@@ -10,9 +10,10 @@
 //
 // Assertions per route kind:
 //   list    — org-A key sees ONLY org-A rows (both its locations);
-//             org-B key the mirror; legacy shared key sees everything
-//             (unscoped BY DESIGN until n8n migrates — pinned so a
-//             change is deliberate).
+//             org-B key the mirror.
+//   retired — (APIKEYS.4) every spec also sends the retired shared
+//             integration key: it is refused with a 401 and nothing
+//             is read or written.
 //   detail  — org-A key reads its own row; a cross-tenant id → 404
 //             (indistinguishable from missing).
 //   mutate  — org-A key mutating a cross-tenant row → 404, the row is
@@ -20,6 +21,10 @@
 //             table. Positive control proves the block isn't vacuous.
 //   create  — org-A key creating into org B (by location_id or via a
 //             B contact anchor) → 403 and no insert.
+//   reference — (W0.1b) a create/update INSIDE org A that references a
+//             row of org B by id (contact_id, assignee_id, template_id)
+//             → 404, nothing written; the org-A reference succeeds
+//             (positive control).
 //
 // ADDING A ROUTE: one entry in the relevant spec table below.
 // Routes that can't fit the pattern are listed in SKIPPED with the
@@ -62,7 +67,7 @@ vi.mock('@/lib/person-links', () => ({ attachLinkedCounts: vi.fn(async (_db, row
 import { createServerClient } from '@/lib/supabase'
 import {
   makeWorld, makeTenantDb, makeReq, jsonOf, propsOf, idsOf,
-  LEGACY_KEY, ORG_A_KEY, ORG_B_KEY,
+  RETIRED_SHARED_KEY, ORG_A_KEY, ORG_B_KEY,
   LOC_A1, LOC_B1,
   C_A1, C_A2, C_B1, C_B2,
   D_A1, D_B1,
@@ -71,6 +76,8 @@ import {
   TASK_A1, TASK_A2, TASK_B1, TASK_B2,
   ET_A1, ET_A2, ET_B1, ET_B2,
   STG_A1, STG_A2, STG_B1, STG_B2,
+  EMT_A1, EMT_B1,
+  P_STAFF_A1, P_STAFF_B1, P_ORGADMIN_A,
 } from './fixture.js'
 
 import * as contactsRoute from '@/app/api/contacts/route.js'
@@ -101,7 +108,6 @@ function freshWorld() {
 
 beforeEach(() => {
   vi.mocked(createServerClient).mockReset()
-  process.env.CRM_API_KEY = LEGACY_KEY
   freshWorld()
 })
 
@@ -114,49 +120,49 @@ const LIST_SPECS = [
     name: 'GET /api/contacts (contacts list)',
     call: () => contactsRoute.GET(makeReq('/api/contacts', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2], all: [C_A1, C_A2, C_B1, C_B2],
+    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
   },
   {
     name: 'GET /api/contacts/search?fields=email (contacts search, email path)',
     call: () => contactsSearchRoute.GET(makeReq('/api/contacts/search?term=lead&fields=email', { bearer: currentKey })),
     ids: itemIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2], all: [C_A1, C_A2, C_B1, C_B2],
+    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
   },
   {
     name: 'GET /api/contacts/search?fields=all (contacts search, or() path)',
     call: () => contactsSearchRoute.GET(makeReq('/api/contacts/search?term=Lead&fields=all', { bearer: currentKey })),
     ids: itemIds,
-    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2], all: [C_A1, C_A2, C_B1, C_B2],
+    orgA: [C_A1, C_A2], orgB: [C_B1, C_B2],
   },
   {
     name: 'GET /api/bookings (bookings list)',
     call: () => bookingsRoute.GET(makeReq('/api/bookings', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [BK_A1, BK_A2], orgB: [BK_B1, BK_B2], all: [BK_A1, BK_A2, BK_B1, BK_B2],
+    orgA: [BK_A1, BK_A2], orgB: [BK_B1, BK_B2],
   },
   {
     name: 'GET /api/campaigns (campaigns list)',
     call: () => campaignsRoute.GET(makeReq('/api/campaigns', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [CAM_A1, CAM_A2], orgB: [CAM_B1, CAM_B2], all: [CAM_A1, CAM_A2, CAM_B1, CAM_B2],
+    orgA: [CAM_A1, CAM_A2], orgB: [CAM_B1, CAM_B2],
   },
   {
     name: 'GET /api/tasks (tasks list)',
     call: () => tasksRoute.GET(makeReq('/api/tasks', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [TASK_A1, TASK_A2], orgB: [TASK_B1, TASK_B2], all: [TASK_A1, TASK_A2, TASK_B1, TASK_B2],
+    orgA: [TASK_A1, TASK_A2], orgB: [TASK_B1, TASK_B2],
   },
   {
     name: 'GET /api/bookings/event-types (event types list)',
     call: () => eventTypesRoute.GET(makeReq('/api/bookings/event-types', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [ET_A1, ET_A2], orgB: [ET_B1, ET_B2], all: [ET_A1, ET_A2, ET_B1, ET_B2],
+    orgA: [ET_A1, ET_A2], orgB: [ET_B1, ET_B2],
   },
   {
     name: 'GET /api/stages (pipeline stages list, API-key path)',
     call: () => stagesRoute.GET(makeReq('/api/stages', { bearer: currentKey })),
     ids: dataIds,
-    orgA: [STG_A1, STG_A2], orgB: [STG_B1, STG_B2], all: [STG_A1, STG_A2, STG_B1, STG_B2],
+    orgA: [STG_A1, STG_A2], orgB: [STG_B1, STG_B2],
   },
 ]
 
@@ -178,11 +184,11 @@ describe.each(LIST_SPECS)('$name — org boundary', (spec) => {
     expect(spec.ids(json)).toEqual([...spec.orgB].sort())
   })
 
-  it('legacy shared key sees every tenant — unscoped BY DESIGN (n8n back-compat, pinned)', async () => {
-    currentKey = LEGACY_KEY
+  it('the retired shared key → 401, nothing listed (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
     const { status, json } = await jsonOf(await spec.call())
-    expect(status).toBe(200)
-    expect(spec.ids(json)).toEqual([...spec.all].sort())
+    expect(status).toBe(401)
+    expect(json?.data).toBeUndefined()
   })
 })
 
@@ -220,11 +226,11 @@ describe.each(DETAIL_SPECS)('$name — org boundary', (spec) => {
     expect(JSON.stringify(json)).not.toContain(spec.bId)
   })
 
-  it('legacy shared key reads any tenant — unscoped BY DESIGN (pinned)', async () => {
-    currentKey = LEGACY_KEY
-    const { status, json } = await jsonOf(await spec.call(spec.bId))
-    expect(status).toBe(200)
-    expect(json.data.id).toBe(spec.bId)
+  it('the retired shared key reading an org-A row → 401, nothing returned (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
+    const { status, json } = await jsonOf(await spec.call(spec.aId))
+    expect(status).toBe(401)
+    expect(JSON.stringify(json)).not.toContain(spec.aId)
   })
 })
 
@@ -287,6 +293,15 @@ describe.each(MUTATION_SPECS)('$name — org boundary', (spec) => {
     if (spec.deletes) expect(row).toBeUndefined()
     else expect(spec.changed(row)).toBe(true)
   })
+
+  it('the retired shared key mutating an org-A row: 401, row untouched, no write issued (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
+    const before = structuredClone(world[spec.table].find((r) => r.id === spec.aId))
+    const { status } = await jsonOf(await spec.call(spec.aId))
+    expect(status).toBe(401)
+    expect(world[spec.table].find((r) => r.id === spec.aId)).toEqual(before)
+    expect(db._writesTo(spec.table)).toEqual([])
+  })
 })
 
 // ─── spec table: CREATE routes (cross-org create refused) ────────────
@@ -345,6 +360,15 @@ describe.each(CREATE_SPECS)('$name — org boundary', (spec) => {
     expect(db._writesTo(spec.table).filter((w) => w.op === 'insert')).toEqual([])
   })
 
+  it('the retired shared key creating inside org A is refused (401) and nothing is inserted (APIKEYS.4)', async () => {
+    currentKey = RETIRED_SHARED_KEY
+    const countBefore = world[spec.table].length
+    const { status } = await jsonOf(await spec.call(spec.aTarget))
+    expect(status).toBe(401)
+    expect(world[spec.table].length).toBe(countBefore)
+    expect(db._writesTo(spec.table).filter((w) => w.op === 'insert')).toEqual([])
+  })
+
   it('org-A key creating inside its own org succeeds and is stamped in org A (positive control)', async () => {
     currentKey = ORG_A_KEY
     const countBefore = world[spec.table].length
@@ -353,6 +377,97 @@ describe.each(CREATE_SPECS)('$name — org boundary', (spec) => {
     expect(json.success).toBe(true)
     expect(world[spec.table].length).toBe(countBefore + 1)
     expect(spec.stamped(world[spec.table][world[spec.table].length - 1])).toBe(true)
+  })
+})
+
+// ─── spec table: cross-org REFERENCES (W0.1b) ────────────────────────
+// The target row/location is inside org A; only the REFERENCED id
+// belongs to org B. Before W0.1b assertCreateInOrg ignored contact_id
+// whenever location_id was also given, tasks PATCH never looked at
+// contact_id / assignee_id, and the campaign routes never looked at
+// template_id — so a keyed caller could stitch org A rows to org B's.
+// 404 (not 403), the assertRowInOrg idiom: the id's existence is not
+// confirmed across orgs.
+const REFERENCE_SPECS = [
+  {
+    name: 'POST /api/tasks (location_id in A, contact_id →)',
+    call: (ref) => tasksRoute.POST(makeReq('/api/tasks', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Task', contact_id: ref } })),
+    table: 'activities', aRef: C_A1, bRef: C_B1, creates: true,
+  },
+  {
+    name: 'POST /api/tasks (location_id in A, assignee_id →)',
+    call: (ref) => tasksRoute.POST(makeReq('/api/tasks', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Task', assignee_id: ref } })),
+    table: 'activities', aRef: P_STAFF_A1, bRef: P_STAFF_B1, creates: true,
+  },
+  {
+    name: 'POST /api/activities (location_id in A, contact_id →)',
+    call: (ref) => activitiesRoute.POST(makeReq('/api/activities', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, subject: 'Ref Activity', contact_id: ref } })),
+    table: 'activities', aRef: C_A1, bRef: C_B1, creates: true,
+  },
+  {
+    name: 'POST /api/notes (location_id in A, contact_id →)',
+    call: (ref) => notesRoute.POST(makeReq('/api/notes', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, content: 'Ref note', contact_id: ref } })),
+    table: 'notes', aRef: C_A1, bRef: C_B1, creates: true,
+  },
+  {
+    name: 'POST /api/campaigns (location_id in A, template_id →)',
+    call: (ref) => campaignsRoute.POST(makeReq('/api/campaigns', { method: 'POST', bearer: currentKey, body: { location_id: LOC_A1, name: 'Ref Campaign', template_id: ref } })),
+    table: 'campaigns', aRef: EMT_A1, bRef: EMT_B1, creates: true,
+  },
+  {
+    name: 'PATCH /api/tasks/[id] (own task, contact_id →)',
+    call: (ref) => taskDetailRoute.PATCH(makeReq(`/api/tasks/${TASK_A1}`, { method: 'PATCH', bearer: currentKey, body: { contact_id: ref } }), propsOf({ id: TASK_A1 })),
+    table: 'activities', rowId: TASK_A1, aRef: C_A1, bRef: C_B1, changed: (row, ref) => row.contact_id === ref,
+  },
+  {
+    name: 'PATCH /api/tasks/[id] (own task, assignee_id → staff)',
+    call: (ref) => taskDetailRoute.PATCH(makeReq(`/api/tasks/${TASK_A1}`, { method: 'PATCH', bearer: currentKey, body: { assignee_id: ref } }), propsOf({ id: TASK_A1 })),
+    table: 'activities', rowId: TASK_A1, aRef: P_STAFF_A1, bRef: P_STAFF_B1, changed: (row, ref) => row.assignee_id === ref,
+  },
+  {
+    name: 'PATCH /api/tasks/[id] (own task, assignee_id → org admin)',
+    call: (ref) => taskDetailRoute.PATCH(makeReq(`/api/tasks/${TASK_A1}`, { method: 'PATCH', bearer: currentKey, body: { assignee_id: ref } }), propsOf({ id: TASK_A1 })),
+    table: 'activities', rowId: TASK_A1, aRef: P_ORGADMIN_A, bRef: P_STAFF_B1, changed: (row, ref) => row.assignee_id === ref,
+  },
+  {
+    name: 'PUT /api/campaigns/[id] (own campaign, template_id →)',
+    call: (ref) => campaignDetailRoute.PUT(makeReq(`/api/campaigns/${CAM_A1}`, { method: 'PUT', bearer: currentKey, body: { template_id: ref } }), propsOf({ id: CAM_A1 })),
+    table: 'campaigns', rowId: CAM_A1, aRef: EMT_A1, bRef: EMT_B1, changed: (row, ref) => row.template_id === ref,
+  },
+]
+
+describe.each(REFERENCE_SPECS)('$name — cross-org reference (W0.1b)', (spec) => {
+  async function expectRefused(key, ref = spec.bRef, code = 404) {
+    currentKey = key
+    const countBefore = world[spec.table].length
+    const before = spec.rowId ? structuredClone(world[spec.table].find((r) => r.id === spec.rowId)) : null
+    const { status, json } = await jsonOf(await spec.call(ref))
+    expect(status).toBe(code)
+    expect(JSON.stringify(json)).not.toContain(ref)
+    expect(world[spec.table].length).toBe(countBefore)
+    if (spec.rowId) expect(world[spec.table].find((r) => r.id === spec.rowId)).toEqual(before)
+    expect(db._writesTo(spec.table)).toEqual([])
+  }
+
+  it('org-A key referencing an org-B row: 404, nothing written', async () => {
+    await expectRefused(ORG_A_KEY)
+  })
+
+  it('the retired shared key referencing an org-A row: 401, nothing written (APIKEYS.4)', async () => {
+    await expectRefused(RETIRED_SHARED_KEY, spec.aRef, 401)
+  })
+
+  it('org-A key referencing an org-A row succeeds (positive control)', async () => {
+    currentKey = ORG_A_KEY
+    const countBefore = world[spec.table].length
+    const { status, json } = await jsonOf(await spec.call(spec.aRef))
+    expect(status).toBe(200)
+    expect(json.success).toBe(true)
+    if (spec.creates) {
+      expect(world[spec.table].length).toBe(countBefore + 1)
+    } else {
+      expect(spec.changed(world[spec.table].find((r) => r.id === spec.rowId), spec.aRef)).toBe(true)
+    }
   })
 })
 
@@ -373,11 +488,12 @@ describe('GET /api/deals/search — org boundary (bespoke: resolves contact by e
     expect(idsOf(json.data.items.map((i) => i.item))).toEqual([D_A1])
   })
 
-  it('legacy shared key resolves any tenant — unscoped BY DESIGN (pinned)', async () => {
-    const { json } = await jsonOf(await dealsSearchRoute.GET(
-      makeReq('/api/deals/search?term=lead.b1@', { bearer: LEGACY_KEY })
+  it('the retired shared key → 401, nothing found (APIKEYS.4)', async () => {
+    const { status, json } = await jsonOf(await dealsSearchRoute.GET(
+      makeReq('/api/deals/search?term=lead.a1@', { bearer: RETIRED_SHARED_KEY })
     ))
-    expect(idsOf(json.data.items.map((i) => i.item))).toEqual([D_B1])
+    expect(status).toBe(401)
+    expect(json?.data).toBeUndefined()
   })
 })
 

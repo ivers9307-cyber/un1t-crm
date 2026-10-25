@@ -1,25 +1,20 @@
 // FTE-EXPENSES.1 — GET /api/expenses/[id]/items/[itemId]/receipt
 //
 // Returns a 5-minute signed URL for the receipt PDF/image in the
-// fte-expense-receipts storage bucket. Visible to the submitter +
-// owner-at-location + master.
+// fte-expense-receipts storage bucket. Visible to whoever can see the
+// claim (canSeeExpenseClaim: submitter, master, owner or expense approver
+// at the claim's studio).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { canSeeExpenseClaim } from '@/lib/fte-expense-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const STORAGE_BUCKET = 'fte-expense-receipts'
 const SIGNED_URL_TTL_SECONDS = 300
-
-function canRead(user, claim) {
-  if (user.profileRole === 'master' || user.role === 'master') return true
-  if (claim.profile_id === user.id) return true
-  return Object.entries(user.rolesByLocation || {})
-    .some(([loc, r]) => r === 'owner' && loc === claim.location_id)
-}
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
@@ -36,9 +31,10 @@ export async function GET(_request, { params }) {
     .eq('id', itemId)
     .eq('claim_id', claimId)
     .maybeSingle()
-  if (!item) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  if (!canRead(user, item.claim)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // FINALTIDY.1 — a caller who can't see the claim gets the same 404 as a
+  // missing item, so ids can't be probed for existence.
+  if (!item || !canSeeExpenseClaim(user, item.claim)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
   if (!item.receipt_path) {
     return NextResponse.json({ success: false, error: 'No receipt uploaded for this item.' }, { status: 404 })

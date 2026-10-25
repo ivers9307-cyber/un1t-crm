@@ -9,8 +9,9 @@ import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import { ensureHostSlug } from '@/lib/hosts'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logWarn } from '@/lib/log'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
@@ -62,17 +63,24 @@ export default async function HostDashboard() {
   // (same derivation the email-domain flow uses) + count mailing-list
   // signups. Any failure degrades to signupUrl=null (card hides).
   let signupUrl = null
+  // HOST-JOIN-PAGE.1 — the standalone form at /h/[slug]/join, for socials.
+  let joinUrl = null
   let signupCount = null
   let signupCopy = null
   try {
     const { data: hostRow } = await db
       .from('event_hosts')
-      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message')
+      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb, anchor_location_id')
       .eq('id', session.host.id)
       .maybeSingle()
     if (hostRow) {
       const slug = await ensureHostSlug(db, hostRow)
-      signupUrl = `${new URL(getAppUrl()).origin}/h/${slug}`
+      // W1.L3b — the host's signup page on the tenant host of their ANCHOR
+      // location (NULL anchor → the resolver floors to the CRM host). Origin-
+      // only, as before, so a misconfigured env var can't poison the link.
+      const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
+      signupUrl = `${baseUrl}/h/${slug}`
+      joinUrl = `${signupUrl}/join`
       const { count } = await db
         .from('host_contacts')
         .select('*', { count: 'exact', head: true })
@@ -84,15 +92,20 @@ export default async function HostDashboard() {
         list_blurb: hostRow.list_blurb,
         list_button_label: hostRow.list_button_label,
         list_success_message: hostRow.list_success_message,
+        events_headline: hostRow.events_headline,
+        events_blurb: hostRow.events_blurb,
+        hero_image_url: hostRow.hero_image_url,
+        accent_hex: hostRow.accent_hex,
       }
     }
   } catch (e) {
     logWarn('host-dashboard', 'signup card degraded', { err: e })
     signupUrl = null
+    joinUrl = null
   }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
-  // Only Stripe-Connect hosts have a UN1T booking fee + a settled "net to host"
+  // Only Stripe-Connect hosts have a platform booking fee + a settled "net to host"
   // (mig 381 columns). Revolut/internal hosts collect directly, so those columns
   // are NULL (→0) and would misrepresent as "€0 net" — show them gross only.
   const isStripe = session.host.payment_provider === 'stripe_connect'
@@ -103,7 +116,9 @@ export default async function HostDashboard() {
     : isStripe
       ? [
           { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-          { label: 'UN1T booking fees', value: formatMoney(revenue.totals.fee_cents, cur) },
+          // W1.S1c: the per-ticket fee is the platform's money rail (Stripe
+          // Connect application fee), so it carries the platform name.
+          { label: `${PLATFORM_NAME} booking fees`, value: formatMoney(revenue.totals.fee_cents, cur) },
           { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
           { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
         ]
@@ -129,9 +144,9 @@ export default async function HostDashboard() {
       {signupUrl && (
         <section className="mt-8">
           <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Grow your list</h2>
-          <HostSignupPageCard url={signupUrl} signupCount={signupCount} copyValues={signupCopy} />
+          <HostSignupPageCard url={signupUrl} joinUrl={joinUrl} signupCount={signupCount} copyValues={signupCopy} />
           <p className="mt-2 text-xs text-white/40">
-            Share this link or QR anywhere — signups land in your Contacts and can be emailed from Emails.
+            Share either link or QR anywhere — the signup form is just the form, for socials; your public page lists your events with the form underneath. Signups land in your Contacts and can be emailed from Emails.
           </p>
         </section>
       )}

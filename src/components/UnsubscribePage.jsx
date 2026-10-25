@@ -41,7 +41,7 @@ const CHANNEL_OPTIONS = [
   },
 ]
 
-export default function UnsubscribePage({ token, locationId = null, campaignId = null }) {
+export default function UnsubscribePage({ token, locationId = null, campaignId = null, brandName = '' }) {
   // UNSUBAUTO.1 — the opt-out fires on ARRIVAL, not on a button press.
   //
   // The previous flow was a GET landing on a confirm button. Measured live on
@@ -176,7 +176,7 @@ export default function UnsubscribePage({ token, locationId = null, campaignId =
   return (
     <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-4">
       <div className="w-full max-w-md text-center">
-        <h1 className="text-2xl font-bold tracking-wider mb-8">UN1T</h1>
+        {brandName && <h1 className="text-2xl font-bold tracking-wider mb-8">{brandName}</h1>}
 
         {status === 'idle' && (
           <div className="bg-un1t-surface border border-un1t-border rounded-lg p-6 text-left">

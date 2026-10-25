@@ -12,7 +12,10 @@ vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve()) })
 
 const vendorTurnOn = vi.fn()
 const loadDeviceWithLocation = vi.fn()
-vi.mock('@/lib/ac-devices', () => ({
+// W0.12b: the real assertDeviceAtLocation rides along (pure, no I/O) so the
+// foreign-device guard is exercised against the helper the runner ships with.
+vi.mock('@/lib/ac-devices', async (importOriginal) => ({
+  ...(await importOriginal()),
   vendorTurnOn: (...a) => vendorTurnOn(...a),
   loadDeviceWithLocation: (...a) => loadDeviceWithLocation(...a),
 }))
@@ -30,8 +33,10 @@ vi.mock('@/lib/glofox', () => ({
 import { runClassClimateForLocation } from './class-climate-runner.js'
 import { syncOccurrencesForLocation } from './class-occurrences.js'
 import { logAuditEvent } from '@/lib/audit'
+import { logError } from '@/lib/log'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
+const OTHER_LOC = 'a0000000-0000-0000-0000-000000000002'
 const NOW = Date.parse('2026-06-18T05:40:00.000Z') // 10 min before a 05:50 class start
 
 // ── in-memory Supabase fake ────────────────────────────────────────
@@ -97,11 +102,14 @@ function makeDb(tables = {}) {
   return { from: (t) => builder(t), _store: store, _calls: calls }
 }
 
-function occ(id, { startOffsetMin = 10, durMin = 45, cancelled_at = null } = {}) {
+// source_platform defaults to 'glofox' like the column (mig 734); the sync's
+// reconcile filters on it, and this fake honours `.eq`.
+function occ(id, { startOffsetMin = 10, durMin = 45, cancelled_at = null, source_platform = 'glofox' } = {}) {
   const start = NOW + startOffsetMin * 60_000
   return {
     glofox_event_id: id,
     location_id: LOC,
+    source_platform,
     name: 'Strength 45',
     starts_at: new Date(start).toISOString(),
     ends_at: new Date(start + durMin * 60_000).toISOString(),
@@ -116,9 +124,10 @@ beforeEach(() => {
   loadDeviceWithLocation.mockReset()
   fetchUpcomingEvents.mockReset()
   logAuditEvent.mockClear()
+  logError.mockClear()
   loadDeviceWithLocation.mockResolvedValue({
     ok: true,
-    device: { id: 'dev1', label: 'Studio AC', provider: 'sensibo', provider_device_id: 'pod1' },
+    device: { id: 'dev1', location_id: LOC, label: 'Studio AC', provider: 'sensibo', provider_device_id: 'pod1' },
     location: { id: LOC },
   })
   vendorTurnOn.mockResolvedValue({ ok: true, observed: {} })
@@ -180,6 +189,34 @@ describe('runClassClimateForLocation', () => {
     expect(out.actions).toEqual([]) // firedSet short-circuits before any vendor call
     expect(vendorTurnOn).not.toHaveBeenCalled()
   })
+
+  it('W0.12b: a device_ids entry that lives at ANOTHER location is recorded failed and never switched', async () => {
+    // The save route (#1966) refuses a foreign id, but an older config or a
+    // direct SQL write can still carry one; loadDeviceWithLocation returns
+    // THAT device's location + credentials, so the runner must refuse it.
+    loadDeviceWithLocation.mockImplementation(async (id) => id === 'dev1'
+      ? { ok: true, device: { id: 'dev1', location_id: LOC, label: 'Studio AC', provider: 'sensibo', provider_device_id: 'pod1' }, location: { id: LOC } }
+      : { ok: true, device: { id: 'dev-foreign', location_id: OTHER_LOC, label: 'Hatch AC', provider: 'sensibo', provider_device_id: 'pod9' }, location: { id: OTHER_LOC } })
+    const db = makeDb({ class_occurrences: [occ('evt1')] })
+    const out = await runClassClimateForLocation(
+      db, { location_id: LOC, config: { ...CONFIG, device_ids: ['dev1', 'dev-foreign'] } }, { nowMs: NOW })
+
+    // The in-location device still fires; the foreign one fails like any other failed fire.
+    expect(out.actions).toEqual([
+      expect.objectContaining({ device_id: 'dev1', status: 'fired' }),
+      expect.objectContaining({ device_id: 'dev-foreign', status: 'failed', error: expect.stringMatching(/location/i) }),
+    ])
+    expect(vendorTurnOn).toHaveBeenCalledTimes(1)
+    expect(vendorTurnOn.mock.calls[0][0].id).toBe('dev1')
+    // No ac_sessions row for the foreign device (it would carry OUR location_id with THEIR device_id).
+    expect(db._store.ac_sessions.map((s) => s.device_id)).toEqual(['dev1'])
+    const foreignFire = db._calls.upserts.find((u) => u.table === 'automation_fire_log' && u.rows.device_id === 'dev-foreign')
+    expect(foreignFire.rows).toMatchObject({
+      location_id: LOC, status: 'failed', detail: { reason: 'device_not_at_location' },
+    })
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError.mock.calls[0][2]).toMatchObject({ locationId: LOC, deviceId: 'dev-foreign', deviceLocationId: OTHER_LOC })
+  })
 })
 
 // ── spine reconciliation ───────────────────────────────────────────
@@ -212,6 +249,23 @@ describe('syncOccurrencesForLocation: cancellation reconciliation', () => {
     const live = db._store.class_occurrences.find((r) => r.glofox_event_id === 'evt-live')
     expect(gone.cancelled_at).not.toBeNull()
     expect(live.cancelled_at).toBeNull()
+  })
+
+  it('never cancels a un1t_online row at the same location, only the Glofox rows Glofox dropped (UN1TCLASS.5)', async () => {
+    const db = makeDb({
+      class_occurrences: [
+        occ('evt-live', { startOffsetMin: 60 }),
+        occ('evt-gone', { startOffsetMin: 90 }),
+        occ('un1t:e1', { startOffsetMin: 75, source_platform: 'un1t_online' }),
+      ],
+    })
+    fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [glofoxEvent('evt-live', 60)] })
+
+    const out = await syncOccurrencesForLocation(db, { locationId: LOC, creds, nowMs: NOW })
+    expect(out.cancelled).toBe(1)
+    const byId = (id) => db._store.class_occurrences.find((r) => r.glofox_event_id === id)
+    expect(byId('evt-gone').cancelled_at).not.toBeNull()
+    expect(byId('un1t:e1').cancelled_at).toBeNull()
   })
 
   it('does NOT cancel private events — they still run', async () => {

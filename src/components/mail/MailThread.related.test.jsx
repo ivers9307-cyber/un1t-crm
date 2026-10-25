@@ -191,7 +191,7 @@ describe('MailThread — the merge picker', () => {
 
     await screen.findByText('Merged 1 conversation into this one.')
     const merge = calls.find(c => c.method === 'POST' && c.url.includes('/merge'))
-    expect(merge.url).toBe('/api/email/tickets/r-open-1/merge')
+    expect(merge.url).toBe('/api/email/mail/r-open-1/merge')
     expect(merge.body).toEqual({ into: CONVERSATION.id })
     expect(onThreadChanged).toHaveBeenCalled()
     // The picker closed; Undo is on the toast and nowhere else.
@@ -231,7 +231,7 @@ describe('MailThread — the merge picker', () => {
 
     await waitFor(() => {
       const undo = calls.find(c => c.method === 'DELETE')
-      expect(undo?.url).toBe('/api/email/tickets/r-open-1/merge')
+      expect(undo?.url).toBe('/api/email/mail/r-open-1/merge')
     })
     await waitFor(() => expect(screen.queryByText(/Merged 1 conversation/)).toBeNull())
     expect(onThreadChanged).toHaveBeenCalledTimes(2)

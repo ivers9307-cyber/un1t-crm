@@ -21,19 +21,26 @@
 
 import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator, sendCtaUrlMessage, splitTrailingUrl } from '@/lib/whatsapp'
 import { recordAgentDecision, compactDecisionMeta } from './decision-log'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { isWhatsAppStaffAuthored } from '@/lib/whatsapp-staff-sources'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
+import { providerFor } from '@/lib/membership/source'
+import { noneSource } from '@/lib/membership/sources/none'
+import { DEFAULTS } from './settings-contract'
+import { trialDoneLineFor } from './trial-done-context'
+import { resolveAgentSettings } from './settings-resolve'
 import {
   shouldAgentReply,
-  formatHistoryForClaude,
+  buildReplyTurnMessages,
+  isReplyWorthyInbound,
   parseAgentResponse,
   isVerificationFresh,
   resolveAgentEffort,
   AGENT_MESSAGE_SOURCE,
-  DEFAULT_HOLDING_MESSAGE,
+  defaultHoldingMessage,
   DEFAULT_NO_CREDITS_HANDOFF_TEXT,
   DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
   resolveAutoVerify,
@@ -48,8 +55,21 @@ import {
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
+import { SEND_BOOKING_FLOW_TOOL, SEND_BOOKING_FLOW_TOOL_NAME, bookingFlowOffered, executeSendBookingFlow } from './booking-flow'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
+import {
+  BOOKING_SYSTEM_TOOL_NAMES, deriveNoBookingTools, membershipAtOtherStudio,
+  refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
+} from './tool-capability'
+import { PURCHASE_TOOL_NAMES } from './purchase-tools'
+import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
+import { resolveMemberStudios, otherStudioOnly } from './member-studios'
+import {
+  threadTakesBookings, resolveTurnPlan, todayPlan, planKey, turnForPlan, createActionStudios, loadAgentKnowledge,
+  promptOptionsForPlan, executorCtxFor, readOrgStudioLinks, otherStudiosBlockFor,
+} from './turn-studios'
+import { DEFAULT_BOOKING_CTA_LABEL } from './default-copy'
 import { anthropicMessages } from '@/lib/anthropic'
 // MIA-HYGIENE.4 — the agent's own caught failures never reached error_events
 // (mig 435 only ever saw errors that escaped Next), so Vercel log retention
@@ -57,6 +77,7 @@ import { anthropicMessages } from '@/lib/anthropic'
 import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
+import { logWarn } from '@/lib/log'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -111,11 +132,57 @@ export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOO
 // Exported so the eval harness sends the EXACT block production sends. It used
 // to rebuild its own copy "in the same shape", which silently drifted the
 // moment the TTL changed here and cost a full eval run to a 400.
-export const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
-  i === ALL_AGENT_TOOLS.length - 1
-    ? { ...tool, cache_control: { type: 'ephemeral', ttl: '1h' } }
-    : tool,
-)
+export const CACHED_ACCOUNT_TOOLS = withCacheBreakpoint(ALL_AGENT_TOOLS)
+// MIAORG.1 Task 5 — the tool block for a studio whose membership source takes
+// no bookings (un1t.online, none): the Glofox tools gone, the timetable tool
+// re-described (tool-capability.js). Derived ONCE here, like the full block,
+// so each variant is a byte-stable cached prefix of its own. The full block
+// above is untouched: Glofox studios send exactly what they sent before.
+export const NO_BOOKING_AGENT_TOOLS = deriveNoBookingTools(ALL_AGENT_TOOLS)
+export const CACHED_NO_BOOKING_TOOLS = withCacheBreakpoint(NO_BOOKING_AGENT_TOOLS)
+// MIAHATCH.2 — the two un1t.online READ blocks (tool-blocks.js), built once at
+// load like the two above: `un1t_read` for a member at a un1t.online studio
+// only, `un1t_read_dual` when the person is also answerable at a Glofox
+// studio. The turn picks one through planTurnTools (turn-studios.js) when the
+// sender is answerable at a un1t.online studio.
+export const CACHED_UN1T_READ_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }))
+export const CACHED_UN1T_READ_DUAL_TOOLS = withCacheBreakpoint(deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }))
+// MIAHATCH.5 — block 3b (`un1t_full`): the dual block plus request_refund, with
+// the two booking writes working at the un1t.online studio too, then (MIAHATCH.6)
+// the three purchase tools (purchase-tools.js). Built once like the others. Only a WhatsApp turn whose un1t.online studio has writes_enabled
+// AND its Mia switch (un1t_chat_actions_enabled) gets it (turn-studios.js).
+export const CACHED_UN1T_FULL_TOOLS = withCacheBreakpoint(deriveUn1tFullTools(ALL_AGENT_TOOLS))
+const CACHED_BLOCKS = {
+  glofox: CACHED_ACCOUNT_TOOLS,
+  no_booking: CACHED_NO_BOOKING_TOOLS,
+  un1t_read: CACHED_UN1T_READ_TOOLS,
+  un1t_read_dual: CACHED_UN1T_READ_DUAL_TOOLS,
+  un1t_full: CACHED_UN1T_FULL_TOOLS,
+}
+// MIAFLOW.1 — each block Mia can be in where she cannot book in chat, plus
+// send_booking_flow last (booking-flow.js), for a WhatsApp turn at a studio
+// whose booking Flow is switched on (bookingFlowOffered). Built once at load,
+// so each variant is a byte-stable cached prefix of its own; the blocks above
+// are untouched. There is no Glofox variant (Stillorgan is unchanged) and no
+// `un1t_full` one (Ruling 24: a known Hatch member books in chat there, so a
+// un1t_full turn always sends CACHED_BLOCKS.un1t_full).
+export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
+  no_booking: withCacheBreakpoint([...NO_BOOKING_AGENT_TOOLS, SEND_BOOKING_FLOW_TOOL]),
+  un1t_read: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: false }), SEND_BOOKING_FLOW_TOOL]),
+  un1t_read_dual: withCacheBreakpoint([...deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }), SEND_BOOKING_FLOW_TOOL]),
+})
+/**
+ * The cached tool block for a turn. The live turn sends CACHED_BLOCKS[block]
+ * for its plan's block (turn-studios.js), the same array objects this returns.
+ * `agentToolsFor(canBook)` (a boolean, what the eval harness passes) is the
+ * full block where the studio takes bookings, else the no-booking one. `agentToolsFor({ answerable,
+ * threadProvider, channel, un1tWrites })` picks through selectToolBlock. Both
+ * return the same array objects on every call, so the cached prefix is stable.
+ */
+export function agentToolsFor(arg) {
+  if (arg !== null && typeof arg === 'object') return CACHED_BLOCKS[selectToolBlock(arg)]
+  return arg ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
+}
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
 // per minute is enough.
 const SOFT_NOTIFY_GAP_MS = 60_000
@@ -163,12 +230,16 @@ const MODEL_MAX_TOKENS_RETRY = 2400
 const DEFAULT_LIMITS = { convHour: 20, locDay: 500 }
 
 function clampInt(v, fallback, min, max) {
+  // MIAORG.1 T2-A — null / blank = "not set": Number(null) is 0, which clamps
+  // to the floor of 1 (one reply an hour). A per-field org/studio merge of
+  // `limits` can carry a null field.
+  if (v == null || (typeof v === 'string' && v.trim() === '')) return fallback
   const n = Number(v)
   if (!Number.isFinite(n)) return fallback
   return Math.max(min, Math.min(max, Math.round(n)))
 }
 
-function resolveLimits(settings) {
+export function resolveLimits(settings) {
   const l = (settings && settings.limits) || {}
   return {
     convHour: clampInt(l.max_replies_per_conversation_per_hour, DEFAULT_LIMITS.convHour, 1, 1000),
@@ -332,13 +403,16 @@ export async function runChannelAgent(db, adapter, ctx) {
     reruns < MAX_MISSED_INBOUND_RERUNS &&
     result?.handled === true && result.action === 'reply' && result.lastInboundSeenIso
   ) {
-    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, result.lastInboundSeenIso)
+    const answeredThroughIso = result.lastInboundSeenIso
+    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, answeredThroughIso)
     if (!missed) break
     reruns++
     console.warn('[radar-agent] missed-inbound rerun', JSON.stringify({
       channel: adapter.name, conversationId: ctx?.conversationId || null, rerun: reruns,
     }))
-    result = await runChannelAgentInner(db, adapter, ctx, trace)
+    // MIAPREFILL.1 — tell the rerun what the last pass already answered, so
+    // the missed message is placed after Mia's reply, not before it.
+    result = await runChannelAgentInner(db, adapter, { ...ctx, answeredThroughIso }, trace)
   }
 
   if (result?.handled === false) {
@@ -346,6 +420,9 @@ export async function runChannelAgent(db, adapter, ctx) {
       channel: adapter.name,
       conversationId: ctx?.conversationId || null,
       reason: result.reason || 'unknown',
+      // MIAPREFILL.1 — nothing_to_answer names the newest row (source + type,
+      // never its body) so a cause other than a STOP acknowledgement shows.
+      ...(result.trailing ? { trailing: result.trailing } : {}),
     }))
   }
 
@@ -367,16 +444,19 @@ export async function runChannelAgent(db, adapter, ctx) {
   return result
 }
 
-// Any inbound row newer than the last one the just-finished turn saw?
+// Any REPLY-WORTHY inbound row newer than the last one the just-finished turn
+// saw? MIAPREFILL.1 — a reaction or a photo landing mid-turn is not a reason
+// to run again: a reaction is never answered (MIA-REVIEW.2), and media takes
+// its own soft-handoff path in its own webhook, never the in_flight bail.
 async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
   if (!conversationId || !sinceIso) return false
   const { data } = await db.from(adapter.messagesTable)
-    .select('id')
+    .select('message_type, body')
     .eq('conversation_id', conversationId)
     .eq('direction', 'inbound')
     .gt('created_at', sinceIso)
-    .limit(1)
-  return Array.isArray(data) && data.length > 0
+    .limit(20)
+  return Array.isArray(data) && data.some((r) => isReplyWorthyInbound({ ...r, direction: 'inbound' }))
 }
 
 // AGENT-REARM.3 — did a human take this thread over since the turn began?
@@ -446,22 +526,44 @@ function takeoverCheckFailed(adapter, conversationId, stage, err) {
 }
 
 async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
-  const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
+  const { conversationId, locationId, recipient, contactId, messageType, body, connection, answeredThroughIso = null } = ctx
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
   if (!conversationId || !locationId) return { handled: false, reason: 'missing_context' }
 
-  const { data: loc } = await db.from('locations')
-    .select('name, settings')
-    .eq('id', locationId)
-    .single()
-  const settings = loc?.settings?.customer_agent || null
+  // MIAORG.1 — Mia's settings are DEFAULTS <- the organisation's <- this
+  // studio's (resolveAgentSettings; enabled/test_mode never come from the
+  // org). A failed studio read is what it always was: no settings, so the gate
+  // below answers 'disabled' and nothing is sent.
+  const resolved = await resolveAgentSettings(db, locationId)
+  const loc = resolved.ok ? resolved.location : null
+  const settings = resolved.ok ? resolved.settings : null
+  // TZ.5 — the studio's clock, from the row already in hand (no second read):
+  // quiet hours with no stored tz, "today" in the prompt, and every time or
+  // date the tools hand the model (toolCtx.zone). An invalid or NULL column is
+  // Europe/Dublin (zoneOfLocation warns once for an invalid one).
+  const zone = zoneOfLocation({ id: locationId, timezone: loc?.timezone })
   // Tripwire only — enabled+test_mode being live for everyone is the
   // documented invariant, not a bug. Logged once per process per location so
   // the half-configured state is greppable when an operator is surprised by it.
   warnLiveDespiteTestMode(locationId, settings)
   const branding = await getLocationBranding(db, locationId)
+  // W1.M3b — the base prompt names the studio's membership source (its app
+  // and payment page); a studio with none gets no app rules.
+  // MIAORG.1 Task 5 — the source comes off the location row the settings
+  // resolver already read (locations.membership_source, NOT NULL), through the
+  // sanctioned mapper. No second read: a separate one could fail on its own
+  // and answer `none`, flipping a Glofox studio to no-booking for a turn. A
+  // failed location read never gets here with settings (the gate below says
+  // 'disabled'). Tools, prompt and executors all use this one value.
+  const membershipSource = loc?.membership_source ? providerFor(loc.membership_source) : noneSource
+  // MIAORG.1 Task 5 — what Mia can do follows THIS studio (the thread's, the
+  // locationId this turn is answered at), never the contact's home studio.
+  // A provider without bookings gets the no-booking tool block and prompt.
+  // MIAHATCH.2 — un1t.online never takes the Glofox booking tools, whatever
+  // its `bookings` capability says (its own blocks come from planTurnTools).
+  const canBook = threadTakesBookings(membershipSource)
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
@@ -498,6 +600,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     senderPhone: recipient,
     lastOutboundHuman,
     now: new Date(),
+    zone,
   })
   // AGENT-REARM.1 — the cooldown released a handed-off thread: clear the
   // handoff stamp so the inbox queue and future turns agree the agent is
@@ -517,7 +620,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // customer + flag a human rather than leave them hanging. Doesn't
     // disable the agent; a follow-up text re-engages it.
     if (decision.onDuty && decision.reason === 'unsupported_type') {
-      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt: conv?.agent_last_reply_at })
+      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName, lastReplyAt: conv?.agent_last_reply_at })
     }
     return { handled: false, reason: decision.reason }
   }
@@ -530,7 +633,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   const aiCap = await getAiCapStatus({ locationId })
   if (aiCap.capped) {
     return await softHandoff(db, adapter, {
-      conversationId, locationId, recipient, contactId, connection, settings,
+      conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
       lastReplyAt: conv?.agent_last_reply_at,
       reason: 'ai_cap',
       notify: {
@@ -554,7 +657,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     const walletSpend = await checkSpend(db, locationId, 'ai_message', 'ai')
     if (!walletSpend.allow) {
       return await softHandoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings,
+        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
         lastReplyAt: conv?.agent_last_reply_at,
         reason: 'wallet_empty',
         notify: {
@@ -575,11 +678,38 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // sending, whether a human took the thread over WHILE the model was thinking.
   const turnStartIso = new Date().toISOString()
 
-  // The agent WILL run a turn now — let the channel show read + typing while
-  // Claude thinks. Best-effort; never blocks or fails the turn.
-  try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
-
   try {
+    // Newest rows first then reversed — ascending+limit returns the OLDEST
+    // rows, which would freeze the agent's view at the start of the
+    // conversation once a thread outgrows the cap (latent amnesia v2).
+    // `source` lets the builder find the previous pass's own reply on a rerun
+    // (both message tables carry it).
+    const { data: historyDesc } = await db.from(adapter.messagesTable)
+      .select('direction, body, message_type, created_at, source')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(MAX_HISTORY * 2)
+    const history = (historyDesc || []).slice().reverse()
+    // Newest inbound this turn will have seen — the wrapper's missed-inbound
+    // sweep compares against it after the reply goes out.
+    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
+
+    // MIAPREFILL.1 — never a request that ends on an assistant turn (Sonnet 5
+    // 400s it as prefill). 'nothing_to_answer' = the newest turn is the
+    // studio's own (e.g. the STOP acknowledgement): stay silent, no API call.
+    // Decided from history alone, BEFORE onEngage, so a silent turn never
+    // shows the customer a read receipt and "typing…" followed by nothing.
+    // `trailing` (source + type, no body) goes to the wrapper's no-reply line.
+    const { messages, reason: historyReason, trailing } = buildReplyTurnMessages(history || [], {
+      maxMessages: MAX_HISTORY,
+      answeredThroughIso,
+    })
+    if (historyReason) return { handled: false, reason: historyReason, ...(trailing ? { trailing } : {}) }
+
+    // The agent WILL run a turn now — let the channel show read + typing while
+    // Claude thinks. Best-effort; never blocks or fails the turn.
+    try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
+
     // Cost / abuse ceilings, cheapest check first. The per-location daily
     // cap stops a runaway across all threads; the per-conversation hourly
     // cap catches a single chatty/looping sender.
@@ -603,7 +733,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     if (convReplies >= limits.convHour) {
       // Abnormal volume to one person in an hour — loop or abuse. Hand off
       // to a human rather than keep burning the model.
-      await handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason: 'rate_limited: hourly agent-reply cap hit', settings })
+      await handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason: 'rate_limited: hourly agent-reply cap hit', settings, brand: branding.companyName })
       return { handled: true, action: 'handoff', reason: 'rate_limited' }
     }
 
@@ -669,24 +799,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // this. The prompt only acts on it when the sender isn't already verified.
     const multipleAccounts = distinctPersonCount(phoneMatches, groupOf) >= 2
 
-    const { data: knowledge } = await db.from('agent_knowledge')
-      .select('category, title, content, enabled, sort_order')
-      .eq('location_id', locationId)
-      .eq('enabled', true)
-      .order('sort_order', { ascending: true })
-
-    // Newest rows first then reversed — ascending+limit returns the OLDEST
-    // rows, which would freeze the agent's view at the start of the
-    // conversation once a thread outgrows the cap (latent amnesia v2).
-    const { data: historyDesc } = await db.from(adapter.messagesTable)
-      .select('direction, body, message_type, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: false })
-      .limit(MAX_HISTORY * 2)
-    const history = (historyDesc || []).slice().reverse()
-    // Newest inbound this turn will have seen — the wrapper's missed-inbound
-    // sweep compares against it after the reply goes out.
-    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
+    const { data: knowledge } = await loadAgentKnowledge(db, locationId)
 
     // A still-fresh prior verification, re-read from the stamp.
     // PERSON-ACCT.6 — used AS STAMPED (no primary remap; see the phone lane
@@ -745,14 +858,32 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       }
     }
 
+    // TRIALDONE.6 — a trial finisher replying to the studio's trial-done
+    // opener: the studio's brief (trial_done.mia_instruction, filled) rides the
+    // uncached suffix so Mia helps them choose an offer. Read once per turn,
+    // only where the thread's studio has trial_done on (a studio-only key) and
+    // the thread has a contact. Never throws: a failed read is no brief.
+    const trialDoneContactId = conv?.contact_id || contactId || null
+    const trialDoneLine = settings?.trial_done?.enabled === true && trialDoneContactId
+      ? await trialDoneLineFor(db, { locationId, contactId: trialDoneContactId, nowMs: Date.now(), settings, studioName: loc?.name || branding.companyName || null, zone })
+      : null
+
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
-    const system = buildCachedSystem({
+    // MIAHATCH.2 — these are TODAY's options; a turn whose plan is not today's
+    // block adds the plan's (settleTurn below).
+    const systemOpts = {
       businessName: branding.companyName,
       locationName: loc?.name || null,
-      agentName: settings?.agent_name || null,
+      agentName: settings?.agent_name || DEFAULTS.agent_name,
       membershipUrl: settings?.membership_signup_url || null,
+      membershipSource: { key: membershipSource.key, label: membershipSource.label },
+      // MIAORG.1 Task 5 — a studio without bookings gets the no-booking
+      // rules (timetable only, booking link or the team). A Glofox studio's
+      // prompt is byte-identical to before (bookings true ignores bookingUrl).
+      bookings: canBook,
+      bookingUrl: canBook ? null : (settings?.booking_url || null),
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
@@ -761,7 +892,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // location settings blob, NOT settings.customer_agent — the inbox
       // composer shares the same sets.
       cardSets: adapter.name === 'whatsapp' ? (loc?.settings?.wa_card_sets || []) : [],
-      today: dublinTodayStr(),
+      today: todayStrIn(zone),
       // Tell the model "already verified — don't re-ask" for a phone match OR a
       // still-fresh prior (quiz) verification, so a returning member isn't
       // re-quizzed inside the 30-day window. (Tools already honour the stored
@@ -770,15 +901,13 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // AGENT-AUTH.3 — number linked to >1 person → ask which account by email.
       multipleAccounts,
       knownContact,
-    })
+      trialDoneLine,
+    }
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
     // notch below the API's `high` default) for this short transactional turn.
     const agentEffort = resolveAgentEffort(settings?.effort)
     const verifyFailThreshold = resolveVerifyFailHandoff(settings)
-
-    const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
-    if (messages.length === 0) return { handled: false, reason: 'no_history' }
 
     // Tool-execution context. verifiedContactId is mutable: verify_identity
     // both stamps the DB and updates this so later tools in the same turn
@@ -794,14 +923,122 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // (handle changed hands) forces the customer to re-verify.
       verifiedContactId: resolvedVerifiedContactId,
       locationId,
+      // TZ.5 — the studio's zone: class labels and event "today" in the tools.
+      zone,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
       // AGENT-HANDS.1 — booking tools read the autonomy mode +
       // consultation type from the agent settings blob.
       settings,
+      // MIAORG.1 Task 5 — the studio's booking capability and membership
+      // source: the executors refuse a booking-system tool where canBook is
+      // false, and list_upcoming_classes reads un1t_events at un1t.online.
+      canBook,
+      membershipSourceKey: membershipSource.key,
+      // MIACONSULT.1 — dates list_consultation_slots returned this turn, so
+      // book_consultation only books a day that was offered (earlier turns are
+      // read back from agent_decisions).
+      consultationDatesListed: new Set(),
     }
     // MIA-REVIEW.3 — surface the acting account to the decision log.
     trace.actingContactId = toolCtx.verifiedContactId || null
+
+    // MIAHATCH.1 — which studios is this person a member of, and may this
+    // studio's Mia answer for them? WhatsApp only (Instagram has no phone to
+    // gate on and leaves memberStudios undefined). The anchor is the acting
+    // account, else the thread's contact; no anchor or no organisation means
+    // no resolution, which is today's thread-studio behaviour. The resolver
+    // never throws; a failed read is { studios: [], readFailed: true } and the
+    // dispatch below treats it exactly like no resolution.
+    const resolveTurnMemberStudios = async (anchorContactId) => {
+      if (!isWhatsApp || !anchorContactId || !loc?.organization_id) return undefined
+      try {
+        return await resolveMemberStudios(db, {
+          anchorContactId,
+          threadLocationId: locationId,
+          organizationId: loc.organization_id,
+          senderPhone: recipient,
+        })
+      } catch { return undefined }
+    }
+    const applyMemberStudios = (resolution) => {
+      // No resolution (e.g. after verify the acting account has no anchor or
+      // the call threw) CLEARS an earlier one: it was anchored on a different
+      // contact and must not keep deciding this turn.
+      if (!resolution) {
+        toolCtx.memberStudios = undefined
+        trace.memberStudios = null
+        return
+      }
+      toolCtx.memberStudios = resolution
+      // The decision row records the LATEST resolution (a failed read records none).
+      trace.memberStudios = resolution.readFailed ? null : resolution.studios
+    }
+    applyMemberStudios(await resolveTurnMemberStudios(resolvedVerifiedContactId || conv?.contact_id))
+
+    // MIAHATCH.2 — the turn's tool block from the studios this sender may be
+    // answered for (turn-studios.js). Today's block (a studio answering its
+    // own member, nobody answerable, Instagram, no resolution) sends exactly
+    // today's request and leaves toolCtx.turn unset; any other sets
+    // toolCtx.turn, toolCtx.glofoxLocationId (the Glofox studio the Glofox
+    // executors run at) and the prompt the block needs. actionStudio is
+    // another studio's resolved settings (booking_mode, booking_url, copy);
+    // voice, quiet hours and caps stay this thread's.
+    const actionStudios = createActionStudios(db, { threadLocationId: locationId, threadSettings: settings, threadZone: zone, threadLocationSettings: loc?.settings ?? null })
+    // MIAFLOW.1 — the thread studio's booking Flow (locations.settings.whatsapp_flow),
+    // offered per block (bookingFlowOffered); tools, prompt and executor agree.
+    const flowConfig = loc?.settings?.whatsapp_flow || null
+    toolCtx.actionStudio = actionStudios.settings
+    let plan
+    let system
+    const planArgs = () => ({
+      memberStudios: toolCtx.memberStudios,
+      threadLocationId: locationId,
+      threadProvider: membershipSource,
+      channel: adapter.name,
+    })
+    const applyPlan = (p) => {
+      plan = p
+      toolCtx.turn = turnForPlan(p, adapter.name)
+      toolCtx.glofoxLocationId = p.glofoxLocationId
+      toolCtx.bookingFlow = {
+        offered: bookingFlowOffered({ channel: adapter.name, canBook, block: p.block, flowConfig, contactId: toolCtx.contactId }),
+        config: flowConfig,
+      }
+    }
+    // Plan the turn and build its system blocks together, so the tools and the
+    // prompt always describe the same block. A prompt that cannot be built
+    // (promptOptionsForPlan threw) drops the turn to today's block: never the
+    // un1t tools with today's prompt. `keepIfKey`: a re-plan whose key (block,
+    // named un1t studio, facts studios) is unchanged keeps the system it has.
+    // MIAFIX.1 (8) — the organisation's other studios, read once per turn
+    // (null on a failed read, logged: the turn goes without their links).
+    let orgStudioLinks
+    const settleTurn = async ({ keepIfKey } = {}) => {
+      let next = await resolveTurnPlan(planArgs(), actionStudios)
+      if (keepIfKey !== undefined && planKey(next) === keepIfKey) {
+        applyPlan(next)
+        return
+      }
+      let extra = null
+      if (!next.sameAsToday) {
+        try {
+          extra = await promptOptionsForPlan(db, next, actionStudios, { conversationId, channel: adapter.name })
+        } catch (err) {
+          logWarn('mia-un1t', 'turn prompt options failed; using the today block', { block: next.block, errClass: err?.name })
+          next = todayPlan(planArgs())
+        }
+      }
+      applyPlan(next)
+      if (orgStudioLinks === undefined) orgStudioLinks = await readOrgStudioLinks(db, { organizationId: loc?.organization_id || null, threadLocationId: locationId }, actionStudios)
+      const otherStudiosBlock = otherStudiosBlockFor(orgStudioLinks, next)
+      system = buildCachedSystem({
+        ...(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts),
+        ...(otherStudiosBlock ? { otherStudiosBlock } : {}),
+        bookingFlow: toolCtx.bookingFlow?.offered === true,
+      })
+    }
+    await settleTurn()
 
     let verifyFails = conv?.agent_verify_attempts ?? 0
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
@@ -810,6 +1047,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // PERSON-ACCT.7 — set when book_class finds two live accounts and refuses
     // to guess; same deterministic-handoff posture as no_credits.
     let accountConflictHandoff = false
+    // MIAFIX.1 (6) — send_purchase_link found a payment link already open for a
+    // DIFFERENT product: the thread goes to the team in this turn, the customer
+    // reads the tool's operator-editable open text (purchase_link_open_text).
+    let purchaseLinkOpenHandoff = null
     let modelText = ''
     // A stop_reason / tool outcome that must NOT become a customer reply.
     // Set inside the loop, actioned as a soft handoff just after it.
@@ -828,6 +1069,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // failing twice in a turn is not.
       const toolThrows = new Map()
       while (iterations-- > 0 && !done) {
+        // MIAHATCH.2 — the block this request sends (a verify mid-turn can
+        // change it for the next iteration; the last one sent wins).
+        trace.toolBlock = plan.block
         // SAAS4-M1 — metered via the shared wrapper (source: mia_auto_reply);
         // each tool-loop iteration is one API call and one usage event.
         const { res, data, aborted } = await callAgentModel(
@@ -838,7 +1082,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             output_config: { effort: agentEffort },
             system,
             messages,
-            tools: CACHED_ACCOUNT_TOOLS,
+            tools: (toolCtx.bookingFlow?.offered && CACHED_BOOKING_FLOW_BLOCKS[plan.block]) || CACHED_BLOCKS[plan.block],
           },
           { apiKey, locationId, source: 'mia_auto_reply' },
           {
@@ -869,7 +1113,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           // message bursts to ONE holding message). The agent stays armed,
           // so it resumes as soon as the API recovers.
           return await softHandoff(db, adapter, {
-            conversationId, locationId, recipient, contactId, connection, settings,
+            conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
             lastReplyAt: conv?.agent_last_reply_at,
             reason: 'model_error',
             notify: modelFailureNotify(adapter),
@@ -900,13 +1144,47 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             // words; ops keep the real signal in the log line.
             let result
             try {
-              result = ACCOUNT_TOOL_NAMES.has(block.name)
-                ? await executeAccountTool(block.name, block.input || {}, toolCtx)
+              // MIAORG.1 Task 5 — a booking-system tool named at a studio
+              // without one (never offered there, so the model invented it)
+              // is refused before any executor runs: no Glofox call, no read.
+              //
+              // MIAHATCH.1 — a person whose only live membership is at another
+              // studio Mia cannot answer for: the booking-system and account
+              // tools would read THIS studio's Glofox columns and report "no
+              // membership", true of the studio and false of the person.
+              // Answer with the studio's name instead, before any executor
+              // (and before the no-booking refusal) runs. A failed or absent
+              // resolution never reaches here: today's behaviour exactly.
+              // Only once verified: unverified, the executor path below
+              // answers not_verified and reads nothing.
+              const otherStudio = BOOKING_SYSTEM_TOOL_NAMES.has(block.name)
+                && toolCtx.verifiedContactId && toolCtx.memberStudios && !toolCtx.memberStudios.readFailed
+                ? otherStudioOnly(toolCtx.memberStudios.studios, locationId)
+                : null
+              // MIAHATCH.2 — the studio this tool runs at (turn-studios.js):
+              // toolCtx itself on today's turn; the Glofox studio for a Glofox
+              // tool when the thread is filed elsewhere; the member's
+              // un1t.online studio for a pause or cancellation request there.
+              // null: the tool's studio could not be resolved, so it is refused
+              // rather than run at the wrong studio.
+              const execCtx = otherStudio ? toolCtx : await executorCtxFor(block.name, block.input || {}, toolCtx, actionStudios)
+              result = (otherStudio ? membershipAtOtherStudio(otherStudio.name) : null)
+                || (execCtx ? null : { ...TOOL_NOT_AT_THIS_STUDIO })
+                || refuseToolForTurn(block.name, execCtx) || (block.name === SEND_BOOKING_FLOW_TOOL_NAME
+                // MIAFLOW.1 — never throws; refuses itself unless this turn offers it.
+                ? await executeSendBookingFlow(execCtx)
+                // MIAHATCH.6 — the purchase tools (block 3b only; refused above
+                // everywhere else). Loaded lazily: no other turn imports the
+                // write side.
+                : PURCHASE_TOOL_NAMES.has(block.name)
+                ? await (await import('./purchase-intents')).executePurchaseTool(block.name, block.input || {}, execCtx)
+                : ACCOUNT_TOOL_NAMES.has(block.name)
+                ? await executeAccountTool(block.name, block.input || {}, execCtx)
                 : EVENT_TOOL_NAMES.has(block.name)
-                  ? await executeEventTool(block.name, block.input || {}, toolCtx)
+                  ? await executeEventTool(block.name, block.input || {}, execCtx)
                   : CARD_TOOL_NAMES.has(block.name)
-                    ? await executeCardTool(block.name, block.input || {}, toolCtx)
-                    : await executeBookingTool(block.name, block.input || {}, toolCtx)
+                    ? await executeCardTool(block.name, block.input || {}, execCtx)
+                    : await executeBookingTool(block.name, block.input || {}, execCtx))
             } catch (err) {
               const throws = (toolThrows.get(block.name) || 0) + 1
               toolThrows.set(block.name, throws)
@@ -922,11 +1200,21 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               })
               continue
             }
+            // MIAHATCH.6 — a purchase result names its intent for the decision
+            // trace only; the model never needs the id.
+            if (PURCHASE_TOOL_NAMES.has(block.name) && result && typeof result === 'object' && 'intent_id' in result) {
+              const { intent_id: intentId, ...forModel } = result
+              if (intentId) trace.tools[trace.tools.length - 1].intentId = intentId
+              result = forModel
+            }
             if (block.name === 'book_class' && result?.no_credits === true) {
               noCreditsHandoff = true
             }
             if (block.name === 'book_class' && result?.account_conflict === true) {
               accountConflictHandoff = true
+            }
+            if (block.name === 'send_purchase_link' && result?.open_link_handoff === true) {
+              purchaseLinkOpenHandoff = { text: typeof result.text === 'string' ? result.text : '' }
             }
             if (block.name === 'verify_identity') {
               // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
@@ -947,6 +1235,14 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
                 // reads (person-accounts.js) make the anchor sufficient.
                 toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
                 trace.actingContactId = toolCtx.verifiedContactId
+                // MIAHATCH.1 — a different acting account can be a member of
+                // different studios: resolve again from the verified contact.
+                applyMemberStudios(await resolveTurnMemberStudios(toolCtx.verifiedContactId))
+                // MIAHATCH.2 — and the tool block with it. A changed block, or
+                // a changed un1t studio or set of facts studios, sends its own
+                // tools AND matching system blocks from the next iteration; an
+                // unchanged plan keeps the system built once.
+                await settleTurn({ keepIfKey: planKey(plan) })
               }
             }
             toolResults.push({
@@ -1014,7 +1310,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       // (debounced) + manager push, agent stays armed for when the model
       // comes back.
       return await softHandoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings,
+        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
         lastReplyAt: conv?.agent_last_reply_at,
         reason: 'model_exception',
         notify: modelFailureNotify(adapter),
@@ -1038,7 +1334,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         conversationId,
       })
       return await softHandoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings,
+        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
         lastReplyAt: conv?.agent_last_reply_at,
         reason: stopFailure,
         notify: abandonedTurnNotify(adapter, stopFailure),
@@ -1073,7 +1369,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // tool) carries the booking intent for the one-tap grant-then-book.
     if (noCreditsHandoff) {
       await handoff(db, adapter, {
-        ...common, reason: 'no_credits', settings,
+        ...common, reason: 'no_credits', settings, brand: branding.companyName,
         holdingOverride: (settings?.no_credits_handoff_text || '').trim() || DEFAULT_NO_CREDITS_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'no_credits' }
@@ -1088,10 +1384,22 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // thread while they are still warm.
     if (accountConflictHandoff) {
       await handoff(db, adapter, {
-        ...common, reason: 'account_conflict', settings,
+        ...common, reason: 'account_conflict', settings, brand: branding.companyName,
         holdingOverride: (settings?.account_conflict_handoff_text || '').trim() || DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT,
       })
       return { handled: true, action: 'handoff', reason: 'account_conflict' }
+    }
+
+    // MIAFIX.1 (6) — a payment link is already open for another product. Same
+    // deterministic shape as the two above: the model's text is DISCARDED, the
+    // customer reads the open text (operator-editable; the tool rendered it),
+    // and the thread is handed to the team with no further reply from them.
+    if (purchaseLinkOpenHandoff) {
+      await handoff(db, adapter, {
+        ...common, reason: 'purchase_link_open', settings, brand: branding.companyName,
+        holdingOverride: purchaseLinkOpenHandoff.text,
+      })
+      return { handled: true, action: 'handoff', reason: 'purchase_link_open' }
     }
 
     if (shouldHandoffAfterVerifyFail(verifyFails, verifyFailThreshold)) {
@@ -1100,7 +1408,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           .update({ agent_verify_attempts: 0 })
           .eq('id', conversationId)
       } catch { /* handoff still proceeds; the next re-arm resets anyway */ }
-      await handoff(db, adapter, { ...common, reason: 'verify_failed', settings })
+      await handoff(db, adapter, { ...common, reason: 'verify_failed', settings, brand: branding.companyName })
       return { handled: true, action: 'handoff', reason: 'verify_failed' }
     }
 
@@ -1116,7 +1424,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     }
 
     if (parsed.action === 'handoff') {
-      await handoff(db, adapter, { ...common, reason: parsed.reason, settings })
+      await handoff(db, adapter, { ...common, reason: parsed.reason, settings, brand: branding.companyName })
       return { handled: true, action: 'handoff', reason: parsed.reason }
     }
 
@@ -1178,12 +1486,12 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
   let recordedText = text
   try {
     if (opts && adapter.sendOptions) {
-      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection })
+      const r = await adapter.sendOptions(recipient, text, opts, { locationId, connection, conversationId })
       messageId = r?.messageId || null
       recordedText = `${text}\n[Options: ${opts.join(' | ')}]`
     } else {
       const sendText = opts ? `${text}\n\n${opts.map(o => `• ${o}`).join('\n')}` : text
-      const r = await adapter.send(recipient, sendText, { locationId, connection, settings })
+      const r = await adapter.send(recipient, sendText, { locationId, connection, settings, conversationId })
       messageId = r?.messageId || null
       recordedText = sendText
     }
@@ -1221,11 +1529,12 @@ async function recordAgentMessage(db, adapter, row) {
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
-async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, holdingOverride }) {
+async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride }) {
   // holdingOverride: a reason-specific script (e.g. the no_credits
   // escalation wording) replaces the generic holding message for this
   // handoff only.
-  const holding = (holdingOverride || '').trim() || (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
+  // W1.S3 — `brand` is the turn's resolved companyName (never re-queried here).
+  const holding = (holdingOverride || '').trim() || (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
 
   await db.from(adapter.conversationsTable).update({
@@ -1238,7 +1547,7 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   }).eq('id', conversationId)
 
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -1367,7 +1676,7 @@ async function claimSoftHandoff(db, adapter, conversationId) {
 // API recovering) re-engages it. Debounced via agent_last_reply_at so a
 // burst of photos / webhook retries during an outage sends ONE ack, not a
 // string of them. `notify` overrides the push copy per cause.
-async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt, reason = 'unsupported_type', notify = null }) {
+async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand, lastReplyAt, reason = 'unsupported_type', notify = null }) {
   if (lastReplyAt && Date.now() - new Date(lastReplyAt).getTime() < SOFT_NOTIFY_GAP_MS) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
@@ -1379,10 +1688,10 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   if (!(await claimSoftHandoff(db, adapter, conversationId))) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
-  const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
+  const holding = (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -1409,6 +1718,32 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
 }
 
 // ── WhatsApp adapter ────────────────────────────────────────────────
+// WAREPLYNUMBER.1 (C86) — every send names the conversation, so it goes from
+// the number the customer wrote to (recorded by the webhook), else the
+// studio default. No conversation id → exactly the old options.
+const waReplyOpts = (locationId, conversationId) => (conversationId
+  ? { locationId, replyInConversation: conversationId }
+  : { locationId })
+
+// MIAORG.1 Task 5 — the trailing-link button's text. The studio's booking link
+// (booking_url, sent where Mia cannot book) carries booking_cta_label, default
+// "Book a class"; every other link keeps link_button_text, default "Open link".
+// A studio with no booking_url (every Glofox studio today) is unchanged.
+function sameLink(a, b) {
+  const norm = (u) => String(u || '').trim().replace(/\/+$/, '')
+  return !!norm(a) && norm(a) === norm(b)
+}
+// Capped at 20, Meta's cta_url display_text limit (as the card-set buttons in
+// whatsapp.js are): a longer label would be refused and the link sent as plain
+// text. Covers link_button_text too (its schema allows 25).
+const CTA_BUTTON_TEXT_MAX = 20
+export function linkButtonText(url, settings) {
+  const text = sameLink(url, settings?.booking_url)
+    ? ((settings?.booking_cta_label || '').trim() || DEFAULT_BOOKING_CTA_LABEL)
+    : ((settings?.link_button_text || '').trim() || 'Open link')
+  return text.slice(0, CTA_BUTTON_TEXT_MAX)
+}
+
 export const whatsappAdapter = {
   name: 'whatsapp',
   label: 'WhatsApp',
@@ -1420,33 +1755,35 @@ export const whatsappAdapter = {
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,
   // AGENT-REARM.2 — operator send routes stamp sent_by; agent + sequence /
-  // automation sends leave it null, so sent_by IS the human signal.
+  // automation sends leave it null, so sent_by IS the human signal. C106 (d):
+  // plus a reply typed in the studio's linked phone app (source 'app_echo',
+  // no sent_by). One rule, shared with the check-in runner and handoff SLA.
   humanOutboundColumns: 'source, sent_by',
-  isHumanOutbound: (m) => m.source !== 'agent' && m.sent_by != null,
+  isHumanOutbound: isWhatsAppStaffAuthored,
   // Fires once the agent has committed to replying (gating + claim passed):
   // marks the inbound read and shows "typing…" while Claude composes.
-  onEngage: async ({ waMessageId, locationId }) => {
+  onEngage: async ({ waMessageId, locationId, conversationId }) => {
     if (!waMessageId) return
-    try { await sendTypingIndicator(waMessageId, { locationId }) }
+    try { await sendTypingIndicator(waMessageId, waReplyOpts(locationId, conversationId)) }
     catch (e) { console.warn('[agent] typing indicator failed:', e?.message) }
   },
   // C3 — a reply that ends in a URL becomes a cta_url button message (body +
   // tappable button) instead of a raw link. Operator-editable button text;
   // plain text is byte-identical to before when no trailing URL.
-  send: async (recipient, text, { locationId, settings }) => {
+  send: async (recipient, text, { locationId, settings, conversationId }) => {
     const split = splitTrailingUrl(text)
     if (split) {
-      const buttonText = (settings?.link_button_text || '').trim() || 'Open link'
+      const buttonText = linkButtonText(split.url, settings)
       try {
-        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, { locationId })
+        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, waReplyOpts(locationId, conversationId))
       } catch (e) {
         // cta_url rejected (rare) — fall back to the plain text send below.
         console.warn('[agent] cta_url send failed, falling back to text:', e?.message)
       }
     }
-    return sendTextMessage(recipient, text, { locationId })
+    return sendTextMessage(recipient, text, waReplyOpts(locationId, conversationId))
   },
-  sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
+  sendOptions: (recipient, text, options, { locationId, conversationId }) => sendInteractiveOptions(recipient, text, options, waReplyOpts(locationId, conversationId)),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,

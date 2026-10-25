@@ -46,7 +46,9 @@ function agentDb({ conv, history, calls, settings }) {
         return { data: [{ id: 'conv-1' }], error: null }
       }
       if (table === 'locations') {
-        return { data: { name: 'Stillorgan', settings: { customer_agent: settings } }, error: null }
+        // MIAORG.1 Task 5 — a Glofox studio, so this harness runs the full
+        // (booking) tool block and prompt it was written against.
+        return { data: { name: 'Stillorgan', membership_source: 'glofox', settings: { customer_agent: settings } }, error: null }
       }
       if (table === 'whatsapp_conversations') return { data: conv, error: null }
       if (table === 'whatsapp_messages') {

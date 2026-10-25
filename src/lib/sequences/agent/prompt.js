@@ -42,17 +42,16 @@ GRAPH SHAPE (emit via the emit_sequence_graph tool):
   "edges": [ { "from": "${TRIGGER_SOURCE_ID}", "to": "n1" }, { "from": "n1", "to": "n2" }, ... ]
 }
 
-NODE TYPES (${ACTIVE_NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_TYPES.join(', ')}. Required config per type:
+NODE TYPES (${ACTIVE_NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_TYPES.filter((t) => ACTIVE_NODE_TYPES.includes(t)).join(', ')}. Required config per type:
 - email:   { subject } (required) and optionally { html_content } — plain HTML.
 - whatsapp:{ template_id } of an APPROVED template, plus { variables: { "1": "first_name", ... } } if it has placeholders.
-- sms:     { body } (required, short).
 - wait:    { days?, hours?, minutes? } — at least one MUST be non-zero. Model every delay as its own wait node.
 - apply_tag:        { tag }.
 - update_field:     { field, value }.
 - internal_task:    { subject } (+ optional note, due_offset_minutes).
 - webhook:          { url } (MUST be https), { method }.
 - glofox_provision: {} (no config). Creates the contact's Glofox account + attaches the studio trial. Use when the request is about registering/adding a new lead in Glofox (e.g. "when a new lead comes in, add them to Glofox with a trial").
-- branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] }.
+- branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] } OR { type:"booked_class_at_studio" } (true when the contact has booked a class at this studio on any booking platform, or has a /start booking request in flight; use it, not the glofox_first_booking tag, for "have they booked yet" at a studio that is not on Glofox) OR { type:"in_pipeline_stage_at_studio", stages:["<stage slug>", ...] } (true when the contact has an open deal at this studio, on an enabled board, in one of those stages; use it, not field_equals on pipeline_stage_slug, which follows the contact's HOME studio) OR { type:"whatsapp_reply_since_enrolment" } (true when the contact has sent a WhatsApp message to any studio of the organisation since entering this flow).
 
 EDGES & STRUCTURE RULES (these are validated — follow them exactly):
 - The first node(s) are reached by an edge from the literal source id "${TRIGGER_SOURCE_ID}".

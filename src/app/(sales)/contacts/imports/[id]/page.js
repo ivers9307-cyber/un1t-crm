@@ -8,7 +8,7 @@ import Link from 'next/link'
 import { redirect, notFound } from 'next/navigation'
 import { ArrowLeft, Download } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtAnyLocation, hasRoleAtLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 import ImportRollbackButton from '@/components/ImportRollbackButton'
@@ -27,7 +27,11 @@ export default async function ImportDetailPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!MANAGER_ROLES.includes(user.role)) redirect('/contacts')
+  // PAGEGATES.1 — coarse pre-check only; the decision is MANAGER_ROLES at
+  // the batch's location below, the same one GET /api/contacts/imports/[id]
+  // and …/error-csv make. The page renders the batch's raw rows itself, so
+  // this check is the only thing between them and the browser.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) redirect('/contacts')
 
   const db = createServerClient()
   const { data: batch } = await db
@@ -36,8 +40,8 @@ export default async function ImportDetailPage(props) {
     .eq('id', params.id)
     .single()
   if (!batch) notFound()
-  const guard = assertLocationAccess(user, batch.location_id)
-  if (guard) redirect('/contacts/imports')
+  if (assertLocationAccess(user, batch.location_id)) notFound()
+  if (!hasRoleAtLocation(user, batch.location_id, MANAGER_ROLES)) redirect('/contacts')
 
   // Paginated via selectAll — the old .limit(5000) was silently capped at
   // the 1000-row PostgREST ceiling, so a >1000-row import only rendered its

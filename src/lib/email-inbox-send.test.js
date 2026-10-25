@@ -1,4 +1,4 @@
-// EMAIL-OUTBOUND-SERVER.1 — ticket mail leaves on the SUPPORT INBOX'S OWN
+// EMAIL-OUTBOUND-SERVER.1 — conversation mail leaves on the SUPPORT INBOX'S OWN
 // Postmark server.
 //
 // Asserted AT THE WIRE (spying on fetch, real sendEmail) rather than against a
@@ -7,7 +7,7 @@
 // names, which From it carries. A mock would let all three be wrong together.
 //
 // THE ONE THAT MATTERS MOST is the pair pinned in "the two streams never
-// touch": ONE ticket reply is internally 'outbound' (transactional consent,
+// touch": ONE conversation reply is internally 'outbound' (transactional consent,
 // no tracking) AND rides Postmark's 'email-send'. Two values, two jobs. If a
 // future edit collapses them, nothing else in the suite would notice — the
 // send would still work and the consent family would still *happen* to come
@@ -17,8 +17,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./tenant-email', () => ({ resolveEmailSender: vi.fn() }))
 vi.mock('./supabase', () => ({ createServerClient: vi.fn(() => ({ __service: true })) }))
+// W1.E2 — the fallback From carries the location's brand. Unbranded by
+// default (companyName '') so the existing wire assertions read PLATFORM_NAME.
+vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: '', shortName: '', companyNameConfigured: false, logoUrl: null, faviconUrl: null })) }))
+import { getLocationBranding } from './location-branding.js'
 // MAILBOX-CONNECT.7 — the SMTP transport is MOCKED here, and only here.
-// sendTicketEmail calls sendViaSmtp with production arguments and no test seam
+// sendConversationEmail calls sendViaSmtp with production arguments and no test seam
 // (deliberately: the seam belongs to the module that owns the socket, not to
 // the branch that chooses it), so a mock is the only way to ask the questions
 // this file is for — WHICH transport ran, with WHAT, and whether the other one
@@ -29,7 +33,7 @@ vi.mock('./supabase', () => ({ createServerClient: vi.fn(() => ({ __service: tru
 vi.mock('./mail/smtp-send', () => ({ sendViaSmtp: vi.fn() }))
 
 import {
-  sendTicketEmail,
+  sendConversationEmail,
   resolveInboxServerToken,
   inboxMessageStream,
   fallbackFromAddress,
@@ -46,7 +50,10 @@ import { sendViaSmtp } from './mail/smtp-send.js'
 
 const INBOX_TOKEN = 'ticketing-server-token'
 const MARKETING_TOKEN = 'marketing-server-token'
-const GLOBAL_FROM = 'UN1T <hello@un1t.ie>'
+// W1.E2 — the env holds the platform ADDRESS only; the fallback From puts
+// PLATFORM_NAME (no brand resolved) or the location's brand on it.
+const PLATFORM_ADDRESS = 'hello@platform.test'
+const GLOBAL_FROM = 'Repset <hello@platform.test>'
 const HATCH = 'accounts@hatchstreetfitness.com'
 // A domain the business does not control — it can never be DKIM-verified, so
 // Postmark refuses it at submit time. Named after the real case.
@@ -91,7 +98,7 @@ beforeEach(() => {
   _resetInboxSenderCache()
   process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN = INBOX_TOKEN
   process.env.POSTMARK_API_KEY = MARKETING_TOKEN
-  process.env.POSTMARK_FROM_EMAIL = GLOBAL_FROM
+  process.env.POSTMARK_FROM_EMAIL = PLATFORM_ADDRESS
   delete process.env.POSTMARK_EMAIL_INBOX_STREAM
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -107,7 +114,7 @@ afterEach(() => {
 describe('the two streams never touch', () => {
   it('ONE reply is internally `outbound` AND on Postmark stream `email-send`', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
 
     const body = bodyOf(fetchSpy.mock.calls[0])
     // Postmark's vocabulary, on the wire.
@@ -129,15 +136,15 @@ describe('the two streams never touch', () => {
     expect(['broadcast', 'outbound']).not.toContain(inboxMessageStream())
   })
 
-  it('never attaches List-Unsubscribe headers — ticket mail is transactional', async () => {
+  it('never attaches List-Unsubscribe headers — conversation mail is transactional', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(bodyOf(fetchSpy.mock.calls[0]).Headers).toBeUndefined()
   })
 
   it('never tracks opens or clicks (EMAIL-NOTRACK.1, via the internal stream)', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     const body = bodyOf(fetchSpy.mock.calls[0])
     expect(body.TrackOpens).toBe(false)
     expect(body.TrackLinks).toBe('None')
@@ -148,7 +155,7 @@ describe('the two streams never touch', () => {
 describe('the server token', () => {
   it('sends on the TICKETING server, never the marketing one', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(tokenOf(fetchSpy.mock.calls[0])).toBe(INBOX_TOKEN)
     expect(tokenOf(fetchSpy.mock.calls[0])).not.toBe(MARKETING_TOKEN)
   })
@@ -157,7 +164,7 @@ describe('the server token', () => {
     delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
 
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
 
     expect(res.ok).toBe(false)
     expect(res.reason).toBe('not_configured')
@@ -168,7 +175,7 @@ describe('the server token', () => {
 
   it('names the env var in the refusal, and says loudly why', async () => {
     delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(res.error).toContain('POSTMARK_EMAIL_INBOX_SERVER_TOKEN')
     expect(console.error).toHaveBeenCalled()
   })
@@ -182,7 +189,7 @@ describe('the server token', () => {
 
   it('never consults the per-tenant sending domain resolver', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(resolveEmailSender).not.toHaveBeenCalled()
   })
 })
@@ -197,7 +204,7 @@ describe('the message stream id', () => {
   it('is overridable without a deploy', async () => {
     process.env.POSTMARK_EMAIL_INBOX_STREAM = 'support-outbound'
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(bodyOf(fetchSpy.mock.calls[0]).MessageStream).toBe('support-outbound')
   })
 
@@ -209,9 +216,9 @@ describe('the message stream id', () => {
 
 // ─────────────────────────────────────────────────────────────────────
 describe('From — the mailbox address', () => {
-  it('sends FROM the ticket’s own mailbox when it is sendable', async () => {
+  it('sends FROM the conversation’s own mailbox when it is sendable', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
 
     expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe(HATCH)
     // The caller logs what actually went out, not a guess.
@@ -221,13 +228,13 @@ describe('From — the mailbox address', () => {
 
   it('keeps Reply-To on the mailbox so the answer threads back', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(bodyOf(fetchSpy.mock.calls[0]).ReplyTo).toBe(HATCH)
   })
 
-  it('falls back to a domain we own when the ticket has no mailbox', async () => {
+  it('falls back to a domain we own when the conversation has no mailbox', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: null })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: null })
 
     const body = bodyOf(fetchSpy.mock.calls[0])
     expect(body.From).toBe(GLOBAL_FROM)
@@ -249,7 +256,7 @@ describe('From — the mailbox address', () => {
 describe('recipients pass straight through', () => {
   it('carries Cc and Bcc in their own Postmark fields', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({
+    await sendConversationEmail({
       ...SEND,
       mailboxAddress: HATCH,
       to: 'member@example.com, colleague@example.com',
@@ -267,7 +274,7 @@ describe('recipients pass straight through', () => {
   // To, in Cc or in Headers would be visible to every other recipient.
   it('puts a bcc address in `Bcc` and NOWHERE else in the request', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({
+    await sendConversationEmail({
       ...SEND,
       mailboxAddress: HATCH,
       to: 'member@example.com',
@@ -283,7 +290,7 @@ describe('recipients pass straight through', () => {
 
   it('omitting them leaves the body exactly as it was before EMAIL-CC.1', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
 
     const body = bodyOf(fetchSpy.mock.calls[0])
     expect(body.Cc).toBeUndefined()
@@ -298,7 +305,7 @@ describe('recipients pass straight through', () => {
       .mockResolvedValueOnce(signatureRejection())
       .mockResolvedValueOnce(okResponse('pm-fallback'))
 
-    const res = await sendTicketEmail({
+    const res = await sendConversationEmail({
       ...SEND,
       mailboxAddress: STILLORGAN,
       to: 'member@example.com, colleague@example.com',
@@ -322,7 +329,7 @@ describe('From — an unverifiable domain degrades, it does not break', () => {
       .mockResolvedValueOnce(signatureRejection())
       .mockResolvedValueOnce(okResponse('pm-fallback'))
 
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
 
     expect(res.ok).toBe(true)
     expect(res.degraded).toBe('unverified_sender')
@@ -345,10 +352,10 @@ describe('From — an unverifiable domain degrades, it does not break', () => {
       .mockResolvedValueOnce(signatureRejection())
       .mockResolvedValue(okResponse())
 
-    await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+    await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
     fetchSpy.mockClear()
 
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe(GLOBAL_FROM)
     expect(res.degraded).toBe('unverified_sender')
@@ -359,10 +366,10 @@ describe('From — an unverifiable domain degrades, it does not break', () => {
       .mockResolvedValueOnce(signatureRejection())
       .mockResolvedValue(okResponse())
 
-    await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+    await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
     fetchSpy.mockClear()
 
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(bodyOf(fetchSpy.mock.calls[0]).From).toBe(HATCH)
   })
 
@@ -375,7 +382,7 @@ describe('From — an unverifiable domain degrades, it does not break', () => {
       json: async () => ({ ErrorCode: 406, Message: 'You tried to send to a recipient that has been marked as inactive.' }),
     })
 
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(res.ok).toBe(false)
@@ -390,7 +397,7 @@ describe('From — an unverifiable domain degrades, it does not break', () => {
       json: async () => ({ ErrorCode: 1235, Message: "The 'MessageStream' provided does not exist on this server." }),
     })
 
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(res.ok).toBe(false)
     expect(res.error).toContain('MessageStream')
@@ -398,14 +405,14 @@ describe('From — an unverifiable domain degrades, it does not break', () => {
 
   it('does NOT retry a network failure — the send may have been accepted', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('socket hang up'))
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(res.ok).toBe(false)
   })
 
   it('never throws, whatever Postmark does', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('boom'))
-    await expect(sendTicketEmail({ ...SEND, mailboxAddress: HATCH })).resolves.toMatchObject({ ok: false })
+    await expect(sendConversationEmail({ ...SEND, mailboxAddress: HATCH })).resolves.toMatchObject({ ok: false })
   })
 })
 
@@ -480,15 +487,41 @@ describe('plannedFroms (pure)', () => {
   })
 })
 
-describe('fallbackFromAddress', () => {
-  it('is POSTMARK_FROM_EMAIL', () => {
-    expect(fallbackFromAddress()).toBe(GLOBAL_FROM)
+describe('fallbackFromAddress (W1.E2 — the brand on the platform address)', () => {
+  it('is PLATFORM_NAME on POSTMARK_FROM_EMAIL when no location is known', async () => {
+    expect(await fallbackFromAddress({ __service: true }, null)).toBe(GLOBAL_FROM)
+    expect(getLocationBranding).not.toHaveBeenCalled()
   })
 
-  it('mirrors sendEmail’s own last-resort default when that is unset', () => {
+  it('is the location’s brand on POSTMARK_FROM_EMAIL', async () => {
+    getLocationBranding.mockResolvedValueOnce({ companyName: 'Gym A', shortName: 'Gym A', companyNameConfigured: true, logoUrl: null, faviconUrl: null })
+    expect(await fallbackFromAddress({ __service: true }, 'loc-1')).toBe('Gym A <hello@platform.test>')
+    expect(getLocationBranding).toHaveBeenCalledWith({ __service: true }, 'loc-1')
+  })
+
+  it("never takes the env's own display name, and is null (no invented address) when the env is unset", async () => {
+    process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@platform.test>'
+    expect(await fallbackFromAddress({ __service: true }, null)).toBe(GLOBAL_FROM)
     delete process.env.POSTMARK_FROM_EMAIL
-    expect(fallbackFromAddress()).toBe('UN1T <hello@un1t.ie>')
-    process.env.POSTMARK_FROM_EMAIL = GLOBAL_FROM
+    expect(await fallbackFromAddress({ __service: true }, null)).toBeNull()
+    process.env.POSTMARK_FROM_EMAIL = PLATFORM_ADDRESS
+  })
+
+  it('sendConversationEmail degrades to the LOCATION’s brand on the platform address (locationId, else the mailbox’s studio)', async () => {
+    getLocationBranding.mockResolvedValue({ companyName: 'Hatch Street Fitness', shortName: '', companyNameConfigured: true, logoUrl: null, faviconUrl: null })
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(signatureRejection())
+      .mockResolvedValueOnce(okResponse())
+    const verdict = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN, mailbox: { address: STILLORGAN, location_id: 'loc-mb' }, locationId: 'loc-conv' })
+    expect(verdict.ok).toBe(true)
+    expect(verdict.fromEmail).toBe('Hatch Street Fitness <hello@platform.test>')
+    expect(bodyOf(fetchSpy.mock.calls[1]).From).toBe('Hatch Street Fitness <hello@platform.test>')
+    expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), 'loc-conv')
+
+    getLocationBranding.mockClear()
+    fetchSpy.mockResolvedValueOnce(signatureRejection()).mockResolvedValueOnce(okResponse())
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH, mailbox: { address: HATCH, location_id: 'loc-mb' } })
+    expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), 'loc-mb')
   })
 })
 
@@ -503,13 +536,13 @@ describe('attachments ride the ticketing server, not the marketing one', () => {
 
   it('adds NO Attachments key when the caller passes none', async () => {
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(okResponse())
-    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
     expect(bodyOf(fetchSpy.mock.calls[0])).not.toHaveProperty('Attachments')
   })
 
   it('puts them on the wire, on the ticketing server and its own stream', async () => {
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(okResponse())
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
     expect(res.ok).toBe(true)
 
     const call = fetchSpy.mock.calls[0]
@@ -529,7 +562,7 @@ describe('attachments ride the ticketing server, not the marketing one', () => {
       .mockResolvedValueOnce(signatureRejection())
       .mockResolvedValueOnce(okResponse())
 
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN, attachments: [FILE] })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN, attachments: [FILE] })
     expect(res.ok).toBe(true)
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(bodyOf(fetchSpy.mock.calls[0]).Attachments).toEqual([FILE])
@@ -540,7 +573,7 @@ describe('attachments ride the ticketing server, not the marketing one', () => {
   it('an unconfigured ticketing server refuses the send, files and all', async () => {
     delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(okResponse())
-    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
+    const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
     expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
@@ -552,7 +585,7 @@ describe('attachments ride the ticketing server, not the marketing one', () => {
 // A mailbox connected over IMAP/SMTP sends its replies through its own
 // provider rather than through Postmark, because Postmark cannot DKIM-sign a
 // domain the business does not control. `email_mailboxes.egress` (mig 572) is
-// the switch and sendTicketEmail branches on it in its first statement.
+// the switch and sendConversationEmail branches on it in its first statement.
 //
 // THE FIRST GROUP IS THE LOAD-BEARING ONE. Three routes call this function
 // with no `mailbox` at all, and none of them knows a second transport exists.
@@ -574,7 +607,7 @@ describe('transport selection', () => {
   describe('no `mailbox` — byte-identical to before this task', () => {
     it('sends through Postmark and never touches the SMTP path', async () => {
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+      const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
 
       expect(res.ok).toBe(true)
       expect(sendViaSmtp).not.toHaveBeenCalled()
@@ -590,7 +623,7 @@ describe('transport selection', () => {
       // database. The SMTP branch's `deliveryTracked` must stay on its own
       // branch.
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+      const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
       expect(Object.keys(res).sort()).toEqual(['degraded', 'fromEmail', 'ok', 'result'])
       expect(res).not.toHaveProperty('deliveryTracked')
     })
@@ -598,7 +631,7 @@ describe('transport selection', () => {
     it('still refuses when the ticketing server token is unset', async () => {
       delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+      const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH })
       expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
       expect(sendViaSmtp).not.toHaveBeenCalled()
     })
@@ -609,7 +642,7 @@ describe('transport selection', () => {
       fetchSpy = vi.spyOn(globalThis, 'fetch')
         .mockResolvedValueOnce(signatureRejection())
         .mockResolvedValueOnce(okResponse())
-      const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN })
+      const res = await sendConversationEmail({ ...SEND, mailboxAddress: STILLORGAN })
       expect(res).toMatchObject({ ok: true, fromEmail: GLOBAL_FROM, degraded: 'unverified_sender' })
       expect(sendViaSmtp).not.toHaveBeenCalled()
     })
@@ -621,7 +654,7 @@ describe('transport selection', () => {
       // in the estate arrives here carrying this value the moment the settings
       // helper starts selecting it. It must be a no-op.
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-      const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, mailbox: POSTMARK_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailboxAddress: HATCH, mailbox: POSTMARK_MAILBOX })
 
       expect(res.ok).toBe(true)
       expect(sendViaSmtp).not.toHaveBeenCalled()
@@ -633,7 +666,7 @@ describe('transport selection', () => {
       // support reply going out. The CHECK constraint is the place that
       // refuses a bad value, at write time, where an operator can see it.
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
-      const res = await sendTicketEmail({
+      const res = await sendConversationEmail({
         ...SEND, mailboxAddress: HATCH, mailbox: { ...POSTMARK_MAILBOX, egress: 'carrier-pigeon' },
       })
       expect(res.ok).toBe(true)
@@ -646,7 +679,7 @@ describe('transport selection', () => {
       sendViaSmtp.mockResolvedValue(SMTP_OK)
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
 
-      const res = await sendTicketEmail({ ...SEND, mailboxAddress: SMTP_MAILBOX.address, mailbox: SMTP_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailboxAddress: SMTP_MAILBOX.address, mailbox: SMTP_MAILBOX })
 
       expect(res).toEqual(SMTP_OK)
       expect(sendViaSmtp).toHaveBeenCalledTimes(1)
@@ -659,14 +692,14 @@ describe('transport selection', () => {
       // server is unconfigured would block a tenant on a fact about us.
       delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
       sendViaSmtp.mockResolvedValue(SMTP_OK)
-      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailbox: SMTP_MAILBOX })
       expect(res.ok).toBe(true)
     })
 
     it('carries the message, the mailbox, the recipients and the attachments', async () => {
       sendViaSmtp.mockResolvedValue(SMTP_OK)
       const FILE = { Name: 'invoice.pdf', Content: 'aGVsbG8=', ContentType: 'application/pdf' }
-      await sendTicketEmail({
+      await sendConversationEmail({
         ...SEND,
         mailbox: SMTP_MAILBOX,
         cc: 'colleague@example.com',
@@ -694,7 +727,7 @@ describe('transport selection', () => {
       // are no webhooks on this path, so forwarding it would be bookkeeping
       // for events that never happen.
       sendViaSmtp.mockResolvedValue(SMTP_OK)
-      await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      await sendConversationEmail({ ...SEND, mailbox: SMTP_MAILBOX })
 
       const args = sendViaSmtp.mock.calls[0][0]
       expect(args).not.toHaveProperty('tag')
@@ -712,7 +745,7 @@ describe('transport selection', () => {
       sendViaSmtp.mockResolvedValue(SMTP_OK)
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(signatureRejection())
 
-      const res = await sendTicketEmail({
+      const res = await sendConversationEmail({
         ...SEND, mailboxAddress: STILLORGAN, mailbox: { ...SMTP_MAILBOX, address: STILLORGAN },
       })
 
@@ -730,7 +763,7 @@ describe('transport selection', () => {
       })
       fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
 
-      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailbox: SMTP_MAILBOX })
 
       expect(res).toEqual({
         ok: false, reason: 'send_failed', error: 'Invalid login: 535-5.7.8 [redacted]',
@@ -744,7 +777,7 @@ describe('transport selection', () => {
       sendViaSmtp.mockResolvedValue({
         ok: false, reason: 'not_configured', error: 'no mail account is connected to it',
       })
-      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailbox: SMTP_MAILBOX })
       expect(res.reason).toBe('not_configured')
     })
 
@@ -755,7 +788,7 @@ describe('transport selection', () => {
       // second place for a credential to end up.
       const error = 'Invalid login: 535-5.7.8 Username and Password not accepted'
       sendViaSmtp.mockResolvedValue({ ok: false, reason: 'send_failed', error })
-      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailbox: SMTP_MAILBOX })
       expect(res.error).toBe(error)
       expect(Object.keys(res).sort()).toEqual(['error', 'ok', 'reason'])
     })
@@ -766,7 +799,7 @@ describe('transport selection', () => {
       // thread has to be able to say "not tracked" instead of rendering an
       // event still in flight.
       sendViaSmtp.mockResolvedValue(SMTP_OK)
-      const res = await sendTicketEmail({ ...SEND, mailbox: SMTP_MAILBOX })
+      const res = await sendConversationEmail({ ...SEND, mailbox: SMTP_MAILBOX })
       expect(res.deliveryTracked).toBe(false)
       expect(res.result.messageId).toBeNull()
     })

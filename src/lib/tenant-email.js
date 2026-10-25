@@ -5,27 +5,33 @@
 // (src/lib/postmark.js sendEmail/sendBatch). Its ONE job: given a
 // locationId, decide whether that location's org has a LIVE tenant email
 // domain and, if so, hand back that org's Postmark server token + verified
-// From — otherwise the GLOBAL DEFAULT (the shared POSTMARK_API_KEY server +
-// POSTMARK_FROM_EMAIL).
+// From — otherwise the PRE-DOMAIN sender (W1.E2): the shared
+// POSTMARK_API_KEY server, the platform address (POSTMARK_FROM_EMAIL, never
+// spelled here), the tenant's BRAND as display name and the location's own
+// address as Reply-To. Nothing says UN1T: a second gym's customers read their
+// gym's name on every email before the gym has verified a domain of its own.
 //
 // FAIL SAFE, ALWAYS. It NEVER throws. A billing/config/DB bug must never
 // stop a booking confirmation going out — every error path resolves to the
-// global default, i.e. exactly today's behaviour. With the table empty
-// (every org today) it returns the global default for every call, so the
-// send path is byte-identical to before this feature existed.
+// global default (platform address + PLATFORM_NAME, no reply-to).
 //
 // SECRET: the resolved serverToken is the org's Postmark server token (see
 // mig 427). It is used ONLY to set the X-Postmark-Server-Token header. It
 // is never logged and never returned to a client.
 
-import { getLocationPlan } from '@/lib/plans'
+import { locationHasPlanFeature } from '@/lib/plans'
+import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationInboxReplyTo } from '@/lib/postmark-reply-to'
+import { PLATFORM_NAME } from '@/lib/brand-name'
+import { platformFromAddress, addressDomain } from '@/lib/platform-sender'
 
 // Small in-request cache: a campaign blasting 500 recipients would
 // otherwise re-resolve the same location on every send. Keyed by
-// locationId; the value is the tenant row (or null = "no live tenant"),
-// with a short TTL so a connect/disconnect self-heals within a minute.
-// The cached row can contain the secret server token — this is a
-// service-role, server-side cache in the send path (the token is already
+// locationId; the value is the WHOLE resolved sender (W1.E2: the tenant row's
+// token + From, or the platform sender with the brand and reply-to resolved),
+// with a short TTL so a connect/disconnect or a brand edit self-heals within
+// a minute. The cached sender can contain the secret server token — this is
+// a service-role, server-side cache in the send path (the token is already
 // in memory there); it is never serialised out.
 const SENDER_CACHE_TTL_MS = 60_000
 const senderCache = new Map()
@@ -37,31 +43,61 @@ export function _resetTenantEmailCache() {
 
 /**
  * The GLOBAL DEFAULT sender: serverToken null (caller falls back to
- * getPostmarkToken() = POSTMARK_API_KEY), from = POSTMARK_FROM_EMAIL.
- * Read from env fresh each call so it always reflects the live config.
+ * getPostmarkToken() = POSTMARK_API_KEY), the platform ADDRESS from
+ * POSTMARK_FROM_EMAIL (parsed: a "Name <addr>" value yields the address, its
+ * name is never used), PLATFORM_NAME as display name, no reply-to. This is
+ * what a send with no location gets, and what any resolver error falls back
+ * to. Read from env fresh each call so it always reflects the live config.
  * Pure.
- * @returns {{ serverToken: null, fromEmail: string|null, fromName: null }}
+ * @returns {{ serverToken: null, fromEmail: string|null, fromName: string, replyTo: null }}
  */
 export function globalDefaultSender() {
   return {
     serverToken: null,
-    fromEmail: process.env.POSTMARK_FROM_EMAIL || null,
-    fromName: null,
+    fromEmail: platformFromAddress(),
+    fromName: PLATFORM_NAME,
+    replyTo: null,
   }
 }
 
 /**
  * Build a sender from a LIVE tenant_email_domains row. Pure. Returns the
  * global default when the row is missing its server token (defensive —
- * a live row should always have one).
- * @param {{ postmark_server_token?: string, from_email?: string, from_name?: string }|null} row
+ * a live row should always have one). replyTo is null here: the caller
+ * (resolveEmailSender) adds the location's reply-to on top.
+ *
+ * FROMDOMAIN — `sendingDomain` is the org's VERIFIED domain (the row's
+ * sending_domain, lower-cased; the domain of its from_email when the column is
+ * empty). It exists ONLY on a live tenant sender: it is what lets a campaign
+ * or sequence send from any other address on that same domain
+ * (pickFromAddress in src/lib/from-address.js). The platform and global
+ * senders never carry it, so nothing can borrow the platform's domain.
+ * @param {{ postmark_server_token?: string, from_email?: string, from_name?: string, sending_domain?: string }|null} row
  */
 export function senderFromRow(row) {
   if (!row?.postmark_server_token) return globalDefaultSender()
+  const declared = typeof row.sending_domain === 'string' ? row.sending_domain.trim().toLowerCase() : ''
   return {
     serverToken: row.postmark_server_token,
-    fromEmail: row.from_email || process.env.POSTMARK_FROM_EMAIL || null,
+    fromEmail: row.from_email || platformFromAddress(),
     fromName: row.from_name || null,
+    replyTo: null,
+    sendingDomain: declared || addressDomain(row.from_email) || null,
+  }
+}
+
+// W1.E2 — the PRE-DOMAIN sender: platform address, tenant display name,
+// tenant reply-to. Nothing says UN1T. The brand is the W1.B1 chain
+// (company_settings → org_settings → locations.name); a brand the chain
+// cannot resolve at all falls to PLATFORM_NAME rather than another gym's.
+// getLocationBranding never throws.
+async function platformSenderFor(db, locationId, replyTo) {
+  const branding = await getLocationBranding(db, locationId)
+  return {
+    serverToken: null,
+    fromEmail: platformFromAddress(),
+    fromName: (branding?.companyName || '').trim() || PLATFORM_NAME,
+    replyTo: replyTo || null,
   }
 }
 
@@ -78,7 +114,7 @@ async function loadLiveRowForLocation(db, locationId) {
 
   const { data: row, error: rowErr } = await db
     .from('tenant_email_domains')
-    .select('postmark_server_token, from_email, from_name, status')
+    .select('postmark_server_token, from_email, from_name, sending_domain, status')
     .eq('organization_id', loc.organization_id)
     .eq('status', 'live')
     .maybeSingle()
@@ -90,25 +126,37 @@ async function loadLiveRowForLocation(db, locationId) {
  * Resolve the sender for a send. NEVER throws.
  *
  *   locationId absent / no db  → global default (no lookup at all)
- *   location → org → LIVE row  → that org's server token + verified From
- *   anything else / ANY error  → global default
+ *   location → org → LIVE row  → that org's server token + verified From,
+ *                                 replyTo = the location's address
+ *   no live row (W1.E2)        → platform address, the location's BRAND as
+ *                                 display name, replyTo = the location's address
+ *   ANY error                  → global default
+ *
+ * replyTo (W1.E2) is getLocationInboxReplyTo: the default email account →
+ * the deprecated locations.email_inbox_reply_to → locations.email → null.
+ * The caller's own replyTo always wins over it.
  *
  * @param {object} db - service-role client (createServerClient())
  * @param {string|null|undefined} locationId
- * @returns {Promise<{ serverToken: string|null, fromEmail: string|null, fromName: string|null }>}
+ * A LIVE tenant sender also carries `sendingDomain` (FROMDOMAIN — see
+ * senderFromRow); no other branch does.
+ *
+ * @returns {Promise<{ serverToken: string|null, fromEmail: string|null, fromName: string|null, replyTo: string|null, sendingDomain?: string|null }>}
  */
 export async function resolveEmailSender(db, locationId) {
   if (!db || !locationId) return globalDefaultSender()
   try {
     const cached = senderCache.get(locationId)
-    let row
-    if (cached && cached.expiresAt > Date.now()) {
-      row = cached.row
-    } else {
-      row = await loadLiveRowForLocation(db, locationId)
-      senderCache.set(locationId, { row, expiresAt: Date.now() + SENDER_CACHE_TTL_MS })
-    }
-    return senderFromRow(row)
+    if (cached && cached.expiresAt > Date.now()) return { ...cached.sender }
+    const row = await loadLiveRowForLocation(db, locationId)
+    const replyTo = await getLocationInboxReplyTo(db, locationId)
+    // A live row with no token (defensive; should not exist) is not a tenant
+    // sender — it falls to the branded platform sender, never to a bare one.
+    const sender = row?.postmark_server_token
+      ? { ...senderFromRow(row), replyTo: replyTo || null }
+      : await platformSenderFor(db, locationId, replyTo)
+    senderCache.set(locationId, { sender, expiresAt: Date.now() + SENDER_CACHE_TTL_MS })
+    return { ...sender }
   } catch {
     // FAIL SAFE — a resolver bug must never break a send.
     return globalDefaultSender()
@@ -121,14 +169,19 @@ export async function resolveEmailSender(db, locationId) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * True when ANY active location of the org is on a plan (tier or add-on)
- * whose resolved features include custom_email_domain. Plans are pinned
+ * True when ANY active location of the org holds an active pin (tier OR
+ * add-on) whose features include custom_email_domain. Plans are pinned
  * per LOCATION (mig 413) but the sending domain is per ORG, so an org
  * "has" the add-on if any of its locations does.
  *
+ * W1.E1 — judged by locationHasPlanFeature, which reads the pins directly.
+ * It used to go through getLocationPlan(), which answers null without a
+ * TIER pin, so an add-on-only pin (the live Test Studio pin) granted
+ * nothing and the feature stayed unreachable. The sending domain is a
+ * PAID plan feature (decision 1): the gate stays, master included.
+ *
  * FAIL CLOSED — this gates provisioning of PAID resources, so any error
- * (or no plan) resolves to false (feature off). Every org is unpinned
- * today → always false → the whole feature is unreachable.
+ * (or no pin) resolves to false (feature off).
  *
  * @param {object} db - service-role client
  * @param {string} orgId
@@ -144,8 +197,7 @@ export async function orgHasEmailDomainAddon(db, orgId) {
       .eq('active', true)
     if (error || !Array.isArray(locs)) return false
     for (const loc of locs) {
-      const plan = await getLocationPlan(db, loc.id)
-      if (plan?.resolved?.features?.custom_email_domain === true) return true
+      if (await locationHasPlanFeature(db, loc.id, 'custom_email_domain')) return true
     }
     return false
   } catch {
@@ -187,7 +239,7 @@ export function tenantEmailStatePayload(row, meta = {}) {
     account_configured: !!meta.accountConfigured,
   }
   if (!row) {
-    return { ...base, status: 'not_configured', sending_domain: null, from_email: null, from_name: null, dkim_verified: false, return_path_verified: false, records: [], last_error: null }
+    return { ...base, status: 'not_configured', sending_domain: null, from_email: null, from_name: null, dkim_verified: false, return_path_verified: false, records: [], last_error: null, webhooks_registered: false }
   }
   return {
     ...base,
@@ -199,5 +251,8 @@ export function tenantEmailStatePayload(row, meta = {}) {
     return_path_verified: !!row.return_path_verified,
     records: dnsRecordsFromRow(row),
     last_error: row.last_error ?? null,
+    // W1.E3 (mig 718) — the broadcast stream + six-trigger webhooks exist on
+    // the org's server. A boolean: the timestamp stays on the row.
+    webhooks_registered: !!row.webhooks_registered_at,
   }
 }

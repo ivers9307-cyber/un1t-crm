@@ -1,3 +1,5 @@
+# CHANGELOG-FILES.1 (30 Sep 2026): new entries are one file per PR in
+# docs/changelog/entries/, so nothing below should need to merge any more.
 # docs/CHANGELOG.md: every PR inserts a row under the same table header. The
 # built-in union driver keeps both sides on a concurrent insert instead of
 # conflicting (CHANGELOG-PRKEY.1). It does NOT lift the branch-protection

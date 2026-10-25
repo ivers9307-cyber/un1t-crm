@@ -29,6 +29,18 @@ const assets = [
   ['node_modules/@ffmpeg/ffmpeg/dist/esm/worker.js',      'worker.js'],
   ['node_modules/@ffmpeg/ffmpeg/dist/esm/const.js',       'const.js'],
   ['node_modules/@ffmpeg/ffmpeg/dist/esm/errors.js',      'errors.js'],
+  // FFMPEGLOADER.1: the loader itself (the FFmpeg class) is served from here
+  // too and imported at runtime by URL, never bundled. Next 16.4's Turbopack
+  // tries to resolve classes.js's `new Worker(new URL(<runtime value>,
+  // import.meta.url))` at build time and fails the build; served unbundled,
+  // import.meta.url is the real https URL of /ffmpeg/classes.js. index.js ->
+  // classes.js + types.js; classes.js -> const.js + utils.js + errors.js.
+  // tests/ffmpeg-loader-unbundled-guard.test.js keeps this list closed over
+  // index.js's imports.
+  ['node_modules/@ffmpeg/ffmpeg/dist/esm/index.js',       'index.js'],
+  ['node_modules/@ffmpeg/ffmpeg/dist/esm/classes.js',     'classes.js'],
+  ['node_modules/@ffmpeg/ffmpeg/dist/esm/types.js',       'types.js'],
+  ['node_modules/@ffmpeg/ffmpeg/dist/esm/utils.js',       'utils.js'],
 ]
 
 mkdirSync(out, { recursive: true })

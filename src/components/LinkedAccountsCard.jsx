@@ -32,7 +32,7 @@ const LinkAccountModal = dynamic(() => import('./LinkAccountModal'), { ssr: fals
 
 // ─── Row component ─────────────────────────────────────────────────────────
 
-function AccountRow({ account, onSetPrimary, onUnlink, busy, error }) {
+function AccountRow({ account, onSetPrimary, onUnlink, busy, error, canManage }) {
   const { name, status, glofoxMemberId, isPrimary, attended30d, lastAttendedAt } = account
   const abbr = initials(name)
   const labelText = accountStatusLabel(status)
@@ -98,6 +98,7 @@ function AccountRow({ account, onSetPrimary, onUnlink, busy, error }) {
       </div>
 
       {/* Actions — right-aligned; wrap beneath the identity when the row is tight */}
+      {canManage && (
       <div className="flex-none flex items-center gap-1 ml-auto">
         {!isPrimary && (
           <Button
@@ -120,13 +121,17 @@ function AccountRow({ account, onSetPrimary, onUnlink, busy, error }) {
           Unlink
         </Button>
       </div>
+      )}
     </div>
   )
 }
 
 // ─── Main card ─────────────────────────────────────────────────────────────
 
-export default function LinkedAccountsCard({ person, contactId, locationId }) {
+// ROLEUI.2 — canManage is POST/DELETE /api/contacts/[id]/link's own rule
+// (`contact_linking` at the contact's location; contactWorkGates.canLinkAccounts
+// in src/lib/contact-page-gates.js). Without it the card only lists accounts.
+export default function LinkedAccountsCard({ person, contactId, locationId, canManage = false }) {
   const router = useRouter()
   const [modalOpen, setModalOpen] = useState(false)
   // busy: { contactId, action } or null
@@ -185,7 +190,7 @@ export default function LinkedAccountsCard({ person, contactId, locationId }) {
     <>
       <Card
         title="Linked accounts"
-        actions={
+        actions={canManage ? (
           <Button
             variant="secondary"
             size="sm"
@@ -194,7 +199,7 @@ export default function LinkedAccountsCard({ person, contactId, locationId }) {
           >
             {hasMultiple ? 'Link another' : 'Link a duplicate'}
           </Button>
-        }
+        ) : null}
       >
         {hasMultiple ? (
           <div>
@@ -206,17 +211,19 @@ export default function LinkedAccountsCard({ person, contactId, locationId }) {
                 onUnlink={handleUnlink}
                 busy={busy}
                 error={rowError}
+                canManage={canManage}
               />
             ))}
           </div>
         ) : (
           <p className="text-sm text-un1t-subtle">
-            This contact isn&apos;t linked to any other accounts. Use &ldquo;Link a duplicate&rdquo; to group multiple Glofox or ClassPass accounts that belong to the same real person.
+            This contact isn&apos;t linked to any other accounts.
+            {canManage && <> Use &ldquo;Link a duplicate&rdquo; to group multiple Glofox or ClassPass accounts that belong to the same real person.</>}
           </p>
         )}
       </Card>
 
-      {modalOpen && (
+      {canManage && modalOpen && (
         <LinkAccountModal
           contactId={contactId}
           locationId={locationId}

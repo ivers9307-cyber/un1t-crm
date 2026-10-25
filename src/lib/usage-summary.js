@@ -1,7 +1,7 @@
 // SAAS4-M3 — org usage summary shared by /api/settings/org-usage and
 // the /settings/usage page (one query/aggregation path, two callers).
 
-import { dublinMonthStartStr } from '@/lib/usage-caps'
+import { platformMonthStartStr } from '@/lib/usage-caps'
 
 /** Pure: fold month rollup rows into per-meter + per-location totals. */
 export function aggregateRollups(rows) {
@@ -46,7 +46,7 @@ async function fetchMonthRollups(db, orgId, monthStart) {
  * (mig 421 RPCs) + nightly rollup totals + the configured hard caps.
  */
 export async function getOrgUsageSummary(db, orgId) {
-  const monthStart = dublinMonthStartStr()
+  const monthStart = platformMonthStartStr()
 
   const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups] =
     await Promise.all([

@@ -13,7 +13,7 @@ vi.mock('./supabase.js', () => ({ createServerClient: vi.fn() }))
 
 import { createServerClient } from './supabase.js'
 import { sendEmail } from './postmark.js'
-import { sendContractIssuedEmail, sendContractSignedEmails, sendContractDeclinedEmail } from './contracts-email.js'
+import { sendContractIssuedEmail, sendContractSignedEmails, sendContractDeclinedEmail, sendContractReminderEmail } from './contracts-email.js'
 
 // Table-aware supabase-builder mock. getLocationBranding does
 // from('company_settings').select(...).eq(...).limit(1); the legacy
@@ -69,14 +69,35 @@ describe('contract email branding header', () => {
     expect(htmlBody).toContain('alt="Acme Fitness"')                // configured name as alt text
   })
 
-  it('falls back to the UN1T wordmark when no branding row exists', async () => {
+  // W1.S1a — with nothing configured the brand chain ends in the location's
+  // own name; the header, subject and copy all read it.
+  it("falls back to the location's own name when no branding row exists", async () => {
+    createServerClient.mockReturnValue(makeDb({ company_settings: [], locations: [{ name: 'UN1T Stillorgan', organization_id: null }] }))
+
+    await sendContractIssuedEmail({ ...baseArgs, issuer: {} })
+
+    const { htmlBody, subject } = sendEmail.mock.calls[0][0]
+    expect(htmlBody).toContain('>UN1T Stillorgan</div>')
+    expect(htmlBody).not.toContain('<img') // no logo image when none configured
+    expect(subject).toBe('Action required: Coach Agreement from UN1T Stillorgan')
+    expect(htmlBody).toContain('An administrator at UN1T Stillorgan has issued you')
+  })
+
+  // W1.S1a — nothing resolvable at all: no wordmark, never a fixed gym name.
+  it('names no gym at all when the brand resolves nothing', async () => {
     createServerClient.mockReturnValue(makeDb({ company_settings: [] }))
 
-    await sendContractIssuedEmail(baseArgs)
+    await sendContractIssuedEmail({ ...baseArgs, issuer: {} })
 
-    const { htmlBody } = sendEmail.mock.calls[0][0]
-    expect(htmlBody).toContain('>UN1T<') // plain wordmark fallback
-    expect(htmlBody).not.toContain('<img') // no logo image when none configured
+    const { htmlBody, subject } = sendEmail.mock.calls[0][0]
+    expect(subject).toBe('Action required: Coach Agreement')
+    expect(htmlBody).toContain('An administrator has issued you')
+    expect(htmlBody).not.toContain('UN1T')
+    const sigCall = sendEmail.mock.calls.length
+    await sendContractSignedEmails(baseArgs)
+    const recipientBody = sendEmail.mock.calls[sigCall][0].htmlBody
+    expect(recipientBody).toContain('A copy is stored in your account and')
+    expect(recipientBody).not.toContain('UN1T')
   })
 
   it('escapes the company name when used as the logo alt text', async () => {
@@ -102,6 +123,10 @@ describe('contract email branding header', () => {
     expect(sendEmail).toHaveBeenCalledTimes(2)
     for (const call of sendEmail.mock.calls) {
       expect(call[0].htmlBody).toContain('https://cdn.example/acme-logo.png')
+      // W1.E2 — the brand is the From display name; no locationId, so the
+      // studio's customer mailbox never becomes a staff email's Reply-To.
+      expect(call[0].fromName).toBe('Acme Fitness')
+      expect(call[0].locationId).toBeUndefined()
     }
   })
 })
@@ -257,5 +282,52 @@ describe('link base follows the NEXT_PUBLIC_APP_URL seam (URLSEAM.1)', () => {
 
     await expect(sendContractIssuedEmail(baseArgs)).rejects.toThrow(/NEXT_PUBLIC_APP_URL is not set/)
     expect(sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+// PUSHDONE.1a — the reminder cron holds its stamp back for a TRANSIENT email
+// failure (tomorrow retries). A Postmark rejection that no retry can fix must
+// say so (`permanent: true`), or a hard-bounced address is retried forever
+// and never reaches the normal 2-reminder cap. sendEmail carries Postmark's
+// ErrorCode on the thrown error (postmark.js, EMAIL-OUTBOUND-SERVER.1).
+describe('sendContractReminderEmail — permanent vs transient failures (PUSHDONE.1a)', () => {
+  const postmarkError = (errorCode, message = 'rejected') =>
+    Object.assign(new Error(message), { errorCode, httpStatus: 422 })
+
+  beforeEach(() => { createServerClient.mockReturnValue(makeDb({})) })
+
+  it('no recipient address is permanent, and nothing is sent', async () => {
+    const out = await sendContractReminderEmail({ ...baseArgs, recipient: { full_name: 'Sarah Test', email: null } })
+    expect(out).toEqual({ ok: false, error: 'No recipient email', permanent: true })
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('406 inactive recipient (a prior hard bounce) is permanent', async () => {
+    sendEmail.mockRejectedValueOnce(postmarkError(406, 'You tried to send to a recipient that has been marked as inactive.'))
+    const out = await sendContractReminderEmail(baseArgs)
+    expect(out).toMatchObject({ ok: false, permanent: true })
+    expect(out.error).toMatch(/inactive/)
+  })
+
+  it('300 invalid email request is permanent', async () => {
+    sendEmail.mockRejectedValueOnce(postmarkError(300, 'Invalid To address'))
+    const out = await sendContractReminderEmail(baseArgs)
+    expect(out).toMatchObject({ ok: false, permanent: true, error: 'Invalid To address' })
+  })
+
+  it.each([
+    ['a network throw (no ErrorCode)', Object.assign(new Error('fetch failed'), {})],
+    ['429 rate limit', postmarkError(429, 'Rate limit exceeded')],
+    ['100 maintenance', postmarkError(100, 'Maintenance')],
+    ['400 sender signature not found (operator-fixable)', postmarkError(400, 'Sender signature not found')],
+  ])('%s stays transient (tomorrow retries)', async (_label, err) => {
+    sendEmail.mockRejectedValueOnce(err)
+    const out = await sendContractReminderEmail(baseArgs)
+    expect(out.ok).toBe(false)
+    expect(out.permanent).toBeUndefined()
+  })
+
+  it('a delivered reminder is ok', async () => {
+    expect(await sendContractReminderEmail(baseArgs)).toEqual({ ok: true })
   })
 })

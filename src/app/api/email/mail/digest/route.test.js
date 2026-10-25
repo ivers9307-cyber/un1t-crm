@@ -302,16 +302,16 @@ describe('GET /api/email/mail/digest — counts=only', () => {
   it('does the count work only — one head-count per location, no rows read, no per-row counts pass', async () => {
     const full = setupDb(state())
     await digest()
-    const fullTicketSelects = selectsFrom(full, 'email_tickets')
+    const fullConversationSelects = selectsFrom(full, 'email_tickets')
     const fullMessageSelects = selectsFrom(full, 'email_inbox_messages')
 
     const lean = setupDb(state())
     await digest('?counts=only')
-    const leanTicketSelects = selectsFrom(lean, 'email_tickets')
+    const leanConversationSelects = selectsFrom(lean, 'email_tickets')
     // Two locations → exactly two selects, both head-only counts.
-    expect(leanTicketSelects).toHaveLength(2)
-    expect(leanTicketSelects.every(s => s.options?.head === true)).toBe(true)
-    expect(leanTicketSelects.length).toBeLessThan(fullTicketSelects.length)
+    expect(leanConversationSelects).toHaveLength(2)
+    expect(leanConversationSelects.every(s => s.options?.head === true)).toBe(true)
+    expect(leanConversationSelects.length).toBeLessThan(fullConversationSelects.length)
     // The per-row message-count pass never ran.
     expect(fullMessageSelects.length).toBeGreaterThan(0)
     expect(selectsFrom(lean, 'email_inbox_messages')).toHaveLength(0)

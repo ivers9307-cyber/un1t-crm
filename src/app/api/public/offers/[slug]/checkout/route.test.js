@@ -15,14 +15,16 @@ const openOffer = {
   active: true, starts_at: '2026-08-08T00:00:00Z', ends_at: '2099-01-01T00:00:00Z',
 }
 
-const state = { offer: openOffer, insertError: null, inserts: [] }
+// W0.4 — the route resolves the pinned Stillorgan location first; the mock
+// answers that lookup with loc1 so openOffer (location_id loc1) belongs.
+const state = { offer: openOffer, homeLocation: { id: 'loc1' }, insertError: null, inserts: [] }
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     _table: null,
     from(t) { this._table = t; return this },
     select() { return this },
     eq() { return this },
-    maybeSingle: async () => ({ data: state.offer }),
+    maybeSingle() { return Promise.resolve({ data: this._table === 'locations' ? state.homeLocation : state.offer }) },
     insert: (row) => { state.inserts.push(row); return Promise.resolve({ error: state.insertError }) },
   }),
 }))
@@ -42,6 +44,7 @@ beforeEach(() => {
   createOrder.mockClear()
   checkRateLimit.mockClear()
   state.offer = openOffer
+  state.homeLocation = { id: 'loc1' }
   state.insertError = null
   state.inserts = []
 })
@@ -105,6 +108,21 @@ describe('POST /api/public/offers/[slug]/checkout', () => {
 
   it('404 unknown slug', async () => {
     state.offer = null
+    expect((await POST(makeRequest(goodBody), props)).status).toBe(404)
+    expect(createOrder).not.toHaveBeenCalled()
+  })
+  // W0.4 — the surface is pinned to Stillorgan: a slug that resolves to
+  // another location's offer is not found, and so is every slug when the
+  // pinned location row is missing.
+  it('404 an offer that belongs to another location', async () => {
+    state.offer = { ...openOffer, location_id: 'loc2' }
+    const res = await POST(makeRequest(goodBody), props)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('Not found')
+    expect(createOrder).not.toHaveBeenCalled()
+  })
+  it('404 every slug when the pinned location row is missing', async () => {
+    state.homeLocation = null
     expect((await POST(makeRequest(goodBody), props)).status).toBe(404)
     expect(createOrder).not.toHaveBeenCalled()
   })

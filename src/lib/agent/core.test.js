@@ -10,7 +10,7 @@ import {
   parseAgentResponse,
   stripEmDashes,
   isVerificationFresh,
-  DEFAULT_HOLDING_MESSAGE,
+  defaultHoldingMessage,
   autoVerifyContactId,
   resolveAutoVerify,
   resolveActingContactId,
@@ -81,6 +81,37 @@ describe('shouldAgentReply', () => {
       senderPhone: '353870000000',
     })
     expect(r).toEqual({ reply: true, reason: 'ok' })
+  })
+
+  // WABUTTONTAP.1 — a quick-reply tap on a TEMPLATE arrives as type 'button'.
+  // The Meta-ad welcome hands the lead to Mia on that tap; 'button' used to be
+  // unsupported_type, so the lead got the holding message instead.
+  it('treats a template quick-reply tap (type button) as a text reply', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'button', body: 'Book a consultation' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: true, reason: 'ok' })
+  })
+  it('a button tap with an empty body is empty, not answered', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'button', body: '  ' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: false, reason: 'empty', onDuty: true })
+  })
+  it('media is still unsupported (soft handoff), so the set did not open everything', () => {
+    const r = shouldAgentReply({
+      settings: { enabled: true },
+      conversation: { agent_active: true },
+      message: { type: 'image', body: '' },
+      senderPhone: '353870000000',
+    })
+    expect(r).toEqual({ reply: false, reason: 'unsupported_type', onDuty: true })
   })
 
   const base = {
@@ -203,6 +234,31 @@ describe('formatHistoryForClaude', () => {
     ]
     expect(formatHistoryForClaude(rows)).toEqual([])
   })
+  // MIAFIX.1 — sendAndLog records a button message as "text\n[Options: a | b]"
+  // so staff can read it in the inbox; the model must not learn that form. Its
+  // own history renders the recorded line back as the real sentinel, so an
+  // imitation produces working buttons.
+  it('an outbound row ending in a recorded [Options: ...] line is rendered with the [[OPTIONS]] sentinel', () => {
+    const rows = [
+      { direction: 'inbound', body: 'can I buy a pack?' },
+      { direction: 'outbound', body: 'Want me to send the link?\n[Options: Yes, send link | No]' },
+      { direction: 'inbound', body: 'Yes, send link' },
+    ]
+    const out = formatHistoryForClaude(rows)
+    expect(out[1]).toEqual({ role: 'assistant', content: `Want me to send the link?\n${OPTIONS_PREFIX} Yes, send link | No` })
+    expect(out[1].content).not.toMatch(/\[Options:/)
+  })
+  it('only a trailing recorded line on an outbound row is rewritten; inbound text and mid-text lines are untouched', () => {
+    const rows = [
+      { direction: 'inbound', body: 'what does [Options: A | B] mean?' },
+      { direction: 'outbound', body: 'Reply with one:\n[Options: A | B]\nThanks!' },
+      { direction: 'inbound', body: 'A' },
+    ]
+    const out = formatHistoryForClaude(rows)
+    // (inbound text keeps HARDEN.2's neutralising and is never given a sentinel)
+    expect(out[0].content).not.toContain(OPTIONS_PREFIX)
+    expect(out[1].content).toBe('Reply with one:\n[Options: A | B]\nThanks!')
+  })
   it('placeholders empty / media-only rows', () => {
     const rows = [{ direction: 'inbound', body: '', message_type: 'image' }]
     expect(formatHistoryForClaude(rows)).toEqual([{ role: 'user', content: '[image]' }])
@@ -291,8 +347,10 @@ describe('parseAgentResponse', () => {
   it('an empty model response is a handoff, not a blank send', () => {
     expect(parseAgentResponse('   ').action).toBe('handoff')
   })
-  it('exposes a default holding message', () => {
-    expect(DEFAULT_HOLDING_MESSAGE).toMatch(/team/i)
+  it('W1.S3 — the default holding message carries the brand it is given, never a literal gym', () => {
+    expect(defaultHoldingMessage('Gym A')).toBe('Thanks for your message! One of the Gym A team will get back to you shortly.')
+    expect(defaultHoldingMessage('')).toBe('Thanks for your message! One of the team will get back to you shortly.')
+    expect(defaultHoldingMessage(undefined)).not.toMatch(/UN1T/)
   })
 
   // AGENT-UX.1 — tap-choice options. The model ends a reply with one
@@ -432,6 +490,43 @@ describe('parseAgentResponse — near-miss sentinel tolerance', () => {
   it('never leaks an unterminated options sentinel into the customer text', () => {
     const r = parseAgentResponse('Pick a time:\n[[OPTIONS 7am | 8am')
     expect(r.text).toBe('Pick a time:')
+    expect(r.options).toEqual(['7am', '8am'])
+  })
+  // MIAFIX.1 — Mia re-read her own recorded button messages ("text\n[Options:
+  // a | b]") and imitated that form, which reached the customer as a plain
+  // bubble with no buttons (MIA TEST, 19 Oct). A trailing "[Options: ...]"
+  // line is read exactly like the sentinel.
+  it('a trailing [Options: a | b] line becomes options and is stripped, like the sentinel', () => {
+    const r = parseAgentResponse('Want me to send the link?\n[Options: Yes, send link | No]')
+    expect(r).toEqual({ action: 'reply', text: 'Want me to send the link?', reason: 'ok', options: ['Yes, send link', 'No'] })
+  })
+  it('the trailing [Options:] line: any case, optional spaces, singular [Option:], same normalisation and cap', () => {
+    for (const line of ['[options: 7am | 8am]', '[ OPTIONS :7am|8am ]', '[Option: 7am | 8am]', '**[Options: 7am | 8am]**', '[Options: 7am | 8am]  ']) {
+      const r = parseAgentResponse(`Pick a time:\n${line}`)
+      expect(r.text, line).toBe('Pick a time:')
+      expect(r.options, line).toEqual(['7am', '8am'])
+    }
+    const eleven = Array.from({ length: 11 }, (_, i) => `opt ${i}`).join(' | ')
+    expect(parseAgentResponse(`Pick:\n[Options: ${eleven}]`).options).toHaveLength(10)
+    const r = parseAgentResponse('Pick:\n[Options: 7am | | 7am | this label is way too long to be a button]')
+    expect(r.options).toEqual(['7am', 'this label is way to'])
+    const dash = parseAgentResponse('Ready?\n[Options: Yes — book me in | Not yet]')
+    expect(dash.options).toEqual(['Yes, book me in', 'Not yet'])
+    const one = parseAgentResponse('Sure.\n[Options: only-one]')
+    expect(one.text).toBe('Sure.')
+    expect(one.options).toBeUndefined()
+  })
+  it('only a TRAILING [Options:] line: one mid-text or inline is left as it is', () => {
+    const mid = parseAgentResponse('Reply with one:\n[Options: A | B]\nThanks!')
+    expect(mid.text).toBe('Reply with one:\n[Options: A | B]\nThanks!')
+    expect(mid.options).toBeUndefined()
+    const inline = parseAgentResponse('You can say [Options: A | B] here')
+    expect(inline.text).toBe('You can say [Options: A | B] here')
+    expect(inline.options).toBeUndefined()
+  })
+  it('the sentinel wins when both are present; the trailing [Options:] line is still stripped', () => {
+    const r = parseAgentResponse(`Pick:\n${OPTIONS_PREFIX} 7am | 8am\n[Options: 9am | 10am]`)
+    expect(r.text).toBe('Pick:')
     expect(r.options).toEqual(['7am', '8am'])
   })
 })
@@ -849,6 +944,16 @@ describe('resolveVerifyFailHandoff', () => {
   it('honours a positive override (rounded)', () => {
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 3 })).toBe(3)
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 2.6 })).toBe(3)
+  })
+  // MIAORG.1 T2-A — null means UNSET. Resolved settings carry DEFAULTS'
+  // `handoff_after_verify_failures: null` where Stillorgan's blob has no key
+  // at all; Number(null) is 0, which read as "disabled" and would have
+  // switched the verify-fail handoff OFF at Stillorgan on deploy.
+  it('null / blank is unset (the default), never the 0 that disables it', () => {
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: null })).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: undefined })).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: '' })).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: '  ' })).toBe(2)
   })
   it('treats 0 / negative as disabled', () => {
     expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 0 })).toBe(0)

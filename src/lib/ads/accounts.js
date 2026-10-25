@@ -2,19 +2,21 @@
 // Resolve/mask/patch ad_accounts rows. Mirrors src/lib/agent/channels.js
 // secret handling so tokens are never returned raw to the browser and a
 // masked echo on save is not written back over the real token.
+// N8NECHO.1: presence only. The mask carries no character of the token (it
+// used to keep the last 4), and "fresh" is the shared •• rule, so no mask
+// shape (this one, the old 8-bullet one) can ever overwrite a token. The old
+// local rule checked an 8-bullet prefix, which the 6-bullet SECRET_MASK would
+// have passed as a fresh token.
 
-const MASK = '••••••••'
+import { SECRET_MASK } from '../secret-keys.js'
+import { isFreshSecret } from '../integration-secret-merge.js'
 
-export function maskSecret(value, keep = 4) {
+export { isFreshSecret }
+
+export function maskSecret(value) {
   const s = String(value || '')
   if (!s) return ''
-  return MASK + s.slice(-keep)
-}
-
-export function isFreshSecret(value) {
-  const s = String(value || '')
-  if (!s) return false
-  return !s.startsWith(MASK)
+  return SECRET_MASK
 }
 
 /** Prepare a row for the browser: mask the token, add has_* booleans. */
@@ -34,7 +36,7 @@ export function buildAccountPatch(body) {
   for (const k of ['external_account_id', 'business_account_id', 'display_name', 'is_active', 'currency', 'account_timezone']) {
     if (body[k] !== undefined) patch[k] = body[k]
   }
-  if (isFreshSecret(body.access_token)) patch.access_token = body.access_token
+  if (isFreshSecret(body.access_token)) patch.access_token = String(body.access_token).trim()
   return patch
 }
 

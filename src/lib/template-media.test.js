@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TEMPLATE_MEDIA_LIMITS, validateTemplateMedia, mediaExt, isMintedMediaPath } from './template-media.js'
+import { TEMPLATE_MEDIA_LIMITS, validateTemplateMedia, mediaExt, isMintedMediaPath, resubmitMediaFields, templateHeaderMediaError } from './template-media.js'
 
 const MB = 1024 * 1024
 
@@ -74,5 +74,49 @@ describe('isMintedMediaPath', () => {
     expect(isMintedMediaPath('global/a/b.mp4')).toBe(false)
     expect(isMintedMediaPath('global/notauuid.mp4')).toBe(false)
     expect(isMintedMediaPath('')).toBe(false)
+  })
+})
+
+// WATPLRESUBMEDIA.1 (C109) — what "Edit & resubmit" sends about the header
+// media, and how the resubmit route judges it.
+describe('resubmitMediaFields', () => {
+  const saved = { header_media_handle: 'h-old', header_media_url: 'https://x/old.jpg', header_media_path: 'L/old.jpg' }
+  it('sends nothing when the header is not media', () => {
+    expect(resubmitMediaFields(saved, { handle: 'h-new', url: 'https://x/new.jpg', path: 'L/new.jpg' }, 'TEXT')).toEqual({})
+  })
+  it('sends nothing when the media did not change', () => {
+    expect(resubmitMediaFields(saved, { handle: 'h-old', url: 'https://x/old.jpg', path: 'L/old.jpg' }, 'IMAGE')).toEqual({})
+  })
+  it('sends all three fields when a new file was uploaded', () => {
+    expect(resubmitMediaFields(saved, { handle: 'h-new', url: 'https://x/new.png', path: 'L/new.png' }, 'IMAGE'))
+      .toEqual({ header_media_handle: 'h-new', header_media_url: 'https://x/new.png', header_media_path: 'L/new.png' })
+  })
+})
+
+describe('templateHeaderMediaError', () => {
+  const LOC = '0c5a1f0e-2d3b-4c5d-8e9f-a0b1c2d3e4f5'
+  const PATH = `${LOC}/1c5a1f0e-2d3b-4c5d-8e9f-a0b1c2d3e4f5.png`
+  const ok = { path: PATH, url: `https://b/${PATH}`, publicUrl: `https://b/${PATH}`, format: 'IMAGE', locationId: LOC }
+  it('accepts a minted path in the studio folder, of the header type, at the bucket URL', () => {
+    expect(templateHeaderMediaError(ok)).toBeNull()
+  })
+  it('refuses a path not minted by the sign route, or in another folder', () => {
+    expect(templateHeaderMediaError({ ...ok, path: `${LOC}/cat.png` })).toMatch(/path/i)
+    expect(templateHeaderMediaError({ ...ok, path: 'global/1c5a1f0e-2d3b-4c5d-8e9f-a0b1c2d3e4f5.png' })).toMatch(/path/i)
+  })
+  it('refuses the wrong file type for the header, and a non-media header', () => {
+    expect(templateHeaderMediaError({ ...ok, format: 'VIDEO' })).toBeTruthy()
+    expect(templateHeaderMediaError({ ...ok, format: 'TEXT' })).toBeTruthy()
+  })
+  it('refuses a URL that is not the bucket URL for the path', () => {
+    expect(templateHeaderMediaError({ ...ok, url: 'https://elsewhere/x.png' })).toBeTruthy()
+  })
+  it('has no em-dashes in what it says', () => {
+    for (const e of [
+      templateHeaderMediaError({ ...ok, path: 'x' }),
+      templateHeaderMediaError({ ...ok, format: 'VIDEO' }),
+      templateHeaderMediaError({ ...ok, format: 'TEXT' }),
+      templateHeaderMediaError({ ...ok, url: 'https://elsewhere/x.png' }),
+    ]) expect(e).not.toMatch(/—/)
   })
 })

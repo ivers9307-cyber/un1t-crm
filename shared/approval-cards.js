@@ -12,6 +12,7 @@ export const APPROVAL_KIND_LABELS = Object.freeze({
   event_booking: 'Event booking',
   event_cancellation: 'Event cancellation',
   membership_purchase: 'Membership purchase',
+  refund_request: 'Refund request',
 })
 
 // One-line summary of the request payload per kind. Mirrors (and
@@ -33,6 +34,23 @@ export function approvalCardSummary(row) {
   } else if (kind === 'cancellation') {
     // CANCEL-FORM.6 — form-originated rows carry a structured end date.
     parts = [d.reason, d.requested_end_date ? `ends ${d.requested_end_date}` : null]
+  } else if (kind === 'refund_request') {
+    // UN1TWRITE.8 — 'Double payment · €15'; matches the /approvals subtitle.
+    const words = String(d.reason || '').replace(/_/g, ' ').trim()
+    // Inline on purpose: shared/ cannot import src/lib/money-format.js and has no
+    // money formatter of its own. Same rules as formatMoneyMinor (whole euros drop
+    // the decimals); src/lib/un1t-online-approval.js and the /approvals subtitle
+    // both reach this function, so there is one wording.
+    const cents = Number(d.amount_cents)
+    let amount = null
+    if (Number.isFinite(cents) && cents > 0) {
+      const major = cents / 100
+      const body = Number.isInteger(major) ? String(major) : major.toFixed(2)
+      const cur = d.currency || 'EUR'
+      amount = cur === 'EUR' ? `€${body}` : `${cur} ${major.toFixed(2)}`
+    }
+    return [words ? words.charAt(0).toUpperCase() + words.slice(1) : null, amount].filter(Boolean).join(' · ')
+      || APPROVAL_KIND_LABELS.refund_request
   }
   const line = parts.filter(Boolean).join(' · ')
   if (line) return line

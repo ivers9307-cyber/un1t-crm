@@ -67,7 +67,7 @@ describe('parseFlowCompletion', () => {
     const out = parseFlowCompletion(interactive)
     expect(out.path).toBe('class')
     expect(out.selection.slot).toBe('c1|2026-07-03T18:00:00Z|HIIT')
-    expect(out.contactFields).toEqual({ name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true })
+    expect(out.contactFields).toEqual({ name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true, terms_accepted: false })
   })
 
   it('returns null for a non-Flow interactive', () => {

@@ -1,11 +1,18 @@
 // GET /api/cron/instagram-feed-sync — refresh each location's IG feed cache.
 // Bearer CRON_SECRET. Per-location isolation: one studio's failure never blocks
 // the others. Heartbeat on completion. (EVENTS-IG.1)
+//
+// A Graph failure that means the stored token is dead (401 / OAuthException,
+// e.g. Meta invalidating the session after a password change) is also stamped
+// on the connection row (status 'error' + last_error), so the Integrations
+// hub says "reconnect Instagram" instead of showing it healthy while only the
+// stale heartbeat pages. Transient failures don't flag the row.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { syncLocationIgFeed } from '@/lib/instagram-feed'
+import { isMetaAuthError, stampConnectionError } from '@/lib/connection-health'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,7 +25,7 @@ export async function GET(request) {
   const db = createServerClient()
   const { data: conns } = await db
     .from('channel_connections')
-    .select('location_id, external_account_id, access_token')
+    .select('id, location_id, external_account_id, access_token')
     .eq('platform', 'instagram')
     .eq('is_active', true)
 
@@ -32,6 +39,10 @@ export async function GET(request) {
     } catch (e) {
       failed += 1
       console.error(`[instagram-feed-sync] location ${conn.location_id}: ${e.message}`)
+      if (isMetaAuthError(e.graphError, e.status)) {
+        const reason = e.graphError?.message || `HTTP ${e.status}`
+        await stampConnectionError(db, conn.id, `Instagram rejected the access token; reconnect it (generate a new token in the Meta console). ${reason}`)
+      }
     }
   }
   // Heartbeat only on overall success: if there were connections and EVERY one

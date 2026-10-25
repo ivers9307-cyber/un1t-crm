@@ -1,5 +1,5 @@
 // INBOX-SURFACE.C — the Mail surface's OWN nav badge, the mirror image of
-// /api/email/tickets/count (see that route's own header for the fuller case
+// /api/email/conversations/count (see that route's own header for the fuller case
 // against "the whole live queue" / "unread_count>0" / "unassigned" — the same
 // reasoning applies here verbatim and is not restated per-test below).
 //
@@ -7,15 +7,15 @@
 // these tests exist to pin:
 //
 // 1. IT COUNTS THIS SURFACE'S MAILBOXES ONLY. A studio running the trial has
-//    studio@ on Mail and accounts@ still on tickets — an unanswered accounts@
-//    ticket is real work, but it is the OTHER badge's job to say so. A count
+//    studio@ on Mail and accounts@ still on conversations — an unanswered accounts@
+//    conversation is real work, but it is the OTHER badge's job to say so. A count
 //    that leaked it here would send an operator to a mailbox this list
 //    refuses to render, the read dot nobody trusts twice.
 //
-// 2. 🔴 NO ORPHAN WIDENING. The ticket badge's elevated path also counts
-//    NULL-mailbox tickets (mailbox_id is ON DELETE SET NULL; mig 484 predates
+// 2. 🔴 NO ORPHAN WIDENING. The conversation badge's elevated path also counts
+//    NULL-mailbox conversations (mailbox_id is ON DELETE SET NULL; mig 484 predates
 //    the column) — that is correct THERE because an orphan has no surface to
-//    read and 'tickets' is the schema's own default, so it is the ticket
+//    read and 'tickets' is the schema's own default, so it is the conversation
 //    surface's mail by definition. It is NOT this surface's mail by the same
 //    argument, so this route's scope is a plain `.in('mailbox_id', ids)` —
 //    exactly what the mail LIST route uses (route.js: no `.or(...is.null)`
@@ -54,7 +54,7 @@ function setupDb(state) {
   return db
 }
 
-// studio@ is on Mail and needs-reply; accounts@ is on tickets and ALSO
+// studio@ is on Mail and needs-reply; accounts@ is on conversations and ALSO
 // needs-reply — the fixture that proves the surface narrowing, not merely the
 // per-account grant, is doing the work: without it this would badge 2.
 const NEEDS_REPLY_BOTH = [
@@ -100,7 +100,7 @@ describe('GET /api/email/mail/count — gates', () => {
 })
 
 describe('GET /api/email/mail/count — scope (RETIRE-TICKETS.1: all visible mailboxes + elevated orphans)', () => {
-  it('counts tickets on EVERY visible mailbox for an elevated caller', async () => {
+  it('counts conversations on EVERY visible mailbox for an elevated caller', async () => {
     getCurrentUser.mockResolvedValue(at(OWNER))
     setupDb(mailState({ tickets: NEEDS_REPLY_BOTH, grants: [] }))
     expect((await count()).body.data.count).toBe(2)
@@ -114,7 +114,7 @@ describe('GET /api/email/mail/count — scope (RETIRE-TICKETS.1: all visible mai
   })
 
   it('DOES count a NULL-mailbox conversation for an elevated caller — orphans live here now', async () => {
-    // The ticket queue was the orphan's only home; RETIRE-TICKETS.1 deleted
+    // The conversation queue was the orphan's only home; RETIRE-TICKETS.1 deleted
     // it, so the badge (like the list) carries the elevated `.or` branch.
     const orphan = {
       ...T_STUDIO, id: 'aaaaaaa9-0000-4000-8000-000000000009',
@@ -134,7 +134,7 @@ describe('GET /api/email/mail/count — scope (RETIRE-TICKETS.1: all visible mai
     expect((await count()).body.data.count).toBe(1)
   })
 
-  it('never counts another studio’s tickets', async () => {
+  it('never counts another studio’s conversations', async () => {
     getCurrentUser.mockResolvedValue(at(OWNER))
     setupDb(mailState({
       tickets: [...NEEDS_REPLY_BOTH, { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' }],
@@ -209,8 +209,8 @@ describe('GET /api/email/mail/count — merged tombstones', () => {
 describe('GET /api/email/mail/count — cheapness and failure', () => {
   it('asks for a COUNT ONLY — never the rows', async () => {
     await count()
-    const ticketRead = selectsFrom(db, 'email_tickets').at(-1)
-    expect(ticketRead.options).toEqual({ count: 'exact', head: true })
+    const conversationRead = selectsFrom(db, 'email_tickets').at(-1)
+    expect(conversationRead.options).toEqual({ count: 'exact', head: true })
   })
 
   it('500s when the mailbox visibility lookup fails — it must NOT badge 0', async () => {
@@ -310,7 +310,7 @@ describe('GET /api/email/mail/count?scope=all', () => {
       { ...T_STUDIO, status: 'open', last_message_direction: 'inbound' },
       { ...T_OTHER_LOCATION, status: 'open', last_message_direction: 'inbound' },
     ] }))
-    // Fail ONLY LOC_B's ticket count; LOC_A answers normally.
+    // Fail ONLY LOC_B's conversation count; LOC_A answers normally.
     const realFrom = db.from
     db.from = (table) => {
       const b = realFrom(table)

@@ -225,3 +225,19 @@ describe('UnsubscribePage — undo (UNSUBAUTO.2)', () => {
     expect(body).toEqual({ email_marketing: true })
   })
 })
+
+// W1.S1b — the header names the brand the server page resolved (the `?l=`
+// studio, else the host's organisation); blank renders no header text.
+describe('UnsubscribePage — header brand (W1.S1b)', () => {
+  it('renders the resolved brand as the header', () => {
+    render(<UnsubscribePage token="tok-1" brandName="Gym A North" />)
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Gym A North')
+    expect(document.body.textContent).not.toMatch(/UN1T/)
+  })
+
+  it('a blank brand renders no level-1 header and no literal gym', () => {
+    render(<UnsubscribePage token="tok-1" />)
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+    expect(document.body.textContent).not.toMatch(/UN1T/)
+  })
+})

@@ -11,6 +11,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { getCachedGbpToEur } from '@/lib/fx'
 import { computeReportMetrics } from '@/lib/cars'
+import { zoneOfLocation } from '@/lib/location-time'
 import CarsReports from '@/components/cars/CarsReports'
 
 export const dynamic = 'force-dynamic'
@@ -23,15 +24,28 @@ export default async function CarsReportsPage() {
   const db = createServerClient()
   const locationId = user.activeLocation?.id
 
-  let query = db.from('cars').select('*')
-  if (locationId) query = query.eq('location_id', locationId)
+  // TENANTSCOPE.1 — one studio, one legal entity: the report is the ACTIVE
+  // studio's cars (the CSV export reads the same). No active studio means
+  // an empty report that says so, never every tenant's cars.
+  if (!locationId) {
+    return (
+      <CarsReports
+        metrics={computeReportMetrics([], { liveRate: null })}
+        error="No active location"
+        fx={null}
+      />
+    )
+  }
+
   const [{ data: cars, error }, fx] = await Promise.all([
-    query,
+    db.from('cars').select('*').eq('location_id', locationId),
     getCachedGbpToEur(),
   ])
 
   const liveFxRate = fx?.rate ?? null
-  const metrics = computeReportMetrics(cars || [], { liveRate: liveFxRate })
+  // TZ.17 — the studio's calendar for YTD / MTD / the monthly buckets. The
+  // active location row already carries its zone (no query).
+  const metrics = computeReportMetrics(cars || [], { liveRate: liveFxRate, zone: zoneOfLocation(user.activeLocation) })
 
   return (
     <CarsReports

@@ -27,6 +27,9 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import ScoringClient from './ScoringClient'
+import { createServerClient } from '@/lib/supabase'
+import { getLocationBranding } from '@/lib/location-branding'
+import { productName } from '@/lib/brand-name'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,5 +37,6 @@ export default async function ScoringSettingsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!MANAGER_ROLES.includes(user.role)) redirect('/settings')
-  return <ScoringClient />
+  const { shortName } = await getLocationBranding(createServerClient(), user.activeLocation?.id)
+  return <ScoringClient pointsName={productName(shortName, 'points')} />
 }

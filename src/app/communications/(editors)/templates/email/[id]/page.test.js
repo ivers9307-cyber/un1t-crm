@@ -55,28 +55,30 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { notFound } from 'next/navigation'
 
-function mockDb({ template = null } = {}) {
+function mockDb({ template = null, error = null } = {}) {
   return {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
-          single: vi.fn(async () => ({
-            data: template,
-            error: template ? null : { message: 'not found' },
-          })),
+          maybeSingle: vi.fn(async () => ({ data: error ? null : template, error })),
         })),
       })),
     })),
   }
 }
 
+// GATES-2 — the page now also asks `email` at the template's studio, so the
+// caller is an owner there (owners hold `email` by default).
 const user = {
   id: 'user-1',
-  locations: [{ id: 'loc-mine' }],
-  activeLocation: { id: 'loc-mine' },
+  role: 'owner',
+  locations: [{ id: 'loc-mine', role: 'owner', features: {} }],
+  assignmentsByLocation: { 'loc-mine': { role: 'owner', permissions: {} } },
+  activeLocation: { id: 'loc-mine', features: {} },
 }
 
-function props(id = 'tpl-1') {
+const TPL = '11111111-1111-4111-8111-111111111111'
+function props(id = TPL) {
   return { params: Promise.resolve({ id }) }
 }
 
@@ -113,13 +115,54 @@ describe('/communications/templates/email/[id] page', () => {
     expect(notFound).not.toHaveBeenCalled()
   })
 
-  it('allows a template with no location_id (parity with GET /api/templates/[id])', async () => {
+  // W0.11 — a template with no location_id belongs to the platform and is
+  // master-only (the rule /api/templates/[id] applies to its read and save).
+  // A non-master who holds `email` somewhere gets the missing-id 404.
+  it('404s a template with no location_id for a non-master (platform row, parity with /api/templates/[id])', async () => {
     getCurrentUser.mockResolvedValue(user)
+    createServerClient.mockReturnValue(
+      mockDb({ template: { id: 'tpl-1', location_id: null } })
+    )
+    await expect(EditTemplatePage(props())).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(notFound).toHaveBeenCalled()
+  })
+
+  it('renders the editor on a template with no location_id for a master', async () => {
+    getCurrentUser.mockResolvedValue({
+      ...user,
+      id: 'user-master',
+      role: 'master',
+      profileRole: 'master',
+      isMaster: true,
+      locations: [{ id: 'loc-mine', role: 'master', features: {} }],
+      assignmentsByLocation: { 'loc-mine': { role: 'master', permissions: {} } },
+    })
     createServerClient.mockReturnValue(
       mockDb({ template: { id: 'tpl-1', location_id: null } })
     )
     const el = await EditTemplatePage(props())
     expect(el).toBeTruthy()
     expect(notFound).not.toHaveBeenCalled()
+  })
+
+  it('a failed read is an error, not "not found"', async () => {
+    getCurrentUser.mockResolvedValue(user)
+    createServerClient.mockReturnValue(mockDb({ error: { code: '57014', message: 'timeout' } }))
+    await expect(EditTemplatePage(props())).rejects.toThrow(/could not be read/)
+    expect(notFound).not.toHaveBeenCalled()
+  })
+})
+
+// C123 (c) review — the read became maybeSingle() + a THROWN error, so a
+// non-uuid id (a typo, a crawler, a stale link) would reach Postgres as a
+// 22P02 and render the error page instead of the 404 it got on main. The id
+// is shape-checked first (same as automations/[id]).
+describe('/communications/templates/email/[id] page: a malformed id', () => {
+  it('404s without reading the table', async () => {
+    getCurrentUser.mockResolvedValue(user)
+    const db = mockDb({ error: { code: '22P02', message: 'invalid input syntax for type uuid' } })
+    createServerClient.mockReturnValue(db)
+    await expect(EditTemplatePage(props('not-a-uuid'))).rejects.toThrow('NEXT_NOT_FOUND')
+    expect(db.from).not.toHaveBeenCalled()
   })
 })

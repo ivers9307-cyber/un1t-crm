@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { crossoverContactIds, fetchCrossoverContext, canViewContact, fetchListMembershipFlags, CROSSOVER_ID_CAP } from './contact-crossovers'
+import { describe, it, expect, vi } from 'vitest'
+import { fetchCrossoverContext, canViewContact, fetchListMembershipFlags } from './contact-crossovers'
 
 // Minimal chainable stub of the supabase builder. `result` is what the
 // awaited query resolves to ({ data } or { data, count }).
@@ -16,36 +16,15 @@ function stubFrom(handlers) {
         order() { return builder },
         range(from, to) { calls.range = [from, to]; return builder },
         limit(n) { calls.limit = n; return builder },
-        then(resolve) { return Promise.resolve(handlers[table](calls)).then(resolve) },
+        // A table no test names answers "no rows": the probes under test are
+        // additive (ORGCONTACTS.0 added glofox_crossover_members), so an
+        // older case that never mentions a newer table keeps its meaning.
+        then(resolve) { return Promise.resolve(handlers[table] ? handlers[table](calls) : { data: [] }).then(resolve) },
       }
       return builder
     },
-    // Stub of db.rpc(fn, args) → resolves to { data, error } from the
-    // named handler (crossoverContactIds now calls an RPC, not .from()).
-    rpc(fn, args) {
-      return Promise.resolve(handlers[fn] ? handlers[fn](args) : { data: null, error: null })
-    },
   }
 }
-
-describe('crossoverContactIds', () => {
-  it('returns the contact_ids from the crossover_contact_ids RPC', async () => {
-    const db = stubFrom({
-      crossover_contact_ids: () => ({ data: [{ contact_id: 'a' }, { contact_id: 'b' }] }),
-    })
-    expect((await crossoverContactIds(db, 'loc1')).sort()).toEqual(['a', 'b'])
-  })
-  it('returns [] for missing args / empty result / rpc error', async () => {
-    expect(await crossoverContactIds(null, 'loc1')).toEqual([])
-    expect(await crossoverContactIds(stubFrom({ crossover_contact_ids: () => ({ data: [] }) }), 'loc1')).toEqual([])
-    expect(await crossoverContactIds(stubFrom({ crossover_contact_ids: () => ({ data: null, error: { message: 'boom' } }) }), 'loc1')).toEqual([])
-  })
-  it('caps the list at CROSSOVER_ID_CAP so the id.in() URL can never blow up', async () => {
-    const many = Array.from({ length: CROSSOVER_ID_CAP + 50 }, (_, i) => ({ contact_id: `c${i}` }))
-    const db = stubFrom({ crossover_contact_ids: () => ({ data: many }) })
-    expect((await crossoverContactIds(db, 'loc1')).length).toBe(CROSSOVER_ID_CAP)
-  })
-})
 
 describe('fetchCrossoverContext', () => {
   const active = 'hatch'
@@ -214,33 +193,124 @@ describe('fetchListMembershipFlags', () => {
 })
 
 describe('canViewContact', () => {
-  // deals stub: resolves whatever rows the crossover deal-probe should see.
-  const dealStub = (rows) => stubFrom({ deals: () => ({ data: rows }) })
+  // ORGCONTACTS.2 — one probe: contact_studios at the caller's Contacts
+  // studios (hasRelationshipAt). Any row, ended included (decision 2).
+  const rel = (rows, { fail = false } = {}) => stubFrom({
+    contact_studios: (calls) => (fail
+      ? { data: null, error: { code: '42501', message: 'boom' } }
+      : { data: rows.filter((r) => (calls.filters.location_id || []).includes(r.location_id)) }),
+  })
+  const contact = { id: 'c1', location_id: 'L2' }
 
   it('master sees any contact without a db probe', async () => {
-    // db is null on purpose — a master must never reach the deal query.
-    expect(await canViewContact(null, { isMaster: true }, { id: 'c1', location_id: 'L2' })).toBe(true)
+    expect(await canViewContact(null, { isMaster: true }, contact)).toBe(true)
   })
-  it('owner of the contact location sees it (no deal probe needed)', async () => {
+  it('a member of the contact\'s primary studio sees it without a probe', async () => {
     const user = { isMaster: false, locations: [{ id: 'L1' }, { id: 'L2' }] }
-    expect(await canViewContact(dealStub([]), user, { id: 'c1', location_id: 'L2' })).toBe(true)
+    expect(await canViewContact(rel([], { fail: true }), user, contact)).toBe(true)
   })
-  it('crossover: a deal at one of the caller locations grants access', async () => {
-    const user = { isMaster: false, locations: [{ id: 'L1' }] }
-    expect(await canViewContact(dealStub([{ id: 'd1' }]), user, { id: 'c1', location_id: 'L2' })).toBe(true)
+  it('any contact_studios row at one of the caller\'s Contacts studios opens the contact, an ENDED one included', async () => {
+    const user = { isMaster: false, locations: [{ id: 'L1', role: 'staff' }] }
+    expect(await canViewContact(rel([{ location_id: 'L1', status: 'active' }]), user, contact)).toBe(true)
+    expect(await canViewContact(rel([{ location_id: 'L1', status: 'ended' }]), user, contact)).toBe(true)
   })
-  it('not owned and no crossover deal → denied', async () => {
-    const user = { isMaster: false, locations: [{ id: 'L1' }] }
-    expect(await canViewContact(dealStub([]), user, { id: 'c1', location_id: 'L2' })).toBe(false)
+  it('a row at a studio where the caller lacks Contacts grants nothing; no row anywhere denies', async () => {
+    const noContactsAtL3 = {
+      isMaster: false,
+      locations: [{ id: 'L1', role: 'staff' }, { id: 'L3', role: 'manager' }],
+      assignmentsByLocation: { L3: { role: 'manager', permissions: { contacts: false, mobile: { contacts: false } } } },
+    }
+    let seen = null
+    const db = stubFrom({ contact_studios: (calls) => { seen = calls; return { data: calls.filters.location_id.includes('L3') ? [{ location_id: 'L3' }] : [] } } })
+    expect(await canViewContact(db, noContactsAtL3, contact)).toBe(false)
+    expect(seen.filters).toEqual({ contact_id: 'c1', location_id: ['L1'] })
+    expect(await canViewContact(rel([]), { isMaster: false, locations: [{ id: 'L1', role: 'staff' }] }, contact)).toBe(false)
   })
-  it('null user or null contact → denied', async () => {
-    expect(await canViewContact(dealStub([]), null, { id: 'c1', location_id: 'L1' })).toBe(false)
-    expect(await canViewContact(dealStub([]), { isMaster: false, locations: [{ id: 'L1' }] }, null)).toBe(false)
+  it('phone-only or web-only Contacts at the studio both open it (mig 690\'s rule)', async () => {
+    const hatch = (permissions) => ({ isMaster: false, locations: [{ id: 'L1', role: 'staff' }], assignmentsByLocation: { L1: { role: 'staff', permissions } } })
+    const row = rel([{ location_id: 'L1', status: 'active' }])
+    expect(await canViewContact(row, hatch({ contacts: false, mobile: { contacts: true } }), contact)).toBe(true)
+    expect(await canViewContact(row, hatch({ contacts: true, mobile: { contacts: false } }), contact)).toBe(true)
+    expect(await canViewContact(row, hatch({ contacts: false, mobile: { contacts: false } }), contact)).toBe(false)
   })
-  it('caller with no location assignments and not owner → denied without probing deals', async () => {
-    // Even though the deal stub WOULD return a row, the empty-locations
-    // short-circuit must deny before any query runs.
-    const user = { isMaster: false, locations: [] }
-    expect(await canViewContact(dealStub([{ id: 'd1' }]), user, { id: 'c1', location_id: 'L2' })).toBe(false)
+  it('a failed read denies and is logged; null user / contact / no studios deny without a probe', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const user = { isMaster: false, locations: [{ id: 'L1', role: 'staff' }] }
+      expect(await canViewContact(rel([], { fail: true }), user, contact)).toBe(false)
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(await canViewContact(stubFrom({ contact_studios: () => { throw new Error('down') } }), user, contact)).toBe(false)
+    } finally {
+      error.mockRestore()
+    }
+    const probing = stubFrom({ contact_studios: () => { throw new Error('should not be probed') } })
+    expect(await canViewContact(probing, null, contact)).toBe(false)
+    expect(await canViewContact(probing, { isMaster: false, locations: [{ id: 'L1' }] }, null)).toBe(false)
+    expect(await canViewContact(probing, { isMaster: false, locations: [] }, contact)).toBe(false)
+  })
+})
+
+// ORGCONTACTS.2 — the radar write routes accept a contact with ANY
+// contact_studios row at the ACTIVE studio (the routes check the primary
+// studio first), and fail closed.
+describe('isCrossoverAt / crossoverIdsAt', () => {
+  function probeDb(tables, { fail = [] } = {}) {
+    const log = []
+    return {
+      log,
+      from(table) {
+        const s = { table, filters: [] }
+        const b = {
+          select: () => b,
+          eq(c, v) { s.filters.push(['eq', c, v]); return b },
+          in(c, v) { s.filters.push(['in', c, v]); return b },
+          order: () => b,
+          range: () => b,
+          limit: () => b,
+          then(res, rej) {
+            log.push(s)
+            if (fail.includes(table)) return Promise.resolve({ data: null, error: { code: 'X', message: 'boom' } }).then(res, rej)
+            const rows = (tables[table] || []).filter((r) => s.filters.every(([k, c, v]) => (k === 'eq' ? r[c] === v : v.includes(r[c]))))
+            return Promise.resolve({ data: rows, error: null }).then(res, rej)
+          },
+        }
+        return b
+      },
+    }
+  }
+  const HATCH = 'loc-hatch'
+  const STILL = 'loc-still'
+  const tables = {
+    contact_studios: [
+      { contact_id: 'c-mem', location_id: HATCH, kind: 'member', status: 'active' },
+      { contact_id: 'c-ended', location_id: HATCH, kind: 'lead', status: 'ended' },
+      { contact_id: 'c-client', location_id: HATCH, kind: 'client', status: 'active' },
+    ],
+  }
+
+  it('any relationship at the active studio is accepted, an ENDED one included (decision 2)', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables), 'c-mem', HATCH)).toBe(true)
+    expect(await isCrossoverAt(probeDb(tables), 'c-ended', HATCH)).toBe(true)
+    expect(await isCrossoverAt(probeDb(tables), 'c-client', HATCH)).toBe(true)
+  })
+  it('refused at any other studio', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables), 'c-mem', STILL)).toBe(false)
+  })
+  it('probe error fails closed', async () => {
+    const { isCrossoverAt } = await import('./contact-crossovers')
+    expect(await isCrossoverAt(probeDb(tables, { fail: ['contact_studios'] }), 'c-mem', HATCH)).toBe(false)
+    expect(await isCrossoverAt({ from() { throw new Error('down') } }, 'c-mem', HATCH)).toBe(false)
+    expect(await isCrossoverAt(probeDb(tables), null, HATCH)).toBe(false)
+  })
+  it('crossoverIdsAt: one read of contact_studios at the active studio; any error → empty set', async () => {
+    const { crossoverIdsAt } = await import('./contact-crossovers')
+    const db = probeDb(tables)
+    expect(await crossoverIdsAt(db, ['c-mem', 'c-client', 'c-ended', 'c-none'], HATCH)).toEqual(new Set(['c-mem', 'c-client', 'c-ended']))
+    for (const q of db.log) { expect(q.table).toBe('contact_studios'); expect(q.filters).toContainEqual(['eq', 'location_id', HATCH]) }
+    expect(await crossoverIdsAt(probeDb(tables), ['c-mem'], STILL)).toEqual(new Set())
+    expect(await crossoverIdsAt(probeDb(tables, { fail: ['contact_studios'] }), ['c-mem', 'c-client'], HATCH)).toEqual(new Set())
+    expect(await crossoverIdsAt(probeDb(tables), [], HATCH)).toEqual(new Set())
   })
 })

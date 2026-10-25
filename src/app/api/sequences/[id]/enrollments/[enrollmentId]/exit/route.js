@@ -11,7 +11,7 @@
 // and may already be mid-step for this enrolment when the request lands.
 // The compare-and-set below makes the DATABASE state correct — the row is
 // exited, next_step_at is null, and no FURTHER step is ever scheduled — but
-// a step already handed to Postmark / Meta / Twilio in this tick will still
+// a step already handed to Postmark / Meta in this tick will still
 // be delivered. This route does not recall a send that has left the
 // building, and must not be described as if it does.
 //
@@ -24,9 +24,11 @@
 // get NO RLS — nothing else filters this).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { sequenceNotFound } from '@/lib/sequence-access'
+import { logError } from '@/lib/log'
 import { uuidLike } from '@/lib/schemas'
 import { buildExitPatch, classifyExitOutcome, EXITABLE_STATUSES } from '@/lib/sequences/exit'
 
@@ -36,24 +38,33 @@ export async function POST(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
   if (!uuidLike.safeParse(params.enrollmentId).success) {
     return NextResponse.json({ success: false, error: 'Enrollment not found' }, { status: 404 })
   }
 
+  // SEQPAGEGATE.1 — a missing sequence and another studio's answer the same
+  // 404 (was 404 vs 403, which confirmed the id existed). A failed read is a
+  // logged 500, not "not found"; a garbage id is not found without a read.
+  if (!uuidLike.safeParse(params.id).success) return sequenceNotFound()
   const db = createServerClient()
-  // Verify sequence exists + the caller can see it — mirrors /resume.
-  const { data: sequence } = await db
+  const { data: sequence, error: seqErr } = await db
     .from('email_sequences')
     .select('id, location_id')
     .eq('id', params.id)
-    .single()
-  if (!sequence) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const locationIds = getUserLocationIds(user)
-  if (user.role !== 'master' && !locationIds.includes(sequence.location_id)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    .maybeSingle()
+  if (seqErr) {
+    logError('sequences', 'exit: sequence read failed', { sequenceId: params.id, code: seqErr.code || null })
+    return NextResponse.json({ success: false, error: 'Could not load the sequence' }, { status: 500 })
+  }
+  if (!sequence) return sequenceNotFound()
+  const hidden = assertLocationAccessOr404(user, sequence.location_id)
+  if (hidden) return hidden
+  // ROLESWEEP.1a — the permission is judged at the sequence's location.
+  if (!hasPermissionForLocation(user, sequence.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
   // CAS: only a live enrollment (scoped to THIS sequence) transitions.

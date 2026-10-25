@@ -8,6 +8,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEventForm from '@/components/host/HostEventForm'
 
 export const dynamic = 'force-dynamic'
@@ -31,6 +32,7 @@ export default async function HostEditEventPage(props) {
     .maybeSingle()
 
   if (!event || event.host_id !== session.host.id) notFound()
+  const brand = await resolveHostOrgBrand(db, session.host)
 
   // First wave drives the single-session fields the form exposes.
   const waves = Array.isArray(event.race_waves) ? [...event.race_waves] : []
@@ -67,12 +69,12 @@ export default async function HostEditEventPage(props) {
 
       {event.status === 'rejected' && event.rejected_reason && (
         <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-          <span className="font-semibold">UN1T asked for changes:</span> {event.rejected_reason}
+          <span className="font-semibold">{brand.name} asked for changes:</span> {event.rejected_reason}
         </div>
       )}
 
       <div className="mt-8">
-        <HostEventForm mode="edit" eventId={event.id} initial={initial} />
+        <HostEventForm mode="edit" eventId={event.id} initial={initial} brandName={brand.name} />
       </div>
     </div>
   )

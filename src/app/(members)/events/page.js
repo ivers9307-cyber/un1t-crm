@@ -10,10 +10,14 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users, Tag } from 'lucide-react'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { ADMIN_ROLES } from '@/lib/schemas'
-import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { eventToday } from '@/lib/event-day'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
+import { showsDonationsLink } from '@/lib/charity-donations'
+import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,23 +53,26 @@ export default async function EventsIndexPage(props) {
   const db = createServerClient()
   // EVENTS-LOC.2 — scope the list to the operator's ACTIVE location so
   // each studio is independent (Hatch Street must not see Stillorgan's
-  // events), PLUS any event flagged `shared` (owned by one location but
-  // surfaced at every location). Master switches active location via the
+  // events), PLUS any event flagged `shared` (owned by a sibling location of
+  // the same organisation, W0.3; another gym never sees it). Master switches
+  // active location via the
   // location switcher; non-master operators are pinned to theirs. No
   // active location → empty list rather than leaking every location.
   const activeLocationId = user.activeLocation?.id || null
   let races = []
   if (activeLocationId) {
+    const orFilter = await sharedEventsOrFilterFor(db, activeLocationId)
     const { data } = await db
       .from('race_events')
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
-        active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        active, kind, shared, location_id, charity_enabled, registration_opens_at, registration_closes_at,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
       `)
-      .or(`location_id.eq.${activeLocationId},shared.eq.true`)
+      .or(orFilter)
       .order('race_date', { ascending: false })
     races = data || []
   }
@@ -80,6 +87,7 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -93,21 +101,47 @@ export default async function EventsIndexPage(props) {
     }
   }
 
-  const today = todayIsoDublin()
-  const { upcoming, past } = orderEventsForBrowse(races, today)
+  // TZ.9: upcoming by each event's own studio day (the zone rides the read).
+  const { upcoming, past } = orderEventsForBrowse(races, (e) => eventToday(e))
 
   const visible = tab === 'past' ? past : upcoming
+  // CHARITY.12 — the Donations link also shows for an event whose section is
+  // off but that already took donations (spec §6). One read for the listed
+  // events; a failed read is treated as none.
+  const donationEventIds = new Set()
+  const visibleIds = visible.map((r) => r.id)
+  if (visibleIds.length > 0) {
+    const { data: donated, error: donatedErr } = await db
+      .from('donations')
+      .select('race_event_id')
+      .in('race_event_id', visibleIds)
+      .range(0, 999)
+    if (donatedErr) logWarn('events-list', 'donations read failed; Donations links follow the switch only', { err: donatedErr })
+    else for (const d of donated || []) donationEventIds.add(d.race_event_id)
+  }
+
   const tabs = [
     { id: 'upcoming', label: 'Upcoming', count: upcoming.length, href: '/events' },
     { id: 'past',     label: 'Past',     count: past.length,     href: '/events?tab=past' },
   ]
 
-  let appOrigin = ''
-  try {
-    const raw = getAppUrl()
-    appOrigin = new URL(raw).origin
-  } catch {
-    appOrigin = ''
+  // W1.L3b — the copyable public link is minted on EACH EVENT's own tenant
+  // host (the list mixes the org's studios and its hosts' events, and a
+  // tenant's event must never be handed round as crm.repset.ie). Resolved once
+  // per distinct location (the resolver caches; it floors to the CRM host and
+  // never throws past it). Origin-only, so a misconfigured env var can't
+  // poison the link when it floors; '' degrades to a relative link.
+  const originByLocation = new Map()
+  for (const r of visible) {
+    const locId = r.location_id || null
+    if (originByLocation.has(locId)) continue
+    let origin = ''
+    try { origin = new URL(await resolveCustomerBaseUrl(db, locId)).origin } catch { origin = '' }
+    originByLocation.set(locId, origin)
+  }
+  const publicUrlFor = (r) => {
+    const baseUrl = originByLocation.get(r.location_id || null) || ''
+    return baseUrl ? `${baseUrl}/event/${r.slug}` : `/event/${r.slug}`
   }
 
   return (
@@ -195,7 +229,7 @@ export default async function EventsIndexPage(props) {
               </thead>
               <tbody className="divide-y divide-un1t-border">
                 {visible.map((r) => {
-                  const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
+                  const publicUrl = publicUrlFor(r)
                   const isRace = isRaceKind(r.kind)
                   const badge = kindBadge(r.kind || 'race')
                   const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
@@ -230,7 +264,11 @@ export default async function EventsIndexPage(props) {
                         </span>
                       </td>
                       <td className="p-3 text-right">
-                        <div className="inline-flex items-center gap-3">
+                        {/* CHARITY.13 — the row gained a Donations link; with seven
+                            actions the cell was clipped by the table wrapper's
+                            overflow-hidden and Edit vanished. Wrap instead of clip,
+                            and keep each label on one line. */}
+                        <div className="inline-flex flex-wrap justify-end items-center gap-x-3 gap-y-1 [&>*]:whitespace-nowrap">
                           <a
                             href={publicUrl}
                             target="_blank"
@@ -253,6 +291,15 @@ export default async function EventsIndexPage(props) {
                           >
                             Check in
                           </Link>
+                          {showsDonationsLink(r, donationEventIds) && (
+                            <Link
+                              href={`/events/${r.id}/donations`}
+                              className="text-[11px] text-un1t-subtle hover:text-un1t-text"
+                              title="Card donations raised on the event page"
+                            >
+                              Donations
+                            </Link>
+                          )}
                           {/* Race-day control panel is race-only —
                               there's no equivalent for workshop /
                               seminar etc. (no live timing). E7 hides
@@ -294,7 +341,7 @@ export default async function EventsIndexPage(props) {
               footer row with action links spaced for tap targets. */}
           <div className="md:hidden space-y-2">
             {visible.map((r) => {
-              const publicUrl = appOrigin ? `${appOrigin}/event/${r.slug}` : `/event/${r.slug}`
+              const publicUrl = publicUrlFor(r)
               const isRace = isRaceKind(r.kind)
               const badge = kindBadge(r.kind || 'race')
               const signupSummary = formatSignupSummary(r.registrations, { isRace, capacity: sumWaveCapacity(r.waves) ?? r.capacity, mode: r.capacity_mode })
@@ -359,6 +406,14 @@ export default async function EventsIndexPage(props) {
                     >
                       Check in
                     </Link>
+                    {showsDonationsLink(r, donationEventIds) && (
+                      <Link
+                        href={`/events/${r.id}/donations`}
+                        className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"
+                      >
+                        Donations
+                      </Link>
+                    )}
                     <Link
                       href={`/events/${r.id}/edit`}
                       className="px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle"

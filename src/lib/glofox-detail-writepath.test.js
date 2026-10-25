@@ -22,12 +22,15 @@ function makeDb({ existingContact = null, stageRows = [{ id: 's1', slug: 'member
       if (st.table === 'contacts') return existingContact ? [existingContact] : []
       if (st.table === 'pipeline_stages') return stageRows
       if (st.table === 'deals') return []
+      // GLOFOXSIBLING.1 — the organisation-wide fallback reads the studio's org.
+      if (st.table === 'locations') return [{ organization_id: 'org-1' }]
       return []
     }
     const result = () => ({ data: rowsForSelect(), error: null })
     const chain = {
       select() { return chain },
       eq() { return chain },
+      ilike() { return chain },
       in() { return chain },
       not() { return chain },
       is() { return chain },

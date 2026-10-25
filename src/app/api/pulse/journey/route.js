@@ -13,7 +13,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadJourneyLane } from '@/lib/onboarding-journey-data'
 
@@ -25,7 +25,7 @@ export async function GET(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'pulse_admin')) {
+  if (!hasPermissionAtAnyLocation(user, 'pulse_admin')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -36,6 +36,10 @@ export async function GET(request) {
   }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the lane's location.
+  if (!hasPermissionForLocation(user, locationId, 'pulse_admin')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const db = createServerClient()
   try {

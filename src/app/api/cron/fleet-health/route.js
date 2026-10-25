@@ -57,11 +57,15 @@ import { sendEmail } from '@/lib/postmark'
 import { sendPush } from '@/lib/push'
 import { getAppUrl } from '@/lib/app-url'
 import { listTailnetDevices, tailscaleConfigured } from '@/lib/tailscale-api'
+import { runScreenHealth } from '@/lib/fleet-screen-health'
+import { excludeTombstones } from '@/lib/staff-tombstone'
+import { getLocationZones, PLATFORM_TZ } from '@/lib/location-time'
 import {
   isFleetDevice,
   deviceNameOf,
   gradeDevice,
   decideAlert,
+  rollbackUndeliveredAlerts,
   indexBridgesByDevice,
   locationsNeedingVisibilityProbe,
   CLASS_GRACE_MS,
@@ -80,15 +84,26 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
 
+  const db = createServerClient()
+
+  // SCREENMODE.10 — the Android TV screens, graded on their plan-fetch
+  // heartbeat. They are not on the tailnet, so this runs FIRST and
+  // unconditionally: an unconfigured or unreachable Tailscale must not blind
+  // it. Never throws (see runScreenHealth).
+  const screens = await runScreenHealth(db, { nowMs: Date.now(), notify })
+  const screenCounts = { screens_checked: screens.checked, screens_alerted: screens.alerted }
+
+  // The Pi pass grades on a clock taken HERE, after the screen pass: a screen
+  // notify can take seconds, and a clock taken before it would grade the Pis
+  // against a moment that is already stale.
+  const now = Date.now()
+
   // Dormant until configured. The heartbeat still stamps, so cron_health
   // does not report this as stale merely for being unconfigured.
   if (!tailscaleConfigured()) {
-    await stampHeartbeat('fleet-health', { configured: false })
-    return NextResponse.json({ success: true, data: { configured: false, checked: 0 } })
+    await stampHeartbeat('fleet-health', { configured: false, ...screenCounts })
+    return NextResponse.json({ success: true, data: { configured: false, checked: 0, ...screenCounts } })
   }
-
-  const db = createServerClient()
-  const now = Date.now()
 
   let devices
   try {
@@ -99,7 +114,7 @@ export async function GET(request) {
     // cry-wolf behaviour that gets alerting muted. Skip the heartbeat too, so
     // a persistently broken integration surfaces as a stale cron.
     logError('fleet-health', 'tailscale api unreachable', { err: String(err) })
-    return NextResponse.json({ success: false, error: 'tailscale_unreachable' }, { status: 200 })
+    return NextResponse.json({ success: false, error: 'tailscale_unreachable', ...screenCounts }, { status: 200 })
   }
 
   const fleet = devices.filter(isFleetDevice)
@@ -108,8 +123,8 @@ export async function GET(request) {
     // wrong tailnet than six simultaneously destroyed Pis. Say so rather than
     // alerting.
     logWarn('fleet-health', 'no devices carry the fleet tag', { seen: devices.length })
-    await stampHeartbeat('fleet-health', { configured: true, checked: 0, tagged: 0 })
-    return NextResponse.json({ success: true, data: { checked: 0, tagged: 0 } })
+    await stampHeartbeat('fleet-health', { configured: true, checked: 0, tagged: 0, ...screenCounts })
+    return NextResponse.json({ success: true, data: { checked: 0, tagged: 0, ...screenCounts } })
   }
 
   // Bridges keyed by the Tailscale device they run on — see
@@ -176,9 +191,25 @@ export async function GET(request) {
   // correctly grades on reachability alone).
   const { data: fleetRows } = await db
     .from('fleet_devices')
-    .select('device_name, role, last_render_at')
+    .select('device_name, role, last_render_at, location_id')
     .in('device_name', names)
   const fleetByName = new Map((fleetRows || []).map((r) => [r.device_name, r]))
+
+  // TZ.12 — `quiet` (an online-but-broken device graded overnight) is the
+  // device's STUDIO night, 22:00-06:00 in its locations.timezone: the bridge's
+  // location, else the kiosk's fleet_devices.location_id. An unclaimed device
+  // has no studio and stays on the platform clock. Resolved once per tick. A
+  // failed read is a DB outage for a decision that gates alerts, so the tick
+  // is skipped (the next one, 5 min later, reads again), never guessed.
+  const deviceLocationId = (name) =>
+    bridgeByName.get(name)?.location_id ?? fleetByName.get(name)?.location_id ?? null
+  let zoneByLocation
+  try {
+    zoneByLocation = await getLocationZones(db, names.map(deviceLocationId))
+  } catch (err) {
+    logError('fleet-health', 'location zones unreadable; tick skipped', { err })
+    return NextResponse.json({ success: false, error: 'zone_read_failed' }, { status: 200 })
+  }
 
   // BRIDGE-BLIND.1 — what is happening in each bridge's room right now.
   //
@@ -197,6 +228,11 @@ export async function GET(request) {
   for (const device of fleet) {
     const name = deviceNameOf(device)
     if (!name) continue
+    // A screen is graded once, on its plan heartbeat, by runScreenHealth above.
+    // A screen box that is ALSO on the tailnet (mis-roled or mis-tagged) must
+    // not be graded a second time here on reachability: the two passes would
+    // fight over its fleet_device_health row.
+    if (fleetByName.get(name)?.role === 'screen') continue
     const bridgeRow = bridgeByName.get(name) ?? null
     // A location absent from the map (probe skipped or failed) yields
     // undefined -> null, and gradeDevice then never considers `blind`. Failing
@@ -204,7 +240,9 @@ export async function GET(request) {
     const visibility = bridgeRow?.location_id
       ? (visibilityByLocation.get(bridgeRow.location_id) ?? null)
       : null
-    const graded = gradeDevice(device, bridgeRow, now, fleetByName.get(name) ?? null, visibility)
+    const locationId = deviceLocationId(name)
+    const zone = (locationId && zoneByLocation.get(locationId)) || PLATFORM_TZ
+    const graded = gradeDevice(device, bridgeRow, now, fleetByName.get(name) ?? null, visibility, zone)
     const { alert, row } = decideAlert(graded, priorByName.get(name) ?? null, now)
     rows.push(row)
     if (alert) alerts.push({ ...graded, alert, row })
@@ -237,17 +275,9 @@ export async function GET(request) {
       logError('fleet-health', 'alert reached nobody — will retry next tick', {
         alerts: alerts.map((a) => `${a.name}:${a.alert}`),
       })
-      // Re-arming differs by direction, and getting it wrong loses the alert.
-      // A failed DOWN notice needs alerted_at null, because the next tick sees
-      // an unchanged state and only re-alerts when nothing has been sent.
-      // A failed RECOVERY notice needs the OLD outage stamp back, because a
-      // recovery is announced only when a previous alert is on record —
-      // nulling it would make the device look like it had never been down.
-      for (const a of alerts) {
-        a.row.alerted_at = a.alert === 'recovered'
-          ? (priorByName.get(a.name)?.alerted_at ?? null)
-          : null
-      }
+      // Re-arming differs by direction, and getting it wrong loses the alert
+      // — see rollbackUndeliveredAlerts for why.
+      rollbackUndeliveredAlerts(alerts, priorByName)
     }
   }
 
@@ -282,11 +312,12 @@ export async function GET(request) {
     alerted: alerts.length,
     expired,
     pruned,
+    ...screenCounts,
   })
 
   return NextResponse.json({
     success: true,
-    data: { checked: rows.length, alerted: alerts.length, expired, pruned },
+    data: { checked: rows.length, alerted: alerts.length, expired, pruned, ...screenCounts },
   })
 }
 
@@ -524,9 +555,11 @@ async function notify(db, alerts) {
     ...back.map((a) => `RECOVERED — ${a.name}`),
   ]
 
-  const { data: masters } = await db
-    .from('profiles')
-    .select('id, email')
+  // STAFFDELETE.1 — never alert a tombstone (its address is scrambled). Mig 622
+  // already demotes a deleted master to role='staff', so this is the second
+  // lock, not the only one: `role` alone is not a tombstone filter.
+  const { data: masters } = await excludeTombstones(db.from('profiles')
+    .select('id, email'))
     .eq('role', 'master')
 
   let delivered = false
@@ -551,7 +584,7 @@ async function notify(db, alerts) {
   const emails = (masters || []).map((m) => m.email).filter(Boolean)
   const html =
     `<p>${lines.map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;')).join('<br/>')}</p>` +
-    `<p><a href="${getAppUrl()}/admin/bridges">Open the bridges admin</a></p>`
+    `<p><a href="${getAppUrl()}/admin/fleet">Open the fleet page</a></p>`
 
   for (const to of emails) {
     try {

@@ -1,0 +1,170 @@
+// GET /api/public/entry/[token] — EVENT-MOVE.6
+//
+// Public, no session. The entry behind a signed entry-manage token (the
+// "Change your date" link in the confirmation and moved emails), for the
+// /event/entry/[token] page. The token is the only credential: a bad,
+// expired or forged one, or an entry that no longer exists, is a 404.
+//
+// The public shape of /api/public/event-registrations/[id] (team name,
+// size, wave, member names, roles, member flag; never an email or a phone;
+// no check-in codes, which this page does not show) plus:
+//   can_move             the holder may change the date now
+//   move_blocked_reason  a plain sentence when they may not (unpaid,
+//                        cancelled, checked in, past, or the event's entry
+//                        policy: date changes switched off or inside the
+//                        hours-before cutoff, in the operator's own words;
+//                        ENTRYPOLICY.1)
+//   lapsed               ENTRYPOLICY.1: an unpaid entry whose hold on its
+//                        place has run out (never resumed, never counted; the
+//                        row stays). With lapsed_message (operator copy) and
+//                        register_url (the event page, to register again).
+//   date_change_pending  a dearer date change is waiting on its payment
+//   date_change_failed   a paid date change was refused (the time filled);
+//                        shown while the entry is still where it started and
+//                        the payment stands (a hand move or refund clears it)
+//   placed_into          FINDTEAM.8 (I5): for a solo staff placed into a team
+//                        (status 'placed'), the team they joined and its wave
+//                        ({ team_name, wave: { start_time, label } }); null
+//                        otherwise. Names and times only.
+//
+// A paid date change returns the buyer HERE, often before the payment
+// webhook: the newest date-change payment, if still pending, is refreshed
+// from the provider first (as /api/public/event-payments/[id] does), which
+// completes it and makes the move, so the page shows the new date.
+//
+// Rate limited per IP: 60 per 5 minutes (bucket shared with move-options).
+
+import { NextResponse } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { verifyEntryManageTokenFromEnv } from '@/lib/entry-manage-tokens'
+import { countEntryCheckins } from '@/lib/registration-move'
+import { entryMoveBlock, customerMoveMessage } from '@/lib/registration-move-public'
+import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
+import { getLocationZone, todayStrIn } from '@/lib/location-time'
+import { pendingLapsed, lapsedMessage } from '@/lib/entry-policy'
+import { logWarn } from '@/lib/log'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const fail = (code, status) => NextResponse.json({ success: false, error: code, message: customerMoveMessage(code) }, { status })
+
+/**
+ * The newest customer date-change payment on this entry (move_gap with no
+ * move yet), refreshed from the provider when still pending. Its state for
+ * the page: { pending, failed }. `failed` needs the move's source event,
+ * checked by the caller. Best-effort: a failure here never costs the page.
+ */
+async function latestDateChange(db, registrationId) {
+  try {
+    const { data: rows, error } = await db
+      .from('race_payments')
+      .select('id, kind, status, payment_provider, payment_provider_ref, metadata')
+      .eq('race_registration_id', registrationId)
+      .eq('kind', GAP_PAYMENT_KIND)
+      .is('registration_move_id', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (error) {
+      logWarn('public-entry', 'date-change read failed; page shows the entry as stored', { err: error, registrationId })
+      return null
+    }
+    let latest = Array.isArray(rows) ? rows[0] : null
+    if (!latest || !latest.metadata?.pending_move) return null
+    if (latest.status === 'pending') latest = (await refreshRacePaymentFromProvider(db, latest)) || latest
+    return latest
+  } catch (e) {
+    logWarn('public-entry', 'date-change refresh threw; page shows the entry as stored', { err: e, registrationId })
+    return null
+  }
+}
+
+export async function GET(request, props) {
+  const { token } = await props.params
+  const db = createServerClient()
+
+  const limit = await checkRateLimit(db, `entry:${getClientIp(request)}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
+  const claim = verifyEntryManageTokenFromEnv(token)
+  if (!claim) return fail('not_found', 404)
+
+  const change = await latestDateChange(db, claim.registrationId)
+
+  const { data, error } = await db
+    .from('race_registrations')
+    .select(`
+      id, status, race_event_id, registered_at, team_composition, race_started_at, race_finished_at,
+      race:race_event_id (
+        id, name, slug, kind, race_date, location_id, entry_policy,
+        locations:location_id ( name, address )
+      ),
+      wave:wave_id ( id, start_time, label ),
+      teams:team_id ( id, name, size,
+        team_members ( id, name, role, is_member ) ),
+      placed_into:placed_into_registration_id ( teams:team_id ( name ), wave:wave_id ( start_time, label ) )
+    `)
+    .eq('id', claim.registrationId)
+    .maybeSingle()
+  if (error) return fail('load_failed', 500)
+  if (!data) return fail('not_found', 404)
+
+  const checkins = await countEntryCheckins(db, data.id)
+  // TZ.9: "past" by the event's studio day. The race select stays as the page
+  // receives it (no timezone in the payload), so the zone is its own cached
+  // read; an unreadable zone answers like an unreadable check-in count (the
+  // move button hides with "try again"), never a guessed day.
+  let today = null
+  let zone = null
+  const nowMs = Date.now()
+  if (!checkins.error) {
+    try {
+      zone = await getLocationZone(db, data.race?.location_id || null)
+      today = todayStrIn(zone, nowMs)
+    } catch (err) {
+      logWarn('public-entry', 'event zone unreadable; move hidden this load', { err, registrationId: data.id })
+    }
+  }
+  // ENTRYPOLICY.1 — the event's policy (reschedule switch, cutoff) is judged
+  // here too, at the studio's clock, so the page shows the operator's reason.
+  const block = !today
+    ? { code: 'load_failed', message: customerMoveMessage('load_failed') }
+    : entryMoveBlock({ registration: data, checkinCount: checkins.count, today, nowMs, zone })
+  // ENTRYPOLICY.1 — an unpaid entry past its hold is lapsed: say so and point
+  // at the event page to register again. The row itself is left alone.
+  const lapsed = pendingLapsed(data, nowMs, data.race || null)
+
+  const members = (data.teams?.team_members || []).map((m) => ({ id: m.id, name: m.name, role: m.role, is_member: m.is_member }))
+  const dateChangePending = change?.status === 'pending'
+  const dateChangeFailed = change?.status === 'completed'
+    && !!change.metadata?.pending_move_failed
+    && change.metadata?.pending_move?.expected_source_event_id === data.race_event_id
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      id: data.id,
+      status: data.status,
+      registered_at: data.registered_at,
+      team_composition: data.team_composition,
+      race: data.race ? { ...data.race, entry_policy: undefined } : data.race,
+      wave: data.wave,
+      team: data.teams ? { id: data.teams.id, name: data.teams.name, size: data.teams.size, team_members: members } : null,
+      can_move: !block,
+      move_blocked_reason: block ? block.message : null,
+      lapsed,
+      lapsed_message: lapsed ? lapsedMessage(data.race || null) : null,
+      register_url: lapsed && data.race?.slug ? `/event/${data.race.slug}` : null,
+      date_change_pending: dateChangePending,
+      date_change_failed: dateChangeFailed,
+      placed_into: data.status === 'placed' && data.placed_into
+        ? {
+            team_name: data.placed_into.teams?.name || null,
+            wave: data.placed_into.wave ? { start_time: data.placed_into.wave.start_time, label: data.placed_into.wave.label } : null,
+          }
+        : null,
+    },
+  })
+}

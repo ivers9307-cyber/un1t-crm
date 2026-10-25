@@ -1,5 +1,6 @@
 // GET /api/xero/debug
-// Returns the exact authorize URL and env-var values we use, so we
+// Returns the exact authorize URL, the non-secret Xero env values, and
+// presence/length (never a character) of the client id and secret, so we
 // can diff against what's registered in the Xero developer portal.
 // Owner-only — never expose this in a client UI without the gate.
 
@@ -30,19 +31,20 @@ export async function GET(req) {
     buildError = e.message
   }
 
-  // Mask the secret — show length + first/last 4 chars so we can
-  // verify it's not blank or a whitespace-padded copy/paste.
-  const mask = (v) => {
-    if (!v) return null
-    if (v.length < 12) return `(${v.length} chars)`
-    return `${v.slice(0, 4)}…${v.slice(-4)} (${v.length} chars)`
+  // SECRETTAILS.1 — presence, length and "was it pasted with surrounding
+  // whitespace?", never a character. That is the whole question this route
+  // answers about a credential ("not blank, not a padded copy/paste"), and
+  // it needs neither end of the value.
+  const describeEnv = (v) => {
+    const s = typeof v === 'string' ? v : ''
+    return { present: s.length > 0, length: s.length, surrounding_whitespace: s.length > 0 && s !== s.trim() }
   }
 
   return NextResponse.json({
     success: true,
     env: {
-      XERO_CLIENT_ID: mask(process.env.XERO_CLIENT_ID),
-      XERO_CLIENT_SECRET: mask(process.env.XERO_CLIENT_SECRET),
+      XERO_CLIENT_ID: describeEnv(process.env.XERO_CLIENT_ID),
+      XERO_CLIENT_SECRET: describeEnv(process.env.XERO_CLIENT_SECRET),
       XERO_REDIRECT_URI: process.env.XERO_REDIRECT_URI || null,
       XERO_SALES_ACCOUNT_CODE: process.env.XERO_SALES_ACCOUNT_CODE || null,
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || null,

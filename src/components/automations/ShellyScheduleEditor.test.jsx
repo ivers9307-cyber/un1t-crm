@@ -136,15 +136,42 @@ describe('ShellyScheduleEditor — Glofox gating', () => {
     render(<ShellyScheduleEditor device={device()} glofoxConnected={false} onSave={vi.fn()} />)
     const radio = screen.getByLabelText('Class timetable')
     expect(radio.disabled).toBe(true)
-    expect(radio.closest('label').getAttribute('title')).toBe('Connect Glofox to use class-linked schedules')
+    expect(radio.closest('label').getAttribute('title')).toBe('Connect a membership source with a class schedule to use class-linked schedules')
   })
 
   it('a device ALREADY in class mode still shows its inputs, disabled, with the reason', () => {
     render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected={false} onSave={vi.fn()} />)
     const lead = screen.getByDisplayValue(String(DEFAULT_LEAD_MIN))
     expect(lead.disabled).toBe(true)
-    expect(lead.getAttribute('title')).toBe('Connect Glofox to use class-linked schedules')
-    expect(screen.getByText('Connect Glofox to use class-linked schedules.')).toBeTruthy()
+    expect(lead.getAttribute('title')).toBe('Connect a membership source with a class schedule to use class-linked schedules')
+    expect(screen.getByText('Connect a membership source with a class schedule to use class-linked schedules.')).toBeTruthy()
+  })
+})
+
+// PROFILESPREAD.1a — the page could not READ the Glofox status (a failed
+// by-id read). Class mode stays off, but nothing may claim Glofox is not
+// connected: the hint says the check failed instead.
+describe('ShellyScheduleEditor — Glofox status unknown', () => {
+  const UNKNOWN = "Couldn't check Glofox. Reload to try again."
+
+  it('class mode is unpickable, and says the check failed (not "connect Glofox")', () => {
+    render(<ShellyScheduleEditor device={device()} glofoxConnected={false} glofoxUnknown onSave={vi.fn()} />)
+    const radio = screen.getByLabelText('Class timetable')
+    expect(radio.disabled).toBe(true)
+    expect(radio.closest('label').getAttribute('title')).toBe(UNKNOWN)
+    expect(document.body.innerHTML).not.toMatch(/Connect Glofox/)
+  })
+
+  it('a device already in class mode keeps its inputs disabled, with the unknown reason', () => {
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected={false} glofoxUnknown onSave={vi.fn()} />)
+    const lead = screen.getByDisplayValue(String(DEFAULT_LEAD_MIN))
+    const lag = screen.getByDisplayValue(String(DEFAULT_LAG_MIN))
+    expect(lead.disabled).toBe(true)
+    expect(lag.disabled).toBe(true)
+    expect(lead.getAttribute('title')).toBe(UNKNOWN)
+    expect(lag.getAttribute('title')).toBe(UNKNOWN)
+    expect(screen.getByText(UNKNOWN)).toBeTruthy()
+    expect(document.body.innerHTML).not.toMatch(/Connect Glofox/)
   })
 })
 

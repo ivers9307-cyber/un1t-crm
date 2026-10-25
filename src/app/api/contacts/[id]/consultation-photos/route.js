@@ -10,7 +10,7 @@ import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 
@@ -52,7 +52,7 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'consultations')) {
+  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -70,6 +70,10 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `consultations` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'consultations')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   // Parse multipart form data
   const formData = await request.formData()

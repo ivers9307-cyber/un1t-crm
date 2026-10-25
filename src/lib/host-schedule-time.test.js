@@ -6,10 +6,17 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  dublinLocalToIso, isoToDublinInputs, nextQuarterHour, dublinScheduleLabel, QUARTER_MS, CLICK_SLACK_MS,
+  zonedLocalToIso, isoToZonedInputs, nextQuarterHour, scheduleLabelIn, QUARTER_MS, CLICK_SLACK_MS,
   validateScheduledFor, scheduleErrorCopy, SCHEDULE_ERROR_COPY, TIME_OPTIONS,
   MIN_LEAD_MS, MAX_LEAD_MS,
 } from './host-schedule-time.js'
+
+// TZ.18b: the Dublin-named aliases are gone; these pin the zone-taking
+// functions on Europe/Dublin (UN1T's studios), exactly as the aliases did.
+const D = 'Europe/Dublin'
+const dublinLocalToIso = (date, time) => zonedLocalToIso(date, time, D)
+const isoToDublinInputs = (isoOrMs) => isoToZonedInputs(isoOrMs, D)
+const dublinScheduleLabel = (isoOrMs) => scheduleLabelIn(isoOrMs, D)
 
 describe('dublinLocalToIso', () => {
   it('converts an IST (summer) wall clock to UTC', () => {

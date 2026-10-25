@@ -33,6 +33,8 @@
 // formatter that doesn't match a pattern here lives in the calling
 // component's local helper.
 
+import { DEFAULT_TZ } from '@shared/zoned-time'
+
 const LOCALE = 'en-IE'
 
 // Module-level Intl instances. Reused across calls for cheaper
@@ -152,10 +154,11 @@ export function formatWeekdayShortDateTime(value) {
 // reuse the module-level Intl instances — TZ-aware formatters
 // don't cache as cleanly because the option set varies.
 //
-// `timeZone` defaults to 'Europe/Dublin' since that's the only
-// caller today. Pass an IANA TZ string to override.
+// `timeZone` defaults to DEFAULT_TZ (Europe/Dublin), the floor. TZ.16:
+// every caller passes the record's studio zone; tests/dates-intz-callers.test.js
+// fails a new one-argument call.
 
-const DEFAULT_EMAIL_TZ = 'Europe/Dublin'
+const DEFAULT_EMAIL_TZ = DEFAULT_TZ
 
 /**
  * "Thu, 8 May, 14:30" rendered in the given timezone. Used by

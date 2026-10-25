@@ -15,6 +15,7 @@ import {
   periodLabel,
   computeClaimTotals,
   buildReceiptPath,
+  isExpenseReceiptPath,
 } from './fte-expenses.js'
 
 describe('EXPENSE_CATEGORIES', () => {
@@ -203,5 +204,38 @@ describe('buildReceiptPath', () => {
   it('falls back to "receipt" when filename is empty', () => {
     const p = buildReceiptPath({ profileId: 'u', claimId: 'c', itemId: 'i', filename: '' })
     expect(p).toMatch(/^u\/c\/i-[a-z0-9]{6}-receipt$/)
+  })
+})
+
+// MOBILE-UPLOAD.1 — the gate the items route applies to a path the DEVICE
+// uploaded to. buildReceiptPath and isExpenseReceiptPath are two halves of
+// one contract: anything the sign route mints must pass, and nothing else
+// may.
+describe('isExpenseReceiptPath', () => {
+  const PROFILE = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const CLAIM = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+  const ITEM = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+
+  it('accepts exactly what buildReceiptPath produces', () => {
+    for (const filename of ['IMG_0007.HEIC', 'receipt.pdf', 'Iarnród Éireann ticket.png', 'no-extension']) {
+      const path = buildReceiptPath({ profileId: PROFILE, claimId: CLAIM, itemId: ITEM, filename })
+      expect(isExpenseReceiptPath(path, PROFILE, CLAIM)).toBe(true)
+    }
+  })
+
+  it("refuses another claimant's path, and another claim of the same claimant", () => {
+    const path = buildReceiptPath({ profileId: PROFILE, claimId: CLAIM, itemId: ITEM, filename: 'r.pdf' })
+    expect(isExpenseReceiptPath(path, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath(path, PROFILE, 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')).toBe(false)
+  })
+
+  it('refuses traversal, wrong depth and junk', () => {
+    expect(isExpenseReceiptPath(`${PROFILE}/${CLAIM}/../../secrets.pdf`, PROFILE, CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath(`${PROFILE}/${CLAIM}/${ITEM}-ab12cd-r.pdf/extra`, PROFILE, CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath(`${PROFILE}/${CLAIM}`, PROFILE, CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath(`${PROFILE}/${CLAIM}/not-a-uuid-r.pdf`, PROFILE, CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath('', PROFILE, CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath(null, PROFILE, CLAIM)).toBe(false)
+    expect(isExpenseReceiptPath(`${PROFILE}/${CLAIM}/${ITEM}-ab12cd-r.pdf`, PROFILE, null)).toBe(false)
   })
 })

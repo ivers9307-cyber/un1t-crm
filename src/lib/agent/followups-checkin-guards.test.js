@@ -19,7 +19,7 @@ const H = 3600_000
 const NOW = Date.UTC(2026, 5, 12, 13, 0, 0) // 14:00 Dublin — inside the band
 
 const LOCATION = {
-  id: 'loc1',
+  id: 'loc1', organization_id: null,
   name: 'Stillorgan',
   settings: { customer_agent: { enabled: true, first_class_checkin: { enabled: true, delay_hours: 2 } } },
 }
@@ -44,6 +44,7 @@ function checkinDb({ conversation, contacts = [CONTACT], onInsert = () => {} }) 
     from(table) {
       const state = { selectOpts: null }
       const finish = () => {
+        if (table === 'location_whatsapp_numbers') return { data: [{ location_id: LOCATION.id }], error: null } // MIAORG.1 Task 6 / WAORGNUMBER.1: a number is switched on at the studio
         if (table === 'locations') return { data: [LOCATION], error: null }
         if (table === 'contacts') {
           if (state.selectOpts?.head) return { count: 0, error: null }
@@ -56,7 +57,7 @@ function checkinDb({ conversation, contacts = [CONTACT], onInsert = () => {} }) 
         select: (_cols, opts) => { if (opts) state.selectOpts = opts; return b },
         update: () => b,
         insert: (row) => { onInsert(table, row); return Promise.resolve({ error: null }) },
-        eq: () => b, in: () => b, gte: () => b, is: () => b, not: () => b,
+        eq: () => b, in: () => b, gte: () => b, lte: () => b, is: () => b, not: () => b,
         or: () => b, order: () => b, limit: () => b,
         maybeSingle: () => b, single: () => b,
         then: (resolve, reject) => Promise.resolve(finish()).then(resolve, reject),

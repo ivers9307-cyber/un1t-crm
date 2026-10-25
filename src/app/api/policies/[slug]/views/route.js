@@ -15,6 +15,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { policyOrgIdFor } from '@/lib/policies'
 
 export const runtime = 'nodejs'
 
@@ -34,10 +35,16 @@ export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
+  // W0.5 (mig 713) — the slug resolves inside the caller's organisation only.
+  const orgId = policyOrgIdFor(user)
+  if (!orgId) {
+    return NextResponse.json({ success: false, error: 'Policy not found' }, { status: 404 })
+  }
   const db = createServerClient()
   const { data: policy } = await db
     .from('policies')
     .select(`id, active, policy_versions ( id, is_current )`)
+    .eq('organization_id', orgId)
     .eq('slug', slug)
     .maybeSingle()
   if (!policy || !policy.active) {

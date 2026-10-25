@@ -8,6 +8,7 @@
 //     feature needs no local mapping table.
 
 import { zoomFetch } from './client'
+import { PLATFORM_NAME } from '../brand-name.js'
 
 export const OWNED_PREFIX = 'crm-'
 const PAGE_SIZE = 100
@@ -26,7 +27,7 @@ export function markerFor(e164) {
 // where `describe` is vitest's global. Same name, different meaning, one
 // keystroke apart from an accidental shadow; not worth the confusion.
 function descriptionFor(contactId) {
-  return `UN1T CRM sync - ${contactId}`
+  return `${PLATFORM_NAME} sync - ${contactId}`
 }
 
 /**

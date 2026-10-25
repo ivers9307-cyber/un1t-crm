@@ -92,17 +92,30 @@ export function decideConnectionHealth(row, now = new Date()) {
   return null
 }
 
+// Graph codes that are OAuthException-typed (or not) but mean "slow down /
+// try again", never "the token is dead": 1/2 unknown + service unavailable,
+// 4 app rate limit, 17 user rate limit, 32 page rate limit, 341 temporary
+// block, 368 policy block, 613 call-volume limit. Flagging a connection
+// 'error' on one of these would show a healthy token as broken, and nothing
+// clears the flag except a token re-paste.
+const TRANSIENT_GRAPH_CODES = new Set([1, 2, 4, 17, 32, 341, 368, 613])
+
 /**
  * Does this Graph API failure mean the stored credential is bad?
  * Meta shape: { error: { message, type, code, ... } } with HTTP 400/401.
- * Expired/invalid tokens come back as type 'OAuthException' / code 190.
- * Pure.
+ * Expired/invalid tokens come back as HTTP 401 and/or code 190 (type
+ * 'OAuthException'). Rate-limit / transient errors ALSO carry type
+ * 'OAuthException' (e.g. code 4, 17, 613) or `is_transient: true`, so the
+ * type alone is not enough: those are excluded unless the code is 190 / the
+ * HTTP status is 401. Pure.
  */
 export function isMetaAuthError(error, httpStatus) {
   if (httpStatus === 401) return true
   if (!error || typeof error !== 'object') return false
+  const code = Number(error.code)
+  if (code === 190) return true
+  if (error.is_transient === true || TRANSIENT_GRAPH_CODES.has(code)) return false
   if (error.type === 'OAuthException') return true
-  if (Number(error.code) === 190) return true
   return false
 }
 

@@ -16,7 +16,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import {
@@ -37,7 +37,9 @@ export async function POST(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'card_receipts')) {
+  // ROLESWEEP.1b — no location is known here (the slot is the submitter's own
+  // folder); POST /api/card-receipts judges the receipt's location.
+  if (!hasPermissionAtAnyLocation(user, 'card_receipts')) {
     return NextResponse.json(
       { success: false, error: 'You do not have permission to submit company-card receipts.' },
       { status: 403 }

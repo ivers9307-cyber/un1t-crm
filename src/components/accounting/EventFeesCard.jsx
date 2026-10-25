@@ -1,7 +1,7 @@
 'use client'
 
 // HOST-PORTAL.8 — Event booking fees card on /accounting. Org-wide
-// rollup of the per-ticket booking fee UN1T earned on host events
+// rollup of the per-ticket booking fee the platform earned on host events
 // (race_payments.application_fee_cents, settled rows only): headline
 // total, per-host table, per-month mini-list. Fetch/loading pattern
 // mirrors HuntInboxesCard; unlike it, an error (e.g. 403) renders
@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Loading } from '@/components/ui'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 const eur = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' })
 const fmtCents = (cents) => eur.format((Number(cents) || 0) / 100)
@@ -38,7 +39,7 @@ export default function EventFeesCard() {
       <div className="mb-3">
         <div className="text-sm font-semibold text-un1t-text">Event booking fees</div>
         <p className="text-xs text-un1t-subtle mt-1">
-          The per-ticket booking fee UN1T earned on hosted events, across every host in this
+          The per-ticket booking fee {PLATFORM_NAME} earned on hosted events, across every host in this
           organisation. Settled payments only; Revolut/internal bookings carry no fee.
         </p>
       </div>

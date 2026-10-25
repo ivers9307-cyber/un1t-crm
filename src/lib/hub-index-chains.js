@@ -129,7 +129,9 @@ export const HUB_INDEX_CHAINS = Object.freeze({
       // would bounce them.
       { keys: ['challenges'], roles: CHALLENGE_ADMIN_ROLES, target: '/challenges' },
       { keys: ['pulse_admin'], target: '/pulse' },
-      { keys: ['studio_management'], target: '/live' },
+      // UN1TBOOK.11 — class_roster opens /live too (the who's-coming list,
+      // no door unlock); the Live HR tab shows for either key.
+      { keys: ['studio_management', 'class_roster'], target: '/live' },
       { keys: ['class_timer'], target: '/studio-management/timer' },
       { keys: ['approvals_hyrox_sessions'], target: '/hyrox' },
     ]),
@@ -180,7 +182,10 @@ export const HUB_INDEX_CHAINS = Object.freeze({
   // signed-in operator into. /settings/landing-page gates on `landing_page`
   // directly, so a landing-page-only editor lands and stays.
   //
-  // Step 3 (HUBDOOR.1) closes defect A: `sms` joined the union in DEEP.4
+  // TWILIO-RETIRE.1 removed step 3 with the SMS channel (and `sms` from the
+  // Marketing union, so the invariant still holds). Its history:
+  //
+  // Step 3 (HUBDOOR.1) closed defect A: `sms` joined the union in DEEP.4
   // Task 2 precisely so an sms-only holder gets a Marketing door to the
   // campaign-lifecycle pages, and /communications/send admits `sms` alone
   // (its own gate builds a channel list and only bounces when it is empty;
@@ -190,7 +195,6 @@ export const HUB_INDEX_CHAINS = Object.freeze({
     chain: Object.freeze([
       { keys: ['automations', 'email', 'whatsapp', 'device_control'], target: '/automations' },
       { keys: ['landing_page'], target: '/settings/landing-page' },
-      { keys: ['sms'], target: '/communications/send' },
     ]),
     fallback: '/',
     visibilityOnly: Object.freeze([]),

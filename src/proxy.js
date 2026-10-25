@@ -7,20 +7,6 @@ import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-sess
 import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
 import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
 
-// Constant-time string compare. Implemented inline because the proxy runs
-// in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
-// length-mismatch early exit leaks key length, but CRM_API_KEY is a fixed
-// 64-char hex string by convention so that's effectively zero info.
-function timingSafeEqualEdge(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false
-  if (a.length !== b.length) return false
-  let mismatch = 0
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  }
-  return mismatch === 0
-}
-
 // PROXY.1 — renamed from middleware → proxy for the Next.js 16 "proxy"
 // file convention (the old "middleware" name is deprecated and the
 // Vercel build pipeline now hard-fails on it). Behaviour is unchanged.
@@ -159,9 +145,11 @@ export async function proxy(request) {
   }
 
   // Public routes that don't require auth.
-  // /tv/ — big-screen kiosk displays (HR live board, future race
-  // display moves here too). TV browsers don't have CRM accounts
-  // and shouldn't need them; the API endpoints under /api/public/
+  // /tv/ — big-screen kiosk displays: /tv/live/[token] (HR live board +
+  // its /challenges twin) and /tv/cast/[token] (UC Cast). Every board is
+  // token-gated since W0.9c (the location-keyed /tv/[locationId] is gone);
+  // the token in the URL is the bearer secret. TV browsers don't have CRM
+  // accounts and shouldn't need them; the API endpoints under /api/public/
   // expose only display-safe data.
   // /ffmpeg/ — the self-hosted ffmpeg.wasm worker + core/wasm (landing-
   // page in-browser video compression). ffmpeg fetches these like a
@@ -206,6 +194,10 @@ export async function proxy(request) {
   // `${baseUrl}/race/<slug>/confirmed`. So the audience is a customer in
   // WhatsApp and a payer coming back from a card form — neither can ever
   // have a session.
+  // /pay-done/ — MIAHATCH.6. Where un1t.online's hosted checkout returns a
+  // member after paying for a link Mia sent (?c=1 on cancel). The member has
+  // no session; the 32-byte token in the path is the only credential, and the
+  // page only triggers a payment check, it never proves one.
   // /account-deletion — PUBPATH.1. App-store compliance surface: it is the URL
   // registered in the Google Play Console's "Account Deletion URL" field
   // (docs/architecture/MOBILE.md — https://crm.un1tdublin.com/account-deletion,
@@ -214,7 +206,16 @@ export async function proxy(request) {
   // own header says "Must be publicly accessible (no auth) so reviewers can
   // verify" while every anonymous hit 307'd to /login. Nothing personal is
   // behind it — it is static copy naming an email address.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/']
+  // /event/entry/ — EVENT-MOVE.6. The customer's own entry page (change
+  // the date) from the link in their confirmation email; the signed token in
+  // the path is its only credential. Already under '/event/', listed on its
+  // own so narrowing '/event/' can never take it down (and with /event-pay/,
+  // where a dearer change pays, the whole flow is public).
+  // /book/manage/ — BOOKINGSELF.1. The customer's own booking page (cancel or
+  // reschedule) from the {{manage_url}} link in booking confirmation and
+  // reminder emails; the signed token in the path is its only credential.
+  // Already under '/book/', listed on its own for the same reason.
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/trial', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/']
 
   // Public paths matched EXACTLY (or as a parent segment), not as a bare
   // prefix — for entries where a same-stem sibling route must NOT inherit the
@@ -238,7 +239,18 @@ export async function proxy(request) {
   // public PAGE, so the other three allowlists (AppShell, brands,
   // tenant-domains) don't apply — nothing renders a shell, and the mobile app
   // calls the canonical CRM host, never a brand hostname.
-  const publicExactPaths = ['/api/mobile/review-login']
+  //
+  // /api/calendar-feed — ICSFEED.1, a person's own published shifts as an
+  // iCalendar feed. Apple, Google and Outlook poll it with no session, so the
+  // rcf_ token in the path is the credential; the route self-guards (sha256
+  // lookup, refuses an inactive or deleted profile, per-token rate limit) and
+  // is in check:route-guards EXEMPT. Segment-matched here, not a bare prefix,
+  // so a future /api/calendar-feeds or /api/calendar-feed-admin is NOT public
+  // by inheritance. Like review-login it is not a PAGE, and the URL is always
+  // minted on the CRM host (getAppUrl), so AppShell, brands and tenant-domains
+  // do not list it: on a brand host it SHOULD fall back
+  // (src/calendar-feed-path.test.js pins both directions).
+  const publicExactPaths = ['/api/mobile/review-login', '/api/calendar-feed']
 
   const pathname = request.nextUrl.pathname
   const isPublic =
@@ -246,20 +258,18 @@ export async function proxy(request) {
     publicExactPaths.some(p => pathname === p || pathname.startsWith(p + '/'))
   if (isPublic) return NextResponse.next()
 
-  // Allow API requests authenticated with a valid Bearer token. Three paths:
-  //   1. CRM_API_KEY — the legacy shared key used by n8n and similar
-  //      external integrations. Fixed 64-char hex, compared constant-time.
-  //      Unchanged — live n8n workflows depend on it.
-  //   2. Per-org API key (SAAS-3) — `unitk_…` keys from mig 217, issued at
+  // Allow API requests authenticated with a valid Bearer token. Two paths
+  // (APIKEYS.4 removed the legacy shared-key path; any other Bearer value
+  // falls through to the cookie gate and is rejected there):
+  //   1. Per-org API key (SAAS-3) — `unitk_…` keys from mig 217, issued at
   //      /settings/api-keys. REAL validation here (SHA-256 via Web Crypto +
   //      an active-row lookup in api_keys), not just a format sniff: a few
   //      routes behind this gate (e.g. /api/openapi.json) have no in-route
   //      auth of their own, so format-only admission would open them to
   //      any `unitk_`-shaped string. Routes that carry data re-resolve the
   //      key via authenticateApiKey()/requireApiKeyOrManager() and scope
-  //      every query to the key's organization — defense in depth, same
-  //      double-validation shape as the CRM_API_KEY path.
-  //   3. Supabase JWT — used by the iOS mobile app. The JWT is the
+  //      every query to the key's organization — defense in depth.
+  //   2. Supabase JWT — used by the iOS mobile app. The JWT is the
   //      `access_token` from a successful Supabase auth session on the
   //      device. We validate it via `supabase.auth.getUser(token)`, which
   //      verifies the signature against the project's JWT secret over the
@@ -273,14 +283,8 @@ export async function proxy(request) {
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
 
     if (token) {
-      // Path 1: CRM_API_KEY (n8n)
-      const expected = process.env.CRM_API_KEY
-      if (expected && timingSafeEqualEdge(token, expected)) {
-        return NextResponse.next()
-      }
-
       if (isApiKeyToken(token)) {
-        // Path 2: per-org API key (SAAS-3). One PostgREST lookup by hash
+        // Path 1: per-org API key (SAAS-3). One PostgREST lookup by hash
         // (unique partial index on active key_hash) — comparable edge cost
         // to the JWT path's auth.getUser() network call, and only paid by
         // `unitk_` traffic. No last_used_at stamp here: middleware stays
@@ -304,10 +308,10 @@ export async function proxy(request) {
           }
         }
         // Unknown/revoked per-org key. A `unitk_` token is never a valid
-        // Supabase JWT — skip Path 3's network round-trip and fall through
+        // Supabase JWT — skip Path 2's network round-trip and fall through
         // to the cookie gate below (which rejects keyless callers).
       } else {
-        // Path 3: Supabase JWT (mobile app). Use a stripped client (no
+        // Path 2: Supabase JWT (mobile app). Use a stripped client (no
         // cookies) since the JWT is the source of truth. If the token is
         // malformed or expired, getUser() returns { user: null } and we
         // fall through to the cookie-session check below.

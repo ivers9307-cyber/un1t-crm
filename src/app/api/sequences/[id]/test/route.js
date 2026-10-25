@@ -22,7 +22,8 @@
 // stats.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
@@ -34,9 +35,13 @@ export async function POST(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check; judged at the sequence's location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
+  // SEQROUTEGATE.1 — and the builder's rule (email or whatsapp); judged at the
+  // sequence below, after the role.
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
   if (!user.email) {
     return NextResponse.json({ success: false, error: 'Your account has no email — cannot test.' }, { status: 400 })
   }
@@ -48,10 +53,14 @@ export async function POST(_request, props) {
     .eq('id', params.id)
     .single()
   if (!sequence) {
-    return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+    return sequenceNotFound()
   }
   const guard = assertLocationAccessOr404(user, sequence.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, sequence.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!canBuildSequencesAt(user, sequence.location_id)) return sequencePermissionRequired()
 
   // Find or create the operator's contact at this location. Reuses
   // the race-contact-linking helper for consistency — it gracefully

@@ -100,7 +100,10 @@ export async function refreshAccessToken({ clientId, clientSecret, refreshToken 
  * we then poll GET /uploads/{id} until the activity_id is set or
  * the upload errors. Returns the activity_id on success.
  */
-export async function uploadTcx({ accessToken, tcxXml, name = 'UN1T HR session', description = '' }) {
+// W1.S1a — the default name is brand-neutral ("HR session"): this module has
+// no location in scope, and callers (external-export.js) pass the studio's
+// own productName(shortName, 'hr').
+export async function uploadTcx({ accessToken, tcxXml, name = 'HR session', description = '' }) {
   const blob = new Blob([tcxXml], { type: 'application/xml' })
   const form = new FormData()
   form.append('file', blob, 'session.tcx')

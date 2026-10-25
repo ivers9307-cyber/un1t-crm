@@ -82,6 +82,23 @@ describe('humanTookOverDuringTurn', () => {
     expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(false)
   })
 
+  // C106 CHECKINRISKS.1 (d) — a reply typed in the studio's linked WhatsApp
+  // Business phone app (coexistence echo) carries no sent_by: it is stored as
+  // source 'app_echo', and it is a person, so Mia must not talk over it.
+  it('true when a reply from the studio phone app (app_echo) landed during the turn', async () => {
+    const db = stubDb({
+      conv: { agent_active: true },
+      lastOut: [{ source: 'app_echo', sent_by: null, created_at: DURING }],
+    })
+    expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(true)
+  })
+
+  it('the re-arm check reads a phone-app echo as a human last outbound', () => {
+    expect(whatsappAdapter.isHumanOutbound({ source: 'app_echo', sent_by: null })).toBe(true)
+    expect(whatsappAdapter.isHumanOutbound({ source: 'api', sent_by: null })).toBe(false)
+    expect(whatsappAdapter.isHumanOutbound({ source: 'agent', sent_by: null })).toBe(false)
+  })
+
   // MIA-HYGIENE.3 — this guard now FAILS CLOSED. It used to return false on
   // any failure ("never block a send"), which pointed the uncertainty at the
   // outcome the guard exists to prevent: a double message into a human-led

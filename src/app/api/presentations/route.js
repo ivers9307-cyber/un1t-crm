@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -17,7 +17,7 @@ function deny() {
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'presentations')) return deny()
+  if (!user || !hasPermissionAtAnyLocation(user, 'presentations')) return deny()
   const url = new URL(request.url)
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id
   if (!locationId || !uuidLike.safeParse(locationId).success) {
@@ -26,6 +26,8 @@ export async function GET(request) {
   if (!user.isMaster && !getUserLocationIds(user).includes(locationId)) {
     return NextResponse.json({ success: false, error: 'Location not in your scope' }, { status: 403 })
   }
+  // ROLESWEEP.1a — the permission is judged at the location listed.
+  if (!hasPermissionForLocation(user, locationId, 'presentations')) return deny()
   const db = createServerClient()
   const { data, error } = await db
     .from('presentations')
@@ -46,12 +48,13 @@ const CreateSchema = z.object({ location_id: uuidLike, title: z.string().min(1).
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'presentations')) return deny()
+  if (!user || !hasPermissionAtAnyLocation(user, 'presentations')) return deny()
   const validation = await validateBody(request, CreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, body.location_id, 'presentations')) return deny()
   const db = createServerClient()
   const { data, error } = await db
     .from('presentations')

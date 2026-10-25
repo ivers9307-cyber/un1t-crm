@@ -11,9 +11,33 @@ vi.mock('@/lib/auth', () => ({
     return null
   },
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true), hasMobilePermission: vi.fn(() => false) }))
+vi.mock('@/lib/permissions', () => {
+  // ROLESWEEP.1c — the route asks the any-location pre-check and the
+  // at-the-target decision; both follow this file's switch below.
+  const hasPermission = vi.fn(() => true)
+  const hasMobilePermission = vi.fn(() => false)
+  return {
+    hasPermission,
+    hasPermissionAtAnyLocation: (u, k) => hasPermission(u, k),
+    hasPermissionForLocation: (u, _loc, k) => hasPermission(u, k),
+    hasMobilePermission,
+    hasMobilePermissionAtAnyLocation: (u, k) => hasMobilePermission(u, k),
+    hasMobilePermissionForLocation: (u, _loc, k) => hasMobilePermission(u, k),
+  }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => dbMock) }))
+// WACONFIGFALLBACK.1 — the route checks the location's OWN number before
+// opening a thread; the default is "has one" (the no-number case is below).
+// WAORGNUMBER.2 — pickTemplateConfig is the real (pure) rule.
+vi.mock('@/lib/whatsapp-config', async () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => ({ source: 'db', id: 'n1' })),
+  pickTemplateConfig: (await vi.importActual('@/lib/whatsapp-config')).pickTemplateConfig,
+}))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.example' }))
+// W1.L3b — the form link is minted on the contact location's tenant host unless
+// the per-location public_base_url override is set. Defaults to the CRM host so
+// the older 'https://crm.example' assertions hold.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.example') }))
 vi.mock('@/lib/cancellation-form/links', () => ({
   issueLink: vi.fn(), revokeLink: vi.fn(), latestLinkForContact: vi.fn(async () => null),
 }))
@@ -24,8 +48,13 @@ vi.mock('@/lib/whatsapp', () => ({
   isWindowOpen: vi.fn(() => true),
   buildTemplateComponents: vi.fn(() => [{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'TOKEN' }] }]),
   renderTemplateBody: vi.fn(() => 'Hi Aoife, here is the link.'),
+  // WAORGNUMBER.4 (R3) — the thread files at the contact's home studio.
+  getOrCreateConversation: vi.fn(async () => 'conv-1'),
 }))
-vi.mock('@/lib/whatsapp-conversations', () => ({ getOrCreateContactConversation: vi.fn() }))
+vi.mock('@/lib/whatsapp-conversations', async (orig) => ({
+  contactWaPhone: (await orig()).contactWaPhone,
+  loadSendConversation: vi.fn(),
+}))
 vi.mock('@/lib/agent/core', () => ({
   manualTakeoverPatch: vi.fn(() => ({ agent_handed_off_at: 'x' })),
   stripEmDashes: (t) => String(t ?? '').replace(/\s*[—–]\s+/g, ', ').replace(/[—–]/g, '-'),
@@ -36,13 +65,15 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
 import { sendTransactionalEmail } from '@/lib/postmark'
-import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents } from '@/lib/whatsapp'
-import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, getOrCreateConversation } from '@/lib/whatsapp'
+import { loadSendConversation } from '@/lib/whatsapp-conversations'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const LOC = 'c0000000-0000-0000-0000-000000000003'
 const USER = { id: 'u-1', role: 'manager', locations: [{ id: LOC }] }
-let dbMock, contactRow, templateRow, writes
+let dbMock, contactRow, templateRow, writes, publicBaseUrl
 
+let orgLayer = null
 function makeDb() {
   writes = []
   return {
@@ -57,7 +88,9 @@ function makeDb() {
           return Promise.resolve({ data: { id: 'x' }, error: null })
         },
         maybeSingle() {
-          if (table === 'locations') return Promise.resolve({ data: { name: 'UN1T Stillorgan', settings: { customer_agent: { cancellation_form: { whatsapp_template_name: templateRow ? templateRow.name : null } } } }, error: null })
+          // MIAORG.1 — read through resolveAgentSettings; `orgLayer` is the org's blob.
+          if (table === 'org_settings') return Promise.resolve({ data: orgLayer ? { customer_agent: orgLayer } : null, error: null })
+          if (table === 'locations') return Promise.resolve({ data: { id: LOC, organization_id: 'org-1', name: 'UN1T Stillorgan', settings: { customer_agent: { cancellation_form: { whatsapp_template_name: templateRow ? templateRow.name : null, ...(publicBaseUrl ? { public_base_url: publicBaseUrl } : {}) } } } }, error: null })
           return Promise.resolve({ data: null, error: null })
         },
         then(res, rej) {
@@ -75,11 +108,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   contactRow = { id: 'c-1', name: 'Aoife Byrne', first_name: 'Aoife', email: 'a@example.com', email_status: 'active', phone: '+353871234567', wa_phone: '+353871234567', location_id: LOC, glofox_membership_plan: 'Unlimited' }
   templateRow = null
+  publicBaseUrl = null
+  orgLayer = null
   dbMock = makeDb()
   getCurrentUser.mockResolvedValue(USER)
   hasPermission.mockReturnValue(true)
   issueLink.mockResolvedValue({ ok: true, linkId: 'l-1', token: 'TOKEN', url: 'https://crm.example/cancel/TOKEN', expiresAt: '2026-10-05T00:00:00Z' })
-  getOrCreateContactConversation.mockResolvedValue({ ok: true, conversation: { id: 'conv-1', window_expires_at: '2999-01-01', agent_handed_off_at: null }, waPhone: '353871234567' })
+  loadSendConversation.mockResolvedValue({ ok: true, conversation: { id: 'conv-1', window_expires_at: '2999-01-01', agent_handed_off_at: null } })
   isWindowOpen.mockReturnValue(true)
 })
 
@@ -115,6 +150,28 @@ describe('GET', () => {
 })
 
 describe('POST email', () => {
+  it("W1.L3b — the link is minted on the contact location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    issueLink.mockResolvedValueOnce({ ok: true, linkId: 'l-1', token: 'TOKEN', url: 'https://gym-a.repset.ie/cancel/TOKEN', expiresAt: '2026-10-05T00:00:00Z' })
+    expect((await post({ channel: 'email' })).status).toBe(200)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://gym-a.repset.ie' }))
+    expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toContain('https://gym-a.repset.ie/cancel/TOKEN')
+  })
+  it('W1.L3b — the per-location public_base_url override still wins, and the resolver is not even consulted', async () => {
+    publicBaseUrl = 'https://forms.example'
+    expect((await post({ channel: 'email' })).status).toBe(200)
+    expect(resolveCustomerBaseUrl).not.toHaveBeenCalled()
+    expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://forms.example' }))
+  })
+  // MIAORG.1 Task 2 — cancellation_form is studio-only: an org's override
+  // never reaches a studio's form link.
+  it("an org's public_base_url never wins over the studio's tenant host", async () => {
+    orgLayer = { cancellation_form: { public_base_url: 'https://org-forms.example' } }
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    expect((await post({ channel: 'email' })).status).toBe(200)
+    expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ baseUrl: 'https://gym-a.repset.ie' }))
+  })
   it('sends a transactional email with the link (no marketing-consent gate) and logs the activity', async () => {
     const res = await post({ channel: 'email' })
     expect(res.status).toBe(200)
@@ -157,7 +214,7 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(200)
     expect(issueLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1' }))
-    expect(sendCtaUrlMessage).toHaveBeenCalledWith('353871234567', expect.objectContaining({ buttonText: 'Open form', url: 'https://crm.example/cancel/TOKEN' }), { locationId: LOC })
+    expect(sendCtaUrlMessage).toHaveBeenCalledWith('353871234567', expect.objectContaining({ buttonText: 'Open form', url: 'https://crm.example/cancel/TOKEN' }), { config: { source: 'db', id: 'n1' } })
     expect(sendTemplateMessage).not.toHaveBeenCalled()
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ conversation_id: 'conv-1', direction: 'outbound', message_type: 'interactive', sent_by: 'u-1', wa_message_id: 'wamid.cta' })
@@ -185,9 +242,25 @@ describe('POST whatsapp', () => {
     const res = await post({ channel: 'whatsapp' })
     expect(res.status).toBe(200)
     expect(buildTemplateComponents).toHaveBeenCalledWith(templateRow, expect.objectContaining({ id: 'c-1' }), { url_button: 'TOKEN' }, null, expect.objectContaining({ locationId: LOC }))
-    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { locationId: LOC })
+    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { config: { source: 'db', id: 'n1' } })
     const msg = writes.find((w) => w.table === 'whatsapp_messages').payload
     expect(msg).toMatchObject({ message_type: 'template', template_name: 'cancellation_form_link', body: 'Hi Aoife, here is the link.' })
+  })
+
+  it('WAORGNUMBER.2: a template on another WABA than the default goes out by that WABA (the studio’s number on it)', async () => {
+    isWindowOpen.mockReturnValue(false)
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce({ source: 'db', id: 'n1', businessAccountId: 'WABA-1' })
+    templateRow = {
+      name: 'cancellation_form_link', language: 'en', status: 'APPROVED', category: 'UTILITY', header_media_url: null, business_account_id: 'WABA-2',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Open form', url: 'https://crm.example/cancel/{{1}}' }] },
+      ],
+    }
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(200)
+    expect(sendTemplateMessage).toHaveBeenCalledWith('353871234567', 'cancellation_form_link', 'en', expect.any(Array), { locationId: LOC, businessAccountId: 'WABA-2' })
   })
 
   it('refuses a template whose URL button is rooted on another host', async () => {
@@ -215,3 +288,39 @@ describe('POST whatsapp', () => {
     expect(revokeLink).toHaveBeenCalledWith(expect.anything(), 'l-1', expect.stringMatching(/meta 131/))
   })
 })
+
+// WACONFIGFALLBACK.1 — no WhatsApp number at the contact's location: refused
+// before a thread is opened or a link minted (the send used to go out on the
+// global env number). Email is unaffected.
+// WAORGNUMBER.4 (R3) — the cancellation-form send opens the composer's
+// thread: at the contact's HOME studio, through getOrCreateConversation.
+describe('WhatsApp thread filing (WAORGNUMBER.4)', () => {
+  it('files at contact.location_id with the + stripped', async () => {
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(200)
+    expect(getOrCreateConversation).toHaveBeenCalledWith(dbMock, expect.objectContaining({ id: 'c-1', wa_phone: '353871234567' }), LOC)
+    expect(loadSendConversation).toHaveBeenCalledWith(dbMock, 'conv-1')
+  })
+})
+
+describe('POST whatsapp — no WhatsApp number at the contact location', () => {
+  it('409 with the shared message; no thread, no link, nothing sent', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    const res = await post({ channel: 'whatsapp' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: 'No WhatsApp number is connected at this location.' })
+    expect(getOrCreateConversation).not.toHaveBeenCalled()
+    expect(issueLink).not.toHaveBeenCalled()
+    expect(sendCtaUrlMessage).not.toHaveBeenCalled()
+  })
+
+  it('email still sends at a location with no WhatsApp number (the check is WhatsApp-only)', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    getLocationWhatsAppNumberConfig.mockResolvedValue(null)
+    const res = await post({ channel: 'email' })
+    expect(res.status).toBe(200)
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+})
+

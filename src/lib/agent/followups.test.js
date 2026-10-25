@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyFollowupCandidate,
-  withinDublinDaytime,
+  withinLocalDaytime,
   deriveFollowupTopic,
   buildFollowupComponents,
   renderFollowupBody,
@@ -60,11 +60,12 @@ describe('classifyFollowupCandidate', () => {
   })
 })
 
-describe('withinDublinDaytime', () => {
+// TZ.5 — renamed from withinDublinDaytime; a Dublin studio's answers are unchanged.
+describe('withinLocalDaytime', () => {
   it('allows Dublin daytime and blocks the evening/night', () => {
-    expect(withinDublinDaytime(Date.UTC(2026, 5, 12, 13, 0))).toBe(true)  // 14:00 Dublin
-    expect(withinDublinDaytime(Date.UTC(2026, 5, 12, 21, 30))).toBe(false) // 22:30 Dublin
-    expect(withinDublinDaytime(Date.UTC(2026, 5, 12, 6, 0))).toBe(false)  // 07:00 Dublin
+    expect(withinLocalDaytime(Date.UTC(2026, 5, 12, 13, 0), 'Europe/Dublin')).toBe(true)  // 14:00 Dublin
+    expect(withinLocalDaytime(Date.UTC(2026, 5, 12, 21, 30), 'Europe/Dublin')).toBe(false) // 22:30 Dublin
+    expect(withinLocalDaytime(Date.UTC(2026, 5, 12, 6, 0), 'Europe/Dublin')).toBe(false)  // 07:00 Dublin
   })
 })
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { composeApprovalSuggestion } from '@/lib/agent/approval-suggest'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 // POST /api/agent/membership-requests/[id]/suggest — INBOX-APPROVALS-AI.2.
 // Wave 3: after staff decide a queued agent request, fire this to get ONE
@@ -22,8 +23,10 @@ export async function POST(request, { params }) {
   const db = createServerClient()
 
   // Confirm the request belongs to a location this user can act on.
+  // MIAHATCH.5 — details: a un1t.online card (details.provider) is followed up
+  // with un1t.online context, never Glofox's (approval-suggest.js).
   const { data: row } = await db.from('agent_membership_requests')
-    .select('id, location_id, kind, status, decision_note, contact_id, channel, conversation_id')
+    .select('id, location_id, kind, status, decision_note, contact_id, channel, conversation_id, details')
     .eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const allowed = getUserLocationIds(user) // masters carry every active location in user.locations
@@ -37,11 +40,16 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'Not decided yet' }, { status: 400 })
   }
 
-  const { data: location } = await db.from('locations')
-    .select('settings')
-    .eq('id', row.location_id)
-    .maybeSingle()
-  const agentSettings = location?.settings?.customer_agent || null
+  // UN1TWRITE.8 — nothing to suggest for a record-only refund_request (Mia's
+  // refund_request_text already answered); skip the settings read and the model.
+  if (row.kind === 'refund_request') {
+    return NextResponse.json({ success: true, suggestion: null })
+  }
+
+  // MIAORG.1 — the studio's resolved Mia settings (DEFAULTS <- org <-
+  // studio; `enabled` is the studio's own). Unreadable = no suggestion.
+  const resolved = await resolveAgentSettings(db, row.location_id)
+  const agentSettings = resolved.ok ? resolved.settings : null
   const inlineSuggestion = agentSettings?.inline_suggestion || null
   if (!agentSettings?.enabled || inlineSuggestion?.enabled === false) {
     return NextResponse.json({ success: true, suggestion: null })

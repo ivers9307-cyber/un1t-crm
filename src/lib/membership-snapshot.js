@@ -15,7 +15,7 @@
 // Plus two sub-metrics worth trending: active recurring (state=active)
 // and "dead" packs (num_classes with no credits left = NULL credits).
 
-import { dublinDayStr } from '@/lib/dublin-time'
+import { dayStrIn, todayStrIn, DEFAULT_TZ } from '@/lib/location-time'
 
 const MEMBER_STATUSES = ['member', 'credit_member']
 
@@ -85,14 +85,19 @@ export async function computeMembershipCounts(db, locationId) {
 }
 
 /**
- * Compute + upsert the snapshot for a location for the current Dublin
- * day (or opts.snapshotDate / opts.now). Idempotent via the
- * (location_id, snapshot_date) unique constraint — the daily cron
- * re-running just refreshes the same day's row.
+ * Compute + upsert the snapshot for a location for its current LOCAL day
+ * (TZ.11a: opts.zone, the location's zone; DEFAULT_TZ when omitted), or
+ * opts.snapshotDate / opts.now. Idempotent via the (location_id,
+ * snapshot_date) unique constraint — the daily cron re-running just
+ * refreshes the same day's row. snapshot_date is a calendar key written in
+ * the location's zone at write time; a later zone change does not rewrite
+ * history. opts.counts (UN1TREAD.5): counts already read for the location.
  */
 export async function writeMembershipSnapshot(db, locationId, opts = {}) {
-  const snapshotDate = opts.snapshotDate || dublinDayStr(opts.now ? new Date(opts.now) : Date.now())
-  const counts = await computeMembershipCounts(db, locationId)
+  const snapshotDate = opts.snapshotDate || dayStrIn(opts.now ? new Date(opts.now) : Date.now(), opts.zone || DEFAULT_TZ)
+  // UN1TREAD.5 — a caller whose source is not Glofox hands the counts it read
+  // through the membership seam; omitted, this is the Glofox-contacts count.
+  const counts = opts.counts || await computeMembershipCounts(db, locationId)
   const row = { location_id: locationId, snapshot_date: snapshotDate, ...counts }
   const { error } = await db
     .from('membership_snapshots')
@@ -103,10 +108,10 @@ export async function writeMembershipSnapshot(db, locationId, opts = {}) {
 
 
 /**
- * First-of-month date string `months` calendar months before today
- * (Dublin). Pure string math — no Date parsing/formatting mix.
+ * First-of-month date string `months` calendar months before `todayStr`
+ * (the location's today). Pure string math — no Date parsing/formatting mix.
  */
-function monthsAgoFirst(months, todayStr = dublinDayStr(Date.now())) {
+function monthsAgoFirst(months, todayStr) {
   const y = Number(todayStr.slice(0, 4))
   const m = Number(todayStr.slice(5, 7))
   const total = y * 12 + (m - 1) - months
@@ -120,6 +125,8 @@ function monthsAgoFirst(months, todayStr = dublinDayStr(Date.now())) {
  * month: 'YYYY-MM', monthly_recurring, class_packs, payg,
  * total_members, active_recurring, dead_packs }.
  *
+ * zone: the location's zone (TZ.11a); nowMs injectable for tests.
+ *
  * granularity:
  *   'monthly' (default) — first-of-month rows only. The pre-daily
  *     behaviour; keeps the mobile TrendMini at ≤12 columns.
@@ -127,12 +134,14 @@ function monthsAgoFirst(months, todayStr = dublinDayStr(Date.now())) {
  *     writes one row per day so this is ≤ ~370 rows, under the
  *     1k-row select cap).
  */
-export async function fetchMembershipTrend(db, locationId, months = 12, { granularity = 'monthly' } = {}) {
+export async function fetchMembershipTrend(db, locationId, months = 12, { granularity = 'monthly', zone = DEFAULT_TZ, nowMs = Date.now() } = {}) {
+  // TZ.11a — the window starts N months before the LOCATION's today.
+  const todayStr = todayStrIn(zone, nowMs)
   const { data, error } = await db
     .from('membership_snapshots')
     .select('snapshot_date, monthly_recurring, class_packs, payg, total_members, active_recurring, dead_packs')
     .eq('location_id', locationId)
-    .gte('snapshot_date', monthsAgoFirst(months))
+    .gte('snapshot_date', monthsAgoFirst(months, todayStr))
     .order('snapshot_date', { ascending: true })
     .limit(800)
   if (error) throw new Error(`fetchMembershipTrend: ${error.message}`)

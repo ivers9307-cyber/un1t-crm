@@ -13,31 +13,53 @@
 import { useState, useEffect, useRef } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
+import { readVisitOrigin } from '@/lib/visit-origin'
+import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel-lead'
+import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
+import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
+import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
 
-// Default copy = today's live Stillorgan /start funnel, so a bare
-// <ClassFunnel /> is unchanged from the old StartFunnel.
-const DEFAULTS = {
-  publicPath:       'stillorgan',
-  consultSlug:      'free-un1t-consultation',
-  heading:          'Your first 3 classes are free',
-  subhead:          'Pick a time that suits you. It takes about 30 seconds.',
-  consentLabel:     "I'd like to hear from UN1T Stillorgan by email, SMS and WhatsApp.",
-  classDoneTitle:   "You're being booked in 🎉",
-  classDoneBody:    "That's the first of your 3 free classes — watch for a WhatsApp confirming it. See you at UN1T Stillorgan!",
-  consultDoneTitle: "You're booked 🎉",
-  consultDoneBody:  "You'll get a WhatsApp confirming your consultation if we have your number. See you at UN1T Stillorgan!",
+// MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
+// during SSR, cookies blocked, no Pixel yet).
+function readFbpCookie() {
+  try {
+    if (typeof document === 'undefined') return null
+    const m = document.cookie.match(/(?:^|;\s*)_fbp=([^;]+)/)
+    return m ? decodeURIComponent(m[1]) : null
+  } catch { return null }
+}
+
+// Default copy = the original /start funnel. W1.S1b: the three lines that
+// name the studio are functions of the `locationName` prop (the page's own
+// location), so a tenant's class_funnel block left blank never reads
+// another gym's name; with no name they still read as whole sentences.
+export function defaultsFor(locationName) {
+  const name = typeof locationName === 'string' ? locationName.trim() : ''
+  const seeYou = name ? `See you at ${name}!` : 'See you soon!'
+  return {
+    publicPath:       'stillorgan',
+    consultSlug:      'free-un1t-consultation',
+    heading:          'Your first 3 classes are free',
+    subhead:          'Pick a time that suits you. It takes about 30 seconds.',
+    consentLabel:     classFunnelConsentDefault(name),
+    classDoneTitle:   "You're being booked in 🎉",
+    classDoneBody:    `That's the first of your 3 free classes. Watch for a WhatsApp confirming it. ${seeYou}`,
+    consultDoneTitle: "You're booked 🎉",
+    consultDoneBody:  `You'll get a WhatsApp confirming your consultation if we have your number. ${seeYou}`,
+  }
 }
 
 const inputCls ='w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
 
 export default function ClassFunnel(props) {
+  const DEFAULTS = defaultsFor(props?.locationName)
   // Copy props: an empty string falls back to the default, so an operator who
   // leaves a field blank keeps our copy rather than a blank line.
   const {
     publicPath, heading, subhead, consentLabel,
     classDoneTitle, classDoneBody, consultDoneTitle, consultDoneBody,
-  } = { ...DEFAULTS, ...Object.fromEntries(Object.entries(props || {}).filter(([, v]) => v != null && v !== '')) }
+  } = { ...DEFAULTS, ...Object.fromEntries(Object.entries(props || {}).filter(([k, v]) => k !== 'locationName' && v != null && v !== '')) }
   // consultSlug is different: an explicit '' means "no consult upsell" and MUST
   // be honoured, so read it straight from props and only default when absent.
   const consultSlug = props?.consultSlug ?? DEFAULTS.consultSlug
@@ -74,6 +96,11 @@ export default function ClassFunnel(props) {
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [classes, setClasses] = useState([])
   const [classesLoading, setClassesLoading] = useState(false)
+  // UN1TWRITE.18 — a un1t.online studio with the funnel on needs the
+  // studio's terms and waiver accepted. /api/public/classes says whether, and
+  // carries the operator's wording; { required: false } everywhere else.
+  const [terms, setTerms] = useState({ required: false })
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [selectedClassDay, setSelectedClassDay] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -90,11 +117,22 @@ export default function ClassFunnel(props) {
   // props). Function declarations hoist, so order is presentational only.
   function buildAttribution() {
     const p = attributionRef.current || {}
-    const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term
-    return hasSignal ? {
-      utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
-      ad_provider: 'meta', ad_external_id: p.meta_ad_id,
-    } : undefined
+    const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term || p.fbclid
+    // MATCHQUALITY.1 — the Pixel's browser id cookie (_fbp), read at submit
+    // time because the Pixel only loads after cookie consent. Sent for
+    // organic visitors too: it raises Meta's match quality on the server
+    // Lead and does not make anyone an ad lead (ad_provider stays tied to
+    // an actual ad signal).
+    const fbp = readFbpCookie()
+    if (!hasSignal && !fbp) return undefined
+    return {
+      ...(hasSignal ? {
+        utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
+        ad_provider: 'meta', ad_external_id: p.meta_ad_id,
+        fbclid: p.fbclid,
+      } : {}),
+      ...(fbp ? { fbp } : {}),
+    }
   }
 
   // Fire one funnel step to the Pixel + Vercel (diagnostics) AND to the CRM's
@@ -132,6 +170,8 @@ export default function ClassFunnel(props) {
       utm_content: p.get('utm_content') || undefined,
       utm_term: p.get('utm_term') || undefined,
       meta_ad_id: p.get('meta_ad_id') || undefined,
+      // METADATASET.1 — Meta's click id, appended to every ad link.
+      fbclid: p.get('fbclid') || undefined,
     }
     // Stable per-visit id so a visitor's steps group into one funnel journey.
     let sid = null
@@ -195,6 +235,7 @@ export default function ClassFunnel(props) {
       .then((j) => {
         const list = (j.success && j.data?.classes) ? j.data.classes : []
         setClasses(list)
+        setTerms(j.success && j.data?.terms?.required === true ? j.data.terms : { required: false })
         if (list.length) setSelectedClassDay(list[0].day)
         // count=0 flags an empty picker (a dead end that would explain a drop)
         fireStep('slots_view', { kind: 'class', count: list.length })
@@ -248,6 +289,9 @@ export default function ClassFunnel(props) {
     if (!isValidMobileNumber(form.phone)) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
+    if (terms.required && !termsAccepted) {
+      setError(stripDashes(terms.required_message || 'Please tick to accept the terms and waiver.')); return
+    }
     fireStep('details')
     // STARTCONV.1 — the form submit IS the booking now. `details` still fires
     // first and separately, so the drop between seeing times and completing
@@ -281,6 +325,10 @@ export default function ClassFunnel(props) {
     if (submitting) return
     if (!c) { setError('Pick a class first.'); setStep('classpick'); return }
     setSubmitting(true); setError(null)
+    // BROWSERLEAD.1 — one id for this lead, sent to the server (its CAPI Lead
+    // uses it as event_id) and used by the Pixel's Lead below, so Meta
+    // dedupes the pair and keeps the better-matched copy.
+    const leadEventId = newLeadEventId()
     try {
       const r = await fetch('/api/public/class-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -290,6 +338,10 @@ export default function ClassFunnel(props) {
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
           attribution: buildAttribution(),
+          // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
+          visit: readVisitOrigin() || undefined,
+          lead_event_id: leadEventId,
+          ...(terms.required ? { terms_accepted: termsAccepted } : {}),
         }),
       })
       const j = await r.json().catch(() => ({}))
@@ -298,6 +350,15 @@ export default function ClassFunnel(props) {
         // back to the picker rather than leaving them on a form whose submit
         // can never succeed. `form` is component state, so everything they
         // typed survives the step change — say so, or it reads as lost work.
+        // UN1TWRITE.18 — the studio needs the terms tick but this page did
+        // not know (it loaded before the switch, or its class list read
+        // missed it): show the tick from the refusal and let them tick it.
+        if (j.code === 'terms_required' && j.terms?.required === true) {
+          setTerms(j.terms)
+          setTermsAccepted(false)
+          setError(stripDashes(j.error || j.terms.required_message || ''))
+          return
+        }
         if (j.code === 'class_unavailable') {
           setChosenClass(null)
           setStep('classpick')
@@ -306,6 +367,15 @@ export default function ClassFunnel(props) {
         }
         setError(j.error || 'Something went wrong — please try again.'); return
       }
+      // BROWSERLEAD.1 — the server has sent its Lead; send the browser twin
+      // (no-op without consent). Before any payment step: the lead exists
+      // from here whether or not the intro is paid for.
+      fireBrowserLead({
+        pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname) : [],
+        eventId: leadEventId,
+        userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
+        contentName: c.name,
+      })
       if (j.data?.requiresPayment) {
         setPayment({ paymentId: j.data.paymentId, checkout: j.data.checkout })
         fireStep('payment_view')
@@ -393,6 +463,17 @@ export default function ClassFunnel(props) {
             <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-white" />
             <span>{consentLabel} <a href="/privacy" target="_blank" rel="noreferrer" className="underline">Privacy</a></span>
           </label>
+          {terms.required && (
+            <label className="flex items-start gap-2.5 text-xs text-white/65">
+              <input type="checkbox" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)} className="mt-0.5 w-4 h-4 accent-white" />
+              <span>
+                {termsLabelSegments({ terms_label: terms.label, terms_link_label: terms.terms_link_label, waiver_link_label: terms.waiver_link_label })
+                  .map((seg, i) => (seg.link
+                    ? <a key={i} href={seg.link === 'terms' ? terms.terms_url : terms.waiver_url} target="_blank" rel="noreferrer" className="underline">{seg.text}</a>
+                    : <span key={i}>{seg.text}</span>))}
+              </span>
+            </label>
+          )}
           {error && <p className="text-sm text-red-300">{error}</p>}
           <button type="submit" disabled={submitting} className="lp-btn w-full disabled:opacity-50">
             {submitting ? 'Booking…' : 'Confirm my class →'}

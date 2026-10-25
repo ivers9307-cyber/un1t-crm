@@ -2,14 +2,14 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'presentations')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'presentations')) {
     return NextResponse.json({ success: false, error: 'Not authorised for presentations' }, { status: 403 })
   }
   const { id, slideId } = await params
@@ -17,6 +17,10 @@ export async function DELETE(_request, { params }) {
   const { data: deck } = await db.from('presentations').select('id, location_id, version').eq('id', id).maybeSingle()
   if (!deck || assertLocationAccess(user, deck.location_id)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  // ROLESWEEP.1a — the permission is judged at the deck's location.
+  if (!hasPermissionForLocation(user, deck.location_id, 'presentations')) {
+    return NextResponse.json({ success: false, error: 'Not authorised for presentations' }, { status: 403 })
   }
   const { data: slide } = await db.from('presentation_slides')
     .select('id, image_path').eq('id', slideId).eq('presentation_id', id).maybeSingle()

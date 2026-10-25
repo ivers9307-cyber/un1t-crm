@@ -10,12 +10,12 @@
 // built here is purely motivational — no "book"/"booking" language, no
 // booking deep-links. The test suite greps every variant for /book/i.
 //
-// Day semantics: a journey day is a Europe/Dublin calendar day
-// (dublinDateKey), NOT a UTC day — a 23:30 UTC session during IST belongs
-// to the NEXT Dublin day. Day 0 is the Dublin day of joined_at
-// (contacts.joined_at, timestamptz).
+// Day semantics: a journey day is a calendar day in the MEMBER's zone — their
+// home studio's, contacts.location_id (TZ.13, D7; omitted = Europe/Dublin) —
+// NOT a UTC day: a 23:30 UTC session during IST belongs to the NEXT Dublin
+// day. Day 0 is the local day of joined_at (contacts.joined_at, timestamptz).
 
-import { dublinDateKey } from '@/lib/dublin-time'
+import { dateKeyIn, DEFAULT_TZ } from '@shared/zoned-time'
 
 export const DEFAULT_JOURNEY_WINDOW_DAYS = 42
 export const DEFAULT_JOURNEY_TARGET_CLASSES = 9
@@ -61,9 +61,9 @@ function cleanInt(value, min, max, fallback) {
 }
 
 /**
- * Epoch-day ordinal for a 'YYYY-MM-DD' Dublin day key. Diffing two of these
- * gives an exact whole-day count with no DST drift (the 23h/25h Dublin
- * transition days never enter the arithmetic).
+ * Epoch-day ordinal for a 'YYYY-MM-DD' local day key. Diffing two of these
+ * gives an exact whole-day count with no DST drift (the 23h/25h transition
+ * days never enter the arithmetic).
  */
 function dayKeyToEpochDays(key) {
   const [y, m, d] = key.split('-').map(Number)
@@ -71,7 +71,7 @@ function dayKeyToEpochDays(key) {
 }
 
 /**
- * Whole Dublin-calendar-days from instant a to instant b (b − a).
+ * Whole local-calendar-days in `zone` from instant a to instant b (b − a).
  *
  * Exported for the data layer (onboarding-journey-data.js), which uses the
  * SAME day arithmetic to decide whether a class_bookings.starts_at falls
@@ -79,8 +79,8 @@ function dayKeyToEpochDays(key) {
  * pure lib (a 23:30 UTC session during IST belongs to the next Dublin day,
  * so a UTC/ms comparison would disagree with dayIndex at the boundary).
  */
-export function dublinDaysBetween(aMs, bMs) {
-  return dayKeyToEpochDays(dublinDateKey(bMs)) - dayKeyToEpochDays(dublinDateKey(aMs))
+export function daysBetweenIn(aMs, bMs, zone = DEFAULT_TZ) {
+  return dayKeyToEpochDays(dateKeyIn(bMs, zone)) - dayKeyToEpochDays(dateKeyIn(aMs, zone))
 }
 
 /**
@@ -104,6 +104,7 @@ export function dublinDaysBetween(aMs, bMs) {
  * @param {string|number|Date} [opts.now]
  * @param {{windowDays?: number, targetClasses?: number}} [opts.config]
  *   from resolveJourneyConfig; defaults 42/9
+ * @param {string} [zone]  the member's home studio zone (default Europe/Dublin)
  * @returns {null | {
  *   inWindow: boolean, dayIndex: number, weekIndex: number,
  *   windowDays: number, attended: number, target: number,
@@ -114,7 +115,7 @@ export function dublinDaysBetween(aMs, bMs) {
  *   are null until attended ≥ target — the app hides the celebration once
  *   completedDaysAgo exceeds a few days)
  */
-export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
+export function journeyStatus({ joinedAt, attendedAt, now, config } = {}, zone = DEFAULT_TZ) {
   const joinedMs = toMs(joinedAt)
   if (joinedMs == null) return null
   const nowMs = toMs(now) ?? Date.now()
@@ -122,9 +123,9 @@ export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
   const windowDays = cleanInt(config?.windowDays, MIN_WINDOW_DAYS, MAX_WINDOW_DAYS, DEFAULT_JOURNEY_WINDOW_DAYS)
   const target = cleanInt(config?.targetClasses, MIN_TARGET_CLASSES, MAX_TARGET_CLASSES, DEFAULT_JOURNEY_TARGET_CLASSES)
 
-  // Day 0 = the Dublin day of joined_at. A pre-dated (future) joined_at
+  // Day 0 = the local day of joined_at. A pre-dated (future) joined_at
   // clamps to day 0 — the member is treated as brand-new, not out-of-window.
-  const dayIndex = Math.max(0, dublinDaysBetween(joinedMs, nowMs))
+  const dayIndex = Math.max(0, daysBetweenIn(joinedMs, nowMs, zone))
   const inWindow = dayIndex <= windowDays
   const totalWeeks = Math.ceil(windowDays / DAYS_IN_WEEK)
   const weekIndex = Math.min(Math.floor(dayIndex / DAYS_IN_WEEK) + 1, totalWeeks)
@@ -143,7 +144,7 @@ export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
     }
   }
   const attended = entries.length
-  const daysSinceLastAttended = lastAttendedMs == null ? null : dublinDaysBetween(lastAttendedMs, nowMs)
+  const daysSinceLastAttended = lastAttendedMs == null ? null : daysBetweenIn(lastAttendedMs, nowMs, zone)
 
   // Completion instant = the target-th attendance chronologically (the class
   // that crossed the line). Drives the app's "hide the celebration a few days
@@ -154,7 +155,7 @@ export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
   if (attended >= target) {
     const completionMs = entries.slice().sort((a, b) => a - b)[target - 1]
     completedAt = new Date(completionMs).toISOString()
-    completedDaysAgo = dublinDaysBetween(completionMs, nowMs)
+    completedDaysAgo = daysBetweenIn(completionMs, nowMs, zone)
   }
 
   const expectedByNow = Math.min(Math.floor((dayIndex / windowDays) * target), target)

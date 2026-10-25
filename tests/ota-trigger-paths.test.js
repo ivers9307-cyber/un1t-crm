@@ -188,6 +188,11 @@ describe('what publishes an OTA', () => {
     'the mobile dependency-audit allowlist': ['mobile/.audit-allowlist.json'],
     // Everything else non-bundle under mobile/.
     'mobile runbooks (the #1455 case, still true)': ['mobile/docs/ota-rollout.md'],
+    'the widget extension Swift sources (native-only, cannot OTA regardless)': [
+      'mobile/targets/widgets/StudioControlsWidget.swift',
+      'mobile/targets/widgets/expo-target.config.js',
+      'mobile/targets/README.md',
+    ],
     'EAS Workflows orchestration': ['mobile/.eas/workflows/release.yml'],
     'the screenshot-resize helper': ['mobile/scripts/resize-screenshots.sh'],
     'the version-bump helper': ['mobile/scripts/bump-version.mjs'],

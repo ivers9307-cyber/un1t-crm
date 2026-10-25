@@ -51,6 +51,18 @@
 // to act as the buyer-facing subdomain.
 // ─────────────────────────────────────────────────────────────────
 
+// W1.L4 — the organisation an in-code hostname speaks for. The DB tier
+// (tenant_domains, src/lib/tenant-domains-edge.js) carries organization_id
+// on every row, but an in-code host never has a row (the admin API refuses
+// one), so the host-keyed brand resolvers — site name, favicon, the
+// anonymous login branding, the /welcome front page — need the linkage
+// here; resolveTenantOrgId consults this tier first. Only the UN1T hosts
+// carry one: un1tdublin.com (+www) and host.un1tdublin.com are UN1T Group's.
+// The car-business hosts render their own in-code pages and inherit no org
+// brand by host. Env-overridable so a preview can point the marketing host
+// at another org.
+export const UN1T_GROUP_ORG_ID = process.env.MARKETING_ORG_ID || 'f117b7b8-5f56-4f80-8299-2c698242e4d2'
+
 export const BRANDS = [
   // ─── CCF Autos — buyer-facing payment subdomain ────────────────
   // Customers reaching this hostname can ONLY hit deposit pages and
@@ -77,12 +89,14 @@ export const BRANDS = [
     description: 'UN1T public marketing site (apex + www)',
     hostnames: (process.env.MARKETING_HOSTNAMES || 'un1tdublin.com,www.un1tdublin.com')
       .split(',').map((s) => s.trim()).filter(Boolean),
+    organizationId: UN1T_GROUP_ORG_ID, // W1.L4
     allowedPaths: [
       '/welcome',
       '/stillorgan',    // pretty path → next.config rewrites to /welcome/stillorgan
       '/hatch-street',  // pretty path → next.config rewrites to /welcome/hatch-street
       '/free-class',    // Stillorgan paid-traffic campaign landing page (src/app/free-class)
       '/start',         // Meta-ad booking wizard (src/app/start)
+      '/trial',         // PAIDTRIAL.1 — Meta-ad paid trial product page (src/app/trial)
       '/offers',        // OFFERS.7: weekend "lock in" sale pages (src/app/offers)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
       '/terms',         // Terms of Service (Meta App Review + site footer)
@@ -109,7 +123,15 @@ export const BRANDS = [
       // startsWith, only /cancel/* is meant to resolve.
       '/cancel/',
       '/book/',         // public Calendly-style booking pages
+      // BOOKINGSELF.1 — the customer's own booking page (cancel/reschedule)
+      // from the {{manage_url}} link in confirmation and reminder emails.
+      // Covered by '/book/' today; listed so the flow survives a narrowing.
+      '/book/manage/',
       '/event/',        // public race / workshop / etc. signup pages
+      // EVENT-MOVE.6 — the customer's entry page (change the date), from the
+      // link in their confirmation email. Covered by '/event/' today; listed
+      // so the flow survives a narrowing of it. Its paid leg is '/event-pay/'.
+      '/event/entry/',
       // PUBPATH.1 — the checkout leg of the two above. RaceSignupWidget
       // sends every PAID signup to a HOST-RELATIVE /event-pay/<id>
       // (src/components/RaceSignupWidget.jsx:428), and in the embed it does
@@ -129,6 +151,29 @@ export const BRANDS = [
       '/race-pay/',     // + its checkout (legacy alias for /event-pay/)
       '/api/public/',   // backing API for all of the above
       '/api/webhooks/', // future-proof if a payment redirect lands here
+      // W1.L2 — the rest of the CUSTOMER FLOW, mirrored from
+      // DB_BRAND_DEFAULTS (src/lib/tenant-domains-edge.js) so UN1T's own
+      // marketing host serves the same links a tenant host does. The
+      // operator may build links on THIS host (settings public_base_url),
+      // and W1.L3 mints them on the org's host; every entry is already
+      // public on the CRM host (the token in the path, or the host session
+      // inside /host, is the credential). Raw startsWith, as above.
+      '/unsubscribe/',     // one-click unsubscribe landing (email footer)
+      '/preferences/',     // the preference centre (email footer)
+      '/view-email/',      // "view in browser" hosted copy
+      '/api/unsubscribe/', // + their backing routes (token in the path)
+      '/api/preferences/',
+      '/class-pay/',       // the paid class leg of the booking flow
+      '/h/',               // host public pages + mailing-list signup (HOST-EMAIL.2)
+      '/host',             // the host portal (auth inside: getCurrentHost)
+      '/host-connect/',    // host self-serve Stripe onboarding (signed token in the path)
+      '/api/host/',        // host-scoped API (getCurrentHost)
+      // MIAHATCH.6 — where un1t.online's hosted checkout returns a member
+      // (success, or ?c=1 on cancel) after paying for a link Mia sent. The
+      // successUrl is built on the studio's customer host, which may be this
+      // one; the 32-byte token in the path is the only credential. Raw
+      // startsWith, so the trailing slash: only /pay-done/<token> resolves.
+      '/pay-done/',
     ],
     rootHandler: 'rewrite',
     rootRewriteTo: '/welcome',
@@ -147,6 +192,7 @@ export const BRANDS = [
     description: 'UN1T third-party event host portal',
     hostnames: (process.env.HOST_PORTAL_HOSTNAME || 'host.un1tdublin.com')
       .split(',').map((s) => s.trim()).filter(Boolean),
+    organizationId: UN1T_GROUP_ORG_ID, // W1.L4 — UN1T's partner portal reads UN1T's brand
     allowedPaths: [
       '/host',        // the portal — login + gated dashboard pages
       '/api/host/',   // host-scoped API (getCurrentHost)
@@ -222,6 +268,21 @@ export const BRANDS = [
  * @param {string} hostname  Raw value of the `Host` request header.
  * @returns {object | null}  Brand entry from BRANDS, or null.
  */
+/**
+ * W1.L4 — one normalisation of a raw `Host` header for every host-keyed
+ * brand lookup (resolveTenantOrgId, the per-host brand cache): lowercased,
+ * port stripped, trailing dot stripped, trimmed; '' for no host. Pure.
+ * resolveBrand() itself stays byte-exact (the proxy's contract); callers
+ * that want case-insensitive matching normalise first.
+ *
+ * @param {unknown} host
+ * @returns {string}
+ */
+export function normalizeHost(host) {
+  if (typeof host !== 'string') return ''
+  return host.trim().split(':')[0].replace(/\.+$/, '').toLowerCase()
+}
+
 export function resolveBrand(hostname) {
   if (!hostname || typeof hostname !== 'string') return null
   const hostKey = hostname.split(':')[0]

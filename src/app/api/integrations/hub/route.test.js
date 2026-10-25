@@ -36,6 +36,7 @@ vi.mock('@/lib/integrations-hub', () => ({
 }))
 
 import { GET } from './route.js'
+import { assembleIntegrationsHub } from '@/lib/integrations-hub'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
@@ -168,5 +169,51 @@ describe('GET /api/integrations/hub — access + org scoping', () => {
     expect(res.status).toBe(200)
     expect(calls.in).toContainEqual(['organization_id', [ORG_A]])
     expect(body.data.locations.map((l) => l.id)).not.toContain('loc-b1')
+  })
+})
+
+// C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing.
+// The route hands the assembler a billingFor predicate: an org admin's own
+// org's locations only; a studio owner without a grant gets none; a master
+// every location.
+describe('GET /api/integrations/hub — plan & wallet strip (C141)', () => {
+  const billingForOf = () => assembleIntegrationsHub.mock.calls[0][2]?.billingFor
+
+  it('a studio owner without an org_admin grant gets no billing locations', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'owner-a', isMaster: false, role: 'owner',
+      rolesByLocation: { [LOC_A1.id]: 'owner' },
+      locations: [{ id: LOC_A1.id, organization_id: ORG_A }],
+      orgAdminOrgIds: [],
+    })
+    createServerClient.mockReturnValue(mockDb().db)
+    const res = await GET()
+    expect(res.status).toBe(200)
+    const billingFor = billingForOf()
+    expect(typeof billingFor).toBe('function')
+    expect(billingFor(LOC_A1)).toBe(false)
+    expect(billingFor(LOC_A2)).toBe(false)
+  })
+
+  it('an org admin gets billing for their own org only', async () => {
+    getCurrentUser.mockResolvedValue({
+      id: 'admin-a', isMaster: false, role: 'owner',
+      rolesByLocation: { [LOC_A1.id]: 'owner' },
+      locations: [{ id: LOC_A1.id, organization_id: ORG_A }],
+      orgAdminOrgIds: [ORG_A],
+    })
+    createServerClient.mockReturnValue(mockDb().db)
+    await GET()
+    const billingFor = billingForOf()
+    expect(billingFor(LOC_A1)).toBe(true)
+    expect(billingFor(LOC_B1)).toBe(false)
+  })
+
+  it('a master gets billing for every location', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm', isMaster: true, role: 'master' })
+    createServerClient.mockReturnValue(mockDb().db)
+    await GET()
+    const billingFor = billingForOf()
+    expect([LOC_A1, LOC_B1].every((l) => billingFor(l))).toBe(true)
   })
 })

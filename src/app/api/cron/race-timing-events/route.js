@@ -18,6 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc } from '@/lib/push-reminders'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,7 +61,7 @@ export async function GET(request) {
     .select(`
       id, contact_id, status,
       race_event_id,
-      race:race_event_id ( id, name, kind, location_id, race_date ),
+      race:race_event_id ( id, name, kind, location_id, race_date, locations:location_id ( id, timezone ) ),
       wave:wave_id ( id, start_time ),
       teams:team_id ( id,
         team_members ( id, name, email, role, contact_id, member_contact_id ) )
@@ -93,15 +94,16 @@ export async function GET(request) {
       continue
     }
     // Construct the wave's start instant. race_date + wave.start_time
-    // are Dublin wall-clock (no TZ semantics). The old code suffixed a
-    // manual '+00:00', treating Dublin local AS UTC — so during BST the
-    // computed instant was an hour late and the 1h alert landed ~at the
-    // actual race start. localToUtc converts the wall-clock correctly
-    // (DST-aware), same helper the push-reminder cron uses.
+    // are wall clock in the race's location zone (TZ.6; Europe/Dublin for
+    // every UN1T studio). The old code suffixed a manual '+00:00', treating
+    // Dublin local AS UTC — so during BST the computed instant was an hour
+    // late and the 1h alert landed ~at the actual race start. localToUtc
+    // converts the wall-clock correctly (DST-aware), same helper the
+    // push-reminder cron uses.
     const waveStart = localToUtc(
       race.race_date,
       (reg.wave.start_time || '00:00:00').slice(0, 8),
-      'Europe/Dublin',
+      zoneOfLocation(race.locations),
     )
     if (!waveStart || Number.isNaN(waveStart.getTime())) {
       stats.skipped += 1

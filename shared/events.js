@@ -3,6 +3,7 @@
 // upcoming/past split can't drift between platforms. Pure — no DB,
 // no network, no platform imports — so it unit-tests under Node and
 // imports cleanly into the RN bundle.
+import { todayStrIn, DEFAULT_TZ } from './zoned-time'
 
 // The multi-kind set from mig 122. `race` is the original/default kind.
 export const EVENT_KINDS = ['race', 'workshop', 'seminar', 'open_day', 'masterclass', 'lead_gen']
@@ -38,17 +39,16 @@ export function isRaceKind(kind) {
 }
 
 /**
- * Return today's date in Europe/Dublin as YYYY-MM-DD — the operator-timezone
- * "today" boundary used by the events upcoming/past browse split. Pure: no
- * DB, no network. Intl + Date are globals available in both Node and the RN
- * runtime, so this stays RN-safe.
+ * Today's date in `zone` as YYYY-MM-DD: the studio-timezone "today"
+ * boundary used by the events upcoming/past browse split (TZ.9). The SERVER
+ * computes it, with the event's studio zone (race_events.location_id; a host
+ * event's location is the host's anchor), so the phone carries no zone
+ * maths. Pure: no DB, no network; Intl + Date only, so it stays RN-safe.
+ * @param {string} [zone=DEFAULT_TZ]  IANA zone, already resolved
+ * @param {number} [nowMs=Date.now()]
  */
-export function todayIsoDublin() {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Dublin',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  })
-  return fmt.format(new Date())
+export function todayIsoIn(zone = DEFAULT_TZ, nowMs = Date.now()) {
+  return todayStrIn(zone, nowMs)
 }
 
 /**
@@ -56,18 +56,21 @@ export function todayIsoDublin() {
  * sort each block for a browse list: upcoming ascending (nearest first),
  * past descending (most recent first). An event with no race_date counts
  * as upcoming so a half-created event isn't hidden. Pure — the caller
- * supplies `today` (compute it in the operator's timezone server-side).
+ * supplies `today` (compute it in the event's studio timezone server-side).
+ * TZ.9: `today` may be one YYYY-MM-DD for every event, or a function giving
+ * each event its own studio's today (a list that mixes studios).
  * @param {Array<{race_date?: string|null}>} events
- * @param {string} today  YYYY-MM-DD
+ * @param {string|((event: object) => string)} today  YYYY-MM-DD, or event → YYYY-MM-DD
  * @returns {{upcoming: Array, past: Array}}
  */
 export function orderEventsForBrowse(events, today) {
   const list = Array.isArray(events) ? events : []
+  const todayOf = typeof today === 'function' ? today : () => today
   const upcoming = list
-    .filter((e) => !e?.race_date || e.race_date >= today)
+    .filter((e) => !e?.race_date || e.race_date >= todayOf(e))
     .sort((a, b) => (a?.race_date || '').localeCompare(b?.race_date || ''))
   const past = list
-    .filter((e) => e?.race_date && e.race_date < today)
+    .filter((e) => e?.race_date && e.race_date < todayOf(e))
     .sort((a, b) => (b?.race_date || '').localeCompare(a?.race_date || ''))
   return { upcoming, past }
 }

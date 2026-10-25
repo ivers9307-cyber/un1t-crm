@@ -14,10 +14,15 @@
 // Poppins ONLY (operator decision 2026-06-11) — the repo's documented SIL
 // stand-in for the brand font NEXA.
 
+import { headers } from 'next/headers'
 import { poppinsBody as poppins } from '@/fonts/poppins'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 
-export const metadata = {
-  title: 'Your communication preferences — UN1T',
+// W1.L4 — the tab names the request host's organisation brand, never a
+// literal (the page below overrides it with its own title).
+export async function generateMetadata() {
+  const brand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  return { title: `Your communication preferences — ${brand}` }
 }
 
 export default function PreferencesLayout({ children }) {

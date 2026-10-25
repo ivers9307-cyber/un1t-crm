@@ -45,9 +45,8 @@ const COMPARE_KEY = randomBytes(32)
  *
  * `crypto.timingSafeEqual` throws on unequal-length buffers, so the usual
  * `a.length !== b.length` early-exit leaks the secret's length through timing
- * (src/proxy.js accepts that leak because CRM_API_KEY is a fixed 64-char hex
- * string by convention — the reviewer gate code has no such convention, and
- * Richard picks a fresh one at submission time). HMAC-ing both sides to a
+ * (the reviewer gate code has no fixed length — Richard picks a fresh one at
+ * submission time). HMAC-ing both sides to a
  * fixed 32 bytes first removes the leak entirely: every comparison is over
  * two 32-byte digests regardless of input length.
  *

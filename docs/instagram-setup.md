@@ -99,6 +99,16 @@ implemented):
 - Tokens are ~60-day: if the refresh cron heartbeat goes stale for more than a couple of
   weeks, treat it as urgent — an expired token cannot be refreshed, only re-generated in the
   console (step 6).
+- **Meta can kill a token before its 60 days are up** (2026-09-26: "The session has been
+  invalidated because the user changed their password or Facebook has changed the session
+  for security reasons"). Symptoms: `instagram-feed-sync` AND `instagram-token-refresh`
+  heartbeats both go stale while their runs still return 200; the Integrations hub shows
+  Instagram in error with that message (the feed cron flags the row on an auth-shaped 401).
+  Inbound DMs keep arriving (webhooks are app-level, they don't use the token), so a busy
+  inbox proves nothing. Fix: steps 6 and 7 (new token, paste it, Save); saving a fresh token
+  clears the error. The feed heartbeat recovers on the next 6-hourly run; the refresh
+  heartbeat needs a run at least 24h after the paste (the next Monday 05:00 UTC, or run it
+  by hand per Verification step 7).
 
 ## Rollback
 

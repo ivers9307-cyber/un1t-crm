@@ -20,11 +20,11 @@ export const SEQUENCE_TEMPLATES = [
     id: 'consultation_reminder',
     category: 'Lead conversion',
     name: 'Consultation reminder',
-    description: 'For free consultations booked via /welcome. Email reminder 24h before the slot, SMS nudge 1h before. Cuts no-shows by giving the prospect two touch points before their arrival.',
+    description: 'For free consultations booked via /welcome. Email reminder 24h before the slot. Cuts no-shows by giving the prospect a touch point before their arrival.',
     trigger_type: 'event_reminder',
     // hours_before=24 → the sequence enrols the booking 24h before
-    // the consultation time. Step 1 fires immediately (T-24h email),
-    // step 2 waits 23h then sends the T-1h SMS.
+    // the consultation time. Step 1 fires immediately (T-24h email).
+    // A T-1h SMS step followed until SMS was retired (TWILIO-RETIRE.1).
     trigger_config: { hours_before: 24 },
     goal_config: null,
     send_window: { start_hour: 7, end_hour: 22, skip_days: [] },
@@ -34,13 +34,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'See you tomorrow, {{first_name}}',
-        html_content: '<p>Hi {{first_name}},</p><p>Your consultation\'s booked for tomorrow. Arrive 5 minutes early so we can chat through your goals before we move.</p><p>Bring water + comfy gym kit. We\'ll handle the rest.</p><p>UN1T {{location_name}}</p>',
-      },
-      {
-        step_type: 'sms',
-        delay_days: 0,
-        delay_hours: 23,
-        sms_body: 'UN1T: {{first_name}}, your consultation\'s in 1 hour. See you at {{location_name}}. Reply if you need to change anything.',
+        html_content: '<p>Hi {{first_name}},</p><p>Your consultation\'s booked for tomorrow. Arrive 5 minutes early so we can chat through your goals before we move.</p><p>Bring water + comfy gym kit. We\'ll handle the rest.</p><p>{{location_name}}</p>',
       },
     ],
   },
@@ -61,7 +55,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_trial_engaged_to_conversion',
     category: 'Lead conversion',
     name: 'Trial engaged → conversion push',
-    description: 'Fires when a trial member crosses 2 attended classes in the last 30 days (tag: glofox_trial_engaged). Sends an email + SMS asking if they\'re ready to talk membership — the funnel board already shows them in the right column (stage placement is automatic). Use this to catch warm trials before their credits run out.',
+    description: 'Fires when a trial member crosses 2 attended classes in the last 30 days (tag: glofox_trial_engaged). Sends an email asking if they\'re ready to talk membership — the funnel board already shows them in the right column (stage placement is automatic). Use this to catch warm trials before their credits run out.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_trial_engaged' },
     goal_config: null,
@@ -85,13 +79,7 @@ export const SEQUENCE_TEMPLATES = [
         html_content: `<p>Hi {{first_name}},</p>
 <p>We've seen you in a couple of classes this week. Great work. Before your trial wraps, want to grab 10 minutes with a coach to chat about which membership fits how you train?</p>
 <p>Reply to this email with a day that works, or just walk in and ask for the on-shift coach.</p>
-<p>UN1T {{location_name}}</p>`,
-      },
-      {
-        step_type: 'sms',
-        delay_days: 1,
-        delay_hours: 0,
-        sms_body: 'UN1T: {{first_name}}, loved having you in this week. Want to chat about membership before your trial ends? Reply with a good time.',
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -99,7 +87,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_trial_credits_low_push',
     category: 'Lead conversion',
     name: 'Trial credits low → conversion push',
-    description: 'Fires when a trial member\'s credits drop to ≤1 (tag: glofox_trial_credits_low). Sends an SMS-first conversion push — "last class this week, let\'s talk membership" (the funnel board places them automatically). Pairs with the engagement template above; together they cover both "trying hard" and "running out of time" signals.',
+    description: 'Fires when a trial member\'s credits drop to ≤1 (tag: glofox_trial_credits_low). Sends a conversion push email — "one trial class left, let\'s talk membership" (the funnel board places them automatically). Pairs with the engagement template above; together they cover both "trying hard" and "running out of time" signals.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_trial_credits_low' },
     goal_config: null,
@@ -107,15 +95,13 @@ export const SEQUENCE_TEMPLATES = [
     send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
     steps: [
       {
-        step_type: 'sms',
+        // Was an SMS first, then this email a day later; with SMS retired
+        // (TWILIO-RETIRE.1) the email IS the push, so it goes first and keeps
+        // the SMS step's delay (a first step's own delay is never applied —
+        // an enrolment starts at now).
+        step_type: 'email',
         delay_days: 0,
         delay_hours: 1,
-        sms_body: 'UN1T: {{first_name}}, your last trial class is on us. After that, want to lock in a membership? Reply MEMBER and a coach will sort you out.',
-      },
-      {
-        step_type: 'email',
-        delay_days: 1,
-        delay_hours: 0,
         subject: 'One trial class left, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Heads up: your trial credits are nearly used up. Don't let the momentum stall: lock in a membership and keep going while it feels easy.</p>
@@ -126,7 +112,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>Class Pack: pay-as-you-go, no membership.</li>
 </ol>
 <p>Reply with your favourite and a coach will set it up. Or walk in and ask at reception.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -134,7 +120,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_trial_ended_winback',
     category: 'Recovery',
     name: 'Trial ended (no sale) → win-back drip',
-    description: 'Fires when Glofox flips a member from TRIAL → NO_SALE_TRIAL (tag: glofox_trial_ended). 3-touch comeback: a "what got in the way" email day 1, a special-offer SMS day 7, a "last invite" email day 21. Leaves the deal in Follow-up Needed where the auto-mover put it. 180-day cooldown so the same contact isn\'t cycled through every quarter.',
+    description: 'Fires when Glofox flips a member from TRIAL → NO_SALE_TRIAL (tag: glofox_trial_ended). 2-touch comeback: a "what got in the way" email day 1 and a "last invite" email day 21. Leaves the deal in Follow-up Needed where the auto-mover put it. 180-day cooldown so the same contact isn\'t cycled through every quarter.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_trial_ended' },
     goal_config: null,
@@ -145,26 +131,20 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 1,
         delay_hours: 0,
-        subject: 'How was your UN1T trial, {{first_name}}?',
+        subject: 'How was your {{company_name}} trial, {{first_name}}?',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Saw your trial just ended. Quick honest question: what got in the way? Time, money, the classes themselves, something else? Reply with one word and a coach will read it personally.</p>
 <p>We get it if it wasn't a fit. But if you'd like to give it another go, we can sort that too.</p>
-<p>UN1T {{location_name}}</p>`,
-      },
-      {
-        step_type: 'sms',
-        delay_days: 6,
-        delay_hours: 0,
-        sms_body: 'UN1T: {{first_name}}, one more class on us this week. Reply with a day if you want to give it another shot.',
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
-        delay_days: 14,
+        delay_days: 20,
         delay_hours: 0,
         subject: 'Last invite, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Last we'll bother you. If you ever want to drop in for a one-off class, the rate is €20, no membership required, no questions asked. Just reply.</p>
-<p>Otherwise, all the best from the UN1T team.</p>`,
+<p>Otherwise, all the best from the {{company_name}} team.</p>`,
       },
     ],
   },
@@ -172,7 +152,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_trial_converted_welcome',
     category: 'Welcome',
     name: 'Trial converted → member welcome',
-    description: 'Fires when Glofox flips a member from TRIAL → MEMBER (or CREDIT_MEMBER) — tag: glofox_trial_converted. Sends a welcome-to-membership email + SMS. No pipeline move step needed — applyMemberSync\'s GLOFOX2.1.4 auto-mover has already moved the deal to the Member stage by the time this fires.',
+    description: 'Fires when Glofox flips a member from TRIAL → MEMBER (or CREDIT_MEMBER) — tag: glofox_trial_converted. Sends a welcome-to-membership email. No pipeline move step needed — applyMemberSync\'s GLOFOX2.1.4 auto-mover has already moved the deal to the Member stage by the time this fires.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_trial_converted' },
     goal_config: null,
@@ -183,9 +163,9 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 1,
-        subject: 'Welcome to UN1T, {{first_name}}',
+        subject: 'Welcome to {{company_name}}, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>You're officially a member. Welcome to the UN1T family.</p>
+<p>You're officially a member. Welcome to the {{company_name}} family.</p>
 <p>A few things you should know:</p>
 <ul>
   <li>Book your classes via the Glofox app. Your membership credits load automatically.</li>
@@ -193,13 +173,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>If you ever need to pause, switch, or upgrade, just reply to this email.</li>
 </ul>
 <p>See you on the floor.</p>
-<p>UN1T {{location_name}}</p>`,
-      },
-      {
-        step_type: 'sms',
-        delay_days: 0,
-        delay_hours: 4,
-        sms_body: 'UN1T: Welcome aboard, {{first_name}}! Your membership is live. Book your next class in the Glofox app.',
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -209,9 +183,13 @@ export const SEQUENCE_TEMPLATES = [
   // FROM the CRM — booking-form opt-in (GLOFOX3.2), event-
   // registration opt-in (GLOFOX3.3), or the manual "Create in
   // Glofox" button (GLOFOX3.4). The push orchestrator tags the
-  // contact 'glofox_account_created' and stashes the one-time
-  // passcode on contacts.glofox_passcode so this template's
-  // {{glofox_passcode}} merge tag resolves at send time.
+  // contact 'glofox_account_created'.
+  //
+  // PASSCODEREAD.1: this used to send the member their initial Glofox
+  // password ({{glofox_passcode}}). Passwords are no longer stored
+  // (mig 651), so the member sets their own with the Glofox app's
+  // "Forgot password?". The id keeps its old name: templates are cloned
+  // by id, and the id never reaches a customer.
   //
   // SHIPS INACTIVE — operator clones, reviews copy, fills in app-
   // store links, then activates. Inactive-by-default avoids us
@@ -219,19 +197,16 @@ export const SEQUENCE_TEMPLATES = [
   {
     id: 'glofox_welcome_passcode',
     category: 'Welcome',
-    name: 'Glofox welcome + passcode',
-    description: 'Fires when CRM creates a new Glofox account for a contact (tag: glofox_account_created). Sends the one-time passcode immediately so the member can log into the Glofox app, with a follow-up nudge the next day if they haven\'t booked yet. SHIPS INACTIVE — operator should review copy and fill in app-store links before activating.',
+    name: 'Glofox welcome + first login',
+    description: 'Fires when CRM creates a new Glofox account for a contact (tag: glofox_account_created). Tells the member how to log into the Glofox app for the first time (Forgot password? with their email), with a follow-up nudge the next day if they haven\'t booked yet. SHIPS INACTIVE: review the copy against the Glofox app and fill in app-store links before activating.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_account_created' },
     // No goal_config: this is a transactional welcome, not a
     // conversion drip. Letting it run to completion is the
     // intended path even if the member books mid-sequence.
     goal_config: null,
-    // 365-day cooldown — a passcode is minted once per Glofox
-    // account; if the same contact somehow re-triggers we don't
-    // want to send another passcode (it'd be stale anyway). The
-    // operator would re-mint via the manual button in that case,
-    // which would re-tag and pass the cooldown.
+    // 365-day cooldown — an account is created once per member; if the same
+    // contact somehow re-triggers we don't want to re-send the welcome.
     re_enrolment_cooldown_days: 365,
     send_window: { start_hour: 8, end_hour: 21, skip_days: [] },
     // All templates clone to status='draft' (from-template route) —
@@ -241,36 +216,23 @@ export const SEQUENCE_TEMPLATES = [
     // would email broken links to brand-new members.
     steps: [
       {
-        // Email 1 — immediate. Lands the passcode + the app links.
+        // Email 1 — immediate. First-login instructions + the app links.
         // Operator MUST fill in the iOS/Android URLs (placeholders
         // below) before activating, otherwise members get broken
         // "Download the app" links.
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T: your Glofox login is ready, {{first_name}}',
+        subject: 'Welcome to {{company_name}}: your Glofox account is ready, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your UN1T account is live. Download the Glofox app and log in with the credentials below to book your first class.</p>
-<p><strong>Email:</strong> {{email}}<br />
-<strong>One-time passcode:</strong> <code>{{glofox_passcode}}</code></p>
-<p>You'll be asked to set your own password the first time you log in.</p>
+<p>Your {{company_name}} account is live. Download the Glofox app to book your first class.</p>
+<p>To log in for the first time, open the app, tap <strong>Forgot password?</strong> and enter <strong>{{email}}</strong>. Glofox will email you a link to set your own password.</p>
 <p>
   <a href="https://apps.apple.com/app/REPLACE-WITH-IOS-LINK">Download on the App Store</a> ·
   <a href="https://play.google.com/store/apps/details?id=REPLACE-WITH-ANDROID-ID">Get it on Google Play</a>
 </p>
 <p>Once you're in, your trial credits are already loaded. Pick a class on the timetable and tap Book.</p>
-<p>See you on the floor.<br />UN1T {{location_name}}</p>`,
-      },
-      {
-        // SMS — same hour-ish window so the member sees the
-        // passcode somewhere even if the email lands in junk.
-        // 15-minute delay rather than 0 so the email arrives
-        // first (most members will see the email and never read
-        // the SMS).
-        step_type: 'sms',
-        delay_days: 0,
-        delay_hours: 0.25,
-        sms_body: 'UN1T: Hi {{first_name}}, your Glofox login is set. Email: {{email}} · Passcode: {{glofox_passcode}}. Open the Glofox app to book your first class.',
+<p>See you on the floor.<br />{{location_name}}</p>`,
       },
       {
         // Day-2 nudge — only if the member hasn't booked yet.
@@ -285,9 +247,9 @@ export const SEQUENCE_TEMPLATES = [
         subject: 'Need a hand booking your first class?',
         html_content: `<p>Hi {{first_name}},</p>
 <p>Just checking in. Did you manage to get logged in and have a look at the timetable?</p>
-<p>If anything's not working (passcode didn't arrive, app's grumpy, can't see the schedule), reply to this email and someone from the team will sort it within the hour.</p>
+<p>If anything's not working (can't log in, app's grumpy, can't see the schedule), reply to this email and someone from the team will sort it within the hour.</p>
 <p>If you'd rather chat in person, we're at the studio Mon–Fri 6am–9pm and weekends 8am–4pm. Just walk in.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -295,7 +257,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_booking_cancelled_re_engage',
     category: 'Recovery',
     name: 'Glofox cancellation → re-engage (24h)',
-    description: 'Fires when Glofox sends a booking.cancelled webhook (tag: glofox_booking_cancelled). 24 hours later, sends an email + SMS suggesting a different class. Catches the "I cancelled and never rebooked" gap that quietly leads to churn.',
+    description: 'Fires when Glofox sends a booking.cancelled webhook (tag: glofox_booking_cancelled). 24 hours later, sends an email suggesting a different class. Catches the "I cancelled and never rebooked" gap that quietly leads to churn.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_booking_cancelled' },
     goal_config: { type: 'booking_made' },
@@ -308,12 +270,6 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'Sorry we missed you, {{first_name}}',
         html_content: '<p>Hi {{first_name}},</p><p>You cancelled yesterday. Life happens. If you want to reschedule, the rest of the week\'s timetable is open. Reply with a day that works and we\'ll save you a spot.</p>',
-      },
-      {
-        step_type: 'sms',
-        delay_days: 0,
-        delay_hours: 4,
-        sms_body: 'UN1T: {{first_name}}, want to grab a different class this week? Just reply with a day.',
       },
     ],
   },
@@ -355,7 +311,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 14,
         delay_hours: 0,
         subject: 'Final offer: half off your first month back',
-        html_content: '<p>Hi {{first_name}},</p><p>One last note. If you want to give UN1T another shot, your first month back is half price. No questions, no judgement.</p><p>Reply HALF and we\'ll set it up.</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>One last note. If you want to give {{company_name}} another shot, your first month back is half price. No questions, no judgement.</p><p>Reply HALF and we\'ll set it up.</p>',
       },
     ],
   },
@@ -363,7 +319,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'webhook_external_lead_capture',
     category: 'Lead conversion',
     name: 'External lead capture (webhook)',
-    description: 'Inbound-webhook starter template. Wire any external system (n8n / Glofox / Zapier / Stripe) to POST to a unique URL — the contact gets a welcome email + an internal task lands on the operator\'s queue. Edit the steps to match your funnel after install.',
+    description: 'Inbound-webhook starter template. Wire any external system (Glofox / Zapier / Stripe) to POST to a unique URL — the contact gets a welcome email + an internal task lands on the operator\'s queue. Edit the steps to match your funnel after install.',
     trigger_type: 'webhook',
     trigger_config: {},
     goal_config: null,
@@ -372,8 +328,8 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T, {{first_name}}',
-        html_content: '<p>Hi {{first_name}},</p><p>Thanks for getting in touch. Someone from the team will be in contact within the next working day.</p><p>In the meantime, you\'re welcome to drop into UN1T {{location_name}} any time.</p>',
+        subject: 'Welcome to {{company_name}}, {{first_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Thanks for getting in touch. Someone from the team will be in contact within the next working day.</p><p>In the meantime, you\'re welcome to drop into {{location_name}} any time.</p>',
       },
       {
         step_type: 'internal_task',
@@ -401,15 +357,15 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 1,
-        subject: 'Welcome to UN1T, {{first_name}}. What\'s next',
-        html_content: '<p>Hi {{first_name}},</p><p>Thanks for booking your consultation. Here\'s what to expect: a 30-minute chat about your goals + a tour of the floor + a short movement screen so we know where you\'re at.</p><p>No pressure, no commitment. Just a conversation.</p><p>See you soon,<br/>UN1T</p>',
+        subject: 'Welcome to {{company_name}}, {{first_name}}. What\'s next',
+        html_content: '<p>Hi {{first_name}},</p><p>Thanks for booking your consultation. Here\'s what to expect: a 30-minute chat about your goals + a tour of the floor + a short movement screen so we know where you\'re at.</p><p>No pressure, no commitment. Just a conversation.</p><p>See you soon,<br/>{{company_name}}</p>',
       },
       {
         step_type: 'email',
         delay_days: 3,
         delay_hours: 0,
-        subject: 'How our members talk about UN1T',
-        html_content: '<p>Hi {{first_name}},</p><p>People often ask "what makes UN1T different?" The short answer: coaches who know your name and a room that shows up.</p><p>Read what members say about training here: <a href="https://un1tdublin.com">un1tdublin.com</a></p><p>Looking forward to meeting you.</p>',
+        subject: 'What makes {{company_name}} different',
+        html_content: '<p>Hi {{first_name}},</p><p>People often ask "what makes {{company_name}} different?" The short answer: coaches who know your name and a room that shows up.</p><p>Looking forward to meeting you.</p>',
       },
       {
         step_type: 'email',
@@ -443,7 +399,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'first_class_booked_second_class_push',
     category: 'Lead conversion',
     name: 'First class booked → push for the second',
-    description: 'Fires on the platform tag glofox_first_booking, stamped once ever on a contact\'s first booking in the booking system. Three touches: what to expect before the class, a prompt to get the next one in the diary, then a short SMS nudge. Exits automatically once they reach the 2nd Class stage. The separate first-booking welcome template only sees bookings made in the CRM, so this is the one that covers classes booked in the Glofox app.',
+    description: 'Fires on the platform tag glofox_first_booking, stamped once ever on a contact\'s first booking in the booking system. Two touches: what to expect before the class, then a prompt to get the next one in the diary. Exits automatically once they reach the 2nd Class stage. The separate first-booking welcome template only sees bookings made in the CRM, so this is the one that covers classes booked in the Glofox app.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_first_booking' },
     goal_config: { type: 'pipeline_stage', value: 'second_class' },
@@ -462,7 +418,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>Bring water and normal gym kit. Everything else is here.</li>
 </ul>
 <p>Scale anything you want to. Nobody is watching the clock but you.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -473,13 +429,7 @@ export const SEQUENCE_TEMPLATES = [
 <p>One class tells you what the room feels like. The second one is where it starts turning into a habit, and it is the one most people never get round to booking.</p>
 <p>Pick a slot that fits your week and get it in the diary now, while you still remember how it felt.</p>
 <p>Stuck on which class to try next? Reply and a coach will point you at one.</p>
-<p>UN1T {{location_name}}</p>`,
-      },
-      {
-        step_type: 'sms',
-        delay_days: 5,
-        delay_hours: 0,
-        sms_body: 'UN1T: {{first_name}}, got your next class booked yet? Reply with a day that suits and we\'ll sort it.',
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -495,7 +445,7 @@ export const SEQUENCE_TEMPLATES = [
     // event_reminder-triggered sequence; post-race copy to race_finished.
     // ({{event_name}} was also removed everywhere: the merge tag does not
     // exist and the literal token was emailed to customers.)
-    description: 'Three registration-relative touches for new race competitors: confirmation, an SMS with the practical details, and a prep guide the next day. Pair with an event-reminder sequence for race-day messages.',
+    description: 'Two registration-relative touches for new race competitors: confirmation, and a prep guide the next day. Pair with an event-reminder sequence for race-day messages.',
     trigger_type: 'race_registered',
     trigger_config: {},
     goal_config: null,
@@ -506,18 +456,12 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'You\'re in, {{first_name}}!',
-        html_content: '<p>Hi {{first_name}},</p><p>Your race entry is confirmed. Welcome to the team.</p><p>On the day, bring water, a towel, and your race-day energy.</p><p>See you there,<br/>UN1T</p>',
-      },
-      {
-        step_type: 'sms',
-        delay_days: 0,
-        delay_hours: 1,
-        sms_body: 'UN1T: Hey {{first_name}}, you\'re signed up for the race. Plan to arrive 30min before your start time on the day. Reply here with any questions.',
+        html_content: '<p>Hi {{first_name}},</p><p>Your race entry is confirmed. Welcome to the team.</p><p>On the day, bring water, a towel, and your race-day energy.</p><p>See you there,<br/>{{company_name}}</p>',
       },
       {
         step_type: 'email',
         delay_days: 1,
-        delay_hours: 0,
+        delay_hours: 1,
         subject: 'How to get ready for race day',
         html_content: '<p>Hi {{first_name}},</p><p>A few pointers while you wait for race day: keep your training ticking over, sort your kit early, and plan to arrive 30 minutes before your start time.</p><p>Results and photos land shortly after the event. Any questions before then, just reply.</p>',
       },
@@ -565,7 +509,7 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Welcome to UN1T, {{first_name}}',
+        subject: 'Welcome to {{company_name}}, {{first_name}}',
         html_content: '<p>Hi {{first_name}},</p><p>Your first class is locked in. Here\'s how to make the most of it: arrive 10 minutes early, water bottle, comfy gym kit.</p><p>See you on the floor.</p>',
       },
       {
@@ -598,7 +542,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'Welcome to the squad, {{first_name}}',
-        html_content: '<p>Big move. You\'re officially part of UN1T now.</p><p>What to expect this week: 4 classes, the Slack invite, the inside info.</p>',
+        html_content: '<p>Big move. You\'re officially part of {{company_name}} now.</p><p>What to expect this week: 4 classes, the Slack invite, the inside info.</p>',
       },
       {
         step_type: 'apply_tag',
@@ -627,7 +571,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'new_member_30_day_checkin',
     category: 'Welcome',
     name: 'New member: 30-day check-in',
-    description: 'Fires 30 days after the contact joined (contacts.joined_at). A short check-in email asking how the first month went, then an SMS nudge to get the next few classes booked. Only continues for members whose membership is still active, so it will not congratulate someone who has already cancelled or paused.',
+    description: 'Fires 30 days after the contact joined (contacts.joined_at). A short check-in email asking how the first month went. Only continues for members whose membership is still active, so it will not congratulate someone who has already cancelled or paused.',
     trigger_type: 'anniversary',
     trigger_config: { from_field: 'joined_at', days_after: 30 },
     audience_filter: { logic: 'and', filters: [{ field: 'glofox_membership_state', op: 'eq', value: 'active' }] },
@@ -648,13 +592,7 @@ export const SEQUENCE_TEMPLATES = [
   <li>Is anything getting in the way? Times, classes, injuries, anything.</li>
 </ul>
 <p>A coach reads every reply and will sort what they can.</p>
-<p>UN1T {{location_name}}</p>`,
-      },
-      {
-        step_type: 'sms',
-        delay_days: 3,
-        delay_hours: 0,
-        sms_body: 'UN1T: {{first_name}}, month one done. Worth getting next week\'s classes in the diary now. Reply if you want a hand picking them.',
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -677,7 +615,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'membership_paused_return',
     category: 'Recovery',
     name: 'Membership paused → return nudge',
-    description: 'Fires when a membership moves to paused in the booking system. Three low-key touches over about five weeks: acknowledge the pause and ask if anything is wrong, check in later, then a short SMS when they are due back. Exits the moment the membership goes active again, which is recorded as the goal being met. Separate from the overdue-payment chase, which handles arrears.',
+    description: 'Fires when a membership moves to paused in the booking system. Two low-key touches over about three weeks: acknowledge the pause and ask if anything is wrong, then check in later. Exits the moment the membership goes active again, which is recorded as the goal being met. Separate from the overdue-payment chase, which handles arrears.',
     trigger_type: 'membership_state_change',
     trigger_config: { to_state: 'paused' },
     goal_config: { type: 'membership_state', value: 'active' },
@@ -693,7 +631,7 @@ export const SEQUENCE_TEMPLATES = [
 <p>Your membership is paused, so nothing is being charged and your spot is held.</p>
 <p>If the pause is for the obvious reasons, travel, work, an injury, that is completely fine and we will see you when you are back.</p>
 <p>If it is because something here was not working, we would rather hear it. Reply to this email and a coach will read it.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -704,34 +642,33 @@ export const SEQUENCE_TEMPLATES = [
 <p>Quick check in. Your membership is still paused and there is no rush on our side.</p>
 <p>When you do want to start again, the easiest way back is to pick one class and book it. The rest sorts itself out after that.</p>
 <p>Reply with a day that suits and we will get you in.</p>
-<p>UN1T {{location_name}}</p>`,
-      },
-      {
-        step_type: 'sms',
-        delay_days: 14,
-        delay_hours: 0,
-        sms_body: 'UN1T: {{first_name}}, ready to unpause? Reply with a day that works and we\'ll book your first one back.',
+<p>{{location_name}}</p>`,
       },
     ],
   },
 
-  // DUNNING.6 — the ready-made automation behind the churn radar's Overdue
-  // tab: a member's MEMBERSHIP payment fails → WhatsApp + email asking them
-  // to update their card, three touches over a week. Manual trigger: the
-  // radar's auto-enrol (locations.dunning_auto_enroll) and the one-click
-  // "Send payment reminder" enrol directly; fees, class packs and custom
-  // charges never do. The run exits the moment the membership invoice is
-  // paid / written off or the membership pauses. Enrolments from those
-  // paths are TRANSACTIONAL (steps.js): they reach members who opted out of
-  // marketing, and still respect every hard block. The WhatsApp copy is the
-  // approved Meta template's (outstanding_payment_) and can't change without
-  // re-approval; the emails are editable in /automations. The first wait
+  // DUNNING.6 / PAYLINK.8 — the ready-made automation behind the churn
+  // radar's Overdue tab: a member's MEMBERSHIP payment fails → WhatsApp +
+  // email carrying a Pay now link for that exact invoice, three touches
+  // over a week. Manual trigger: the radar's auto-enrol
+  // (locations.dunning_auto_enroll) and the one-click "Send payment
+  // reminder" enrol directly; fees, class packs and custom charges never
+  // do. The run exits the moment the membership invoice is paid / written
+  // off or the membership pauses. Enrolments from those paths are
+  // TRANSACTIONAL (steps.js): they reach members who opted out of
+  // marketing, and still respect every hard block. The WhatsApp copy is
+  // the approved Meta template's (outstanding_payment_link_ — a Pay now
+  // URL button whose suffix is the run's invoice id, {{2}} the amount) and
+  // can't change without re-approval; the emails carry the same link via
+  // {{payment_cta}} and are editable in /automations. The install route
+  // refuses to install this template until outstanding_payment_link_ is
+  // APPROVED at the target location (template-install.js). The first wait
   // gives Glofox's own quick retry an hour to succeed first.
   {
     id: 'overdue_payment_dunning',
     category: 'Recovery',
-    name: 'Overdue membership payment → card update reminders',
-    description: 'When a membership payment fails, reminds the member to update their card: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Install, review the copy, activate, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it.',
+    name: 'Overdue membership payment → Pay now reminders',
+    description: 'When a membership payment fails, reminds the member with a Pay now link for that exact invoice: a WhatsApp and an email about an hour after the failure, an email on day 3, and a WhatsApp plus a final email on day 7. Stops as soon as the payment goes through. Install is refused until the WhatsApp template outstanding_payment_link_ is approved at this location. Install, review the copy, publish, then pick it under Churn radar → Payment reminders and turn on automatic starts. Fees and class packs never trigger it. If you installed the earlier card-update version, pause it after re-picking this one under Churn radar → Payment reminders, so only one sends.',
     trigger_type: 'manual',
     trigger_config: {},
     goal_config: null,
@@ -743,8 +680,8 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'whatsapp',
         delay_days: 0,
         delay_hours: 1,
-        whatsapp_template_name: 'outstanding_payment_',
-        whatsapp_variables: { '1': 'first_name' },
+        whatsapp_template_name: 'outstanding_payment_link_',
+        whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' },
       },
       {
         step_type: 'email',
@@ -752,9 +689,9 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'A quick heads-up about your payment, {{first_name}}',
         html_content: `<p>Hi {{first_name}},</p>
-<p>We tried to take your membership payment and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
-<p>Your membership is still active. To keep it that way, update your card in the Glofox app, or reply to this email and we'll sort it with you.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>We tried to take your membership payment{{pay_amount_phrase}} and it didn't go through. It happens, usually a card that has expired or been replaced.</p>
+<p>Your membership is still active. To keep it that way, {{payment_cta}}. If you'd rather we sorted the card with you, just reply to this email.</p>
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'email',
@@ -762,26 +699,26 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         subject: 'Still no luck with your membership payment',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your membership payment is still outstanding. Updating your card in the Glofox app takes about a minute, and we'll take the payment from there.</p>
+<p>Your membership payment{{pay_amount_phrase}} is still outstanding, usually a card that needs updating. You can {{payment_cta}}.</p>
 <p>If something else is going on, reply here and we'll figure it out together.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>{{location_name}}</p>`,
       },
       {
         step_type: 'whatsapp',
         delay_days: 4,
         delay_hours: 0,
-        whatsapp_template_name: 'outstanding_payment_',
-        whatsapp_variables: { '1': 'first_name' },
+        whatsapp_template_name: 'outstanding_payment_link_',
+        whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' },
       },
       {
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'Action needed to keep your UN1T membership',
+        subject: 'Action needed to keep your {{company_name}} membership',
         html_content: `<p>Hi {{first_name}},</p>
-<p>Your membership payment is now a week overdue and we don't want you to lose your spot.</p>
-<p>Two minutes fixes it: update your card in the Glofox app, or reply to this email and we'll take it from there. No awkwardness, we just want to keep you training.</p>
-<p>UN1T {{location_name}}</p>`,
+<p>Your membership payment{{pay_amount_phrase}} is now a week overdue and we don't want you to lose your spot.</p>
+<p>You can {{payment_cta}}. Or reply to this email and we'll sort the card together. No awkwardness, we just want to keep you training.</p>
+<p>{{location_name}}</p>`,
       },
     ],
   },
@@ -789,7 +726,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'cart_recovery',
     category: 'Recovery',
     name: 'Cart abandonment recovery',
-    description: 'Fires when a buyer abandons a checkout (race or car deposit). Single email, then SMS the next day.',
+    description: 'Fires when a buyer abandons a checkout (race or car deposit). Single email.',
     trigger_type: 'order_abandoned',
     trigger_config: {},
     goal_config: { type: 'tag_added', tag: 'race_completed' },
@@ -801,12 +738,6 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 1,
         subject: 'Did something go wrong?',
         html_content: '<p>Hi {{first_name}},</p><p>You started a payment with us but didn\'t finish. If you hit a snag, just hit reply and we\'ll sort it.</p>',
-      },
-      {
-        step_type: 'sms',
-        delay_days: 1,
-        delay_hours: 0,
-        sms_body: 'UN1T: Quick nudge {{first_name}}: your spot is still open. Reply with any questions.',
       },
     ],
   },
@@ -861,7 +792,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 30,
         delay_hours: 0,
         subject: 'Half off your first month back',
-        html_content: '<p>Hi {{first_name}},</p><p>It\'s been three months. The first step back is the hardest, so we\'re halving your first month if you want to give UN1T another go.</p><p>Reply HALF and I\'ll set it up. No long contract, no fuss.</p>',
+        html_content: '<p>Hi {{first_name}},</p><p>It\'s been three months. The first step back is the hardest, so we\'re halving your first month if you want to give {{company_name}} another go.</p><p>Reply HALF and I\'ll set it up. No long contract, no fuss.</p>',
       },
     ],
   },
@@ -934,8 +865,8 @@ export const SEQUENCE_TEMPLATES = [
         step_type: 'email',
         delay_days: 0,
         delay_hours: 0,
-        subject: 'A year with UN1T',
-        html_content: '<p>Hi {{first_name}},</p><p>Happy UN1T anniversary. A year ago today you signed up. Look how far you\'ve come.</p>',
+        subject: 'A year with {{company_name}}',
+        html_content: '<p>Hi {{first_name}},</p><p>Happy {{company_name}} anniversary. A year ago today you signed up. Look how far you\'ve come.</p>',
       },
     ],
   },
@@ -952,7 +883,7 @@ export const SEQUENCE_TEMPLATES = [
     // fraction of the list. Stating the CONDITION, not a percentage: the
     // share moves every time dob gets filled in, and a stale number in
     // shipped copy is worse than none.
-    description: 'Fires on each contact\'s birthday, matching the month and day of contact.dob in any year. Only reaches contacts whose date of birth is on file, so it covers a smaller audience than most recipes. Email from 9am plus an SMS two hours later so the message lands on both channels. Re-fires every year, subject to the 350-day cooldown.',
+    description: 'Fires on each contact\'s birthday, matching the month and day of contact.dob in any year. Only reaches contacts whose date of birth is on file, so it covers a smaller audience than most recipes. Email from 9am. Re-fires every year, subject to the 350-day cooldown.',
     trigger_type: 'anniversary',
     trigger_config: { from_field: 'dob', days_after: 0 },
     re_enrolment_cooldown_days: 350,
@@ -963,13 +894,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_days: 0,
         delay_hours: 0,
         subject: 'Happy birthday, {{first_name}}',
-        html_content: '<p>Hi {{first_name}},</p><p>Happy birthday from the UN1T team. Hope today\'s a good one.</p><p>Drop in any time this week for a free birthday class. Just reply with a day that works.</p>',
-      },
-      {
-        step_type: 'sms',
-        delay_days: 0,
-        delay_hours: 2,
-        sms_body: 'UN1T: Happy birthday {{first_name}}! Free class on us this week. Reply with a day.',
+        html_content: '<p>Hi {{first_name}},</p><p>Happy birthday from the {{company_name}} team. Hope today\'s a good one.</p><p>Drop in any time this week for a free birthday class. Just reply with a day that works.</p>',
       },
     ],
   },

@@ -21,15 +21,17 @@
 //      embedded checkout, or { confirmed: true } for free entries.
 
 import { NextResponse } from 'next/server'
+import { getLocationOrgBrandName } from '@/lib/location-branding'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
+import { holdingPlaces } from '@/lib/entry-policy'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
@@ -165,14 +167,17 @@ export async function POST(request, props) {
     }, { status: 400 })
   }
   if (wave.capacity != null) {
-    const { count } = await db
+    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
+    const { data: inWave } = await db
       .from('race_registrations')
-      .select('*', { count: 'exact', head: true })
+      .select('status, registered_at')
       .eq('race_event_id', race.id)
       .eq('wave_id', wave.id)
       // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
       .in('status', LIVE_REGISTRATION_STATUSES)
-    if ((count || 0) >= wave.capacity) {
+      .limit(2000)
+    // ENTRYPOLICY.1 — an unpaid entry holds its place for unpaid_hold_hours only.
+    if (holdingPlaces(inWave || [], Date.now(), race).length >= wave.capacity) {
       return NextResponse.json({
         success: false,
         error: `The ${wave.label || wave.start_time.slice(0, 5)} wave is full. Pick another.`,
@@ -288,9 +293,16 @@ export async function POST(request, props) {
     const unverified = validatedRoster.filter((m) => !m.is_member)
     if (unverified.length > 0) {
       const names = unverified.map((m) => m.name || '(unnamed)').join(', ')
+      // W1.S1b — the event's ORGANISATION brand, the same name the widget
+      // prints (the public payload's organization_name, getOrgBrandName), so
+      // the two never disagree and a host-anchor location's internal label
+      // never shows. Never a literal; a refusal path, so read uncached.
+      const brand = await getLocationOrgBrandName(db, race.location_id)
       return NextResponse.json({
         success: false,
-        error: `This race is open to UN1T members only. We couldn't verify membership for: ${names}. Each team member must use the email on their UN1T account.`,
+        error: brand
+          ? `This race is open to ${brand} members only. We couldn't verify membership for: ${names}. Each team member must use the email on their ${brand} account.`
+          : `This race is open to members only. We couldn't verify membership for: ${names}. Each team member must use the email on their member account.`,
         code: 'members_only_unverified',
         unverified_emails: unverified.map((m) => m.email).filter(Boolean),
       }, { status: 403 })
@@ -376,8 +388,11 @@ export async function POST(request, props) {
   // ─── kick off the payment (or mark paid for free entry) ──────────
   let paymentResult
   try {
-    const baseUrl = getAppUrl()
-    const returnUrl = `${baseUrl}/race/${race.slug}/confirmed?registration=${registration.id}`
+    // W1.L3b — the checkout returns to the EVENT LOCATION's tenant host, on
+    // the canonical /event/ path: /race/ is only a next.config alias on the
+    // CRM host and is not served on a tenant host.
+    const baseUrl = await resolveCustomerBaseUrl(db, race.location_id)
+    const returnUrl = `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`
     paymentResult = await createRacePayment({
       db,
       race,

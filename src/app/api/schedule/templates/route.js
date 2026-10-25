@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay, hexColor, DEFAULT_COLOR } from '@/lib/schemas'
 import { WEEKDAY_CODES, generateBlocksForTemplate } from '@/lib/roster'
+import { SHIFT_KINDS } from '@shared/shift-kind'
+import { resolveTemplateKindWrite } from '@/lib/shift-template-kind'
 
 // days_of_week + max_coaches landed in mig 067 (Roster v2 phase 1).
 // When a template is saved with non-empty days_of_week, we auto-
@@ -25,6 +27,10 @@ const CreateTemplateSchema = z.object({
   // because max might also be in the same payload — let Postgres
   // be the source of truth for the relational invariant.
   min_coaches: z.number().int().min(0).max(50).optional(),
+  // SHIFTTYPE.1 (mig 628) — class (default) or admin. An admin template has
+  // no minimum: min_coaches > 0 with kind admin is refused (400), and the
+  // database CHECKs it too (shift_templates_admin_no_minimum).
+  kind: z.enum(SHIFT_KINDS).optional(),
 })
 
 // GET /api/schedule/templates?location_id=xxx
@@ -52,9 +58,12 @@ export async function GET(request) {
 
 // POST /api/schedule/templates — Create a shift template.
 // Auto-generates blocks for the next 8 weeks if days_of_week is set.
+//
+// SCHEDROLES.1 — manager AT body.location_id, not at the active studio
+// (`user.role`); the first check is only "manages somewhere".
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -64,6 +73,13 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  // SHIFTTYPE.1 — kind + minimum, decided before any write.
+  const kindWrite = resolveTemplateKindWrite({ prior: null, body })
+  if (!kindWrite.ok) return NextResponse.json(kindWrite.body, { status: kindWrite.status })
 
   const db = createServerClient()
   const { data: template, error } = await db.from('shift_templates').insert({
@@ -76,11 +92,11 @@ export async function POST(request) {
     display_order: body.display_order || 0,
     days_of_week: body.days_of_week || [],
     max_coaches: body.max_coaches || 15,
-    // 1 is the chosen default per SHIFTMIN.1 scoping — every shift
-    // needs at least one coach to function. body.min_coaches === 0
-    // is a legitimate explicit choice ("no minimum"), so coalesce
-    // only on undefined, not falsy.
-    min_coaches: body.min_coaches ?? 1,
+    // SHIFTMIN.1 — 1 is the class default and an explicit 0 is legitimate;
+    // SHIFTTYPE.1 — an admin template is always 0. resolveTemplateKindWrite
+    // decides both.
+    kind: kindWrite.patch.kind,
+    min_coaches: kindWrite.patch.min_coaches,
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

@@ -49,6 +49,41 @@ describe('GET /auth/callback', () => {
     expect(loc(res)).not.toContain('dashboard')
   })
 
+  // ACTIVEUSER.1 (review S1) — deactivation bans the login, and the emailed
+  // link of a banned user comes back from GoTrue as an ERROR bounce with no
+  // `code`. That used to read "link was not valid", which sends the person
+  // round the request-a-link loop forever. The file had no error_code parsing
+  // at all until now, so the expired case is pinned with it.
+  it('a BANNED user\'s bounce (error_code=user_banned) reads as deactivated, not as a bad link', async () => {
+    const res = await GET(req('error=access_denied&error_code=user_banned&error_description=User+is+banned'))
+    expect(exchangeCodeForSession).not.toHaveBeenCalled()
+    expect(loc(res)).toBe('https://crm.test/login?error=account_deactivated')
+  })
+
+  it('an EXPIRED link\'s bounce (error_code=otp_expired) still reads as expired', async () => {
+    const res = await GET(req('error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired'))
+    expect(exchangeCodeForSession).not.toHaveBeenCalled()
+    expect(loc(res)).toBe('https://crm.test/login?error=link_expired')
+  })
+
+  it('any other error bounce is still link_invalid', async () => {
+    const res = await GET(req('error=server_error&error_code=unexpected_failure'))
+    expect(loc(res)).toBe('https://crm.test/login?error=link_invalid')
+  })
+
+  it('user_banned wins even when a code is present — no exchange is attempted', async () => {
+    const res = await GET(req('code=abc123&error_code=user_banned'))
+    expect(exchangeCodeForSession).not.toHaveBeenCalled()
+    expect(loc(res)).toBe('https://crm.test/login?error=account_deactivated')
+  })
+
+  it('a ban discovered AT the exchange reads as deactivated too; any other exchange error stays expired', async () => {
+    exchangeCodeForSession.mockResolvedValueOnce({ data: null, error: { message: 'User is banned', code: 'user_banned' } })
+    expect(loc(await GET(req('code=abc123')))).toBe('https://crm.test/login?error=account_deactivated')
+    exchangeCodeForSession.mockResolvedValueOnce({ data: null, error: { message: 'invalid code' } })
+    expect(loc(await GET(req('code=abc123')))).toBe('https://crm.test/login?error=link_expired')
+  })
+
   it('never throws if exchange throws', async () => {
     exchangeCodeForSession.mockRejectedValueOnce(new Error('network'))
     const res = await GET(req('code=abc123'))

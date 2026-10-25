@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { validateStructure, buildTimeline } from '@/lib/class-timer'
 
@@ -31,24 +31,27 @@ async function loadOwned(db, user, id) {
     .maybeSingle()
   if (!row) return { notFound: true }
   if (assertLocationAccess(user, row.location_id)) return { notFound: true }
+  // ROLESWEEP.1a — the permission is judged at the template's location.
+  if (!hasPermissionForLocation(user, row.location_id, 'class_timer')) return { denied: true }
   return { row }
 }
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
   const db = createServerClient()
-  const { row, notFound } = await loadOwned(db, user, id)
+  const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (denied) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   return NextResponse.json({ success: true, template: row })
 }
 
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
@@ -57,8 +60,9 @@ export async function PUT(request, { params }) {
   const body = validation.data
 
   const db = createServerClient()
-  const { row, notFound } = await loadOwned(db, user, id)
+  const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (denied) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
   const updates = { updated_at: new Date().toISOString() }
   if (body.name !== undefined) updates.name = body.name
@@ -82,13 +86,14 @@ export async function PUT(request, { params }) {
 
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
   const db = createServerClient()
-  const { row, notFound } = await loadOwned(db, user, id)
+  const { row, notFound, denied } = await loadOwned(db, user, id)
   if (notFound) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  if (denied) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
 
   const { error } = await db
     .from('class_timer_templates')

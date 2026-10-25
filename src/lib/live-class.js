@@ -11,7 +11,7 @@
 // don't need any of this. These helpers exist for the edge cases
 // the coach needs to handle in real time.
 
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { findRegistrationConflict } from '@/lib/hr-claim'
 import { selectAll } from '@/lib/select-all'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
@@ -22,12 +22,15 @@ import { resolveBodyMetrics } from '@/lib/body-metrics'
 import { estimateCaloriesKcal } from '@/lib/calories'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce } from '@/lib/customer-nudge-claim'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
 import { buildSessionPush, buildGoalPush, buildTargetHitPush, buildTierUpPush, periodKey } from '@/lib/customer-notifications'
 import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/goals'
 import { tierForMonths, nextTier, tierWindowMonths, windowedMonthsHit } from '@/lib/tiers'
-import { dublinMonthStr } from '@/lib/dublin-time'
+import { getLocationZone, monthStrIn } from '@/lib/location-time'
+import { getLocationBranding } from '@/lib/location-branding'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -295,7 +298,15 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
       patch.class_link_source = linkSource
     }
     if (Object.keys(patch).length) {
-      await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
+      // C31 PUSHNITS.1 — judged, not discarded. The pairing below still
+      // stands (it is the coach's action); a lost patch leaves the session on
+      // the old strap / unlinked, so say it.
+      const { error: patchErr } = await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
+      if (patchErr) {
+        logError('live-class', 'pairOverride session patch failed; session keeps its old strap/class link', {
+          sessionId, fields: Object.keys(patch), err: patchErr,
+        })
+      }
     }
   }
 
@@ -445,12 +456,18 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     .eq('id', sessionId)
   if (updErr) return { ok: false, error: updErr.message }
 
-  // Close strap_assignments rows for this session (if any).
-  await db
+  // Close strap_assignments rows for this session (if any). C31 PUSHNITS.1 —
+  // judged: the session itself is finalised above, so a lost close is logged
+  // (the row stays open until the next end/close of this session), never
+  // grounds to fail the end.
+  const { error: saCloseErr } = await db
     .from('strap_assignments')
     .update({ ended_at: endedAt })
     .eq('heart_rate_session_id', sessionId)
     .is('ended_at', null)
+  if (saCloseErr) {
+    logError('live-class', 'endSession strap_assignments close failed; assignment left open', { sessionId, err: saCloseErr })
+  }
 
   // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions still get
   // zones/points from summariseSession above, but skip every contact-bound
@@ -536,14 +553,10 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
   try {
     const det = await runDetectionForSession(db, sessionId)
     const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
-    if (unlocked.length) {
-      await db
-        .from('contact_achievements')
-        .update({ notified_at: new Date(nowMs).toISOString() })
-        .eq('source_session_id', sessionId)
-        .is('notified_at', null)
-    }
-    await sendCustomerPush(
+    // W1.S4 — the push names the product in the studio's brand ("280 UN1T
+    // Points"); the resolver never throws and answers '' when unresolved.
+    const { shortName } = await getLocationBranding(db, session.location_id)
+    const pushResult = await sendCustomerPush(
       db,
       session.contact_id,
       buildSessionPush({
@@ -551,14 +564,35 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
         className: session.class_name,
         sessionId,
         unlocked,
+        shortName,
       })
     )
+    // C31 PUSHNITS.1 — notified_at is stamped AFTER the push, and only when it
+    // reached a device. It used to be stamped first, so a push that reached
+    // nobody (Expo down, a failed token read, no device) still marked the
+    // achievements "notified". Nothing re-sends from this column today, so the
+    // order costs no duplicate; a null notified_at now means "never told".
+    if (unlocked.length && (Number(pushResult?.sent) || 0) > 0) {
+      const { error: stampErr } = await db
+        .from('contact_achievements')
+        .update({ notified_at: new Date(nowMs).toISOString() })
+        .eq('source_session_id', sessionId)
+        .is('notified_at', null)
+      if (stampErr) {
+        logError('live-class', 'achievement notified_at stamp failed after a delivered push', {
+          sessionId, unlocked: unlocked.length, err: stampErr,
+        })
+      }
+    }
   } catch (err) {
     logWarn('live-class', 'engagement notify threw', { err, sessionId })
   }
 
   // Best-effort: celebrate any active goal completed (this period) by this
   // session. Idempotent per (goal, period) via customer_engagement_nudges.
+  // C21 PUSHDONE.1b — through sendNudgeOnce: a celebration that reached nobody
+  // because something broke gives its claim back, so the member's NEXT session
+  // in the same period (the goal is still met) celebrates it — late, once.
   try {
     const { data: goals } = await db
       .from('contact_goals')
@@ -567,13 +601,20 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       .eq('is_active', true)
       .is('archived_at', null)
     if (goals && goals.length) {
+      // TZ.13 (D7) — the goal push's once-per-period key is on the member's
+      // calendar: the studio this session belongs to. An unreadable zone throws
+      // into the catch below (no celebration this session; the next one in the
+      // same period still celebrates), never a silent Dublin key.
+      const memberZone = await getLocationZone(db, session.location_id)
       // Lower bound must cover BOTH the current ISO week and the current
       // month: computeProgress filters weekly goals to the ISO-week start,
       // which can fall in the PREVIOUS month near a boundary. Fetch from
       // whichever anchor is earlier; computeProgress re-filters per goal.
+      // TZ.17 — both anchors and the per-goal sums are the member's calendar,
+      // the same one as the dedup key (they were UTC weeks and months).
       const goalRef = new Date(nowMs)
       const sinceIso = new Date(
-        Math.min(startOfIsoWeek(goalRef).getTime(), startOfMonth(goalRef).getTime())
+        Math.min(startOfIsoWeek(goalRef, memberZone).getTime(), startOfMonth(goalRef, memberZone).getTime())
       ).toISOString()
       const { data: gSessions, error: gErr } = await db
         .from('heart_rate_sessions')
@@ -585,15 +626,15 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
       for (const goal of goals) {
         const def = GOAL_DEFS[goal.kind]
         if (!def) continue
-        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
+        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs), memberZone)
         if (current < goal.target_value) continue
-        const dedupKey = `${goal.id}:${periodKey(def.period, nowMs)}`
-        const { data: ins, error: insErr } = await db
-          .from('customer_engagement_nudges')
-          .insert({ contact_id: session.contact_id, type: 'goal_complete', dedup_key: dedupKey })
-          .select('id')
-        if (insErr || !ins || !ins.length) continue // already celebrated this period, or insert failed
-        await sendCustomerPush(db, session.contact_id, buildGoalPush({ goal, def }))
+        await sendNudgeOnce(db, {
+          contactId: session.contact_id,
+          type: 'goal_complete',
+          dedupKey: `${goal.id}:${periodKey(def.period, nowMs, memberZone)}`,
+          payload: buildGoalPush({ goal, def }),
+          module: 'live-class',
+        })
       }
     }
   } catch (err) {
@@ -604,12 +645,21 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
   // this-month points cross the gym target; tier is derived from the count of
   // banked months. Idempotent per (contact, month) via the unique constraint.
   try {
-    const { data: loc } = await db
-      .from('locations').select('settings').eq('id', session.location_id).maybeSingle()
-    const target = Number(loc?.settings?.customer_agent?.monthly_points_target) || 0
+    // MIAORG.1 — the target is a Mia setting, resolved DEFAULTS <- org <-
+    // studio (an org-wide target reaches a studio that sets none). `loc` keeps
+    // the raw row for tierWindowMonths (settings.scoring). Unreadable = no target.
+    const resolved = await resolveAgentSettings(db, session.location_id)
+    const loc = resolved.ok ? resolved.location : null
+    const target = (resolved.ok && Number(resolved.settings.monthly_points_target)) || 0
     if (target > 0) {
-      const monthKey = periodKey('month', nowMs) // 'YYYY-MM'
-      const monthStartIso = startOfMonth(new Date(nowMs)).toISOString()
+      // TZ.13 (D7) — the banked month is the studio's calendar month. An
+      // unreadable zone throws into the catch below: no bank this session, the
+      // next session in the month banks it (the insert is idempotent).
+      const memberZone = await getLocationZone(db, session.location_id)
+      const monthKey = periodKey('month', nowMs, memberZone) // 'YYYY-MM'
+      // TZ.17 — the points summed are the banked month's (the member's calendar
+      // month, as monthKey); the sum started at the UTC month before.
+      const monthStartIso = startOfMonth(new Date(nowMs), memberZone).toISOString()
       const { data: monthSessions } = await db
         .from('heart_rate_sessions')
         .select('effort_points')
@@ -629,7 +679,7 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
         if (!bankErr && banked && banked.length) {
           // Tier decay (approved decision #4, default-off). When the operator
           // sets settings.scoring.tier_window_months = N, tier is derived from
-          // the DISTINCT months banked within the last N Dublin calendar months
+          // the DISTINCT months banked within the last N local calendar months
           // (inclusive of the current month) rather than the cumulative all-time
           // count. N absent/null → cumulative, so no member's tier changes until
           // an operator opts in. `newTier` reflects state after this bank;
@@ -641,22 +691,27 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
             .select('period_month')
             .eq('contact_id', session.contact_id)
           const bankedMonths = (banks || []).map((b) => b.period_month)
-          const nowMonth = dublinMonthStr(nowMs)
+          const nowMonth = monthStrIn(nowMs, memberZone)
           const monthsHit = windowedMonthsHit(bankedMonths, windowN, nowMonth)
           const priorMonths = bankedMonths.filter((p) => p !== monthKey)
           const priorHit = windowedMonthsHit(priorMonths, windowN, nowMonth)
           const newTier = tierForMonths(monthsHit)
           const oldTier = tierForMonths(priorHit)
           if (newTier && (!oldTier || newTier.slug !== oldTier.slug)) {
-            const { data: nins } = await db
-              .from('customer_engagement_nudges')
-              .insert({ contact_id: session.contact_id, type: 'tier_up', dedup_key: newTier.slug })
-              .select('id')
-            if (nins && nins.length) {
-              await sendCustomerPush(db, session.contact_id, buildTierUpPush({ tier: newTier, monthsHit }))
-            }
+            // C21 PUSHDONE.1b — a tier-up that reached nobody gives its claim
+            // back. Nothing re-runs this month's banking, so it is not re-sent
+            // now; the ledger no longer claims it landed, and a later crossing
+            // into the same tier (tier decay) can still celebrate it.
+            await sendNudgeOnce(db, {
+              contactId: session.contact_id,
+              type: 'tier_up',
+              dedupKey: newTier.slug,
+              payload: buildTierUpPush({ tier: newTier, monthsHit }),
+              module: 'live-class',
+            })
           } else {
-            const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
+            // TZ.17 — the banked month's name (it was the UTC month's).
+            const monthLabel = MONTH_NAMES[Number(monthKey.slice(5, 7)) - 1]
             await sendCustomerPush(
               db, session.contact_id,
               buildTargetHitPush({ monthLabel, monthsHit, next: nextTier(monthsHit) })

@@ -21,6 +21,7 @@ vi.mock('@/lib/postmark-suppressions', () => ({
   suppressAtPostmark: vi.fn(async () => ({ ok: 1, failed: [] })),
   unsuppressAtPostmark: vi.fn(async () => ({ ok: 1, failed: [], skipped: [] })),
 }))
+vi.mock('@/lib/postmark-server-for-location', () => ({ serverTokenForLocation: vi.fn(async () => null) }))
 vi.mock('@/lib/rate-limit', async () => {
   const actual = await vi.importActual('@/lib/rate-limit')
   return { ...actual, getClientIp: () => '203.0.113.9' }
@@ -36,9 +37,16 @@ vi.mock('@/lib/consent-token-guard', async () => {
   }
 })
 
-import { PUT } from './route'
+// W1.S1b — the org brand for the page header rides the GET payload.
+vi.mock('@/lib/host-brand', () => ({
+  resolveOrgChrome: vi.fn(async ({ orgId }) => ({ orgId, companyName: orgId ? 'Gym A' : '', shortName: '', legalName: '', studios: [] })),
+}))
+
+import { PUT, GET } from './route'
+import { resolveOrgChrome } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
 import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
+import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
 
 const TOKEN = '11111111-2222-3333-4444-555555555555'
 const LOCATION = 'a0000000-0000-0000-0000-000000000001'
@@ -52,7 +60,7 @@ const PREF = {
   whatsapp_administrative: true,
   sms_marketing: true,
   sms_administrative: true,
-  contacts: { id: 'contact-1', name: 'Ada', email: 'Ada@Example.com', email_status: 'active', wa_phone: '353860000000' },
+  contacts: { id: 'contact-1', name: 'Ada', email: 'Ada@Example.com', email_status: 'active', location_id: LOCATION, wa_phone: '353860000000' },
 }
 
 // Chainable, thenable double (supabase-js builders are thenables, not
@@ -98,6 +106,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   suppressAtPostmark.mockResolvedValue({ ok: 1, failed: [] })
   unsuppressAtPostmark.mockResolvedValue({ ok: 1, failed: [], skipped: [] })
+  serverTokenForLocation.mockResolvedValue(null)
 })
 
 describe('PUT /api/preferences/[token] — Postmark suppression (PMSUPP.1)', () => {
@@ -106,7 +115,7 @@ describe('PUT /api/preferences/[token] — Postmark suppression (PMSUPP.1)', () 
     const res = await call({ email_marketing: false })
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true })
-    expect(suppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com')
+    expect(suppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: null })
     expect(unsuppressAtPostmark).not.toHaveBeenCalled()
   })
 
@@ -114,8 +123,22 @@ describe('PUT /api/preferences/[token] — Postmark suppression (PMSUPP.1)', () 
     createServerClient.mockReturnValue(makeDb({ pref: { ...PREF, email_marketing: false } }))
     const res = await call({ email_marketing: true })
     expect(res.status).toBe(200)
-    expect(unsuppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com')
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: null })
     expect(suppressAtPostmark).not.toHaveBeenCalled()
+  })
+
+  // W1.E4 — both directions act on the TENANT server when the contact's org
+  // has a live one (resolved from the contact's home location).
+  it('suppresses and lifts on the TENANT server when the org has a live one', async () => {
+    serverTokenForLocation.mockResolvedValue('tenant-tok')
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    await call({ email_marketing: false })
+    expect(serverTokenForLocation).toHaveBeenCalledWith(db, LOCATION)
+    expect(suppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: 'tenant-tok' })
+    createServerClient.mockReturnValue(makeDb({ pref: { ...PREF, email_marketing: false } }))
+    await call({ email_marketing: true })
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: 'tenant-tok' })
   })
 
   it('does nothing at Postmark when email_marketing did not change', async () => {
@@ -140,7 +163,7 @@ describe('PUT /api/preferences/[token] — Postmark suppression (PMSUPP.1)', () 
     createServerClient.mockReturnValue(makeDb({ locRow: { email_marketing: false, sms_marketing: true, whatsapp_marketing: true } }))
     const res = await call({ locationId: LOCATION, email_marketing: true })
     expect(await res.json()).toMatchObject({ success: true })
-    expect(unsuppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com')
+    expect(unsuppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: null })
   })
 
   it('still confirms the opt-in when Postmark refuses to lift a hard-bounce suppression', async () => {
@@ -187,3 +210,28 @@ describe('PUT /api/preferences/[token] — Postmark suppression (PMSUPP.1)', () 
     expect(unsuppressAtPostmark).not.toHaveBeenCalled()
   })
 })
+
+describe('GET /api/preferences/[token] — the brand (W1.S1b)', () => {
+  const get = () => GET(req(), { params: Promise.resolve({ token: TOKEN }) })
+
+  it('names the organisation the contact\'s lists belong to, and every list by its studio name', async () => {
+    createServerClient.mockReturnValue(makeDb({ locRow: [
+      { location_id: LOCATION, email_marketing: true, sms_marketing: false, whatsapp_marketing: true, locations: { name: 'Gym A North', organization_id: 'org-a' } },
+    ] }))
+    const body = await (await get()).json()
+    expect(body.brand).toBe('Gym A')
+    expect(resolveOrgChrome).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-a' }))
+    expect(body.lists.map((l) => l.locationName)).toEqual(['Gym A North'])
+  })
+
+  it('no lists → an empty brand and no literal gym anywhere in the payload', async () => {
+    createServerClient.mockReturnValue(makeDb({ locRow: [
+      { location_id: LOCATION, email_marketing: true, sms_marketing: false, whatsapp_marketing: true, locations: null },
+    ] }))
+    const body = await (await get()).json()
+    expect(body.brand).toBe('')
+    expect(body.lists[0].locationName).toBe('')
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+})
+

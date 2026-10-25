@@ -96,7 +96,7 @@ beforeEach(() => {
 describe('PUT /api/deals/[id] — pipeline_stage_change trigger (STAGETRIG.1)', () => {
   it('fires with the resolved from/to slugs on a real stage move', async () => {
     createServerClient.mockReturnValue(mockDb({
-      deal: { location_id: 'loc-1', contact_id: 'c1', stage_id: STAGE_TRIAL },
+      deal: { location_id: 'loc-1', contact_id: 'c1', stage_id: STAGE_TRIAL, pipeline_id: 'pl-1' },
     }))
     const res = await PUT(req({ stage_id: STAGE_CONV }), props)
     expect(res.status).toBe(200)
@@ -104,6 +104,21 @@ describe('PUT /api/deals/[id] — pipeline_stage_change trigger (STAGETRIG.1)', 
       action: 'move',
       from_slug: 'active_trial',
       to_slug: 'converted',
+    }, { dealLocationId: 'loc-1', pipelineId: 'pl-1' })
+  })
+
+  it('PUT selects pipeline_id and passes { dealLocationId: existing.location_id, pipelineId: existing.pipeline_id }', async () => {
+    const db = mockDb({
+      deal: { location_id: 'loc-9', contact_id: 'c1', stage_id: STAGE_TRIAL, pipeline_id: 'pl-9' },
+    })
+    createServerClient.mockReturnValue(db)
+    await PUT(req({ stage_id: STAGE_CONV }), props)
+    const dealsBuilder = db.from.mock.results
+      .filter((r, i) => db.from.mock.calls[i][0] === 'deals')
+      .map((r) => r.value)[0]
+    expect(dealsBuilder.select).toHaveBeenCalledWith('location_id, contact_id, stage_id, pipeline_id')
+    expect(triggerSequencesForDealPlacement.mock.calls[0][2]).toEqual({
+      dealLocationId: 'loc-9', pipelineId: 'pl-9',
     })
   })
 
@@ -114,7 +129,7 @@ describe('PUT /api/deals/[id] — pipeline_stage_change trigger (STAGETRIG.1)', 
     await PUT(req({ stage_slug: 'converted' }), props)
     expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith('c1', expect.objectContaining({
       from_slug: 'active_trial', to_slug: 'converted',
-    }))
+    }), expect.any(Object))
   })
 
   // The idempotency gate. A PUT that re-sends the stage the deal is

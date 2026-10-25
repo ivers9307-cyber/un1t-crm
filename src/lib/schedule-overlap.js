@@ -1,4 +1,5 @@
-// SCHEDULE-DOUBLE-BOOKING.1 — pure helpers for the double-booking advisory.
+// SCHEDULE-DOUBLE-BOOKING.1 — pure helpers for the double-booking advisory,
+// plus (ROSTER-FIX.6c) the time formatting every schedule screen shares.
 //
 // A coach physically can't be at two shifts at once, so when an
 // assignment overlaps another shift the coach is already on (same date,
@@ -9,6 +10,43 @@
 /** 'HH:MM:SS' → 'HH:MM'. Pure. */
 export function fmtTime(t) {
   return String(t || '').slice(0, 5)
+}
+
+/**
+ * ROSTER-FIX.6c — 'HH:MM:SS' → the 12-hour label the schedule screens render
+ * ('9am', '9:30am', '12pm'). Pure.
+ *
+ * This is NOT fmtTime with a different skin: fmtTime returns the 24-hour
+ * 'HH:MM' the overlap comparison needs, and it is what a clash badge quotes.
+ * The 12-hour form is what the calendar, the template manager and the swap
+ * list have always PRINTED on a card, and those three each carried their own
+ * byte-identical copy of it. One copy now, in the module that already owns
+ * schedule time formatting, so the two forms sit side by side and the reason
+ * there are two is written down instead of guessed at.
+ */
+// ROSTERLOOK.1 — `amSuffix: false` is for the month cell, where a line has
+// about 120px for a time AND two first names. Only "am" is dropped: a roster
+// that runs 5:45am and 5:45pm classes must never print both as "5:45".
+export function formatTime12h(time, { amSuffix = true } = {}) {
+  if (!time) return ''
+  const [h, m] = String(time).split(':')
+  const hour = parseInt(h)
+  const suffix = hour >= 12 ? 'pm' : amSuffix ? 'am' : ''
+  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
+  return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
+}
+
+/**
+ * ROSTERLOOK.1 — a shift's range on ONE line: '9:15–10:30am', '11:30am–12:30pm'.
+ * Built on formatTime12h so there is still one 12-hour rule. The suffix is
+ * printed once when both ends share it. En dash, no spaces: there is no break
+ * opportunity inside it (the card adds whitespace-nowrap as well). Pure.
+ */
+export function formatTimeRange12h(start, end) {
+  const from = formatTime12h(start)
+  const to = formatTime12h(end)
+  if (!from || !to) return from || to
+  return from.slice(-2) === to.slice(-2) ? `${from.slice(0, -2)}–${to}` : `${from}–${to}`
 }
 
 /**

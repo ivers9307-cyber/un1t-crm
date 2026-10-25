@@ -65,7 +65,7 @@
 
 import { getLocationPlan } from './plans'
 import { getWallet, currentPeriodStart, nextPeriodStart } from './wallet'
-import { dublinTodayStr, dublinDayStartMs } from './dublin-time'
+import { todayStrIn, dayStartMsIn, PLATFORM_TZ } from './location-time'
 
 // Mirrors the wallets.balance_cents CHECK (>= -1000) and the RPC's
 // grace-floor guard (mig 414): −€10.00.
@@ -181,11 +181,12 @@ export function isGraceFloorError(err) {
 }
 
 /**
- * Pure: the Dublin billing-month window containing `anchorDateStr`
+ * Pure: the billing-month window (D5: the platform billing calendar,
+ * PLATFORM_TZ) containing `anchorDateStr`
  * (YYYY-MM-DD). monthStart/monthNext are calendar dates for
  * usage_rollups_daily.day filters; startIso/endIso are the UTC
- * instants of Dublin local midnight on those dates for
- * usage_events.occurred_at filters (BST-safe via dublinDayStartMs).
+ * instants of PLATFORM_TZ local midnight on those dates for
+ * usage_events.occurred_at filters (DST-safe via dayStartMsIn).
  */
 export function billingMonthWindow(anchorDateStr) {
   const monthStart = currentPeriodStart(anchorDateStr)
@@ -193,8 +194,8 @@ export function billingMonthWindow(anchorDateStr) {
   return {
     monthStart,
     monthNext,
-    startIso: new Date(dublinDayStartMs(monthStart)).toISOString(),
-    endIso: new Date(dublinDayStartMs(monthNext)).toISOString(),
+    startIso: new Date(dayStartMsIn(monthStart, PLATFORM_TZ)).toISOString(), // D5: the platform billing calendar (PLATFORM_TZ)
+    endIso: new Date(dayStartMsIn(monthNext, PLATFORM_TZ)).toISOString(),
   }
 }
 
@@ -304,7 +305,7 @@ export async function getBillingState(db, locationId) {
     return null
   }
 
-  const window = billingMonthWindow(dublinTodayStr())
+  const window = billingMonthWindow(todayStrIn(PLATFORM_TZ)) // D5: the platform billing calendar (PLATFORM_TZ)
   const [wallet, rollups, aiCount, drawn] = await Promise.all([
     getWallet(db, locationId),
     sumRollupUsage(db, locationId, window),

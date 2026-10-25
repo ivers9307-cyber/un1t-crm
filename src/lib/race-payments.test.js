@@ -123,15 +123,18 @@ describe('markRacePaymentStatus', () => {
         update: (patch) => ({
           eq: (col, val) => {
             updates.push({ table, patch, col, val })
-            return {
+            const chain = {
               eq: (col2, val2) => {
                 const last = updates[updates.length - 1]
                 last.col2 = col2
                 last.val2 = val2
-                return Promise.resolve({ data: null, error: null })
+                return chain
               },
-              then: (cb) => cb({ data: null, error: null }),
+              // The race_payments status write is a CAS that reads back its rows.
+              select: () => Promise.resolve({ data: [{ id: 'pay-1' }], error: null }),
+              then: (cb, rej) => Promise.resolve({ data: null, error: null }).then(cb, rej),
             }
+            return chain
           },
         }),
       }),

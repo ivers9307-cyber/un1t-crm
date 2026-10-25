@@ -3,8 +3,12 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
+import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
+import { uuidLike } from '@/lib/schemas'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -46,22 +50,46 @@ const SequenceUpdateSchema = z.object({
   rotate_webhook_token: z.boolean().optional(),
 })
 
+// SEQROUTEGATE.1 — every column but webhook_token / webhook_secret (the
+// builder's settings panel gets those from the /automations/[id] page's own
+// read, and the token from the PUT response below) and the dead `active`,
+// and (SEQCOUNTERS.1) the never-maintained total_* counters; the Performance
+// panel counts from /stats.
+const SEQUENCE_DETAIL_COLUMNS = [
+  'id, location_id, name, description, status',
+  'trigger_type, trigger_config, audience_filter, goal_config, send_window, re_enrolment_cooldown_days',
+  'graph, draft_graph, graph_version',
+  'from_email, from_name, reply_to',
+  'audience_seeded_at, audience_seeded_by, audience_seed_count',
+  'created_by, created_at, updated_at',
+  'sequence_steps(*)',
+].join(', ')
+
 // GET /api/sequences/[id]
 export async function GET(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
   const { data, error } = await db.from('email_sequences')
-    .select('*, sequence_steps(*)')
+    .select(SEQUENCE_DETAIL_COLUMNS)
     .eq('id', params.id)
-    .single()
+    .maybeSingle()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
+  // SEQROUTEGATE.1 — a failed read is a 500 (logged; PostgREST's message stays
+  // server-side), only an absent row is a 404.
+  if (error) {
+    logError('sequences', 'sequence detail read failed', { sequenceId: params.id, code: error.code, err: error.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sequence' }, { status: 500 })
+  }
+  if (!data) return sequenceNotFound()
 
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, data.location_id)) return sequencePermissionRequired()
 
   // Sort steps by step_order
   if (data.sequence_steps) {
@@ -76,23 +104,39 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
+
+  // SEQPAGEGATE.1: a malformed id is a missing sequence, never a PostgREST
+  // 22P02 surfacing as the 500 below.
+  if (!uuidLike.safeParse(params.id).success) return sequenceNotFound()
 
   const db = createServerClient()
 
   // Verify caller can write to this sequence's location. trigger_type /
   // trigger_config / status feed the activation guard below (effective
   // values = request merged over the stored row).
-  const { data: existing } = await db.from('email_sequences')
+  // SEQPAGEGATE.1: a failed read is a logged 500 (it used to be discarded
+  // and answer 404 as if the sequence were gone); only no row is a 404.
+  const { data: existing, error: existingErr } = await db.from('email_sequences')
     .select('location_id, trigger_type, trigger_config, status')
     .eq('id', params.id)
-    .single()
-  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+    .maybeSingle()
+  if (existingErr) {
+    logError('sequences', 'sequence update: read failed', { sequenceId: params.id, code: existingErr.code || null, err: existingErr.message })
+    return NextResponse.json({ success: false, error: 'Could not load the sequence' }, { status: 500 })
+  }
+  if (!existing) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  // SEQPAGEGATE.1: '' and null both mean "no secret" (the inbound webhook
+  // and has_webhook_secret agree); store the one spelling, null.
+  if (updates.webhook_secret === '') updates.webhook_secret = null
 
   // COMMSFIX.B.7 — reject an invalid audience_filter at save time. A bad
   // filter used to save cleanly, then contactMatchesSequenceAudience failed
@@ -175,14 +219,18 @@ export async function PUT(request, props) {
     if (needsToken) updates.webhook_token = randomBytes(16).toString('hex')
   }
 
+  // SEQPAGEGATE.1 — the builder shape: the settings fields, the token (the
+  // panel shows the URL) and has_webhook_secret. The secret itself never
+  // goes back to the browser, not even to the editor who just set it (the
+  // panel still holds what they typed).
   const { data, error } = await db.from('email_sequences')
     .update(updates)
     .eq('id', params.id)
-    .select()
+    .select(SEQUENCE_BUILDER_ROW_SELECT)
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, sequence: data })
+  return NextResponse.json({ success: true, sequence: toBuilderSequence(data) })
 }
 
 // DELETE /api/sequences/[id]
@@ -190,6 +238,7 @@ export async function DELETE(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
 
@@ -197,9 +246,11 @@ export async function DELETE(request, props) {
     .select('location_id')
     .eq('id', params.id)
     .single()
-  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!existing) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp) at the sequence.
+  if (!canBuildSequencesAt(user, existing.location_id)) return sequencePermissionRequired()
 
   // Delete steps first
   await db.from('sequence_steps').delete().eq('sequence_id', params.id)

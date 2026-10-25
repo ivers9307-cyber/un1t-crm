@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { safeEqual } from './webhook-auth'
 import { getCurrentUser } from './auth'
+import { hasRoleAtAnyLocation } from './role-at-location'
 import { MANAGER_ROLES } from './schemas'
 import { createServerClient } from './supabase'
 import { hashApiKey, isApiKeyToken } from './api-keys'
@@ -46,8 +46,8 @@ const NO_MATCH_UUID = '00000000-0000-0000-0000-000000000000'
 
 /**
  * SAAS-3 — org location filter for list queries on `location_id`-bearing
- * tables. Returns null when the caller is unscoped (legacy shared key /
- * cookie session — keep today's behaviour), else the org's location ids;
+ * tables. Returns null when the caller is unscoped (a cookie session —
+ * keep today's behaviour), else the org's location ids;
  * an org with zero locations gets [NO_MATCH_UUID] so it matches NOTHING
  * rather than falling through unfiltered. Apply at the call site:
  *
@@ -74,6 +74,14 @@ export async function orgScopeLocationIds(db, orgId) {
  * the `contactId`'s location. Returns null when allowed, or a
  * NextResponse (400 if no location resolvable, 403 if outside the org).
  * No-op (null) when orgId is falsy.
+ *
+ * W0.1b — when BOTH are supplied the contact is no longer ignored: the
+ * location decides the target (403 outside the org, as before) and the
+ * contact is then checked as a REFERENCE — it must exist at one of the
+ * org's locations, else 404 (the assertRowInOrg idiom: a cross-org id
+ * is indistinguishable from a missing one). Before this a keyed caller
+ * could create a task/activity/note at its own location against
+ * another organisation's contact id.
  */
 export async function assertCreateInOrg({ db, orgId, locationId = null, contactId = null }) {
   if (!orgId) return null
@@ -88,6 +96,12 @@ export async function assertCreateInOrg({ db, orgId, locationId = null, contactI
   }
   if (!locIds.includes(loc)) {
     return NextResponse.json({ success: false, error: 'not in your organization' }, { status: 403 })
+  }
+  if (locationId && contactId) {
+    const { data } = await db.from('contacts').select('location_id').eq('id', contactId).maybeSingle()
+    if (!data || !locIds.includes(data.location_id)) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
   }
   return null
 }
@@ -108,36 +122,58 @@ export async function assertRowInOrg({ db, orgId, table, id }) {
   return null
 }
 
-// Validates the API key sent by n8n in the Authorization header.
-// Comparison is constant-time so an attacker can't observe how many leading
-// bytes of CRM_API_KEY they got right by timing 401 responses. Vercel's edge
-// adds enough latency noise that a real timing attack is impractical, but
-// there's no reason to leave a `!==` here either.
-//
-// Note: token extraction now uses startsWith() instead of replace(), which
-// previously would strip "Bearer " from anywhere in the string (e.g.
-// "abcBearer xyz" became "abcxyz") rather than only the prefix.
-//
-// Usage: const error = requireApiKey(request); if (error) return error;
-export function requireApiKey(request) {
-  const auth = request.headers.get('authorization') || ''
-  const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
-  const expected = process.env.CRM_API_KEY
-
-  if (!expected || !safeEqual(token, expected)) {
-    return NextResponse.json(
-      { success: false, error: 'Unauthorized' },
-      { status: 401 }
-    )
+/**
+ * W0.1b — gate a PROFILE reference (a task's assignee_id) for a per-org
+ * key. Profiles carry no location_id or organization_id of their own, so
+ * membership is read the way staff-fleet-scope.js reads it: a
+ * profile_locations row at one of the org's locations, OR a
+ * profile_organizations row for the org (org admins hold no location
+ * row). Returns null when allowed, or a 404 NextResponse (404 not 403,
+ * so the id's existence is not confirmed across orgs). No-op when orgId
+ * is falsy.
+ */
+export async function assertProfileInOrg({ db, orgId, profileId }) {
+  if (!orgId) return null
+  const notFound = () => NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+  if (!profileId) return notFound()
+  const locIds = await orgLocationIds(db, orgId)
+  if (locIds.length) {
+    const { data: atLocation } = await db
+      .from('profile_locations')
+      .select('profile_id')
+      .eq('profile_id', profileId)
+      .in('location_id', locIds)
+      .limit(1)
+    if (atLocation?.length) return null
   }
-  return null // auth OK
+  const { data: orgAdmin } = await db
+    .from('profile_organizations')
+    .select('profile_id')
+    .eq('profile_id', profileId)
+    .eq('organization_id', orgId)
+    .limit(1)
+  if (orgAdmin?.length) return null
+  return notFound()
 }
 
 /**
- * Same as requireApiKey but ALSO accepts a logged-in manager+ user
- * (cookie auth) as a valid caller. Used by routes that started life
- * as n8n integration endpoints (POST /api/contacts, etc.) and now
- * also need to be reachable from the web UI.
+ * Accepts either a per-org API key (`unitk_…`, resolved to its
+ * organisation) or a logged-in manager+ user (cookie auth). Used by
+ * routes that serve both external integrations and the web UI
+ * (POST /api/contacts, etc.).
+ *
+ * ROLESWEEP.2 — the cookie branch is a COARSE pre-check only: the
+ * caller holds a MANAGER_ROLES role at SOME location
+ * (hasRoleAtAnyLocation). It used to read `user.role`, the role at the
+ * ACTIVE studio, which refused a manager whose active studio is one
+ * where they are staff, and admitted a head coach at A to act on B
+ * where they are staff. EVERY caller must now judge the role at the
+ * location it acts on — hasRoleAtLocation(auth.user, loc, MANAGER_ROLES)
+ * after its membership check — before it reads or writes anything the
+ * caller may not see. tests/role-at-target.test.js enforces that every
+ * route calling this helper also calls hasRoleAtLocation (or another
+ * target judgement) in the same file. The API-key branch is
+ * unchanged.
  *
  * Return shape:
  *   { ok: true,  user: <user>|null }    — auth ok. user is null
@@ -147,34 +183,28 @@ export function requireApiKey(request) {
  *   { ok: false, response: <NextResponse> } — caller should return
  *                                              this directly.
  *
- * Why an object instead of mirroring `requireApiKey`'s
- * "null = ok": callers usually want the user object for audit
- * stamps (created_by, updated_by, etc.). API-key callers don't have
- * a user — that's a known property, not an error.
+ * Why an object instead of "null = ok": callers usually want the
+ * user object for audit stamps (created_by, updated_by, etc.).
+ * API-key callers don't have a user — that's a known property, not
+ * an error.
  */
 export async function requireApiKeyOrManager(request) {
-  // API-key path first (cheap, header-only). If the bearer token
-  // matches the configured key we're done — no DB hit.
   const auth = request.headers.get('authorization') || ''
   const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
-  const expected = process.env.CRM_API_KEY
-  if (expected && token && safeEqual(token, expected)) {
-    // Legacy shared key — unscoped (orgId null) for back-compat.
-    return { ok: true, user: null, orgId: null }
-  }
 
   // APIKEYS.3 — per-org key. Returns the scoping org so handlers can
-  // filter by organization; legacy + cookie callers get orgId null and
-  // behave exactly as before.
+  // filter by organization; cookie callers get orgId null and behave
+  // exactly as before.
   const resolved = await resolveApiKeyOrg(token)
   if (resolved) {
     return { ok: true, user: null, orgId: resolved.orgId }
   }
 
-  // Cookie path. Manager+ only — we don't want random staff
-  // accidentally hitting these endpoints.
+  // Cookie path. Manager+ SOMEWHERE — we don't want random staff
+  // accidentally hitting these endpoints. Not the decision: the route
+  // judges the role at its target (ROLESWEEP.2, see above).
   const user = await getCurrentUser()
-  if (user && MANAGER_ROLES.includes(user.role)) {
+  if (user && hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return { ok: true, user, orgId: null }
   }
 
@@ -188,18 +218,14 @@ export async function requireApiKeyOrManager(request) {
 }
 
 /**
- * APIKEYS.1 — authenticate an external (n8n / integration) caller and
- * resolve the ORGANIZATION the key is scoped to. Supports two token
- * kinds during the rollout:
- *
- *   - per-org key (`unitk_…`): looked up by SHA-256 hash in `api_keys`;
- *     returns { orgId } so handlers can scope queries by organization.
- *   - legacy shared `CRM_API_KEY`: still accepted, returns orgId=null
- *     (unscoped, all-org) so existing n8n flows keep working until they
- *     migrate. Retire by unsetting CRM_API_KEY once migration is done.
+ * APIKEYS.1 — authenticate an external integration caller and resolve
+ * the ORGANIZATION the key is scoped to. The only accepted token is a
+ * per-org key (`unitk_…`), looked up by SHA-256 hash in `api_keys`; it
+ * returns { orgId } so handlers can scope queries by organization.
+ * (APIKEYS.4 removed the legacy shared key path.)
  *
  * Return shape:
- *   { ok: true,  orgId: <uuid>|null, legacy: boolean, keyId?: uuid }
+ *   { ok: true,  orgId: <uuid>, keyId: uuid }
  *   { ok: false, response: <NextResponse 401> }
  *
  * Note: async (per-org keys require a DB lookup). Routes adopting this
@@ -214,16 +240,10 @@ export async function authenticateApiKey(request) {
   })
   if (!token) return unauthorized()
 
-  // Legacy shared key first (cheap, header-only) — unscoped.
-  const expected = process.env.CRM_API_KEY
-  if (expected && safeEqual(token, expected)) {
-    return { ok: true, orgId: null, legacy: true }
-  }
-
   // Per-org key — look up by hash, must be active (not revoked).
   const resolved = await resolveApiKeyOrg(token)
   if (resolved) {
-    return { ok: true, orgId: resolved.orgId, legacy: false, keyId: resolved.keyId }
+    return { ok: true, orgId: resolved.orgId, keyId: resolved.keyId }
   }
 
   return unauthorized()

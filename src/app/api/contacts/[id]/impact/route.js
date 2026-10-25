@@ -5,10 +5,13 @@
 // will be cascaded vs preserved) and by the merge confirm dialog
 // (so they see what's about to fold across).
 //
-// Manager+ at the contact's location.
+// Manager+ at the contact's primary studio, an organisation admin, or a master
+// (ORGCONTACTS.4: the same decision as DELETE).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtAnyLocation } from '@/lib/auth'
+import { canDeleteOrRehomeContact } from '@/lib/contact-edit-gates'
+import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { getContactImpact } from '@/lib/contact-merge'
@@ -20,18 +23,19 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the decision is made at the contact below.
+  // ORGCONTACTS.4: an organisation admin may hold no studio role at all.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES) && !isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
   const db = createServerClient()
-  const { data: contact } = await db.from('contacts').select('id, location_id').eq('id', params.id).single()
+  const { data: contact } = await db.from('contacts').select('id, location_id, organization_id').eq('id', params.id).single()
   if (!contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
-  if (user.role !== 'master') {
-    const userLocIds = (user.locations || []).map(l => l.id)
-    if (!userLocIds.includes(contact.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
+  // ORGCONTACTS.4 — the same decision as DELETE (this is its confirm dialog):
+  // the primary studio's admins, an organisation admin, or a master.
+  if (!canDeleteOrRehomeContact({ user, contact })) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
   const impact = await getContactImpact(db, params.id)

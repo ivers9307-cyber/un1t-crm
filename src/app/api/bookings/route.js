@@ -15,8 +15,8 @@ export async function GET(request) {
     .order('booking_date', { ascending: true })
     .order('start_time', { ascending: true })
 
-  // APIKEYS.3 — per-org key: restrict to the org's locations. Legacy
-  // shared key (orgId null) stays unscoped — unchanged.
+  // APIKEYS.3 — per-org key: restrict to the org's locations. Every keyed
+  // caller has an orgId; only a cookie session is unscoped here.
   if (auth.orgId) {
     const locIds = await orgLocationIds(db, auth.orgId)
     query = query.in('location_id', locIds.length ? locIds : ['00000000-0000-0000-0000-000000000000'])

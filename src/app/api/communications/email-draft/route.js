@@ -5,13 +5,13 @@
 //   - 'send'     → status 'queued'  (the run-campaigns cron sends it, exactly
 //                  like POST /api/campaigns/[id]/send — untouched send path)
 //   - 'schedule' → status 'scheduled' + scheduled_at (cron promotes at the time)
-// (The existing POST /api/campaigns is Bearer-only for n8n; this is the browser
+// (The existing POST /api/campaigns is Bearer-only (per-org API key); this is the browser
 // session path, mirroring how CampaignEditor creates campaigns.)
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
@@ -49,7 +49,7 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionForLocation(user, location_id, 'email')) {
     return NextResponse.json({ success: false, error: 'No email permission at this location' }, { status: 403 })
   }
   if (action === 'schedule' && !scheduled_at) {

@@ -27,6 +27,14 @@ vi.mock('@/lib/rate-limit', () => ({
 }))
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+// EVENT-WAITLIST.1 — the staff and host "Offer now" routes throttle AFTER
+// their gate; stub the gate so the limiter is the first thing that answers.
+vi.mock('@/lib/auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentUser: vi.fn(async () => ({ id: 'u1' })) }))
+vi.mock('@/lib/host-auth', async (importOriginal) => ({ ...(await importOriginal()), getCurrentHost: vi.fn(async () => ({ host: { id: 'h1' } })) }))
+vi.mock('@/lib/event-waitlist-access', () => ({
+  resolveStaffWaitlistEvent: vi.fn(async (_u, id) => ({ db: {}, race: { id, location_id: 'L1' } })),
+  resolveHostWaitlistEvent: vi.fn(async (_s, id) => ({ db: {}, race: { id, location_id: 'L1', host_id: 'h1' } })),
+}))
 
 import { checkRateLimit, peekRateLimit } from '@/lib/rate-limit'
 import { createServerClient } from '@/lib/supabase'
@@ -36,6 +44,9 @@ import { POST as hostListPOST } from './host-list/[slug]/subscribe/route.js'
 import { POST as eventRegisterPOST } from './events/[slug]/register/route.js'
 import { POST as raceRegisterPOST } from './races/[slug]/register/route.js'
 import { POST as checkMemberPOST } from './events/[slug]/check-member/route.js'
+import { POST as waitlistPOST } from './events/[slug]/waitlist/route.js'
+import { POST as staffOfferPOST } from '../events/[id]/waitlist/offer/route.js'
+import { POST as hostOfferPOST } from '../host/events/[id]/waitlist/offer/route.js'
 import { GET as classesGET } from './classes/route.js'
 import { POST as classBookingPOST } from './class-booking/route.js'
 import { POST as leadsPOST } from './leads/route.js'
@@ -50,7 +61,8 @@ import { GET as bcaMergedGET } from './bca/[token]/merged/route.js'
 import { GET as bookingTypeGET } from './bookings/[slug]/route.js'
 import { GET as slotsGET } from './bookings/[slug]/slots/route.js'
 import { GET as brandingGET } from './branding/route.js'
-import { GET as challengesGET } from './challenges/[locationId]/route.js'
+import { GET as tvChallengesGET } from './tv-challenges/[token]/route.js'
+import { GET as tvLiveGET } from './tv-live/[token]/route.js'
 import { GET as eventPaymentGET } from './event-payments/[id]/route.js'
 import { GET as eventRegistrationGET } from './event-registrations/[id]/route.js'
 import { GET as raceGET } from './events/[slug]/route.js'
@@ -121,6 +133,26 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     const res = await eventRegisterPOST(req('/api/public/events/city-race/register', { method: 'POST', body: {} }), props({ slug: 'city-race' }))
     expect(res.status).toBe(429)
     expect(limiterKey()).toBe(`race-register:city-race:${IP}`)
+  })
+
+  it('event waitlist join keys on the event slug (EVENT-WAITLIST.1)', async () => {
+    const res = await waitlistPOST(req('/api/public/events/city-race/waitlist', { method: 'POST', body: {} }), props({ slug: 'city-race' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`waitlist:city-race:${IP}`)
+  })
+
+  it('staff Offer now keys on the event id, 3 per hour (EVENT-WAITLIST.1)', async () => {
+    const res = await staffOfferPOST(req('/api/events/e1/waitlist/offer', { method: 'POST' }), props({ id: 'e1' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe('waitlist-offer:e1')
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
+  })
+
+  it('host Offer now shares the same per-event key and budget (EVENT-WAITLIST.1)', async () => {
+    const res = await hostOfferPOST(req('/api/host/events/e1/waitlist/offer', { method: 'POST' }), props({ id: 'e1' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe('waitlist-offer:e1')
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 3, windowMs: 3_600_000 })
   })
 
   it('race register keys on the race slug', async () => {
@@ -296,10 +328,19 @@ describe('H2a — remaining public routes are rate limited', () => {
     expect(checkRateLimit.mock.calls[1][1]).toBe(`pubbranding:${LOC_A}:${IP}`)
   })
 
-  it('challenges TV board keys on the location', async () => {
-    const res = await challengesGET(req(`/api/public/challenges/${LOC_A}`), props({ locationId: LOC_A }))
+  // W0.9c — the TV boards are token-keyed only (the location-keyed
+  // /api/public/live|challenges/[locationId] routes are gone). The limiter
+  // runs BEFORE the token lookup so an enumeration attempt is still capped.
+  it('challenges TV board keys on the display token', async () => {
+    const res = await tvChallengesGET(req('/api/public/tv-challenges/tok-a'), props({ token: 'tok-a' }))
     expect(res.status).toBe(429)
-    expect(limiterKey()).toBe(`pubchallenges:${LOC_A}:${IP}`)
+    expect(limiterKey()).toBe(`tv-challenges:tok-a:${IP}`)
+  })
+
+  it('live TV board keys on the display token', async () => {
+    const res = await tvLiveGET(req('/api/public/tv-live/tok-a'), props({ token: 'tok-a' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`tv-live:tok-a:${IP}`)
   })
 
   it('event-payment status keys on IP alone (anti-enumeration — the enumerator varies the UUID)', async () => {

@@ -19,6 +19,7 @@ vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
 vi.mock('@/lib/approvals/registry', () => ({ getPendingApprovalsCount: vi.fn() }))
 vi.mock('@/lib/issues', () => ({ countInboxIssues: vi.fn() }))
 vi.mock('@/lib/churn-radar-data', () => ({ loadRadar: vi.fn() }))
+vi.mock('@/lib/radar-availability', () => ({ radarAvailability: vi.fn(async () => ({ available: true, source: 'glofox', dataAsOf: null })) }))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
@@ -30,6 +31,7 @@ import { hasPermission } from '@/lib/permissions'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { countInboxIssues } from '@/lib/issues'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { radarAvailability } from '@/lib/radar-availability'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
 
 const LOC = 'loc-1'
@@ -176,5 +178,49 @@ describe('fetchLocationTodayFeed (morning-briefing cron) — same predicate', ()
     })
     const rows = await fetchLocationTodayFeed(db, LOC)
     expect(rows.find((r) => r.id === 'whatsapp')?.count).toBe(2)
+  })
+})
+
+// TZ.17 ⚠️ — "today" (bookings today, tasks due) is the studio's day. It was
+// the host clock's (UTC on Vercel): from 00:00 to 01:00 Irish summer time the
+// feed showed yesterday's bookings.
+describe('TZ.17 the feed day is the studio day', () => {
+  function bookingsDb() {
+    const seen = []
+    const bookings = { select: () => bookings, eq: (c, v) => { if (c === 'booking_date') seen.push(v); return bookings }, neq: () => bookings, order: () => Promise.resolve({ data: [], error: null }) }
+    return { seen, db: makeDb({ bookings }) }
+  }
+  beforeEach(() => { hasPermission.mockImplementation((_u, key) => key === 'bookings') })
+
+  it('Dublin at 00:30 IST on 2 Jul asks for 2 Jul (the UTC host said 1 Jul)', async () => {
+    const { db, seen } = bookingsDb()
+    await fetchTodayFeed(db, { id: 'u1' }, LOC, { nowMs: Date.parse('2026-07-01T23:30:00Z'), zone: 'Europe/Dublin' })
+    expect(seen).toEqual(['2026-07-02'])
+  })
+  it('a New York studio at 23:30 EDT on 1 Jul asks for 1 Jul', async () => {
+    const { db, seen } = bookingsDb()
+    await fetchTodayFeed(db, { id: 'u1' }, LOC, { nowMs: Date.parse('2026-07-02T03:30:00Z'), zone: 'America/New_York' })
+    expect(seen).toEqual(['2026-07-01'])
+  })
+  it('the briefing feed takes the slot zone, and an unreadable zone omits the day rows (never a guessed day)', async () => {
+    const { db, seen } = bookingsDb()
+    await fetchLocationTodayFeed(db, LOC, Date.parse('2026-07-01T23:30:00Z'), { zone: 'Europe/Dublin' })
+    expect(seen).toEqual(['2026-07-02'])
+    const b = bookingsDb()
+    const broken = { from: (t) => (t === 'locations' ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'down' } }) }) }) } : b.db.from(t)) }
+    await fetchLocationTodayFeed(broken, 'loc-unreadable', Date.parse('2026-07-01T23:30:00Z'))
+    expect(b.seen).toEqual([]) // no bookings read on a guessed day
+  })
+})
+
+// UN1TRADAR.1 — a source without the memberships capability gets no churn row.
+describe('fetchChurn and the memberships capability', () => {
+  it('today-feed churn is null at a source without memberships (no radar read)', async () => {
+    radarAvailability.mockResolvedValueOnce({ available: false, source: 'un1t_online', dataAsOf: null })
+    loadRadar.mockClear()
+    const db = makeDb({})
+    const rows = await fetchLocationTodayFeed(db, LOC)
+    expect(loadRadar).not.toHaveBeenCalled()
+    expect(rows.find((r) => r.id === 'churn')).toBeUndefined()
   })
 })

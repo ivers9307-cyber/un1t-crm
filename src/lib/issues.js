@@ -27,6 +27,10 @@ export const ISSUE_STATUS = Object.freeze({
 
 export const ISSUE_ACTIVE_STATUSES = Object.freeze(['open', 'in_progress'])
 
+// The private bucket every issue photo lives in — an ordinary report's and
+// a failed inspection's alike.
+export const ISSUE_PHOTO_BUCKET = 'issue-photos'
+
 // Photo limits. Mirror the FTE-EXPENSES.3 receipt limits — phone
 // cameras default to 3-6 MB JPEGs so we cap at 10 MB to be safe
 // without making the operator think about it. PNG / HEIC also
@@ -99,6 +103,20 @@ export function validateSubmission({ description, photos = [] } = {}) {
   if (desc.length > DESCRIPTION_MAX) {
     return { ok: false, code: 'description_too_long', error: `Description must be ${DESCRIPTION_MAX} characters or fewer.` }
   }
+  const photoCheck = validatePhotos(photos)
+  if (!photoCheck.ok) return photoCheck
+  return { ok: true, normalised: { description: desc, photos } }
+}
+
+/**
+ * Validate photo METADATA — `{ filename, size, type }` per photo, no bytes.
+ * Extracted from validateSubmission (REPORT-ISSUE.3) so the rules have ONE
+ * definition and the direct-to-storage flow can apply them twice: once to
+ * the client's declared metadata when minting upload slots, and again to
+ * what Supabase Storage says it actually stored. The second pass is the
+ * load-bearing one — a client can declare any size/mime it likes.
+ */
+export function validatePhotos(photos = []) {
   if (!Array.isArray(photos)) {
     return { ok: false, code: 'photos_bad_shape', error: 'Photos must be a list.' }
   }
@@ -131,7 +149,115 @@ export function validateSubmission({ description, photos = [] } = {}) {
       }
     }
   }
-  return { ok: true, normalised: { description: desc, photos } }
+  return { ok: true }
+}
+
+// REPORT-ISSUE.3 — a storage path the device uploaded to directly, as minted
+// by POST /api/issues/upload-sign: `{location}/{draft}/{attachment}-{slug}`.
+// The finalise route pins the first segment to the CALLER'S active location,
+// so a path from another studio is refused before anything is read. The two
+// uuid segments are unguessable and the bucket is private (no client can
+// list it), and finalise additionally refuses a path an issue already
+// references — so an abandoned upload can't be re-attached by someone else.
+// Deliberately NOT time-boxed: a report written slowly, or resent after a
+// network failure, must still find its photos.
+const ISSUE_PHOTO_PATH_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-z0-9_.-]+$/
+
+export function isIssuePhotoPath(path, locationId) {
+  if (typeof path !== 'string' || !locationId) return false
+  if (!ISSUE_PHOTO_PATH_RE.test(path.toLowerCase())) return false
+  return path.toLowerCase().startsWith(`${String(locationId).toLowerCase()}/`)
+}
+
+/**
+ * Prove a set of direct-to-storage photo paths and turn them into
+ * attachment rows. Shared by every route that accepts photos the DEVICE
+ * uploaded against a slot from /api/issues/upload-sign — the ordinary
+ * report (POST /api/issues) and a failed equipment inspection
+ * (POST /api/equipment/inspections/[id]/submit) — so the gate has one
+ * definition and cannot drift between them.
+ *
+ * What it refuses, in order: a path that is not a slot minted for THIS
+ * location, the same object twice in one submission, an object another
+ * report already owns, an object that never arrived, and an object whose
+ * REAL size or type breaks the photo rules. Size and mime come from
+ * Storage, never from the caller's claim — a client can post any JSON.
+ *
+ * @returns {Promise<{ok: true, attachments: object[]} | {ok: false, status: number, error: string, code?: string}>}
+ */
+export async function verifyIssuePhotoPaths(db, { locationId, photos = [], bucket = ISSUE_PHOTO_BUCKET } = {}) {
+  const list = Array.isArray(photos) ? photos : []
+  if (list.length === 0) return { ok: true, attachments: [] }
+
+  for (let i = 0; i < list.length; i++) {
+    if (!isIssuePhotoPath(list[i]?.path, locationId)) {
+      return {
+        ok: false, status: 400, code: 'photo_bad_path',
+        error: `Photo ${i + 1} is not an upload slot for this studio.`,
+      }
+    }
+  }
+
+  // One object, two attachment rows is not a submission we can make sense
+  // of — refuse it here rather than letting the insert decide.
+  if (new Set(list.map((p) => p.path)).size !== list.length) {
+    return { ok: false, status: 400, code: 'photo_duplicate', error: 'The same photo was attached twice.' }
+  }
+
+  const { data: claimed, error: claimErr } = await db
+    .from('issue_attachments')
+    .select('id')
+    .in('storage_path', list.map((p) => p.path))
+    .limit(1)
+  if (claimErr) {
+    logWarn('issues', 'attachment claim check failed', { error: claimErr.message })
+    return { ok: false, status: 500, error: `Could not verify the photos: ${claimErr.message}` }
+  }
+  if (claimed && claimed.length > 0) {
+    return {
+      ok: false, status: 400, code: 'photo_already_used',
+      error: 'Those photos already belong to a report — attach them again.',
+    }
+  }
+
+  const attachments = []
+  for (let i = 0; i < list.length; i++) {
+    const photo = list[i]
+    const parts = String(photo.path).split('/')
+    const name = parts.pop()
+    const { data: listed, error: listErr } = await db.storage
+      .from(bucket)
+      .list(parts.join('/'), { search: name })
+    if (listErr) {
+      logWarn('issues', 'attachment listing failed', { error: listErr.message })
+      return { ok: false, status: 500, error: `Could not verify photo ${i + 1}: ${listErr.message}` }
+    }
+    const hit = (listed || []).find((o) => o.name === name)
+    if (!hit) {
+      return {
+        ok: false, status: 400, code: 'photo_missing',
+        error: `Photo ${i + 1} did not finish uploading — attach it again.`,
+      }
+    }
+
+    const storedSize = Number(hit.metadata?.size)
+    const storedMime = String(hit.metadata?.mimetype || photo.mime || '').toLowerCase()
+    const stored = validatePhotos([{ filename: name, size: storedSize, type: storedMime }])
+    if (!stored.ok) {
+      await db.storage.from(bucket).remove([photo.path]).then(() => {}, () => {})
+      return { ok: false, status: 400, code: stored.code, error: stored.error }
+    }
+
+    attachments.push({
+      storage_path: photo.path,
+      bucket,
+      size_bytes:   storedSize,
+      mime_type:    storedMime,
+    })
+  }
+
+  return { ok: true, attachments }
 }
 
 /**

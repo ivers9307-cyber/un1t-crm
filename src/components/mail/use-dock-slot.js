@@ -125,7 +125,7 @@ export function useDockSlot({ hasReader }) {
     setComposeMode(m => (m === COMPOSE_MODE_MIN ? composeRestoreTarget(composePrevModeRef.current) : m))
   }
   // The compose Esc ladder — dirty-aware, routed from ComposeDock's scoped
-  // keydown. `dirty` and `requestClose` are TicketCompose's own (the shell
+  // keydown. `dirty` and `requestClose` are ComposeForm's own (the shell
   // hands them through), so "pristine closes silently" and "✕ confirms" are
   // the same code paths the Modal always had.
   function handleComposeEscape(dirty, requestClose) {

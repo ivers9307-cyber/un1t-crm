@@ -1,8 +1,17 @@
 // HYROX-STYLE — PUT /api/hyrox/settings: operator editor for the Hyrox
 // charter + house style + style examples, stored on locations.settings.hyrox
-// (jsonb). Read-modify-write so sibling settings keys are never clobbered.
+// (jsonb). One key through mergeLocationSettings (SETTINGSWIPE.1), so sibling
+// settings keys are never clobbered, and a failed read writes nothing.
 // Collection-style write (location_id in the body) — Forbidden (403) on a
 // missing per-location grant, unlike the detail routes' 404 IDOR posture.
+//
+// C32 HYROXSTAR.1 — style_examples is a list the page edits whole, but the
+// exemplar route ("Save as style example") appends to the STORED list behind
+// the page's back. A whole-array PUT therefore deleted any example starred
+// after the page loaded. The page now sends `known_example_ids` (every id it
+// has seen); a stored example whose id it never saw is kept (prepended, as the
+// exemplar route adds them), one it saw and dropped is removed. Without the
+// field (a page loaded before this shipped) the array replaces as before.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
@@ -12,6 +21,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { MAX_STORED_EXAMPLES, MAX_STORED_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
+import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +37,21 @@ const SettingsSchema = z.object({
   charter: z.string().max(8000).nullish(),
   house_style: z.string().max(8000).nullish(),
   style_examples: z.array(ExampleSchema).max(MAX_STORED_EXAMPLES).optional(),
+  known_example_ids: z.array(z.string().max(64)).max(200).optional(),
 })
+
+/**
+ * The examples to store: the page's list, plus any stored example the page
+ * never saw (added elsewhere since it loaded). Pure.
+ */
+export function mergeStyleExamples(stored, sent, knownIds) {
+  if (!Array.isArray(knownIds)) return sent
+  const known = new Set(knownIds)
+  const sentIds = new Set(sent.map((e) => e?.id).filter(Boolean))
+  const unseen = (Array.isArray(stored) ? stored : [])
+    .filter((e) => e?.id && !known.has(e.id) && !sentIds.has(e.id))
+  return [...unseen, ...sent].slice(0, MAX_STORED_EXAMPLES)
+}
 
 export async function PUT(request) {
   const user = await getCurrentUser()
@@ -39,14 +63,18 @@ export async function PUT(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const db = createServerClient()
-  const { data: loc } = await db.from('locations').select('id, settings').eq('id', body.location_id).single()
-  const settings = { ...(loc?.settings || {}) }
-  const hyrox = { ...(settings.hyrox || {}) }
-  if (body.charter !== undefined) hyrox.charter = body.charter || null
-  if (body.house_style !== undefined) hyrox.house_style = body.house_style || null
-  if (body.style_examples !== undefined) hyrox.style_examples = body.style_examples
-  settings.hyrox = hyrox
-  const { error } = await db.from('locations').update({ settings }).eq('id', body.location_id).select('id').single()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, data: { hyrox } })
+  // SETTINGSWIPE.1 — one key (settings.hyrox) through mergeLocationSettings;
+  // this used to discard its read error and rewrite the whole column.
+  const saved = await mergeLocationSettings(db, body.location_id, (settings) => {
+    const hyrox = { ...(settings.hyrox || {}) }
+    if (body.charter !== undefined) hyrox.charter = body.charter || null
+    if (body.house_style !== undefined) hyrox.house_style = body.house_style || null
+    if (body.style_examples !== undefined) {
+      hyrox.style_examples = mergeStyleExamples(hyrox.style_examples, body.style_examples, body.known_example_ids)
+    }
+    settings.hyrox = hyrox
+    return settings
+  }, { scope: 'hyrox-settings' })
+  if (!saved.ok) return settingsSaveFailure(saved)
+  return NextResponse.json({ success: true, data: { hyrox: saved.settings.hyrox } })
 }

@@ -3,6 +3,8 @@
 // mirrors src/app/api/public/events/[slug]/route.js (capacity stays server-side;
 // only a boolean leaves).
 import { eventKindLabel } from '@shared/events'
+import { formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
+import { loadForMode } from './event-signups'
 
 const EUR = (cents) => {
   const n = (Number(cents) || 0) / 100
@@ -19,11 +21,13 @@ export function formatEventDate(iso) {
   return new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(d)
 }
 
-function formatOpensDate(iso) {
+// registration_opens_at is an INSTANT: its day is the studio's (TZ.9; the
+// page passes the studio's zone, DEFAULT_TZ when it has none).
+function formatOpensDate(iso, zone = DEFAULT_TZ) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' }).format(d)
+  return formatInZone(d, zone, { day: 'numeric', month: 'short' }, 'en-GB')
 }
 
 /** "Free" | "€25" | "From €15" (cheaper of member/non-member when member pricing on). */
@@ -37,34 +41,52 @@ export function eventPriceLabel(e) {
 
 /** Mirrors the public route: full = ≥1 capped wave, no uncapped wave, every
  *  capped wave full. people mode counts team sizes; teams mode counts regs.
- *  Only CONFIRMED registrations consume capacity. */
+ *  Only CONFIRMED registrations consume capacity (the paid, live subset; a
+ *  placed solo is not one). FINDTEAM.8 (I4): the load is `loadForMode`, so in
+ *  teams mode a solo still looking for a team is a person, not a team, and
+ *  never sells a wave out; the callers' embeds must select `looking_for_team`. */
 export function isEventSoldOut(waves, registrations, capacityMode) {
   const capped = (waves || []).filter((w) => w.capacity != null)
   if (capped.length === 0) return false
   if ((waves || []).some((w) => w.capacity == null)) return false // an uncapped wave absorbs
   const mode = capacityMode === 'people' ? 'people' : 'teams'
-  const confirmed = (registrations || []).filter((r) => r.status === 'confirmed')
-  return capped.every((w) => {
-    const inWave = confirmed.filter((r) => r.wave_id === w.id)
-    const used = mode === 'people'
-      ? inWave.reduce((sum, r) => sum + (Number(r.team?.size) || 1), 0)
-      : inWave.length
-    return used >= w.capacity
-  })
+  const regs = registrations || []
+  return capped.every((w) => loadForMode(regs.filter((r) => r.wave_id === w.id), mode) >= w.capacity)
 }
 
-/** Row → card view-model. `now` injectable for tests. */
-export function toBrowseCard(e, { soldOut = false, now = Date.now() } = {}) {
+/** Earliest wave start ("HH:MM:SS" from Postgres TIME, or "HH:MM") → "11:00".
+ *  Falls back to the event's own start_time; '' when neither is set. */
+export function formatEventTime(e) {
+  const times = (e?.waves || []).map((w) => w?.start_time).filter(Boolean).map(String).sort()
+  const t = times[0] || (e?.start_time ? String(e.start_time) : '')
+  const m = /^(\d{2}):(\d{2})/.exec(t)
+  return m ? `${m[1]}:${m[2]}` : ''
+}
+
+/** Row → card view-model. `now` injectable for tests. `zone` (TZ.9) is the
+ *  studio's (the listing studio, or a host's anchor) and dates the "Opens" badge.
+ *  HOST-EVENTS-PAGE.1 added `timeLabel` + `venue` (additive; the studio
+ *  listing ignores them). HOST-EVENTS-PAGE.2 added `closed` + the "Registration
+ *  closed" badge (after "Opens", before "Sold out": a closed event can't be
+ *  bought whether or not it is full); the studio listing still filters closed
+ *  events out before calling this, so it never sees one. */
+export function toBrowseCard(e, { soldOut = false, now = Date.now(), zone = DEFAULT_TZ } = {}) {
   const opensAt = e?.registration_opens_at ? Date.parse(e.registration_opens_at) : null
+  const closesAt = e?.registration_closes_at ? Date.parse(e.registration_closes_at) : null
+  const closed = !!(closesAt && now > closesAt)
   let badge = null
-  if (opensAt && now < opensAt) badge = `Opens ${formatOpensDate(e.registration_opens_at)}`
+  if (opensAt && now < opensAt) badge = `Opens ${formatOpensDate(e.registration_opens_at, zone)}`
+  else if (closed) badge = 'Registration closed'
   else if (soldOut) badge = 'Sold out'
   return {
     slug: e.slug,
     title: e.name,
     kindLabel: eventKindLabel(e.kind),
     dateLabel: formatEventDate(e.race_date),
+    timeLabel: formatEventTime(e),
+    venue: typeof e?.venue_name === 'string' && e.venue_name.trim() ? e.venue_name.trim() : null,
     priceLabel: eventPriceLabel(e),
     badge,
+    closed,
   }
 }

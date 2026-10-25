@@ -107,3 +107,20 @@ describe('GET /api/host/list-page', () => {
     expect(j.error).not.toContain('boom')
   })
 })
+
+describe('PATCH /api/host/list-page — branding (HOST-EVENTS-PAGE.1)', () => {
+  it('rejects a malformed accent and a non-http hero', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    mocks.createServerClient.mockReturnValue(dbWith({}))
+    expect((await PATCH(req({ accent_hex: 'red' }))).status).toBe(400)
+    expect((await PATCH(req({ hero_image_url: 'javascript:alert(1)' }))).status).toBe(400)
+  })
+  it('writes a valid accent + hero and clears them on empty string', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    const db = dbWith({})
+    mocks.createServerClient.mockReturnValue(db)
+    const res = await PATCH(req({ accent_hex: '#FF5A1F', hero_image_url: 'https://cdn.example/hero.png', events_headline: 'Train with PTC', events_blurb: '' }))
+    expect(res.status).toBe(200)
+    expect(db._update).toHaveBeenCalledWith({ accent_hex: '#FF5A1F', hero_image_url: 'https://cdn.example/hero.png', events_headline: 'Train with PTC', events_blurb: null })
+  })
+})

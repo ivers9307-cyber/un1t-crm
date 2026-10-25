@@ -10,14 +10,12 @@ import { useRouter, useFocusEffect, Stack } from 'expo-router'
 import { listPolicies } from '../../../lib/policies-api'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 import TabletConstrained from '../../../components/TabletConstrained'
+import { dateOnlyLabel } from '../../../lib/studio-zone'
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-  })
-}
+// TZ.14 — effective_date is a Postgres `date`, not an instant: formatted in
+// UTC (dateOnlyLabel), never a studio zone, which would show the previous day
+// in any zone behind UTC. Same text as before in Dublin.
+const fmtDate = dateOnlyLabel
 
 export default function PoliciesList() {
   const router = useRouter()

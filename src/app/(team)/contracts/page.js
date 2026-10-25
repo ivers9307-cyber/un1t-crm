@@ -22,12 +22,11 @@ import { Plus, FileText, Settings as SettingsIcon, ChevronRight } from 'lucide-r
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { canManageContractsInOrg } from '@/lib/contract-gates'
+import { contractZone, contractStamp } from '@/lib/contract-display-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 const STATUS_BADGE = {
   issued:   { label: 'Sent',     class: 'bg-blue-500/15 text-blue-700' },
@@ -38,14 +37,6 @@ const STATUS_BADGE = {
   draft:    { label: 'Draft',    class: 'bg-purple-500/15 text-purple-700' },
 }
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24
 
@@ -78,7 +69,10 @@ export default async function ContractsAdminPage() {
   // CONTRACTS-GATES.1 — issuing/templates stay owner/master-only; a
   // permission-granted non-owner sees the list and can open rows
   // read-only but gets no write affordances.
-  const canWrite = isOwnerOrMaster(user)
+  // GATES-3 (c) — judged at the ACTIVE org (this list's, and the one the
+  // Templates page manages), not the active studio's role: an org admin
+  // whose own role there is not owner was offered nothing.
+  const canWrite = canManageContractsInOrg(user, user.activeOrganization?.id || null)
 
   // CONTRACTS-SCOPE.1 — replicate mig 106's tenant boundary in app code
   // (service role bypasses RLS). Master sees every contract; everyone else
@@ -93,13 +87,18 @@ export default async function ContractsAdminPage() {
       .select(`
         id, status, issued_at, signed_at, declined_at, revoked_at,
         profile:profiles!profile_id (id, full_name, email, employment_type),
-        template:contract_templates!template_id (name)
+        template:contract_templates!template_id (name),
+        location:locations!location_id ( id, timezone )
       `)
       .order('issued_at', { ascending: false })
     if (!user.isMaster) query = query.eq('organization_id', orgId)
     const { data: contracts } = await query
     rows = contracts || []
   }
+  // TZ.16 (D3 = A) — each row in ITS studio's zone (a master's list spans
+  // studios), the abbreviation only where it differs from the viewer's.
+  const viewerZone = viewerZoneOf(user)
+  const fmtDate = (r) => contractStamp(r.issued_at, contractZone(r, user), viewerZone)
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
@@ -164,7 +163,7 @@ export default async function ContractsAdminPage() {
                         <div className="text-[11px] text-un1t-subtle">{r.profile?.email}</div>
                       </td>
                       <td className="p-3 text-un1t-subtle">{r.template?.name || '—'}</td>
-                      <td className="p-3 text-un1t-subtle whitespace-nowrap">{fmtDate(r.issued_at)}</td>
+                      <td className="p-3 text-un1t-subtle whitespace-nowrap">{fmtDate(r)}</td>
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.class}`}>
@@ -208,7 +207,7 @@ export default async function ContractsAdminPage() {
                     </span>
                   </div>
                   <div className="text-[11px] text-un1t-subtle mt-1 flex items-center gap-2">
-                    <span>{fmtDate(r.issued_at)}</span>
+                    <span>{fmtDate(r)}</span>
                     <AwaitingAnnotation status={r.status} issuedAt={r.issued_at} />
                   </div>
                 </Link>

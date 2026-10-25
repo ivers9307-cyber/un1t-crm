@@ -46,6 +46,20 @@ describe('agentRequestsProvider.fetchPending — AGENT-REQ-UX.1 decide-card fiel
     })
   })
 
+  // VISIT-ORIGIN.1
+  it('labels where the contact came from, and omits the line when nothing is known', async () => {
+    const db = stubDb([
+      { id: 'r3', kind: 'class_booking', details: {}, created_at: '2026-10-04T10:00:00Z', location_id: 'loc1',
+        contact: { id: 'ct3', name: 'A', ad_provider: 'meta', utm_content: 'why-un1t-city-centre' } },
+      { id: 'r4', kind: 'class_booking', details: {}, created_at: '2026-10-04T10:00:00Z', location_id: 'loc1',
+        contact: { id: 'ct4', name: 'B', visit_referrer: 'https://l.instagram.com', visit_landing_path: '/hatch-street' } },
+      { id: 'r5', kind: 'class_booking', details: {}, created_at: '2026-10-04T10:00:00Z', location_id: 'loc1',
+        contact: { id: 'ct5', name: 'C' } },
+    ])
+    const { items } = await agentRequestsProvider.fetchPending(db, { activeLocation: { id: 'loc1' } })
+    expect(items.map((i) => i.contactOrigin)).toEqual(['Meta ad (why-un1t-city-centre)', 'Instagram, landed on /hatch-street', null])
+  })
+
   it('nulls the contact fields when the embed is empty', async () => {
     const db = stubDb([{ id: 'r2', kind: 'class_booking', details: {}, created_at: '2026-08-24T10:00:00Z', location_id: 'loc1' }])
     const { items } = await agentRequestsProvider.fetchPending(db, { activeLocation: { id: 'loc1' } })
@@ -153,5 +167,38 @@ describe('agentRequestsProvider — account summary enrichment', () => {
     const { items } = await agentRequestsProvider.fetchPending(db, { activeLocation: { id: 'loc1' } })
     expect(items[0].accountLine).toBe('The UN1T Trial (trial, not started) · 3 credits left')
     expect(items[0].why).toMatch(/attended before/i)
+  })
+})
+
+// EVENT-MOVE.7 — Mia's move request on the /approvals card.
+describe('agentRequestSubtitle — event_move', () => {
+  it('uses the event-move card summary (web-only module)', () => {
+    const s = agentRequestSubtitle({ kind: 'event_move', details: {
+      entry_label: 'Ann Example', source_event_name: 'Hyrox Sim', source_event_date: '2099-10-18',
+      target_event_name: 'Hyrox Sim', target_event_date: '2099-10-25', target_wave_label: '09:30', price_gap_cents: 1000, currency: 'EUR',
+    } })
+    expect(s).toBe('Move Ann Example from Hyrox Sim, Sun 18 Oct to Hyrox Sim, Sun 25 Oct 09:30 · €10 difference to collect')
+  })
+})
+
+// UN1TWRITE.8 — a record-only refund card on the /approvals list.
+describe('agentRequestsProvider — refund_request', () => {
+  const refundRow = {
+    id: 'rf1', kind: 'refund_request', created_at: '2026-10-17T10:00:00Z', location_id: 'loc1',
+    details: { provider: 'un1t_online', reason: 'double_payment', amount_cents: 1500, currency: 'EUR', record_only: true },
+    contact: { id: 'ct9', name: 'Aoife Test' },
+  }
+
+  it("the approvals list labels refund_request 'Refund request'", async () => {
+    const { items } = await agentRequestsProvider.fetchPending(stubDb([refundRow]), { activeLocation: { id: 'loc1' } })
+    expect(items).toHaveLength(1)
+    expect(items[0].title).toBe('Refund request — Aoife Test')
+    expect(items[0].kind).toBe('refund_request')
+  })
+
+  it('the subtitle names the reason and the amount, and falls back when neither is known', () => {
+    expect(agentRequestSubtitle(refundRow)).toBe('Double payment · €15')
+    expect(agentRequestSubtitle({ kind: 'refund_request', details: { reason: 'member_request' } })).toBe('Member request')
+    expect(agentRequestSubtitle({ kind: 'refund_request', details: {} })).toBe('Refund request')
   })
 })

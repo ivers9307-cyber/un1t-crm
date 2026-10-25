@@ -32,6 +32,19 @@ updates:
         update-types: ['version-update:semver-major']
       - dependency-name: 'typescript'
         update-types: ['version-update:semver-major']
+      # PGLITE STAYS ON PROD'S POSTGRES MAJOR (2026-10-03, #1874). Every
+      # migration-replay test boots PGlite as a stand-in for prod, which runs
+      # PostgreSQL 17 (17.6, read 3 Oct). PGlite 0.3.x is PG 17; 0.5.x is
+      # PG 18.3. For a 0.x package a "minor" (0.3 -> 0.5) is the breaking
+      # line, and here it swaps the engine's major version under 81 test
+      # files: PG 18 materialises NOT NULL as pg_constraint rows (contype
+      # 'n'), which broke mig 688's prod-catalog pin, and 0.5.x also stopped
+      # defaulting the session TimeZone to UTC (mig 659's updated_at check
+      # failed off-CI). A replay on a newer engine can also pass SQL that
+      # prod rejects. Patch bumps within 0.3.x still flow. Lift this only
+      # when prod itself moves to PG 18, together with the test fixes.
+      - dependency-name: '@electric-sql/pglite'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
     labels: [dependencies]
 
   # Mobile (Expo/RN). CAUTION: EAS runs a strict `npm ci` and the app tracks a

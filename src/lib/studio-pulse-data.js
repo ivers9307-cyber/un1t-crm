@@ -2,7 +2,8 @@
 // briefing. Assembles the bundle shapePulseMetrics() (pure, in
 // morning-briefing.js) turns into rendered metrics:
 //
-//   counts          live membership split via computeMembershipCounts
+//   counts          live membership split via the seam's membershipCounts
+//                   (computeMembershipCounts at a Glofox studio)
 //                   (same definitions as the Business dashboard +
 //                   monthly membership_snapshots — apples to apples)
 //   radar           live radar summary (paused = Glofox state
@@ -17,13 +18,28 @@
 // Fail-soft: returns null on any failure — the briefing renders
 // without the strip rather than not at all.
 
-import { computeMembershipCounts, firstOfMonth } from '@/lib/membership-snapshot'
+import { firstOfMonth } from '@/lib/membership-snapshot'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { radarReadsFor } from '@/lib/membership/reads/index'
 
-// Last row strictly before this month's first day; else the oldest
-// row available; else null. `table`/`dateCol` differ per snapshot
-// family but the comparator rule is identical.
-async function pickComparator(db, table, dateCol, cols, locationId, monthStartIso) {
+const COMPARATOR_MIN_AGE_MS = 30 * 86_400_000
+
+// UN1TRADAR.2 — the oldest row is read FIRST: while it is under 30 days old
+// the location has no month to compare with (Hatch's un1t-shaped history
+// starts 2026-10-18), so there is no comparator and the "vs" line is hidden.
+// Otherwise: the last row strictly before this month's first day; else the
+// oldest row available. `table`/`dateCol` differ per snapshot family but the
+// rule is identical (Stillorgan's history starts in June, so it is unchanged).
+export async function pickComparator(db, table, dateCol, cols, locationId, monthStartIso, nowMs = Date.now()) {
+  const oldest = await db
+    .from(table)
+    .select(cols)
+    .eq('location_id', locationId)
+    .order(dateCol, { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  const oldestMs = Date.parse(oldest.data?.[dateCol])
+  if (!Number.isFinite(oldestMs) || nowMs - oldestMs < COMPARATOR_MIN_AGE_MS) return null
   const before = await db
     .from(table)
     .select(cols)
@@ -33,13 +49,6 @@ async function pickComparator(db, table, dateCol, cols, locationId, monthStartIs
     .limit(1)
     .maybeSingle()
   if (before.data) return before.data
-  const oldest = await db
-    .from(table)
-    .select(cols)
-    .eq('location_id', locationId)
-    .order(dateCol, { ascending: true })
-    .limit(1)
-    .maybeSingle()
   return oldest.data || null
 }
 
@@ -50,20 +59,28 @@ export async function fetchStudioPulse(db, locationId, nowMs = Date.now()) {
   if (!locationId) return null
   try {
     const monthStartIso = firstOfMonth(new Date(nowMs))
+    // UN1TRADAR.2 — counts through the membership seam by source key (the
+    // Glofox adapter's membershipCounts is computeMembershipCounts)
+    const { reads } = await radarReadsFor(db, locationId)
+    if (typeof reads.membershipCounts !== 'function') return null
     const [counts, radarRes, prevMembership, prevChurn] = await Promise.all([
-      computeMembershipCounts(db, locationId),
+      reads.membershipCounts(db, locationId),
       loadRadar(db, locationId, nowMs),
       pickComparator(db, 'membership_snapshots', 'snapshot_date',
         'snapshot_date, monthly_recurring, class_packs, payg, total_members',
-        locationId, monthStartIso),
+        locationId, monthStartIso, nowMs),
       pickComparator(db, 'churn_radar_snapshots', 'captured_at',
         'captured_at, paused, overdue',
-        locationId, monthStartIso),
+        locationId, monthStartIso, nowMs),
     ])
     const s = radarRes?.summary || {}
     return {
       counts,
-      radar: { paused: s.paused || 0, overdue: s.overdue || 0, overdueValueCents: s.overdueValueCents || 0 },
+      radar: {
+        paused: s.paused || 0, overdue: s.overdue || 0, overdueValueCents: s.overdueValueCents || 0,
+        overdueValueEstimated: s.overdueValueEstimated === true,
+        arrearsUnavailable: s.unpaidCharges === null,
+      },
       prevMembership,
       prevChurn,
     }

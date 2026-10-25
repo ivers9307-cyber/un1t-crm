@@ -3,7 +3,7 @@
 //
 // Every real send resolves the person's rich signature through
 // effectiveRichSignature(personRich, ctx) with the SENDING studio's context
-// (src/app/api/email/tickets/_helpers.js → loadSignatureContext): the note
+// (src/app/api/email/mail/_conversation.js → loadSignatureContext): the note
 // line is always replaced by the studio name, and phone/links whenever the
 // studio's own card (company_settings.email_signature, MAIL-SIG.2) defines
 // them. Two audit findings (both upheld 3-0) were preview surfaces rendering
@@ -80,7 +80,7 @@ import { resolveSendSignature, normalizeSignature } from '@/lib/email-signature'
 
 /**
  * The stated per-studio ceiling on email_mailboxes rows — mirrors
- * MAILBOX_LIMIT in src/app/api/email/tickets/_helpers.js, which is a
+ * MAILBOX_LIMIT in src/app/api/email/mail/_conversation.js, which is a
  * module-private const there (not exported, and that file is outside this
  * change's ownership). The mailbox read below is bounded in THIS unit:
  * studios × per-studio ceiling, capped at PostgREST's 1,000-row hard cap.

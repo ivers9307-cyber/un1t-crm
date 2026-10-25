@@ -18,7 +18,8 @@ import Link from 'next/link'
 import { ChevronRight, ChevronLeft, FileText, AlertCircle, Info, Search } from 'lucide-react'
 import {
   renderTemplate, profileVariables, unresolvedPlaceholders, unresolvedPlaceholdersUnion,
-  eligibleTemplatesFor, extractPlaceholders, customVariablesFrom, LOCATION_VAR_KEYS,
+  eligibleTemplatesFor, recipientsForTemplate, extractPlaceholders, customVariablesFrom, LOCATION_VAR_KEYS,
+  issuingZone,
 } from '@/lib/contracts'
 import ContractBody from '@/components/ContractBody'
 
@@ -38,7 +39,18 @@ const LOCATION_VAR_PREVIEW = {
   company_name: '[company name]',
 }
 
-export default function ContractIssueWizard({ issuerName, fromContractId }) {
+const NO_ZONES = Object.freeze({})
+
+// C140 CONTRACTRECIPIENT.1 (folds C138 d) — `locationOrgs` is the issuer's own
+// { location_id: organization_id } (from the host page). The recipient list
+// narrows to the chosen template's org and the template list to orgs every
+// selected person belongs to, the rule POST /api/contracts enforces.
+//
+// TZ follow-up — `locationZones` is the issuer's own { location_id: zone },
+// built on the server from their studios. Each preview renders {{today}} in
+// the zone of the studio POST /api/contracts will issue at (issuingZone, the
+// route's own rule), so the preview shows the date the stored body gets.
+export default function ContractIssueWizard({ issuerName, fromContractId, locationOrgs = {}, locationZones = NO_ZONES }) {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [staff, setStaff] = useState([])
@@ -155,23 +167,25 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
   // old `profileId`-derived `recipient` produced.
   const recipient = recipients[0] || null
 
-  const filteredStaff = useMemo(() => {
-    const q = recipientFilter.trim().toLowerCase()
-    if (!q) return staff
-    return staff.filter(s => {
-      const hay = `${s.full_name || ''} ${s.email || ''} ${s.employment_type || ''}`.toLowerCase()
-      return hay.includes(q)
-    })
-  }, [staff, recipientFilter])
-
   const template = useMemo(
     () => templates.find(t => t.id === templateId) || null,
     [templates, templateId],
   )
   const eligibleTemplates = useMemo(
-    () => eligibleTemplatesFor(recipients, templates),
-    [templates, recipients],
+    () => eligibleTemplatesFor(recipients, templates, locationOrgs),
+    [templates, recipients, locationOrgs],
   )
+
+  const filteredStaff = useMemo(() => {
+    // C140 — only the chosen template's org's people.
+    const inOrg = recipientsForTemplate(staff, template, locationOrgs)
+    const q = recipientFilter.trim().toLowerCase()
+    if (!q) return inOrg
+    return inOrg.filter(s => {
+      const hay = `${s.full_name || ''} ${s.email || ''} ${s.employment_type || ''}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [staff, recipientFilter, template, locationOrgs])
 
   // CONTRACTS-BULK.1 — if a recipient is added/removed such that the
   // currently-chosen template is no longer eligible for every
@@ -258,16 +272,21 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
   // CONTRACTS-BULK.1 — one rendered preview per selected recipient
   // (custom `vars` are shared; profile auto-fills are per-recipient).
   // Location vars still get the bracketed stand-in — see
-  // LOCATION_VAR_PREVIEW above.
+  // LOCATION_VAR_PREVIEW above. {{today}} is the issuing studio's day,
+  // per recipient (two recipients can be issued at different studios).
   const previews = useMemo(() => {
     if (!template) return []
     return recipients.map(r => ({
       profileId: r.id,
       recipient: r,
       name: r.full_name,
-      text: renderTemplate(template.body_markdown, { ...profileVariables(r), ...LOCATION_VAR_PREVIEW, ...vars }),
+      text: renderTemplate(template.body_markdown, {
+        ...profileVariables(r, { zone: issuingZone(r, template, { locationOrgs, locationZones }) }),
+        ...LOCATION_VAR_PREVIEW,
+        ...vars,
+      }),
     }))
-  }, [template, recipients, vars])
+  }, [template, recipients, vars, locationOrgs, locationZones])
 
   // Back-compat: the single-recipient preview. previews[0] is exactly
   // what the old `preview` memo produced when there was one recipient
@@ -527,7 +546,11 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
             </div>
             <div className="border border-un1t-border rounded-md max-h-64 overflow-y-auto divide-y divide-un1t-border">
               {filteredStaff.length === 0 ? (
-                <p className="text-xs text-un1t-muted italic p-3">No staff match &quot;{recipientFilter}&quot;.</p>
+                <p className="text-xs text-un1t-muted italic p-3">
+                  {recipientFilter.trim()
+                    ? <>No staff match &quot;{recipientFilter}&quot;.</>
+                    : 'No staff in this template\'s organisation.'}
+                </p>
               ) : (
                 filteredStaff.map(s => (
                   <label
@@ -568,8 +591,8 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
             </select>
             {profileIds.length > 0 && eligibleTemplates.length === 0 && (
               <p className="text-xs text-amber-700 mt-1">
-                No active templates match every selected recipient&apos;s employment type. Create one
-                first, or narrow the selection.
+                No active templates match every selected recipient&apos;s employment type and
+                organisation. Create one first, or narrow the selection.
               </p>
             )}
           </div>

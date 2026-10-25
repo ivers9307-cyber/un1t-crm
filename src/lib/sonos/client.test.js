@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sonosConfigError, getSonosConfig } from './client'
+import { sonosConfigError, getSonosConfig, isHouseholdGone } from './client'
 
 const full = {
   SONOS_CLIENT_ID: 'abc',
@@ -368,5 +368,17 @@ describe('live control calls', () => {
   it('never throws when the network dies', async () => {
     global.fetch.mockRejectedValue(new Error('ECONNRESET'))
     await expect(sonosPlay('tok', 'GRP1')).resolves.toMatchObject({ ok: false, statusCode: 0 })
+  })
+})
+
+describe('isHouseholdGone', () => {
+  it('is true for 410 and 404: the household id no longer resolves', () => {
+    expect(isHouseholdGone(410)).toBe(true)
+    expect(isHouseholdGone(404)).toBe(true)
+  })
+  it('is false for token problems, network failures and server errors', () => {
+    for (const code of [401, 403, 0, 429, 500, 503, 200, undefined]) {
+      expect(isHouseholdGone(code)).toBe(false)
+    }
   })
 })

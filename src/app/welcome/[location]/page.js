@@ -21,8 +21,11 @@
 //   · JSON-LD (Gym) via the JsonLd island for richer search results.
 
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
-import { blocksOrDefault, primaryCta } from '@/lib/landing-page-blocks'
+import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
+import { resolveGymSiteName } from '@/lib/default-site-name'
+import { blocksOrDefault, pageCtas } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import RevealManager from '@/components/landing-page/RevealManager'
@@ -40,7 +43,7 @@ async function loadByPath(path) {
     const db = createServerClient()
     const { data, error } = await db
       .from('landing_page_settings')
-      .select('*, locations:location_id ( id, name )')
+      .select('*, locations:location_id ( id, name, organization_id )')
       .eq('public_path', path)
       .maybeSingle()
     if (error) return null
@@ -50,14 +53,19 @@ async function loadByPath(path) {
   }
 }
 
+// W1.L4 — the OG site name is THIS studio's brand (company_settings →
+// org_settings → location name) and the not-found title is the host's
+// organisation brand; neither is a literal.
 export async function generateMetadata(props) {
   const params = await props.params
   const row = await loadByPath(params.location)
-  if (!row || !isPubliclyVisible(row.publish_state)) return { title: 'UN1T Dublin' }
+  const hostBrand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  if (!row || !isPubliclyVisible(row.publish_state)) return { title: hostBrand }
   const blocks = blocksOrDefault(row.blocks)
   const hero = blocks.find((b) => b.type === 'hero')
   const heroImage = hero?.image_url || null
-  const studioName = row.locations?.name || 'UN1T Dublin'
+  const brand = (await resolveLocationBrand({ locationId: row.location_id })).companyName || hostBrand
+  const studioName = row.locations?.name || brand
   const description = hero?.subtext
     || 'Coach-led strength + conditioning, built for racing. Book your free consultation.'
   const title = `${studioName} — Strength + conditioning, built for racing`
@@ -67,7 +75,7 @@ export async function generateMetadata(props) {
     openGraph: {
       title,
       description,
-      siteName: 'UN1T Dublin',
+      siteName: brand,
       type: 'website',
       ...(heroImage ? { images: [{ url: heroImage }] } : {}),
     },
@@ -106,8 +114,18 @@ export default async function StudioLandingPage(props) {
     reviewsData = { reviews: reviews || [] }
   }
 
+  // W1.S1b — this studio's brand and its organisation's site chrome, both
+  // from the per-location / per-org caches (host-brand.js): the logo alt and
+  // name fall back to the studio's brand, the blocks' watermark to its
+  // wordmark, the footer to the org's brand, live studios and legal name.
+  const [brand, chrome] = await Promise.all([
+    resolveLocationBrand({ locationId: row.location_id }),
+    resolveOrgChrome({ orgId: row.locations?.organization_id || null }),
+  ])
+  const footer = { brand: chrome.companyName, studios: chrome.studios, legalName: chrome.legalName }
+
   const logoUrl     = row.logo_url || null
-  const logoAlt     = row.logo_alt || 'UN1T Dublin'
+  const logoAlt     = row.logo_alt || brand.companyName
   const logoWidthPx = row.logo_width_px || 200
 
   // Edit-mode preview (LP multi-page). The /settings/landing-page editor
@@ -121,12 +139,16 @@ export default async function StudioLandingPage(props) {
         initialLogoUrl={logoUrl}
         initialLogoAlt={logoAlt}
         initialLogoWidthPx={logoWidthPx}
+        fallbackLogoAlt={brand.companyName}
+        wordmark={brand.shortName}
+        locationName={brand.locationName}
+        footer={footer}
       />
     )
   }
 
-  const cta = primaryCta(blocks)
-  const studioName = row.locations?.name || 'UN1T Dublin'
+  const { primary: cta, secondary: cta2 } = pageCtas(blocks)
+  const studioName = row.locations?.name || brand.companyName
   const hero = blocks.find((b) => b.type === 'hero')
 
   // Gym structured data — name, url, hero image. No aggregateRating:
@@ -150,9 +172,11 @@ export default async function StudioLandingPage(props) {
         logoUrl={logoUrl}
         logoAlt={logoAlt}
         logoWidthPx={logoWidthPx}
+        wordmark={brand.shortName}
         sticky
         ctaHref={cta?.href || null}
         ctaLabel={cta?.label}
+        ctaLabelShort={cta?.labelShort || ''}
         eventsHref={`/${row.public_path}/events`}
       />
       {blocks.map((block) => (
@@ -163,9 +187,13 @@ export default async function StudioLandingPage(props) {
           reviewsData={reviewsData}
           ctaHref={cta?.href || null}
           ctaLabel={cta?.label}
+          ctaSecondaryHref={cta2?.href || null}
+          ctaSecondaryLabel={cta2?.label}
+          wordmark={brand.shortName}
+          locationName={brand.locationName}
         />
       ))}
-      <SiteFooter ctaHref={cta?.href || '#book'} ctaLabel={cta?.label || 'Book a free consult'} />
+      <SiteFooter ctaHref={cta?.href || '#book'} ctaLabel={cta?.label || 'Book a free consult'} {...footer} />
     </div>
   )
 }

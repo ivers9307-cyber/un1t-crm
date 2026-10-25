@@ -20,10 +20,11 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { contactChannelFlags, canLoadContactConsultations } from '@/lib/contact-page-gates'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
+import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +57,7 @@ export async function GET(request, props) {
 
   // Activities + bookable event types + triage signals in one parallel
   // pass. The event-types list powers the Book tab (UIX-P3a) — the
-  // existing /api/bookings/event-types list route is API-key-only (n8n),
+  // existing /api/bookings/event-types list route is API-key-only,
   // so the session-authed bundle carries it instead.
   //
   // INBOX-REDESIGN.4.1 — arrears + latest note join the same pass: both
@@ -83,7 +84,10 @@ export async function GET(request, props) {
     }
   }
 
-  const [actRes, etRes, arrears, latestNote] = await Promise.all([
+  // HATCHPIPE.2 — un1t.online billing joins the same pass. loadUn1tBilling
+  // never rejects and already narrows to the studios where the viewer holds
+  // Contacts (the 404 gate above is unchanged).
+  const [actRes, etRes, arrears, latestNote, un1tBilling] = await Promise.all([
     db.from('activities')
       .select('*')
       .eq('contact_id', params.id)
@@ -96,6 +100,7 @@ export async function GET(request, props) {
       .order('name', { ascending: true }),
     loadContactArrears(db, params.id),
     fetchLatestNote(),
+    loadUn1tBilling(db, user, params.id),
   ])
   if (actRes.error) {
     return NextResponse.json({ success: false, error: actRes.error.message }, { status: 500 })
@@ -110,7 +115,10 @@ export async function GET(request, props) {
   // → churnClass → churnScored), minus the person-group activity merge —
   // out of scope here; no migration/new data source either way.
   const churnCtx = arrears.count > 0 ? { pastDueIds: new Set([params.id]) } : {}
-  const churnClass = classifyContact(contact, churnCtx)
+  // An un1t.online overdue is the same 'overdue' class a Glofox past-due
+  // gets, so the label, the null tier and CommandCentre's red chip all follow
+  // from the one existing branch below.
+  const churnClass = un1tBilling.overdue ? 'overdue' : classifyContact(contact, churnCtx)
   const scored = churnClass === 'active' ? scoreMember(contact, Date.now()) : null
   let churnLabel = null
   let churnTier = null
@@ -125,6 +133,24 @@ export async function GET(request, props) {
   } else if (scored) {
     churnLabel = 'At risk'
     churnTier = 'low'
+  }
+
+  // The panel's own shape: only the studios with an overdue row (each named
+  // once, at its earliest `since`), and the EUR sum alone (another currency is
+  // never added to it; 0 when no amount is known).
+  const earliestSince = (rows) => rows.reduce((min, r) => {
+    const ms = Date.parse(r?.since)
+    if (!Number.isFinite(ms)) return min
+    return min === null || ms < Date.parse(min) ? r.since : min
+  }, null)
+  const un1tBillingOut = {
+    overdue: un1tBilling.overdue,
+    arrears_cents: Number(un1tBilling.arrearsCentsByCurrency?.EUR) || 0,
+    amount_unreported: un1tBilling.amountUnreported === true,
+    amount_not_eur: un1tBilling.amountNotEur === true,
+    studios: (un1tBilling.studios || [])
+      .filter((s) => s.pastDues?.length > 0)
+      .map((s) => ({ location_id: s.locationId, since: earliestSince(s.pastDues) })),
   }
 
   // DRAWER.2 — extra fields for the pipeline contact drawer only, so
@@ -143,9 +169,12 @@ export async function GET(request, props) {
         .eq('contact_id', params.id)
         .eq('status', 'active')
         .order('next_step_at', { ascending: true }),
+      // WAORGNUMBER.4 (R3) — the composer sends on the HOME studio's thread,
+      // so its window is the one the drawer shows.
       db.from('whatsapp_conversations')
         .select('id, window_expires_at, last_message_at')
         .eq('contact_id', params.id)
+        .eq('location_id', contact.location_id)
         .order('last_message_at', { ascending: false })
         .limit(1),
     ])
@@ -155,8 +184,12 @@ export async function GET(request, props) {
     // isSendableUtilityTemplate chain the contact page builds, only
     // when the caller can send WhatsApp at all.
     let composerTemplates = []
-    const canWhatsApp = hasPermission(user, 'whatsapp')
-    if (canWhatsApp) {
+    // ROLESWEEP.1c — the drawer's channel flags are the send routes' own
+    // decision: the web OR the mobile toggle at the CONTACT's location (the
+    // composer sends from there), not the active studio. The contact page
+    // reads the same helper, so the two composers agree.
+    const channels = contactChannelFlags(user, contact.location_id)
+    if (channels.whatsapp) {
       const { data: rawTemplates } = await db
         .from('whatsapp_templates')
         .select('name, language, components, status, category')
@@ -184,11 +217,11 @@ export async function GET(request, props) {
         window_expires_at: latestWa?.window_expires_at || null,
       },
       composer_templates: composerTemplates,
-      permissions: {
-        whatsapp: canWhatsApp,
-        sms: hasPermission(user, 'sms'),
-        email: hasPermission(user, 'email'),
-      },
+      // ROLEUI.1 — `kudos` is POST /api/contacts/[id]/kudos's decision (the
+      // web `consultations` permission at the contact's location). The staff
+      // phone's contact screen reads every flag here instead of judging its
+      // buttons at the active studio.
+      permissions: { ...channels, kudos: canLoadContactConsultations(user, contact.location_id) },
     }
   }
 
@@ -210,6 +243,7 @@ export async function GET(request, props) {
       lastAttendedAt: contact.last_attended_at ?? null,
     },
     latestNote,
+    un1t_billing: un1tBillingOut,
     ...(drawerExtras || {}),
   })
 }

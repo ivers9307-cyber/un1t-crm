@@ -28,6 +28,9 @@ export async function GET(request) {
     .from('channel_connections')
     .select('id, status, last_error, token_expires_at')
     .eq('is_active', true)
+    // The un1t.online sync owns that row's status (its token is graded by
+    // integration-health on tokenExpiresAt); grading it here too flapped it.
+    .neq('platform', 'un1t_online')
   if (error) {
     console.error('[connection-health] fetch failed:', error.message)
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })

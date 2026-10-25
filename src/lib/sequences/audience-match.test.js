@@ -53,6 +53,15 @@ function mockDb({ sequences = [], enrolledContactIds = [] } = {}) {
       if (table === 'sequence_enrollments') {
         return { select: vi.fn(() => pageable(enrolledContactIds.map(id => ({ contact_id: id })))) }
       }
+      // TZ.4 — the sweep reads every sequence's studio zone once per run;
+      // "no rows" puts each studio on the Europe/Dublin floor, as before.
+      if (table === 'locations') {
+        const q = {
+          select: vi.fn(() => q), in: vi.fn(() => q), order: vi.fn(() => q),
+          then: (f) => Promise.resolve({ data: [], error: null }).then(f),
+        }
+        return q
+      }
       throw new Error(`unexpected table ${table}`)
     }),
   }

@@ -18,6 +18,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 import {
   Snowflake, Loader2, AlertCircle, CheckCircle2, Power, Clock, Settings,
   Plus,
@@ -66,18 +68,20 @@ function useVisiblePoll(load, deps) {
  * ac-external-rule cron every 5 min and written immediately on every
  * CRM-initiated change — so it must not be labelled "Live".
  */
-function asOfLabel(iso) {
+//
+// TZ.16 (D3 = A) — in the studio's zone (the list route's `timezone`), with
+// its abbreviation only when that differs from the viewer's.
+export function asOfLabel(iso, zone, viewerZone = null) {
   if (!iso) return null
   const t = new Date(iso)
   if (Number.isNaN(t.getTime())) return null
-  return t.toLocaleTimeString('en-IE', {
-    hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Dublin',
-  })
+  return formatRecordTime(t, zone, { hour: '2-digit', minute: '2-digit' }, 'en-IE', viewerZone)
 }
 
 export default function AcControlPanel() {
   const [devices, setDevices] = useState(null)
   const [loadError, setLoadError] = useState(null)
+  const [zone, setZone] = useState(null) // the studio's zone, from the list route
 
   async function load() {
     try {
@@ -89,6 +93,7 @@ export default function AcControlPanel() {
       }
       setLoadError(null)
       setDevices(j.data || [])
+      setZone(j.timezone || null)
     } catch (e) {
       setLoadError(e.message || 'Network error')
     }
@@ -130,7 +135,7 @@ export default function AcControlPanel() {
           <div>
             No AC units are set up for you at this location yet. A master
             adds devices under{' '}
-            <strong className="text-un1t-text">Settings → Locations → AC Devices</strong>{' '}
+            <strong className="text-un1t-text">Settings → Integrations → Climate devices</strong>{' '}
             and ticks the ones you should be able to control on your{' '}
             <strong className="text-un1t-text">staff record</strong>.
           </div>
@@ -158,7 +163,7 @@ export default function AcControlPanel() {
             </div>
             <div className="space-y-3">
               {groupDevices.map((d) => (
-                <DeviceCard key={d.id} device={d} />
+                <DeviceCard key={d.id} device={d} zone={zone} />
               ))}
             </div>
           </div>
@@ -189,7 +194,8 @@ function groupDevices(devices) {
 // DeviceCard — one row per AC unit
 // ============================================================
 
-function DeviceCard({ device }) {
+function DeviceCard({ device, zone }) {
+  const viewerZone = useViewerZone()
   const [state, setState] = useState(null)        // live vendor state + active_session
   const [stateError, setStateError] = useState(null)
   const [busy, setBusy] = useState(null)          // 'on' | 'off' | 'extend'
@@ -352,8 +358,8 @@ function DeviceCard({ device }) {
                   fresh vendor call. Saying when it was taken is the
                   difference between "the AC is off" and "the AC was
                   off five minutes ago". */}
-              {asOfLabel(state.state_as_of)
-                ? ` · as of ${asOfLabel(state.state_as_of)}`
+              {asOfLabel(state.state_as_of, zone, viewerZone)
+                ? ` · as of ${asOfLabel(state.state_as_of, zone, viewerZone)}`
                 : ''}
             </div>
           )}

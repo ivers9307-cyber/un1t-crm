@@ -8,8 +8,14 @@ vi.mock('@/lib/whatsapp', () => ({
   getOrCreateConversation: vi.fn(async () => 'conv-1'),
 }))
 
+vi.mock('@/lib/whatsapp-purpose-templates', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolvePurposeTemplate: vi.fn(),
+}))
+
 import { maybeSendCampaignWhatsappWelcome } from './meta-ad-whatsapp-welcome'
 import { sendTemplateMessage } from '@/lib/whatsapp'
+import { resolvePurposeTemplate } from '@/lib/whatsapp-purpose-templates'
 
 // Minimal supabase-js-ish builder mock — only the chains this code uses.
 function makeDb(template) {
@@ -69,9 +75,9 @@ describe('maybeSendCampaignWhatsappWelcome — happy path', () => {
       contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
     })
     expect(r).toEqual({ sent: true, messageId: 'wamid.TEST' })
-    // Irish local 087… is normalised to +353…
+    // Irish local 087… is normalised to the stored wa_phone form (353…, no '+')
     expect(sendTemplateMessage).toHaveBeenCalledWith(
-      '+353871234567', 'meta_ad_whatsapp_lead', 'en', expect.any(Array), { locationId: 'a0000000-0000-0000-0000-000000000001' },
+      '353871234567', 'meta_ad_whatsapp_lead', 'en', expect.any(Array), { locationId: 'a0000000-0000-0000-0000-000000000001' },
     )
   })
 })
@@ -88,7 +94,42 @@ describe('maybeSendCampaignWhatsappWelcome — Flow toggle', () => {
       },
     }
   }
-  const FLOW_TPL = { name: 'book_first_visit', status: 'APPROVED', language: 'en', header_media_url: null, components: [{ type: 'BODY', text: 'Hi {{1}}!' }] }
+  const FLOW_TPL = {
+    name: 'book_first_visit', status: 'APPROVED', language: 'en', header_media_url: null,
+    components: [{ type: 'BODY', text: 'Hi {{1}}!' }, { type: 'BUTTONS', buttons: [{ type: 'FLOW', text: 'Book' }] }],
+  }
+
+  // FLOWTOKENDEDUP.1 — the token comes from flowTokenFor and the button from
+  // flowButtonComponentFor, so the index is the FLOW button's real position.
+  it('puts the flow_token on the FLOW button at its real index', async () => {
+    const tpl = { ...FLOW_TPL, components: [FLOW_TPL.components[0], { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Later' }, { type: 'FLOW', text: 'Book' }] }] }
+    await maybeSendCampaignWhatsappWelcome({
+      db: makeFlowDb(tpl, { whatsapp_flow: { enabled: true, template_name: 'book_first_visit' } }),
+      locationId: 'loc1', contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    const [, , , components] = sendTemplateMessage.mock.calls[0]
+    const flowBtn = components.find((c) => c.sub_type === 'flow')
+    expect(flowBtn).toEqual({ type: 'button', sub_type: 'flow', index: '1', parameters: [{ type: 'action', action: { flow_token: 'c1.loc1' } }] })
+  })
+
+  // A contact with no id cannot get a token the Flow endpoint can resolve
+  // (the hand-built string was "undefined.loc1"), so the lead gets the
+  // classic welcome instead of a Flow that could never book them.
+  it('with no contact id → keeps the classic welcome instead of minting a dead token', async () => {
+    const db = makeFlowDb(null, { whatsapp_flow: { enabled: true, template_name: 'book_first_visit' } })
+    const base = db.from
+    // Templates resolve BY NAME here, so the name the code asked for is what is sent.
+    db.from = (tbl) => tbl !== 'whatsapp_templates' ? base(tbl) : {
+      select: () => ({ eq: (_c, name) => ({ eq: () => ({ maybeSingle: async () => ({ data: name === 'book_first_visit' ? FLOW_TPL : APPROVED }) }) }) }),
+    }
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db, locationId: 'loc1', contact: { first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r.sent).toBe(true)
+    const [, tplName, , components] = sendTemplateMessage.mock.calls[0]
+    expect(tplName).toBe('meta_ad_whatsapp_lead')
+    expect(components.find((c) => c.sub_type === 'flow')).toBeUndefined()
+  })
 
   it('when whatsapp_flow.enabled → sends the FLOW template with a flow_token button', async () => {
     const r = await maybeSendCampaignWhatsappWelcome({
@@ -155,5 +196,74 @@ describe('maybeSendCampaignWhatsappWelcome — location bundle/feature gate', ()
     })
     expect(r.sent).toBe(true)
     expect(sendTemplateMessage).toHaveBeenCalled()
+  })
+})
+
+// WAORGNUMBER.2 (R5) — the studio's own pick for the ad welcome.
+describe('maybeSendCampaignWhatsappWelcome — purpose template', () => {
+  const HATCH = 'a0000000-0000-4000-8000-000000000002'
+  const contact = { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }
+
+  it("uses the studio's purpose template, on that template's WABA", async () => {
+    resolvePurposeTemplate.mockResolvedValueOnce({ ...APPROVED, id: 'T-H', name: 'hatch_welcome', category: 'MARKETING', business_account_id: 'WABA-9' })
+    const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(null), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r.sent).toBe(true)
+    // The campaign's name is only the default for a studio that picked nothing.
+    expect(resolvePurposeTemplate).toHaveBeenCalledWith(expect.anything(), HATCH, 'meta_ad_welcome', { fallbackName: 'meta_ad_whatsapp_lead' })
+    expect(sendTemplateMessage).toHaveBeenCalledWith(
+      '353871234567', 'hatch_welcome', 'en', expect.any(Array), { locationId: HATCH, businessAccountId: 'WABA-9' },
+    )
+  })
+
+  it('no template at the studio → quiet template_not_found, nothing sent', async () => {
+    resolvePurposeTemplate.mockResolvedValueOnce(null)
+    const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(APPROVED), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r).toEqual({ sent: false, reason: 'template_not_found' })
+    expect(sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it('a failed template read is a quiet send_failed, never thrown', async () => {
+    resolvePurposeTemplate.mockRejectedValueOnce(new Error('read failed'))
+    const r = await maybeSendCampaignWhatsappWelcome({ db: makeDb(null), locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r).toEqual({ sent: false, reason: 'send_failed' })
+  })
+
+  it('a failed settings read still sends the default-named template', async () => {
+    const real = await vi.importActual('@/lib/whatsapp-purpose-templates')
+    resolvePurposeTemplate.mockImplementationOnce(real.resolvePurposeTemplate)
+    const defaultTpl = { ...APPROVED, id: 'T-DEF', location_id: HATCH, category: 'MARKETING', business_account_id: 'WABA-1' }
+    const base = makeDb(null)
+    const db = {
+      from(tbl) {
+        if (tbl === 'locations') {
+          // The welcome's own read ('settings, features') works; the resolver's ('id, settings') fails.
+          return { select: (cols) => ({ eq: () => ({ maybeSingle: async () => (cols === 'id, settings' ? { data: null, error: { message: 'down' } } : { data: { settings: {}, features: {} }, error: null }) }) }) }
+        }
+        if (tbl === 'whatsapp_templates') {
+          const q = { eq: () => q, order: () => q, limit: async () => ({ data: [defaultTpl], error: null }) }
+          return { select: () => q }
+        }
+        return base.from(tbl)
+      },
+    }
+    const r = await maybeSendCampaignWhatsappWelcome({ db, locationId: HATCH, contact, templateName: 'meta_ad_whatsapp_lead', purpose: 'meta_ad_welcome' })
+    expect(r.sent).toBe(true)
+    expect(sendTemplateMessage.mock.calls[0][1]).toBe('meta_ad_whatsapp_lead')
+  })
+})
+
+describe('maybeSendCampaignWhatsappWelcome — WAPHONE.1: the contact\'s WhatsApp number', () => {
+  const send = (contact) => maybeSendCampaignWhatsappWelcome({
+    db: makeDb(APPROVED), locationId: 'L', contact, templateName: 'meta_ad_whatsapp_lead',
+  })
+  it('a stored wa_phone wins over a different phone', async () => {
+    await send({ id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: '447700900123' })
+    expect(sendTemplateMessage.mock.calls[0][0]).toBe('447700900123')
+  })
+  it('a +-prefixed foreign mobile maps; a bare foreign number does not', async () => {
+    await send({ id: 'c1', first_name: 'Sarah', phone: '+380 50 123 4567', wa_phone: null })
+    expect(sendTemplateMessage.mock.calls[0][0]).toBe('380501234567')
+    expect(await send({ id: 'c1', first_name: 'Sarah', phone: '3174278753', wa_phone: null }))
+      .toEqual({ sent: false, reason: 'unnormalisable_phone' })
   })
 })

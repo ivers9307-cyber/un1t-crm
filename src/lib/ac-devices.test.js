@@ -23,6 +23,7 @@ import {
   authoriseDevice,
   loadDeviceForUser,
   loadDeviceWithLocation,
+  assertDeviceAtLocation,
   vendorTurnOff,
   findDefaultDeviceForLocation,
   turnOn,
@@ -539,6 +540,23 @@ describe('loadDeviceWithLocation', () => {
     expect(out.ok).toBe(true)
     expect(out.device.id).toBe('dev-thinq')
     expect(out.location.id).toBe('loc-1')
+  })
+})
+
+// W0.12b — the runner-side twin of the save route's device_ids check (#1966).
+describe('assertDeviceAtLocation', () => {
+  it('passes a device whose location_id is the automation location', () => {
+    expect(assertDeviceAtLocation(THINQ_DEVICE, 'loc-1')).toEqual({ ok: true })
+  })
+
+  it('refuses a device that lives at another location', () => {
+    expect(assertDeviceAtLocation(THINQ_DEVICE, 'loc-2'))
+      .toMatchObject({ ok: false, code: 'device_not_at_location' })
+  })
+
+  it('fails closed on a missing location on either side', () => {
+    expect(assertDeviceAtLocation({ id: 'x' }, 'loc-1').ok).toBe(false)
+    expect(assertDeviceAtLocation(THINQ_DEVICE, null).ok).toBe(false)
   })
 })
 

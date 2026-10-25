@@ -3,10 +3,18 @@ import { createClient } from '@supabase/supabase-js'
 import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
-import { mergeTemplates } from '@shared/permissions'
 import { isApiKeyToken } from './api-keys'
-import { hasPermission } from './permissions'
+import {
+  hasPermission, hasPermissionForLocation, hasPermissionAtAnyLocation,
+  hasMobilePermissionForLocation, hasMobilePermissionAtAnyLocation,
+} from './permissions'
+import { loadRoleTemplatesForLocations } from './role-templates.js'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
+import { hasRoleAtLocation, hasRoleAtAnyLocation } from './role-at-location'
+import { isTombstone } from './staff-tombstone.js'
+import { PROFILE_AUTH_SELECT, pickUserProfile, pickAuthUser } from './user-profile.js'
+import { logError } from './log.js'
+import { USER_LOCATION_COLUMNS, toUserLocation, toUserLinkedLocations } from './location-secrets.js'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -159,10 +167,7 @@ async function getUserFromBearer() {
   }
   if (!auth.startsWith('Bearer ')) return null
   const token = auth.slice('Bearer '.length)
-  // Skip the n8n CRM_API_KEY — that path doesn't carry a Supabase user;
-  // routes that need a user under that token use requireApiKey() instead.
-  if (process.env.CRM_API_KEY && token === process.env.CRM_API_KEY) return null
-  // SAAS-3: per-org API keys (unitk_…) likewise never carry a Supabase
+  // SAAS-3: per-org API keys (unitk_…) never carry a Supabase
   // user — skip the doomed auth.getUser() round-trip; routes resolve
   // them via authenticateApiKey()/requireApiKeyOrManager() instead.
   if (isApiKeyToken(token)) return null
@@ -276,12 +281,44 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // don't know whether to fetch it until realProfile is loaded
   // (only masters can impersonate), but the cookie read is cheap and
   // doesn't depend on the profile fetch.
-  const [{ data: realProfile }, { readImpersonationTarget }] = await Promise.all([
-    db.from('profiles').select('*').eq('id', user.id).single(),
+  //
+  // PROFILESPREAD.1 — NAME the columns: the result is spread into the user
+  // object, which every page serialises (AppShell). PROFILE_AUTH_SELECT is
+  // the ten fields readers use + deleted_at (tombstone check, never spread).
+  const [{ data: realProfile, error: profileErr }, { readImpersonationTarget }] = await Promise.all([
+    db.from('profiles').select(PROFILE_AUTH_SELECT).eq('id', user.id).single(),
     import('./impersonation.js'),
   ])
+  // A failed read still resolves "signed out", as before, but not silently:
+  // a column-name mistake here would sign EVERYONE out. PGRST116 (no row) is
+  // the normal answer for a member who has no staff profile.
+  if (profileErr && profileErr.code !== 'PGRST116') {
+    logError('auth', 'profile read failed; request resolves signed out', { code: profileErr.code || null })
+  }
 
-  if (!realProfile) return null
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+  // tombstone, so history still names them) but is nobody: the auth user is
+  // banned, and an access token issued before the ban dies here.
+  if (!realProfile || isTombstone(realProfile)) return null
+
+  // ACTIVEUSER.1 — and a DEACTIVATED staff member is nobody either, until
+  // someone reactivates them. "Deactivate" only ever wrote profiles.active =
+  // false: the Supabase auth user was untouched, so a live web cookie, a mobile
+  // Bearer JWT or a studio_session PIN cookie kept resolving as a fully
+  // signed-in user on every route and page. All three sources funnel into the
+  // read above, so this one line closes all three. The deactivate route also
+  // bans the login (src/lib/staff-login-access.js), but that is the second
+  // lock: it can fail, and it is deliberately skipped for a login that is also
+  // a member's or a host's.
+  //
+  // STRICTLY `=== false`. A missing/null `active` must keep resolving — "we did
+  // not read the column" must never become "everyone is signed out".
+  //
+  // It reads the REAL profile, so a deactivated master cannot "View as" their
+  // way back in. The impersonation TARGET below is deliberately NOT held to
+  // it: a master reproducing what a deactivated person saw is what the tool
+  // is for, and the gate on it is the master's own (active) session.
+  if (realProfile.active === false) return null
 
   // Master impersonation (mig 035). If `un1t_impersonate` cookie OR
   // `x-impersonate-target` header is set AND the underlying session
@@ -299,11 +336,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (realProfile.role === 'master') {
     const targetId = await readImpersonationTarget()
     if (targetId && targetId !== realProfile.id) {
-      const { data: target } = await db
+      const { data: target, error: targetErr } = await db
         .from('profiles')
-        .select('*')
+        .select(PROFILE_AUTH_SELECT) // PROFILESPREAD.1
         .eq('id', targetId)
         .single()
+      if (targetErr && targetErr.code !== 'PGRST116') {
+        logError('auth', 'impersonation target read failed; master stays themselves', { code: targetErr.code || null })
+      }
       // Only treat this as a live impersonation if there's an OPEN
       // impersonation_log row for this master+target. A leftover
       // un1t_impersonate cookie (e.g. the browser kept it after a
@@ -312,7 +352,10 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       // no real session behind it — which showed up as "Viewing as
       // <yourself> · signed in as Master". Gating on the audit row makes
       // the cookie inert once the session is closed.
-      if (target) {
+      // STAFFDELETE.1 — and a tombstone is never a target.
+      // ACTIVEUSER.1 — a merely DEACTIVATED profile still is (see the check
+      // on realProfile above for why); pinned in auth.getCurrentUser.test.js.
+      if (target && !isTombstone(target)) {
         const { data: openRow } = await db
           .from('impersonation_log')
           .select('id')
@@ -344,12 +387,17 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // regardless of profile_locations, but the rows are still fetched
   // for the is_default flag used by active-location resolution.
   const effectiveProfileId = profile.id
+  // SECFIX.3a — NAME the location columns: this object is serialised into
+  // every page (AppShell). USER_LOCATION_COLUMNS is the public identity every
+  // consumer reads (id, name, organization_id, features, active,
+  // is_host_anchor, slug, country, timezone, …): the client identity; no
+  // `settings` (PROFILESPREAD.1). The credential columns are never loaded.
   const linksPromise = db
     .from('profile_locations')
-    .select('*, locations(*)')
+    .select(`*, locations(${USER_LOCATION_COLUMNS})`)
     .eq('profile_id', effectiveProfileId)
   const allLocsPromise = profile.role === 'master'
-    ? db.from('locations').select('*').eq('active', true).order('name')
+    ? db.from('locations').select(USER_LOCATION_COLUMNS).eq('active', true).order('name')
     : Promise.resolve({ data: null })
   // Organizations (mig 079). Master sees every active org; non-master
   // sees the orgs whose locations they're a member of (resolved
@@ -367,12 +415,22 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? Promise.resolve({ data: null })
     : db.from('profile_organizations').select('*').eq('profile_id', effectiveProfileId)
 
-  const [{ data: locationLinks }, { data: allLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
+  const [{ data: rawLocationLinks }, { data: rawAllLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
     linksPromise,
     allLocsPromise,
     allOrgsPromise,
     orgAdminLinksPromise,
   ])
+
+  // SECFIX.3a / PROFILESPREAD.1 — this object is serialised into EVERY page
+  // (layout → AppShellServer → <AppShell user={user}>). The selects name the
+  // client identity only (no settings, no credential column); the pick is
+  // the second lock. Server code that needs settings or a credential reads
+  // the row fresh by id (readGlofoxAutomationStatus,
+  // glofoxCredentialsForLocation, getUnifiConfig, …) and never takes one off
+  // `user`.
+  const locationLinks = toUserLinkedLocations(rawLocationLinks)
+  const allLocs = Array.isArray(rawAllLocs) ? rawAllLocs.map(toUserLocation) : rawAllLocs
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
 
@@ -410,11 +468,15 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   if (orgAdminOrgIds.length > 0) {
     const { data: orgLocs } = await db
       .from('locations')
-      .select('*')
+      .select(USER_LOCATION_COLUMNS) // SECFIX.3a
       .in('organization_id', orgAdminOrgIds)
       .eq('active', true)
       .order('name')
-    const expanded = expandOrgAdminAccess({ locations, rolesByLocation, orgLocations: orgLocs })
+    const expanded = expandOrgAdminAccess({
+      locations,
+      rolesByLocation,
+      orgLocations: Array.isArray(orgLocs) ? orgLocs.map(toUserLocation) : orgLocs, // SECFIX.3a / PROFILESPREAD.1
+    })
     locations = expanded.locations
     rolesByLocation = expanded.rolesByLocation
     orgAdminSyntheticLocationIds = expanded.syntheticLocationIds
@@ -537,55 +599,18 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? assignmentsByLocation[activeLocation.id] || null
     : null
 
-  // PERM-AUDIT.2 (mig 364) — operator-edited role permission
-  // templates, resolved by the shared resolver between the per-user
-  // override and the code role default. One small query for the
-  // user's locations; keyed per location by the role THE USER holds
-  // there (a template row for a different role at that location is
-  // irrelevant to this user). Master skips the fetch entirely —
-  // the resolver short-circuits master past tiers 2/2.5/3, so a
-  // template can never change what a master sees.
-  // RECEPTION.2 (mig 367): templates can carry employment-type
-  // variants — an 'all' row applies to every user of the role, and
-  // an 'fte' / 'contractor' / 'casual' row layers on top for users
-  // whose profiles.employment_type matches. We merge here so every
-  // consumer downstream still sees ONE template blob per location.
-  const roleTemplatesByLocation = {}
-  const acDeviceTemplatesByLocation = {}
-  if (!isMaster) {
-    const templateLocationIds = Object.keys(rolesByLocation)
-    if (templateLocationIds.length > 0) {
-      try {
-        const { data: templateRows } = await db
-          .from('location_role_permissions')
-          .select('location_id, role, employment_type, permissions, ac_device_ids')
-          .in('location_id', templateLocationIds)
-        const findRow = (locId, emp) => (templateRows || []).find(r =>
-          r.location_id === locId && r.role === rolesByLocation[locId] && r.employment_type === emp
-        ) || null
-        const rowFor = (locId, emp) => findRow(locId, emp)?.permissions || null
-        for (const locId of templateLocationIds) {
-          const merged = mergeTemplates(
-            rowFor(locId, 'all'),
-            profile.employment_type ? rowFor(locId, profile.employment_type) : null
-          )
-          if (merged) roleTemplatesByLocation[locId] = merged
-          // AC-ROLE.1 — resolve the role-template AC device list:
-          // employment-type variant wins if set (non-null), else the
-          // 'all' row, else inherit (null). Stored ABSOLUTE, not diffed.
-          const allRow = findRow(locId, 'all')
-          const varRow = profile.employment_type ? findRow(locId, profile.employment_type) : null
-          const acList = Array.isArray(varRow?.ac_device_ids)
-            ? varRow.ac_device_ids
-            : (Array.isArray(allRow?.ac_device_ids) ? allRow.ac_device_ids : null)
-          if (acList !== null) acDeviceTemplatesByLocation[locId] = acList
-        }
-      } catch {
-        // Defensive: a failed template fetch degrades to code
-        // defaults (empty maps) rather than failing the request.
-      }
-    }
-  }
+  // PERM-AUDIT.2 (mig 364) / RECEPTION.2 (mig 367) — operator-edited role
+  // permission templates, resolved by the shared resolver between the
+  // per-user override and the code role default. The mechanics (per-location
+  // keying by the role THE USER holds, the master short-circuit, and the
+  // employment-type variant merge) now live in ./role-templates.js, which the
+  // widget-token auth path calls too so the two can never drift.
+  const { roleTemplatesByLocation, acDeviceTemplatesByLocation } =
+    await loadRoleTemplatesForLocations(db, {
+      isMaster,
+      rolesByLocation,
+      employmentType: profile.employment_type || null,
+    })
   const activeRoleTemplate = activeLocation?.id
     ? roleTemplatesByLocation[activeLocation.id] || null
     : null
@@ -631,8 +656,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   }
 
   return {
-    ...profile,
-    user,
+    // PROFILESPREAD.1 — only the ten listed fields (src/lib/user-profile.js),
+    // never pin_hash / pay / UniFi id / tombstone bookkeeping.
+    ...pickUserProfile(profile),
+    // AUTHUSERPICK.1 — { id, email } of the Supabase auth user, never the
+    // whole thing (identities, app_metadata, user_metadata, phone, factors):
+    // this object is serialised into every page. Under "View as" it is the
+    // MASTER's auth user. Nothing reads another field (plan C58 §2).
+    user: pickAuthUser(user),
     locations,
     activeLocation,
     // { [org_id]: org row } — every org reachable by this caller.
@@ -732,8 +763,8 @@ export function getOwnerOrganizationIds(user) {
  * user input (query string or request body) to prevent IDOR — a user
  * passing `?location_id=<some other tenant>` and reading their data.
  *
- * Bearer-auth routes (n8n) skip this — the API key holder is treated as
- * a system admin in this app's model.
+ * API-key routes skip this — they scope to the key's organisation
+ * instead (orgScopeLocationIds / assertRowInOrg in src/lib/api-auth.js).
  *
  * Behaviour:
  *   - user is null              → 401
@@ -858,6 +889,90 @@ export function requireInboxPermission(user, channel) {
     return NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
   }
   return null
+}
+
+// ─── INBOXLOC.1 (C37) — WhatsApp thread routes judge at the THREAD's studio ──
+// requireInboxPermission(user, 'wa') resolves `whatsapp` at the ACTIVE studio
+// (the phone's x-active-location header, the web's cookie). The thread routes
+// under /api/whatsapp/conversations/[id] (and /start) act on ONE studio's
+// conversation, so they judge there: a coarse pre-check before any read, then
+// the decision at the conversation's (or contact's) location once the row is
+// read and membership has passed. Web OR mobile `whatsapp`, the rule the
+// contact routes use (contactChannelFlags, /api/contacts/[id]/whatsapp): the
+// phone calls these routes, and its own reads of the same rows (RLS
+// wa_conv_select) already judge the mobile toggle at the row's studio.
+// (Since INBOXWEBONLY3.1 the three the phone never calls, /add-contact,
+// /agent and /start, use the web-only pair below instead.)
+
+const FORBIDDEN_INBOX = () =>
+  NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
+
+/**
+ * Coarse pre-check: does the caller hold WhatsApp (web or mobile) at ANY
+ * studio? Run before the conversation is read; the real decision is
+ * requireWhatsAppInboxAt at the conversation's studio.
+ *
+ * @param {object|null} user
+ * @returns {NextResponse | null}
+ */
+export function requireWhatsAppInboxAnywhere(user) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (hasPermissionAtAnyLocation(user, 'whatsapp') || hasMobilePermissionAtAnyLocation(user, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+/**
+ * The decision: WhatsApp (web or mobile) at `locationId`, the studio the
+ * conversation belongs to. No location, or a studio the caller does not
+ * belong to, is refused (fail closed). Call it after assertLocationAccessOr404.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function requireWhatsAppInboxAt(user, locationId) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!locationId) return FORBIDDEN_INBOX()
+  if (hasPermissionForLocation(user, locationId, 'whatsapp') || hasMobilePermissionForLocation(user, locationId, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+// ─── INBOXWEBONLY3.1 (C119) — the web-only thread actions keep the WEB key ──
+// Richard, 30 Sep: the thread routes the PHONE calls take web OR mobile
+// `whatsapp` (the pair above); the ones only the WEB calls
+// (/conversations/[id]/add-contact, /conversations/[id]/agent — pause/resume
+// Mia — and /conversations/start) take the WEB key only, judged at the same
+// studio. Same order and shapes: the any-studio pre-check before any read,
+// membership (404) once the row is read, then the decision at its studio.
+
+/**
+ * Coarse pre-check: does the caller hold the WEB `whatsapp` permission at ANY
+ * studio? Run before the record is read; the decision is
+ * requireWebWhatsAppInboxAt at the conversation's (or contact's) studio.
+ *
+ * @param {object|null} user
+ * @returns {NextResponse | null}
+ */
+export function requireWebWhatsAppInboxAnywhere(user) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (hasPermissionAtAnyLocation(user, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
+}
+
+/**
+ * The decision: the WEB `whatsapp` permission at `locationId`. No location,
+ * or a studio the caller does not belong to, is refused (fail closed). Call
+ * it after the membership guard.
+ *
+ * @param {object|null} user
+ * @param {string|null|undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function requireWebWhatsAppInboxAt(user, locationId) {
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!locationId) return FORBIDDEN_INBOX()
+  if (hasPermissionForLocation(user, locationId, 'whatsapp')) return null
+  return FORBIDDEN_INBOX()
 }
 
 // ─── Organization guards (SAAS-4, mig 417) ──────────────────────────
@@ -1062,10 +1177,13 @@ export function guardMasterOrOwner(user, locationId) {
  * @param {readonly string[]} allowedRoles
  * @returns {boolean}
  */
-export function hasRoleAtLocation(user, locationId, allowedRoles) {
-  if (!user || !locationId) return false
-  if (user.profileRole === 'master') return true
-  const role = user.rolesByLocation?.[locationId]
-  if (!role) return false
-  return (allowedRoles || []).includes(role)
-}
+// ROSTERROLE.1 — the two implementations moved to `./role-at-location`, a
+// pure client-safe module, because a CLIENT component needs the same answer:
+// ScheduleCalendar's publish modal was deciding "is this person an owner
+// here" from `user.role` (the ACTIVE studio's role) while the route decided
+// it with hasRoleAtLocation, so the two disagreed for anyone whose active
+// studio is not the one they are publishing. Importing `@/lib/auth` into a
+// client bundle is not on offer (it reaches next/headers and the service-role
+// client), and a second copy of a permission rule is how permission rules
+// drift. Re-exported here so every existing server import is untouched.
+export { hasRoleAtLocation, hasRoleAtAnyLocation }

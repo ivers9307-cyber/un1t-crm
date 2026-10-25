@@ -37,12 +37,6 @@ vi.mock('./postmark', () => ({ sendTransactionalEmail: (...a) => sendTransaction
 // into a red suite here — and these seven tests are the send-then-stamp
 // regression guards, so disarming them is exactly the accident to avoid.
 // `importOriginal` keeps every other export real, so a new one cannot break us.
-vi.mock('./twilio', async (importOriginal) => ({
-  ...(await importOriginal()),
-  sendLocationSms: vi.fn(async () => ({ sid: 'SM1' })),
-  resolveSenderLocation: vi.fn(async (_db, l) => l),
-  resolveTenantSmsSender: vi.fn(async (_db, l) => ({ location: l, senderId: 'UN1T', source: 'location' })),
-}))
 vi.mock('./event-comms-location', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveEventCommsLocation: (...a) => resolveEventCommsLocation(...a),
@@ -50,12 +44,18 @@ vi.mock('./event-comms-location', async (importOriginal) => ({
 vi.mock('@/lib/connection-registry', () => ({ overlayConnections: vi.fn(async (_db, row) => row) }))
 vi.mock('./event-email', () => ({
   resolveEventEmail: vi.fn(async () => ({ subject: 'You are in', htmlBody: '<p>hi</p>' })),
+  resolveEventBrand: vi.fn(async () => ''),
   buildEventEmailShell: vi.fn(() => '<html></html>'),
 }))
 vi.mock('./app-url', () => ({ getAppUrl: () => 'https://crm.example.com' }))
+// W1.L3b — the manage link's host; defaults to the CRM host for the older assertions.
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.example.com') }))
 vi.mock('./event-checkin-tokens', () => ({ signCheckinToken: () => 'tok' }))
 
 import { sendRaceConfirmations } from './race-confirmations'
+import { resolveEventEmail } from './event-email'
+import { verifyEntryManageToken } from './entry-manage-tokens'
+import { resolveCustomerBaseUrl } from './tenant-host'
 
 const PAYMENT_ID = 'p0000000-0000-0000-0000-000000000001'
 
@@ -91,9 +91,7 @@ function makeWorld({ stampFails = false, alreadySent = null, onStamp = null } = 
       venue_name: null, venue_address: null, accent_hex: null, hero_image_url: null,
       confirmation_email_subject: null, confirmation_email_intro: null,
       confirmation_email_template_id: null,
-      // SMS off, so these tests exercise the email leg only.
-      confirmation_sms_enabled: false,
-      locations: { id: 'LOC', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T', organization_id: 'ORG' },
+      locations: { id: 'LOC', name: 'Stillorgan', organization_id: 'ORG' },
     },
     registration: { id: 'reg1', wave_id: null, wave: null, teams: null },
   }
@@ -252,5 +250,54 @@ describe('sendRaceConfirmations — send-once ordering', () => {
       expect.objectContaining({ locationId: 'LOC' }),
     )
     expect(row.confirmation_email_sent_at).toBeTruthy()
+  })
+})
+
+// EVENT-MOVE.6 — the confirmation carries the entry's own page, so the booker
+// can change the date: {{manage_url}} for operator copy and a "Change it
+// here" line closing the default copy. Not send-once behaviour, but this file
+// is the one that drives sendRaceConfirmations through resolveEventEmail.
+describe('sendRaceConfirmations — the "Change your date" link', () => {
+  it('passes a signed /event/entry/<token> link for THIS entry as manage_url and in the default copy', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-secret')
+    try {
+      const { db } = makeWorld()
+      resolveEventEmail.mockClear()
+      await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+      const { extras, defaults } = resolveEventEmail.mock.calls[0][0]
+      expect(extras.manage_url).toMatch(/^https:\/\/crm\.example\.com\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+      expect(verifyEntryManageToken(extras.manage_url.split('/').pop(), 'test-secret')).toEqual({ registrationId: 'reg1' })
+      expect(defaults.footerHtml).toContain(`Need a different date? <a href="${extras.manage_url}"`)
+      expect(defaults.footerHtml).toContain('>Change it here</a>.')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it("W1.L3b — manage_url is minted on the event location's tenant host, never the CRM host", async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-secret')
+    try {
+      resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+      const { db } = makeWorld()
+      resolveEventEmail.mockClear()
+      await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+      const { extras } = resolveEventEmail.mock.calls[0][0]
+      expect(extras.manage_url).toMatch(/^https:\/\/gym-a\.repset\.ie\/event\/entry\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+      expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, expect.any(String))
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+  it('with no signing key there is no link and the default copy is unchanged', async () => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', '')
+    try {
+      const { db } = makeWorld()
+      resolveEventEmail.mockClear()
+      await sendRaceConfirmations({ db, paymentId: PAYMENT_ID })
+      const { extras, defaults } = resolveEventEmail.mock.calls[0][0]
+      expect(extras.manage_url).toBe('')
+      expect(defaults.footerHtml).not.toContain('Change it here')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

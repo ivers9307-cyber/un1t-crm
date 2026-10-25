@@ -124,6 +124,29 @@ describe('loadFrontPage — /welcome still resolves the UN1T chooser (SAAS-6)', 
     const page = await loadFrontPage(db)
     expect(page).toEqual({ headline: null, intro: null, tiles: [] })
   })
+
+  // W1.L4 — the page passes resolveTenantOrgId(host): a mapped host renders
+  // THAT org's chooser and tiles, with no slug lookup at all. null keeps the
+  // UN1T slug fallback above byte-identical.
+  it('W1.L4 — an explicit orgId renders that org\'s chooser and tiles without the slug lookup', async () => {
+    const db = makeDb({
+      org: { id: ORG_A },
+      chooserByOrg: { headline: 'Gym B chooser', intro: null, tile_order: ['rival-gym'] },
+      tiles: [tile('stillorgan', ORG_A, 'Stillorgan'), tile('rival-gym', ORG_B, 'Rival Gym')],
+    })
+    const page = await loadFrontPage(db, { orgId: ORG_B })
+    expect(db.calls.some(([table]) => table === 'organizations')).toBe(false)
+    expect(db.calls).toContainEqual(['chooser_settings', 'organization_id', ORG_B])
+    expect(page.headline).toBe('Gym B chooser')
+    expect(page.tiles.map((t) => t.path)).toEqual(['rival-gym'])
+  })
+
+  it('W1.L4 — orgId null keeps the slug fallback', async () => {
+    const db = makeDb({ org: { id: ORG_A }, chooserByOrg: { headline: 'UN1T', intro: null, tile_order: [] }, tiles: [tile('stillorgan', ORG_A, 'Stillorgan')] })
+    const page = await loadFrontPage(db, { orgId: null })
+    expect(db.calls).toContainEqual(['organizations', 'slug', FRONT_PAGE_ORG_SLUG])
+    expect(page.headline).toBe('UN1T')
+  })
 })
 
 // A location-scoped tenant domain (mig 432) lands strays on ONE studio's

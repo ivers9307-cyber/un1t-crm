@@ -15,13 +15,15 @@ import { notFound, redirect } from 'next/navigation'
 import { ChevronLeft, Eye, AlertCircle, Flame } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { listVersionViewers, sectionDwellAggregate } from '@/lib/policies'
+import { listVersionViewers, sectionDwellAggregate, policyOrgIdFor } from '@/lib/policies'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const dynamic = 'force-dynamic'
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
+// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —
+// policies belong to an organisation: this page reads the caller's ACTIVE
+// organisation's rows only (a master switches studio to switch organisation).
 
 function fmtDateTime(iso) {
   if (!iso) return ''
@@ -47,12 +49,15 @@ export default async function AdminPolicyVersionPage({ params }) {
 
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  if (!canManagePolicies(user)) redirect('/')
+  const orgId = policyOrgIdFor(user)
+  if (!orgId) notFound()
 
   const db = createServerClient()
   const { data: policy } = await db
     .from('policies')
     .select('id, slug, title')
+    .eq('organization_id', orgId)
     .eq('slug', slug)
     .maybeSingle()
   if (!policy) notFound()
@@ -66,7 +71,7 @@ export default async function AdminPolicyVersionPage({ params }) {
   if (!version) notFound()
 
   const [{ viewers, outstanding }, hotSections] = await Promise.all([
-    listVersionViewers(version.id),
+    listVersionViewers(version.id, user),
     sectionDwellAggregate(version.id),
   ])
 

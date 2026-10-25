@@ -33,6 +33,8 @@ import { createServerClient } from '@/lib/supabase'
 import { buildAudienceQueryAsync } from '@/lib/postmark'
 import { ESCALATION_TABLE } from '@/lib/bounce-escalation-sweep'
 import { BOUNCE_ESCALATION_MIN_CAMPAIGNS } from '@/lib/bounce-escalation'
+import { formatRecordTime } from '@/lib/record-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 import ListHealthEscalations from '@/components/communications/ListHealthEscalations'
 import ListHealthTrend from '@/components/communications/ListHealthTrend'
 import OtherEmailDeliverability from '@/components/communications/OtherEmailDeliverability'
@@ -62,14 +64,16 @@ function Stat({ label, value, hint }) {
   )
 }
 
-function dateLabel(iso) {
+// TZ.16 — the escalation rows are the active studio's, so its zone (the
+// viewer's own: never suffixed).
+function dateLabel(iso, zone) {
   if (!iso) return 'Not recorded'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return 'Not recorded'
-  return d.toLocaleDateString('en-IE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Europe/Dublin' })
+  return formatRecordTime(d, zone, { day: '2-digit', month: 'short', year: 'numeric' }, 'en-IE', zone)
 }
 
-function toRow(row) {
+function toRow(row, zone) {
   return {
     id: row.id,
     name: row.contact?.name || null,
@@ -78,8 +82,8 @@ function toRow(row) {
     bounce_events: row.bounce_events ?? 0,
     bounce_types_label: (row.bounce_types || []).join(', ') || 'unknown',
     successful_deliveries: row.successful_deliveries ?? 0,
-    last_bounce_label: dateLabel(row.last_bounce_at),
-    since_label: dateLabel(row.suppressed_at || row.created_at),
+    last_bounce_label: dateLabel(row.last_bounce_at, zone),
+    since_label: dateLabel(row.suppressed_at || row.created_at, zone),
   }
 }
 
@@ -89,6 +93,7 @@ export default async function ListHealthPage() {
   if (!hasPermission(user, 'email')) redirect('/communications')
 
   const locationId = user.activeLocation?.id
+  const zone = viewerZoneOf(user)
   if (!locationId) {
     return <p className="text-sm text-un1t-subtle">Pick a location to see its list health.</p>
   }
@@ -180,7 +185,7 @@ export default async function ListHealthPage() {
       .is('released_at', null)
       .order('created_at', { ascending: false })
       .range(0, MAX_ROWS - 1)
-    return (data || []).map(toRow)
+    return (data || []).map((r) => toRow(r, zone))
   }
   const suppressedRows = await escalationRows('suppress')
   const reviewRows = await escalationRows('review')

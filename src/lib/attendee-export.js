@@ -32,7 +32,8 @@ export function pickLatestPhones(payments) {
 }
 
 /**
- * Fetch an event's registrations (with team members + wave) and attach each
+ * Fetch an event's registrations (with team members, wave and the lead
+ * contact's name, which labels a team-less entry on the host page) and attach each
  * registration's latest booking phone. Range-paginated so a large event never
  * silently truncates at the 1000-row select cap. Service-role client; the
  * CALLER is responsible for the tenancy gate before calling this.
@@ -45,6 +46,7 @@ export async function fetchEventAttendees(db, eventId) {
       .from('race_registrations')
       .select(`
         id, status, registered_at, wave_id,
+        contact:contact_id ( first_name, last_name ),
         teams:team_id ( id, name, size, team_members ( id, name, email, role, is_member ) ),
         wave:wave_id ( id, start_time, label )
       `)

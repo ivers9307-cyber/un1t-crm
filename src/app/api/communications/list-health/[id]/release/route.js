@@ -25,7 +25,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { ESCALATION_TABLE, RELEASE_REASON_OPERATOR } from '@/lib/bounce-escalation-sweep'
 
@@ -34,7 +34,7 @@ export const runtime = 'nodejs'
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -55,6 +55,10 @@ export async function POST(request, { params }) {
 
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the escalation's location.
+  if (!hasPermissionForLocation(user, row.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Already released — report it rather than rewriting who released it and
   // when, which would destroy the audit trail this table exists to hold.

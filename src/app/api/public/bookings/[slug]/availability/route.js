@@ -1,5 +1,5 @@
 // GET /api/public/bookings/:slug/availability?days=14
-// Returns the calendar days (Europe/Dublin) that have ≥1 open slot, so the
+// Returns the calendar days (the studio's own zone, TZ.7) that have ≥1 open slot, so the
 // public booking UI can show ONLY bookable days instead of a static next-N-days
 // list peppered with dead days. Public (display-safe), light rate limit since
 // it runs per-day slot computations. Mirrors the auth posture of the sibling
@@ -25,7 +25,7 @@ export async function GET(request, props) {
   const days = Math.min(Math.max(1, Number(searchParams.get('days')) || 14), 31)
 
   const { data: event } = await db.from('event_types')
-    .select('id, duration_minutes, availability, buffer_minutes, max_advance_days')
+    .select('id, duration_minutes, availability, buffer_minutes, max_advance_days, location_id, locations:location_id ( timezone )')
     .eq('slug', params.slug).eq('active', true).maybeSingle()
   if (!event) return NextResponse.json({ success: false, error: 'Booking type not found' }, { status: 404 })
 

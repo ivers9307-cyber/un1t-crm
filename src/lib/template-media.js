@@ -70,3 +70,48 @@ export function isMintedMediaPath(path) {
   return /^[0-9a-fA-F-]{32,36}\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/.test(String(path || '')) ||
     /^global\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/.test(String(path || ''))
 }
+
+/**
+ * WATPLRESUBMEDIA.1 — the header-media fields "Edit & resubmit" sends: all
+ * three when the header is media and the uploaded file differs from what the
+ * row stores, otherwise none (the route then leaves the stored media alone).
+ *
+ * @param {{ header_media_handle?: string|null, header_media_url?: string|null, header_media_path?: string|null } | null} saved
+ * @param {{ handle?: string|null, url?: string|null, path?: string|null }} current
+ * @param {string} headerFormat  'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'TEXT' | 'NONE' | …
+ */
+export function resubmitMediaFields(saved, current, headerFormat) {
+  if (!TEMPLATE_MEDIA_LIMITS[String(headerFormat || '').toUpperCase()]) return {}
+  const handle = current?.handle || null
+  const url = current?.url || null
+  const path = current?.path || null
+  const same = handle === (saved?.header_media_handle || null) &&
+    url === (saved?.header_media_url || null) &&
+    path === (saved?.header_media_path || null)
+  if (same) return {}
+  return { header_media_handle: handle, header_media_url: url, header_media_path: path }
+}
+
+/**
+ * WATPLRESUBMEDIA.1 — judge header media a resubmit wants to store, the way
+ * the upload route judges an upload: a path the sign route minted, in the
+ * template's own studio folder, a file of the header's type, and the URL the
+ * 'whatsapp-templates' bucket serves for that path (`publicUrl`, from
+ * getPublicUrl). null = acceptable, otherwise the operator-facing reason.
+ * Plain words, no em-dashes.
+ */
+export function templateHeaderMediaError({ path, url, publicUrl, format, locationId } = {}) {
+  const fmt = String(format || '').toUpperCase()
+  const limits = TEMPLATE_MEDIA_LIMITS[fmt]
+  if (!limits) return 'This template has no image, video or document header, so it takes no header media.'
+  if (!isMintedMediaPath(path) || String(path).split('/')[0] !== String(locationId || '')) {
+    return 'Invalid media path. Upload the header file again.'
+  }
+  if (!limits.exts.includes(mediaExt(path))) {
+    return `${fmt} headers need a ${limits.exts.join(' / ')} file. Upload the header file again.`
+  }
+  if (!url || !publicUrl || url !== publicUrl) {
+    return 'The header media link does not match its uploaded file. Upload the header file again.'
+  }
+  return null
+}

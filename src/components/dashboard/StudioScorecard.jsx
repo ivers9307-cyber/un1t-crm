@@ -74,10 +74,12 @@ export function RoleSection({ title, hint, children }) {
   )
 }
 
+// `bookingKpis` is false for a non-Glofox source, where the Glofox trainer-name
+// note would be wrong (UN1TCLASS.5).
 // Floor breakdown table (by coach when Glofox sends instructor names,
 // else by class) — staff-facing raw counts are fine here (the
 // no-capacity-to-customers rule binds customer surfaces, not the CRM).
-export function FloorTable({ rows, groupedBy }) {
+export function FloorTable({ rows, groupedBy, bookingKpis = true }) {
   if (!rows || rows.length === 0) {
     return (
       <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 text-center">
@@ -109,7 +111,9 @@ export function FloorTable({ rows, groupedBy }) {
       </table>
       {groupedBy === 'class' ? (
         <p className="text-[11px] text-un1t-muted px-4 py-2 border-t border-un1t-border">
-          Split by class — per-coach arrives once Glofox trainer names are mapped.
+          {bookingKpis
+            ? 'Split by class — per-coach arrives once Glofox trainer names are mapped.'
+            : 'Split by class.'}
         </p>
       ) : null}
     </div>
@@ -119,9 +123,9 @@ export function FloorTable({ rows, groupedBy }) {
 export function LocationEmptyState({ name }) {
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-2xl p-6 text-center">
-      <p className="text-sm font-medium text-un1t-text">{name} isn't connected to Glofox yet</p>
+      <p className="text-sm font-medium text-un1t-text">No membership data has synced yet for {name}</p>
       <p className="text-xs text-un1t-subtle mt-1">
-        The scorecard fills in automatically once the location's Glofox sync goes live.
+        The scorecard fills in automatically once the membership source's first sync completes.
       </p>
     </div>
   )

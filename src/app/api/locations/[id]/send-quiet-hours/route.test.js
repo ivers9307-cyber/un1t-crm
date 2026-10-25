@@ -35,6 +35,7 @@ import { GET, PUT } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { DEFAULT_SEND_QUIET_HOURS } from '@/lib/send-quiet-hours'
+import { resetLocationZoneCache } from '@/lib/location-time'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
@@ -87,11 +88,24 @@ const COLS = ['send_quiet_hours_enabled', 'send_quiet_hours_start', 'send_quiet_
 //   GET  .select(cols).eq('location_id', id).limit(1)  → the seeded rows
 // Echoing the written columns back means pinning the success BODY also pins
 // the WRITE. Fail LOUD on any other table or any other chain.
-function makeDb({ rows = [] } = {}) {
+//   TZ.4: GET also reads locations.timezone (.select('id, timezone').eq('id', id).maybeSingle()).
+function makeDb({ rows = [], zones = {}, zoneError = null } = {}) {
   const upserts = []
   return {
     upserts,
     from(table) {
+      if (table === 'locations') {
+        return {
+          select: () => ({
+            eq: (col, id) => {
+              if (col !== 'id') throw new Error(`unexpected .eq('${col}') on locations`)
+              return { maybeSingle: () => Promise.resolve(zoneError
+                ? { data: null, error: zoneError }
+                : { data: { id, timezone: zones[id] ?? null }, error: null }) }
+            },
+          }),
+        }
+      }
       if (table !== 'company_settings') throw new Error(`unexpected db.from('${table}') in send-quiet-hours test`)
       return {
         upsert(payload, opts) {
@@ -143,6 +157,7 @@ const SUCCESS_BODY = {
 let db
 beforeEach(() => {
   vi.clearAllMocks()
+  resetLocationZoneCache()
   db = makeDb()
   createServerClient.mockReturnValue(db)
   getCurrentUser.mockResolvedValue(OWNER_A)
@@ -255,6 +270,8 @@ describe('GET /api/locations/[id]/send-quiet-hours — can_edit is the role AT T
         default_start_hour: DEFAULT_SEND_QUIET_HOURS.startHour,
         default_end_hour: DEFAULT_SEND_QUIET_HOURS.endHour,
         can_edit: true,
+        // TZ.4 — the hours are the studio's wall clock; GET names its zone.
+        timezone: 'Europe/Dublin',
       },
     })
   })
@@ -292,5 +309,20 @@ describe('GET /api/locations/[id]/send-quiet-hours — can_edit is the role AT T
     expect((await GET(get(LOC_B), props(LOC_B))).status).toBe(403)
     getCurrentUser.mockResolvedValue(null)
     expect((await GET(get(LOC_A), props(LOC_A))).status).toBe(401)
+  })
+})
+
+describe('GET /api/locations/[id]/send-quiet-hours — TZ.4 names the studio zone', () => {
+  it("returns the studio's own timezone", async () => {
+    createServerClient.mockReturnValue(makeDb({ zones: { [LOC_A]: 'America/New_York' } }))
+    const body = await (await GET(get(LOC_A), props(LOC_A))).json()
+    expect(body.data.timezone).toBe('America/New_York')
+  })
+
+  it('a zone read failure is display-only: the card still loads, on the Dublin floor', async () => {
+    createServerClient.mockReturnValue(makeDb({ zoneError: { message: 'connection reset' } }))
+    const res = await GET(get(LOC_A), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.timezone).toBe('Europe/Dublin')
   })
 })

@@ -1,10 +1,10 @@
 // INTEG hub inline #4 (Phase 3) — open-redirect guard for the OPTIONAL
 // `return_to` carried through the Xero OAuth `state`.
 //
-// The hub's inline "Connect / Reconnect" button starts the full-page OAuth
-// redirect with `?return_to=/settings/integrations-hub` so the callback can
-// bounce the browser back to the hub (instead of the default per-location
-// Xero tab). `return_to` is carried INSIDE the signed `state` — the same
+// The hub's inline "Connect / Reconnect" button (and the Xero card in the
+// hub's Manage drawer) starts the full-page OAuth redirect with a hub
+// `return_to` (`/settings/integrations-hub[?manage=xero&location=<id>]`) so
+// the callback bounces the browser back to it. `return_to` is carried INSIDE the signed `state` — the same
 // `state` value is echoed to Xero AND stored in an httpOnly cookie, and the
 // callback only trusts `state` when it byte-matches that cookie, so a
 // tampered `return_to` fails the cookie==state check before it is ever read.
@@ -14,18 +14,17 @@
 // ever used as a redirect target — after OAuth we must NEVER bounce the
 // browser to an attacker-controlled absolute URL. `safeReturnTo()` returns
 // the validated path or null; on null the callback falls back to its
-// existing default redirect (the per-location Xero tab).
+// default redirect (the hub's Xero drawer for the location, INTEGONE.1).
 //
 // Pure + unit-tested (return-to.test.js). No I/O, no imports.
 
 // Exact-match allowlist of internal destinations we accept post-OAuth. Kept
-// tiny on purpose — the hub, and (defensively) /settings itself.
+// tiny on purpose — the hub, and (defensively) /settings itself. Matched on
+// the path (query stripped), so the hub's ?manage=xero&location=<id> drawer
+// query and the callback's xero_* decoration pass. (The per-location Xero tab,
+// /settings/locations/<id>?tab=xero, left this list with INTEGONE.1: it is
+// retired and nothing returns to it.)
 const ALLOWLIST = ['/settings/integrations-hub', '/settings']
-
-// The EXISTING default redirect the callback already uses:
-// /settings/locations/<id>?tab=xero. Matched on the path (query stripped),
-// so ?tab=xero&connected=… decoration passes.
-const LOCATION_TAB_RE = /^\/settings\/locations\/[^/?#]+$/
 
 // Control chars (0x00-0x1F, 0x7F) + any whitespace — none may appear in a path.
 const UNSAFE_CHARS_RE = /[\u0000-\u001f\u007f\s]/
@@ -41,8 +40,7 @@ const UNSAFE_CHARS_RE = /[\u0000-\u001f\u007f\s]/
  *      protocol-relative by some browsers.
  *   4. No scheme/host and no control chars or whitespace — reject "://" and
  *      any control char (0x00-0x1F, 0x7F) or whitespace.
- *   5. Path (query/hash stripped) matches the ALLOWLIST or the existing
- *      per-location Xero-tab shape.
+ *   5. Path (query/hash stripped) matches the ALLOWLIST.
  *
  * @param {unknown} returnTo
  * @returns {string|null} the validated internal path, or null.
@@ -60,7 +58,6 @@ export function safeReturnTo(returnTo) {
   // Compare the PATH ONLY (drop query/hash) against the allowlist.
   const path = returnTo.split(/[?#]/)[0]
   if (ALLOWLIST.includes(path)) return returnTo
-  if (LOCATION_TAB_RE.test(path)) return returnTo
   return null
 }
 

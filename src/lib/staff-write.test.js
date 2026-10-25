@@ -136,7 +136,8 @@ describe('applyStaffProfileWrite', () => {
     const res = await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'Ada' }, actorId: 'u1' })
     expect(db.from).toHaveBeenCalledWith('profiles')
     expect(db.update).toHaveBeenCalledWith({ full_name: 'Ada' })
-    expect(res).toEqual({ ok: true })
+    // ACTIVEUSER.1 — `profileWritten` is additive: did the profiles UPDATE land?
+    expect(res).toEqual({ ok: true, profileWritten: true })
   })
 
   it('does not touch profiles when the body has no profile fields', async () => {
@@ -148,7 +149,7 @@ describe('applyStaffProfileWrite', () => {
   it('returns ok:false with the db error message on a profiles update failure', async () => {
     const db = mockDb({ updateError: { message: 'boom' } })
     const res = await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'X' }, actorId: 'u1' })
-    expect(res).toEqual({ ok: false, error: 'boom' })
+    expect(res).toEqual({ ok: false, error: 'boom', profileWritten: false })
   })
 
   it('upserts compensation with only the defined comp fields', async () => {
@@ -167,7 +168,31 @@ describe('applyStaffProfileWrite', () => {
     upsertCompensationForProfile.mockResolvedValue({ ok: false, error: 'locked' })
     const db = mockDb()
     const res = await applyStaffProfileWrite({ db, id: 'p1', body: { hourly_rate: 9 }, actorId: 'u1' })
-    expect(res).toEqual({ ok: false, error: 'compensation: locked' })
+    // ACTIVEUSER.1 — hourly_rate is ALSO a profiles patch key (the SECURITY.1
+    // dual-write), so the profiles update landed before the upsert failed.
+    expect(res).toEqual({ ok: false, error: 'compensation: locked', profileWritten: true })
+  })
+
+  // ACTIVEUSER.1 (review S5) — the comp upsert runs AFTER the profiles write, so
+  // "failed" must not hide that `active` already flipped: the route still owes
+  // the login a ban/unban for a flip that landed.
+  it('a comp failure AFTER a landed profiles write reports profileWritten:true', async () => {
+    upsertCompensationForProfile.mockResolvedValue({ ok: false, error: 'locked' })
+    const db = mockDb()
+    const res = await applyStaffProfileWrite({ db, id: 'p1', body: { active: true, hourly_rate: 9 }, actorId: 'u1' })
+    expect(res).toEqual({ ok: false, error: 'compensation: locked', profileWritten: true })
+  })
+
+  it('extraPatch rides the SAME profiles update (the deactivating transition clears the legacy door flag)', async () => {
+    const db = mockDb()
+    await applyStaffProfileWrite({ db, id: 'p1', body: { active: false }, actorId: 'u1', extraPatch: { unifi_door_access: false } })
+    expect(db.update).toHaveBeenCalledTimes(1)
+    expect(db.update).toHaveBeenCalledWith({ active: false, unifi_door_access: false })
+  })
+
+  it('reports profileWritten:false when there was nothing to write', async () => {
+    const db = mockDb()
+    expect(await applyStaffProfileWrite({ db, id: 'p1', body: { assignments: [] }, actorId: 'u1' })).toEqual({ ok: true, profileWritten: false })
   })
 })
 
@@ -197,7 +222,7 @@ describe('applyStaffProfileWrite — ordering guarantee (C2b.2a review)', () => 
     const update = vi.fn(() => ({ eq }))
     const db = { update, from: vi.fn(() => ({ update })) }
     const res = await applyStaffProfileWrite({ db, id: 'p1', body: { full_name: 'X', hourly_rate: 9 }, actorId: 'u1' })
-    expect(res).toEqual({ ok: false, error: 'boom' })
+    expect(res).toEqual({ ok: false, error: 'boom', profileWritten: false })
     expect(upsertCompensationForProfile).not.toHaveBeenCalled()
   })
 })

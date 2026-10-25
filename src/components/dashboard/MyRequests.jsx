@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeftRight, Calendar } from 'lucide-react'
 import { SectionHeader, ListCard } from '@/components/dashboard/Cards'
 import Button from '@/components/ui/Button'
+import { LEAVE_CANCEL_NOTICES } from '@/lib/time-off-cancel-copy'
 
 // ── status chips ──────────────────────────────────────────────────────────
 function StatusChip({ status }) {
@@ -95,6 +96,9 @@ export default function MyRequests({ postedSwaps = [], timeOff = [] }) {
   // Track which row ids are mid-cancel-request to disable the button.
   const [cancellingSwap, setCancellingSwap] = useState(null)
   const [cancellingTimeOff, setCancellingTimeOff] = useState(null)
+  // LEAVECANCEL.1 — { tone: 'info' | 'error', text } after a time-off cancel
+  // that needs saying. Lives here, not on the row: the refresh removes the row.
+  const [timeOffNotice, setTimeOffNotice] = useState(null)
 
   const totalCount = postedSwaps.length + timeOff.length
   const isEmpty = totalCount === 0
@@ -130,14 +134,22 @@ export default function MyRequests({ postedSwaps = [], timeOff = [] }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ status: 'cancelled' }),
       })
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}))
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || json.success === false) {
         console.error('[MyRequests] cancel time-off failed:', json.error || res.status)
+        setTimeOffNotice({ tone: 'error', text: json.error || 'The request was not cancelled.' })
       } else {
+        // LEAVECANCEL.1 — a 2xx is not always a cancel. If the request was
+        // approved while this card sat open, a manager's Cancel only ASKS an
+        // owner (cancellation: 'requested') and the leave is still approved.
+        // This list is pending-only, so the refresh drops the row either way,
+        // which would read as "cancelled". Same words as the Time Off page.
+        setTimeOffNotice(json.cancellation === 'requested' ? { tone: 'info', text: LEAVE_CANCEL_NOTICES.requested } : null)
         router.refresh()
       }
     } catch (e) {
       console.error('[MyRequests] cancel time-off error:', e?.message || e)
+      setTimeOffNotice({ tone: 'error', text: 'Network error, please try again' })
     } finally {
       setCancellingTimeOff(null)
     }
@@ -191,6 +203,19 @@ export default function MyRequests({ postedSwaps = [], timeOff = [] }) {
   return (
     <div className="max-w-5xl">
       <SectionHeader title="My requests" count={isEmpty ? null : totalCount} />
+      {timeOffNotice && (
+        <div
+          role={timeOffNotice.tone === 'error' ? 'alert' : 'status'}
+          className={`mb-3 flex items-start gap-3 p-3 rounded-lg border text-sm ${
+            timeOffNotice.tone === 'error'
+              ? 'border-red-500/40 bg-red-500/10 text-red-700'
+              : 'border-amber-500/40 bg-amber-500/10 text-amber-700'
+          }`}
+        >
+          <div className="flex-1">{timeOffNotice.text}</div>
+          <button type="button" onClick={() => setTimeOffNotice(null)} className="text-xs underline">Dismiss</button>
+        </div>
+      )}
       <ListCard empty={isEmpty} emptyText="No open requests.">
         {rows.map((row, i) => (
           <RequestRow

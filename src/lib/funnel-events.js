@@ -10,6 +10,11 @@ export const VALID_STEPS = [
   'slots_view',
   'booked_class',
   'booked_consult',
+  // CONSENTRATE.1 — the cookie banner, funnel 'consent' (see consent-telemetry.js)
+  'consent_shown',
+  'consent_accept',
+  'consent_reject',
+  'consent_custom',
 ]
 
 const cap = (v, n = 200) => (v == null ? null : String(v).slice(0, n))

@@ -19,6 +19,7 @@ import { useRouter } from 'next/navigation'
 import { loadStripe } from '@stripe/stripe-js'
 import { Loader2, AlertCircle, Lock } from 'lucide-react'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
 
@@ -35,8 +36,33 @@ function getStripe(pubKey, connectedAccountId) {
   return stripePromises.get(cacheKey)
 }
 
+// EVENT-MOVE.6 — a customer's own date change is paid from a link the entry
+// page built: /event-pay/<id>#back=<their entry token>. The fragment never
+// reaches a server; this page reads it to send them back to their entry. It
+// is accepted only in the token's exact shape (base64url "payload.sig"), so
+// it can only ever name a path under /event/entry/ on this origin: no open
+// redirect. Anything else is ignored.
+const BACK_TOKEN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
+
+export function backPathFromHash(hash) {
+  const m = /(?:^#|&)back=([^&]*)/.exec(String(hash || ''))
+  if (!m) return null
+  let token
+  try { token = decodeURIComponent(m[1]) } catch { return null }
+  return BACK_TOKEN.test(token) ? `/event/entry/${token}` : null
+}
+
+// Where a paid (or already-paid) payment goes: back to the entry page for a
+// price difference that came with one, else the event's confirmed page.
+function doneUrl(d, backPath) {
+  if (backPath && d?.kind === GAP_PAYMENT_KIND) return backPath
+  return `/event/${d?.race?.slug}/confirmed?registration=${d?.registration?.id || ''}`
+}
+
 export default function RaceCheckoutPage({ paymentId }) {
   const router = useRouter()
+  // Read once, client-side (the fragment is not sent with the request).
+  const [backPath] = useState(() => (typeof window === 'undefined' ? null : backPathFromHash(window.location.hash)))
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [phaseError, setPhaseError] = useState(null)
@@ -63,10 +89,10 @@ export default function RaceCheckoutPage({ paymentId }) {
         }
         setData(j.data)
         if (j.data?.status === 'completed') {
-          // Already paid — webhook landed. Redirect to confirmation.
-          const slug = j.data.race?.slug
-          const regId = j.data.registration?.id
-          if (slug) router.replace(`/event/${slug}/confirmed?registration=${regId || ''}`)
+          // Already paid — webhook landed. Redirect to confirmation (or, for
+          // a customer's date change, back to their entry page).
+          const goesBack = !!backPath && j.data.kind === GAP_PAYMENT_KIND
+          if (goesBack || j.data.race?.slug) router.replace(doneUrl(j.data, backPath))
           return
         }
         // Both providers now render inline below: Revolut via its embed SDK,
@@ -79,12 +105,14 @@ export default function RaceCheckoutPage({ paymentId }) {
         }
       })
     return () => { cancelled = true }
-  }, [paymentId, router])
+  }, [paymentId, router, backPath])
 
   // Mount the SDK once we have data + a target div.
   useEffect(() => {
     if (!data) return
     if (data.status !== 'pending') return
+    // EVENT-MOVE.5 — a difference settled by hand: nothing to pay.
+    if (data.settled) return
     if (!targetRef.current || instanceRef.current) return
 
     // ─── Stripe Connect: mount Stripe Embedded Checkout inline ───────
@@ -112,9 +140,7 @@ export default function RaceCheckoutPage({ paymentId }) {
             clientSecret,
             onComplete: () => {
               if (destroyed) return
-              const slug = data.race?.slug
-              const regId = data.registration?.id
-              router.push(`/event/${slug}/confirmed?registration=${regId || ''}`)
+              router.push(doneUrl(data, backPath))
             },
           })
           if (destroyed) { try { checkout.destroy() } catch {} ; return }
@@ -162,9 +188,7 @@ export default function RaceCheckoutPage({ paymentId }) {
           createOrder: async () => ({ publicId: data.checkout.token }),
           onSuccess: () => {
             if (destroyed) return
-            const slug = data.race?.slug
-            const regId = data.registration?.id
-            router.push(`/event/${slug}/confirmed?registration=${regId || ''}`)
+            router.push(doneUrl(data, backPath))
           },
           onError: ({ error }) => {
             if (destroyed) return
@@ -191,7 +215,7 @@ export default function RaceCheckoutPage({ paymentId }) {
       try { instanceRef.current?.destroy?.() } catch {}
       instanceRef.current = null
     }
-  }, [data, router])
+  }, [data, router, backPath])
 
   if (loadError) {
     return (
@@ -207,6 +231,35 @@ export default function RaceCheckoutPage({ paymentId }) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
         <Loader2 size={28} className="animate-spin text-white/40" />
+      </div>
+    )
+  }
+
+  // EVENT-MOVE.5 — a moved entry's price difference: say so, list no roster.
+  const isGap = data.kind === GAP_PAYMENT_KIND
+
+  // A difference link that can no longer be paid: say why, mount nothing.
+  const closedMessage = isGap && data.settled
+    ? 'This difference is already settled, nothing to pay.'
+    : isGap && data.expired
+      // EVENT-MOVE.6 — a customer's own date change can simply be started again.
+      ? (backPath
+          ? 'This payment link has expired. Go back to your entry to choose your date again.'
+          : 'This payment link has expired. Ask the event team for a new one.')
+      : null
+  if (closedMessage) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <div className="lp-card-glow rounded-2xl p-8 max-w-sm text-center">
+          <AlertCircle size={32} className="mx-auto text-white/50 mb-3" />
+          <p className="font-semibold mb-1">{data.race?.name || 'Your event'}</p>
+          <p className="text-white/70">{closedMessage}</p>
+          {isGap && backPath && (
+            <a href={backPath} className="inline-block mt-4 text-sm font-semibold underline underline-offset-4 text-white/90 hover:text-white">
+              Back to your entry
+            </a>
+          )}
+        </div>
       </div>
     )
   }
@@ -235,12 +288,15 @@ export default function RaceCheckoutPage({ paymentId }) {
             {/* top: event + team */}
             <div className="px-6 pt-6 pb-5">
               <h1 className="font-bold text-lg leading-snug">{data.race?.name || 'Your race'}</h1>
-              {data.registration?.team_name && (
+              {isGap && (
+                <p className="text-sm text-white/60 mt-1">Price difference</p>
+              )}
+              {!isGap && data.registration?.team_name && (
                 <p className="text-sm text-white/60 mt-1">
                   Team <strong className="text-white font-semibold">{data.registration.team_name}</strong>
                 </p>
               )}
-              {data.registration?.team_size > 1 && (
+              {!isGap && data.registration?.team_size > 1 && (
                 <p className="text-xs text-white/45 mt-1 tabular-nums">{data.registration.team_size} people</p>
               )}
             </div>
@@ -259,7 +315,7 @@ export default function RaceCheckoutPage({ paymentId }) {
               {data.booking_fee_cents > 0 && (
                 <div className="space-y-2 text-sm mb-4">
                   <div className="flex items-baseline justify-between text-white/70">
-                    <span>Entry</span>
+                    <span>{isGap ? 'Price difference' : 'Entry'}</span>
                     <span className="tabular-nums text-white/90">
                       {fmt(data.amount_cents - data.booking_fee_cents, data.currency)}
                     </span>

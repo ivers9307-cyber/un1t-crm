@@ -100,6 +100,11 @@ describe('lifetimeMilestones', () => {
     const s = m.milestones.find((x) => x.kind === 'sessions')
     expect(s.threshold).toBe(100) // 120 crosses 100, not yet 150
     expect(s.label).toContain('100 times')
+    // W1.S4 — the studio name arrives from the caller; none in hand → no
+    // "at …" clause, and never a gym literal.
+    expect(s.label).toBe("You've trained 100 times")
+    const branded = lifetimeMilestones(many, NOW, { brand: 'UN1T Dublin', shortName: 'UN1T' })
+    expect(branded.milestones.find((x) => x.kind === 'sessions').label).toBe("You've trained 100 times at UN1T Dublin")
   })
 
   it('no session milestone below the first threshold (10)', () => {
@@ -112,6 +117,12 @@ describe('lifetimeMilestones', () => {
     const m = lifetimeMilestones(sessions, NOW) // 3000 pts
     const p = m.milestones.find((x) => x.kind === 'points')
     expect(p.threshold).toBe(2500)
+    // W1.S4 — the product name is the tenant's short brand.
+    expect(p.label).toBe('2,500 Points earned')
+    const branded = lifetimeMilestones(sessions, NOW, { brand: 'UN1T Dublin', shortName: 'UN1T' })
+    expect(branded.milestones.find((x) => x.kind === 'points').label).toBe('2,500 UN1T Points earned')
+    expect(lifetimeMilestones(sessions, NOW, { shortName: 'Gym A' }).milestones.find((x) => x.kind === 'points').label)
+      .toBe('2,500 Gym A Points earned')
   })
 
   it('surfaces a longest-streak milestone only at 5+ days', () => {

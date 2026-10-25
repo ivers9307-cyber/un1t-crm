@@ -196,8 +196,8 @@ describe('mergeConversations — sequential, stop on first failure', () => {
     const result = await mergeConversations({ ids: ['a', 'b'], into: 'target', fetchImpl })
     expect(result).toEqual({ merged: ['a', 'b'], failed: null })
     expect(fetchImpl.mock.calls.map(c => c[0])).toEqual([
-      '/api/email/tickets/a/merge',
-      '/api/email/tickets/b/merge',
+      '/api/email/mail/a/merge',
+      '/api/email/mail/b/merge',
     ])
     for (const [, init] of fetchImpl.mock.calls) {
       expect(init.method).toBe('POST')
@@ -252,7 +252,7 @@ describe('mergeConversations — sequential, stop on first failure', () => {
   it('encodes ids into the path', async () => {
     const fetchImpl = vi.fn(async () => okResponse)
     await mergeConversations({ ids: ['a/b'], into: 't', fetchImpl })
-    expect(fetchImpl.mock.calls[0][0]).toBe('/api/email/tickets/a%2Fb/merge')
+    expect(fetchImpl.mock.calls[0][0]).toBe('/api/email/mail/a%2Fb/merge')
   })
 
   it('merges nothing when handed nothing', async () => {
@@ -268,8 +268,8 @@ describe('unmergeConversations — the toast Undo', () => {
     const result = await unmergeConversations({ ids: ['a', 'b'], fetchImpl })
     expect(result).toEqual({ unmerged: ['a', 'b'], failed: null })
     expect(fetchImpl.mock.calls.map(c => [c[0], c[1].method])).toEqual([
-      ['/api/email/tickets/a/merge', 'DELETE'],
-      ['/api/email/tickets/b/merge', 'DELETE'],
+      ['/api/email/mail/a/merge', 'DELETE'],
+      ['/api/email/mail/b/merge', 'DELETE'],
     ])
   })
 

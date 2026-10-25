@@ -64,7 +64,7 @@ import { overrideKey } from '@/lib/shelly/plan'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { ShellyToggleBody, ShellyOverride, MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import { stateFromReading } from '@/lib/shelly/status'
-import { nextLocalMidnightMs } from '@/lib/tz-time'
+import { nextLocalMidnightMs } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -145,7 +145,8 @@ function optimisticState(prev, channel, on, nowIso) {
 }
 
 export const POST = withAuth(
-  { permission: 'device_control', schema: ShellyToggleBody },
+  // WIDGET.1 — the Studio Controls widget's plug button lands here.
+  { permission: 'device_control', location: true, schema: ShellyToggleBody, allowWidgetToken: true },
   async ({ user, db, locationId, input, params }) => {
     const loaded = await loadDevice(db, locationId, params?.id)
     if (!loaded.ok) {

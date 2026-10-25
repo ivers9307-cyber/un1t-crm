@@ -208,6 +208,9 @@ export async function applyInvoiceWebhook(db, locationId, contactId, rawEvent) {
     // failed MEMBERSHIP invoice starts card-update reminders, and only a
     // settled one stops them.
     is_membership: isMembershipInvoice(parsed),
+    // PAYLINK.4 — the invoice's own Glofox user id, for capturePaymentForRun
+    // (falls back to the contact's linked glofox_member_id when absent).
+    glofox_user_id: parsed.glofox_user_id ?? null,
     aggregates: aggs,
   }
 }

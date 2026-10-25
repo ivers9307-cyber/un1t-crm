@@ -27,6 +27,7 @@ import { PATCH } from './route.js'
 import { executeMembershipCancellation } from '@/lib/agent/execute-membership-cancellation'
 import { sendMembershipOutcomeMessage } from '@/lib/cancellation-form/confirm'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
+import { glofoxCredentialsForLocation } from '@/lib/glofox'
 
 const ROW = {
   id: 'r1', location_id: 'L1', kind: 'cancellation', status: 'pending', contact_id: 'c1',
@@ -36,7 +37,7 @@ const ROW = {
 const CONTACT = { id: 'c1', first_name: 'Aoife', name: 'Aoife Byrne', email: 'a@example.com', email_status: 'active', glofox_member_id: '6a0219cee62c0c6c980bc95f', glofox_user_membership_id: null, glofox_membership_plan: 'Unlimited' }
 
 let updates
-function makeDb(row, { autoCancel = false } = {}) {
+function makeDb(row, { autoCancel = false, cancellationForm = {}, org = null, membershipSource = 'glofox' } = {}) {
   updates = []
   return {
     from(table) {
@@ -47,7 +48,9 @@ function makeDb(row, { autoCancel = false } = {}) {
         async maybeSingle() {
           if (patch) return { data: { id: row.id }, error: null }
           if (table === 'contacts') return { data: CONTACT, error: null }
-          if (table === 'locations') return { data: { name: 'UN1T Stillorgan', glofox_auto_cancel_memberships: autoCancel, settings: { customer_agent: { cancellation_form: {} } } }, error: null }
+          if (table === 'locations') return { data: { id: 'L1', name: 'UN1T Stillorgan', organization_id: 'O1', membership_source: membershipSource, glofox_auto_cancel_memberships: autoCancel, settings: { customer_agent: { cancellation_form: cancellationForm } } }, error: null }
+          // MIAORG.1 — the copy is read through resolveAgentSettingsForLocation.
+          if (table === 'org_settings') return { data: org ? { customer_agent: org } : null, error: null }
           return { data: row, error: null }
         },
         async single() {
@@ -160,5 +163,62 @@ describe('toggle ON', () => {
     db = makeDb(ROW, { autoCancel: true })
     await patch({ status: 'saved' })
     expect(executeMembershipCancellation).not.toHaveBeenCalled()
+  })
+})
+
+// MIAORG.1 Task 2 — the confirmation copy comes from the studio's RESOLVED Mia
+// settings; cancellation_form is a studio-only key, so an org's never lands.
+describe('confirmation copy from resolved settings (MIAORG.1)', () => {
+  it("the studio's own form copy reaches the confirmation; an org's never does", async () => {
+    db = makeDb(ROW, { cancellationForm: { cancel_confirmation_text: 'Studio says bye.' }, org: { cancellation_form: { cancel_confirmation_text: 'Org says bye.' } } })
+    await patch({ status: 'approved' })
+    expect(sendMembershipOutcomeMessage.mock.calls[0][1].copy.cancel_confirmation_text).toBe('Studio says bye.')
+    db = makeDb(ROW, { cancellationForm: null, org: { cancellation_form: { cancel_confirmation_text: 'Org says bye.' } } })
+    await patch({ status: 'approved' })
+    expect(sendMembershipOutcomeMessage.mock.calls[1][1].copy.cancel_confirmation_text).not.toBe('Org says bye.')
+  })
+})
+
+// MIAHATCH.2 — Mia files a Hatch member's cancellation at Hatch Street (a
+// un1t.online studio). Approving it must never run the Glofox cancel there,
+// whatever the auto-cancel column says: staff cancel in un1t.online.
+describe('a un1t.online studio row (MIAHATCH.2)', () => {
+  it('never calls the Glofox cancel: lands failed with NOT_EXECUTABLE_UN1T and no confirmation', async () => {
+    db = makeDb(ROW, { autoCancel: true, membershipSource: 'un1t_online' })
+    const res = await patch({ status: 'approved' })
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(executeMembershipCancellation).not.toHaveBeenCalled()
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
+    expect(body.request.status).toBe('failed')
+    expect(finalUpdate().details.result).toEqual({ ok: false, message_code: 'NOT_EXECUTABLE_UN1T' })
+    expect(body.executed).toEqual({ ok: false, message_code: 'NOT_EXECUTABLE_UN1T' })
+    // The execution marker opened by the claim is closed by the final write.
+    expect(updates[0].patch.details.execution.stage).toBe('executing')
+    expect(finalUpdate().details.execution.stage).toBe('done')
+    expect(sendMembershipOutcomeMessage).not.toHaveBeenCalled()
+    expect(body.customer_notified).toMatchObject({ sent: false, reason: 'not_executed' })
+  })
+
+  it('a failed row re-approved still never calls the Glofox cancel', async () => {
+    db = makeDb({ ...ROW, status: 'failed', details: { ...ROW.details, result: { ok: false, message_code: 'NOT_EXECUTABLE_UN1T' } } }, { autoCancel: true, membershipSource: 'un1t_online' })
+    const res = await patch({ status: 'approved' })
+    expect((await res.json()).request.status).toBe('failed')
+    expect(executeMembershipCancellation).not.toHaveBeenCalled()
+  })
+
+  it('with the toggle off it approves exactly as at any studio (nothing executes)', async () => {
+    db = makeDb(ROW, { membershipSource: 'un1t_online' })
+    const res = await patch({ status: 'approved' })
+    expect((await res.json()).request.status).toBe('approved')
+    expect(executeMembershipCancellation).not.toHaveBeenCalled()
+  })
+
+  it('a Glofox studio row still executes (the guard reads membership_source)', async () => {
+    db = makeDb(ROW, { autoCancel: true, membershipSource: 'glofox' })
+    executeMembershipCancellation.mockResolvedValue({ ok: true, status: 200, message_code: null, local_planned_end_date: '2026-10-06' })
+    const res = await patch({ status: 'approved' })
+    expect((await res.json()).request.status).toBe('actioned')
+    expect(executeMembershipCancellation).toHaveBeenCalledTimes(1)
   })
 })

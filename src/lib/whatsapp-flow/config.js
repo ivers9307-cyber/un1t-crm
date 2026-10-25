@@ -1,5 +1,18 @@
-// A flow_token is minted per send as `<contactId>.<locationId>`. Resolve it back
-// to the contact + the location's whatsapp_flow settings. Ping (health check)
+/**
+ * WATPLSEND.1 — THE flow_token format: `<contactId>.<locationId>`. Every
+ * minter uses this (the inbox template send, broadcasts, sequences, and since
+ * FLOWTOKENDEDUP.1 the inbox Flow send and the paid-ad welcome); config.test.js
+ * fails on a token built by hand anywhere in src/. resolveFlowConfigByToken below is
+ * its only reader. null when either half is missing, so a caller can
+ * refuse the send rather than hand Meta a token the endpoint cannot resolve.
+ */
+export function flowTokenFor(contactId, locationId) {
+  if (!contactId || !locationId) return null
+  return `${contactId}.${locationId}`
+}
+
+// Resolve a flow_token (see flowTokenFor) back to the contact + the location's
+// whatsapp_flow settings. Ping (health check)
 // carries no token, so this returns an empty fallback for it.
 export async function resolveFlowConfigByToken(db, flowToken) {
   const fallback = { contact: null, locationId: null, config: {} }

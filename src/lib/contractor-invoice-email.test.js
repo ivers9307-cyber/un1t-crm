@@ -5,7 +5,7 @@
 // table, which has no logo_url/company_name columns (mig 004 vs the
 // company_settings table in mig 013). These tests lock that in:
 // branding is sourced from company_settings, and a missing branding
-// row falls back to the neutral "UN1T" wordmark.
+// row renders no wordmark at all (W1.S2: never another gym's name).
 //
 // createServerClient + the Postmark fetch are mocked so we can assert
 // on the composed HtmlBody without standing up Supabase or Postmark.
@@ -83,6 +83,34 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('W1.E2 — staff/supplier mail leaves as the location brand on the platform address', () => {
+  it('From is the company_settings brand on POSTMARK_FROM_EMAIL', async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [{ company_name: 'UN1T Stillorgan', logo_url: null, favicon_url: null }] }))
+    const fetchMock = stubPostmark()
+    await sendInvoiceApprovedEmail('inv-1')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).From).toBe('UN1T Stillorgan <hello@platform.test>')
+  })
+
+  it('From is `Repset <POSTMARK_FROM_EMAIL>` when no brand resolves; nothing on the wire says un1t.ie', async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+    await sendInvoiceApprovedEmail('inv-1')
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.From).toBe('Repset <hello@platform.test>')
+    expect(JSON.stringify(body)).not.toContain('un1t.ie')
+  })
+
+  it("the env's own display name is never used", async () => {
+    vi.stubEnv('POSTMARK_FROM_EMAIL', 'UN1T <hello@platform.test>')
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+    await sendInvoiceApprovedEmail('inv-1')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).From).toBe('Repset <hello@platform.test>')
+  })
+})
+
 describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
   it('renders the company_settings logo in the email header', async () => {
     vi.mocked(createServerClient).mockReturnValue(
@@ -101,7 +129,7 @@ describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
     expect(html).toContain('UN1T Stillorgan')
   })
 
-  it('falls back to the UN1T wordmark when no branding row exists (no logo img)', async () => {
+  it('W1.S2 — renders NO wordmark when the brand is unresolved (no logo img, no literal gym name)', async () => {
     vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
     const fetchMock = stubPostmark()
 
@@ -109,7 +137,23 @@ describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
 
     const html = sentHtml(fetchMock)
     expect(html).not.toContain('<img')
-    expect(html).toContain('UN1T')
+    expect(html).not.toContain('UN1T')
+    expect(html).not.toMatch(/letter-spacing:2px;margin-bottom:16px">\s*</)
+  })
+})
+
+describe('sendInvoiceApprovedEmail — honest wording (INVOICEREVIEW.2)', () => {
+  it('says queued for payment processing, never forwarded for payment', async () => {
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+
+    await sendInvoiceApprovedEmail('inv-1')
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    for (const part of [body.HtmlBody, body.TextBody]) {
+      expect(part).toContain('queued for payment processing')
+      expect(part).not.toMatch(/forwarded/i)
+    }
   })
 })
 

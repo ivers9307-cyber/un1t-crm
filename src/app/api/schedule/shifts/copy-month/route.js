@@ -5,7 +5,7 @@
 // button — the most common case is "rinse and repeat last month's
 // roster, then tweak".
 //
-// Body: { location_id, source_month_start, target_month_start }
+// Body: { location_id, source_month_start, target_month_start, mode? }
 //   - both must be the FIRST of a calendar month (YYYY-MM-01).
 //   - the date range copied is source_month_start through the last
 //     day of THAT month (28-31 days depending on month / leap year).
@@ -23,21 +23,32 @@
 // end-of-month) would silently bunch multiple source shifts onto
 // Feb 28, which is rarely what an operator wants.
 //
-// Idempotency
-// -----------
+// COPYMODES.1 — that day-of-month mapping is the EXACT mode's. In TEMPLATE
+// mode a coach belongs to a template slot (template + weekday), so the Nth
+// weekday maps to the Nth weekday instead (first Monday -> first Monday; a
+// 5th Monday the target lacks is skipped). Day-of-month would move a Monday
+// slot's coach onto a Thursday, where that template mostly doesn't run.
+//
+// Idempotency (COPYFIX.1)
+// -----------------------
 // Same upsert pattern as copy-week — the unique key
-// (location_id, profile_id, shift_template_id, shift_date) means
-// re-running over an already-copied month updates rather than
-// duplicates. Manager re-runs after edits land cleanly.
+// (block_id, profile_id), upserted with ON CONFLICT DO NOTHING. A
+// re-run over an already-copied month adds only the coaches still
+// missing from the target; a coach already assigned there is left
+// exactly as they were — their override, notes, status and
+// assigned_by are never touched. `copied` in the response counts
+// only the rows actually inserted, so a full re-run reports 0.
 
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, realIsoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { bulkUpsertShiftAssignments } from '@/lib/roster-write'
-import { fetchSourceShiftRows } from '@/lib/roster-read'
+import { fetchSlotRemovalKeys } from '@/lib/roster'
+import { fetchSourceBlocks, fetchLeaveLookup, buildCopyPlan, mapNthWeekdayOfMonth, COPY_MODES } from '@/lib/roster-copy'
+import { readAssignmentKeysInRange, logAndNotifyCopiedShifts } from '@/lib/roster-change-notify'
 
 export const runtime = 'nodejs'
 
@@ -45,8 +56,12 @@ export const runtime = 'nodejs'
 // consistent across the two endpoints.
 const CopyMonthSchema = z.object({
   location_id: uuidLike,
-  source_month_start: isoDate,
-  target_month_start: isoDate,
+  // DATECHECK.1 — real dates, not just the shape (month 00/13 passed the
+  // first-of-month check below).
+  source_month_start: realIsoDate,
+  target_month_start: realIsoDate,
+  // COPYMODES.1 — see copy-week. Missing = 'exact', today's behaviour.
+  mode: z.enum(COPY_MODES).default('exact'),
 })
 
 /**
@@ -82,16 +97,21 @@ export function mapDayOfMonth(sourceIso, targetMonthStartIso) {
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // SCHEDROLES.1 — coarse pre-check; the decision is the role AT
+  // body.location_id below, never `user.role` (the ACTIVE studio's).
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   const validation = await validateBody(request, CopyMonthSchema)
   if (!validation.ok) return validation.response
-  const { location_id, source_month_start, target_month_start } = validation.data
+  const { location_id, source_month_start, target_month_start, mode } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   // Validate inputs are first-of-month — clearer error than a silent
   // off-by-one if a manager passes a mid-month date.
@@ -108,8 +128,9 @@ export async function POST(request) {
   const sourceLastDay = daysInMonth(source_month_start)
   const sourceEnd = `${source_month_start.slice(0, 7)}-${String(sourceLastDay).padStart(2, '0')}`
 
-  // Source rows from the Roster v2 model (blocks + assignments).
-  const { rows: sourceRows, error: fetchError } = await fetchSourceShiftRows(db, {
+  // Source blocks (with template + assignments) from the Roster v2 model.
+  // Paged, so a busy month is never cut at the 1,000-row select cap.
+  const { blocks: sourceBlocks, error: fetchError } = await fetchSourceBlocks(db, {
     locationId: location_id,
     startDate: source_month_start,
     endDate: sourceEnd,
@@ -117,57 +138,95 @@ export async function POST(request) {
 
   if (fetchError) return NextResponse.json({ success: false, error: fetchError.message }, { status: 400 })
 
-  if (!sourceRows || sourceRows.length === 0) {
+  // Target month bounds. Hoisted (it used to be computed below) because the
+  // leave read needs them.
+  const targetEnd = `${target_month_start.slice(0, 7)}-${String(daysInMonth(target_month_start)).padStart(2, '0')}`
+
+  // COPYLEAVE.1 — see copy-week: approved leave over the TARGET month, read
+  // before any write; a failed read stops the copy.
+  const { isOnLeave, error: leaveError } = await fetchLeaveLookup(db, {
+    sourceBlocks,
+    startDate: target_month_start,
+    endDate: targetEnd,
+  })
+  if (leaveError) return NextResponse.json({ success: false, error: leaveError.message }, { status: 500 })
+
+  // Map each source block's date into the target month; a day with no
+  // counterpart (e.g. Jan 31 -> Feb, or a 5th weekday in template mode) is
+  // dropped and its coaches are reported back as `skipped`.
+  const plan = buildCopyPlan(sourceBlocks, {
+    mode,
+    mapDate: mode === 'template'
+      ? (d) => mapNthWeekdayOfMonth(d, target_month_start)
+      : (d) => mapDayOfMonth(d, target_month_start),
+    isOnLeave,
+  })
+
+  if (plan.sourceAssignments === 0) {
     return NextResponse.json({ success: false, error: 'No shifts found in the source month' }, { status: 404 })
   }
 
-  // Map each source row's date to the target month, dropping ones
-  // that fall on a day-of-month that doesn't exist in the target
-  // (e.g. Jan 31 -> Feb).
-  const newRows = []
-  let skippedCount = 0
-  for (const r of sourceRows) {
-    const mappedDate = mapDayOfMonth(r.shiftDate, target_month_start)
-    if (mappedDate === null) {
-      skippedCount++
-      continue
-    }
-    newRows.push({
-      profileId: r.profileId,
-      shiftTemplateId: r.shiftTemplateId,
-      shiftDate: mappedDate,
-      startTimeOverride: r.startTimeOverride,
-      endTimeOverride: r.endTimeOverride,
-      notes: r.notes,
-      status: 'scheduled',
-    })
+  // Every source coach was skipped and there is no block to ensure: nothing
+  // to write. Same 201 shape as a copy that wrote (and as copy-week), so the
+  // client reads copied/skipped the one way.
+  if (plan.rows.length === 0 && plan.blocks.length === 0) {
+    return NextResponse.json({ success: true, copied: 0, skipped: plan.skipped, skipped_removed: 0, skipped_on_leave: plan.skippedOnLeave, skipped_not_at_studio: 0, mode }, { status: 201 })
   }
 
-  if (newRows.length === 0) {
-    return NextResponse.json({
-      success: true,
-      data: [],
-      copied: 0,
-      skipped: skippedCount,
-      message: skippedCount > 0
-        ? `Every source shift fell on a day-of-month that doesn't exist in the target (likely Feb).`
-        : 'No shifts to copy.',
-    })
+  // NOTIFY.1 — see copy-week.
+  const before = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
+
+  // SLOTREMOVAL.1 — slots a manager deleted in the target month stay deleted:
+  // the writer neither re-creates them nor places the source's coaches on
+  // them (those coaches are counted as skipped). Read before any write, and
+  // a failed read stops the copy — copying blind would bring them back.
+  let removedSlots
+  try {
+    removedSlots = await fetchSlotRemovalKeys(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
+  } catch (e) {
+    return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }
 
-  // Find-or-create blocks + upsert assignments (new model). New blocks
-  // carry no roster_id → copied shifts read unpublished until publish.
-  const { count, error } = await bulkUpsertShiftAssignments(db, {
+  // Find-or-create blocks + insert assignments (new model). A block created
+  // inside an already-published period joins that roster (ROSTER-FIX.4).
+  const { count, skippedRemoved = 0, skippedNotAtStudio = 0, error } = await bulkUpsertShiftAssignments(db, {
     locationId: location_id,
     actorId: user.id,
-    rows: newRows,
+    rows: plan.rows,
+    blocks: plan.blocks,
+    removedSlots,
   })
 
+  // NOTIFY.1 review — see copy-week: the AFTER snapshot is read synchronously
+  // here, right after the upsert commits, so it can't race a second copy onto
+  // the same period. Only the log+notify step is deferred via `after`.
+  const afterSnap = await readAssignmentKeysInRange(db, { locationId: location_id, startDate: target_month_start, endDate: targetEnd })
+
+  after(() => logAndNotifyCopiedShifts(db, {
+    locationId: location_id,
+    actorId: user.id,
+    startDate: target_month_start,
+    endDate: targetEnd,
+    before,
+    after: afterSnap,
+    via: 'copy_month',
+  }))
+
+  // Review fix — the writer batches its inserts, so an error can arrive AFTER
+  // earlier batches committed. Those coaches are real and must still be logged
+  // and told: the snapshot + after() above run first, and the before/after
+  // diff only ever names what actually landed. A retry cannot catch them up,
+  // because its own before-snapshot already contains them.
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
+  // skipped_removed and skipped_on_leave: see copy-week.
   return NextResponse.json({
     success: true,
     copied: count,
-    skipped: skippedCount,
+    skipped: plan.skipped + skippedRemoved + skippedNotAtStudio,
+    skipped_removed: skippedRemoved,
+    skipped_on_leave: plan.skippedOnLeave,
+    skipped_not_at_studio: skippedNotAtStudio, // STAFFDELETE.1 — see copy-week
+    mode,
   }, { status: 201 })
 }

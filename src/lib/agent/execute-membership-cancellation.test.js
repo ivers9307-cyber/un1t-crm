@@ -68,4 +68,13 @@ describe('executeMembershipCancellation', () => {
     const out = await executeMembershipCancellation(makeDb(), row(), { contact: { glofox_member_id: MEMBER, glofox_user_membership_id: UM }, creds })
     expect(out).toMatchObject({ ok: false, status: 400, message_code: 'MEMBERSHIP_MINIMUM_TERM_NOT_REACHED' })
   })
+
+  it('REGISTRYREAD.1a: unreadable settings → GLOFOX_SETTINGS_UNREADABLE, no Glofox call', async () => {
+    const out = await executeMembershipCancellation(makeDb(), row(), {
+      contact: { glofox_member_id: MEMBER, glofox_user_membership_id: UM },
+      creds: { branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' },
+    })
+    expect(out).toEqual({ ok: false, message_code: 'GLOFOX_SETTINGS_UNREADABLE', local_planned_end_date: null })
+    expect(cancelGlofoxMembership).not.toHaveBeenCalled()
+  })
 })

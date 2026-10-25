@@ -1,5 +1,7 @@
-// GET /api/host/signup-qr — printable QR PNG for the host's public
-// mailing-list signup page /h/[slug] (HOST-GROWTH.3). Host session only;
+// GET /api/host/signup-qr — printable QR PNG for the host's public page
+// /h/[slug] (HOST-GROWTH.3), or with ?page=join for the standalone signup
+// form /h/[slug]/join (HOST-JOIN-PAGE.1; any other value is the public
+// page). Host session only;
 // ensures the slug exists first via ensureHostSlug (same lazy derivation
 // the email-domain flow uses).
 //
@@ -14,20 +16,20 @@ import QRCode from 'qrcode'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { ensureHostSlug } from '@/lib/hosts'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+export async function GET(request) {
   const session = await getCurrentHost()
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const db = createServerClient()
   const { data: hostRow } = await db
     .from('event_hosts')
-    .select('id, name, slug')
+    .select('id, name, slug, anchor_location_id')
     .eq('id', session.host.id)
     .maybeSingle()
   if (!hostRow) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -40,12 +42,14 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Could not prepare your signup page — try again shortly.' }, { status: 500 })
   }
 
-  // Origin-only from getAppUrl, same defensive pattern as the events QR
-  // route — a misconfigured env var can't poison the QR target.
+  // W1.L3b — on the tenant host of the host's ANCHOR location (NULL → the
+  // resolver floors to the CRM host). Origin-only, same defensive pattern as
+  // the events QR route — a misconfigured env var can't poison the QR target.
   let publicUrl
   try {
-    const origin = new URL(getAppUrl()).origin
-    publicUrl = `${origin}/h/${slug}`
+    const baseUrl = new URL(await resolveCustomerBaseUrl(db, hostRow.anchor_location_id)).origin
+    const page = new URL(request.url).searchParams.get('page')
+    publicUrl = page === 'join' ? `${baseUrl}/h/${slug}/join` : `${baseUrl}/h/${slug}`
   } catch (e) {
     return NextResponse.json({
       success: false,
@@ -74,7 +78,7 @@ export async function GET() {
     headers: {
       'Content-Type': 'image/png',
       'Content-Length': String(png.length),
-      'Content-Disposition': `attachment; filename="signup-qr-${slug}.png"`,
+      'Content-Disposition': `attachment; filename="${publicUrl.endsWith('/join') ? 'signup-form-qr' : 'signup-qr'}-${slug}.png"`,
       'Cache-Control': 'private, no-store',
     },
   })

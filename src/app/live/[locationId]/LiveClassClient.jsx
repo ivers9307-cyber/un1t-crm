@@ -7,16 +7,27 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
+import { Heart, RefreshCw, Plug, Square, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 import DetectedTab from './DetectedTab'
+import ClassRosterPanel from './ClassRosterPanel'
 
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 
-export default function LiveClassClient({ locationId, locationName }) {
-  const [data, setData] = useState({ sessions: [], available_straps: [], roster: [], occurrence: null })
+// GATES-2 — `canMutate` (from the page: a LIVE_MUTATION_ROLES role at this
+// location) gates every control whose route would otherwise 403: End all,
+// End, Pair, HR test mode and the Detected tab's Claim. Defaults closed.
+//
+// LIVE-TVBTN.1 — `tvToken` (from the page: this location's oldest active
+// tv_displays token, or null) backs the "TV display" link. Null → no link.
+//
+// TZ.12 — `timeZone` (from the page: the location's IANA zone) is the studio
+// clock for the overnight poll back-off and the Detected tab's times.
+export default function LiveClassClient({ locationId, locationName, canMutate = false, tvToken = null, timeZone = DEFAULT_TZ }) {
+  const [data, setData] = useState({ sessions: [], available_straps: [], roster: [], occurrence: null, has_bridge: undefined })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [endingAll, setEndingAll] = useState(false)
@@ -35,6 +46,8 @@ export default function LiveClassClient({ locationId, locationName }) {
         available_straps: json.available_straps || [],
         roster: json.roster || [],
         occurrence: json.occurrence || null,
+        // UN1TBOOK.13 — undefined (an older payload) leaves the panel's default.
+        has_bridge: json.has_bridge,
       })
       setTestModeUntil(json.test_mode_until || null)
       setError(null)
@@ -56,12 +69,12 @@ export default function LiveClassClient({ locationId, locationName }) {
     async function loop() {
       const json = await poll()
       if (cancelled) return
-      handle = setTimeout(loop, json ? nextPollDelay(json) : ACTIVE_POLL_MS)
+      handle = setTimeout(loop, json ? nextPollDelay(json, new Date(), timeZone) : ACTIVE_POLL_MS)
     }
     loop()
     return () => { cancelled = true; clearTimeout(handle) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId])
+  }, [locationId, timeZone])
 
   async function endAll() {
     if (!confirm(`End all ${data.sessions.length} active sessions?`)) return
@@ -118,17 +131,23 @@ export default function LiveClassClient({ locationId, locationName }) {
         </div>
         <div className="flex items-center gap-2">
           <RefreshIndicator lastTickRef={lastTickRef} />
-          {/* Open the in-class TV display (the public board this location casts
-              to the studio screen) in a new tab. */}
-          <Link
-            href={`/tv/${locationId}`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border bg-white px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface"
-          >
-            <Tv size={14} /> TV display
-          </Link>
-          {data.sessions.length > 0 && (
+          {/* Open the in-class TV display (the token-keyed board this location
+              casts to the studio screen) in a new tab. W0.9c removed the
+              location-keyed /tv/<locationId>; LIVE-TVBTN.1 restored the link
+              via the page-loaded tv_displays token. Deliberately NO ?kiosk=1
+              and NO ?device= — a staff preview must not stamp a kiosk render
+              heartbeat (src/app/api/public/tv-live/[token]/route.js). */}
+          {tvToken && (
+            <Link
+              href={`/tv/live/${encodeURIComponent(tvToken)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border bg-white px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface"
+            >
+              <Tv size={14} /> TV display
+            </Link>
+          )}
+          {canMutate && data.sessions.length > 0 && (
             <button
               type="button"
               onClick={endAll}
@@ -167,26 +186,26 @@ export default function LiveClassClient({ locationId, locationName }) {
       </div>
 
       {tab === 'detected' ? (
-        <DetectedTab locationId={locationId} />
+        <DetectedTab locationId={locationId} canClaim={canMutate} timeZone={timeZone} />
       ) : loading && data.sessions.length === 0 ? (
         <p className="mt-10 text-center text-sm text-un1t-subtle">Loading live class…</p>
       ) : (
         <>
-          <TestModeControl locationId={locationId} testModeUntil={testModeUntil} onChange={setTestModeUntil} />
+          <TestModeControl locationId={locationId} testModeUntil={testModeUntil} onChange={setTestModeUntil} canMutate={canMutate} />
 
           <SessionGrid
             sessions={data.sessions}
-            onEndOne={endOne}
+            onEndOne={canMutate ? endOne : null}
           />
 
-          <ClassRosterPanel roster={data.roster} occurrence={data.occurrence} />
+          <ClassRosterPanel roster={data.roster} occurrence={data.occurrence} hasBridge={data.has_bridge} />
 
           <AvailableStrapsPanel
             straps={data.available_straps}
-            onStartPair={(strap) => setPairing(strap)}
+            onStartPair={canMutate ? (strap) => setPairing(strap) : null}
           />
 
-          {pairing && (
+          {canMutate && pairing && (
             <PairModal
               strap={pairing}
               locationId={locationId}
@@ -202,7 +221,7 @@ export default function LiveClassClient({ locationId, locationName }) {
 
 // ── components ───────────────────────────────────────────────────
 
-function TestModeControl({ locationId, testModeUntil, onChange }) {
+function TestModeControl({ locationId, testModeUntil, onChange, canMutate = false }) {
   const [busy, setBusy] = useState(false)
   const activeMs = testModeUntil ? new Date(testModeUntil).getTime() : 0
   const active = activeMs > Date.now()
@@ -232,10 +251,11 @@ function TestModeControl({ locationId, testModeUntil, onChange }) {
       <div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
         <span className="font-semibold text-amber-800">HR test mode on</span>
         <span className="text-amber-700">registered straps route for ~{minsLeft} min</span>
-        <button type="button" onClick={disable} disabled={busy} className="ml-auto rounded-md bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50">Turn off</button>
+        {canMutate && <button type="button" onClick={disable} disabled={busy} className="ml-auto rounded-md bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50">Turn off</button>}
       </div>
     )
   }
+  if (!canMutate) return null
   return (
     <button type="button" onClick={enable} disabled={busy} className="mb-4 rounded-md border border-un1t-border px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface disabled:opacity-50">
       Enable HR test mode (2h)
@@ -259,7 +279,7 @@ function SessionGrid({ sessions, onEndOne }) {
   return (
     <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {sessions.map((s) => (
-        <SessionTile key={s.id} session={s} onEnd={() => onEndOne(s.id)} />
+        <SessionTile key={s.id} session={s} onEnd={onEndOne ? () => onEndOne(s.id) : null} />
       ))}
     </section>
   )
@@ -292,14 +312,16 @@ function SessionTile({ session, onEnd }) {
             <p className="truncate text-sm font-semibold">{session.contactFirstName}</p>
             <p className="truncate text-xs text-un1t-subtle">{session.contactName}</p>
           </div>
-          <button
-            type="button"
-            onClick={onEnd}
-            className="rounded p-1 text-un1t-subtle hover:bg-un1t-border"
-            title="End this session"
-          >
-            <Square size={12} />
-          </button>
+          {onEnd && (
+            <button
+              type="button"
+              onClick={onEnd}
+              className="rounded p-1 text-un1t-subtle hover:bg-un1t-border"
+              title="End this session"
+            >
+              <Square size={12} />
+            </button>
+          )}
         </div>
 
         <div className="mt-3 flex items-baseline justify-between">
@@ -331,57 +353,6 @@ function SessionTile({ session, onEnd }) {
         </p>
       </div>
     </div>
-  )
-}
-
-function ClassRosterPanel({ roster, occurrence }) {
-  // Only shown while a class is live (occurrence resolved) and there's a roster
-  // or walk-ins to show. HR-CLASS-ALLOC.2.
-  if (!occurrence || roster.length === 0) return null
-  const booked = roster.filter((r) => r.booked)
-  const presentBooked = booked.filter((r) => r.hasHr).length
-  const walkins = roster.filter((r) => !r.booked)
-
-  return (
-    <section className="mt-8 rounded-2xl border border-un1t-border bg-white p-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Users size={16} className="text-un1t-subtle" />
-        <h2 className="text-sm font-semibold">Class roster</h2>
-        {occurrence.class_name && (
-          <span className="rounded-full bg-un1t-border px-2 py-0.5 text-[11px] font-medium text-un1t-subtle">
-            {occurrence.class_name}
-          </span>
-        )}
-        <span className="ml-auto text-xs text-un1t-subtle">
-          {presentBooked}/{booked.length} booked here
-          {walkins.length > 0 && ` · ${walkins.length} walk-in${walkins.length > 1 ? 's' : ''}`}
-        </span>
-      </div>
-
-      <ul className="mt-3 divide-y divide-un1t-border">
-        {roster.map((r, i) => (
-          <li key={r.sessionId || `roster-${i}`} className="flex items-center gap-3 py-2">
-            <span className={`min-w-0 flex-1 truncate text-sm ${r.hasHr ? 'font-medium' : 'text-un1t-subtle'}`}>
-              {r.anon ? <span className="font-mono">{r.label}</span> : r.label}
-              {r.anon && <span className="ml-1.5 text-[10px] font-semibold uppercase text-indigo-700">walk-in</span>}
-              {!r.booked && !r.anon && <span className="ml-1.5 text-[10px] text-amber-700">not booked</span>}
-            </span>
-            {r.hasHr ? (
-              <span className="shrink-0 text-sm font-semibold tabular-nums">
-                {r.currentBpm ?? '—'}<span className="ml-0.5 text-[10px] font-normal text-un1t-subtle">bpm</span>
-              </span>
-            ) : (
-              <span className="shrink-0 text-[11px] text-un1t-subtle">no strap</span>
-            )}
-            {r.booked && (
-              <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                booked
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
   )
 }
 
@@ -422,13 +393,15 @@ function AvailableStrapsPanel({ straps, onStartPair }) {
               {s.lastBpm != null && (
                 <p className="text-sm font-semibold tabular-nums">{s.lastBpm}<span className="ml-0.5 text-[10px] text-un1t-subtle">bpm</span></p>
               )}
-              <button
-                type="button"
-                onClick={() => onStartPair(s)}
-                className="mt-1 inline-flex items-center rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500"
-              >
-                Pair
-              </button>
+              {onStartPair && (
+                <button
+                  type="button"
+                  onClick={() => onStartPair(s)}
+                  className="mt-1 inline-flex items-center rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500"
+                >
+                  Pair
+                </button>
+              )}
             </div>
           </li>
         ))}

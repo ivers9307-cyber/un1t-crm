@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/consent-propagation', () => ({ propagateOptOut: vi.fn(async () => {}) }))
 vi.mock('@/lib/postmark-suppressions', () => ({ suppressAtPostmark: vi.fn(async () => ({ ok: 1, failed: [] })) }))
+vi.mock('@/lib/postmark-server-for-location', () => ({ serverTokenForLocation: vi.fn(async () => null) }))
 vi.mock('@/lib/rate-limit', async () => {
   const actual = await vi.importActual('@/lib/rate-limit')
   return { ...actual, getClientIp: () => '203.0.113.9' }
@@ -37,6 +38,7 @@ vi.mock('@/lib/consent-token-guard', async () => {
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { suppressAtPostmark } from '@/lib/postmark-suppressions'
+import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
 
 const TOKEN = '11111111-2222-3333-4444-555555555555'
 const LOCATION = 'a0000000-0000-0000-0000-000000000001'
@@ -93,6 +95,7 @@ const call = (opts, token = TOKEN) => POST(req(opts), { params: Promise.resolve(
 beforeEach(() => {
   vi.clearAllMocks()
   suppressAtPostmark.mockResolvedValue({ ok: 1, failed: [] })
+  serverTokenForLocation.mockResolvedValue(null)
 })
 
 describe('POST /api/unsubscribe/[token] — Postmark suppression (PMSUPP.1)', () => {
@@ -101,7 +104,20 @@ describe('POST /api/unsubscribe/[token] — Postmark suppression (PMSUPP.1)', ()
     const res = await call()
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true })
-    expect(suppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com')
+    expect(suppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: null })
+  })
+
+  // W1.E4 — a tenant on its own Postmark server is suppressed THERE, where its
+  // mail actually goes out; the server is resolved from the contact's home
+  // location (→ org → live tenant_email_domains row).
+  it('suppresses on the TENANT server when the contact\'s org has a live one', async () => {
+    serverTokenForLocation.mockResolvedValue('tenant-tok')
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(serverTokenForLocation).toHaveBeenCalledWith(db, LOCATION)
+    expect(suppressAtPostmark).toHaveBeenCalledWith('Ada@Example.com', { serverToken: 'tenant-tok' })
   })
 
   it('does NOT suppress when nothing flipped — a repeat click is not a new opt-out', async () => {

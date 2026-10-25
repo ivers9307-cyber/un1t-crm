@@ -1,33 +1,52 @@
 // FUNNEL.1 — read-only funnel board.
 //
-// Tabs: Funnel (default) vs Off funnel. The funnel view shows the
-// classifier-derived journey stages (new_lead → first_class →
-// second_class → trial_done → converted, is_dormant=false); the
-// Off funnel view (?view=dormant) shows the parked piles
-// (member / classpass / dormant, is_dormant=true).
+// PIPELINES.6 — the tabs come from the `pipelines` table (mig 594), not from a
+// hardcoded list. The page resolves the location's enabled boards first, picks
+// the active one from ?pipeline=<key> (first board otherwise), and scopes the
+// stage query to that board's pipeline_id. `pipeline_stages.board` (mig 558) is
+// no longer read anywhere — pipelines.key replaces it; the column stays on disk
+// until a later migration drops it.
 //
-// The board is read-only: every column is derived by the classifier
-// (webhook + nightly cron), so drag-drop was removed — a manual move
-// would be silently overwritten on the next classify pass.
+// Views within a DERIVED board: Funnel (default) vs Off funnel. The funnel view
+// shows the classifier-derived journey stages (new_lead → first_class →
+// second_class → trial_done → converted, is_dormant=false); the Off funnel view
+// (?view=dormant) shows the parked piles (member / classpass / dormant,
+// is_dormant=true). The param value stays `dormant` — operators have bookmarked
+// it.
 //
-// Funnel view only: each deal's contact ships a server-derived
-// `next_class_at` badge (soonest future BOOKED class from
-// contacts.recent_bookings), and the raw jsonb is stripped before
-// the payload leaves the server.
+// A MANUAL board (pipelines.mode='manual') has no view split: nothing is "off
+// funnel" when a human decides where each card sits, so every live column
+// renders in one view and the toggle is not drawn.
+//
+// The derived board is read-only: every column is set by the classifier
+// (webhook + nightly cron), so drag-drop was removed — a manual move would be
+// silently overwritten on the next classify pass. `manual` is threaded down to
+// KanbanBoard for the drag-drop that a manual board CAN have (PIPELINES.10).
+//
+// Funnel view only: each deal's contact ships a server-derived `next_class_at`
+// badge (soonest future BOOKED class from contacts.recent_bookings), and the
+// raw jsonb is stripped before the payload leaves the server.
 //
 // Still true from PIPELINE5.8:
-//   - Server-side filtering on stages — only fetch deals belonging
-//     to the selected view's stages.
+//   - Server-side filtering on stages — only fetch deals belonging to the
+//     selected view's stages.
 //   - archived=false filter so retiring old stages needs no UI change.
 
 import { createServerClient } from '@/lib/supabase'
-import { pipelineDealSelect, toBoardDeal, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import {
+  pipelineDealSelect, boardDealMapper, boardCardOptionsForModule,
+  initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
+} from '@/lib/pipeline-board'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
 import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import Link from 'next/link'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,52 +61,115 @@ export default async function PipelinePage(props) {
   // against both shapes — `await Promise.resolve(...)` is a no-op on a
   // plain object and unwraps the promise on 15.
   const sp = (await Promise.resolve(searchParams)) || {}
-  // RETURNPIPE.1 — three boards now. Anything unrecognised still falls back to
-  // 'active', so an old bookmarked URL behaves exactly as before.
-  const view = sp?.view === 'dormant' ? 'dormant'
-    : sp?.view === 'returning' ? 'returning'
-    : 'active'
+  // Anything unrecognised falls back to 'active', so an old bookmarked URL
+  // behaves exactly as before.
+  const requestedView = sp?.view === 'dormant' ? 'dormant' : 'active'
+  const requestedPipeline = typeof sp?.pipeline === 'string' ? sp.pipeline : null
 
   const db = createServerClient()
 
-  // 1. Stages — split between active vs dormant. Always exclude
-  //    archived. We need BOTH counts (for the tab badges) so do two
-  //    queries: full stage list scoped to non-archived, then filter
-  //    in-app.
+  // 0. Boards. Only ENABLED rows render — CCF Autos, SourceIt and Test Studio
+  //    hold a disabled row purely so their stray stage rows have a parent
+  //    (mig 594), and Stillorgan's `returning` board is parked. display_order
+  //    is the tab order.
+  const { data: pipelineRows, error: pipelinesError } = await db
+    .from('pipelines')
+    .select('id, key, name, mode, module')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+    .order('display_order', { ascending: true })
+  if (pipelinesError) throw new Error(`pipeline load: ${pipelinesError.message}`)
+
+  const pipelines = pipelineRows || []
+  // ?pipeline=<key> picks the board; an unknown or absent key falls back to the
+  // first, so a stale bookmark lands on a real board rather than an empty page.
+  const activePipeline = pipelines.find((p) => p.key === requestedPipeline) || pipelines[0] || null
+
+  if (!activePipeline) {
+    return (
+      <div className="p-6">
+        <h2 className="text-2xl font-bold mb-4">Pipeline</h2>
+        <p className="text-sm text-un1t-subtle">No pipeline is configured for this location.</p>
+      </div>
+    )
+  }
+
+  const manual = activePipeline.mode === 'manual'
+  const toBoard = boardDealMapper(boardCardOptionsForModule(activePipeline.module))
+  // A manual board draws no view toggle, so it can only ever be the one view —
+  // otherwise a bookmarked ?view=dormant would strand the operator on a screen
+  // with no way back.
+  const view = manual ? 'active' : requestedView
+
+  // 1. Stages — this BOARD's stages, split between active vs dormant. Always
+  //    exclude archived. We need BOTH counts (for the tab badges) so do two
+  //    queries: full stage list scoped to non-archived, then filter in-app.
   const { data: allStages } = await db
     .from('pipeline_stages')
     .select('*')
-    .eq('location_id', locationId)
+    .eq('pipeline_id', activePipeline.id)
     .eq('archived', false)
     .order('display_order')
 
-  // RETURNPIPE.1 — splitStagesByFunnel owns the board/is_dormant partition so
-  // the page and the mobile screen can never disagree about which stage sits
-  // on which tab. A row with no `board` reads as 'acquisition', so every stage
-  // predating mig 558 lands exactly where it did before.
-  const { funnel: activeStages, offFunnel: dormantStages, returning: returningStages } =
-    splitStagesByFunnel(allStages || [])
-  const visibleStages = view === 'dormant' ? dormantStages
-    : view === 'returning' ? returningStages
-    : activeStages
+  // splitStagesByFunnel owns the is_dormant partition so the page and the
+  // mobile screen can never disagree about which stage sits on which tab.
+  const { funnel: activeStages, offFunnel: dormantStages } = splitStagesByFunnel(allStages || [])
+  // A manual board's rows all carry is_dormant=false, so the concat IS
+  // activeStages in practice — it is there so a stray is_dormant row can never
+  // make a column vanish on a board that has no second view to find it in.
+  const visibleStages = manual
+    ? [...activeStages, ...dormantStages]
+    : (view === 'dormant' ? dormantStages : activeStages)
 
-  // 2. Deals — ship only the FIRST page per column + a per-stage total count,
-  //    instead of the whole open-deal set (was ≤10k shipped to the client and
-  //    held in the Kanban). The board lazily fetches more per column via
-  //    /api/pipeline/deals. Per stage: first page (created_at desc) + an exact
+  // 2. Deals. HATCHPIPE.4 — a funnel column and every column of a manual board
+  //    ships WHOLE: the operator sees everyone without clicking, and the board's
+  //    "Load more" never draws because loaded equals the total. Those columns are
+  //    small (max 96 at Hatch's funnel, 159 on its waitlist, at most 29 at
+  //    Stillorgan), read in 1,000-row .range() pages with an explicit order (the
+  //    1,000-row cap) until the exact count is reached. The Off funnel piles are
+  //    huge (dormant 5,457, classpass 1,684, member 1,110 at Stillorgan), so they
+  //    keep the first 50 + a per-stage total, and the board fetches the rest per
+  //    column through /api/pipeline/deals. Per stage: the deals read and an exact
   //    HEAD count, in parallel. Empty visibleStages → no queries.
+  //
+  //    Either read failing THROWS, like the pipelines read above: an error used
+  //    to be dropped here (`pageRes.data || []`), which rendered a column as
+  //    empty, or with a zero badge, to an operator who would take it as true.
+  //    The message carries ids only (no contact or deal data).
+  const pageSize = initialPageSizeFor(view, manual)
   const perStage = visibleStages.length > 0
     ? await Promise.all(visibleStages.map(async (stage) => {
+        // created_at is not unique (bulk imports share a stamp), so `id` breaks
+        // ties: without it two pages of one column can overlap or skip a card.
+        const readRange = (from, to) => db.from('deals')
+          .select(pipelineDealSelect(view))
+          .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id)
+          .order('created_at', { ascending: false })
+          .order('id')
+          .range(from, to)
         const [pageRes, countRes] = await Promise.all([
-          db.from('deals')
-            .select(pipelineDealSelect(view))
-            .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id)
-            .order('created_at', { ascending: false })
-            .range(0, PIPELINE_PAGE_SIZE - 1),
+          readRange(0, (pageSize ?? PIPELINE_READ_PAGE) - 1),
           db.from('deals').select('id', { count: 'exact', head: true })
             .eq('status', 'open').eq('location_id', locationId).eq('stage_id', stage.id),
         ])
-        return { stageId: stage.id, deals: (pageRes.data || []).map(toBoardDeal), count: countRes.count || 0 }
+        if (countRes.error) {
+          throw new Error(`pipeline deals count (stage ${stage.id}, location ${locationId}): ${countRes.error.message}`)
+        }
+        const total = countRes.count || 0
+        if (pageSize != null) {
+          if (pageRes.error) {
+            throw new Error(`pipeline deals load (stage ${stage.id}, location ${locationId}): ${pageRes.error.message}`)
+          }
+          return { stageId: stage.id, deals: (pageRes.data || []).map(toBoard), count: total }
+        }
+        const whole = await readWholeColumn({ readRange, first: pageRes, count: total })
+        if (whole.error) {
+          throw new Error(`pipeline deals load (stage ${stage.id}, location ${locationId}): ${whole.error.message}`)
+        }
+        // What was read IS the column: report that, so a card that moved out (or
+        // in) between the count and the last page cannot leave a "Load more"
+        // that has nothing to load.
+        return { stageId: stage.id, deals: whole.rows.map(toBoard), count: whole.rows.length }
       }))
     : []
   const boardDeals = perStage.flatMap((sg) => sg.deals)
@@ -101,24 +183,49 @@ export default async function PipelinePage(props) {
         .eq('status', 'open').eq('location_id', locationId)
         .in('stage_id', stages.map((s) => s.id))
     : Promise.resolve({ count: 0 }))
-  const [{ count: activeCount }, { count: dormantCount }, { count: returningCount }] =
-    await Promise.all([tabCount(activeStages), tabCount(dormantStages), tabCount(returningStages)])
+  const [{ count: activeCount }, { count: dormantCount }] =
+    await Promise.all([tabCount(activeStages), tabCount(dormantStages)])
+
+  // W1.M3a — the board is NOT gated: a lead-only gym needs new_lead →
+  // dormant, which the classifier derives without any membership source.
+  // But its membership and credit stages (first_class … converted, member)
+  // key on glofox_* columns, so on a DERIVED board at a studio with NO
+  // source those columns can never fill. One note says so. A manual board
+  // has no classifier, and an 'unknown' read is not a known absence.
+  const membership = manual ? null : await membershipStateForPage(db, locationId)
+  const noSourceNote = membership?.state === 'none'
+  const canManageSource = noSourceNote && canManageMembershipSource(user, locationId)
+
+  // "funnel" is the derived board's word for its live columns; a manual board
+  // has no funnel, so it just counts deals.
+  const totalLabel = manual ? 'deals'
+    : view === 'dormant' ? 'off-funnel deals'
+    : 'funnel deals'
 
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Pipeline</h2>
         <span className="text-sm text-un1t-subtle">
-          {visibleTotal.toLocaleString()}{' '}
-          {view === 'dormant' ? 'off-funnel' : view === 'returning' ? 'returning' : 'funnel'} deals
+          {visibleTotal.toLocaleString()} {totalLabel}
         </span>
       </div>
 
+      {noSourceNote && (
+        <p role="note" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2 mb-4">
+          No membership source is connected at this studio. Stages that depend on memberships and credits will not move without a membership source; leads still enter and go dormant.{' '}
+          {canManageSource
+            ? <>Choose one in <Link href={membershipSettingsHref(locationId)} className="underline">Settings → Integrations</Link>.</>
+            : 'Ask an owner to connect one.'}
+        </p>
+      )}
       <PipelineViewSwitcher
+        pipelines={pipelines}
+        activePipelineKey={activePipeline.key}
+        isManual={manual}
         view={view}
         activeCount={activeCount || 0}
         dormantCount={dormantCount || 0}
-        returningCount={returningCount || 0}
       />
 
       <KanbanBoard
@@ -126,7 +233,14 @@ export default async function PipelinePage(props) {
         initialDeals={boardDeals}
         stageCounts={stageCounts}
         view={view}
+        manual={manual}
         locationId={locationId}
+        // TZ.16 — the board's studio zone: every deal on it is this studio's.
+        timezone={zoneOfLocation(user.activeLocation)}
+        // C146 TASKSNEEDCONTACTS.1 — the cards' and drawer's Task item is a
+        // browser `activities` insert at this studio; since mig 700 it needs
+        // Contacts here (web or phone).
+        canTask={canWriteActivitiesAt(user, locationId)}
       />
     </div>
   )

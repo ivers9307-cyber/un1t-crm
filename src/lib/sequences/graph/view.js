@@ -58,6 +58,9 @@ function describePredicate(p) {
     case 'has_tag': return `Has tag “${p.tag ?? ''}”`
     case 'field_equals': return `${p.field ?? 'field'} = ${p.value ?? ''}`
     case 'field_in': return `${p.field ?? 'field'} in [${(p.values || []).join(', ')}]`
+    case 'booked_class_at_studio': return 'Has booked a class at this studio'
+    case 'in_pipeline_stage_at_studio': return `In stage ${(p.stages || []).join(' or ') || '(none)'} at this studio`
+    case 'whatsapp_reply_since_enrolment': return 'Replied on WhatsApp since this flow began'
     default: return humanise(p.type)
   }
 }

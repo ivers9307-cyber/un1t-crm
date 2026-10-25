@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { broadcastTimerPing } from '@/lib/timer-broadcast'
 import { nextRunState, buildTimeline } from '@/lib/class-timer'
@@ -23,7 +23,7 @@ const ControlSchema = z.object({
 
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
@@ -39,6 +39,10 @@ export async function POST(request, { params }) {
     .maybeSingle()
   if (!run || assertLocationAccess(user, run.location_id)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  // ROLESWEEP.1a — the permission is judged at the run's location.
+  if (!hasPermissionForLocation(user, run.location_id, 'class_timer')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   const timeline = action === 'skip' ? buildTimeline(run.structure_snapshot) : null

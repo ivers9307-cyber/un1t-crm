@@ -5,7 +5,10 @@ import { authenticateApiKey, requireApiKeyOrManager, assertRowInOrg } from '@/li
 import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { canEditContact, canDeleteOrRehomeContact } from '@/lib/contact-edit-gates'
+import { studiosOfContact } from '@/lib/contact-studios'
+import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -28,7 +31,7 @@ const ContactUpdateSchema = z.object({
   hr_leaderboard_opt_out: z.boolean().optional(),
   // HOST-MASTER.6 (mig 464) — blocks AUTOMATIC sequence/automation enrolment
   // only (manual staff enrolment ignores it). Staff-decision field: writable
-  // via the cookie path only (Manager+ — requireApiKeyOrManager gates it);
+  // via the cookie path only (Manager+ at the contact, judged in PUT);
   // API-key callers get it stripped in the handler below.
   automations_exempt: z.boolean().optional(),
   // tags is a TEXT[] in Postgres. Frontend code that wants to "add a tag"
@@ -40,8 +43,8 @@ const ContactUpdateSchema = z.object({
 
 // PUT /api/contacts/:id — Update a contact.
 //
-// Accepts either the n8n API key OR a logged-in manager+. Web UI
-// uses the cookie path; n8n keeps using the bearer token.
+// Accepts either a per-org API key OR a logged-in manager+. Web UI
+// uses the cookie path; integrations use the bearer token.
 export async function PUT(request, props) {
   const params = await props.params;
   const auth = await requireApiKeyOrManager(request)
@@ -53,10 +56,11 @@ export async function PUT(request, props) {
   const body = validation.data
 
   // HOST-MASTER.6 — automations_exempt is a staff decision. The route has no
-  // per-field gating, but its cookie path is already Manager+-only
-  // (requireApiKeyOrManager), so auth.user present ⇒ MANAGER_ROLES. API-key
-  // callers (auth.user null — n8n / integrations) may not flip it: strip
-  // rather than 403 so integrations that PUT whole objects keep working.
+  // per-field gating, but its cookie path is Manager+-only AT THE CONTACT
+  // (judged below, before any write), so auth.user present ⇒ MANAGER_ROLES
+  // there. API-key callers (auth.user null — integrations) may not flip
+  // it: strip rather than 403 so integrations that PUT whole objects keep
+  // working.
   if (!auth.user) delete body.automations_exempt
 
   const db = createServerClient()
@@ -71,22 +75,41 @@ export async function PUT(request, props) {
   // CLASSIFY.2: status_change triggers now fire from deal stage moves
   // (where pipeline_stage_slug is the source of truth), not from
   // contact PUTs. Contact PUTs no longer accept a status field.
-  const { data: oldRow } = await db
+  const { data: oldRow, error: oldErr } = await db
     .from('contacts')
     .select('tags, location_id, email, email_status, glofox_member_id')
     .eq('id', id)
     .single()
+  // REVIEWNITS.1 (D5): a failed read is not "no contact". Writing anyway
+  // skipped the tag-added sequence trigger in silence and judged the
+  // address-change reset without the old address. Nothing is written yet, so
+  // refusing loses nothing and the caller (an integration included) can retry. No row at
+  // all is a 404 for every caller (detail routes answer 404, not 400), and so
+  // is a malformed id (22P02: no such row can exist; a 503 would invite an
+  // endless retry).
+  if (oldErr && oldErr.code !== 'PGRST116' && oldErr.code !== '22P02') {
+    logError('contacts.PUT', 'old-row read failed; nothing written', { id, err: oldErr.message })
+    return NextResponse.json({ success: false, error: 'Could not read the contact just now; nothing was changed. Try again.' }, { status: 503 })
+  }
+  if (!oldRow) return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
 
   // SECURITY (audit 2026-06-10): the cookie path must be location-
   // scoped. assertRowInOrg above only guards per-org API keys (it
-  // no-ops when orgId is null — the legacy-key and cookie paths), so
+  // no-ops when orgId is null — the cookie path), so
   // without this check a manager at one studio could update any
   // contact at any location/org by id. Mirrors the DELETE handler's
   // guard below; 404 (not 403) so a cross-tenant probe can't confirm
   // an id exists — same convention as assertRowInOrg.
-  if (auth.user && auth.user.role !== 'master') {
-    const userLocIds = (auth.user.locations || []).map((l) => l.id)
-    if (!oldRow || !userLocIds.includes(oldRow.location_id)) {
+  // ROLESWEEP.1c/.2 — requireApiKeyOrManager's cookie branch only says
+  // "Manager+ somewhere" (src/lib/api-auth.js); THIS is the decision.
+  // ORGCONTACTS.4 (decision 4): MANAGER_ROLES at the contact's primary studio
+  // as before, or MANAGER_ROLES + Contacts at a studio the person has a
+  // relationship with (contact_studios; an unreadable read keeps the primary
+  // rule). Answered as the route answers a non-member (404 not_found).
+  if (auth.user) {
+    const rel = await studiosOfContact(db, id)
+    const relationshipStudioIds = rel.ok ? rel.rows.map((r) => r.location_id) : []
+    if (!canEditContact({ user: auth.user, contact: oldRow, relationshipStudioIds })) {
       return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
     }
   }
@@ -133,7 +156,15 @@ export async function PUT(request, props) {
   const { data, error } = await db.from('contacts').update(updates).eq('id', id).select().single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    // W0.6 — same answer as POST /api/contacts: a duplicate email is a
+    // generic 409 (contacts_email_org_unique, mig 712, is per organisation),
+    // anything else a generic 400; the database text goes to the logs, never
+    // to the caller (it named the index and confirmed the address existed).
+    if (error.code === '23505') {
+      return NextResponse.json({ success: false, error: 'A contact with this email already exists in your organisation' }, { status: 409 })
+    }
+    logWarn('contacts.PUT', `update failed for ${id}`, { err: error })
+    return NextResponse.json({ success: false, error: 'Could not update contact' }, { status: 400 })
   }
 
   // Fire sequence triggers AFTER the update lands. The helper is
@@ -192,7 +223,7 @@ export async function GET(request, props) {
 
 // DELETE /api/contacts/:id — hard delete + GDPR PII scrub.
 //
-// Uses the cookie auth path (n8n shouldn't be issuing destructive
+// Uses the cookie auth path (integrations shouldn't be issuing destructive
 // deletes — kept off the API-key surface). MANAGER_ROLES (mig 092
 // audit). Mig 094: WhatsApp history no longer blocks the delete —
 // PII (wa_phone, wa_profile_name, message body, media URL) is
@@ -224,21 +255,24 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the decision is made at the contact below.
+  // ORGCONTACTS.4: an organisation admin may hold no studio role at all.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES) && !isOrgAdminSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master required' }, { status: 403 })
   }
 
   const db = createServerClient()
   const { data: existing } = await db.from('contacts')
-    .select('id, location_id')
+    .select('id, location_id, organization_id')
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
-  if (user.role !== 'master') {
-    const userLocIds = (user.locations || []).map(l => l.id)
-    if (!userLocIds.includes(existing.location_id)) {
-      return NextResponse.json({ success: false, error: 'Contact is at a different location' }, { status: 403 })
-    }
+  // ORGCONTACTS.4 (decision 4) — the primary studio's admins (MANAGER_ROLES
+  // there), an organisation admin of the contact's organisation, or a master.
+  // A manager at a studio the person merely has a relationship with may edit
+  // (PUT) but not delete.
+  if (!canDeleteOrRehomeContact({ user, contact: existing })) {
+    return NextResponse.json({ success: false, error: 'Head coach, manager, owner, or master at the contact’s primary studio, or an organisation admin, required' }, { status: 403 })
   }
 
   // DELBLOCK.1 — the blocker check. Runs AFTER the auth + location guards

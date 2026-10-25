@@ -99,8 +99,12 @@ export function dublinDayStartMs(date) {
  */
 export function dublinDayRangeMs(startDate, endDate) {
   const startMs = dublinDayStartMs(startDate)
-  // end-exclusive = start of the day AFTER endDate.
-  const endMs = dublinDayStartMs(dublinDateKey(dublinDayStartMs(endDate) + DAY_MS))
+  // end-exclusive = start of the day AFTER endDate. Stepped with
+  // dublinAddDays (anchored at noon), NOT midnight + 24h: on the clocks-back
+  // day (a 25-hour Dublin day, e.g. 25 Oct 2026) midnight + 24h is 23:00 the
+  // SAME day, so the old form returned endMs === the day's own start and the
+  // window was empty (DUBLINDAY.1).
+  const endMs = dublinDayStartMs(dublinAddDays(endDate, 1))
   return { startMs, endMs }
 }
 

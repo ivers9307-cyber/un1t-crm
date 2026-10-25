@@ -7,11 +7,52 @@
 // the payload leaves the server (PERF.2 discipline).
 
 import { nextBookedClass } from '@/lib/pipeline-classifier'
+import { getBoardModule } from '../../shared/pipelines/index.js'
 
 // Per-column page size — the server ships this many cards per column initially
 // and each "Load more" fetches another page. Replaces the old approach of
 // shipping ALL open deals (≤10k) to the client.
 export const PIPELINE_PAGE_SIZE = 50
+
+// HATCHPIPE.4 — the page ships a column WHOLE when the column is small and the
+// operator should see everyone without clicking: funnel columns (view 'active')
+// and every column of a manual board (max 96 at Hatch's funnel, 159 on its
+// waitlist, at most 29 at Stillorgan). Only the off-funnel piles (dormant 5,457,
+// classpass 1,684, member 1,110 at Stillorgan) keep the 50-card first page and
+// "Load more" through /api/pipeline/deals. Returns the first-page size, or null
+// for "the whole column". A manual board has no off-funnel view (the page also
+// forces its view to 'active'), so `manual` wins.
+export function initialPageSizeFor(view, manual) {
+  if (manual) return null
+  return view === 'dormant' ? PIPELINE_PAGE_SIZE : null
+}
+
+// PostgREST returns at most 1,000 rows per select whatever .limit() says
+// (CLAUDE.md: the 1,000-row cap), so a whole column is read in .range() pages
+// of exactly that size, each with an explicit order.
+export const PIPELINE_READ_PAGE = 1000
+
+// Finish reading a column whose first .range(0, PIPELINE_READ_PAGE - 1) page is
+// already in hand. `readRange(from, to)` runs the same ordered query for an
+// inclusive range and resolves { data, error }; `count` is the column's exact
+// open-deal count. Loops until `count` rows are held or a page comes back
+// short (a deal moved out since the count). Rows are de-duplicated by id: the
+// column can shift between two pages, and a repeated card would render twice.
+// Resolves { rows } or { error } (the first failing page's error, whole).
+export async function readWholeColumn({ readRange, first, count }) {
+  if (first.error) return { error: first.error }
+  const byId = new Map()
+  const take = (data) => { for (const row of data || []) byId.set(row.id, row) }
+  take(first.data)
+  let lastPageLen = (first.data || []).length
+  for (let from = PIPELINE_READ_PAGE; lastPageLen === PIPELINE_READ_PAGE && byId.size < count; from += PIPELINE_READ_PAGE) {
+    const res = await readRange(from, from + PIPELINE_READ_PAGE - 1)
+    if (res.error) return { error: res.error }
+    take(res.data)
+    lastPageLen = (res.data || []).length
+  }
+  return { rows: [...byId.values()] }
+}
 
 // Only funnel columns 1–4 carry the next-class badge (DealCard has a matching
 // set). Others get null so the board's badge-first sort never re-orders a
@@ -87,21 +128,54 @@ export function dealAge(deal, nowMs) {
   }
 }
 
-// Map a raw deal row to a board deal: derive next_class_at for funnel columns
-// and the age footer, strip recent_bookings so the payload stays card-sized.
-// Deliberately 1-arg (nowMs pinned inside): callers do `.map(toBoardDeal)`,
-// and a second parameter would silently receive the array index. Tests
-// inject time via dealAge directly.
-export function toBoardDeal(deal) {
-  const { recent_bookings, ...contact } = deal.contacts || {}
-  return {
-    ...deal,
-    age: dealAge(deal, Date.now()),
-    contacts: {
-      ...contact,
-      next_class_at: BADGE_SLUGS.has(contact.pipeline_stage_slug)
-        ? nextBookedClass(recent_bookings)
-        : null,
-    },
+// The next-class badge reads a Glofox-fed `contacts.recent_bookings`. A board
+// whose inputs come from un1t.online has no such bookings (they are not
+// projected), so the badge there would be empty at best and wrong at worst.
+// Decided by the board module's declared inputSource, never a location id.
+// An unknown or absent module keeps the badge (today's behaviour).
+export function badgeEnabledForModule(moduleName) {
+  return getBoardModule(moduleName)?.inputSource !== 'un1t_online'
+}
+
+// The card options for a board, by its module. A un1t.online board shows
+// neither the next-class badge nor the Glofox credit count: on a dual-studio
+// contact `contacts.trial_credits_remaining` is Stillorgan's Glofox balance,
+// not this studio's. Same seam as the badge (the module's inputSource, never a
+// location id); a Glofox, unknown or absent module keeps both.
+export function boardCardOptionsForModule(moduleName) {
+  const glofoxBoard = badgeEnabledForModule(moduleName)
+  return { badge: glofoxBoard, glofoxCredits: glofoxBoard }
+}
+
+// Build the row mapper for a board: derive next_class_at for funnel columns
+// (unless `badge` is false, then always null) and the age footer, and strip
+// recent_bookings so the payload stays card-sized. `glofoxCredits: false`
+// also strips trial_credits_remaining (a un1t.online board, see
+// boardCardOptionsForModule); the default leaves the row exactly as before.
+// The returned mapper is deliberately 1-arg (nowMs pinned inside): callers do
+// `.map(mapper)`, and a second parameter would silently receive the array
+// index. Tests inject time via dealAge directly.
+export function boardDealMapper({ badge = true, glofoxCredits = true } = {}) {
+  return (deal) => {
+    const { recent_bookings, ...contact } = deal.contacts || {}
+    if (!glofoxCredits) delete contact.trial_credits_remaining
+    return {
+      ...deal,
+      age: dealAge(deal, Date.now()),
+      // HATCHPIPE.5 — the card must know the badge is OFF, not merely that no
+      // class is booked: a null next_class_at alone renders "No class booked"
+      // on every early-stage un1t.online card. Only added when off, so a badge
+      // board's row (Stillorgan) is exactly what it was.
+      ...(badge ? {} : { next_class_badge: false }),
+      contacts: {
+        ...contact,
+        next_class_at: badge && BADGE_SLUGS.has(contact.pipeline_stage_slug)
+          ? nextBookedClass(recent_bookings)
+          : null,
+      },
+    }
   }
 }
+
+// The default mapper (badge on) — unchanged for existing callers.
+export const toBoardDeal = boardDealMapper()

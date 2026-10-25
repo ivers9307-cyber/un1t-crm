@@ -13,6 +13,9 @@
 
 import { User, Clock } from 'lucide-react'
 import PersonActionBar from './PersonActionBar'
+import { personActionsFor } from '@/lib/activity-write-gate'
+import { nextClassLabel } from '@/components/contact/format'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 // PIPE-AGE.1 footer tones — colour keys on the server-derived
 // deal.age.tone (time in stage, falling back to time in pipeline).
@@ -38,11 +41,36 @@ const statusColors = {
   dormant:      'border-l-gray-500',
 }
 
+// WAITLIST.5 — the Cold button is a DERIVED-board affordance. All it does is
+// write contacts.pipeline_dismissed_at, and the only thing that reads that
+// stamp is the classifier (shared/pipeline-classifier.js), which never runs on
+// a manual board. So on Hatch Street's waitlist board the item is at best a
+// second, invisible way to say what column 4 ("Not interested") already says
+// by hand — and at worst it looks like a move and produces none.
+//
+// WAITLIST.6 closed the two call sites this note used to leave open.
+// ContactDrawer takes `manual` straight from KanbanBoard (which already knows
+// the board), and ContactHeaderBand takes it from its server page, which
+// resolves the contact's location's primary pipeline in a round trip it was
+// making anyway — so neither pays a per-render lookup after all. Both default
+// to `derived`, so a caller that cannot resolve a board still shows Cold.
+const CARD_ACTIONS = {
+  derived: ['message', 'task', 'sequence', 'cold'],
+  manual: ['message', 'task', 'sequence'],
+}
+
 // Funnel columns 1–4 show the next-class badge; Converted and the
 // off-funnel stages don't (it'd be noise there).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
-export default function DealCard({ deal, locationId, stageName, onOpenContact }) {
+// C146 TASKSNEEDCONTACTS.1 — `canTask` (the pipeline page's
+// canWriteActivitiesAt at the board's studio) drops the Task item where the
+// person cannot read Contacts. Defaults true so a caller that does not judge
+// it keeps today's menu; the pipeline page always passes it.
+// TZ.16 (D3 = A) — `timezone` is the board's studio zone; the next-class chip
+// reads in it, with the abbreviation only when the viewer's browser is elsewhere.
+export default function DealCard({ deal, locationId, timezone = null, stageName, onOpenContact, manual = false, canTask = true }) {
+  const viewerZone = useViewerZone()
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
@@ -52,6 +80,10 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact })
   // (toBoardDeal) so SSR and hydration render identical text.
   // Colour only alarms on the four active funnel stages — a long stay
   // in Member/Converted/dormant piles is fine (or good), not stale.
+  // HATCHPIPE.5 — a board with the next-class badge off (a un1t.online board,
+  // boardDealMapper) marks its deals next_class_badge:false: no "Next: …" and
+  // no "No class booked" there, since the badge never looked for a booking.
+  const showClassBadge = deal.next_class_badge !== false && BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const age = deal.age || {}
   const ageTone = BADGE_SLUGS.has(contact.pipeline_stage_slug)
     ? (AGE_TONES[age.tone] || AGE_TONES.quiet)
@@ -84,7 +116,7 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact })
             <PersonActionBar
               contactId={contact.id}
               locationId={locationId}
-              actions={['message', 'task', 'sequence', 'cold']}
+              actions={personActionsFor(CARD_ACTIONS[manual ? 'manual' : 'derived'], { canTask })}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           )}
@@ -105,10 +137,10 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact })
             {contact.trial_credits_remaining} credits
           </span>
         )}
-        {BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
+        {showClassBadge && (
           contact.next_class_at ? (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-500/10 rounded text-emerald-700">
-              Next: {new Date(contact.next_class_at).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+              Next: {nextClassLabel(contact.next_class_at, timezone, viewerZone)}
             </span>
           ) : (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/10 rounded text-red-700">

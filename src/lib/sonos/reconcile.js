@@ -2,14 +2,13 @@
 // testable with fakes (house pattern: zoom/reconcile.orchestrator.test.js).
 
 import { logWarn } from '@/lib/log'
-import { getSonosConfig, withFreshToken, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
+import { getSonosConfig, withFreshToken, isHouseholdGone, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
 import { applyOpen } from './apply'
 import { mapGroups, resolveGroupIds, planAction } from './groups'
-// dublinDayStr(instant), NOT dublinTodayStr() — the latter takes no
-// argument and always reads the real clock, which would quietly ignore an
-// injected `now` and make these tests pass or fail depending on what day
-// they are run.
-import { dublinDayStr } from '@/lib/dublin-time'
+// dayStrIn(instant, zone), NOT todayStrIn(zone) with its default clock — an
+// injected `now` must drive the day, or these tests would pass or fail
+// depending on what day they are run.
+import { dayStrIn, getLocationZones, LocationZoneReadError } from '@/lib/location-time'
 
 const MODULE = 'sonos-reconcile'
 
@@ -60,7 +59,6 @@ export async function runSonosReconcile(db, deps = {}) {
   if (!schedules?.length) return { ok: true, applied: 0, failed: 0 }
 
   const nowMs = now()
-  const dateStr = dublinDayStr(nowMs)
   const nowIso = new Date(nowMs).toISOString()
 
   // Group by location: one household read serves every schedule there.
@@ -70,12 +68,36 @@ export async function runSonosReconcile(db, deps = {}) {
     byLocation.get(s.location_id).push(s)
   }
 
+  // TZ.10 — a schedule's windows are wall clock in ITS location's zone, so
+  // "today" is computed per location, inside the loop. Every zone is read
+  // ONCE, here, before any Sonos call. A failed read (LocationZoneReadError,
+  // never cached) leaves those locations without a zone, and each is skipped
+  // for this tick below, logged, with no device call: acting on a guessed
+  // zone would open or close the music an hour (or a day) wrong.
+  let zones = new Map()
+  try {
+    zones = await getLocationZones(db, [...byLocation.keys()])
+  } catch (err) {
+    if (!(err instanceof LocationZoneReadError)) throw err
+    logWarn(MODULE, 'location timezones unreadable', { locationIds: err.locationIds, error: err.message })
+  }
+
   let applied = 0
   let failed = 0
   let tokenFailures = 0
+  let zoneUnreadable = 0
   let sonosDown = false
+  let householdGone = 0
 
   for (const [locationId, rows] of byLocation) {
+    const zone = zones.get(locationId)
+    if (!zone) {
+      zoneUnreadable++
+      logWarn(MODULE, 'location timezone unreadable; location skipped this tick', { locationId })
+      continue
+    }
+    const dateStr = dayStrIn(nowMs, zone)
+
     const tok = await getToken(db, locationId, cfg)
     if (!tok.ok) {
       tokenFailures++
@@ -85,6 +107,14 @@ export async function runSonosReconcile(db, deps = {}) {
 
     const res = await getGroups(tok.token, tok.householdId)
     if (!res.ok) {
+      // 410/404 = the stored household no longer exists on Sonos's side (a
+      // reset or re-setup). Not an outage: it needs a human to re-link, and
+      // retrying changes nothing. No DB writes this tick.
+      if (isHouseholdGone(res.statusCode)) {
+        householdGone++
+        logWarn(MODULE, 'household gone — re-link needed', { locationId, statusCode: res.statusCode })
+        continue
+      }
       // 401 = revoked/rotated grant; 0 = network. Either way: no DB writes
       // this tick. last_state staleness is the alert, not a thrown error.
       sonosDown = true
@@ -95,7 +125,7 @@ export async function runSonosReconcile(db, deps = {}) {
     const { groups } = mapGroups(res.body)
 
     for (const schedule of rows) {
-      const plan = planAction(schedule, nowMs, dateStr)
+      const plan = planAction(schedule, nowMs, dateStr, zone)
       if (!plan) continue
 
       const groupIds = resolveGroupIds(groups, schedule.player_ids)
@@ -161,5 +191,10 @@ export async function runSonosReconcile(db, deps = {}) {
     }
   }
 
-  return { ok: true, applied, failed, tokenFailures, ...(sonosDown ? { sonosDown: true } : {}) }
+  return {
+    ok: true, applied, failed, tokenFailures,
+    ...(zoneUnreadable ? { zoneUnreadable } : {}),
+    ...(householdGone ? { householdGone } : {}),
+    ...(sonosDown ? { sonosDown: true } : {}),
+  }
 }

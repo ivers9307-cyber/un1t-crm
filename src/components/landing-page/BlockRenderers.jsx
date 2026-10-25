@@ -20,35 +20,23 @@
 // exact data shape and EditableText/EditableImage field paths, so the
 // operator's saved content and the CRM editor are untouched.
 
+import { Fragment } from 'react'
 import Link from 'next/link'
 import { filterVisibleReviews, marqueeDurationSeconds } from '@/lib/google-business/reviews'
 import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 import WaitlistWidget from '@/components/WaitlistWidget'
 import ClassFunnel from '@/components/ClassFunnel'
+import { classFunnelShownOnLanding } from '@/lib/public-landing'
 import VideoTestimonials from './VideoTestimonials'
 import CountUp from './CountUp'
 import { parseEmbed } from '@/lib/landing-page-embed'
-import EditableText from './EditableText'
+import { E } from './EditableField'
 import EditableImage from './EditableImage'
 import HeroMediaTools from './HeroMediaTools'
 import LogoSwapper from './LogoSwapper'
-
-// Pass-through wrapper used by every block renderer. When `onEdit`
-// is provided (i.e. we're rendering inside the iframe edit
-// overlay), the text becomes contentEditable and edits propagate
-// via onEdit(path, newValue). When `onEdit` is absent (public page
-// render), it's a plain text fragment — zero overhead.
-function E({ value, onEdit, path, multiline }) {
-  if (!onEdit) return <>{value}</>
-  return (
-    <EditableText
-      value={value || ''}
-      onChange={(v) => onEdit(path, v)}
-      multiline={multiline}
-    />
-  )
-}
+import OfferPanel from './OfferPanel'
+import { offerOf } from '@/lib/landing-page-blocks'
 
 // Shared section header: hairline + uppercase tracked label. The label
 // is presentational chrome (not operator data) so it stays consistent
@@ -64,7 +52,11 @@ function Eyebrow({ children, dark = true }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel }) {
+// W1.S1b — `wordmark` (the brand's short name, org_settings.short_name: the
+// outlined watermarks and "Why …") and `locationName` (the page's studio:
+// consent and sign-off defaults) come from the page's own location load.
+// Blank → the block words around it; never a literal gym.
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '' }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -76,13 +68,21 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
   // the upload to the right tenant.
   const editProps = { onEdit: localOnEdit, locationId }
   switch (block.type) {
-    case 'hero':        return <HeroBlock        block={block} {...editProps} ctaHref={ctaHref} ctaLabel={ctaLabel} />
+    case 'hero':        return <HeroBlock        block={block} {...editProps} wordmark={wordmark} ctaHref={ctaHref} ctaLabel={ctaLabel} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} />
     case 'booking':     return <BookingBlock     block={block} />
-    case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
+    case 'pillars':     return <PillarsBlock     block={block} {...editProps} wordmark={wordmark} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
-    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} />
-    case 'class_funnel': return <ClassFunnelBlock block={block} onEdit={localOnEdit} publicPath={publicPath} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} wordmark={wordmark} locationName={locationName} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} />
+    // MANUALFUNNEL.1 — a funnel switched off the main page still renders in
+    // the editor (so its copy and timetable stay editable) and at /start/{path}.
+    case 'class_funnel': return (localOnEdit || classFunnelShownOnLanding(block))
+      ? <ClassFunnelBlock block={block} onEdit={localOnEdit} publicPath={publicPath} locationName={locationName} />
+      : null
+    // PAIDTRIAL.1 — the paid trial product has its own page (/trial); on a
+    // landing page it renders only in the editor, as a stub, so its copy and
+    // price stay editable there.
+    case 'paid_trial':  return localOnEdit ? <PaidTrialBlock block={block} onEdit={localOnEdit} /> : null
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -129,9 +129,13 @@ function HeroMarquee() {
 // always carries. Content staggers in on load (CSS only). The primary
 // CTA is passed down from the page (computed from the page's own
 // funnel blocks) — the hero never invents a target.
-export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
+export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '' }) {
   const href = ctaHref || (onEdit ? '#book' : null)
   const label = ctaLabel || 'Book a free consult'
+  // An off-site primary (the foundation checkout) gets rel=noopener.
+  // Derived from the href rather than passed as a prop — the hero
+  // already receives the target and nothing else needs to know.
+  const external = /^https?:\/\//i.test(href || '')
   return (
     <section className="relative min-h-[92svh] flex flex-col overflow-hidden bg-black lp-grain">
       {block.video_url ? (
@@ -186,7 +190,7 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
           />
           <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
             <span className="lp-outline font-display font-extrabold leading-none select-none text-[34vw] md:text-[26vw]">
-              UN1T
+              {wordmark}
             </span>
           </div>
         </div>
@@ -230,10 +234,16 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel }) {
           )}
           {href && (
             <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-              <a href={href} className="lp-btn">
+              <a href={href} className="lp-btn" {...(external ? { rel: 'noopener' } : {})}>
                 {label}
                 <span className="lp-btn-arrow" aria-hidden="true">→</span>
               </a>
+              {ctaSecondaryHref && (
+                <a href={ctaSecondaryHref} className="lp-btn-ghost">
+                  {ctaSecondaryLabel}
+                  <span className="lp-btn-arrow" aria-hidden="true">→</span>
+                </a>
+              )}
             </div>
           )}
           {/* Scroll cue — decorative, fades under reduced motion. */}
@@ -317,45 +327,103 @@ export function EventBlock({ block }) {
   )
 }
 
-export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
+export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '' }) {
+  // offerOf() is the one place that decides whether there is an offer
+  // to show; a malformed group returns null and we render exactly
+  // what this section rendered before the group existed.
+  const offer = offerOf(block)
+  const eyebrow = offer ? (offer.section_eyebrow || 'Two ways in') : 'Join us'
+  // HATCH-OPEN.1 — the panel beside the offer is a button to the class
+  // funnel when the operator asked for it AND pageCtas resolved that
+  // path (it only does so while the funnel is shown on this page). One
+  // decision, made once in pageCtas: the hero's ghost button and this
+  // panel can never point at different places.
+  const funnelLink = offer && block.second_path === 'class_funnel' && ctaSecondaryHref === '#start'
+    ? { href: ctaSecondaryHref, label: ctaSecondaryLabel || 'Book a class' }
+    : null
   return (
     <section id="waitlist" className="scroll-mt-20 relative bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
       {/* Faint outlined watermark drifting behind the form — depth
           without noise. */}
       <div className="absolute inset-y-0 -right-10 hidden lg:flex items-center pointer-events-none" aria-hidden="true">
-        <span className="lp-outline font-display font-extrabold leading-none text-[13rem]">UN1T</span>
+        <span className="lp-outline font-display font-extrabold leading-none text-[13rem]">{wordmark}</span>
       </div>
-      <div className="relative max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
-        <div>
-          <Eyebrow>Join us</Eyebrow>
-          {(block.heading || onEdit) && (
-            <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-5">
-              <E value={block.heading} onEdit={onEdit} path={['heading']} />
+
+      {offer ? (
+        <div className="relative max-w-6xl mx-auto px-6">
+          <Eyebrow>{eyebrow}</Eyebrow>
+          {(offer.section_heading || onEdit) && (
+            <h2 className="lp-reveal whitespace-pre-line font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-12 md:mb-16 max-w-2xl">
+              <E value={offer.section_heading} onEdit={onEdit} path={['offer', 'section_heading']} multiline />
             </h2>
           )}
-          {(block.subtext || onEdit) && (
-            <p className="lp-reveal lp-d1 text-white/70 leading-relaxed max-w-md text-base md:text-lg">
-              <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
-            </p>
-          )}
-        </div>
-        <div className="lp-reveal lp-d2">
-          <div className="lp-card-glow rounded-2xl p-6 md:p-8">
-            <WaitlistWidget
-              publicPath={publicPath}
-              campaign={campaign}
-              buttonLabel={block.button_label}
-              successMessage={block.success_message}
-              consentLabel={block.consent_label}
-            />
+          <div className="grid lg:grid-cols-[1.25fr_1fr] gap-6 lg:gap-8 items-stretch">
+            <OfferPanel offer={offer} onEdit={onEdit} />
+            <div className="lp-reveal lp-d2 rounded-2xl border border-white/12 p-8 md:p-10 flex flex-col">
+              {(block.heading || onEdit) && (
+                <h3 className="font-display font-extrabold uppercase text-xl md:text-2xl tracking-tight mb-3">
+                  <E value={block.heading} onEdit={onEdit} path={['heading']} />
+                </h3>
+              )}
+              {(block.subtext || onEdit) && (
+                <p className="text-white/60 leading-relaxed text-sm md:text-base mb-7">
+                  <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+                </p>
+              )}
+              <div className="mt-auto">
+                {funnelLink ? (
+                  <a href={funnelLink.href} className="lp-btn">
+                    {funnelLink.label}
+                    <span className="lp-btn-arrow" aria-hidden="true">→</span>
+                  </a>
+                ) : (
+                  <WaitlistWidget
+                    publicPath={publicPath}
+                    campaign={campaign}
+                    buttonLabel={block.button_label}
+                    successMessage={block.success_message}
+                    consentLabel={block.consent_label}
+                    brandName={locationName}
+                  />
+                )}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="relative max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
+          <div>
+            <Eyebrow>{eyebrow}</Eyebrow>
+            {(block.heading || onEdit) && (
+              <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-5xl leading-[1.04] tracking-tight mb-5">
+                <E value={block.heading} onEdit={onEdit} path={['heading']} />
+              </h2>
+            )}
+            {(block.subtext || onEdit) && (
+              <p className="lp-reveal lp-d1 text-white/70 leading-relaxed max-w-md text-base md:text-lg">
+                <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+              </p>
+            )}
+          </div>
+          <div className="lp-reveal lp-d2">
+            <div className="lp-card-glow rounded-2xl p-6 md:p-8">
+              <WaitlistWidget
+                publicPath={publicPath}
+                campaign={campaign}
+                buttonLabel={block.button_label}
+                successMessage={block.success_message}
+                consentLabel={block.consent_label}
+                brandName={locationName}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
 
-export function ClassFunnelBlock({ block, onEdit, publicPath }) {
+export function ClassFunnelBlock({ block, onEdit, publicPath, locationName = '' }) {
   return (
     <section id="start" className="scroll-mt-20 relative min-h-[80svh] flex flex-col overflow-hidden bg-black text-white lp-grain border-t border-white/10">
       <div
@@ -367,11 +435,16 @@ export function ClassFunnelBlock({ block, onEdit, publicPath }) {
         {onEdit ? (
           <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 backdrop-blur-xl px-6 py-8 text-center">
             <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Glofox Class Booking Funnel'}</div>
-            <p className="text-white/60 text-sm">Live class-booking funnel — shown to visitors on the published page. Edit copy and the consult upsell in the panel.</p>
+            <p className="text-white/60 text-sm">
+              {classFunnelShownOnLanding(block)
+                ? 'Live class-booking funnel — shown to visitors on the published page. Edit copy and the consult upsell in the panel.'
+                : 'Class-booking funnel — hidden on this page, shown on its own booking page. Edit copy and the timetable in the panel.'}
+            </p>
           </div>
         ) : (
           <ClassFunnel
             publicPath={publicPath}
+            locationName={locationName}
             consultSlug={block.consult_slug}
             heading={block.heading}
             subhead={block.subhead}
@@ -387,13 +460,30 @@ export function ClassFunnelBlock({ block, onEdit, publicPath }) {
   )
 }
 
-export function PillarsBlock({ block, onEdit, locationId }) {
+// PAIDTRIAL.1 — editor stub for the paid trial block. The live card is
+// PaidTrialFunnel, rendered by src/app/trial/page.js.
+export function PaidTrialBlock({ block }) {
+  const price = Number(block.price_cents) > 0 ? `€${(Number(block.price_cents) / 100).toFixed(Number(block.price_cents) % 100 ? 2 : 0)}` : 'no price'
+  const ready = Boolean(block.membership_id && block.plan_code)
+  return (
+    <section className="relative bg-black text-white border-t border-white/10 py-20 px-5 flex items-center justify-center">
+      <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 px-6 py-8 text-center">
+        <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Paid trial'}</div>
+        <p className="text-white/60 text-sm">
+          Sold at /trial for {price}. {ready ? 'Glofox product set.' : 'No Glofox product set yet: the page sells nothing until it is.'} Edit the copy, the price and the product in the panel.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+export function PillarsBlock({ block, onEdit, locationId, wordmark = '' }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
     <section className="bg-white text-black py-24 md:py-32">
       <div className="max-w-6xl mx-auto px-6">
-        <Eyebrow dark={false}>Why UN1T</Eyebrow>
+        <Eyebrow dark={false}>{wordmark ? `Why ${wordmark}` : 'Why us'}</Eyebrow>
         <div className="grid md:grid-cols-3 gap-10 md:gap-8">
           {items.map((p, i) => (
             <Pillar
@@ -791,15 +881,25 @@ function Stat({ number, label, onEdit, itemIndex, delayClass = '' }) {
 // click-to-change logo affordance.
 export function SiteHeader({
   logoUrl,
-  logoAlt = 'UN1T Dublin',
+  logoAlt = '',
+  // W1.S1b — the no-logo fallback is the brand's wordmark text (short name),
+  // never a literal gym; blank renders no text.
+  wordmark = '',
   logoWidthPx = 200,
   onChangeLogo = null,
   locationId = null,
   sticky = false,
   ctaHref = null,
   ctaLabel = 'Book a free consult',
+  ctaLabelShort = '',
   eventsHref = null,
 }) {
+  // The header is the tightest surface on the page — logo + Events +
+  // button in one row, ~167px left for the button at 375px. A long
+  // CTA overflows and gets clipped by the sticky bar, with no
+  // horizontal scroll to reveal it. Falls back to the full label, so
+  // every page without a short label renders exactly as before.
+  const headerCtaLabel = (ctaLabelShort && ctaLabelShort.trim()) || ctaLabel
   return (
     <header
       className={
@@ -826,15 +926,29 @@ export function SiteHeader({
             className="object-contain"
           />
         ) : (
-          <div className="font-display font-extrabold text-2xl tracking-widest text-white">UN1T</div>
+          <div className="font-display font-extrabold text-2xl tracking-widest text-white">{wordmark}</div>
         )}
-        <div className="flex items-center gap-4">
+        {/* HEADER-FIT.1 — this row is the tightest surface on the site.
+            At 375px the logo leaves it ~185px, and with Events present
+            the button had only ~122px against real labels needing
+            155-186px: "Claim 3 free classes" ran 82px off-screen on
+            Stillorgan and "Join the waitlist" 55px on Hatch, both
+            since launch. It failed SILENTLY — the sticky bar clips the
+            overflow and the page never scrolls sideways, so a
+            half-eaten button just looks like a button.
+
+            Three changes, smallest first: Events steps aside below
+            420px (it is one tap away in the footer, the CTA is not),
+            the button loses some padding there, and it may now SHRINK
+            and ellipsize rather than run off the edge — so an
+            over-long label degrades visibly instead of disappearing. */}
+        <div className="flex items-center gap-4 min-w-0">
           {eventsHref && (
-            <Link href={eventsHref} className="text-white/80 hover:text-white transition-colors text-sm font-medium shrink-0">Events</Link>
+            <Link href={eventsHref} className="hidden min-[420px]:inline-block text-white/80 hover:text-white transition-colors text-sm font-medium shrink-0">Events</Link>
           )}
           {sticky && ctaHref && (
-            <a href={ctaHref} className="lp-btn !px-5 !py-2.5 !text-sm shrink-0">
-              {ctaLabel}
+            <a href={ctaHref} className="lp-btn !px-3.5 min-[420px]:!px-5 !py-2.5 !text-sm min-w-0 max-w-full">
+              <span className="truncate">{headerCtaLabel}</span>
               <span className="lp-btn-arrow hidden sm:inline" aria-hidden="true">→</span>
             </a>
           )}
@@ -861,7 +975,13 @@ function EditableLogo({ logoUrl, logoAlt, logoWidthPx, locationId, onChange }) {
   )
 }
 
-export function SiteFooter({ ctaHref = '#book', ctaLabel = 'Book a free consult' }) {
+// W1.S1b — the footer names the ORGANISATION: `brand` (its customer brand),
+// `studios` (its live studio pages, [{ name, href }]) and `legalName` (the
+// copyright holder) come from resolveOrgChrome (host-brand.js) on the page.
+// Each part hides when blank, so no tenant's footer can name another gym.
+export function SiteFooter({ ctaHref = '#book', ctaLabel = 'Book a free consult', brand = '', studios = [], legalName = '' }) {
+  const studioLinks = Array.isArray(studios) ? studios.filter((s) => s && s.name && s.href) : []
+  const holder = legalName || brand
   return (
     <footer className="relative bg-black text-white border-t border-white/10 overflow-hidden">
       {/* Closing conversion moment — the last thing every visitor sees
@@ -881,24 +1001,29 @@ export function SiteFooter({ ctaHref = '#book', ctaLabel = 'Book a free consult'
 
         <div className="grid md:grid-cols-3 gap-10 text-sm pt-14">
           <div>
-            <div className="font-display font-extrabold text-xl tracking-widest mb-4">UN1T DUBLIN</div>
+            {brand && <div className="font-display font-extrabold text-xl tracking-widest uppercase mb-4">{brand}</div>}
             <p className="text-white/55 leading-relaxed max-w-xs">
               Coach-led strength &amp; conditioning. Built for racing.
               We train as one.
             </p>
           </div>
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.3em] text-white/45 font-semibold mb-4">Studios</div>
-            <p className="leading-loose">
-              <Link href="/welcome/stillorgan" className="text-white/80 hover:text-white transition-colors">
-                UN1T Stillorgan
-              </Link>
-              <br />
-              <Link href="/welcome/hatch-street" className="text-white/80 hover:text-white transition-colors">
-                UN1T Hatch Street
-              </Link>
-            </p>
-          </div>
+          {studioLinks.length > 0 ? (
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.3em] text-white/45 font-semibold mb-4">Studios</div>
+              <p className="leading-loose">
+                {studioLinks.map((studio, i) => (
+                  <Fragment key={studio.href}>
+                    {i > 0 && <br />}
+                    <Link href={studio.href} className="text-white/80 hover:text-white transition-colors">
+                      {studio.name}
+                    </Link>
+                  </Fragment>
+                ))}
+              </p>
+            </div>
+          ) : (
+            <div aria-hidden="true" />
+          )}
           <div>
             <div className="text-[11px] uppercase tracking-[0.3em] text-white/45 font-semibold mb-4">Get in touch</div>
             <p className="leading-loose">
@@ -919,7 +1044,7 @@ export function SiteFooter({ ctaHref = '#book', ctaLabel = 'Book a free consult'
 
       <div className="border-t border-white/10">
         <div className="max-w-6xl mx-auto px-6 py-6 flex flex-wrap items-center justify-between gap-4 text-xs text-white/45">
-          <span>© {new Date().getFullYear()} UN1T Dublin. All rights reserved.</span>
+          <span>© {new Date().getFullYear()}{holder ? ` ${holder}` : ''}. All rights reserved.</span>
           <span className="flex items-center gap-6">
             <Link href="/privacy" className="hover:text-white/80 transition-colors">Privacy</Link>
             <Link href="/login" className="hover:text-white/80 transition-colors">Member &amp; staff login</Link>

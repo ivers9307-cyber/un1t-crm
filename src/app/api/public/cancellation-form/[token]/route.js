@@ -23,10 +23,12 @@ import { getClientIp, checkRateLimit, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { guardBeforeTokenLookup, penaliseInvalidToken, guardResolvedToken } from '@/lib/consent-token-guard'
 import { getLocationBranding } from '@/lib/location-branding'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
+import { logWarn } from '@/lib/log'
 import { notifyAgentApprovalRequest } from '@/lib/agent/approval-notify'
 import { resolveLink, markOpened, claimLink, unclaimLink, attachRequest } from '@/lib/cancellation-form/links'
 import { resolveCancellationFormCopy, renderCopy } from '@/lib/cancellation-form/copy'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 import { SubmitSchema, formOptions, validateSubmission } from '@/lib/cancellation-form/rules'
 
 export const runtime = 'nodejs'
@@ -53,11 +55,24 @@ async function gate(db, request, token) {
   return { ...resolved, ip }
 }
 
+// TZ.5 — the same read carries the studio's zone: the form's "today" (date
+// bounds on GET, validation on POST) is the link location's day. A failed read
+// still answers the member: copy falls back to the defaults, as it always did,
+// and the zone to DEFAULT_TZ, explicitly and with a warning.
+// MIAORG.1 — the copy comes from the studio's RESOLVED Mia settings
+// (cancellation_form is studio-only, so it is the studio's own); the resolver
+// logs the underlying read error.
 async function loadCopy(db, locationId) {
-  const { data: loc } = await db.from('locations').select('name, settings').eq('id', locationId).maybeSingle()
+  const resolved = await resolveAgentSettings(db, locationId)
+  const readFailed = !resolved.ok && resolved.reason === 'read_failed'
+  if (readFailed) {
+    logWarn('cancellation-form', 'location unreadable; default copy and the platform zone used', { locationId, err: resolved.reason })
+  }
+  const loc = resolved.ok ? resolved.location : null
   return {
     locationName: loc?.name || null,
-    copy: resolveCancellationFormCopy(loc?.settings?.customer_agent?.cancellation_form),
+    copy: resolveCancellationFormCopy(resolved.ok ? resolved.settings.cancellation_form : null),
+    zone: readFailed ? DEFAULT_TZ : zoneOfLocation({ id: locationId, timezone: loc?.timezone }),
   }
 }
 
@@ -72,7 +87,7 @@ export async function GET(request, props) {
   if (g.refused) return g.refused
   const { link, contact } = g
 
-  const [{ locationName, copy }, branding] = await Promise.all([
+  const [{ locationName, copy, zone }, branding] = await Promise.all([
     loadCopy(db, link.location_id),
     getLocationBranding(db, link.location_id),
   ])
@@ -89,7 +104,7 @@ export async function GET(request, props) {
     plan: contact.glofox_membership_plan || 'current',
     location: branding.companyName || locationName || '',
   }
-  const today = dublinTodayStr()
+  const today = todayStrIn(zone)
   return json({
     success: true,
     data: {
@@ -128,8 +143,8 @@ export async function POST(request, props) {
   if (g.refused) return g.refused
   const { link, contact } = g
 
-  const { copy } = await loadCopy(db, link.location_id)
-  const checked = validateSubmission(v.data, copy, dublinTodayStr())
+  const { copy, zone } = await loadCopy(db, link.location_id)
+  const checked = validateSubmission(v.data, copy, todayStrIn(zone))
   if (!checked.ok) return json({ success: false, error: checked.error, field: checked.field }, 400)
 
   // Single-use: the atomic claim decides who files. A lost claim means a

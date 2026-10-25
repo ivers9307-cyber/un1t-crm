@@ -76,7 +76,7 @@ Staff, coaches, and authorised contractors sign in with their UN1T account to:
 
 • View shift schedules, request time off, and arrange swaps — arrival at the gym is logged automatically
 • Manage member bookings, classes, and contact records
-• Message members by WhatsApp, SMS, and email from the shared inbox
+• Message members by WhatsApp and email from the shared inbox
 • Submit and track contractor invoices with receipt capture
 • Run studio settings, dashboards, and team rosters for their locations
 

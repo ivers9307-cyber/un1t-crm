@@ -18,8 +18,13 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadQuarantine } from '@/lib/churn-radar-data'
 import { radarCache, invalidateRadar } from '@/lib/radar-cache'
+import { radarAvailability, RADAR_UNAVAILABLE } from '@/lib/radar-availability'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { crossoverIdsAt } from '@/lib/contact-crossovers'
+import { markDormantAtStudio } from '@/lib/radar-dormant-studio'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
 const QuarantineTriageSchema = z.object({
   decision:    z.enum(['stale', 'keep']),
@@ -49,11 +54,14 @@ export async function GET() {
   if (access.error) return access.error
   const db = createServerClient()
   try {
+    // UN1TRADAR.1 — before the cache: a source without membership data answers data:null
+    const avail = await radarAvailability(db, access.locationId, { module: 'churn-radar' })
+    if (!avail.available) return NextResponse.json(RADAR_UNAVAILABLE)
     const items = await radarCache(
       'churn', access.locationId, 'quarantine',
       () => loadQuarantine(db, access.locationId),
     )
-    return NextResponse.json({ success: true, data: { items } })
+    return NextResponse.json({ success: true, data: { items }, source: avail.source, dataAsOf: avail.dataAsOf })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })
   }
@@ -86,20 +94,47 @@ export async function POST(request) {
   if (scopeErr) {
     return NextResponse.json({ success: false, error: scopeErr.message }, { status: 500 })
   }
-  const ids = (scoped || []).map((c) => c.id)
+  const ownedIds = (scoped || []).map((c) => c.id)
+  // UN1TRADAR.3 — plus crossovers AT the active studio (a membership or a
+  // un1t client there). A failed probe adds none (owned contacts only).
+  const owned = new Set(ownedIds)
+  const crossover = await crossoverIdsAt(db, contactIds.filter((id) => !owned.has(id)), locationId)
+  const ids = [...ownedIds, ...crossover]
   if (ids.length === 0) {
     return NextResponse.json({ success: false, error: 'No contacts in scope' }, { status: 400 })
   }
 
   // 'stale' — reclassify the pipeline stage out of the active base.
+  // UN1TRADAR.3 — at a studio whose membership source is not Glofox the
+  // decision is logged only: contacts.pipeline_stage_slug follows the primary
+  // board there, which spec A's classifier owns (Claude's call 6).
+  // Read only for 'stale': a 'keep' never touches contacts.
   if (decision === 'stale') {
-    const { error: updErr } = await db
-      .from('contacts')
-      .update({ pipeline_stage_slug: 'dormant' })
-      .in('id', ids)
-    if (updErr) {
-      logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
-      return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    let source
+    try {
+      ({ source } = await radarReadsFor(db, locationId))
+    } catch (err) {
+      logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+      return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+    }
+    if (source === 'glofox' && ownedIds.length > 0) {
+      const { error: updErr } = await db
+        .from('contacts')
+        .update({ pipeline_stage_slug: 'dormant' })
+        .in('id', ownedIds) // owned only: the contact-wide column follows the primary studio
+      if (updErr) {
+        logWarn('churn-radar', 'quarantine reclassify failed', { err: updErr })
+        return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+      }
+    }
+    // ORGCONTACTS.4 (decision 3) — dormancy is per studio: the person's
+    // contact_studios row AT THIS studio takes stage_slug 'dormant', owned and
+    // crossover alike (the row's kind / source / status kept), so this studio's
+    // audiences and list read it. No row here → nothing to mark here. Best
+    // effort: the action log and the contacts column above are the record,
+    // and a lost studio write is logged, never a refusal.
+    if (source === 'glofox' && ids.length > 0) {
+      await markDormantAtStudio(db, { locationId, contactIds: ids, module: 'churn-radar' })
     }
   }
 

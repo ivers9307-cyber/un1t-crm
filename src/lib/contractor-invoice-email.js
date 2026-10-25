@@ -2,7 +2,7 @@
 //
 // Both emails go to the contractor's email on their profile via
 // Postmark. Branded with the location's logo when one is configured
-// (mirrors the approach used by deposit-receipts.js / roster-email).
+// (mirrors the approach used by roster-email).
 //
 // Sent best-effort: if the email send fails we still record the
 // approval/decline status in the DB and return a warning to the
@@ -13,7 +13,9 @@ import { createServerClient } from '@/lib/supabase'
 import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
+import { zoneOfLocation } from './location-time.js'
 import { resolvePostmarkToken } from './postmark-token.js'
+import { platformFromHeader } from './platform-sender.js'
 // URLSEAM.1 — /schedule/invoices is served by THIS deployment, so the base is
 // this deployment's own host. The local `NEXT_PUBLIC_APP_URL || '<literal>'`
 // helper this replaces made the link ignore the seam wherever the env said
@@ -27,11 +29,18 @@ function getPostmarkToken() {
   return resolvePostmarkToken()
 }
 
-function getFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+// W1.E2 — staff/supplier-facing mail leaves as the location's BRAND on the
+// platform address (POSTMARK_FROM_EMAIL, never spelled); PLATFORM_NAME when
+// the brand cannot be resolved. With the env unset this is undefined: the
+// request carries no From and Postmark refuses with its own message
+// (platformFromHeader has already logged the missing env), rather than a
+// silently invented address. getPostmarkToken() has already thrown before
+// this point when the server itself is unconfigured.
+function getFromAddress(brand) {
+  return platformFromHeader(brand) || undefined
 }
 
-async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) {
+async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata, fromName }) {
   const token = getPostmarkToken()
   if (!token) throw new Error('Postmark is not configured (set POSTMARK_API_KEY).')
   const res = await fetch(`${POSTMARK_API_URL}/email`, {
@@ -42,7 +51,7 @@ async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) 
       'X-Postmark-Server-Token': token,
     },
     body: JSON.stringify({
-      From: getFromAddress(),
+      From: getFromAddress(fromName),
       To: to,
       Subject: subject,
       HtmlBody: htmlBody,
@@ -67,7 +76,8 @@ async function loadInvoiceForEmail(invoiceId) {
       id, period_start, period_end, invoice_amount, status,
       decline_reason, approved_at, reviewed_by, location_id,
       contractor:contractor_id ( full_name, email ),
-      reviewer:reviewed_by ( full_name )
+      reviewer:reviewed_by ( full_name ),
+      location:location_id ( timezone )
     `)
     .eq('id', invoiceId)
     .single()
@@ -75,16 +85,21 @@ async function loadInvoiceForEmail(invoiceId) {
   // Branding (logo + company name) lives on company_settings keyed by
   // location_id — the locations table has neither logo_url nor
   // company_name, so embedding them there returned nothing. Resolve via
-  // the shared helper (never throws; falls back to a neutral 'UN1T').
+  // the shared helper (never throws; W1.S2: an unresolved brand is the empty
+  // string, and the header then carries no wordmark rather than another gym's).
   const branding = await getLocationBranding(db, data.location_id)
-  return { ...data, branding }
+  // TZ.8b — "Approved at" is printed on the invoice's studio clock.
+  const zone = zoneOfLocation({ id: data.location_id, timezone: data.location?.timezone })
+  return { ...data, branding, zone }
 }
 
 function brandHeader(branding) {
   if (branding?.logoUrl) {
     return `<img src="${escapeAttr(branding.logoUrl)}" alt="${escapeAttr(branding.companyName || 'Logo')}" style="max-height:48px;margin-bottom:16px" />`
   }
-  return `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(branding?.companyName || 'UN1T')}</div>`
+  const name = (branding?.companyName || '').trim()
+  if (!name) return ''
+  return `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(name)}</div>`
 }
 
 export async function sendInvoiceApprovedEmail(invoiceId) {
@@ -105,11 +120,11 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
       <p>Hi ${escapeHtml(inv.contractor.full_name || 'there')},</p>
       <p>Your invoice for <strong>${period}</strong> has been approved${
         inv.reviewer?.full_name ? ` by ${escapeHtml(inv.reviewer.full_name)}` : ''
-      } and forwarded to our accounts package for payment processing.</p>
+      } and queued for payment processing. Our accountant reviews it next, and it is paid from there.</p>
       <table style="border-collapse:collapse;margin:16px 0">
         <tr><td style="padding:4px 12px 4px 0;color:#666">Period</td><td style="padding:4px 0">${period}</td></tr>
         <tr><td style="padding:4px 12px 4px 0;color:#666">Amount</td><td style="padding:4px 0">€${Number(inv.invoice_amount).toFixed(2)}</td></tr>
-        <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${formatFullDateTimeInTZ(inv.approved_at)}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;color:#666">Approved at</td><td style="padding:4px 0">${formatFullDateTimeInTZ(inv.approved_at, inv.zone)}</td></tr>
       </table>
       <p>You can review your submission history at <a href="${getAppUrl()}/schedule/invoices">${getAppUrl()}/schedule/invoices</a>.</p>
       <p style="color:#666;font-size:13px;margin-top:24px">
@@ -119,9 +134,9 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
   `.trim()
   const textBody =
     `Hi ${inv.contractor.full_name || 'there'},\n\n` +
-    `Your invoice for ${period} has been approved and forwarded for payment.\n\n` +
+    `Your invoice for ${period} has been approved and queued for payment processing. Our accountant reviews it next, and it is paid from there.\n\n` +
     `Amount: €${Number(inv.invoice_amount).toFixed(2)}\n` +
-    `Approved at: ${formatFullDateTimeInTZ(inv.approved_at)}\n\n` +
+    `Approved at: ${formatFullDateTimeInTZ(inv.approved_at, inv.zone)}\n\n` +
     `Review your submission history: ${getAppUrl()}/schedule/invoices\n`
 
   const messageId = await postmarkSend({
@@ -129,6 +144,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
     subject, htmlBody, textBody,
     tag: 'contractor-invoice-approved',
     metadata: { invoice_id: inv.id, contractor_id: inv.contractor?.id || null },
+    fromName: inv.branding?.companyName,
   })
   return { messageId }
 }
@@ -174,6 +190,7 @@ export async function sendInvoiceDeclinedEmail(invoiceId) {
     subject, htmlBody, textBody,
     tag: 'contractor-invoice-declined',
     metadata: { invoice_id: inv.id, contractor_id: inv.contractor?.id || null },
+    fromName: inv.branding?.companyName,
   })
   return { messageId }
 }

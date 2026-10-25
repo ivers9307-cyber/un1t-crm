@@ -1,15 +1,16 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKeyOrManager, orgScopeLocationIds } from '@/lib/api-auth'
-import { assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { assertLocationAccess, getUserLocationIds, hasRoleAtLocation } from '@/lib/auth'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
 // GET /api/stages — List pipeline stages.
 //
-// Accepts either the n8n bearer token OR a manager+ cookie session
+// Accepts either a per-org API key (Bearer) OR a manager+ cookie session
 // — same dual-auth pattern as /api/contacts/[id]. (The SequenceEditor
 // stage-slug picker that used the cookie path went with the
-// move_pipeline_stage step type, retired in FUNNEL.1; n8n still hits
-// this with the API key.)
+// move_pipeline_stage step type, retired in FUNNEL.1; integrations hit
+// this with an API key.)
 export async function GET(request) {
   const auth = await requireApiKeyOrManager(request)
   if (!auth.ok) return auth.response
@@ -28,15 +29,23 @@ export async function GET(request) {
   // per-org-key path (auth.orgId set) and the legacy global-key path
   // (auth.user + auth.orgId both null) are unchanged — auth.user is null
   // for both, so this block is skipped.
+  //
+  // ROLESWEEP.2 — requireApiKeyOrManager's cookie branch only says "Manager+
+  // somewhere". Judge MANAGER_ROLES at the asked-for location (the helper's
+  // 401 body), and list only the locations where the caller holds it.
   if (auth.user) {
     if (locationId) {
       const guard = assertLocationAccess(auth.user, locationId)
       if (guard) return guard
+      if (!hasRoleAtLocation(auth.user, locationId, MANAGER_ROLES)) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+      }
     }
-    query = query.in('location_id', getUserLocationIds(auth.user))
+    const managed = getUserLocationIds(auth.user).filter((id) => hasRoleAtLocation(auth.user, id, MANAGER_ROLES))
+    query = query.in('location_id', managed)
   }
-  // APIKEYS.3 — per-org key: restrict to the org's locations (no-op for
-  // cookie callers + legacy shared key).
+  // APIKEYS.3 — keyed caller (per-org key): restrict to the org's locations
+  // (no-op for cookie callers only).
   const orgLocs = await orgScopeLocationIds(db, auth.orgId)
   if (orgLocs) query = query.in('location_id', orgLocs)
   const { data, error } = await query

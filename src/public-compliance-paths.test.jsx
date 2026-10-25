@@ -93,6 +93,14 @@ const COMPLIANCE_PATHS = [
     path: '/cancel/eyJsIjoieCJ9.c2ln',
     why: 'CANCEL-FORM.3: per-contact membership cancellation form link sent by email/WhatsApp; must render without a session on every host, incl. the marketing host when the operator builds links there',
   },
+  {
+    path: '/legal/un1t/hatch-street/terms',
+    why: 'UN1TWRITE.17: the un1t.online terms and waiver the class funnel tick links to; a customer must read them before accepting, on every host',
+  },
+  {
+    path: '/pay-done/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4',
+    why: 'MIAHATCH.6: the return page un1t.online checkout sends a member to after paying; the member has no session and lands on the customer (marketing) host, so a login wall or a rewrite to /welcome strands them',
+  },
 ]
 
 // The embed's post-submit hop. RaceSignupWidget sends a PAID signup to a
@@ -419,5 +427,244 @@ describe('tenant-domain brand defaults serve /account-deletion', () => {
 
   it('the defaults name it explicitly', () => {
     expect(DB_BRAND_DEFAULTS.allowedPaths).toContain('/account-deletion')
+  })
+})
+
+// ── 7. EVENT-MOVE.6 — the customer's own entry page, as a FLOW ────────
+//
+// /event/entry/<token> is the "Change your date" link in every event
+// confirmation and moved email. Its audience never has a session: the signed
+// token in the path is the only credential. The page calls
+// /api/public/entry/<token>/*, and a dearer date change hands the browser to
+// /event-pay/<id>, whose checkout returns to the entry page. All three legs
+// must resolve anonymously on every host that may carry the link (the CRM
+// host mints it; the marketing and tenant hosts serve /event/ too).
+
+const ENTRY_FLOW_PATHS = [
+  { path: '/event/entry/eyJyIjoieCJ9.c2ln', why: 'the entry page itself' },
+  { path: '/api/public/entry/eyJyIjoieCJ9.c2ln/move-options', why: 'the page\'s data' },
+  { path: '/event-pay/00000000-0000-4000-8000-000000000002', why: 'a dearer change pays the difference here' },
+]
+
+describe('EVENT-MOVE.6 — the entry page flow is public on every host', () => {
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const { path, why } of ENTRY_FLOW_PATHS) {
+    it(`CRM host admits ${path} anonymously — ${why}`, async () => {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} 307s to /login: missing from proxy publicPaths`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+
+    for (const host of [MARKETING_HOST, TENANT_HOST]) {
+      it(`${host} does not rewrite ${path} to /welcome`, async () => {
+        const res = await proxy(makeReq({ host, path }))
+        expect(rewrittenTo(res), `${path} fell through to the /welcome fallback on ${host}`).toBe(null)
+        expect(admitted(res)).toBe(true)
+      })
+    }
+  }
+
+  it('AppShell renders the entry page and its checkout with no session', () => {
+    for (const path of ['/event/entry/eyJyIjoieCJ9.c2ln', '/event-pay/00000000-0000-4000-8000-000000000002']) {
+      pathnameImpl = path
+      const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+      expect(html, `${path} is missing from AppShell PUBLIC_PATHS`).toContain('page-body')
+    }
+  })
+
+  it('the marketing brand and the tenant defaults name the entry page AND its checkout explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/event/entry/'`).toContain('/event/entry/')
+      expect(allowed, `${label} lost the checkout leg`).toContain('/event-pay/')
+    }
+  })
+})
+
+// ── 7b. BOOKINGSELF.1 — the customer's own booking page, as a FLOW ─────
+//
+// /book/manage/<token> is the {{manage_url}} link in every booking
+// confirmation and reminder email (cancel or reschedule). Its audience never
+// has a session: the signed token in the path is the only credential. The
+// page calls /api/public/booking-manage/<token>/*. Both legs must resolve
+// anonymously on every host that may carry the link (the send path mints it
+// on the studio's customer host; the CRM host is the floor).
+
+const BOOKING_MANAGE_FLOW_PATHS = [
+  { path: '/book/manage/eyJiIjoieCJ9.c2ln', why: 'the booking page itself' },
+  { path: '/api/public/booking-manage/eyJiIjoieCJ9.c2ln/slots', why: 'the page\'s data' },
+]
+
+describe('BOOKINGSELF.1 — the booking manage page flow is public on every host', () => {
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const { path, why } of BOOKING_MANAGE_FLOW_PATHS) {
+    it(`CRM host admits ${path} anonymously — ${why}`, async () => {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} 307s to /login: missing from proxy publicPaths`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+
+    for (const host of [MARKETING_HOST, TENANT_HOST]) {
+      it(`${host} does not rewrite ${path} to /welcome`, async () => {
+        const res = await proxy(makeReq({ host, path }))
+        expect(rewrittenTo(res), `${path} fell through to the /welcome fallback on ${host}`).toBe(null)
+        expect(admitted(res)).toBe(true)
+      })
+    }
+  }
+
+  it('AppShell renders the booking page with no session', () => {
+    pathnameImpl = '/book/manage/eyJiIjoieCJ9.c2ln'
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/book/manage is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name the booking page explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/book/manage/'`).toContain('/book/manage/')
+    }
+  })
+})
+
+// ── 7c. MIAHATCH.6 — the pay-done return page is public on every host ──
+//
+// un1t.online's hosted checkout redirects a member to
+// <customer base>/pay-done/<token> (success) or ...?c=1 (cancel). The member
+// has no session, and the customer base is the studio's customer host (the
+// marketing host or a tenant domain), so all FOUR lists must carry it.
+
+describe('MIAHATCH.6 — /pay-done is public on every host', () => {
+  const PAY_DONE = '/pay-done/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4'
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  // (the cancel variant is the same path with ?c=1; the matchers read the pathname only)
+  for (const host of [CRM_HOST, MARKETING_HOST, TENANT_HOST]) {
+    it(`${host} admits ${PAY_DONE} anonymously without a rewrite`, async () => {
+      const res = await proxy(makeReq({ host, path: PAY_DONE }))
+      expect(rewrittenTo(res), `${PAY_DONE} fell through to the /welcome fallback on ${host}`).toBe(null)
+      expect(admitted(res), `${PAY_DONE} is not admitted on ${host}`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+  }
+
+  it('AppShell renders the page with no session', () => {
+    pathnameImpl = PAY_DONE
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/pay-done is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name /pay-done/ explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/pay-done/'`).toContain('/pay-done/')
+    }
+  })
+
+  it('a same-stem sibling (/pay-donefoo) does not inherit the exemption', async () => {
+    const res = await proxy(makeReq({ host: MARKETING_HOST, path: '/pay-donefoo' }))
+    expect(rewrittenTo(res)).toContain('/welcome')
+  })
+})
+
+// ── 8. W1.L2 — the customer flow is complete on a tenant domain ───────
+//
+// W1.L1 gave every organisation an automatic <slug>.repset.ie host whose
+// tenant_domains row carries brand = {} → DB_BRAND_DEFAULTS. W1.L3 mints
+// customer-facing links (unsubscribe, preferences, view-email, class-pay,
+// host portal, embeds) on that host. Until this section's paths were in
+// the defaults, every one of those links rewrote to /welcome
+// (fallbackHandler = 'rewrite'): the customer clicked "unsubscribe" and got
+// the studio chooser, with the consent untouched.
+//
+// Every path here is ALREADY public on the CRM host (proxy publicPaths), so
+// the widened default exposes nothing new — it only stops the tenant host
+// from swallowing a flow the CRM host already serves anonymously.
+//
+// Deliberately NOT served by default: /start, /free-class, /offers,
+// /technical. They are Stillorgan literals (src/app/start, src/app/free-class,
+// W0.4's pinned /offers) or UN1T's own company story (src/app/technical, the
+// Meta Tech Provider page) and would show UN1T on another gym's host. UN1T
+// Group's own platform row may list them in brand.allowedPaths.
+
+const TENANT_FLOW_PATHS = [
+  '/unsubscribe/abc', '/preferences/abc', '/view-email/abc',
+  '/api/unsubscribe/abc', '/api/preferences/abc',
+  '/class-pay/abc', '/h/pride', '/h/pride/join', '/host', '/host/login', '/host-connect/abc',
+  '/api/host/x', '/embed/event/x', '/terms',
+]
+const TENANT_PINNED_OFF = ['/start', '/trial', '/free-class', '/offers', '/technical']
+const PLATFORM_TENANT_HOST = 'gym-a.repset.ie'
+
+// The entries the two rewrite-fallback tiers (un1t-marketing + the tenant
+// defaults) must both name, as raw startsWith prefixes.
+const W1L2_ALLOWLIST_ENTRIES = [
+  '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/',
+  '/class-pay/', '/h/', '/host', '/host-connect/', '/api/host/', '/embed/', '/terms',
+]
+
+describe('W1.L2 — the customer flow is complete on a tenant domain', () => {
+  beforeEach(() => {
+    // A platform row (mig 716) has brand = {} → the real frozen defaults.
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === PLATFORM_TENANT_HOST
+        ? { id: `tenant:${PLATFORM_TENANT_HOST}`, hostnames: [PLATFORM_TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  it.each(TENANT_FLOW_PATHS)('%s is served, not rewritten, on a tenant_domains host', async (path) => {
+    const res = await proxy(makeReq({ host: PLATFORM_TENANT_HOST, path }))
+    expect(rewrittenTo(res), `${path} fell through to /welcome on ${PLATFORM_TENANT_HOST}`).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it.each(TENANT_FLOW_PATHS)('%s is already public on the CRM host (the default exposes nothing new)', async (path) => {
+    const res = await proxy(makeReq({ host: CRM_HOST, path }))
+    expect(admitted(res), `${path} is auth-gated on the CRM host: it does not belong in a brand default`).toBe(true)
+    expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+  })
+
+  it.each(TENANT_PINNED_OFF)('%s stays OFF the default (Stillorgan-pinned until Wave 2/3)', async (path) => {
+    const res = await proxy(makeReq({ host: PLATFORM_TENANT_HOST, path }))
+    expect(rewrittenTo(res)).toContain('/welcome')
+  })
+
+  it('a CRM page on a tenant host still rewrites to /welcome', async () => {
+    const res = await proxy(makeReq({ host: PLATFORM_TENANT_HOST, path: '/dashboard' }))
+    expect(rewrittenTo(res)).toContain('/welcome')
+  })
+
+  it.each(TENANT_FLOW_PATHS)('%s is also served on the marketing host (same flow, UN1T\'s own domain)', async (path) => {
+    const res = await proxy(makeReq({ host: MARKETING_HOST, path }))
+    expect(rewrittenTo(res), `${path} fell through to /welcome on ${MARKETING_HOST}`).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('the tenant defaults and the marketing brand name every flow entry explicitly', () => {
+    for (const [label, allowed] of [['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths], ['un1t-marketing', marketingBrand().allowedPaths]]) {
+      for (const entry of W1L2_ALLOWLIST_ENTRIES) {
+        expect(allowed, `${label} lost '${entry}'`).toContain(entry)
+      }
+    }
+  })
+
+  it('the tenant defaults never carry the Stillorgan funnel pages', () => {
+    for (const entry of TENANT_PINNED_OFF) {
+      expect(DB_BRAND_DEFAULTS.allowedPaths, `'${entry}' is a Stillorgan literal; it belongs on UN1T Group's own row, not the default`).not.toContain(entry)
+    }
   })
 })

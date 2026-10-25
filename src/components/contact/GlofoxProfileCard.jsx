@@ -13,7 +13,10 @@
 // file-local function there) so the command-centre layout can compose
 // it; shared format helpers now come from ./format.
 
-import CreateInGlofoxButton from '@/components/CreateInGlofoxButton'
+import CreateInGlofoxButton, {
+  CreateInGlofoxResultScope,
+  CreateInGlofoxResultSlot,
+} from '@/components/CreateInGlofoxButton'
 import { relativeTime, formatMoney, formatDate } from './format'
 
 const GLOFOX_STATUS_META = {
@@ -134,7 +137,11 @@ export default function GlofoxProfileCard({ contact }) {
     ? contact.glofox_signup_answers.map(normaliseAnswer).filter(Boolean)
     : []
 
+  // PASSCODEREAD.1 — the scope and slot sit ABOVE the linked switch: the
+  // refresh after a desk create links the contact and unmounts the button,
+  // and the one-time password it showed must stay until it is dismissed.
   return (
+    <CreateInGlofoxResultScope>
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Glofox membership</h3>
@@ -144,6 +151,8 @@ export default function GlofoxProfileCard({ contact }) {
           </span>
         )}
       </div>
+
+      <CreateInGlofoxResultSlot />
 
       {!linked && (
         <div className="space-y-2">
@@ -276,6 +285,7 @@ export default function GlofoxProfileCard({ contact }) {
         </>
       )}
     </div>
+    </CreateInGlofoxResultScope>
   )
 }
 

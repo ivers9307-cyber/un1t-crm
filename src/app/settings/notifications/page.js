@@ -14,11 +14,13 @@
 // page links into it. Per-user toggles live in StaffForm.
 //
 // Auth: any settings-permission holder can view. Counts are
-// aggregate (no PII).
+// aggregate (no PII). Non-masters see only their own locations and the
+// people assigned there (W0.8); masters see the whole platform.
 
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Bell, Clock, Users, User, Mail, Cog, Webhook, ChevronRight, ShieldCheck } from 'lucide-react'
@@ -46,17 +48,25 @@ export default async function NotificationRegistryPage() {
 
   const db = createServerClient()
   // Pull active profiles + locations once. Per-category enabled
-  // counts are computed in JS — cheap (<200 profiles ever).
-  const [{ data: profiles }, { data: locations }] = await Promise.all([
-    db.from('profiles')
-      .select('id, role, active, permissions')
-      .eq('active', true),
-    db.from('locations')
-      .select('id, name, slug, active, notification_config')
-      .eq('active', true)
-      .eq('is_host_anchor', false)
-      .order('name'),
-  ])
+  // counts are computed in JS — cheap (<200 profiles per tenant).
+  // W0.8 — a tenant owner sees their own studios and people, never the
+  // estate's: non-masters are scoped to getUserLocationIds and to the
+  // profiles with a profile_locations row there (nil-uuid sentinel when
+  // there are none, so an empty list never widens to everyone). Masters
+  // keep the platform-wide view.
+  const isMaster = user.isMaster || user.role === 'master' || user.profileRole === 'master'
+  const scopeIds = isMaster ? null : getUserLocationIds(user)
+  const NONE = ['00000000-0000-0000-0000-000000000000']
+  let profileIds = null
+  if (scopeIds) {
+    const { data: links } = await db.from('profile_locations').select('profile_id').in('location_id', scopeIds.length ? scopeIds : NONE)
+    profileIds = [...new Set((links || []).map((l) => l.profile_id))]
+  }
+  let profilesQ = db.from('profiles').select('id, role, active, permissions').eq('active', true)
+  if (profileIds) profilesQ = profilesQ.in('id', profileIds.length ? profileIds : NONE)
+  let locationsQ = db.from('locations').select('id, name, slug, active, notification_config').eq('active', true).eq('is_host_anchor', false).order('name')
+  if (scopeIds) locationsQ = locationsQ.in('id', scopeIds.length ? scopeIds : NONE)
+  const [{ data: profiles }, { data: locations }] = await Promise.all([profilesQ, locationsQ])
 
   // Compute, for each notify_<category>, the enabled count.
   const enabledCounts = {}
@@ -79,21 +89,25 @@ export default async function NotificationRegistryPage() {
         Every push notification the CRM sends. {totalProfiles} active staff member{totalProfiles === 1 ? '' : 's'} can receive notifications, subject to per-user toggles in their profile.
       </p>
 
-      <Link
-        href="/settings/notifications/health"
-        className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors mb-6"
-      >
-        <div className="flex items-start gap-3">
-          <ShieldCheck size={16} className="text-un1t-subtle mt-0.5" />
-          <div>
-            <div className="text-un1t-text">Delivery health</div>
-            <div className="text-xs text-un1t-subtle mt-0.5">
-              See which staff have the mobile app installed and tokens registered. Send test pushes to verify end-to-end delivery.
+      {/* C18 ORGROLE.1 — the staff device fleet is for organisation admins
+          (the health page's and /api/staff-devices' rule). */}
+      {isActiveOrgAdmin(user) && (
+        <Link
+          href="/settings/notifications/health"
+          className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors mb-6"
+        >
+          <div className="flex items-start gap-3">
+            <ShieldCheck size={16} className="text-un1t-subtle mt-0.5" />
+            <div>
+              <div className="text-un1t-text">Delivery health</div>
+              <div className="text-xs text-un1t-subtle mt-0.5">
+                See which staff have the mobile app installed and tokens registered. Send test pushes to verify end-to-end delivery.
+              </div>
             </div>
           </div>
-        </div>
-        <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
-      </Link>
+          <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text" />
+        </Link>
+      )}
 
       <div className="space-y-3">
         {NOTIFICATION_REGISTRY.map(n => (

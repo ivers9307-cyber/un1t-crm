@@ -3,11 +3,12 @@
 // Kept I/O-free so the time-window + lead-time math is fixture-testable
 // without a DB. class_bookings.starts_at is a UTC timestamptz (fed straight
 // from the Glofox API — unlike the legacy `bookings` table whose
-// booking_date/start_time are Dublin wall-clock), so the window logic
+// booking_date/start_time are studio-local wall-clock), so the window logic
 // compares UTC instants directly; only the human time LABEL needs the
 // location timezone.
 
 import { inLeadWindow } from '@/lib/push-reminders'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 // Default: one nudge 30 minutes before the class. Operators can override
 // per location with notification_config.categories.class_reminder.lead_times_minutes
@@ -77,10 +78,11 @@ export function selectDueClassReminders(bookings, nowMs, leadTimes, windowMin = 
  * a UTC instant rendered in the location timezone as '7:30pm'.
  *
  * @param {string} startsAtIso  UTC ISO timestamp (class_bookings.starts_at)
- * @param {string} tz           IANA tz, e.g. 'Europe/Dublin'
+ * @param {string} tz           IANA tz: the class's location zone (the cron
+ *                              passes locations.timezone); DEFAULT_TZ if omitted
  * @returns {string}
  */
-export function classTimeLabel(startsAtIso, tz = 'Europe/Dublin') {
+export function classTimeLabel(startsAtIso, tz = DEFAULT_TZ) {
   const d = new Date(startsAtIso)
   if (Number.isNaN(d.getTime())) return ''
   try {

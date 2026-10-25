@@ -19,6 +19,8 @@ import {
 import { nettedOutByRetry, isMembershipInvoice } from '@/lib/glofox-arrears'
 import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 import { selectAll } from '@/lib/select-all'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { logInfo } from '@/lib/log'
 
 // Columns the scorer + UI need from contacts. glofox_membership_type
 // and trial_credits_remaining drive the live-membership gate (a class
@@ -34,6 +36,34 @@ const MEMBER_COLUMNS =
   'total_bookings_30d, joined_at, lifetime_value_cents, person_group_id'
 
 const CONTACTING_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent']
+
+/**
+ * UN1TRADAR.1 — the location's radar row reads, resolved through the
+ * membership seam BY SOURCE KEY in any state (radarReadsFor): the Glofox
+ * adapter forwards to fetchMembers / fetchWinbackContacts / fetchPastDue
+ * below, untouched; a un1t.online studio reads its un1t_* rows. Every key is
+ * checked before any read runs, so an adapter lacking one throws
+ * "radar read missing: <key>" (callers gate on the memberships capability).
+ * An unreadable source key throws MEMBERSHIP_SOURCE_UNREADABLE.
+ */
+export async function radarReads(db, locationId, keys) {
+  const { reads, pinArrears } = await radarReadsFor(db, locationId)
+  const out = {}
+  for (const key of keys) {
+    if (typeof reads[key] !== 'function') throw new Error(`radar read missing: ${key}`)
+    out[key] = reads[key]
+  }
+  // UN1TRADAR.3 — the adapter's flag rides along (a boolean, never a read)
+  out.pinArrears = pinArrears === true
+  return out
+}
+
+// UN1TRADAR.2/3 — a fold's `profileById` (a un1t studio's own plan and last
+// attended) laid over contact rows; the name stays the contact's.
+function withProfiles(contacts, pastDue) {
+  const profileById = pastDue?.profileById instanceof Map ? pastDue.profileById : null
+  return profileById ? contacts.map((c) => (profileById.has(c.id) ? { ...c, ...profileById.get(c.id) } : c)) : contacts
+}
 
 // Actions that triage a quarantine record — once a member carries one
 // they're off the quarantine backlog (kept, or marked stale).
@@ -258,8 +288,14 @@ async function applyPersonRollup(db, locationId, rows) {
   if (!hasGroups) return rows
 
   try {
-    // 1. Load ALL person_groups for this location (paginated, location-scoped).
-    //    Avoids the giant .in(groupIds) URL-overflow with ~895 groups.
+    // 1. Load ALL person_groups of this studio's ORGANISATION (paginated).
+    //    Groups follow the organisation (mig 767; mig 769 dropped their
+    //    location_id), and the org's ~940 groups page in three reads, so no
+    //    giant .in(groupIds) URL. A studio with no readable organisation
+    //    throws like any other failed read here.
+    const { data: studio, error: locErr } = await db.from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+    if (locErr) throw new Error(locErr.message)
+    if (!studio?.organization_id) throw new Error('studio has no organisation')
     const primaryByGroup = new Map()
     let pgStart = 0
     while (true) {
@@ -267,7 +303,7 @@ async function applyPersonRollup(db, locationId, rows) {
       const { data: page, error: pgErr } = await db
         .from('person_groups')
         .select('id, primary_contact_id')
-        .eq('location_id', locationId)
+        .eq('organization_id', studio.organization_id)
         .order('id', { ascending: true })
         .range(pgStart, pgEnd)
       if (pgErr) throw new Error(pgErr.message)
@@ -321,11 +357,12 @@ async function applyPersonRollup(db, locationId, rows) {
  * @returns {Promise<{ radar: object[], summary: object }>}
  */
 export async function loadRadar(db, locationId, nowMs = Date.now()) {
+  const r = await radarReads(db, locationId, ['radarMembers', 'radarPastDue'])
   const [allMembers, actions, dismissed, pastDue] = await Promise.all([
-    fetchMembers(db, locationId),
+    r.radarMembers(db, locationId, { nowMs }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
-    fetchPastDue(db, locationId),
+    r.radarPastDue(db, locationId, { nowMs }),
   ])
   // CHURN-CLEAN.1 — operator-dismissed "not a member" contacts drop off
   // every surface AND the summary counts (active base, at-risk, etc.).
@@ -384,12 +421,13 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // who owe. Pending never counts as Overdue or Unpaid charges. (A contact can
   // land in more than one bucket — a failed renewal AND a failed fee, say.)
   const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue)
-  let overdueCount = 0, overdueValueCents = 0
+  let overdueCount = 0, overdueValueCents = 0, overdueValueEstimated = false
   let unpaidChargesCount = 0, unpaidChargesValueCents = 0
   let awaitingAuthCount = 0, awaitingAuthValueCents = 0
   for (const [id, agg] of overdueById) {
     if (dismissed.has(id)) continue
     overdueCount++; overdueValueCents += agg.amountCents || 0
+    if (agg.amountEstimated === true || agg.amountUnknown === true) overdueValueEstimated = true
   }
   for (const [id, agg] of unpaidById) {
     if (dismissed.has(id)) continue
@@ -400,11 +438,36 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     awaitingAuthCount++; awaitingAuthValueCents += agg.amountCents || 0
   }
 
+  // UN1TRADAR.2 — a source that cannot read a tab's charges (un1t.online:
+  // unpaid charges, awaiting authorization) reports null for it, never 0; an
+  // estimated overdue total says so. Both keys are absent for Glofox.
+  const unavailable = new Set(pastDue.unavailable || [])
+  // UN1TRADAR.3 — at a studio whose adapter pins arrears (un1t.online), the
+  // past-due members' Overdue rows also go above the At-risk list ("Payment
+  // failed"). Dismissed and snoozed contacts are left out; the summary counts
+  // do not change (they are the Overdue tab's, where a debt does not snooze),
+  // so the block can be shorter than the Overdue badge on purpose.
+  let pinned
+  if (r.pinArrears) {
+    const nowSnoozed = (id) => {
+      const snz = snoozedUntil.get(id)
+      return Boolean(snz && new Date(snz).getTime() > nowMs)
+    }
+    const ids = [...overdueById.keys()].filter((id) => !dismissed.has(id) && !nowSnoozed(id))
+    const contacts = withProfiles(await fetchContactsByIds(db, ids), pastDue)
+    pinned = buildOverdue(contacts, nowMs, { pastDueById: overdueById })
+      .map((row) => ({ ...row, lastContacted: lastContacted.get(row.contactId) || null }))
+    logInfo('churn-radar', 'un1t radar pinned', { locationId, pinned: pinned.length })
+  }
+
   const finalSummary = {
     ...summary, quarantine: quarantineOpen, snoozed, recovery,
     overdue: overdueCount, overdueValueCents,
-    unpaidCharges: unpaidChargesCount, unpaidChargesValueCents,
-    awaitingAuth: awaitingAuthCount, awaitingAuthValueCents,
+    unpaidCharges: unavailable.has('unpaidCharges') ? null : unpaidChargesCount,
+    unpaidChargesValueCents: unavailable.has('unpaidCharges') ? null : unpaidChargesValueCents,
+    awaitingAuth: unavailable.has('awaitingAuth') ? null : awaitingAuthCount,
+    awaitingAuthValueCents: unavailable.has('awaitingAuth') ? null : awaitingAuthValueCents,
+    ...(overdueValueEstimated ? { overdueValueEstimated: true } : {}),
   }
 
   // RADAR-TREND.1 — week-over-week deltas vs the most recent weekly
@@ -419,7 +482,7 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     .maybeSingle()
   finalSummary.trend = computeTrend(finalSummary, snapshot || null)
 
-  return { radar, summary: finalSummary }
+  return pinned ? { radar, summary: finalSummary, pinned } : { radar, summary: finalSummary }
 }
 
 /**
@@ -427,8 +490,9 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
  * footprint that haven't yet been triaged (no quarantine_* action).
  */
 export async function loadQuarantine(db, locationId) {
+  const r = await radarReads(db, locationId, ['radarMembers'])
   const [allMembers, actions, dismissed] = await Promise.all([
-    fetchMembers(db, locationId),
+    r.radarMembers(db, locationId, { nowMs: Date.now() }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
@@ -475,8 +539,9 @@ export async function loadQuarantine(db, locationId) {
  * loadOverdue + loadUnpaidCharges + loadAwaitingAuth so they read identical data.
  */
 async function loadArrearsRows(db, locationId, nowMs) {
+  const r = await radarReads(db, locationId, ['radarPastDue'])
   const [pastDue, actions, dismissed] = await Promise.all([
-    fetchPastDue(db, locationId),
+    r.radarPastDue(db, locationId, { nowMs }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
@@ -485,7 +550,10 @@ async function loadArrearsRows(db, locationId, nowMs) {
   // authorization. A contact may appear in more than one tab.
   const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue)
   const ids = [...new Set([...overdueById.keys(), ...unpaidById.keys(), ...awaitingAuthById.keys()])].filter((id) => !dismissed.has(id))
-  const contacts = await fetchContactsByIds(db, ids)
+  // UN1TRADAR.2 — at a un1t studio the plan and last attended come from the
+  // studio's own rows (profileById): a dual-studio member's contact row is
+  // Stillorgan's. The name stays the contact's.
+  const contacts = withProfiles(await fetchContactsByIds(db, ids), pastDue)
 
   // Actions are newest-first — first hit per contact is the latest.
   const lastContacted = new Map()
@@ -499,13 +567,17 @@ async function loadArrearsRows(db, locationId, nowMs) {
   const overdue = buildOverdue(contacts, nowMs, { pastDueById: overdueById }).map(withAction)
   const unpaidCharges = buildOverdue(contacts, nowMs, { pastDueById: unpaidById }).map(withAction)
   const awaitingAuth = buildOverdue(contacts, nowMs, { pastDueById: awaitingAuthById }).map(withAction)
-  return { overdue, unpaidCharges, awaitingAuth }
+  return { overdue, unpaidCharges, awaitingAuth, unavailable: new Set(pastDue.unavailable || []) }
 }
+
+// UN1TRADAR.2 — a tab whose charges the source cannot read.
+const UNAVAILABLE_TAB = () => ({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
 
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
   const { overdue } = await loadArrearsRows(db, locationId, nowMs)
   const totalValueCents = overdue.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
-  return { overdue, summary: { total: overdue.length, totalValueCents } }
+  const estimated = overdue.some((r) => r.amountEstimated === true || r.amountUnknown === true)
+  return { overdue, summary: { total: overdue.length, totalValueCents, ...(estimated ? { totalValueEstimated: true } : {}) } }
 }
 
 /**
@@ -519,7 +591,8 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
  * @returns {Promise<{ charges: object[], summary: object }>}
  */
 export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
-  const { unpaidCharges } = await loadArrearsRows(db, locationId, nowMs)
+  const { unpaidCharges, unavailable } = await loadArrearsRows(db, locationId, nowMs)
+  if (unavailable.has('unpaidCharges')) return UNAVAILABLE_TAB()
   const totalValueCents = unpaidCharges.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { charges: unpaidCharges, summary: { total: unpaidCharges.length, totalValueCents } }
 }
@@ -535,7 +608,8 @@ export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
  * @returns {Promise<{ charges: object[], summary: object }>}
  */
 export async function loadAwaitingAuth(db, locationId, nowMs = Date.now()) {
-  const { awaitingAuth } = await loadArrearsRows(db, locationId, nowMs)
+  const { awaitingAuth, unavailable } = await loadArrearsRows(db, locationId, nowMs)
+  if (unavailable.has('awaitingAuth')) return UNAVAILABLE_TAB()
   const totalValueCents = awaitingAuth.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { charges: awaitingAuth, summary: { total: awaitingAuth.length, totalValueCents } }
 }
@@ -610,7 +684,7 @@ const WINBACK_CONTACT_STATUSES = ['member', 'credit_member', 'ex_member']
  * Fetch every contact that could be a former member. Paginated, like
  * fetchMembers, but widened to include ex_member.
  */
-async function fetchWinbackContacts(db, locationId) {
+export async function fetchWinbackContacts(db, locationId) {
   const rows = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
@@ -636,8 +710,9 @@ async function fetchWinbackContacts(db, locationId) {
  * @returns {Promise<{ winback: object[], summary: object }>}
  */
 export async function loadWinback(db, locationId, nowMs = Date.now()) {
+  const r = await radarReads(db, locationId, ['winbackContacts'])
   const [allContacts, actions, dismissed] = await Promise.all([
-    fetchWinbackContacts(db, locationId),
+    r.winbackContacts(db, locationId, { nowMs }),
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])

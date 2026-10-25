@@ -11,6 +11,7 @@
 // formula-injection guard, so a host or event name can never execute in Excel.
 
 import { csvCell } from './attendee-csv.js'
+import { PLATFORM_NAME } from './brand-name.js'
 
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0 }
 // Cents → euro decimals ("4700" → "47.00"; null/garbage → "0.00").
@@ -40,7 +41,7 @@ export function monthsWithActivity(payments) {
  *   Statement for <hostName>
  *   Month,<YYYY-MM>
  *   <blank>
- *   Date,Event,Status,Gross,UN1T fee,Net,Refunded
+ *   Date,Event,Status,Gross,<platform> fee,Net,Refunded   (PLATFORM_NAME, W1.S1c)
  *   ...one row per settled payment (amounts in euro decimals)...
  *   <blank>
  *   Totals,,,<gross>,<fee>,<net>,<refunded>
@@ -56,7 +57,8 @@ export function buildStatementCsv({ hostName, month, payments, eventNameById }) 
     [`Statement for ${hostName}`],
     ['Month', month],
     [],
-    ['Date', 'Event', 'Status', 'Gross', 'UN1T fee', 'Net', 'Refunded'],
+    // W1.S1c: the per-ticket fee is the platform's money rail.
+    ['Date', 'Event', 'Status', 'Gross', `${PLATFORM_NAME} fee`, 'Net', 'Refunded'],
   ]
 
   // Totals accumulate in integer cents (exact) and format once at the end.

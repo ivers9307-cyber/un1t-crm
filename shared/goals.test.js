@@ -7,6 +7,8 @@ import {
   periodEnd,
   computeProgress,
   GOAL_DEFS,
+  GOAL_KINDS,
+  goalDefs,
 } from './goals.js'
 
 // ── periodEnd ─────────────────────────────────────────────────────
@@ -116,5 +118,29 @@ describe('computeProgress — undated session guard', () => {
     // null-dated session: new Date(null).getTime()=0 < startMs → skipped by period filter
     // undefined-dated session (no field): new Date(undefined).getTime()=NaN → skipped by isFinite guard
     expect(current).toBe(50)
+  })
+})
+
+describe('goalDefs — the points goals name the product in the brand (W1.S4)', () => {
+  it('builds "{shortName} Points this week/month" from the short brand', () => {
+    const defs = goalDefs('UN1T')
+    expect(defs.weekly_points.label).toBe('UN1T Points this week')
+    expect(defs.monthly_points.label).toBe('UN1T Points this month')
+    expect(goalDefs('Gym A').weekly_points.label).toBe('Gym A Points this week')
+    expect(defs.weekly_classes.label).toBe('Classes this week')
+    expect(defs.monthly_classes.label).toBe('Classes this month')
+  })
+  it('GOAL_DEFS is the brand-less default: bare "Points", never a gym literal', () => {
+    expect(GOAL_DEFS.weekly_points.label).toBe('Points this week')
+    expect(GOAL_DEFS.monthly_points.label).toBe('Points this month')
+    expect(JSON.stringify(GOAL_DEFS)).not.toContain('UN1T')
+    expect(goalDefs('')).toEqual(GOAL_DEFS)
+  })
+  it('only the labels vary with the brand; unit / period / field / suggested are fixed', () => {
+    for (const kind of GOAL_KINDS) {
+      const { label: _l1, ...a } = goalDefs('UN1T')[kind]
+      const { label: _l2, ...b } = GOAL_DEFS[kind]
+      expect(a).toEqual(b)
+    }
   })
 })

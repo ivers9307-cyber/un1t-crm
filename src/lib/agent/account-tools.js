@@ -21,9 +21,11 @@
 // Pure helpers (identityMatches, formatMembership, formatNextClass,
 // formatRecentAttendance) are unit-tested; the executor does the IO.
 
-import { formatDublinClassTime } from './dublin-format'
+import { formatClassTime } from './dublin-format'
+import { DEFAULT_TZ } from '@/lib/location-time'
 import { escapeLikePattern } from '../like-escape'
 import { linkedAccountsForContact, hasBookableMembership, electWriteAccount } from '@/lib/person-accounts'
+import { refuseToolForTurn } from './tool-capability'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -54,6 +56,16 @@ export const ACCOUNT_TOOLS = [
       'verify_identity has succeeded this conversation. Use for "is my membership active", ' +
       '"what plan am I on", "what does my plan include". For live billing standing or ' +
       'payment issues, hand off.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_my_payment_reminder',
+    description:
+      'Look up whether the verified customer has been sent an overdue membership payment ' +
+      'reminder, the amount, the pay link, and whether Glofox still shows the payment as ' +
+      'outstanding. Call this before answering anything about a payment reminder, a failed ' +
+      'payment, or a Pay now link. Only works after verify_identity has succeeded this ' +
+      'conversation.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -281,12 +293,13 @@ export function formatMembership(contact) {
  * array (each row: { event_name, model_name, time_start unix-sec, status }).
  * Pure. now injectable for tests.
  *
- * class_time is a DUBLIN WALL-CLOCK label ("Sat 13 Jun, 07:00"), never a raw
+ * class_time is a WALL-CLOCK label in the studio's zone (TZ.5; it was Dublin
+ * for every studio) ("Sat 13 Jun, 07:00"), never a raw
  * UTC ISO string: handing the model UTC is what told a customer their 7am
  * summer class was at "6am" (live test 2026-06-12, fixed for the booking
  * tools then and for this one in MIA-REVIEW.3). Same helper both sides.
  */
-export function formatNextClass(recentBookings, now = new Date()) {
+export function formatNextClass(recentBookings, now = new Date(), zone = DEFAULT_TZ) {
   const nowSec = Math.floor(now.getTime() / 1000)
   const upcoming = (recentBookings || [])
     .filter(b => b && Number(b.time_start) > nowSec && String(b.status || '').toUpperCase() !== 'CANCELLED')
@@ -296,7 +309,7 @@ export function formatNextClass(recentBookings, now = new Date()) {
   return {
     found: true,
     class_name: next.event_name || next.model_name || 'your class',
-    class_time: formatDublinClassTime(Number(next.time_start)),
+    class_time: formatClassTime(Number(next.time_start), zone),
   }
 }
 
@@ -507,10 +520,127 @@ function queueFailed(kind, error) {
   }
 }
 
+// ── MIA-DUNNING.1 — the overdue-payment reminder run, read-only ─────
+// The CRM chases a failed membership payment with a "Pay now" WhatsApp +
+// emails over ~7 days (PAYLINK, #1683). The run is a sequence_enrollments
+// row whose source_type is transactional and whose metadata.payment carries
+// the invoice, amount and hosted pay link (dunning-payment.js). This tool
+// lets Mia answer "I've paid" / "why did I get this" / "the link doesn't
+// work" from the run itself, plus a LIVE Glofox overdue check with the SAME
+// inference rules as dunningPresendGate: invoice listed → still owed; ok and
+// absent under the page cap → settled; anything else → 'unknown'.
+//
+// It NEVER exits or edits the run. The pre-send gate does that before the
+// next send, which is what makes "the reminders stop automatically" true.
+//
+// Columns are the real ones on sequence_enrollments (mig 005/037/088): there
+// is NO created_at — the row's timestamp is enrolled_at (ENROLFIX.1).
+const REMINDER_ENROLMENT_COLUMNS = 'id, contact_id, status, exit_reason, enrolled_at, metadata, source_type'
+
+const NO_REMINDER = Object.freeze({
+  has_reminder: false, status: 'none', amount: null, currency: null, pay_link: null,
+  first_sent_at: null, exit_reason: null, still_overdue: 'unknown',
+})
+
+function reminderStatus(row) {
+  if (row?.status === 'completed') return 'completed'
+  if (row?.status === 'exited') return 'exited'
+  return 'active'
+}
+
+async function getMyPaymentReminder(db, { verifiedId, locationId }) {
+  try {
+    // Lazy imports, like glofox-catalog above: dunning-payment pulls the
+    // enrolment-status helper (a service client) and glofox pulls the
+    // connection registry. Keeps this module test-loadable.
+    const [{ paymentFromEnrollment }, { TRANSACTIONAL_SOURCE_TYPES }, glofox] = await Promise.all([
+      import('@/lib/dunning-payment'),
+      import('@/lib/sequences/steps'),
+      import('@/lib/glofox'),
+    ])
+    const { glofoxCredentialsForLocation, getGlofoxOverdueInvoices, GLOFOX_OVERDUE_INVOICES_PAGE_CAP } = glofox
+
+    // The run can sit on a sibling contact row (person_groups); read the
+    // whole group, and on an unreadable group fall back to the anchor alone.
+    const linked = await linkedAccountsForContact(db, verifiedId)
+    const ids = linked.readFailed
+      ? [verifiedId]
+      : [...new Set([verifiedId, ...linked.contacts.map((c) => c?.id).filter(Boolean)])]
+
+    const { data: row, error } = await db.from('sequence_enrollments')
+      .select(REMINDER_ENROLMENT_COLUMNS)
+      .in('contact_id', ids)
+      .in('source_type', [...TRANSACTIONAL_SOURCE_TYPES])
+      .order('enrolled_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    if (!row) return { ...NO_REMINDER }
+
+    const payment = paymentFromEnrollment(row)
+    const invoiceId = typeof payment?.invoice_id === 'string' ? payment.invoice_id.trim() : ''
+    const result = {
+      has_reminder: true,
+      status: reminderStatus(row),
+      amount: payment?.amount || null,
+      currency: payment?.currency || null,
+      pay_link: typeof payment?.link === 'string' && payment.link.startsWith('https://') ? payment.link : null,
+      first_sent_at: row.enrolled_at || null,
+      exit_reason: row.exit_reason || null,
+      still_overdue: 'unknown',
+    }
+    if (!invoiceId) return result
+
+    // The Glofox member id belongs to the contact that OWNS the run, which
+    // need not be the anchor.
+    const { data: owner, error: ownerErr } = await db.from('contacts')
+      .select('glofox_member_id, location_id')
+      .eq('id', row.contact_id)
+      .maybeSingle()
+    if (ownerErr) throw ownerErr
+    const memberId = owner?.glofox_member_id
+    if (!memberId) return result
+
+    // W1.M3b — the live overdue check belongs to the studio's membership
+    // source: a studio with none (or a provider without invoices) answers
+    // 'unknown' without a credentials read. Same lazy-import reasoning as above.
+    // HATCHPIPE.2 — and the check below is a GLOFOX read, so it runs only for
+    // the Glofox provider: another source's invoices capability must never send
+    // its member id to Glofox.
+    const { resolveMembershipSource } = await import('@/lib/membership/source')
+    const provider = await resolveMembershipSource(db, locationId || owner?.location_id)
+    if (provider.key !== 'glofox' || !provider.capabilities.invoices) return result
+
+    const creds = await glofoxCredentialsForLocation(db, locationId || owner?.location_id)
+    if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) return result
+
+    const res = await getGlofoxOverdueInvoices(creds, { memberId })
+    if (!res?.ok) return result
+    if (res.invoiceIds.includes(invoiceId)) return { ...result, still_overdue: true }
+    // Absence is only proof of settlement on a page that was not truncated
+    // (same reasoning as dunningPresendGate).
+    if (res.invoiceIds.length >= GLOFOX_OVERDUE_INVOICES_PAGE_CAP) return result
+    return { ...result, still_overdue: false }
+  } catch (err) {
+    // Written FOR the model (card-tools convention): the raw PostgREST /
+    // Glofox string stays in the log, never in the model's context.
+    console.error('[agent][account] get_my_payment_reminder failed:', err?.message || err)
+    return { error: 'The payment reminder could not be looked up right now. Do not guess whether a reminder was sent or paid — hand off to the team.' }
+  }
+}
+
+// MIAHATCH.2 — the account reads that have a un1t.online source.
+const UN1T_ACCOUNT_READS = new Set(['get_my_membership', 'get_my_next_class', 'get_my_recent_attendance', 'get_my_payment_reminder'])
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId, channel }
 export async function executeAccountTool(toolName, input, ctx) {
   const { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId } = ctx
+
+  // MIAORG.1 Task 5 — defence in depth: a Glofox-backed tool at a studio whose
+  // source takes no bookings (never offered there) is refused before any read.
+  const refused = refuseToolForTurn(toolName, ctx)
+  if (refused) return refused
 
   if (toolName === 'verify_identity') {
     // AGENT-AUTH — what "linked" actually means: the sender's PHONE NUMBER is
@@ -597,6 +727,15 @@ export async function executeAccountTool(toolName, input, ctx) {
     return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
   }
 
+  // MIAHATCH.2 — on a turn whose tool block reads un1t.online (ctx.turn.block
+  // starts with `un1t_`, set by the runner) the account reads answer
+  // from the answerable studios. A turn without one is untouched; the module
+  // loads lazily so a Glofox turn never imports it.
+  if (UN1T_ACCOUNT_READS.has(toolName) && String(ctx.turn?.block || '').startsWith('un1t_')) {
+    const { executeUn1tRead } = await import('./un1t-tools')
+    return executeUn1tRead(toolName, input, ctx, ctx.turn.answerable)
+  }
+
   if (toolName === 'get_my_membership') {
     // PERSON-ACCT.3 — a member's LIVE membership can sit on a sibling
     // contact row (person_groups), not the one this conversation is bound
@@ -642,6 +781,10 @@ export async function executeAccountTool(toolName, input, ctx) {
     return result
   }
 
+  if (toolName === 'get_my_payment_reminder') {
+    return getMyPaymentReminder(db, { verifiedId, locationId })
+  }
+
   if (toolName === 'get_my_next_class') {
     // PERSON-ACCT.3 — the soonest booking can be on any linked account.
     const linked = await linkedAccountsForContact(db, verifiedId)
@@ -650,7 +793,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       try {
         const rows = await fetchContactRowsByIds(db, ids, 'recent_bookings')
         const combined = rows.flatMap((r) => (Array.isArray(r?.recent_bookings) ? r.recent_bookings : []))
-        return formatNextClass(combined)
+        return formatNextClass(combined, new Date(), ctx.zone || DEFAULT_TZ)
       } catch (err) {
         console.error('[agent][account] get_my_next_class group read failed:', err?.message || err)
         // fall through to the single-contact read below
@@ -660,7 +803,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       .select('recent_bookings')
       .eq('id', verifiedId)
       .maybeSingle()
-    return formatNextClass(data?.recent_bookings)
+    return formatNextClass(data?.recent_bookings, new Date(), ctx.zone || DEFAULT_TZ)
   }
 
   if (toolName === 'get_my_recent_attendance') {
@@ -730,6 +873,12 @@ export async function executeAccountTool(toolName, input, ctx) {
     // outcome 'none' (or an unreadable group) leaves targetContactId at
     // verifiedId — today's behaviour, unchanged: never a confident guess
     // when there is nothing to elect from.
+
+    // MIAHATCH.2 — a dual-studio member's request names the other studio
+    // (set by the turn, turn-studios.js executorCtxFor). Ids and a flag only.
+    if (ctx.membershipRequestDetails && typeof ctx.membershipRequestDetails === 'object') {
+      Object.assign(details, ctx.membershipRequestDetails)
+    }
 
     const { data: inserted, error } = await db.from('agent_membership_requests').insert({
       location_id: locationId,

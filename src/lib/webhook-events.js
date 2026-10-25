@@ -7,7 +7,7 @@
 // work.
 //
 // Why this exists
-//   Postmark, Revolut, WhatsApp + Twilio all retry webhooks on
+//   Postmark, Revolut and WhatsApp all retry webhooks on
 //   non-2xx responses for hours-to-days. Our existing per-feature
 //   idempotency (status comparisons in the cars / race-payments
 //   paths, *_sent_at stamps in the confirmation paths) is good but
@@ -26,7 +26,7 @@
 //   path O(log n) on the small lookup we need. Rows older than 90d
 //   get pruned by a future TTL cron.
 
-import { logWarn } from './log'
+import { logWarn, logError } from './log'
 
 export const WEBHOOK_PROVIDERS = Object.freeze({
   POSTMARK: 'postmark',
@@ -38,13 +38,17 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   REVOLUT_CLASS_BOOKING: 'revolut_class_booking',
   // OFFERS.5: signed Revolut receiver for weekend-sale offer purchases.
   REVOLUT_OFFER: 'revolut_offer',
+  // CHARITY.7: signed Revolut receiver for event-page card donations.
+  REVOLUT_DONATION: 'revolut_donation',
   WHATSAPP: 'whatsapp',
   // Instagram DM webhooks (messages field, incl. is_echo reflections).
   // Was missing — the IG webhook route passed `undefined` here, so IG
   // events had NO idempotency (Meta retries could double-process).
   INSTAGRAM: 'instagram',
-  TWILIO: 'twilio',
   XERO: 'xero',
+  // NOTE: 'twilio' (the SMS delivery-status webhook) left with the SMS
+  // channel (TWILIO-RETIRE.1). The DB CHECK still permits it, like the
+  // unifi values below — historical rows carry it.
   // NOTE: 'unifi_access' (mig 120) and 'unifi_protect' (mig 121) used to
   // live here. Both receivers drove the zero-touch staff-attendance
   // pipeline, removed 2026-07-31 (Access: 157 events, none ever matched
@@ -102,4 +106,31 @@ export async function recordWebhookEvent({ db, provider, eventId }) {
   // But log it so a sustained failure becomes visible in Sentinel.
   logWarn('webhook-events', 'insert failed', { provider, eventId, err: error })
   return { seen: false, error: error.message }
+}
+
+/**
+ * W0.14 — undo a dedup claim so the provider's retry is processed.
+ *
+ * Use when the handler fails AFTER recordWebhookEvent claimed the row:
+ * without this, the route's non-2xx makes the provider retry, but the
+ * retry hits `seen=true` and short-circuits — the event is lost for good.
+ * Never throws: a failed release is logged (the worst case is the
+ * pre-W0.14 behaviour, not a crashed route).
+ *
+ * @param {object} args
+ * @param {object} args.db        Supabase service-role client
+ * @param {string} args.provider  One of WEBHOOK_PROVIDERS values
+ * @param {string} args.eventId   The exact eventId that was claimed
+ */
+export async function releaseWebhookEvent({ db, provider, eventId }) {
+  try {
+    const { error } = await db
+      .from('webhook_events')
+      .delete()
+      .eq('provider', provider)
+      .eq('event_id', eventId)
+    if (error) logError('webhook-events', 'release failed', { provider, eventId, err: error })
+  } catch (e) {
+    logError('webhook-events', 'release threw', { provider, eventId, err: e })
+  }
 }

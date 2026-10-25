@@ -15,7 +15,7 @@
 // list route); `non_openers_count` (how many a "Send a reminder" draft
 // would reach right now, from the same resolver the reminder-draft's send
 // uses — null, never 0, on a resolver failure); and top-level `links`, one
-// row per clicked URL from host_campaign_clicks (mig 594), aggregated with
+// row per clicked URL from host_campaign_clicks (mig 772), aggregated with
 // a per-person count and sorted clicks desc, the unsubscribe link last.
 
 import { NextResponse } from 'next/server'
@@ -26,6 +26,7 @@ import { deriveOutcome, outcomeAt, failureCopy } from '@/lib/host-campaign-outco
 import { resolveMissedRecipients, hostSendBlockReason } from '@/lib/host-campaign-launch'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
 import { logError } from '@/lib/log'
+import { displayZoneFor } from '@/lib/display-zone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -46,6 +47,12 @@ const SEND_COLUMNS =
 function recipientName(contact) {
   const c = contact || {}
   return [c.first_name, c.last_name].filter(Boolean).join(' ') || c.name || ''
+}
+
+async function hostDisplayZone(db, hostId) {
+  const { data, error } = await db.from('event_hosts').select('anchor_location_id').eq('id', hostId).maybeSingle()
+  if (error) logError('host-campaigns', 'host anchor unreadable; report on the default zone', { host_id: hostId, error: error.message })
+  return displayZoneFor(db, null, data?.anchor_location_id || null, 'host-campaigns')
 }
 
 export async function GET(_request, props) {
@@ -143,7 +150,7 @@ export async function GET(_request, props) {
   }
 
   // HOST-EMAILS.2 — one row per clicked URL from host_campaign_clicks (mig
-  // 594), aggregated with a per-person count (contact_id, falling back to
+  // 772), aggregated with a per-person count (contact_id, falling back to
   // send_id for a click with no matched contact). Sorted clicks desc, the
   // unsubscribe link always last regardless of its own click count.
   const clicksByUrl = new Map()
@@ -167,12 +174,19 @@ export async function GET(_request, props) {
     .map((l) => ({ url: l.url, clicks: l.clicks, people: l.people.size, is_unsubscribe: l.is_unsubscribe }))
     .sort((a, b) => (a.is_unsubscribe - b.is_unsubscribe) || (b.clicks - a.clicks) || a.url.localeCompare(b.url))
 
+  // TZ.16 — the host's studio zone (its anchor location, where its events
+  // live; the composer schedules in the same one, TZ.9), so the report shows
+  // every stamp on the host's clock. Display only: an unreadable zone falls
+  // back to the default, logged.
+  const timezone = await hostDisplayZone(db, session.host.id)
+
   return NextResponse.json({
     success: true,
     data: {
       campaign: { ...campaign, stats, missed_count: missedCount, paused_reason: pausedReason, non_openers_count: nonOpenersCount },
       recipients,
       links,
+      timezone,
     },
   })
 }

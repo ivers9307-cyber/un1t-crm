@@ -142,6 +142,48 @@ describe('enqueueFromFteExpenseClaim', () => {
   })
 })
 
+// TZ.11a — an undated receiptless item is billed on the claim STUDIO's today
+// (its Xero org's calendar), read only when needed; a failed read enqueues
+// nothing.
+describe('enqueueFromFteExpenseClaim — undated item, studio zone (TZ.11a)', () => {
+  function wire({ timezone, locationsError = null }) {
+    const itemsResult = { data: [{ id: 'i9', claim_id: 'c1', receipt_path: null, vendor: 'Cash', amount: 5, expense_date: null }], error: null }
+    const insertedRows = []
+    const queueChain = {
+      insert: vi.fn((rows) => { insertedRows.push(...rows); return queueChain }),
+      select: vi.fn().mockResolvedValue({ data: [{ id: 'q-9' }], error: null }),
+    }
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'fte_expense_claims') return buildChainable({ data: { id: 'c1', location_id: 'loc-ny', status: 'approved' }, error: null })
+      if (t === 'fte_expense_items') return { select: vi.fn().mockReturnThis(), eq: vi.fn(() => Promise.resolve(itemsResult)) }
+      if (t === 'locations') return buildChainable(locationsError ? { data: null, error: locationsError } : { data: { id: 'loc-ny', timezone }, error: null })
+      if (t === 'invoices_queue') return queueChain
+      throw new Error(`unexpected table ${t}`)
+    })
+    return insertedRows
+  }
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-01T03:30:00Z')) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('New York: 31 Oct (23:30 EDT), where Dublin is already 1 Nov', async () => {
+    const rows = wire({ timezone: 'America/New_York' })
+    expect(await enqueueModule.enqueueFromFteExpenseClaim('c1')).toEqual({ ok: true, queueIds: ['q-9'] })
+    expect(rows[0].extracted_fields.invoice_date).toBe('2026-10-31')
+  })
+  it('Europe/Dublin: 1 Nov, as before', async () => {
+    const rows = wire({ timezone: 'Europe/Dublin' })
+    await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(rows[0].extracted_fields.invoice_date).toBe('2026-11-01')
+  })
+  it('an unreadable zone enqueues nothing', async () => {
+    const rows = wire({ locationsError: { message: 'connection reset' } })
+    const r = await enqueueModule.enqueueFromFteExpenseClaim('c1')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/timezone/i)
+    expect(rows).toEqual([])
+  })
+})
+
 describe('enqueueFromContractorInvoice', () => {
   it('returns ok + queueId on success', async () => {
     const invChain = buildChainable({

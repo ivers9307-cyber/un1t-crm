@@ -36,17 +36,16 @@ function makeCapturingDb() {
       update(patch) {
         const entry = { table, patch, eqs: [] }
         captured.push(entry)
+        // Chainable: .eq() any number of times, then awaited directly or via
+        // .select('id') (the race_payments status write is a CAS that reads
+        // back the rows it touched).
         const chain = {
           eq(col, val) {
             entry.eqs.push({ col, val })
-            // support a second .eq() for the race_registrations conditional update
-            chain.eq = (col2, val2) => {
-              entry.eqs.push({ col: col2, val: val2 })
-              return Promise.resolve({ data: null, error: null })
-            }
             return chain
           },
-          then: (cb) => Promise.resolve({ data: null, error: null }).then(cb),
+          select: () => Promise.resolve({ data: [{ id: 'row' }], error: null }),
+          then: (cb, rej) => Promise.resolve({ data: null, error: null }).then(cb, rej),
         }
         return chain
       },
@@ -237,3 +236,46 @@ describe('markRacePaymentStatus — terminal → terminal guard (idempotency)', 
     expect(payUpdate.patch.completed_at).toBe(existingTs)
   })
 })
+
+describe('markRacePaymentStatus — the status write is a compare-and-set (EVENT-MOVE.5)', () => {
+  function casDb({ written = [{ id: 'p-1' }], error = null } = {}) {
+    const captured = []
+    return {
+      _captured: captured,
+      from: (table) => ({
+        update(patch) {
+          const entry = { table, patch, eqs: [], selected: null }
+          captured.push(entry)
+          const chain = {
+            eq(col, val) { entry.eqs.push({ col, val }); return chain },
+            select(cols) { entry.selected = cols; return Promise.resolve({ data: error ? null : written, error }) },
+            then: (cb, rej) => Promise.resolve({ data: null, error: null }).then(cb, rej),
+          }
+          return chain
+        },
+      }),
+    }
+  }
+  const pending = { id: 'p-1', status: 'pending', race_registration_id: 'reg-1', amount_cents: 5000, contact_id: null }
+
+  it('filters on the id AND the status the caller judged, and reads back the rows it touched', async () => {
+    const db = casDb()
+    await markRacePaymentStatus({ db, payment: pending, revolutState: 'completed', revolutAmount: 5000 })
+    const w = db._captured.find((u) => u.table === 'race_payments')
+    expect(w.eqs).toEqual([{ col: 'id', val: 'p-1' }, { col: 'status', val: 'pending' }])
+    expect(w.selected).toBe('id')
+  })
+  it('zero rows (someone else moved it first) applies nothing: no registration confirm, no side effects', async () => {
+    const db = casDb({ written: [] })
+    const r = await markRacePaymentStatus({ db, payment: pending, revolutState: 'completed', revolutAmount: 5000 })
+    expect(r).toEqual({ applied: null, state_changed: false })
+    expect(db._captured.some((u) => u.table === 'race_registrations')).toBe(false)
+  })
+  it('a failed write applies nothing and never throws', async () => {
+    const db = casDb({ error: { message: 'down' } })
+    const r = await markRacePaymentStatus({ db, payment: pending, revolutState: 'completed', revolutAmount: 5000 })
+    expect(r).toEqual({ applied: null, state_changed: false })
+    expect(db._captured.some((u) => u.table === 'race_registrations')).toBe(false)
+  })
+})
+

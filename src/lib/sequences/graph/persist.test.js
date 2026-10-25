@@ -1,18 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import { resolveSequenceGraph, compileForPublish } from './persist.js'
 
-// A published canonical graph (one SMS step).
+// A published canonical graph (one email step).
 const publishedGraph = {
   version: 1,
   trigger: { type: 'manual', config: {} },
-  nodes: [{ id: 'n1', type: 'sms', config: { body: 'published' } }],
+  nodes: [{ id: 'n1', type: 'email', config: { subject: 'published' } }],
   edges: [{ from: 'trigger', to: 'n1' }],
 }
 // A draft (work-in-progress) graph — note it is allowed to be richer.
 const draftGraph = {
   version: 1,
   trigger: { type: 'manual', config: {} },
-  nodes: [{ id: 'n1', type: 'sms', config: { body: 'draft edit' } }],
+  nodes: [{ id: 'n1', type: 'email', config: { subject: 'draft edit' } }],
   edges: [{ from: 'trigger', to: 'n1' }],
 }
 
@@ -80,14 +80,14 @@ describe('compileForPublish — the publish gate', () => {
     const r = compileForPublish(publishedGraph)
     expect(r.ok).toBe(true)
     expect(r.steps).toHaveLength(1)
-    expect(r.steps[0]).toMatchObject({ step_order: 1, step_type: 'sms', sms_body: 'published' })
+    expect(r.steps[0]).toMatchObject({ step_order: 1, step_type: 'email', subject: 'published' })
   })
 
   it('refuses an invalid graph and surfaces the validation errors', () => {
     const bad = {
       version: 1,
       trigger: { type: 'manual', config: {} },
-      nodes: [{ id: 'n1', type: 'sms', config: {} }], // SMS with no body
+      nodes: [{ id: 'n1', type: 'email', config: {} }], // email with no subject
       edges: [{ from: 'trigger', to: 'n1' }],
     }
     const r = compileForPublish(bad)

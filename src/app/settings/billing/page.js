@@ -6,15 +6,16 @@
 // nothing else; the whole surface is inert until the master pins a
 // plan. Per pinned location: plan block, month-to-date meters vs
 // allowance (staff assistant shown separately — allowance-exempt),
-// wallet (balance + Dublin month-end expiry + late-month lapse
+// wallet (balance + month-end expiry on the platform billing calendar,
+// D5: 00:00 Irish time on the 1st, also shown on the studio's clock when
+// its zone differs (TZ.11a) + late-month lapse
 // warning + last-20 ledger + auto-top-up config), then org-level
 // invoices (empty state v1) and billing contact (disabled — no
 // columns yet).
 //
-// Auth mirrors the SAAS4-M3 /settings/usage page shape (redirect
-// pattern + hasPermission('settings')), narrowed to owner/master —
-// billing is an ownership surface end to end, so unlike usage there
-// is no manager read tier. Same permissions decision as M3: NO new
+// Auth (C18 ORGROLE.1): an organisation admin of the active org, the
+// API route's rule — billing is an ownership surface end to end.
+// (Before: owner/master at the active studio + `settings`.) Same permissions decision as M3: NO new
 // WEB_PERMISSIONS key — billing rides the existing `settings` key,
 // which already has a mobile counterpart (staff_management
 // webEquivalent), and the WEB_ONLY_OK notes already record that
@@ -29,13 +30,14 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { getBillingPageData } from '@/lib/billing-page'
 import { METERS } from '@shared/plans'
 import { redirect } from 'next/navigation'
 import { CreditCard, ReceiptText, Wallet } from 'lucide-react'
 import AutoTopupForm from '@/components/settings/AutoTopupForm'
 import WalletTopupButtons from '@/components/settings/WalletTopupButtons'
+import { PLATFORM_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,7 +58,7 @@ function dateLabel(dateStr) {
 function dateTimeLabel(iso) {
   if (!iso) return '—'
   return new Intl.DateTimeFormat('en-IE', {
-    day: 'numeric', month: 'short', timeZone: 'Europe/Dublin',
+    day: 'numeric', month: 'short', timeZone: PLATFORM_TZ, // D5: the platform billing calendar (PLATFORM_TZ)
   }).format(new Date(iso))
 }
 
@@ -97,10 +99,10 @@ function InvoiceStatusChip({ status }) {
 export default async function BillingSettingsPage({ searchParams }) {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  // Owner/master only — billing is an ownership surface (narrower than
-  // /settings/usage, which grants managers a read tier).
-  if (user.role !== 'owner' && user.role !== 'master') redirect('/settings')
-  if (!hasPermission(user, 'settings')) redirect('/settings')
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026) — organisation admins only: master or
+  // an org_admin grant on the active organisation (GET /api/settings/billing's
+  // rule). A studio owner is not an organisation admin.
+  if (!isActiveOrgAdmin(user)) redirect('/settings')
 
   const orgId = user.activeOrganization?.id
   if (!orgId) redirect('/settings')
@@ -209,6 +211,7 @@ export default async function BillingSettingsPage({ searchParams }) {
                 <p className="text-xs text-un1t-subtle mb-3">
                   Credit expires {dateLabel(loc.wallet.expires_on)} — the wallet is a monthly usage budget
                   and unused credit doesn&apos;t roll over.
+                  {loc.wallet.resets_note && <> {loc.wallet.resets_note}</>}
                 </p>
 
                 {loc.wallet.lapse_warning && (

@@ -18,6 +18,12 @@ const ROUTES = Object.freeze({
   tasks: '/tasks',
 })
 
-export function mobileRouteForFeedRow(rowId) {
+// C146 TASKSNEEDCONTACTS.1 — the server's tasks row is gated on the web
+// `activities` key, which knows nothing of Contacts; at a studio where the
+// phone hides Tasks (canUseTasksHere) the row stays informational instead of
+// opening a screen that would only say Tasks is off. Callers that omit the
+// option keep the plain mapping.
+export function mobileRouteForFeedRow(rowId, { canUseTasks = true } = {}) {
+  if (rowId === 'tasks' && !canUseTasks) return null
   return ROUTES[rowId] || null
 }

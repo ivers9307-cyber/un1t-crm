@@ -174,7 +174,7 @@ const noUtcToday = {
     docs: { description: "Disallow new Date().toISOString().slice/split — the UTC date of now; use dublinTodayStr() for a business 'today'." },
     schema: [],
     messages: {
-      utcToday: "new Date().toISOString() is the UTC date of now — during BST it differs from the Dublin date around midnight, an off-by-one for a business 'today'. Use dublinTodayStr() from @/lib/dublin-time. If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
+      utcToday: "new Date().toISOString() is the UTC date of now — around midnight it differs from the studio's date (an hour in Irish summer time; more in other zones), an off-by-one for a business 'today'. Use todayStrIn(zone) from @/lib/location-time (the location's zone; shared/zoned-time on the phone). If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
     },
   },
   create(context) {
@@ -191,6 +191,51 @@ const noUtcToday = {
         if (!dateNode.callee || dateNode.callee.name !== 'Date') return
         if (dateNode.arguments && dateNode.arguments.length > 0) return // new Date(x) — not "now"
         context.report({ node, messageId: 'utcToday' })
+      },
+    }
+  },
+}
+
+// TZ.18 — a studio's clock is its locations.timezone. A bare 'Europe/Dublin' or a
+// dublin-time import is a per-tenant decision pinned to UN1T's zone. Use
+// @/lib/location-time (zone from the location) or PLATFORM_TZ (a platform-level
+// decision). Exact-value match only: prose that mentions the zone is fine.
+// Armed by scripts/check-dublin-zone.mjs (npm run check:guardrails), which owns
+// the allowlist (TZ.18b: no baseline any more; the wave is swept); not by
+// eslint.guardrails.config.mjs, which ignores mobile/**. Option
+// `{ literals: false }` keeps only the import ban: tests may name the zone (the
+// Europe/Dublin pins), but nothing imports dublin-time outside its own tests.
+const DUBLIN_IMPORT = /(^|\/)dublin-time(\.js)?$/
+const noHardcodedDublinZone = {
+  meta: {
+    type: 'problem',
+    docs: { description: "Disallow the literal 'Europe/Dublin' and dublin-time imports outside the zone helpers." },
+    schema: [{ type: 'object', properties: { literals: { type: 'boolean' } }, additionalProperties: false }],
+    messages: {
+      literal: "'Europe/Dublin' hard-codes UN1T's zone. Use the location's zone (@/lib/location-time: getLocationZone / zoneOfLocation) or PLATFORM_TZ for a platform-level decision.",
+      import: 'dublin-time pins Europe/Dublin. Import the zone-taking twin from @/lib/location-time (web) or shared/zoned-time (phone, shared).',
+    },
+  },
+  create(context) {
+    const literals = context.options[0]?.literals !== false
+    const lit = (node, value) => {
+      if (literals && value === 'Europe/Dublin') context.report({ node, messageId: 'literal' })
+    }
+    const imp = (node, src) => {
+      if (typeof src === 'string' && DUBLIN_IMPORT.test(src)) context.report({ node, messageId: 'import' })
+    }
+    return {
+      // An import's source string is a Literal too, but '…/dublin-time' is not
+      // 'Europe/Dublin', so nothing reports twice.
+      Literal(node) { lit(node, node.value) },
+      TemplateLiteral(node) { if (node.expressions.length === 0) lit(node, node.quasis[0].value.cooked) },
+      ImportDeclaration(node) { imp(node, node.source.value) },
+      ImportExpression(node) { if (node.source.type === 'Literal') imp(node, node.source.value) },
+      ExportAllDeclaration(node) { imp(node, node.source && node.source.value) },
+      ExportNamedDeclaration(node) { if (node.source) imp(node, node.source.value) },
+      'CallExpression[callee.type="Identifier"][callee.name="require"]'(node) {
+        const a = node.arguments[0]
+        if (a && a.type === 'Literal') imp(node, a.value)
       },
     }
   },
@@ -1000,14 +1045,186 @@ const noSubstringRedirectAssertion = {
   },
 }
 
+// ─── no-unawaited-async-expect (D2 EXPECTLINT.1) ──────────────────────────
+//
+// `expect(p).resolves.toBe(x)` / `.rejects.toThrow()` / `expect.poll(fn)…`
+// return a PROMISE: the assertion runs when it settles. Nothing waits for an
+// un-awaited one, so the test can finish first. Then either the check never
+// counts (the test passes without it) or it fails after the test has ended
+// and vitest pins the failure on whatever runs next. #1762 lost a CI run to
+// exactly this line in src/lib/availability-notify.test.js:
+//
+//     expect(sendPushOnce.mock.results[0].value).resolves.toMatchObject({ sent: 4 })
+//
+// "Waited for" means: awaited; returned (the runner awaits a returned
+// promise); the body of a concise arrow; an element of an awaited/returned
+// Promise.all/allSettled/race/any; or bound to a `const` that is itself
+// waited for in one of those ways. The last form is the fake-timer idiom,
+// where the handler must be attached BEFORE the clock moves:
+//
+//     const settled = expect(pending).rejects.toThrow(/timed out/)
+//     await vi.advanceTimersByTimeAsync(60_000)
+//     await settled
+//
+// A return does NOT count inside a `.forEach` callback, because forEach
+// drops what its callback returns.
+//
+// Blind spots (a floor, not proof): an assertion inside a callback or helper
+// whose OWN promise floats — `forEach(async …)`, an un-awaited `.map(...)`, an
+// async IIFE, `q.then(async () => …)`, a helper that returns the assertion
+// called without `await`. The inner `await`/concise arrow reads as "waited
+// for". False positives (safe, force a rewrite): an assertion passed as an
+// argument (`await settle(expect(...))`) or stored on an object/array other
+// than a Promise combinator's literal array — bind it to a const and await it.
+const ASYNC_EXPECT_MODIFIERS = new Set(['resolves', 'rejects'])
+const PROMISE_COMBINATORS = new Set(['all', 'allSettled', 'race', 'any'])
+const RETURN_DISCARDING_METHODS = new Set(['forEach'])
+
+// expect(x) / expect.soft(x) -> 'plain'; expect.poll(fn) -> 'poll'; else null.
+function expectCallKind(node) {
+  const c = node.callee
+  if (c.type === 'Identifier' && c.name === 'expect') return 'plain'
+  if (
+    c.type === 'MemberExpression' && !c.computed &&
+    c.object.type === 'Identifier' && c.object.name === 'expect' &&
+    c.property.type === 'Identifier'
+  ) {
+    if (c.property.name === 'soft') return 'plain'
+    if (c.property.name === 'poll') return 'poll'
+  }
+  return null
+}
+
+function enclosingFunction(node) {
+  let cur = node.parent
+  while (cur && !/Function/.test(cur.type)) cur = cur.parent
+  return cur
+}
+
+// True when `fn` is a callback whose return value its caller throws away.
+function returnIsDiscarded(fn) {
+  const call = fn?.parent
+  return Boolean(
+    call?.type === 'CallExpression' && call.arguments.includes(fn) &&
+    call.callee.type === 'MemberExpression' && !call.callee.computed &&
+    RETURN_DISCARDING_METHODS.has(call.callee.property.name),
+  )
+}
+
+function isPromiseCombinatorCall(call, array) {
+  return (
+    call?.type === 'CallExpression' && call.arguments[0] === array &&
+    call.callee.type === 'MemberExpression' && !call.callee.computed &&
+    call.callee.object.type === 'Identifier' && call.callee.object.name === 'Promise' &&
+    PROMISE_COMBINATORS.has(call.callee.property.name)
+  )
+}
+
+// How the promise `node` evaluates to is consumed:
+//   { kind: 'settled' }                 something waits for it
+//   { kind: 'bound', declarator }       stored in `const/let name = …`
+//   { kind: 'floating' }                nothing waits for it
+function asyncConsumer(node) {
+  let cur = node
+  for (;;) {
+    const p = cur.parent
+    if (!p) return { kind: 'floating' }
+    if (p.type === 'AwaitExpression') return { kind: 'settled' }
+    if (p.type === 'ReturnStatement') {
+      return returnIsDiscarded(enclosingFunction(p)) ? { kind: 'floating' } : { kind: 'settled' }
+    }
+    if (p.type === 'ArrowFunctionExpression' && p.body === cur) {
+      return returnIsDiscarded(p) ? { kind: 'floating' } : { kind: 'settled' }
+    }
+    if (p.type === 'VariableDeclarator' && p.init === cur && p.id.type === 'Identifier') {
+      return { kind: 'bound', declarator: p }
+    }
+    if (
+      (p.type === 'ConditionalExpression' && p.test !== cur) ||
+      p.type === 'LogicalExpression' ||
+      (p.type === 'SequenceExpression' && p.expressions[p.expressions.length - 1] === cur)
+    ) {
+      cur = p
+      continue
+    }
+    if (p.type === 'ArrayExpression' && isPromiseCombinatorCall(p.parent, p)) {
+      cur = p.parent
+      continue
+    }
+    return { kind: 'floating' }
+  }
+}
+
+const noUnawaitedAsyncExpect = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Require every async assertion (expect(…).resolves / .rejects, expect.poll) to be awaited or returned, so the test cannot end before it settles.',
+    },
+    schema: [],
+    messages: {
+      floating:
+        'This {{what}} assertion is a promise and nothing waits for it, so the test can end before it settles: it then passes without checking, or fails a LATER test (#1762). Write `await expect(…)…`.',
+      unsettledBinding:
+        "'{{name}}' holds a {{what}} assertion that is never awaited or returned, so the test can end before it settles. `await {{name}}` before the test ends.",
+    },
+  },
+  create(context) {
+    const sourceCode = context.sourceCode ?? context.getSourceCode()
+    return {
+      CallExpression(node) {
+        const kind = expectCallKind(node)
+        if (!kind) return
+        // Climb the chain: expect(x).not.resolves.toBe(1) and friends.
+        let top = node
+        let modifier = kind === 'poll' ? 'expect.poll' : null
+        let invoked = false
+        for (;;) {
+          const p = top.parent
+          if (p?.type === 'MemberExpression' && p.object === top) {
+            if (!p.computed && ASYNC_EXPECT_MODIFIERS.has(p.property.name)) modifier ??= `.${p.property.name}`
+            top = p
+            continue
+          }
+          if (p?.type === 'CallExpression' && p.callee === top) {
+            invoked = true
+            top = p
+            continue
+          }
+          break
+        }
+        // No async modifier, or a chain that never calls its matcher, is
+        // not a promise (the second is a different bug, out of scope here).
+        if (!modifier || !invoked) return
+        const use = asyncConsumer(top)
+        if (use.kind === 'settled') return
+        if (use.kind === 'bound') {
+          const [variable] = sourceCode.getDeclaredVariables(use.declarator)
+          const waited = (variable?.references ?? []).some(
+            (ref) => ref.isRead() && asyncConsumer(ref.identifier).kind === 'settled',
+          )
+          if (!waited) {
+            context.report({ node, messageId: 'unsettledBinding', data: { name: use.declarator.id.name, what: modifier } })
+          }
+          return
+        }
+        context.report({ node, messageId: 'floating', data: { what: modifier } })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
+    'no-unawaited-async-expect': noUnawaitedAsyncExpect,
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
     'no-unchecked-supabase-write': noUncheckedSupabaseWrite,
     'no-substring-redirect-assertion': noSubstringRedirectAssertion,
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
+    'no-hardcoded-dublin-zone': noHardcodedDublinZone,
     'no-low-contrast-chip': noLowContrastChip,
     'no-low-contrast-accent-text': noLowContrastAccentText,
     'no-dead-un1t-token': noDeadUn1tToken,

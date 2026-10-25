@@ -22,13 +22,15 @@
 // hosts only, or update that statement. Flagged 2026-06-19.
 
 import { useEffect, useRef, useState } from 'react'
+import { SITE_META_PIXEL_ID, metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
+import { reportConsent } from '@/lib/consent-telemetry'
 
 const STORAGE_KEY = 'un1t_cookie_consent_v1'
 const EXPIRY_DAYS = 180
 
 // ---- Replace these with your real tag IDs ----
 const GA_MEASUREMENT_ID = 'G-XXXXXXXXXX'
-const META_PIXEL_ID = '1866914428028977' // UN1T Web dataset (Meta Pixel)
+const META_PIXEL_ID = SITE_META_PIXEL_ID // UN1T Web dataset (Meta Pixel)
 const TIKTOK_PIXEL_ID = 'XXXXXXXXXXXXXXXXXXXX'
 const GOOGLE_ADS_ID = 'AW-XXXXXXXXX'
 
@@ -94,7 +96,10 @@ function loadMarketing() {
       s = b.getElementsByTagName(e)[0]
       s.parentNode.insertBefore(t, s)
     })(window, document, 'script', 'https://connect.facebook.net/en_US/fbevents.js')
-    window.fbq('init', META_PIXEL_ID)
+    // METADATASET.1 — a studio with its own Meta dataset (Hatch Street) gets
+    // its pixel too on its own pages; every page still loads the site pixel.
+    // `track` goes to every initialised pixel.
+    for (const id of metaPixelIdsForPath(window.location.pathname)) window.fbq('init', id)
     window.fbq('track', 'PageView')
   }
 
@@ -207,6 +212,9 @@ export default function CookieConsent() {
       setMarketing(!!existing.marketing)
     } else {
       setVisible(true)
+      // CONSENTRATE.1 — one row per banner shown, so accept/reject/ignore
+      // rates can be read from funnel_events.
+      reportConsent('consent_shown')
     }
 
     // Allow reopening preferences from anywhere (e.g. a footer link
@@ -225,6 +233,7 @@ export default function CookieConsent() {
   function acceptAll() {
     const c = { essential: true, analytics: true, marketing: true }
     saveConsent(c)
+    reportConsent('consent_accept', c)
     applyConsent(c)
     setVisible(false)
     setPrefsOpen(false)
@@ -233,6 +242,7 @@ export default function CookieConsent() {
   function rejectAll() {
     const c = { essential: true, analytics: false, marketing: false }
     saveConsent(c)
+    reportConsent('consent_reject', c)
     setVisible(false)
     setPrefsOpen(false)
   }
@@ -240,6 +250,7 @@ export default function CookieConsent() {
   function saveSelected() {
     const c = { essential: true, analytics, marketing }
     saveConsent(c)
+    reportConsent('consent_custom', c)
     applyConsent(c)
     setVisible(false)
     setPrefsOpen(false)

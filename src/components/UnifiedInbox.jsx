@@ -419,6 +419,12 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
+                  onMoved={(movedId) => {
+                    // WAHOMESTUDIO.1 (R7) — the thread left this inbox: drop the
+                    // selection (pane, command centre, mobile back bar) and reload the queue.
+                    setSelected(prev => (prev && prev.id === movedId ? null : prev))
+                    loadConversations()
+                  }}
                 />
               ) : (
                 <IGInbox

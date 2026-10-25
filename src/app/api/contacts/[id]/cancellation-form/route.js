@@ -29,16 +29,23 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasMobilePermission } from '@/lib/permissions'
+import {
+  hasPermissionAtAnyLocation, hasPermissionForLocation,
+  hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
+} from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { sendTransactionalEmail } from '@/lib/postmark'
-import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody } from '@/lib/whatsapp'
+import { sendCtaUrlMessage, sendTemplateMessage, isWindowOpen, buildTemplateComponents, renderTemplateBody, getOrCreateConversation } from '@/lib/whatsapp'
 import { URL_BUTTON_MAPPING_KEY } from '@/lib/whatsapp-template-buttons'
-import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { contactWaPhone, loadSendConversation } from '@/lib/whatsapp-conversations'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { pickTemplateConfig } from '@/lib/whatsapp-config'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 import { manualTakeoverPatch } from '@/lib/agent/core'
 import { issueLink, revokeLink, latestLinkForContact } from '@/lib/cancellation-form/links'
 import { resolveCancellationFormCopy } from '@/lib/cancellation-form/copy'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 import { linkVars, renderLinkTexts, buildLinkEmailHtml, templateUrlPrefixOk } from '@/lib/cancellation-form/deliver'
 
 export const runtime = 'nodejs'
@@ -51,23 +58,43 @@ const SendSchema = z.object({
 const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained']
 const CONTACT_COLUMNS = 'id, name, first_name, email, email_status, phone, wa_phone, location_id, glofox_membership_plan'
 
-function channelPermitted(user, channel) {
-  return hasPermission(user, channel) || hasMobilePermission(user, channel)
+// ROLESWEEP.1c — the channel is judged AT the contact's location (web OR
+// mobile toggle there), never at the caller's active studio.
+function channelPermitted(user, locationId, channel) {
+  return hasPermissionForLocation(user, locationId, channel) || hasMobilePermissionForLocation(user, locationId, channel)
+}
+
+// Coarse pre-check only: the caller holds the channel (web or mobile) at SOME
+// location. The real decision is channelPermitted at the contact's location.
+function channelPermittedAnywhere(user, channel) {
+  return hasPermissionAtAnyLocation(user, channel) || hasMobilePermissionAtAnyLocation(user, channel)
 }
 
 async function loadContext(db, contactId) {
   const { data: contact, error } = await db.from('contacts').select(CONTACT_COLUMNS).eq('id', contactId).single()
   if (error || !contact) return { contact: null }
-  const { data: loc } = await db.from('locations').select('name, settings').eq('id', contact.location_id).maybeSingle()
-  const copy = resolveCancellationFormCopy(loc?.settings?.customer_agent?.cancellation_form)
-  const baseUrl = copy.public_base_url || getAppUrl()
-  return { contact, locationName: loc?.name || '', copy, baseUrl }
+  // MIAORG.1 — the form copy from the studio's RESOLVED Mia settings
+  // (cancellation_form is studio-only, so it is the studio's own). Unreadable =
+  // every code default, as before.
+  const resolved = await resolveAgentSettings(db, contact.location_id)
+  const copy = resolveCancellationFormCopy(resolved.ok ? resolved.settings.cancellation_form : null)
+  return { contact, locationName: (resolved.ok && resolved.location.name) || '', copy }
+}
+
+// W1.L3b — the per-location `public_base_url` override stays first; else the
+// form link lands on the CONTACT LOCATION's tenant host. An approved WhatsApp
+// template's URL button must carry the same base (templateUrlPrefixOk), so a
+// studio whose template was approved on another host pins `public_base_url`.
+// Called only AFTER the location and channel gates: a refused caller must not
+// cost a tenant-host lookup (tests/role-sweep/contact-messaging.test.js).
+async function resolveFormBaseUrl(db, ctx) {
+  return ctx.copy.public_base_url || await resolveCustomerBaseUrl(db, ctx.contact.location_id)
 }
 
 async function loadTemplate(db, locationId, name) {
   if (!name) return null
   const { data: rows } = await db.from('whatsapp_templates')
-    .select('name, language, category, status, components, header_media_url')
+    .select('name, language, category, status, components, header_media_url, business_account_id')
     .eq('location_id', locationId)
     .eq('name', name)
     .order('created_at', { ascending: false })
@@ -86,7 +113,7 @@ export async function GET(request, props) {
   const { id: contactId } = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!channelPermitted(user, 'email') && !channelPermitted(user, 'whatsapp')) {
+  if (!channelPermittedAnywhere(user, 'email') && !channelPermittedAnywhere(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const db = createServerClient()
@@ -94,16 +121,23 @@ export async function GET(request, props) {
   if (!ctx.contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, ctx.contact.location_id)
   if (guard) return guard
-  const { contact, locationName, copy, baseUrl } = ctx
+  // ROLESWEEP.1c — email OR whatsapp judged at the contact's location.
+  if (!channelPermitted(user, ctx.contact.location_id, 'email') && !channelPermitted(user, ctx.contact.location_id, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  const { contact, locationName, copy } = ctx
+  const baseUrl = await resolveFormBaseUrl(db, ctx)
 
   const [latest, template] = await Promise.all([
     latestLinkForContact(db, contact.id),
     loadTemplate(db, contact.location_id, copy.whatsapp_template_name),
   ])
-  // Window state without creating a conversation: read the newest thread.
+  // Window state without creating a conversation: read the newest thread at
+  // the contact's HOME studio, the one the POST sends on (WAORGNUMBER.4, R3).
   const { data: convs } = await db.from('whatsapp_conversations')
     .select('id, window_expires_at')
     .eq('contact_id', contact.id)
+    .eq('location_id', contact.location_id)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(1)
   const conversation = convs?.[0] || null
@@ -119,8 +153,8 @@ export async function GET(request, props) {
     data: {
       latest,
       can: {
-        email: emailOk && channelPermitted(user, 'email'),
-        whatsapp: hasPhone && channelPermitted(user, 'whatsapp') && (windowOpen || templateReady),
+        email: emailOk && channelPermitted(user, contact.location_id, 'email'),
+        whatsapp: hasPhone && channelPermitted(user, contact.location_id, 'whatsapp') && (windowOpen || templateReady),
         whatsapp_window_open: windowOpen,
         whatsapp_template_ready: templateReady,
         has_phone: hasPhone,
@@ -151,15 +185,19 @@ export async function POST(request, props) {
   if (!ctx.contact) return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, ctx.contact.location_id)
   if (guard) return guard
-  if (!channelPermitted(user, channel)) {
+  // ROLESWEEP.1c — the channel is judged at the contact's location.
+  if (!channelPermitted(user, ctx.contact.location_id, channel)) {
     return NextResponse.json({ success: false, error: `Forbidden — ${channel} not enabled at this location for your role` }, { status: 403 })
   }
-  const { contact, locationName, copy, baseUrl } = ctx
+  const { contact, locationName, copy } = ctx
+  const baseUrl = await resolveFormBaseUrl(db, ctx)
 
   // ── Pre-flight per channel (before a link is minted) ─────────────────
   let conversation = null
   let waPhone = null
   let template = null
+  // WACONFIGFALLBACK.1 — the number checked below; the WhatsApp send uses it.
+  let numberConfig = null
   if (channel === 'email') {
     if (!contact.email) return NextResponse.json({ success: false, error: 'Contact has no email address on file' }, { status: 400 })
     if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status || '')) {
@@ -169,10 +207,19 @@ export async function POST(request, props) {
     if (!contact.wa_phone && !contact.phone) {
       return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
     }
-    const opened = await getOrCreateContactConversation(db, contact)
+    // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number
+    // of its own before a thread is opened or a link minted: the send used to
+    // go out on the global env number (another studio's). 409 / 500. The
+    // send carries this checked config: one lookup, no check-then-send gap.
+    const own = await ownNumberOrRefusal(contact.location_id, 'cancel-form-send')
+    if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+    numberConfig = own.config
+    // WAORGNUMBER.4 (R3) — the contact's HOME studio's thread, as the composer.
+    waPhone = contactWaPhone(contact)
+    const opened = await loadSendConversation(db,
+      await getOrCreateConversation(db, { ...contact, wa_phone: waPhone }, contact.location_id))
     if (!opened.ok) return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
     conversation = opened.conversation
-    waPhone = opened.waPhone
     if (!isWindowOpen(conversation)) {
       template = await loadTemplate(db, contact.location_id, copy.whatsapp_template_name)
       if (!templateUsable(template, baseUrl)) {
@@ -217,14 +264,19 @@ export async function POST(request, props) {
       let body
       let templateName = null
       if (!template) {
-        result = await sendCtaUrlMessage(waPhone, { bodyText: texts.whatsappText, buttonText: texts.whatsappButtonText, url: issued.url }, { locationId: contact.location_id })
+        result = await sendCtaUrlMessage(waPhone, { bodyText: texts.whatsappText, buttonText: texts.whatsappButtonText, url: issued.url }, { config: numberConfig })
         messageType = 'interactive'
         body = `${texts.whatsappText}\n${issued.url}`
       } else {
         // The token rides the dynamic URL button; resolveContactField falls
         // through to the literal because 'TOKEN' is not a contact field.
         const components = buildTemplateComponents(template, contact, { [URL_BUTTON_MAPPING_KEY]: issued.token }, null, { locationId: contact.location_id })
-        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId: contact.location_id })
+        // WAORGNUMBER.2 (R5) — from a number on the template's own WABA: the
+        // checked default when it is on it, else the studio's number on that
+        // WABA (none → WhatsAppNumberMissingError → the link is revoked, 409).
+        const held = pickTemplateConfig(null, numberConfig, template.business_account_id || null)
+        result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components,
+          held ? { config: held } : { locationId: contact.location_id, businessAccountId: template.business_account_id })
         messageType = 'template'
         templateName = template.name
         body = renderTemplateBody(template, contact, {}, { locationId: contact.location_id }) || `[Template: ${template.name}]`
@@ -257,7 +309,7 @@ export async function POST(request, props) {
     }
   } catch (e) {
     await revokeLink(db, issued.linkId, e?.message || 'send failed')
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send the form link' }, { status: 502 })
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send the form link' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // Timeline activity — best-effort, the link is already delivered.

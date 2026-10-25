@@ -15,22 +15,26 @@
 // one 4s poll; the overnight window still removes the bulk of the wasted
 // polls (a kiosk left on all night). Pure so both boards share one definition
 // and it can be unit-tested without a DOM.
+//
+// TZ.12 — "overnight" is the BOARD's studio clock (locations.timezone), not
+// Dublin's: the boards pass the zone their payload / page carries, and
+// fleet-health passes the Pi's location zone. Europe/Dublin is byte-identical
+// (src/lib/tz-12.tz.test.js). Client-imported, so the zone maths come from
+// @shared/zoned-time, never @/lib/location-time (server IO).
+
+import { DEFAULT_TZ, instantToZonedParts } from '@shared/zoned-time'
 
 export const ACTIVE_POLL_MS = 4000
 export const IDLE_POLL_MS = 30000
-export const OVERNIGHT_START_HOUR = 22 // Dublin wall-clock, inclusive
-export const OVERNIGHT_END_HOUR = 6    // Dublin wall-clock, exclusive
+export const OVERNIGHT_START_HOUR = 22 // studio wall-clock, inclusive
+export const OVERNIGHT_END_HOUR = 6    // studio wall-clock, exclusive
 
-/** Hour-of-day in Dublin regardless of the device/server TZ. */
-function dublinHour(now) {
-  return Number(new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Dublin', hour: 'numeric', hour12: false,
-  }).format(now))
-}
-
-/** Overnight = the only window where an idle board may back off. */
-export function isOvernight(now = new Date()) {
-  const h = dublinHour(now)
+/**
+ * Overnight = the only window where an idle board may back off. Judged on the
+ * studio's wall clock in `zone` (an IANA name), regardless of the device/server TZ.
+ */
+export function isOvernight(now = new Date(), zone = DEFAULT_TZ) {
+  const h = instantToZonedParts(now, zone).h
   return h >= OVERNIGHT_START_HOUR || h < OVERNIGHT_END_HOUR
 }
 
@@ -51,8 +55,8 @@ export function boardIsActive(payload) {
   )
 }
 
-/** Delay (ms) before the next poll after a successful fetch. */
-export function nextPollDelay(payload, now = new Date()) {
+/** Delay (ms) before the next poll after a successful fetch; `zone` is the board's studio zone. */
+export function nextPollDelay(payload, now = new Date(), zone = DEFAULT_TZ) {
   if (boardIsActive(payload)) return ACTIVE_POLL_MS
-  return isOvernight(now) ? IDLE_POLL_MS : ACTIVE_POLL_MS
+  return isOvernight(now, zone) ? IDLE_POLL_MS : ACTIVE_POLL_MS
 }

@@ -11,14 +11,27 @@
 // session for device users, OR a participation session from a previous run) is
 // skipped. The dedupe decision lives in the pure helpers in
 // src/lib/credit-attendance.js (unit-tested).
+//
+// UN1TBOOK.2 / UN1TBOOK.8 — Decision 1 (2026-10-17): the CRM never credits
+// attendance (sessions, points, achievement / goal / tier pushes) for a
+// un1t.online booking or at a un1t.online studio; the un1t.online app does.
+// The decision is src/lib/class-booking-platform.js, independent of the
+// provider's `bookings` capability: the read goes through
+// scopeToCrmActionable, and every returned row through
+// crmMayActOnClassBooking before anything is credited (a row that is not
+// glofox, or sits at a un1t_online studio, is skipped and counted in
+// `skipped_un1t_online`). A failed un1t_online locations read is a 500 with
+// no heartbeat, like the seam read beside it.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createParticipationSession, finalizeSessionRewards } from '@/lib/live-class'
 import { resolveScoringConfig, resolveMaxHr } from '@/lib/heart-rate'
 import { dedupeKey, filterUncredited } from '@/lib/credit-attendance'
 import { DEFAULT_CLASS_MINUTES } from '@/lib/class-occurrences'
-import { logInfo, logWarn } from '@/lib/log'
+import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { locationIdsWithoutCapability } from '@/lib/membership/locations-for-source'
+import { crmMayActOnClassBooking, scopeToCrmActionable, readUn1tOnlineLocationIds } from '@/lib/class-booking-platform'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -53,15 +66,31 @@ export async function GET(request) {
     }
     for (const l of locations || []) locationMap.set(l.id, l)
   }
+  // W1.M3b — a booking at a location with NO membership source is never
+  // credited (its class_bookings would be stale residue): skipped with a
+  // counted skipped_no_source. A failed seam read is a 500 with no heartbeat.
+  const { ids: noSource, error: srcErr } = await locationIdsWithoutCapability(db, 'bookings') // UN1TCAP.1: a configured source can lack bookings (un1t.online)
+  if (srcErr) {
+    logWarn('cron-credit-attendance', 'membership sources read failed', { err: srcErr })
+    return NextResponse.json({ success: false, error: 'membership sources read failed' }, { status: 500 })
+  }
+  // Decision 1: the un1t.online studios, read once per tick.
+  const { ids: un1tOnlineLocationIds, error: un1tErr } = await readUn1tOnlineLocationIds(db)
+  if (un1tErr) {
+    logError('cron-credit-attendance', 'un1t_online locations read failed', { err: un1tErr })
+    return NextResponse.json({ success: false, error: 'un1t_online locations read failed' }, { status: 500 })
+  }
 
   let scanned = 0
   let credited = 0
+  let skippedNoSource = 0
+  let skippedUn1tOnline = 0
 
   // Paginate attended, contact-linked, completed bookings (oldest first).
   for (let from = 0; ; from += PAGE) {
-    const { data: bookings, error } = await db
-      .from('class_bookings')
-      .select('id, location_id, glofox_event_id, contact_id, class_name, starts_at')
+    const { data: bookings, error } = await scopeToCrmActionable(
+      db.from('class_bookings').select('id, location_id, glofox_event_id, contact_id, class_name, starts_at, source_platform'),
+    )
       .eq('attended', true)
       .not('contact_id', 'is', null)
       .gte('starts_at', new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString())
@@ -74,12 +103,19 @@ export async function GET(request) {
     }
     if (!bookings || bookings.length === 0) break
     scanned += bookings.length
+    const pageSize = bookings.length
+    // Decision 1: the predicate judges every returned row, whatever the query
+    // or the provider's capabilities say.
+    const notUn1tOnline = bookings.filter((b) => crmMayActOnClassBooking(b, { un1tOnlineLocationIds }))
+    skippedUn1tOnline += pageSize - notUn1tOnline.length
+    const sourced = notUn1tOnline.filter((b) => !noSource.has(b.location_id))
+    skippedNoSource += notUn1tOnline.length - sourced.length
 
     // Batch-load existing sessions for this page's (contact, event) pairs and
     // build the set of keys that already have ANY session (HR or participation).
     // No N+1 — one query for the whole page.
-    const pageContactIds = [...new Set(bookings.map((b) => b.contact_id).filter(Boolean))]
-    const pageEventIds = [...new Set(bookings.map((b) => b.glofox_event_id).filter(Boolean))]
+    const pageContactIds = [...new Set(sourced.map((b) => b.contact_id).filter(Boolean))]
+    const pageEventIds = [...new Set(sourced.map((b) => b.glofox_event_id).filter(Boolean))]
     const existingKeys = new Set()
     if (pageContactIds.length && pageEventIds.length) {
       // .in × .in returns a cross-product superset; filterUncredited narrows it back to exact (contact, event) keys.
@@ -99,9 +135,9 @@ export async function GET(request) {
     }
 
     // Decide which bookings still need a credit (pure + tested).
-    const toCredit = filterUncredited(bookings, existingKeys)
+    const toCredit = filterUncredited(sourced, existingKeys)
     if (toCredit.length === 0) {
-      if (bookings.length < PAGE) break
+      if (pageSize < PAGE) break
       continue
     }
 
@@ -177,11 +213,11 @@ export async function GET(request) {
       }
     }
 
-    if (bookings.length < PAGE) break
+    if (pageSize < PAGE) break
   }
 
-  logInfo('cron-credit-attendance', 'tick', { scanned, credited })
+  logInfo('cron-credit-attendance', 'tick', { scanned, credited, skipped_no_source: skippedNoSource, skipped_un1t_online: skippedUn1tOnline })
   await stampHeartbeat('credit-attendance').catch((err) =>
     logWarn('cron-credit-attendance', 'heartbeat failed', { err }))
-  return NextResponse.json({ success: true, credited, scanned })
+  return NextResponse.json({ success: true, credited, scanned, skipped_no_source: skippedNoSource, skipped_un1t_online: skippedUn1tOnline })
 }

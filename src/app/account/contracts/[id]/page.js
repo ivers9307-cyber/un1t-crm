@@ -16,18 +16,12 @@ import { createServerClient } from '@/lib/supabase'
 import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
+import ContractPdfGenerateButton from '@/components/ContractPdfGenerateButton'
 import ContractBody from '@/components/ContractBody'
+import { contractZone, contractStamp, contractSignedStamp } from '@/lib/contract-display-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
-
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
 
 export default async function AccountContractDetail(props) {
   const params = await props.params;
@@ -41,7 +35,8 @@ export default async function AccountContractDetail(props) {
       *,
       profile:profiles!profile_id (id, full_name, email),
       issuer:profiles!issued_by (id, full_name),
-      template:contract_templates!template_id (name, version)
+      template:contract_templates!template_id (name, version),
+      location:locations!location_id ( id, timezone )
     `)
     .eq('id', params.id)
     .maybeSingle()
@@ -54,6 +49,11 @@ export default async function AccountContractDetail(props) {
   // is unconditional: a draft is issuer-side work-in-progress the
   // recipient was never notified about, full stop.
   if (c.status === 'draft') notFound()
+  // TZ.16 (D3 = A) — the contract's studio zone; the abbreviation follows only
+  // when it differs from the viewer's active studio.
+  const zone = contractZone(c, user)
+  const viewerZone = viewerZoneOf(user)
+  const fmtDate = (iso) => contractStamp(iso, zone, viewerZone)
 
   // First-time view-tracking — best-effort flip from issued -> viewed
   // straight from this page so the issuer sees signal even if the
@@ -117,6 +117,8 @@ export default async function AccountContractDetail(props) {
             label={`For ${entityLabel}`}
             name={c.issuer_signature}
             timestamp={c.issued_at}
+            zone={zone}
+            viewerZone={viewerZone}
           />
           {signed ? (
             <SignatureBlock
@@ -124,6 +126,8 @@ export default async function AccountContractDetail(props) {
               name={c.signature_value}
               timestamp={c.signed_at}
               ip={c.signed_ip}
+              zone={zone}
+              viewerZone={viewerZone}
             />
           ) : (
             <div>
@@ -141,6 +145,7 @@ export default async function AccountContractDetail(props) {
           contract={c}
           recipientName={user.full_name}
           impersonating={!!(user.impersonatingFrom || user.supportSession)}
+          issuerLabel={entityLabel}
         />
       )}
 
@@ -155,6 +160,12 @@ export default async function AccountContractDetail(props) {
             className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >Download PDF</a>
         )}
+        {/* CONTRACTS-PDF.2 — signed before PDFs were stored: say so (the
+            recipient cannot generate it; an administrator can, from the
+            issuer's page). */}
+        {c.status === 'signed' && !c.signed_pdf_path && (
+          <ContractPdfGenerateButton contractId={c.id} canGenerate={false} />
+        )}
       </div>
 
       <style>{`
@@ -166,7 +177,7 @@ export default async function AccountContractDetail(props) {
   )
 }
 
-function SignatureBlock({ label, name, timestamp, ip }) {
+function SignatureBlock({ label, name, timestamp, ip, zone, viewerZone }) {
   return (
     <div>
       <p className="text-[10px] uppercase tracking-wider text-gray-500">{label}</p>
@@ -174,7 +185,7 @@ function SignatureBlock({ label, name, timestamp, ip }) {
         {name || ''}
       </p>
       <p className="text-[10px] text-gray-500 mt-1">
-        Signed {new Date(timestamp).toLocaleString('en-IE', { timeZone: 'Europe/Dublin' })}
+        Signed {contractSignedStamp(timestamp, zone, viewerZone)}
         {ip ? ` · ${ip}` : ''}
       </p>
     </div>

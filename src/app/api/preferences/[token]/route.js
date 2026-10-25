@@ -7,6 +7,8 @@ import { consentActionFor } from '@/lib/consent-actions'
 import { propagateOptOut } from '@/lib/consent-propagation'
 import { emailStatusNormaliseForOptIn } from '@/lib/email-reputation'
 import { suppressAtPostmark, unsuppressAtPostmark } from '@/lib/postmark-suppressions'
+import { serverTokenForLocation } from '@/lib/postmark-server-for-location'
+import { resolveOrgChrome } from '@/lib/host-brand'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -82,7 +84,7 @@ async function resolveTokenOrRefuse(db, request, token) {
   // the guard look correct while silently never normalising a legacy NULL row.
   const { data: pref, error } = await db
     .from('contact_preferences')
-    .select('*, contacts(id, name, email, email_status, wa_phone)')
+    .select('*, contacts(id, name, email, email_status, location_id, wa_phone)')
     .eq('unsubscribe_token', token)
     .single()
 
@@ -116,21 +118,30 @@ export async function GET(request, props) {
   // showing all of them is what makes that legible instead of surprising.
   const { data: locRows } = await db
     .from('contact_location_preferences')
-    .select('location_id, email_marketing, sms_marketing, whatsapp_marketing, locations(name)')
+    .select('location_id, email_marketing, sms_marketing, whatsapp_marketing, locations(name, organization_id)')
     .eq('contact_id', pref.contact_id)
 
   const lists = (locRows || [])
     .map((r) => ({
       locationId: r.location_id,
-      locationName: r.locations?.name || 'UN1T',
+      locationName: r.locations?.name || '',
       email_marketing: r.email_marketing,
       sms_marketing: r.sms_marketing,
       whatsapp_marketing: r.whatsapp_marketing,
     }))
     .sort((a, b) => a.locationName.localeCompare(b.locationName))
 
+  // W1.S1b — the page header and the "leave everything" line name the
+  // ORGANISATION's brand (the page lists every studio list the person is
+  // on, so no one studio speaks for it). The org is the one the contact's
+  // lists belong to; cached per org (host-brand.js). Empty when unknown, and
+  // the page words around it rather than printing a literal.
+  const orgId = (locRows || []).map((r) => r.locations?.organization_id).find(Boolean) || null
+  const { companyName: brand } = await resolveOrgChrome({ orgId, db })
+
   return NextResponse.json({
     success: true,
+    brand,
     contact: {
       name: pref.contacts?.name,
       email: pref.contacts?.email,
@@ -365,11 +376,16 @@ export async function PUT(request, props) {
     //
     // A location-scoped OPT-OUT is the one combination with nothing to do at
     // Postmark; the other three all act.
+    //
+    // W1.E4 — both directions act on the server the person's mail comes from:
+    // the org's own Postmark server when it has a live tenant_email_domains
+    // row, else the global one. Resolved from the contact's home location.
     const scopedOptOut = updates.email_marketing === false && Boolean(body.locationId)
     if (pref.contacts?.email && !scopedOptOut) {
       try {
+        const serverToken = await serverTokenForLocation(db, pref.contacts.location_id)
         if (updates.email_marketing === false) {
-          const result = await suppressAtPostmark(pref.contacts.email)
+          const result = await suppressAtPostmark(pref.contacts.email, { serverToken })
           if (result?.failed?.length) {
             console.error('[preferences] Postmark suppression failed (the opt-out itself IS recorded; consent-drift-check will retry):', {
               contactId: pref.contact_id,
@@ -377,7 +393,7 @@ export async function PUT(request, props) {
             })
           }
         } else {
-          const result = await unsuppressAtPostmark(pref.contacts.email)
+          const result = await unsuppressAtPostmark(pref.contacts.email, { serverToken })
           if (result?.failed?.length) {
             console.error('[preferences] Postmark un-suppression failed (the opt-in itself IS recorded):', {
               contactId: pref.contact_id,

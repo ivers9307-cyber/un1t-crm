@@ -151,3 +151,37 @@ describe('RaceSignupWidget — a failed check is retryable, never cached as non-
     expect(bodyText()).not.toContain('Non-member rate')
   })
 })
+
+// W1.S1b — the member notice, the members-only line and the consent name the
+// organisation's brand from the payload (organization_name), never a
+// literal gym; with no brand they read as plain "member" copy.
+describe('RaceSignupWidget — member copy names the tenant brand (W1.S1b)', () => {
+  function serve(race) {
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      const u = String(url)
+      if (u.includes('/check-member')) return checkMember(u)
+      if (u.includes('/api/public/events/')) return Promise.resolve(jsonRes({ success: true, data: race }))
+      return Promise.resolve(jsonRes({ success: false, error: 'not found' }, 404))
+    }))
+  }
+
+  it('names the brand in the notice, the members-only line and the consent', async () => {
+    serve({ ...RACE, members_only: true, organization_name: 'Gym A' })
+    await renderLoaded()
+    const text = bodyText()
+    expect(text).toContain('Gym A members: use the email on your Gym A account')
+    expect(text).toContain('must be a verified Gym A member.')
+    expect(text).toContain('Yes, send me Gym A promotional updates')
+    expect(text).not.toMatch(/UN1T/)
+  })
+
+  it('with no brand the copy still reads, and names nobody', async () => {
+    serve({ ...RACE, members_only: true, organization_name: null })
+    await renderLoaded()
+    const text = bodyText()
+    expect(text).toContain('Members: use the email on your member account')
+    expect(text).toContain('must be a verified member.')
+    expect(text).toContain('Yes, send me promotional updates')
+    expect(text).not.toMatch(/UN1T/)
+  })
+})

@@ -2,7 +2,7 @@
 //
 // The ~870-line pure module the Mail surface grew since MAIL-TRIAL.B mixed
 // three concerns, and its archive/needs-reply vocabulary was mirrored by hand
-// into mobile/lib/email-tickets.js, where it drifted. It is split three ways,
+// into mobile/lib/email-conversations.js, where it drifted. It is split three ways,
 // beside this file:
 //
 //   ./mail-vocabulary.js   the VOCABULARY — archive / needs-reply / unread /

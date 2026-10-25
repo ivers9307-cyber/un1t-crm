@@ -2,7 +2,7 @@
 
 // TV.1 — fullscreen display client for UC Cast Pro.
 //
-// Polls /api/public/tv/[token]/content every 3s. Re-renders only
+// Polls /api/public/tv/[token]/content every 6s (60s with ?kiosk=1). Re-renders only
 // when content.pushed_at changes (so a steady-state poll is cheap).
 // Renders one of:
 //   - <img>          for source_type 'storage' or 'url'
@@ -10,7 +10,7 @@
 //                    a fixed base image with text zones overlaid
 //   - HyroxBoard     for source_type 'generated' (HYROX-TC.3) —
 //                    the purpose-built portrait Hyrox board
-//   - Idle view      (UN1T mark + live clock) if no content row
+//   - Idle view      (the studio's mark + live clock) if no content row
 //
 // TV-ROTATION.1 — the whole stage is counter-rotated by
 // display.rotation degrees so content designed landscape fills a
@@ -20,21 +20,26 @@ import { useEffect, useState, useRef } from 'react'
 import TemplateCanvas from '@/components/TemplateCanvas'
 import HyroxBoard from '@/components/HyroxBoard'
 import { tvFontFamily } from '@/components/tv-font'
+import { boardZone, idleBoardClock } from '@/lib/tv-board-time'
+import { castPollMs } from '@/lib/tv-cast-poll'
 
 // Content-push display (near-static); runs all day — keep the poll relaxed
-// to limit Vercel Fluid-compute cost.
-const POLL_MS = 6000
+// to limit Vercel Fluid-compute cost (castPollMs: 6s, or 60s in kiosk mode).
 
-export default function TVDisplay({ token, initial }) {
+export default function TVDisplay({ token, initial, kiosk }) {
   // `data` is the server-rendered snapshot. It never changes in
   // place — when the poll sees a new push the page hard-reloads
   // (see below), so the only state that moves here is the clock.
   const [data] = useState(initial)
-  const [now, setNow] = useState(new Date())
+  // TZ.17 — no clock until mounted: a server render would print the SERVER's
+  // time (UTC on Vercel) and, with no payload zone, its zone too, until
+  // hydration replaced it. The screen fills it on its first effect.
+  const [now, setNow] = useState(null)
   const lastPushedAtRef = useRef(initial?.content?.pushed_at || null)
   const lastRotationRef = useRef(initial?.display?.rotation ?? 0)
 
   useEffect(() => {
+    const pollMs = castPollMs(Boolean(kiosk))
     let cancelled = false
     const tick = async () => {
       try {
@@ -63,11 +68,12 @@ export default function TVDisplay({ token, initial }) {
         // network blip — retry next tick
       }
     }
-    const handle = setInterval(tick, POLL_MS)
+    const handle = setInterval(tick, pollMs)
     return () => { cancelled = true; clearInterval(handle) }
-  }, [token])
+  }, [token, kiosk])
 
   useEffect(() => {
+    setNow(new Date())
     const handle = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(handle)
   }, [])
@@ -125,6 +131,7 @@ export default function TVDisplay({ token, initial }) {
     body = (
       <IdleView
         now={now}
+        zone={boardZone(data?.timezone)}
         logoUrl={data?.display?.logo_url}
         companyName={data?.display?.company_name}
       />
@@ -147,10 +154,10 @@ export default function TVDisplay({ token, initial }) {
   )
 }
 
-function IdleView({ now, logoUrl, companyName }) {
-  const hh = String(now.getHours()).padStart(2, '0')
-  const mm = String(now.getMinutes()).padStart(2, '0')
-  const day = now.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+function IdleView({ now, zone = null, logoUrl, companyName }) {
+  // TZ.12 — the clock and day line are the studio's (payload `timezone`); with
+  // no payload (zone null) they keep the screen's own clock, as before.
+  const { hh, mm, day } = idleBoardClock(now, zone)
   // TV-IDLE-LOGO — show the location's brand logo in place of the
   // hard-coded wordmark. The idle screen is white-on-black, but the
   // stored logo (the same asset used on invoice/contract emails,
@@ -232,14 +239,14 @@ function IdleView({ now, logoUrl, companyName }) {
         />
       ) : (
         <div style={{ fontSize: '12cqh', fontWeight: 900, letterSpacing: '0.2em', fontFamily: tvFontFamily }}>
-          {companyName || 'UN1T'}
+          {companyName}
         </div>
       )}
       <div style={{ fontSize: '18cqh', fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1, fontFamily: tvFontFamily }}>
-        {hh}:{mm}
+        {hh ? `${hh}:${mm}` : '\u00a0'}
       </div>
       <div style={{ fontSize: '3.5cqh', color: '#888', letterSpacing: '0.1em', fontFamily: tvFontFamily }}>
-        {day}
+        {day || '\u00a0'}
       </div>
     </div>
   )

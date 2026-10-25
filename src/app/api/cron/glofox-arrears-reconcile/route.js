@@ -54,6 +54,11 @@ export async function GET(request) {
   for (const loc of locations || []) {
     try {
       const creds = await glofoxCredentialsForLocation(db, loc.id)
+      if (creds.readError) {
+        // REGISTRYREAD.1b: not a clean skip. The daily reconcile did not run here.
+        perLocation.push({ location_id: loc.id, location_name: loc.name, ok: false, error: creds.readError })
+        continue
+      }
       if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
         perLocation.push({ location_id: loc.id, location_name: loc.name, skipped: 'no_glofox_credentials' })
         continue

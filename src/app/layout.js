@@ -2,6 +2,7 @@ import './globals.css'
 import AppShellServer from '@/components/AppShellServer'
 import StudioLockOverlay from '@/components/StudioLockOverlay'
 import CookieConsent from '@/components/CookieConsent'
+import { headers } from 'next/headers'
 import { resolveDefaultFaviconUrl } from '@/lib/default-favicon'
 import { resolveDefaultSiteName } from '@/lib/default-site-name'
 
@@ -23,11 +24,11 @@ import { resolveDefaultSiteName } from '@/lib/default-site-name'
 // Storage serves the same path forever and the browser's own
 // cache handles invalidation cheaply enough.
 //
-// SAAS-7 — the URL is no longer hardcoded to the Stillorgan UUID:
-// resolveDefaultFaviconUrl reads the operator-uploaded favicon from
-// company_settings behind a module-level TTL cache (one DB read per
-// lambda per 5 min, not per request) and falls back to the exact
-// pre-SAAS-7 URL on any miss/blip, so UN1T renders identically.
+// SAAS-7 / W1.L4 — the URL is no longer hardcoded to the Stillorgan UUID:
+// resolveDefaultFaviconUrl reads the REQUEST HOST's organisation's favicon
+// (org_settings → that org's company_settings) behind a per-host TTL cache
+// (one DB read set per host per lambda per 5 min, not per request) and
+// falls back to the platform mark on a CRM host, an unmapped host or a blip.
 
 // Default site metadata. Customer-facing public surfaces (event
 // signup, deposit pay, etc.) inherit these unless the page exports
@@ -54,24 +55,28 @@ import { resolveDefaultSiteName } from '@/lib/default-site-name'
 // no operator could edit. company_settings has no tagline column —
 // if one is wanted, that is where it belongs, not here.
 //
-// REVIEW FOLLOW-UP — this is now the PLATFORM default only. Prod's one
-// company_settings row has company_name NULL (org_settings is empty), so
-// this resolver really does return "Repset" today, and the customer-facing
-// pages that used to inherit it — /book, /event-pay, /host, /host-connect,
-// /reset-password, /account — would have shown customers a brand they have
-// no relationship with. Each of those subtrees now declares its own
-// metadata via customerFacingMetadata() (src/lib/default-site-name.js),
-// which floors on the gym wordmark instead of the platform's. A new
-// customer-facing route must do the same; src/lib/brand-chrome.test.js
-// pins the ones that exist.
+// REVIEW FOLLOW-UP — this is the PLATFORM default: the customer-facing
+// subtrees — /book, /event-pay, /host, /host-connect, /reset-password,
+// /account — declare their own metadata via customerFacingMetadata()
+// (src/lib/default-site-name.js). A new customer-facing route must do the
+// same; src/lib/brand-chrome.test.js pins the ones that exist.
+//
+// W1.L4 — BOTH resolvers take the REQUEST HOST: a tenant host (an in-code
+// brand with an organizationId, or a tenant_domains row) reads its
+// organisation's brand, and the CRM hosts read the platform name. Before
+// this the name was the first company_settings row in the ESTATE, on every
+// host. headers() is a dynamic API, so every route renders dynamically;
+// nearly every route already did (auth, force-dynamic), and the proxy runs
+// on every request regardless.
 //
 // Per-page upgrades (richer previews showing the actual event name
 // + description) live on individual page files via generateMetadata
 // — see src/app/event/[slug]/page.js for the event signup example.
 export async function generateMetadata() {
+  const host = (await headers()).get('host')
   const [faviconUrl, siteName] = await Promise.all([
-    resolveDefaultFaviconUrl(),
-    resolveDefaultSiteName(),
+    resolveDefaultFaviconUrl({ host }),
+    resolveDefaultSiteName({ host }),
   ])
   return {
     title: siteName,

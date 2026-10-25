@@ -13,6 +13,7 @@ import AssistantBubble from './AssistantBubble'
 import { hasPermission } from '@/lib/permissions'
 import { isAccountTierPath } from '@/lib/account-nav'
 import { isPlatformTierPath } from '@/lib/platform-nav'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 // PERF.3 — Vercel SpeedInsights + Analytics mount in the authenticated
 // branch below (NOT the root layout) so /login and the public booking/
 // payment surfaces don't pay for the two analytics bundles pre-auth.
@@ -75,7 +76,9 @@ import { Analytics } from '@vercel/analytics/next'
 // the LEGACY path here and the shell blanked the page it had just
 // rendered. Segment-aware matcher, so no trailing slash (see the proxy's
 // list, which is raw startsWith and therefore keeps one).
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/offers', '/deposit', '/book', '/event', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel']
+// BOOKINGSELF.1 — '/book/manage': the customer's own booking page (cancel,
+// reschedule); covered by '/book', listed so the flow survives a narrowing.
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/trial', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()
@@ -97,7 +100,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
   // Protected route but no resolved user (expired/unresolved session, or
   // a transient profile-fetch miss in getCurrentUser). Previously the
   // chrome rendered anyway with user=null, producing a dead shell —
-  // default "UN1T" logo, "Lead Management" subtitle, "User" footer and
+  // default platform-name logo, "Lead Management" subtitle, "User" footer and
   // an EMPTY nav (every permission check fails on a null user). Send them
   // to login instead, preserving where they were headed.
   useEffect(() => {
@@ -161,7 +164,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
             ? 'Repset · Platform'
             : isAccountTier
               ? (user?.activeOrganization?.name || 'Account')
-              : (user?.activeLocation?.name || 'UN1T')}
+              : (user?.activeLocation?.name || PLATFORM_NAME)}
         </span>
       </div>
 

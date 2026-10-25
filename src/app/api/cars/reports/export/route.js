@@ -5,14 +5,18 @@
 // columns) and the outstanding-VAT list (oldest first, with
 // days-outstanding for HMRC chase commentary).
 //
-// Permissions mirror the Reports page itself — car_processing
-// required, RLS limits rows to the caller's locations.
+// Permissions mirror the Reports page itself — car_processing required.
+// Service-role read, so RLS does nothing: TENANTSCOPE.1 scopes it in code
+// to the ACTIVE studio, for a master too, exactly like the Reports page.
+// One studio = one legal entity (one Xero organisation), and this CSV is
+// that entity's UK-VAT chase list / revenue sheet.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { profitBreakdown, splitIrishPrice } from '@/lib/cars'
+import { profitBreakdown, splitIrishPrice, carsYearStartIso } from '@/lib/cars'
+import { zoneOfLocation } from '@/lib/location-time'
 import { getCachedGbpToEur } from '@/lib/fx'
 
 export const runtime = 'nodejs'
@@ -42,20 +46,25 @@ export async function GET(request) {
 
   const url = new URL(request.url)
   const type = url.searchParams.get('type') || 'completed-ytd'
+
+  // No active studio means nothing to export — never every tenant's cars.
   const locationId = user.activeLocation?.id
+  if (!locationId) {
+    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
+  }
 
   const db = createServerClient()
   const fx = await getCachedGbpToEur()
   const liveRate = fx?.rate ?? null
 
-  let query = db.from('cars').select('*')
-  if (locationId && user.role !== 'master') query = query.eq('location_id', locationId)
-  const { data: cars, error } = await query
+  const { data: cars, error } = await db.from('cars').select('*').eq('location_id', locationId)
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  const startOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString()
+  // TZ.17 — 1 Jan 00:00 on the active studio's calendar (it was the server
+  // clock's year start; identical for Europe/Dublin, which is on GMT in January).
+  const startOfYear = carsYearStartIso(Date.now(), zoneOfLocation(user.activeLocation))
   const today = new Date().toISOString().slice(0, 10) // eslint-disable-line guardrails/no-utc-today -- CSV export filename suffix (cars-*-${today}.csv); a UTC date key, not a business date
 
   let csv = ''

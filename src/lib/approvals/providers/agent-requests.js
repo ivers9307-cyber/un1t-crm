@@ -27,22 +27,28 @@
 // query needed — unlike host_events (org-scoped).
 
 import { viewerActiveLocationId } from '../registry'
+import { visitOriginLabel } from '@/lib/visit-origin'
 import { formatMoneyMinor } from '@/lib/money-format'
 import { retryOffered, RETRYABLE_KINDS } from '@/lib/agent/request-recovery'
-import { failureExplanation, accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
+import { accountSummaryLine, whyFlagged, accountMismatchWarning } from '@/lib/approvals/agent-request-why'
+import { approvalSummary, explainFailure } from '@/lib/approvals/event-move-card'
 
 // AGENT-FUNNEL-CREDITS.1 — the membership/credit fields the Glofox sync
 // denormalises onto contacts, surfaced on every approval card so staff see
 // what the account can book with before deciding. glofox_member_id
 // (PERSON-ACCT.8) is read only for accountMismatchWarning's comparison
 // against details.elected_glofox_member_id — never displayed itself.
-const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining )'
+// VISIT-ORIGIN.1 adds ad_provider/utm_content/visit_* for the "Came via" line.
+const CONTACT_EMBED = 'contact:contacts!contact_id ( id, name, email, phone, glofox_member_id, glofox_membership_plan, glofox_membership_status, glofox_membership_state, trial_credits_remaining, ad_provider, utm_content, visit_referrer, visit_landing_path )'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
   cancellation: 'Cancel membership',
   class_booking: 'Book class',
   consultation: 'Book consultation',
+  event_move: 'Move event entry',
+  // UN1TWRITE.8 — record-only: the refund is done by hand in un1t.online.
+  refund_request: 'Refund request',
 }
 
 // One-line summary of the request payload per kind. Exported for tests.
@@ -53,6 +59,11 @@ export function agentRequestSubtitle(row) {
     if (d.paid) parts.push(`💳 Paid ${formatMoneyMinor(d.amount_cents, d.currency)}`)
     return parts.join(' · ') || 'Class booking request'
   }
+  // EVENT-MOVE.7 — the move summary (web-only module; see event-move-card.js).
+  if (row?.kind === 'event_move') return approvalSummary(row)
+  // UN1TWRITE.8 — 'Double payment · €15': the one shared wording (approvalSummary
+  // falls through to shared approvalCardSummary for every non-event_move kind).
+  if (row?.kind === 'refund_request') return approvalSummary(row)
   if (row?.kind === 'consultation') {
     return [d.date, d.start_time].filter(Boolean).join(' · ') || 'Consultation request'
   }
@@ -87,6 +98,9 @@ function toItem(r) {
     // For the operator's Glofox lookup — shown on the decide card.
     contactEmail: r.contact?.email || null,
     contactPhone: r.contact?.phone || null,
+    // VISIT-ORIGIN.1 — one line: "Meta ad (…)", "Instagram, landed on /…",
+    // "Direct link to /…", or null when nothing is known.
+    contactOrigin: visitOriginLabel(r.contact) || null,
     retentionFlagged: !!r.retention_flagged,
     channel: r.channel || null,
     conversationId: r.conversation_id || null,
@@ -159,7 +173,7 @@ export const agentRequestsProvider = {
       failedAt: r.decided_at || null,
       // Pre-computed what-went-wrong copy so mobile renders it without
       // needing the (web-side) explainer lib.
-      failedWhy: failureExplanation(r),
+      failedWhy: explainFailure(r),
     }))
     return { count: items.length + failedItems.length, items, failedItems }
   },

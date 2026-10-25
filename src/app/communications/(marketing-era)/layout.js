@@ -57,8 +57,8 @@ import CommsShell from '@/components/communications/CommsShell'
 export const dynamic = 'force-dynamic'
 
 const TABS = [
-  { id: 'send',        label: 'Send',        href: '/communications/send',        perms: ['email', 'whatsapp', 'sms'] },
-  { id: 'sent',        label: 'Sent',        href: '/communications/sent',        perms: ['email', 'whatsapp', 'sms'] },
+  { id: 'send',        label: 'Send',        href: '/communications/send',        perms: ['email', 'whatsapp'] },
+  { id: 'sent',        label: 'Sent',        href: '/communications/sent',        perms: ['email', 'whatsapp'] },
   { id: 'templates',   label: 'Templates',   href: '/communications/templates',   perms: ['email', 'whatsapp'] },
   { id: 'segments',    label: 'Segments',    href: '/communications/segments',    perms: ['email', 'whatsapp'], roles: MANAGER_ROLES },
   { id: 'list-health', label: 'List health', href: '/communications/list-health', perms: ['email'] },

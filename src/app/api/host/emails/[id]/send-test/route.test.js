@@ -22,6 +22,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/host-auth', () => ({ getCurrentHost: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3a — the test footer link is minted on the host anchor location's
+// tenant host, as the real send's is. Defaults to the CRM host.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('@/lib/postmark', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, sendEmail: vi.fn(async () => ({ messageId: 'pm-test-1' })) }
@@ -31,6 +34,7 @@ import { POST } from './route.js'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail } from '@/lib/postmark'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const HOST_ID = 'b0000000-0000-0000-0000-0000000000b1'
 const CAMPAIGN_ID = 'a0000000-0000-0000-0000-0000000000a1'
@@ -80,6 +84,8 @@ function makeDb(cfg = {}) {
     if (state.table === 'event_hosts') {
       return { data: 'host' in cfg ? cfg.host : HOST_ROW, error: null }
     }
+    // W1.S1c — the host's organisation brand, for the setup refusals.
+    if (state.table === 'org_settings') return { data: cfg.orgSettings || [], error: null }
     return { data: null, error: null }
   }
   return { db, statements }
@@ -126,6 +132,17 @@ describe('POST /api/host/emails/[id]/send-test', () => {
     const campaignStmt = statements.find((s) => s.table === 'host_campaigns')
     const eqArgs = campaignStmt.ops.filter((o) => o.method === 'eq').map((o) => o.args)
     expect(eqArgs).toContainEqual(['host_id', HOST_ID])
+  })
+
+  it("W1.S1c: the setup refusal names the host's organisation, never a literal gym", async () => {
+    const made = makeDb({
+      host: { ...HOST_ROW, organization_id: 'org-send-test-1', sender_domain_verified: false },
+      orgSettings: [{ company_name: 'Pulse Gym', short_name: null }],
+    })
+    createServerClient.mockReturnValue(made.db)
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Sending is not enabled. Ask Pulse Gym to verify your sending domain.')
   })
 
   it('409s when the sending domain is not verified', async () => {
@@ -220,6 +237,24 @@ describe('POST /api/host/emails/[id]/send-test', () => {
     const html = sendEmail.mock.calls[0][0].htmlBody
     expect(html).toContain('Unsubscribe')
     expect(html).toContain('Pride Training Club')
+  })
+
+  // W1.L3a — the inert test-token footer link lands where the real one will:
+  // on the tenant host of the host's anchor location (event_hosts.
+  // anchor_location_id), never on the CRM host.
+  it("W1.L3a — the footer link is minted on the host anchor location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const made = makeDb({ host: { ...HOST_ROW, anchor_location_id: 'loc-anchor' } })
+    createServerClient.mockReturnValue(made.db)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(made.db, 'loc-anchor')
+    const html = sendEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('https://gym-a.repset.ie/unsubscribe/host/test-token')
+    expect(html).not.toContain('crm.test')
+    // The anchor must actually be READ, or the resolver is handed undefined.
+    const hostRead = made.statements.find((s) => s.table === 'event_hosts')
+    expect(hostRead.ops.find((o) => o.method === 'select').args[0]).toContain('anchor_location_id')
   })
 
   it('runs the sanitizer, so the style block survives scrubbed (HOST-EMAILS.2)', async () => {

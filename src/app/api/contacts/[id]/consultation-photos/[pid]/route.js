@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 
@@ -24,7 +24,7 @@ export async function DELETE(_request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'consultations')) {
+  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -44,6 +44,10 @@ export async function DELETE(_request, props) {
 
   const guard = assertLocationAccessOr404(user, photo.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `consultations` judged at the photo's location, not the active studio.
+  if (!hasPermissionForLocation(user, photo.location_id, 'consultations')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   // Remove storage object best-effort — swallow errors so a missing
   // file (e.g. manually cleaned up) doesn't block the row deletion.

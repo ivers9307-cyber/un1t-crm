@@ -1,11 +1,11 @@
 // TASKS.1 — external integration surface.
 //
-// Lets n8n / Slack / Zapier / etc. push tasks into the CRM
+// Lets Slack / Zapier / etc. push tasks into the CRM
 // without having to know the activities schema. Marketed as
 // /api/tasks but writes to public.activities with kind='task'.
 //
-// Authentication mirrors the other public n8n surfaces:
-//   - x-api-key: <CRM_API_KEY> required.
+// Authentication mirrors the other integration surfaces (authenticateApiKey):
+//   - Authorization: Bearer <per-org unitk_ key>
 //
 // Endpoints:
 //   GET  /api/tasks?location_id=&status=&assignee_id=&limit=
@@ -22,7 +22,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg } from '@/lib/api-auth'
+import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg, assertProfileInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -85,10 +85,18 @@ export async function POST(request) {
   // APIKEYS.3 — per-org key may only create a task at a location in its org.
   const scopeErr = await assertCreateInOrg({ db, orgId: auth.orgId, locationId: validation.data.location_id, contactId: validation.data.contact_id })
   if (scopeErr) return scopeErr
+  // W0.1b — the assignee must be a member of the org as well (404 otherwise).
+  if (validation.data.assignee_id) {
+    const refErr = await assertProfileInOrg({ db, orgId: auth.orgId, profileId: validation.data.assignee_id })
+    if (refErr) return refErr
+  }
   const insert = {
     ...validation.data,
     kind: 'task',
-    source: 'api',
+    // activities_source_check (mig 138) allows only 'crm' and 'glofox'; the
+    // 'api' this used to stamp was refused on every create (C150,
+    // tests/activities-source-check-guard.test.js).
+    source: 'crm',
     type: 'task',
   }
 

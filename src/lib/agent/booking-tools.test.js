@@ -133,9 +133,9 @@ describe('consultationInputGuard', () => {
 })
 
 describe('book_consultation schema — does not force re-collecting on-file details', () => {
-  it('requires only date + start_time (name/email are pre-filled from the contact)', () => {
+  it('requires only the slot (slot_id + confirmed label); name/email are pre-filled from the contact', () => {
     const t = BOOKING_TOOLS.find((x) => x.name === 'book_consultation')
-    expect(t.input_schema.required).toEqual(['date', 'start_time'])
+    expect(t.input_schema.required).toEqual(['slot_id', 'confirmed_label'])
     expect(t.description.toLowerCase()).toContain('do not ask again')
   })
 })

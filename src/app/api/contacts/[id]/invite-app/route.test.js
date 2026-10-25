@@ -7,12 +7,16 @@
 //   - 404 when contact doesn't exist
 //   - 400 when contact has no email
 //   - happy path: invite sent (kind='invite_sent')
-//   - existing-user fallback: magic link resent (kind='magic_link_resent')
+//   - existing-user fallback (APPINVITE.1): a sign-in prompt email to the
+//     member app's /login (kind='sign_in_prompt_sent'); no server-minted link,
+//     and a failed send never reports success
 //   - error path: invite fails with non-existence reason → 400
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   // Mirror the real helper. The previous mock omitted it AND the user
   // fixtures set a non-existent `locationIds` field, so the location
@@ -26,9 +30,14 @@ vi.mock('@/lib/supabase', () => ({
   createServerClient: vi.fn(),
 }))
 
+vi.mock('@/lib/member-app-sign-in-email', () => ({ sendMemberAppSignInEmail: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logError: vi.fn(), logWarn: vi.fn() }))
+
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { sendMemberAppSignInEmail } from '@/lib/member-app-sign-in-email'
+import { getMemberAppUrl } from '@/lib/app-url'
 
 function mockDb({ contact, contactError, inviteError, generateLinkError } = {}) {
   return {
@@ -62,6 +71,7 @@ function mockDb({ contact, contactError, inviteError, generateLinkError } = {}) 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  sendMemberAppSignInEmail.mockResolvedValue({ messageId: 'pm-1' })
 })
 
 const fakeRequest = () => new Request('http://localhost/api/contacts/c1/invite-app', { method: 'POST' })
@@ -74,13 +84,13 @@ describe('POST /api/contacts/[id]/invite-app', () => {
   })
 
   it('returns 403 when user is not master/owner/manager', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'coach', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'coach', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'coach' } })
     const res = await POST(fakeRequest(), { params: { id: 'c1' } })
     expect(res.status).toBe(403)
   })
 
   it('returns 403 when manager is at a different location', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }], rolesByLocation: { 'loc-OTHER': 'manager' } })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: null },
     }))
@@ -128,7 +138,7 @@ describe('POST /api/contacts/[id]/invite-app', () => {
   })
 
   it('manager at the right location can invite', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: null },
     }))
@@ -136,10 +146,11 @@ describe('POST /api/contacts/[id]/invite-app', () => {
     expect(res.status).toBe(200)
   })
 
-  it('existing-user fallback: invite says "already registered" → generate magic link', async () => {
+  it('existing-user fallback: emails a sign-in prompt to the member app /login (APPINVITE.1)', async () => {
     getCurrentUser.mockResolvedValue({ isMaster: true })
+    const contact = { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: 'u-existing' }
     const db = mockDb({
-      contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: 'u-existing' },
+      contact,
       inviteError: { message: 'A user with this email already been registered.' },
     })
     createServerClient.mockReturnValue(db)
@@ -148,14 +159,30 @@ describe('POST /api/contacts/[id]/invite-app', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.success).toBe(true)
-    expect(json.kind).toBe('magic_link_resent')
-    expect(db.auth.admin.generateLink).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'magiclink',
-        email: 'sarah@example.com',
-        options: expect.objectContaining({ redirectTo: expect.stringContaining('/auth/callback') }),
-      }),
-    )
+    expect(json.kind).toBe('sign_in_prompt_sent')
+    expect(sendMemberAppSignInEmail).toHaveBeenCalledTimes(1)
+    expect(sendMemberAppSignInEmail).toHaveBeenCalledWith(db, {
+      contact,
+      signInUrl: `${getMemberAppUrl()}/login`,
+    })
+    // generateLink sends nothing and its link cannot complete the app's PKCE
+    // sign-in: the fix must not mint one at all.
+    expect(db.auth.admin.generateLink).not.toHaveBeenCalled()
+  })
+
+  it('existing-user fallback: a failed send does not report success', async () => {
+    getCurrentUser.mockResolvedValue({ isMaster: true })
+    createServerClient.mockReturnValue(mockDb({
+      contact: { id: 'c1', name: 'Sarah', email: 'sarah@example.com', location_id: 'loc-1', user_id: 'u-existing' },
+      inviteError: { message: 'A user with this email already been registered.' },
+    }))
+    sendMemberAppSignInEmail.mockRejectedValue(new Error('Postmark said no'))
+
+    const res = await POST(fakeRequest(), { params: { id: 'c1' } })
+    expect(res.status).toBe(502)
+    const json = await res.json()
+    expect(json.success).toBe(false)
+    expect(json.error).toMatch(/could not be sent/i)
   })
 
   it('returns 400 when invite fails with a non-recoverable error', async () => {

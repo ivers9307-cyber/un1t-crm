@@ -46,7 +46,10 @@ function fmtAge(iso) {
 // kept on the prop list as a forward-compat hook in case future
 // row-level behaviour wants the caller's role.
 
-export default function StaffSearchableList({ staff, user: _user, canEditFns, verdictsById = {}, permissionsById = {}, targetVersion = null }) {
+// showDevices — C141 ORGROLE.2: the Device column and its "Needs update"
+// filter are the staff device fleet, organisation admins only (the page
+// decides, and reads no device row for anyone else).
+export default function StaffSearchableList({ staff, user: _user, canEditFns, showDevices = false, verdictsById = {}, permissionsById = {}, targetVersion = null }) {
   const [query, setQuery] = useState('')
   // 'all' | 'active' | 'inactive' | 'needs_update'
   const [statusFilter, setStatusFilter] = useState('all')
@@ -105,7 +108,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
             { key: 'all', label: 'All' },
             { key: 'active', label: 'Active' },
             { key: 'inactive', label: 'Inactive' },
-            { key: 'needs_update', label: 'Needs update' },
+            ...(showDevices ? [{ key: 'needs_update', label: 'Needs update' }] : []),
           ].map(({ key, label }) => (
             <button
               key={key}
@@ -132,7 +135,9 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Role</th>
               <th className="text-left p-3">Locations</th>
-              <th className="text-left p-3" title={targetVersion ? `Latest reported version: ${targetVersion}` : undefined}>Device</th>
+              {showDevices && (
+                <th className="text-left p-3" title={targetVersion ? `Latest reported version: ${targetVersion}` : undefined}>Device</th>
+              )}
               <th className="text-left p-3">Status</th>
               <th className="w-8"></th>
             </tr>
@@ -140,7 +145,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
           <tbody className="divide-y divide-un1t-border">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-sm text-un1t-subtle">
+                <td colSpan={showDevices ? 7 : 6} className="p-6 text-center text-sm text-un1t-subtle">
                   {staff.length === 0 ? 'No team members yet.' : 'No matches for that search.'}
                 </td>
               </tr>
@@ -159,9 +164,11 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
                   <td className="p-3 text-un1t-subtle text-xs">
                     {(s.profile_locations || []).map(pl => pl.locations?.name).filter(Boolean).join(', ') || '—'}
                   </td>
-                  <td className="p-3">
-                    <DeviceCell verdict={verdictsById[s.id]} permission={permissionsById[s.id]} />
-                  </td>
+                  {showDevices && (
+                    <td className="p-3">
+                      <DeviceCell verdict={verdictsById[s.id]} permission={permissionsById[s.id]} />
+                    </td>
+                  )}
                   <td className="p-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${s.active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'}`}>
                       {s.active ? 'Active' : 'Inactive'}

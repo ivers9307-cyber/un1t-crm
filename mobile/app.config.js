@@ -111,7 +111,15 @@ export default ({ config }) => ({
   // FCM push registration works. Build-config only: no new native module,
   // no JS↔native change, so runtimeVersion STAYS 2.3.0 (the 1.3.2 /
   // ANDROID-R8 precedent) and every existing install keeps receiving OTAs.
-  version: '2.3.1',
+  // 2.4.0 (WIDGET.1) — adds the iOS home-screen widget extension: a
+  // WidgetKit target (@bacons/apple-targets) with two widget kinds,
+  // Studio Controls and What Needs Me, plus an App Group shared with the
+  // app. A whole extra Xcode target and a new entitlement → new EAS
+  // Build and store release, NEVER an OTA; runtimeVersion moves to 2.4.0
+  // in lockstep (see the runtimeVersion log below). 🔴 The two-build rule
+  // applies: build AND submit both `production` and `production-legacy`,
+  // or the legacy record's installed base silently stops receiving OTAs.
+  version: '2.4.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -157,6 +165,12 @@ export default ({ config }) => ({
     // at 2048×2732 (12.9") and/or 2064×2752 (13" iPad Pro M4). Until
     // those are uploaded, new submissions can defer iPad-specific
     // metadata via the "use iPhone screenshots" toggle.
+    // WIDGET.1 — @bacons/apple-targets needs the team id at config-evaluation
+    // time to sign the extension target; it warns on every evaluation without
+    // it and iOS builds fail. Same team the eas.json submit profiles already
+    // carry — hoisted here because the plugin reads the Expo config, not
+    // eas.json.
+    appleTeamId: '535XMCT5PY',
     supportsTablet: true,
     // requireFullScreen: false (the Expo default) lets the iPad run
     // the app in Split View / Stage Manager. Verified the existing
@@ -205,6 +219,28 @@ export default ({ config }) => ({
       // never have to re-answer the "are you using encryption?"
       // question in App Store Connect for each version.
       ITSAppUsesNonExemptEncryption: false,
+    },
+    // WIDGET.1 — the App Group the app and its widget extension share.
+    //
+    // 🔴 The id is env-switched IN LOCKSTEP with the bundle identifier, and
+    // that is deliberate. Using ONE group for both bundle ids would be wrong:
+    // during the migration window the legacy unlisted app
+    // (com.un1tdublin.crm) and the public app (ie.repset.app) can both sit on
+    // the same staff phone — that window is precisely why an in-app migration
+    // nudge exists. Sharing one group would put both installs' widget tokens
+    // on the same key, so whichever launched last would overwrite the other,
+    // and revoking "that phone's widget" would revoke a credential the other
+    // install then silently re-minted. Two installs are two devices' worth of
+    // credentials; give them two containers.
+    //
+    // The widget's own expo-target.config.js does not repeat this:
+    // @bacons/apple-targets mirrors an app-level App Group onto every target.
+    entitlements: {
+      'com.apple.security.application-groups': [
+        process.env.LEGACY_APP === '1'
+          ? 'group.com.un1tdublin.crm.widgets'
+          : 'group.ie.repset.widgets',
+      ],
     },
   },
   android: {
@@ -328,6 +364,10 @@ export default ({ config }) => ({
         },
       },
     ],
+    // WIDGET.1 — generates the WidgetKit extension Xcode target from
+    // mobile/targets/widgets/ at prebuild. NATIVE (a whole extra Xcode target
+    // plus an App Group entitlement) → new EAS Build, never an OTA.
+    '@bacons/apple-targets',
   ],
   experiments: {
     typedRoutes: true,
@@ -403,7 +443,18 @@ export default ({ config }) => ({
   // "Configure expo-updates" Xcode build phase (the phase recomputes the
   // fingerprint in a restricted build sandbox and errors, failing the
   // production build — EAS build e02f3944).
-  runtimeVersion: '2.3.0',
+  // 2.4.0 — WIDGET.1 adds a WidgetKit extension target
+  // (@bacons/apple-targets) and an App Group entitlement. Native, so the
+  // lane must move: widget Swift cannot reach a device over OTA at all.
+  //
+  // 🔴 WHAT THIS COSTS THE MOMENT IT MERGES: mobile/app.config.js is in
+  // eas-update.yml's trigger allowlist, so every publish after this lands
+  // targets the 2.4.0 lane — which no device is on yet. Installs on 2.3.x
+  // FREEZE (they do not crash): they keep running their current bundle and
+  // receive nothing, hotfixes included, until users install the 2.4.0
+  // binary. Land this only when both binaries are built and ready to
+  // submit, and keep the window short.
+  runtimeVersion: '2.4.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy

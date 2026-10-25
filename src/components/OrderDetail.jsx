@@ -7,6 +7,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, AlertCircle, ArrowLeft, ExternalLink, Tag, Calendar, Users, Receipt, Clock, BadgeCheck, Car, Ban } from 'lucide-react'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 export default function OrderDetail({ orderId }) {
   const [data, setData] = useState(null)
@@ -28,6 +30,7 @@ export default function OrderDetail({ orderId }) {
   const [cancelConfirming, setCancelConfirming] = useState(false)
   const [cancelBusy, setCancelBusy] = useState(false)
   const [cancelError, setCancelError] = useState(null)
+  const viewerZone = useViewerZone()
 
   async function handleCancel() {
     setCancelBusy(true)
@@ -69,6 +72,9 @@ export default function OrderDetail({ orderId }) {
   }
 
   const { order, retry_chain: chain, events, source } = data
+  // TZ.16 (D3 = A) — every stamp on the order in its studio's zone (the route's
+  // `timezone`), abbreviation only when the browser is elsewhere.
+  const when = (iso) => fmtDateTime(iso, data.timezone, viewerZone)
 
   return (
     <div className="space-y-6">
@@ -133,21 +139,21 @@ export default function OrderDetail({ orderId }) {
               <div className="text-xs text-un1t-subtle">{order.contact_phone}</div>
             )}
             <div className="text-[11px] text-un1t-muted mt-2">
-              Created {fmtDateTime(order.created_at)}
+              Created {when(order.created_at)}
             </div>
             {order.completed_at && (
               <div className="text-[11px] text-un1t-muted">
-                Completed {fmtDateTime(order.completed_at)}
+                Completed {when(order.completed_at)}
               </div>
             )}
             {order.refunded_at && (
               <div className="text-[11px] text-purple-700">
-                Refunded {fmtDateTime(order.refunded_at)}
+                Refunded {when(order.refunded_at)}
               </div>
             )}
             {order.status === 'cancelled' && order.metadata?.cancelled_at && (
               <div className="text-[11px] text-slate-600">
-                Cancelled {fmtDateTime(order.metadata.cancelled_at)}
+                Cancelled {when(order.metadata.cancelled_at)}
               </div>
             )}
           </div>
@@ -168,7 +174,7 @@ export default function OrderDetail({ orderId }) {
       </div>
 
       {/* Source summary */}
-      <SourceSummary source={source} />
+      <SourceSummary source={source} when={when} />
 
       {/* Retry chain — each pending line can be cancelled inline so an
           operator can clear out a buyer's duplicate attempts from here. */}
@@ -179,7 +185,7 @@ export default function OrderDetail({ orderId }) {
           </h3>
           <div className="space-y-2">
             {chain.map((c) => (
-              <ChainRow key={c.id} c={c} isCurrent={c.id === order.id} onCancelled={load} />
+              <ChainRow key={c.id} c={c} isCurrent={c.id === order.id} onCancelled={load} when={when} />
             ))}
           </div>
         </section>
@@ -199,7 +205,7 @@ export default function OrderDetail({ orderId }) {
                 <span className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-un1t-border" />
                 <div className="flex items-baseline gap-2">
                   <span className="text-sm font-mono text-un1t-text">{e.event_type}</span>
-                  <span className="text-[11px] text-un1t-subtle">{fmtDateTime(e.occurred_at)}</span>
+                  <span className="text-[11px] text-un1t-subtle">{when(e.occurred_at)}</span>
                 </div>
                 {e.event_metadata && (
                   <div className="text-[11px] text-un1t-subtle mt-0.5 font-mono truncate max-w-full">
@@ -218,7 +224,7 @@ export default function OrderDetail({ orderId }) {
 // One retry-chain row. The info area links to that order; a pending row
 // also gets an inline Cancel (ORDERS-CANCEL.1) so the operator can clear
 // duplicate attempts without opening each one. onCancelled refetches.
-function ChainRow({ c, isCurrent, onCancelled }) {
+function ChainRow({ c, isCurrent, onCancelled, when }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -254,7 +260,7 @@ function ChainRow({ c, isCurrent, onCancelled }) {
           <span className="text-sm text-un1t-text tabular-nums">
             {formatMoney(c.amount_cents, c.currency)}
           </span>
-          <span className="text-[11px] text-un1t-subtle">{fmtDateTime(c.created_at)}</span>
+          <span className="text-[11px] text-un1t-subtle">{when(c.created_at)}</span>
           {isCurrent && (
             <span className="text-[10px] uppercase tracking-wider text-un1t-muted">this order</span>
           )}
@@ -281,7 +287,7 @@ function ChainRow({ c, isCurrent, onCancelled }) {
   )
 }
 
-function SourceSummary({ source }) {
+function SourceSummary({ source, when }) {
   if (!source?.kind) return null
   if (source.kind === 'race_registration') {
     const r = source.race_event
@@ -361,10 +367,10 @@ function SourceSummary({ source }) {
             <div>Deposit amount: <span className="text-un1t-text">€{Number(c.deposit_amount).toFixed(2)}</span></div>
           )}
           {c?.deposit_link_sent_at && (
-            <div>Link sent: <span className="text-un1t-text">{fmtDateTime(c.deposit_link_sent_at)}</span></div>
+            <div>Link sent: <span className="text-un1t-text">{when(c.deposit_link_sent_at)}</span></div>
           )}
           {c?.deposit_paid_at && (
-            <div>Paid: <span className="text-un1t-text">{fmtDateTime(c.deposit_paid_at)}</span></div>
+            <div>Paid: <span className="text-un1t-text">{when(c.deposit_paid_at)}</span></div>
           )}
         </div>
         {c?.id && (
@@ -405,14 +411,13 @@ function formatMoney(cents, currency) {
   return `${major} ${currency || ''}`.trim()
 }
 
-function fmtDateTime(iso) {
+export function fmtDateTime(iso, zone, viewerZone = null) {
   if (!iso) return ''
   try {
-    return new Date(iso).toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin',
+    return formatRecordTime(new Date(iso), zone, {
       day: 'numeric', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit',
-    })
+    }, 'en-IE', viewerZone)
   } catch { return String(iso) }
 }
 

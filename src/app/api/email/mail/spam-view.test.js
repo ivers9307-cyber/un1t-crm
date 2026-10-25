@@ -1,6 +1,6 @@
 // MAIL-SPAM.1 — the quarantine, as the list surfaces see it.
 //
-// THE PROPERTY UNDER TEST: a ticket flagged `is_spam` appears in EXACTLY ONE
+// THE PROPERTY UNDER TEST: a conversation flagged `is_spam` appears in EXACTLY ONE
 // place — the `spam` view — and nowhere else. Not in Inbox, not in Needs
 // reply, not in Sent or Archived, not in the needs-reply badge on the list, the
 // nav-badge count route, the digest's tile count or the digest's sections,
@@ -26,7 +26,7 @@ vi.mock('@/lib/permissions', async () => {
   return { ...actual, hasPermissionForLocation: vi.fn(() => true) }
 })
 vi.mock('./_search', () => ({
-  searchTicketIds: vi.fn(),
+  searchConversationIds: vi.fn(),
   SEARCH_SCAN_LIMIT: 1000,
 }))
 
@@ -36,7 +36,7 @@ import { GET as DIGEST } from './digest/route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { searchTicketIds } from './_search'
+import { searchConversationIds } from './_search'
 import { makeDb } from '../tickets/_test-db'
 import { LOC_A, T_STUDIO, T_ACCOUNTS, OWNER, mailState } from './_test-fixtures'
 
@@ -82,7 +82,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   hasPermissionForLocation.mockReturnValue(true)
   getCurrentUser.mockResolvedValue({ ...OWNER, activeLocation: { id: LOC_A } })
-  searchTicketIds.mockResolvedValue({ ok: true, skipped: true, ids: null, partial: false })
+  searchConversationIds.mockResolvedValue({ ok: true, skipped: true, ids: null, partial: false })
   setupDb(mailState({ tickets: [{ ...LIVE }, { ...LIVE_ACCOUNTS }, { ...SPAM }] }))
 })
 
@@ -140,7 +140,7 @@ describe('quarantined rows are absent from every other view', () => {
   })
 
   it('search excludes it unless the operator is on the spam view', async () => {
-    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, ids: [SPAM.id, LIVE.id], partial: false })
+    searchConversationIds.mockResolvedValue({ ok: true, skipped: false, ids: [SPAM.id, LIVE.id], partial: false })
     const inbox = await list(`?location_id=${LOC_A}&q=won`)
     expect(ids(inbox.body.data.conversations)).toEqual([LIVE.id])
     const spam = await list(`?location_id=${LOC_A}&view=spam&q=won`)

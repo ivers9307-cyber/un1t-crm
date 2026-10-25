@@ -19,6 +19,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchTodayFeedRows } from '../../lib/today-feed-api'
 import { mobileRouteForFeedRow } from '../../lib/today-feed-nav'
+import { canUseTasksHere } from '../../lib/tasks-access'
 import { SectionHeader, ListCard, PendingRow } from './cards'
 
 // Ionicons name per feed-row id (ids owned by shared/today-feed.js).
@@ -61,13 +62,15 @@ export default function NeedsAttentionCard() {
   useFocusEffect(useCallback(() => { load() }, [load]))
 
   if (!rows.length) return null
+  // C146 — no link into Tasks at a studio where the phone hides it.
+  const canUseTasks = canUseTasksHere(profile, activeLocation)
 
   return (
     <View className="mb-4">
       <SectionHeader title="Needs attention" count={rows.length} />
       <ListCard>
         {rows.map((row, i) => {
-          const route = mobileRouteForFeedRow(row.id)
+          const route = mobileRouteForFeedRow(row.id, { canUseTasks })
           return (
             <PendingRow
               key={row.id}

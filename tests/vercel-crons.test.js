@@ -6,33 +6,22 @@
 //      would fire it forever and get a 404 — silent, because a cron
 //      that never runs looks exactly like a cron with nothing to do.
 //
-//   2. Someone "fixing" the ONE duplicated path. The 2026-08 platform
-//      audit flagged /api/cron/receipt-coverage-weekly appearing twice
-//      (07:00 and 08:00 UTC on Fridays) as a double-fire bug. It is
-//      NOT a bug — it is a deliberate DST straddle, documented in the
-//      route header and in shouldRunFridayCron()'s own comment:
-//      Vercel cron expressions are UTC only, and 08:00 Europe/Dublin
-//      is 07:00 UTC under IST (summer) and 08:00 UTC under GMT
-//      (winter). Both entries fire; the route's Dublin-hour gate lets
-//      exactly the one landing in the 08:xx Dublin hour do work, and
-//      the alreadyRanToday check absorbs the other firing plus any
-//      retry. Delete either entry and the weekly receipt-coverage
-//      report goes silent for half the year.
-//
-// So: duplicates are allowed, but ONLY this pair, and only with the
-// gate that makes it safe.
+//   2. A cron path listed twice. It fires twice. The one deliberate pair
+//      there ever was, /api/cron/receipt-coverage-weekly at 07:00 AND 08:00
+//      UTC on Fridays (a straddle onto 08:00 Europe/Dublin across DST),
+//      became a single hourly entry in TZ.6: the daily-slot gate
+//      (src/lib/cron-daily-slot.js, a local-anchored slot) now picks each
+//      location's Friday 08:xx local hour, and its claim absorbs any retry.
+//      src/lib/cron-daily-slot.test.js proves it acts at exactly the instants
+//      the old pair + Dublin-hour gate did, every Friday of 2026.
 
 import { describe, it, expect } from 'vitest'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import vercelConfig from '../vercel.json'
-import { shouldRunFridayCron } from '../src/lib/recon/report-email.js'
 
 const ROOT = join(import.meta.dirname, '..')
 const crons = vercelConfig.crons
-
-const DST_STRADDLE_PATH = '/api/cron/receipt-coverage-weekly'
-const DST_STRADDLE_SCHEDULES = ['0 7 * * 5', '0 8 * * 5']
 
 function countByPath() {
   const counts = new Map()
@@ -61,29 +50,13 @@ describe('vercel.json crons — every entry maps to a route', () => {
   })
 })
 
-describe('vercel.json crons — the only duplicate is the deliberate DST straddle', () => {
-  it('names exactly one duplicated path', () => {
+describe('vercel.json crons — no path is listed twice', () => {
+  it('names no duplicated path', () => {
     const dupes = [...countByPath()].filter(([, n]) => n > 1).map(([p]) => p)
-    expect(
-      dupes,
-      'a cron path listed twice fires twice — unless it is the documented Dublin DST straddle',
-    ).toEqual([DST_STRADDLE_PATH])
+    expect(dupes, 'a cron path listed twice fires twice').toEqual([])
   })
 
-  it('the straddle is exactly the 07:00/08:00 UTC Friday pair', () => {
-    const schedules = crons.filter((c) => c.path === DST_STRADDLE_PATH).map((c) => c.schedule).sort()
-    expect(schedules).toEqual(DST_STRADDLE_SCHEDULES)
-  })
-
-  it('and the route gates on the Dublin hour, so only one firing works', () => {
-    // 07:00 UTC in summer === 08:00 Dublin → runs.
-    expect(shouldRunFridayCron({ dublinMinutes: 8 * 60, alreadyRanToday: false })).toBe(true)
-    // The other firing lands at 09:xx Dublin that same day → skipped by
-    // the hour gate even before alreadyRanToday is consulted.
-    expect(shouldRunFridayCron({ dublinMinutes: 9 * 60, alreadyRanToday: false })).toBe(false)
-    // Winter: 07:00 UTC is 07:00 Dublin → skipped; 08:00 UTC runs.
-    expect(shouldRunFridayCron({ dublinMinutes: 7 * 60, alreadyRanToday: false })).toBe(false)
-    // Belt and braces: a same-day re-fire never doubles the report.
-    expect(shouldRunFridayCron({ dublinMinutes: 8 * 60, alreadyRanToday: true })).toBe(false)
+  it('receipt-coverage-weekly runs hourly; the daily-slot gate picks Friday 08:xx local (TZ.6)', () => {
+    expect(crons.filter((c) => c.path === '/api/cron/receipt-coverage-weekly').map((c) => c.schedule)).toEqual(['0 * * * *'])
   })
 })

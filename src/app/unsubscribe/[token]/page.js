@@ -1,12 +1,32 @@
+import { cache } from 'react'
+import { headers } from 'next/headers'
 import UnsubscribePage from '@/components/UnsubscribePage'
+import { resolveScopedBrandName } from '@/lib/host-brand'
 
-// Public, no auth, no server data fetch — let Next.js render a static
-// shell that UnsubscribePage then hydrates client-side.
-export const dynamicParams = true
-export const revalidate = 3600
+// Public, no auth, no server data fetch for the body — UnsubscribePage
+// hydrates client-side. W1.L4: the title resolves by request (the `?l=`
+// studio, else the host), which is a dynamic read, so the former static
+// shell (`revalidate = 3600`) is now rendered per request.
+export const dynamic = 'force-dynamic'
 
-export const metadata = {
-  title: 'Unsubscribe — UN1T',
+// W1.L4 — the tab names the gym whose email this was: the `?l=<locationId>`
+// scope buildUnsubscribeUrl appends (that studio's brand chain), else the
+// request host's organisation brand. Never a literal — and never ANOTHER
+// tenant's: `?l=` is caller-controlled, so resolveScopedBrandName honours it
+// only when it is a UUID (the API route's gate) AND the location belongs to
+// the host's organisation, or the host has no organisation (a CRM-host link,
+// where every link was minted before W1.L3). A non-UUID costs no read.
+// W1.S1b — the page header names the same brand as the tab; React-cached so
+// the metadata and the render share one resolution per request.
+const scopedBrand = cache((host, l) => resolveScopedBrandName({
+  host,
+  locationId: typeof l === 'string' ? l : null,
+}))
+
+export async function generateMetadata(props) {
+  const searchParams = await props.searchParams
+  const brand = await scopedBrand((await headers()).get('host'), searchParams?.l)
+  return { title: `Unsubscribe — ${brand}` }
 }
 
 export default async function Unsubscribe(props) {
@@ -24,11 +44,13 @@ export default async function Unsubscribe(props) {
   // list saw a number well under reality. UNSUBAUTO.1 multiplies page-path
   // opt-outs, which multiplies the undercount with them.
   const searchParams = await props.searchParams;
+  const brandName = await scopedBrand((await headers()).get('host'), searchParams?.l)
   return (
     <UnsubscribePage
       token={params.token}
       locationId={searchParams?.l || null}
       campaignId={searchParams?.c || null}
+      brandName={brandName}
     />
   )
 }

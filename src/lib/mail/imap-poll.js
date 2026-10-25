@@ -6,7 +6,7 @@
 // message, reshaped as a Postmark inbound payload, to the LANE'S SINK. On the
 // 'inbox' lane that sink POSTs it at the EXISTING webhook route
 // (/api/webhooks/postmark-inbound/<token>) and this module files nothing
-// itself: no ticket, no message row, no attachment row, no counter. Everything
+// itself: no conversation, no message row, no attachment row, no counter. Everything
 // downstream — mailbox routing, threading, dedupe, dead-lettering, the storage
 // quota — is inherited from that route, unchanged.
 //
@@ -28,7 +28,7 @@
 // ══ TWO LANES, AND THE SINK IS THE ONLY DIFFERENCE (§5) ═════════════
 // A connected mailbox is a REAL MAILBOX THAT PEOPLE STILL OPEN. A reply
 // somebody types in Gmail lands in that account's Sent folder and never in
-// INBOX, so an INBOX-only poller never sees it: the ticket sits "needs reply"
+// INBOX, so an INBOX-only poller never sees it: the conversation sits "needs reply"
 // forever and a second person answers the member again. That is the one
 // divergence in §5's table that is customer-facing, and it is why this poller
 // sweeps two lanes rather than one.
@@ -85,7 +85,7 @@
 // entire subsystem's history is about.
 //
 // 🔴 AND A 2xx IS ONLY EARNED BY A COMPLETE PAYLOAD. A body part that failed
-// to download is NOT "a ticket with no text" — it is silent, permanent data
+// to download is NOT "a conversation with no text" — it is silent, permanent data
 // loss, because the deterministic MessageID makes every re-POST a
 // `200 deduped` and the body can never be back-filled. attachBodies() returns
 // a verdict and pollOpenFolder() judges it; see IMAP-BLANKBODY.1 there.
@@ -98,7 +98,7 @@
 // COLD START INGESTS NOTHING (§3.5). The first successful connect for a
 // (mailbox, folder) records UIDVALIDITY + the current highest UID and returns.
 // New mail only, no backfill, EVER — a backfill would file years of a
-// customer's correspondence as fresh tickets, with push notifications.
+// customer's correspondence as fresh conversations, with push notifications.
 //
 // A UIDVALIDITY CHANGE RE-ANCHORS, NEVER RE-INGESTS (§3.3). Every UID we hold
 // becomes meaningless; the honest response is to anchor at the current highest
@@ -152,7 +152,7 @@
 //     row and nothing else — so anything staged there would sit in the bucket
 //     billed forever with nothing that will ever name it. The consequence is
 //     stated rather than hidden: a file a colleague attached in Gmail is not
-//     recorded on the ticket, only the reply's text is, and pollOpenFolder()
+//     recorded on the conversation, only the reply's text is, and pollOpenFolder()
 //     says so at warn level when it happens.
 
 import { getAppUrl } from '../app-url'
@@ -389,7 +389,7 @@ const MAX_FORWARD_BYTES = 3_500_000
  * A 40 MB HTML body must not become a 40 MB buffer inside a serverless
  * function (the risk table's "large message exhausts function memory"). The
  * limiter TRUNCATES rather than failing, which is the right shape here: a
- * truncated body is still a ticket someone can answer, where a refusal would
+ * truncated body is still a conversation someone can answer, where a refusal would
  * be a stalled mailbox.
  */
 const MAX_BODY_PART_BYTES = 1_000_000
@@ -432,7 +432,7 @@ const MAX_TEXT_BODY_CHARS = HTML_BODY_MAX_CHARS
  * badge is not what the trial is measuring.
  *
  * 50 is roughly a month of INBOX at the volume this is being trialled against
- * (29 tickets over 17 days on the ticketing surface) and about a day on a
+ * (29 conversations over 17 days on the ticketing surface) and about a day on a
  * mailbox ten times busier. It is also comfortably inside the 1,000-row select
  * cap for the database half, which is why the chunking below is a safety net
  * rather than a load-bearing loop.
@@ -536,7 +536,7 @@ const INGRESS_COLUMNS = [
  *
  * Deliberately NOT one of the two named MAILBOX_COLUMNS constants — those
  * belong to the settings routes (`…/email/mailboxes/_helpers.js`) and the
- * ticket routes (`…/email/tickets/_helpers.js`), which are owned by other
+ * conversation routes (`…/email/mail/_helpers.js`), which are owned by other
  * phases and select for other purposes. `address` is the load-bearing one: it
  * becomes OriginalRecipient, which is what routes the mail.
  */
@@ -687,13 +687,13 @@ export function resolveInboundTarget(env = process.env) {
  *
  *   • message/* IS NOT DESCENDED INTO. A forwarded .eml carries its own
  *     text/plain, and taking it would replace the covering note ("see below")
- *     with the forwarded message's body — the ticket would show the wrong
+ *     with the forwarded message's body — the conversation would show the wrong
  *     text with no indication anything had been substituted. The attachment
  *     walker treats the same subtree as one file, so the two agree.
  *   • A part with a filename or an `attachment` disposition is a FILE even
  *     when it is text/plain (a .txt attachment, a .csv export). Those belong
  *     to imap-attachments.js, and reading one as the body would put a
- *     stranger's CSV in the ticket's message text.
+ *     stranger's CSV in the conversation's message text.
  *
  * First match wins per type, which is the multipart/alternative convention
  * read the other way round: alternatives are ordered worst-to-best, but there
@@ -742,7 +742,7 @@ export function selectBodyParts(bodyStructure) {
  * `meta.charset` to 'utf-8'. When it does not recognise one it leaves the
  * bytes alone, and THAT is the case this covers: a windows-1252 or
  * iso-8859-1 body read as UTF-8 turns every accented character in an Irish or
- * European name into mojibake, permanently, in the stored ticket.
+ * European name into mojibake, permanently, in the stored conversation.
  *
  * TextDecoder is Node's own (WHATWG encodings, no dependency). An unknown
  * label throws, and UTF-8 is the only honest fallback left.
@@ -767,7 +767,7 @@ function decodeBodyBytes(buffer, charset) {
  * entry point that decodes the transfer encoding AND unwraps RFC 3676
  * format=flowed AND converts the charset AND honours maxBytes. Gmail sends
  * format=flowed plain text; without the unwrap, every soft line break becomes
- * a hard one in the stored ticket.
+ * a hard one in the stored conversation.
  */
 async function downloadBodyPart(client, uid, part, ctx) {
   try {
@@ -816,16 +816,16 @@ async function downloadBodyPart(client, uid, part, ctx) {
  * the caller discarded it entirely, which is how a body-part download failure
  * became permanent, silent data loss: downloadBodyPart() swallows every error
  * and returns null, so nothing throws, the mapper emits `TextBody: ''`, the
- * route files a blank ticket, answers 200, and the watermark advances past it.
+ * route files a blank conversation, answers 200, and the watermark advances past it.
  * It is unrecoverable — the synthetic MessageID is deterministic, so a re-POST
  * hits classifySeenClaim and comes back `200 deduped`, and the body can never
  * be back-filled. One dropped IMAP socket mid-backlog filed up to a full tick's
- * worth of member emails as empty tickets and moved the watermark past all of
+ * worth of member emails as empty conversations and moved the watermark past all of
  * them. See how pollOpenFolder() reads `attempted` against `text`/`html`.
  *
  * `attempted: 0` is a DIFFERENT verdict and not a failure: the message
  * genuinely has no text or html part (an attachments-only email is the normal
- * case). It is logged rather than silently filed, because the ticket will still
+ * case). It is logged rather than silently filed, because the conversation will still
  * look empty to whoever opens it and that should be explicable.
  */
 export async function attachBodies(client, msg, ctx) {
@@ -870,7 +870,7 @@ export async function attachBodies(client, msg, ctx) {
  *
  * Over budget, the BODIES are trimmed and nothing else. They are the only
  * fields large enough to matter, the route truncates them itself anyway
- * (truncateHtmlBody), and a ticket with a shortened body is one an operator can
+ * (truncateHtmlBody), and a conversation with a shortened body is one an operator can
  * still answer — where refusing the message outright, or letting it 413 and
  * stall the mailbox, are both silent losses. HTML goes first because the route
  * can derive plain text from it but not the reverse, so the plain text is the
@@ -1041,7 +1041,7 @@ function inboundSink(target) {
 
 /**
  * The 'sent' sink: a client-sent reply, filed as an OUTBOUND message on the
- * ticket it belongs to.
+ * conversation it belongs to.
  *
  * 🔴 NOTHING GOES OVER THE WIRE HERE. That is the whole reason this lane
  * exists as a sink rather than as another producer — see the two-lanes note in
@@ -1091,13 +1091,13 @@ function sentSink(db, mailbox) {
       }
 
       // 🔴 `filed`, `duplicate` AND `orphan` ARE ALL HANDLED.
-      //   • `filed`     — the reply is on the ticket. Obvious.
-      //   • `duplicate` — it is already on the ticket: this Sent copy is one we
+      //   • `filed`     — the reply is on the conversation. Obvious.
+      //   • `duplicate` — it is already on the conversation: this Sent copy is one we
       //     sent over SMTP ourselves, or one a previous tick filed. Mig 574's
       //     partial unique index is what makes that an exact answer rather
       //     than a heuristic.
       //   • `orphan`    — the writer resolved no thread we hold and
-      //     deliberately did NOT conjure a ticket (§5, 8.5). Re-reading it
+      //     deliberately did NOT conjure a conversation (§5, 8.5). Re-reading it
       //     next tick produces the same answer forever.
       // Holding the watermark for any of the three would stall the lane behind
       // a message that nothing can change, which is the denial-of-inbox this
@@ -1115,7 +1115,7 @@ function sentSink(db, mailbox) {
       //
       // Only `filed` produced a message row, and a row is the only thing an
       // email_ticket_attachments row can hang off. `duplicate` means the reply
-      // is already on the ticket — either one WE sent over SMTP, whose files
+      // is already on the conversation — either one WE sent over SMTP, whose files
       // the composer already filed at send time, or one an earlier tick filed
       // with its own copy of these same bytes. `orphan` produced no row at all.
       // In both of those the freshly staged copy is referenced by nothing, so
@@ -1145,7 +1145,7 @@ function sentSink(db, mailbox) {
             })
           }
         } catch (err) {
-          // The reply itself is already on the ticket. Attachment bookkeeping
+          // The reply itself is already on the conversation. Attachment bookkeeping
           // must never turn that into a retry, which would re-file the message
           // — so this is logged and the bytes are dropped, exactly as an
           // unredeemed outcome is. The operator sees the reply without its
@@ -1910,7 +1910,7 @@ async function pollOpenFolder({
     if (highestUid == null) {
       // 🔴 FAIL CLOSED, and this is the narrow case that earns it. Anchoring
       // at 0 without a trustworthy uidNext would make the NEXT tick fetch
-      // `1:*` and file the customer's entire mailbox as fresh tickets, with
+      // `1:*` and file the customer's entire mailbox as fresh conversations, with
       // push notifications — the one outcome §3.5 forbids outright. Proceeding
       // is actively harmful and irreversible; refusing costs one skipped tick.
       throw new Error('Server reported no usable UIDNEXT, so the mailbox cannot be anchored safely.')
@@ -1994,7 +1994,7 @@ async function pollOpenFolder({
     let payload
     try {
       // 🔴 BODIES FIRST. See attachBodies() — the mapper does not fetch, and a
-      // payload built before this call files a blank ticket in silence.
+      // payload built before this call files a blank conversation in silence.
       const bodies = await attachBodies(client, msg, { mailboxId })
 
       // 🔴 A BODY WE TRIED AND FAILED TO DOWNLOAD IS NOT A BLANK TICKET
@@ -2006,12 +2006,12 @@ async function pollOpenFolder({
       // the watermark does not move, so the next tick downloads it again.
       //
       // `attempted > 0` with neither half present is the only failing shape.
-      // One half arriving is enough for a ticket somebody can answer, and
+      // One half arriving is enough for a conversation somebody can answer, and
       // `attempted: 0` means the message genuinely has no body part (already
       // logged inside attachBodies).
       if (bodies.attempted > 0 && !bodies.text && !bodies.html) {
         if (!stalled) {
-          logError('imap-poll', 'could not download any body part — holding the watermark rather than filing a blank ticket', {
+          logError('imap-poll', 'could not download any body part — holding the watermark rather than filing a blank conversation', {
             mailboxId, uid, attempted: bodies.attempted,
           })
           return halt(0, 'Could not download the message body; the watermark is held so the next tick retries.')
@@ -2019,10 +2019,10 @@ async function pollOpenFolder({
         // Bounded, for the same reason the deferral above is bounded: a body
         // part that fails EVERY time would otherwise stall the mailbox
         // permanently, which is the denial-of-inbox this file spends its
-        // length avoiding. A blank ticket carrying the real sender, subject,
-        // threading and attachments is poor; no ticket at all, and no further
+        // length avoiding. A blank conversation carrying the real sender, subject,
+        // threading and attachments is poor; no conversation at all, and no further
         // mail ever, is worse.
-        logError('imap-poll', '🔴 FILING WITHOUT ITS BODY after repeated failed ticks — the ticket will be blank', {
+        logError('imap-poll', '🔴 FILING WITHOUT ITS BODY after repeated failed ticks — the conversation will be blank', {
           mailboxId, uid, stalledTicks, attempted: bodies.attempted,
         })
       }
@@ -2077,7 +2077,7 @@ async function pollOpenFolder({
 
       // stageImapAttachments never throws and never costs the email: an
       // unusable id, an oversized part or a failed upload each come back as an
-      // entry the route records as skipped, so the file is ON the ticket rather
+      // entry the route records as skipped, so the file is ON the conversation rather
       // than absent from it.
       const staged = await stageImapAttachments(db, client, msg, { mailboxId, messageId: payload.MessageID })
       payload.Attachments = staged.attachments
@@ -2093,7 +2093,7 @@ async function pollOpenFolder({
       // file (a .txt attachment does; a forwarded .eml is one part, not many).
       const files = attachmentParts(msg?.bodyStructure)
       if (files.parts.length > 0) {
-        logWarn('imap-poll', 'a reply sent from the mail client carries files that are NOT recorded on the ticket — only its text is filed', {
+        logWarn('imap-poll', 'a reply sent from the mail client carries files that are NOT recorded on the conversation — only its text is filed', {
           mailboxId, folder: sink.lane, uid, files: files.parts.length,
         })
       }
@@ -2136,7 +2136,7 @@ async function pollOpenFolder({
       // 🔴 THE ONLY PLACE THE WATERMARK MOVES ON AN INGESTED MESSAGE.
       //
       // `ingested` counts messages the SINK ACCEPTED, which on the sent lane
-      // includes a `duplicate` (already on the ticket) and an `orphan` (no
+      // includes a `duplicate` (already on the conversation) and an `orphan` (no
       // thread we hold). Both are handled — see the sink — and neither is a
       // step-over, because a step-over is inert while a deferral is open and
       // an accepted message is exactly the proof a deferral is waiting for.

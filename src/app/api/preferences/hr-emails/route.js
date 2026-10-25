@@ -100,6 +100,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getClientIp } from '@/lib/rate-limit'
 import { logInfo, logWarn } from '@/lib/log'
+import { resolveSiteNameForHost } from '@/lib/default-site-name'
 import {
   REFUSAL_REASONS,
   guardBeforeTokenLookup,
@@ -140,7 +141,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * /api/preferences/[token]. Two handlers means two chances for the guards to
  * drift, and the one that drifts is the one nobody re-reads.
  */
-async function resolveCredentialOrRefuse(request) {
+async function resolveCredentialOrRefuse(request, brand) {
   const url = new URL(request.url)
   const token = (url.searchParams.get('token') || '').trim()
   const contactId = (url.searchParams.get('cid') || '').trim()
@@ -148,7 +149,7 @@ async function resolveCredentialOrRefuse(request) {
   const scope = (url.searchParams.get('scope') || 'hr').trim()
 
   if (scope !== 'hr') {
-    return { refused: htmlResponse('<h1>Unknown scope</h1>', 400) }
+    return { refused: htmlResponse('<h1>Unknown scope</h1>', 400, brand) }
   }
   if (!token && !contactId) {
     // No credential at all. Costs no database work, so there is nothing to
@@ -156,7 +157,7 @@ async function resolveCredentialOrRefuse(request) {
     return {
       refused: htmlResponse(
         `<h1>Invalid link</h1><p>This unsubscribe link is incomplete. Reply to any of our emails and we will sort it out.</p>`,
-        400
+        400, brand
       ),
     }
   }
@@ -174,7 +175,7 @@ async function resolveCredentialOrRefuse(request) {
   })
   const notFound = () => htmlResponse(
     `<h1>Link not recognised</h1><p>This unsubscribe link may have expired. Reply to any of our emails and we will take you off the list.</p>`,
-    404
+    404, brand
   )
 
   // ── shape gate, before any query ──────────────────────────────────
@@ -196,7 +197,7 @@ async function resolveCredentialOrRefuse(request) {
   const ipBudget = await guardBeforeTokenLookup(db, SCOPE, ip)
   if (!ipBudget.allowed) {
     await refusal(REFUSAL_REASONS.IP_ENUMERATION)
-    return { refused: tooManyRequests(ipBudget) }
+    return { refused: tooManyRequests(ipBudget, brand) }
   }
 
   // ── resolve the credential to exactly one contact ─────────────────
@@ -236,7 +237,7 @@ async function resolveCredentialOrRefuse(request) {
   const credBudget = await guardResolvedToken(db, SCOPE, credential)
   if (!credBudget.allowed) {
     await refusal(REFUSAL_REASONS.TOKEN_FLOOD, { contactId: resolvedContactId })
-    return { refused: tooManyRequests(credBudget) }
+    return { refused: tooManyRequests(credBudget, brand) }
   }
 
   // The confirm form has to POST back with whatever credential the link
@@ -254,14 +255,16 @@ async function resolveCredentialOrRefuse(request) {
 // GETMUT.1 in the header. Everything before the render is identical to POST's
 // front half, including the refusal accounting.
 export async function GET(request) {
-  const gate = await resolveCredentialOrRefuse(request)
+  const brand = await pageBrand(request)
+  const gate = await resolveCredentialOrRefuse(request, brand)
   if (gate.refused) return gate.refused
-  return confirmPage(gate.credentialQuery)
+  return confirmPage(gate.credentialQuery, brand)
 }
 
 // POST /api/preferences/hr-emails — this is what actually opts the person out.
 export async function POST(request) {
-  const gate = await resolveCredentialOrRefuse(request)
+  const brand = await pageBrand(request)
+  const gate = await resolveCredentialOrRefuse(request, brand)
   if (gate.refused) return gate.refused
   const { db, contactId } = gate
 
@@ -274,7 +277,7 @@ export async function POST(request) {
   if (!contact) {
     // The credential resolved but the contact is gone (merged or deleted).
     // Nothing to switch off, and saying so plainly beats a 500.
-    return alreadyDonePage()
+    return alreadyDonePage(brand)
   }
 
   // Already off is a no-op SUCCESS, not an error: people click the link in two
@@ -289,13 +292,13 @@ export async function POST(request) {
       logWarn('hr-pref', 'failed to update flag', { contactId, err: updErr })
       return htmlResponse(
         `<h1>Couldn't update preferences</h1><p>Please try again shortly, or reply to any of our emails and we will do it for you.</p>`,
-        500
+        500, brand
       )
     }
     logInfo('hr-pref', 'unsubscribed from hr emails', { contactId })
   }
 
-  return alreadyDonePage()
+  return alreadyDonePage(brand)
 }
 
 /**
@@ -308,7 +311,7 @@ export async function POST(request) {
  * preferences off the responses. Do not add a "you're already unsubscribed"
  * branch here; that is the oracle, rebuilt.
  */
-function confirmPage(credentialQuery) {
+function confirmPage(credentialQuery, brand) {
   return htmlResponse(`
     <h1>Stop these emails?</h1>
     <p>Confirm and we'll stop sending you post-class heart-rate summary emails.</p>
@@ -321,10 +324,10 @@ function confirmPage(credentialQuery) {
     <p style="margin-top:24px;font-size:13px;color:#666;">
       Nothing has changed yet. Close this page and you'll keep getting them.
     </p>
-  `)
+  `, 200, brand)
 }
 
-function alreadyDonePage() {
+function alreadyDonePage(brand) {
   return htmlResponse(`
     <h1>You're unsubscribed</h1>
     <p>You won't get post-class heart-rate summary emails any more.</p>
@@ -332,7 +335,7 @@ function alreadyDonePage() {
       Changed your mind? You can re-enable these in your app account
       → Settings, or just reply to any email and we'll flip it back.
     </p>
-  `)
+  `, 200, brand)
 }
 
 /**
@@ -340,20 +343,34 @@ function alreadyDonePage() {
  * body. Retry-After still goes on the response for the automated callers
  * (link scanners) that produce most of this traffic.
  */
-function tooManyRequests(budget) {
+function tooManyRequests(budget, brand) {
   const res = htmlResponse(`
     <h1>Too many requests</h1>
     <p>We have had a lot of hits on this link just now. Please try again in a few minutes.</p>
-  `, 429)
+  `, 429, brand)
   res.headers.set('Retry-After', String(budget.retryAfterSec))
   return res
 }
 
-function htmlResponse(bodyHtml, status = 200) {
+// W1.S1b — the tab names the request host's organisation (the one per-host
+// brand cache; the platform name on the CRM host), never a literal gym. It
+// is resolved from the HOST alone, never from the contact, so a page body
+// stays the same whoever the credential names (the no-oracle rule above).
+async function pageBrand(request) {
+  let host = request.headers.get('host')
+  if (!host) { try { host = new URL(request.url).host } catch { host = '' } }
+  return resolveSiteNameForHost({ host })
+}
+
+function escapeHtml(v) {
+  return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+function htmlResponse(bodyHtml, status = 200, brand = '') {
   const html = `<!doctype html>
 <html><head>
   <meta charset="utf-8">
-  <title>Email preferences · UN1T</title>
+  <title>${brand ? `Email preferences · ${escapeHtml(brand)}` : 'Email preferences'}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     body { margin:0; padding:48px 24px; font-family: ui-sans-serif, system-ui, sans-serif;

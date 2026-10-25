@@ -10,8 +10,11 @@
 //      branch_id matches the payload's branchId).
 //   3. Verify the HMAC-SHA256 signature against THAT location's
 //      webhook_secret. Wrong/missing → 401.
-//   4. Record in glofox_webhook_events for idempotency + audit. The
-//      event_id UNIQUE constraint dedupes retried deliveries.
+//   4. Record in glofox_webhook_events. NOTE (WEBHOOKAUDIT.1): event_id is
+//      Glofox's ENTITY id (Payload.id), not an emission id, so a booking's
+//      later events upsert this same row and it holds only the LATEST
+//      event. Each processed delivery also writes one PII-free row to
+//      glofox_webhook_attempts (src/lib/glofox-webhook-attempts.js).
 //   5. Find the matching CRM contact by email, scoped to the
 //      resolved location. MEMBER_CREATED for an unknown member
 //      CREATES the contact in real time (single-member fetch +
@@ -31,12 +34,12 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import {
   verifyGlofoxSignature,
   parseGlofoxEvent,
   tagsForGlofoxEvent,
-  glofoxCredentialsByBranchId,
+  readGlofoxCredentialsByBranchId,
   glofoxFetch,
 } from '@/lib/glofox'
 import {
@@ -49,10 +52,15 @@ import { applyServiceWebhook } from '@/lib/glofox-services'
 import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
 import { maybeEnrolDunning, exitDunningForContact, dunningActionFor } from '@/lib/dunning'
 import { applyMemberSync } from '@/lib/glofox-sync'
+import { findGlofoxCrossoverContact } from '@/lib/glofox-crossover'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { buildGlofoxWebhookAttempt, recordGlofoxWebhookAttempt } from '@/lib/glofox-webhook-attempts'
+import { sendTrialScheduleFollowup, sendTrialSubscribeFollowup } from '@/lib/trial-purchase-meta-followups'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// PAYLINK — this route awaits a Glofox pay-link fetch (8s abortable budget) inline; the platform default would cut a slow PAST_DUE event off mid-enrolment.
+export const maxDuration = 30
 
 const SIGNATURE_HEADER_CANDIDATES = [
   'signature',
@@ -69,6 +77,9 @@ function getSignatureHeader(request) {
 }
 
 export async function POST(request) {
+  // WEBHOOKAUDIT.1 — when this delivery reached us (the event row's
+  // received_at is when its ENTITY was first seen, not this delivery).
+  const deliveredAt = new Date().toISOString()
   // Read raw body BEFORE parsing — HMAC must compute over the
   // bytes Glofox sent, not a re-stringified copy.
   const rawBody = await request.text()
@@ -109,7 +120,15 @@ export async function POST(request) {
     logWarn('glofox-webhook', 'no branch_id in payload')
     return NextResponse.json({ success: false, error: 'Missing branch_id' }, { status: 400 })
   }
-  const creds = await glofoxCredentialsByBranchId(db, parsed.branchId)
+  const { creds, error: credsErr } = await readGlofoxCredentialsByBranchId(db, parsed.branchId)
+  if (credsErr) {
+    // REGISTRYREAD.1a: the lookup could not be made (a DB blip) — that is
+    // not "unknown branch". 503 lets a sender that retries 5xx redeliver
+    // (event_id UNIQUE dedupes below). Not dead-lettered: the body is
+    // unverified until we can read the secret.
+    logError('glofox-webhook', 'branch lookup failed; answering 503', { branch_id: parsed.branchId, err: credsErr })
+    return NextResponse.json({ success: false, error: 'Temporarily unavailable' }, { status: 503 })
+  }
   if (!creds) {
     logWarn('glofox-webhook', 'unknown branch_id', { branch_id: parsed.branchId })
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -133,9 +152,18 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
-  // 3. Insert / upsert the event row (idempotency boundary). When
-  // event_id is null Glofox didn't include one — we still record
-  // for debug, just skip the dedupe.
+  // 3. Insert / upsert the event row. When event_id is null Glofox didn't
+  // include one — we still record for debug.
+  //
+  // WEBHOOKAUDIT.1 — this is NOT a working dedup boundary, and must not be
+  // "fixed" in passing. event_id is the ENTITY id (Payload.id), so 57% of
+  // deliveries are a LATER event about a booking we already have a row for;
+  // the upsert rewrites status to 'received' and returns it, so the
+  // 'deduped' branch below never fires and each of those events is
+  // processed, as it must be. Switching to ignoreDuplicates: true would
+  // silently drop every one of them. A genuine retry of the same emission
+  // (same Metadata.trace_id; 2 in 30 days) is processed again today. See
+  // follow-up C46 GLOFOXDEDUP.1 before touching this.
   let eventRow
   if (parsed.eventId) {
     const { data, error } = await db
@@ -189,6 +217,10 @@ export async function POST(request) {
     return NextResponse.json({ success: true, status: 'dark_launch', event_row_id: eventRow.id })
   }
 
+  // WEBHOOKAUDIT.1 — everything markEvent needs to write this delivery's
+  // attempt row beside the event row.
+  const attemptCtx = { eventRowId: eventRow.id, locationId: creds.locationId, parsed, payload, deliveredAt }
+
   // 5–9. Action block — everything AFTER auth + dedup + dark-launch is the
   // "processing" boundary. If anything here throws unexpectedly (a bug, a
   // transient lib error, etc.) we capture a dead-letter row and still 200 the
@@ -200,7 +232,7 @@ export async function POST(request) {
     // not failed — Glofox might send domains we haven't mapped yet.
     const tags = tagsForGlofoxEvent(parsed.eventType)
     if (tags.length === 0) {
-      await markEvent(db, eventRow.id, 'unknown_event_type', null, null)
+      await markEvent(db, attemptCtx, 'unknown_event_type', null, null)
       return NextResponse.json({ success: true, status: 'unknown_event_type', event_type: parsed.eventType })
     }
 
@@ -211,7 +243,7 @@ export async function POST(request) {
     //      events which Glofox's payloads ship without an email
     //      (GLOFOX5.1).
     if (!parsed.contactEmail && !parsed.userId) {
-      await markEvent(db, eventRow.id, 'failed', null, 'No contact_email or user_id in payload')
+      await markEvent(db, attemptCtx, 'failed', null, 'No contact_email or user_id in payload')
       return NextResponse.json({ success: true, status: 'no_email' })
     }
 
@@ -224,7 +256,7 @@ export async function POST(request) {
         .eq('email', parsed.contactEmail)
         .limit(1)
       if (contactErr) {
-        await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
+        await markEvent(db, attemptCtx, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
         return NextResponse.json({ success: true, status: 'lookup_error' })
       }
       contact = contactRows?.[0] || null
@@ -237,10 +269,35 @@ export async function POST(request) {
         .eq('glofox_member_id', parsed.userId)
         .limit(1)
       if (contactErr) {
-        await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
+        await markEvent(db, attemptCtx, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
         return NextResponse.json({ success: true, status: 'lookup_error' })
       }
       contact = contactRows?.[0] || null
+    }
+    // 6a. GLOFOXSIBLING.1 — nothing at this studio: the member's one contact
+    // may live at a sibling studio of the same organisation (one contact per
+    // email per org, mig 712). Found that way, it is the same person; the
+    // member-sync step below links it here (its contact_studios row with source glofox, mig 768).
+    let crossoverHow = null
+    if (!contact) {
+      const x = await findGlofoxCrossoverContact(db, creds.locationId, {
+        glofoxMemberId: parsed.userId || null, email: parsed.contactEmail || null, select: 'id, last_booked_at',
+      })
+      if (x.error) {
+        await markEvent(db, attemptCtx, 'failed', null, `Contact lookup across the organisation: ${x.error}`)
+        return NextResponse.json({ success: true, status: 'lookup_error' })
+      }
+      if (x.conflict) {
+        logWarn('glofox-webhook', 'Glofox member matches more than one organisation contact', {
+          locationId: creds.locationId, reason: x.conflict.reason, contact_ids: x.conflict.contact_ids,
+        })
+        await markEvent(db, attemptCtx, 'contact_ambiguous', null, x.conflict.reason)
+        return NextResponse.json({ success: true, status: 'contact_ambiguous' })
+      }
+      if (x.contact) {
+        contact = { id: x.contact.id, last_booked_at: x.contact.last_booked_at ?? null }
+        crossoverHow = x.how
+      }
     }
     // 6b. SEQ-GLOFOX.1 — real-time contact creation for brand-new Glofox
     // leads/members. MEMBER_CREATED for a contact we don't know used to
@@ -270,7 +327,26 @@ export async function POST(request) {
               } catch (e) {
                 logWarn('glofox-webhook', 'contact_created trigger threw', { err: e?.message, contact_id: memberSyncResult.contact_id })
               }
+            } else if (memberSyncResult.crossover && memberSyncResult.crossover_link?.linked) {
+              // GLOFOXSIBLING.1 — a new Glofox signup whose contact lives at a
+              // sibling studio has joined THIS studio: its contact_created
+              // sequences fire here ('joined_studio'), as the un1t sync does.
+              try {
+                await triggerSequencesForContactCreated(memberSyncResult.contact_id, { locationId: creds.locationId })
+              } catch (e) {
+                logWarn('glofox-webhook', 'contact_created (joined studio) trigger threw', { err: e?.message, contact_id: memberSyncResult.contact_id })
+              }
             }
+          } else if (memberSyncResult?.error || memberSyncResult?.action === 'ambiguous') {
+            // GLOFOXSIBLING.1 — the sync refused or failed (a refused insert, a
+            // failed lookup, two candidate contacts). Recorded as what it is,
+            // never as contact_not_found, which read as "nobody to match".
+            const why = memberSyncResult.error || memberSyncResult.reason || 'ambiguous'
+            logError('glofox-webhook', 'MEMBER_CREATED member sync did not produce a contact', {
+              locationId: creds.locationId, action: memberSyncResult.action ?? null, error: why,
+            })
+            await markEvent(db, attemptCtx, memberSyncResult.action === 'ambiguous' ? 'contact_ambiguous' : 'failed', null, `Member sync: ${why}`)
+            return NextResponse.json({ success: true, status: memberSyncResult.action === 'ambiguous' ? 'contact_ambiguous' : 'member_sync_failed' })
           }
         } else {
           memberSyncResult = { ok: false, status: r.status, reason: 'glofox_fetch_failed' }
@@ -282,7 +358,7 @@ export async function POST(request) {
     }
 
     if (!contact) {
-      await markEvent(db, eventRow.id, 'contact_not_found', null, null)
+      await markEvent(db, attemptCtx, 'contact_not_found', null, null)
       return NextResponse.json({
         success: true,
         status: 'contact_not_found',
@@ -322,9 +398,16 @@ export async function POST(request) {
       const action = dunningActionFor(invStatus, ltvResult.is_membership)
       try {
         if (action === 'enrol') {
-          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, { invoiceId: ltvResult.invoice_id, isMembership: true })
+          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, {
+            invoiceId: ltvResult.invoice_id, isMembership: true,
+            // PAYLINK.4 — the invoice's own user id when the parser carried it;
+            // capturePaymentForRun falls back to the contact's linked id.
+            glofoxUserId: ltvResult.glofox_user_id || null,
+          })
         } else if (action === 'exit') {
-          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`)
+          // PAYLINK.4b — scope the exit to THIS invoice: a run refreshed onto
+          // a newer failed invoice must not be cancelled by an older one settling.
+          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`, { invoiceId: ltvResult.invoice_id })
         }
       } catch (e) {
         logWarn('glofox-webhook', 'reactive dunning threw', { err: e?.message, contact_id: contact.id })
@@ -388,6 +471,25 @@ export async function POST(request) {
         if (!fbRows?.length) tags.push('glofox_first_booking')
       } catch (e) {
         logWarn('glofox-webhook', 'first-booking tag check threw', { err: e?.message, contact_id: contact.id })
+      }
+    }
+
+    // 6d. TRIALFOLLOWUP.1 — a paid-trial buyer's first class booking is a
+    // Schedule to Meta, and a membership after the trial is a Subscribe with
+    // its price. Both once per purchase, both best-effort, both only when the
+    // contact has a granted paid trial in the window (no-op for everyone else).
+    let trialFollowup = null
+    if (evUpper === 'BOOKING_CREATED' || evUpper === 'COURSE_BOOKING_CREATED') {
+      try {
+        trialFollowup = await sendTrialScheduleFollowup(db, { contactId: contact.id, locationId: creds.locationId, booking: payload?.Payload })
+      } catch (e) {
+        logWarn('glofox-webhook', 'trial schedule follow-up threw', { err: e?.message, contact_id: contact.id })
+      }
+    } else if (evUpper === 'MEMBERSHIP_CREATED') {
+      try {
+        trialFollowup = await sendTrialSubscribeFollowup(db, { contactId: contact.id, locationId: creds.locationId, membership: payload?.Payload })
+      } catch (e) {
+        logWarn('glofox-webhook', 'trial subscribe follow-up threw', { err: e?.message, contact_id: contact.id })
       }
     }
 
@@ -484,10 +586,14 @@ export async function POST(request) {
       }
     }
 
-    await markEvent(db, eventRow.id, 'applied', {
+    await markEvent(db, attemptCtx, 'applied', {
       contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
       service: serviceResult, membership_pause: membershipPauseResult,
       dunning: dunningResult, member_sync: memberSyncResult,
+      // GLOFOXSIBLING.1 — how a sibling studio's contact was matched, if it was.
+      crossover: crossoverHow,
+      // TRIALFOLLOWUP.1 — the Schedule / Subscribe outcome, when one applied.
+      trial_followup: trialFollowup,
     }, null)
     return NextResponse.json({
       success: true,
@@ -505,30 +611,55 @@ export async function POST(request) {
     logWarn('glofox-webhook', 'processing threw unexpectedly', {
       err: e?.message, event_type: parsed.eventType, event_id: parsed.eventId,
     })
-    await deadLetterWebhook(db, {
-      provider: 'glofox',
-      eventType: parsed.eventType || null,
-      payload,
-      error: e,
-      locationId: creds.locationId,
-    })
+    // WEBHOOKAUDIT.1 — the dead letter keeps the payload; the attempt row
+    // keeps this delivery in the entity's history. In parallel; neither throws.
+    await Promise.all([
+      deadLetterWebhook(db, {
+        provider: 'glofox',
+        eventType: parsed.eventType || null,
+        payload,
+        error: e,
+        locationId: creds.locationId,
+      }),
+      // A builder, not a row: recordGlofoxWebhookAttempt runs it inside its
+      // own try, so nothing about the attempt can throw out of this catch.
+      recordGlofoxWebhookAttempt(db, () => buildGlofoxWebhookAttempt({
+        ...attemptCtx, status: 'processing_failed', result: null, errorMessage: e?.message || 'threw',
+      })),
+    ])
     // Always 200 Glofox — we have the raw payload in dead_letter for replay.
     return NextResponse.json({ success: true, status: 'processing_failed_dead_lettered' })
   }
 }
 
-async function markEvent(db, id, status, result, errorMessage) {
-  try {
-    await db
-      .from('glofox_webhook_events')
-      .update({
-        status,
-        result,
-        error_message: errorMessage,
-        processed_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-  } catch {
-    // Audit-update failure must not 500 the webhook.
-  }
+// Marks the event row AND writes this delivery's attempt row
+// (WEBHOOKAUDIT.1). The two writes are independent, so they go in parallel:
+// no round trip is added to the delivery. Neither can throw or change the
+// response; a failure of either is one logWarn.
+async function markEvent(db, ctx, status, result, errorMessage) {
+  const processedAt = new Date().toISOString()
+  const markRow = (async () => {
+    try {
+      const { error } = await db
+        .from('glofox_webhook_events')
+        .update({
+          status,
+          result,
+          error_message: errorMessage,
+          processed_at: processedAt,
+        })
+        .eq('id', ctx.eventRowId)
+      // This { error } used to be discarded (only a throw was caught), so a
+      // refused audit update left the row at 'received' in silence.
+      if (error) logWarn('glofox-webhook', 'event row update failed', { status, code: error.code || null, err: error.message })
+    } catch (e) {
+      // Audit-update failure must not 500 the webhook.
+      logWarn('glofox-webhook', 'event row update threw', { status, err: e?.message })
+    }
+  })()
+  // A builder, not a row: it runs inside recordGlofoxWebhookAttempt's try.
+  const recordAttempt = recordGlofoxWebhookAttempt(db, () => buildGlofoxWebhookAttempt({
+    ...ctx, status, result, errorMessage, processedAt,
+  }))
+  await Promise.all([markRow, recordAttempt])
 }

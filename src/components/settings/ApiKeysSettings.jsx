@@ -71,7 +71,7 @@ export default function ApiKeysSettings({ initialKeys = [] }) {
       {/* Create */}
       <Card title="Create an API key">
         <p className="text-xs text-un1t-subtle mb-3">
-          Keys are scoped to this organization. Use them as a <code>Bearer</code> token from n8n or other
+          Keys are scoped to this organization. Use them as a <code>Bearer</code> token from your
           integrations. The secret is shown once — store it somewhere safe.
         </p>
         <div className="flex items-end gap-2">
@@ -81,7 +81,7 @@ export default function ApiKeysSettings({ initialKeys = [] }) {
                 {...p}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. n8n lead-capture"
+                placeholder="e.g. Zapier lead-capture"
                 className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
               />
             )}

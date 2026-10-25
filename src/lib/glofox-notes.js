@@ -1,6 +1,8 @@
 // GLOFOX-NOTES — pure helpers for the outbound note push + echo reconciliation.
 // No DB, no network — string building + fingerprint matching only.
 
+import { PLATFORM_NAME } from './brand-name.js'
+
 const MAX_DESCRIPTION = 500
 const ECHO_WINDOW_MS = 2 * 60 * 60 * 1000 // 2h — exact-text match makes this safe
 
@@ -11,8 +13,8 @@ const ECHO_WINDOW_MS = 2 * 60 * 60 * 1000 // 2h — exact-text match makes this 
  */
 export function buildInteractionDescription({ authorName, content } = {}) {
   const prefix = authorName && authorName.trim()
-    ? `[UN1T CRM · ${authorName.trim()}] `
-    : '[UN1T CRM] '
+    ? `[${PLATFORM_NAME} · ${authorName.trim()}] `
+    : `[${PLATFORM_NAME}] `
   const full = prefix + (content || '')
   if (full.length <= MAX_DESCRIPTION) return { description: full, truncated: false }
   // Reserve 1 char for the ellipsis marker.

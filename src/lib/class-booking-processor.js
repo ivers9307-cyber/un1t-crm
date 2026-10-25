@@ -4,28 +4,116 @@
 // returner with nothing to book with goes to staff review — and a
 // returner is never auto-granted a fresh trial. Brand-new leads: ensure a
 // Glofox account + trial credit, book the class, send the
-// booking_class_confirmed WhatsApp. Any failure → review.
-import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCredits, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+// booking_class_confirmed WhatsApp. Any failure → review, except a read
+// that could not be made (unreadable settings, an unreadable credits
+// balance): those THROW so the queue retries them first.
+import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCreditsResult, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
+import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { hasBookableMembership, personRowsForContact, corroborated, reusableSibling, electWriteAccount, chunkIds } from '@/lib/person-accounts'
-import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
+import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
+import { isHandBookedEventId, isManualEventId, isUn1tEventId } from '@/lib/manual-timetable'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
+import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
+import { notifyFlowBookingOutcome } from '@/lib/whatsapp-flow/booking-notice'
 
-const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
-function classLabel(startsAt) {
+// TZ.7: the class's start (an instant, from Glofox or the studio's timetable)
+// labelled on the STUDIO's clock, for the approval card and the customer's
+// WhatsApp confirmation. Same Intl options as before, so a Dublin studio's
+// text is byte-identical.
+const LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
+export function classLabel(startsAt, zone = DEFAULT_TZ) {
   if (!startsAt) return 'your class'
   const d = new Date(startsAt)
-  return isNaN(d.getTime()) ? 'your class' : labelFmt.format(d)
+  return isNaN(d.getTime()) ? 'your class' : formatInZone(d, zone, LABEL_OPTS, 'en-IE')
 }
-const MAX_ATTEMPTS = 3 // keep in sync with the process-class-bookings cron
+// Display only: an unreadable zone labels in DEFAULT_TZ rather than failing a
+// booking or a review card over a label.
+function requestZone(db, request) {
+  return getLocationZone(db, request?.location_id).catch(() => DEFAULT_TZ)
+}
+const MAX_ATTEMPTS = CLASS_BOOKING_MAX_ATTEMPTS // one constant with the queue and the card copy
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// FLOWACK.1 — tell a WhatsApp Flow customer the outcome (a no-op for any row
+// that did not come from the Flow; whatsapp-flow/booking-notice.js decides and
+// owns the copy). Best-effort by construction: a notice never changes, delays
+// past its own send, or fails a booking outcome.
+async function flowNotice(db, request, args) {
+  try { await notifyFlowBookingOutcome(db, request, args) } catch (e) { logWarn('cbp', 'flow outcome notice failed', { requestId: request?.id ?? null, err: e }) }
+}
 
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
 }
-async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null } = {}) {
+
+// CBPCREDITREAD.1 — a Glofox credits read that FAILED (still 429/5xx after
+// glofoxFetch's own retries, any other non-2xx, a network throw) is
+// "unknown", never "no credits". fetchUserCredits collapsed it into [], so the
+// booking reached staff as needs_credit_grant (whose APPROVE buys the trial
+// membership: membership-requests/[id]/route.js) or prior_attendance ("no
+// usable balance was found"), and staff were told to grant a credit the
+// member may already hold. A THROW is the queue's retry signal
+// (class-booking-queue.js): re-queued under MAX_ATTEMPTS, then a staff card
+// whose reason is reviewReason, 'credit_check_failed' (its copy says the
+// balance is unknown, and approving it grants nothing).
+//
+// reviewOptions is routeToReview's 4th argument, passed through by the queue:
+// the throw can come AFTER the processor elected a sibling's account for the
+// write, and the card filed at the cap must still name it (executing_contact_id
+// + elected_glofox_member_id). Without it, approving falls back to the funnel
+// contact, which has no Glofox account, and answers NOT_EXECUTABLE.
+// creditUnreadAccounts names WHICH read failed ({ role: 'booking_account' |
+// 'linked_account', contact_id, glofox_member_id }), so the card can tell
+// staff which account to check.
+export class CreditReadError extends Error {
+  constructor({ personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null } = {}) {
+    super('credit_check_failed')
+    this.name = 'CreditReadError'
+    this.reviewReason = 'credit_check_failed'
+    this.reviewOptions = { personContactIds, executingContactId, electedMemberId, creditUnreadAccounts }
+  }
+}
+
+// A credits read as a three-way answer: { ok: true, remaining > 0 }, a known
+// nothing ({ ok: true, remaining: 0 | null }; computeCreditsRemaining is null
+// for "no active pack"), or unread ({ ok: false }).
+async function readCredits(creds, memberId) {
+  const { ok, credits } = await fetchUserCreditsResult(creds, memberId)
+  return ok ? { ok: true, remaining: computeCreditsRemaining(credits) } : { ok: false, remaining: null }
+}
+// Exported for class-booking-queue.js (REGISTRYREAD.1a): a booking that
+// exhausts its retries on a THROW lands here too, so staff get a card rather
+// than a bare needs_review nobody is shown. Also run by the cron's reaper for
+// rows stuck in 'processing' past the attempt cap.
+// UN1TWRITE.22 — provider: 'un1t_online' marks a card the un1t.online
+// executor runs (details.provider); rowStatus / rowLastError let a
+// record-only card leave the queue row 'failed' with its own reason (the
+// trial-used email). Existing callers pass neither and are unchanged.
+export async function routeToReview(db, request, reason, { personContactIds = null, executingContactId = null, electedMemberId = null, creditUnreadAccounts = null, trialGrant = null, provider = null, rowStatus = 'needs_review', rowLastError = null } = {}) {
   let approvalId = null
+  const zone = await requestZone(db, request)
+  // A row that ALREADY names a card keeps it while that card is still pending
+  // — never file a second one for the same booking. The person-wide lookup
+  // below would usually find it too, but only by (contact, event), so a card
+  // filed against a sibling contact would slip through it. A card that has
+  // since been decided is not reused (the row would point at a closed card);
+  // an unreadable one IS reused, because a second card staff could approve
+  // twice is the worse of the two errors.
+  if (request.approval_request_id) {
+    try {
+      const { data: linked, error } = await db.from('agent_membership_requests')
+        .select('id, status').eq('id', request.approval_request_id).maybeSingle()
+      if (error) throw error
+      if (linked?.status === 'pending') approvalId = linked.id
+    } catch (e) {
+      logWarn('cbp', 'linked review lookup failed; keeping the existing card', { err: e })
+      approvalId = request.approval_request_id
+    }
+  }
   // Reuse an existing pending review item for this (PERSON, class) so a
   // re-submit/retry can't create a duplicate that staff approve twice.
   //
@@ -47,25 +135,28 @@ async function routeToReview(db, request, reason, { personContactIds = null, exe
   const dedupeIds = (personContactIds && personContactIds.length)
     ? personContactIds
     : [request.contact_id]
-  try {
-    for (const batch of chunkIds(dedupeIds)) {
-      const { data: existing, error } = await db.from('agent_membership_requests')
-        .select('id').in('contact_id', batch).eq('kind', 'class_booking').eq('status', 'pending')
-        .contains('details', { event_id: request.glofox_event_id }).limit(1).maybeSingle()
-      if (error) throw error
-      if (existing?.id) { approvalId = existing.id; break }
-    }
-  } catch (e) { logWarn('cbp', 'review lookup failed', { err: e }) }
+  if (!approvalId) {
+    try {
+      for (const batch of chunkIds(dedupeIds)) {
+        const { data: existing, error } = await db.from('agent_membership_requests')
+          .select('id').in('contact_id', batch).eq('kind', 'class_booking').eq('status', 'pending')
+          .contains('details', { event_id: request.glofox_event_id }).limit(1).maybeSingle()
+        if (error) throw error
+        if (existing?.id) { approvalId = existing.id; break }
+      }
+    } catch (e) { logWarn('cbp', 'review lookup failed', { err: e }) }
+  }
 
   if (!approvalId) {
     try {
       const { data: amr } = await db.from('agent_membership_requests').insert({
         location_id: request.location_id, contact_id: request.contact_id, kind: 'class_booking', status: 'pending',
         details: {
-          event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at),
+          event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at, zone),
           // ISO start for the mobile queue's countdown chip (class_time is a label).
           starts_at: request.starts_at || null,
           mode: 'draft', source: 'start_funnel', reason,
+          ...(provider ? { provider } : {}),
           // PERSON-ACCT.9 — the row is FILED against the funnel contact
           // (attribution: ctwa_clid, and the phone the customer just typed is
           // where the confirmation goes), but the write may belong to a
@@ -74,9 +165,26 @@ async function routeToReview(db, request, reason, { personContactIds = null, exe
           // ACCOUNT_MISMATCH cross-check has something to compare.
           ...(executingContactId ? { executing_contact_id: executingContactId } : {}),
           ...(electedMemberId ? { elected_glofox_member_id: electedMemberId } : {}),
+          // CBPCREDITREAD.1 — credit_check_failed: which account's credits
+          // could not be read (whyFlagged names it on the card).
+          ...(Array.isArray(creditUnreadAccounts) && creditUnreadAccounts.length
+            ? { credit_unread_accounts: creditUnreadAccounts }
+            : {}),
           ...(request.payment_status === 'paid'
             ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
             : {}),
+          // TRIALGRANT.1 — approving needs_credit_grant buys a trial
+          // (agent/trial-grant.js). The funnel block may name its own trial,
+          // which the mint path buys; carry it so the approve buys the same
+          // one instead of the location default.
+          ...(reason === 'needs_credit_grant' && request.trial_membership_id && request.trial_plan_code
+            ? { trial_membership_id: request.trial_membership_id, trial_plan_code: request.trial_plan_code }
+            : {}),
+          // GLOFOXPOSTRETRY.1 — a mint whose trial purchase got no clear
+          // answer: the approve route reads this as details.trial_grant (the
+          // priorGrant of grantTrialBeforeBooking), so even the FIRST approval
+          // books only if credits show and never buys a second trial.
+          ...(trialGrant ? { trial_grant: trialGrant } : {}),
         },
       }).select('id').maybeSingle()
       approvalId = amr?.id || null
@@ -89,9 +197,13 @@ async function routeToReview(db, request, reason, { personContactIds = null, exe
     // the attempt cap, else mark failed so an operator query surfaces it.
     const next = (request.attempts || 0) + 1 >= MAX_ATTEMPTS ? 'failed' : 'queued'
     await setStatus(db, request.id, { status: next, last_error: `review_unavailable:${reason}` })
+    // FLOWACK.1 — re-queued: the next attempt decides what the customer hears.
+    // Terminal with no card: they are still told the team will confirm (and
+    // booking-notice logs the missing card at error).
+    if (next === 'failed') await flowNotice(db, request, { outcome: 'failed' })
     return { outcome: next === 'failed' ? 'failed' : 'needs_review', detail: `review_unavailable:${reason}` }
   }
-  await setStatus(db, request.id, { status: 'needs_review', last_error: reason, approval_request_id: approvalId })
+  await setStatus(db, request.id, { status: rowStatus, last_error: rowLastError ?? reason, approval_request_id: approvalId })
   // APPROVALS-STUDIO.1 — a review item is a customer waiting; ping the
   // approvers. Deduped per (request, recipient), so the reuse-existing
   // path above can't double-notify. Best-effort.
@@ -102,16 +214,61 @@ async function routeToReview(db, request, reason, { personContactIds = null, exe
       locationId: request.location_id,
       kind: 'class_booking',
       customerName: request.customer_name,
-      summary: [request.class_name, classLabel(request.starts_at), `needs review: ${reason}`].filter(Boolean).join(' · '),
+      summary: [request.class_name, classLabel(request.starts_at, zone), `needs review: ${reason}`].filter(Boolean).join(' · '),
     })
   } catch (e) { logWarn('cbp', 'approval notify failed', { err: e }) }
+  // FLOWACK.1 — a Flow customer hears that the team is confirming, and the card
+  // is linked to their thread so approving or declining it messages them. Not
+  // for a record-only card that leaves the row with its own terminal status
+  // (un1t's trial_used_options_sent): that customer was just emailed what to
+  // do, and "the team is confirming your class" would contradict it.
+  if (rowStatus === 'needs_review') await flowNotice(db, request, { outcome: 'needs_review', approvalId })
   return { outcome: 'needs_review', detail: reason }
 }
 
 export async function processClassBookingRequest(db, request) {
   const creds = await glofoxCredentialsForLocation(db, request.location_id)
+  // REGISTRYREAD.1a: an unreadable settings row is not "not configured".
+  // 'failed' is terminal and nothing retries it; a THROW is the queue's
+  // documented retry signal (class-booking-queue.js: re-queue under
+  // MAX_ATTEMPTS, then needs_review with a staff card, reason
+  // 'processing_error'). A blip costs a 2-minute retry, never the
+  // customer's class.
+  if (creds.readError) throw new Error(creds.readError)
   if (missingGlofoxCredentialsForLocation(creds).length) {
+    // MANUALFUNNEL.1 — a class off a hand-written timetable (a studio with no
+    // Glofox: Hatch Street books on its own platform) is never booked from
+    // here. It goes straight to staff, who create the account and the booking
+    // by hand and then approve the card to record it. HATCHSTART.1: so is a
+    // class off a un1t.online studio's synced timetable ('un1t:' ids).
+    //
+    // UN1TWRITE.22 — at a un1t.online studio with the funnel on, a class off
+    // its synced timetable is booked by the un1t.online processor. With the
+    // funnel off a 'un1t:' id is still booked by hand (a request filed before
+    // the switch flips is never lost), and any other id gets a card. A failed
+    // settings read throws: the queue's retry signal.
+    if (!isManualEventId(request.glofox_event_id)) {
+      let un1t
+      try {
+        un1t = await readUn1tWriteSettings(db, request.location_id)
+      } catch (e) {
+        // A bare uuid is only ever a un1t.online class: its cap card must run
+        // the un1t.online executor. A 'un1t:' id falls back to the manual record.
+        if (UUID_RE.test(String(request.glofox_event_id || ''))) e.reviewOptions = { provider: 'un1t_online' }
+        throw e
+      }
+      if (un1t.membershipSource === 'un1t_online') {
+        const bareUuid = UUID_RE.test(String(request.glofox_event_id || ''))
+        if (un1t.settings.funnelEnabled && (isUn1tEventId(request.glofox_event_id) || bareUuid)) {
+          const { processUn1tClassBookingRequest } = await import('@/lib/un1t-online-booking-processor')
+          return processUn1tClassBookingRequest(db, request, { settings: un1t.settings, studioName: un1t.studioName, organizationId: un1t.organizationId })
+        }
+        if (bareUuid) return routeToReview(db, request, 'un1t_funnel_off', { provider: 'un1t_online' })
+      }
+    }
+    if (isHandBookedEventId(request.glofox_event_id)) return routeToReview(db, request, 'manual_booking')
     await setStatus(db, request.id, { status: 'failed', last_error: 'glofox_not_configured' })
+    await flowNotice(db, request, { outcome: 'failed' })
     return { outcome: 'failed', detail: 'glofox_not_configured' }
   }
   const { data: contact } = await db.from('contacts')
@@ -184,8 +341,15 @@ export async function processClassBookingRequest(db, request) {
   // confirmation goes to the number the customer just typed).
   let executingContactId = null
   let electedMemberId = null
-  const toReview = (reason) => routeToReview(db, request, reason, {
+  const toReview = (reason, { trialGrant = null } = {}) => routeToReview(db, request, reason, {
+    personContactIds, executingContactId, electedMemberId, trialGrant,
+  })
+  // CBPCREDITREAD.1 — the retry signal carries the same account the card
+  // would have named (read at throw time, like toReview above).
+  // unreadCreditAccounts (below) is every account whose read failed.
+  const creditReadError = () => new CreditReadError({
     personContactIds, executingContactId, electedMemberId,
+    creditUnreadAccounts: unreadCreditAccounts.length ? [...unreadCreditAccounts] : null,
   })
 
   // AGENT-FUNNEL-CREDITS.1 — prior attendance alone no longer blocks the
@@ -294,18 +458,37 @@ export async function processClassBookingRequest(db, request) {
   // fetch order (same rule as electWriteAccount). ClassPass rows are never
   // written to: those bookings are governed by ClassPass's own credit/refund
   // ledger, so a booking made directly against the Glofox member would never
-  // reach it. An unreadable sibling read is skipped, never counted as empty.
-  async function rescueSiblingBalance() {
+  // reach it. An unreadable sibling read is skipped, never counted as empty:
+  // if no readable sibling has a balance, the rescue THROWS CreditReadError
+  // (CBPCREDITREAD.1) and the queue retries.
+  // CBPCREDITREAD.1 — set when a sibling's credits could not be read.
+  //
+  // membershipOnly: the rescue made when the ANCHOR's own credits read
+  // failed. Only a sibling with a BOOKABLE MEMBERSHIP qualifies (it needs no
+  // credits read, as on main); a sibling whose only asset is credits is not
+  // spent while the anchor's own balance is unknown, and no sibling is read.
+  // The caller throws CreditReadError when this finds nobody.
+  let siblingCreditsUnread = false
+  // CBPCREDITREAD.1 — which accounts could not be read, for the card.
+  const unreadCreditAccounts = []
+  async function rescueSiblingBalance({ membershipOnly = false } = {}) {
     const rescueable = reusableAccounts
       .filter((row) => row.glofox_member_id && row.glofox_member_id !== memberId)
       .filter((row) => row.glofox_membership_status !== 'classpass_payg')
       .sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0))
     for (const row of rescueable) {
       let usable = hasBookableMembership(row)
-      if (!usable) {
-        let siblingCredits = null
-        try { siblingCredits = computeCreditsRemaining(await fetchUserCredits(creds, row.glofox_member_id)) } catch (e) { logWarn('cbp', 'sibling credit check failed', { err: e }); continue }
-        usable = siblingCredits > 0
+      if (!usable && !membershipOnly) {
+        const siblingRead = await readCredits(creds, row.glofox_member_id)
+        if (!siblingRead.ok) {
+          // Unknown is not empty: note it and keep looking. Another sibling
+          // that DOES hold a balance still books.
+          siblingCreditsUnread = true
+          unreadCreditAccounts.push({ role: 'linked_account', contact_id: row.id, glofox_member_id: row.glofox_member_id })
+          logWarn('cbp', 'sibling credit check unreadable', { requestId: request.id })
+          continue
+        }
+        usable = siblingRead.remaining > 0
       }
       if (!usable) continue
       memberId = row.glofox_member_id
@@ -314,27 +497,50 @@ export async function processClassBookingRequest(db, request) {
       balanceRow = row
       return true
     }
+    // Nobody we could read has a balance. If someone could NOT be read,
+    // "this person has nothing to book with" is not known: retry, rather
+    // than file prior_attendance / needs_credit_grant on a guess.
+    if (siblingCreditsUnread) throw creditReadError()
     return false
+  }
+
+  // The returner's balance gate: book against an existing balance, never a
+  // fresh trial. Returns the review outcome when there is nothing to book
+  // with, null to go on and book. Run where attendance is known: below, and
+  // again after the mint LINKED an existing account (GLOFOXWRITEJUDGE.1).
+  async function returnerBalanceGate() {
+    // computeCreditsRemaining is null for BOTH "no credits" and "membership
+    // without per-class credit records" — the CRM's synced membership status
+    // breaks the tie: a bookable membership is bookable (Glofox arbitrates,
+    // and a rejection routes to review as booking_failed below). Zero /
+    // null with no bookable membership → staff.
+    // hasBookableMembership, NOT status === 'active' — that string never
+    // occurs in contacts.glofox_membership_status (see person-accounts.js);
+    // this exact check was dead code until PERSON-ACCT.3 fixed it here.
+    const activeMembership = hasBookableMembership(balanceRow)
+    const read = await readCredits(creds, memberId)
+    // CBPCREDITREAD.1 — an UNREAD balance is not "nothing to book with":
+    // retry rather than tell staff the returner has no balance. A bookable
+    // membership still books without it, exactly as before, on this account
+    // or (the rescue that needs no read) on a reusable sibling's.
+    if (!read.ok && !activeMembership) {
+      unreadCreditAccounts.push({ role: 'booking_account', contact_id: balanceRow?.id ?? null, glofox_member_id: memberId })
+      if (!(await rescueSiblingBalance({ membershipOnly: true }))) {
+        logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
+        throw creditReadError()
+      }
+    } else if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
+      return toReview('prior_attendance')
+    }
+    return null
   }
 
   let grantedTrial = false
   if (attended) {
     // Attended before with no Glofox account at all → nothing to book with.
     if (!memberId) return toReview('prior_attendance')
-    let credits = null
-    try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
-    // computeCreditsRemaining is null for BOTH "no credits" and "membership
-    // without per-class credit records" — the CRM's synced membership status
-    // breaks the tie: a bookable membership is bookable (Glofox arbitrates,
-    // and a rejection routes to review as booking_failed below). Zero /
-    // null / unreadable with no bookable membership → staff.
-    // hasBookableMembership, NOT status === 'active' — that string never
-    // occurs in contacts.glofox_membership_status (see person-accounts.js);
-    // this exact check was dead code until PERSON-ACCT.3 fixed it here.
-    const activeMembership = hasBookableMembership(balanceRow)
-    if (!(credits > 0) && !activeMembership && !(await rescueSiblingBalance())) {
-      return toReview('prior_attendance')
-    }
+    const gate = await returnerBalanceGate()
+    if (gate) return gate
     // Fall through to the booking — consuming the EXISTING balance, never a
     // fresh trial.
   } else if (!memberId) {
@@ -356,19 +562,60 @@ export async function processClassBookingRequest(db, request) {
       ? { membershipId: request.trial_membership_id, planCode: request.trial_plan_code }
       : null
     const res = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: true, attachTrial: true, trialOverride })
+    // TRIALGRANT.1 — the account WAS created and linked, but its trial did not
+    // take. That is exactly the card whose approve buys the trial and then
+    // books (needs_credit_grant), not account_needs_review, whose copy says
+    // the account match needs a human check and whose approve books with no
+    // credit behind it.
+    if (res.status === 'needs_review' && res.trial_failed === true && res.glofox_member_id) {
+      // GLOFOXPOSTRETRY.1 review — a purchase with no clear answer (a 5xx or
+      // no reply) may have bought the trial. Without this stamp the card's
+      // first approval (priorGrant null, not a retry) would buy blind when
+      // the balance reads empty or unreadable, stacking a second trial.
+      return toReview('needs_credit_grant', res.trial_outcome_unknown === true
+        // TRIALPURCHASE.2 (d): named by member, so another card for the same
+        // person finds the doubt (grantTrialBeforeBooking) and buys nothing.
+        ? { trialGrant: { ok: false, code: 'TRIAL_GRANT_FAILED', outcome_unknown: true, glofox_member_id: res.glofox_member_id } }
+        : {})
+    }
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {
       return toReview(`account_${res.status || 'failed'}`)
     }
     memberId = res.glofox_member_id
     grantedTrial = res.status === 'created'
+    // GLOFOXWRITEJUDGE.1 — 'linked' means Glofox already held an account for
+    // this email (EMAIL_ALREADY_IN_USE, found on a second search). Attendance
+    // was read above with no account to read, so read it now on the linked
+    // one: a returner must reach the returner gate (prior_attendance), never
+    // needs_credit_grant, whose approve buys a trial. A failed read is not
+    // "never attended": it goes to review like the read above.
+    if (res.status === 'linked') {
+      const { ok: attendOk, bookings } = await fetchUserBookingsResult(creds, memberId, { windowDays: 365 * 5 })
+      if (!attendOk) return toReview('attendance_check_failed')
+      if (bookings.some((b) => b.attended === true)) {
+        attended = true
+        const gate = await returnerBalanceGate()
+        if (gate) return gate
+      }
+    }
   }
   // Existing never-attended account, no live credit → review (staff grant the
-  // trial + approve); an uncertain credit read also fails safe to review.
+  // trial + approve); an unreadable credit read is retried (CBPCREDITREAD.1).
   // The attended path above did its own balance check.
   if (!attended && !grantedTrial) {
-    let credits = null
-    try { credits = computeCreditsRemaining(await fetchUserCredits(creds, memberId)) } catch (e) { logWarn('cbp', 'credit check failed', { err: e }) }
-    if (credits == null || credits <= 0) {
+    // CBPCREDITREAD.1 — needs_credit_grant only on a read that WORKED: its
+    // approve path buys the trial membership, so it must never rest on a read
+    // that failed. Unread → first the rescue that needs no read (a reusable
+    // sibling's bookable membership), else retry (the queue), then
+    // credit_check_failed.
+    const read = await readCredits(creds, memberId)
+    if (!read.ok) {
+      unreadCreditAccounts.push({ role: 'booking_account', contact_id: balanceRow?.id ?? null, glofox_member_id: memberId })
+      if (!(await rescueSiblingBalance({ membershipOnly: true }))) {
+        logWarn('cbp', 'credit check unreadable; the queue retries', { requestId: request.id })
+        throw creditReadError()
+      }
+    } else if (read.remaining == null || read.remaining <= 0) {
       // PERSON-ACCT.9 — before asking staff to grant a credit, check the rest
       // of this person: a corroborated sibling may already hold a balance
       // (the same rescue the attended path makes). Only a person-wide empty
@@ -391,9 +638,18 @@ export async function processClassBookingRequest(db, request) {
   // Persist the Glofox booking id so re-runs and the /approvals view can see
   // the real booking (null on the already-booked re-run path).
   await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingId })
+  let confirmed = false
+  let classTime = null
   try {
-    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at)] })
+    const zone = await requestZone(db, request)
+    classTime = classLabel(request.starts_at, zone)
+    const confirm = await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, purpose: 'class_confirmed', bodyParams: [firstName, request.class_name || 'your class', classTime] })
+    confirmed = confirm?.sent === true
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
+  // FLOWACK.1 — the class_confirmed template is the confirmation. Only when it
+  // did not go (no approved template at the studio, a refusal) does a Flow
+  // customer get the in-thread confirmation instead: never both.
+  if (!confirmed) await flowNotice(db, request, { outcome: 'booked', classTime })
   // CTWA attribution: a confirmed booking is the conversion the ad campaign
   // optimises on. No-ops unless the contact carries a ctwa_clid and the
   // location has settings.meta_ads.dataset_id.

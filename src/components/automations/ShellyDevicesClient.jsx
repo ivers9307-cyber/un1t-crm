@@ -107,7 +107,7 @@ export function syncNamesSummary({
 
 const MSG_TONE = { error: 'text-red-700', warn: 'text-amber-700', ok: 'text-un1t-subtle' }
 
-export default function ShellyDevicesClient({ locationName, locationTz, glofoxConnected, canManageConnection }) {
+export default function ShellyDevicesClient({ locationName, locationTz, glofoxConnected, glofoxUnknown = false, canManageConnection }) {
   // Last GOOD payloads. Null means "has never loaded", NOT "empty".
   const [conn, setConn] = useState(null)
   const [dev, setDev] = useState(null)
@@ -404,6 +404,7 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
               connected={connected}
               locationTz={locationTz}
               glofoxConnected={glofoxConnected}
+              glofoxUnknown={glofoxUnknown}
               onChanged={load}
             />
           ))}

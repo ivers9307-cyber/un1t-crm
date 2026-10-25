@@ -22,7 +22,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/revolut', () => ({ verifyWebhookSignature: vi.fn(), getOrder: vi.fn() }))
-vi.mock('@/lib/deposit-receipts', () => ({ sendDepositReceiptSms: vi.fn(async () => ({ status: 'sent' })) }))
 vi.mock('@/lib/orders', () => ({ syncOrderFromCarDeposit: vi.fn(async () => {}) }))
 vi.mock('@/lib/contact-events', () => ({
   emitEvent: vi.fn(async () => {}),
@@ -77,7 +76,7 @@ const CAR = {
   deposit_amount: 500, deposit_paid_amount: null, deposit_receipt_sent_at: null,
   buyer_phone: '+353871234567', buyer_name: 'Sarah', buyer_email: null,
   make: 'Tesla', model: 'Model 3', irish_reg: '241-D-1',
-  locations: { id: 'loc-1', name: 'CCF', car_deposit_receipt_sms_enabled: true, twilio_alpha_sender_id: 'CCFautos' },
+  locations: { id: 'loc-1', name: 'CCF' },
 }
 
 beforeEach(() => {
@@ -210,5 +209,198 @@ describe('POST /api/webhooks/revolut', () => {
     const patch = db._updates[0].payload
     expect(patch.deposit_status).toBe('paid')
     expect('deposit_paid_at' in patch).toBe(false) // original timestamp preserved
+  })
+})
+
+// ── W0.6b — the buyer's contact is resolved inside the CAR'S ORGANISATION ──
+//
+// contacts_email_org_unique (mig 712) is per organisation, so one address can
+// be a contact at several tenants. The buyer lookup was an estate-wide
+// `.ilike(email).maybeSingle()`: a second holder → PGRST116 → "no contact"
+// (no sequence enrolment), and a lone holder at ANOTHER tenant was enrolled
+// in THIS tenant's order_* sequence. The lookup now carries
+// `.in('location_id', orgLocationIdsFor(car.location_id))` and picks the
+// car's own studio first (pickContact). cars.location_id is NOT NULL (mig
+// 025), so there is always a scope.
+import { ilikeMatches } from '@/lib/like-escape.test-helpers'
+import { triggerSequencesForOrderStatus } from '@/lib/sequences'
+import { emitEvent } from '@/lib/contact-events'
+
+// The cars row is PROJECTED to the columns the handler's select names, the
+// way PostgREST answers. Before REVOLUT.1 this mock handed back the whole
+// fixture whatever the select said, which is how a select that never named
+// buyer_email passed these tests while the branch was dead in production.
+function projectSelect(row, select) {
+  const flat = select.replace(/\w+\s*\([^)]*\)/g, (m) => m.split('(')[0])
+  const cols = flat.split(',').map((c) => c.trim()).filter(Boolean)
+  return Object.fromEntries(cols.filter((c) => c in row).map((c) => [c, row[c]]))
+}
+
+function makeOrgDb({ car, locations = [], contacts = [] }) {
+  const contactLookups = []
+  const selects = []
+  function from(table) {
+    const b = { _op: 'select', _filters: [], _limit: null, _payload: null, _select: null }
+    const rows = () => {
+      let out = table === 'cars'
+        ? (car ? [b._select ? { ...projectSelect(car, b._select), deposit_revolut_order_id: car.deposit_revolut_order_id } : car] : [])
+        : table === 'locations' ? locations : table === 'contacts' ? contacts : []
+      for (const [kind, col, val] of b._filters) {
+        if (kind === 'eq') out = out.filter((r) => r[col] === val)
+        if (kind === 'neq') out = out.filter((r) => r[col] !== val)
+        if (kind === 'in') out = out.filter((r) => val.includes(r[col]))
+        if (kind === 'ilike') out = out.filter((r) => ilikeMatches(val, r[col]))
+      }
+      if (typeof b._limit === 'number') out = out.slice(0, b._limit)
+      return out
+    }
+    const settle = (shape) => {
+      if (b._op === 'update') return Promise.resolve({ data: null, error: null })
+      if (table === 'contacts') contactLookups.push({ filters: b._filters, limit: b._limit })
+      const out = rows()
+      if (shape === 'single') {
+        return out.length > 1
+          ? Promise.resolve({ data: null, error: { code: 'PGRST116', message: 'multiple rows' } })
+          : Promise.resolve({ data: out[0] || null, error: null })
+      }
+      return Promise.resolve({ data: out, error: null })
+    }
+    b.select = (cols) => { if (b._op === 'select' && typeof cols === 'string') { b._select = cols; selects.push({ table, cols }) } return b }
+    b.update = (payload) => { b._op = 'update'; b._payload = payload; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.neq = (col, val) => { b._filters.push(['neq', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.ilike = (col, val) => { b._filters.push(['ilike', col, val]); return b }
+    b.limit = (n) => { b._limit = n; return b }
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+  return { from, _contactLookups: contactLookups, _selects: selects }
+}
+
+describe('POST — the buyer contact is matched inside the car\'s organisation (W0.6b)', () => {
+  const LOC_CCF = 'loc-ccf'
+  const LOC_CCF_2 = 'loc-ccf-2'
+  const LOC_UN1T = 'loc-un1t'
+  const LOCATIONS = [
+    { id: LOC_CCF, organization_id: 'org-ccf' },
+    { id: LOC_CCF_2, organization_id: 'org-ccf' },
+    { id: LOC_UN1T, organization_id: 'org-un1t' },
+  ]
+  const BUYER_CAR = { ...CAR, deposit_revolut_order_id: 'ord-1', location_id: LOC_CCF, buyer_email: 'Buyer@Example.com', locations: { id: LOC_CCF, name: 'CCF' } }
+  const AT_CCF = { id: 'c-ccf', location_id: LOC_CCF, email: 'buyer@example.com', created_at: '2026-02-01T00:00:00Z' }
+  const AT_CCF_2 = { id: 'c-ccf-2', location_id: LOC_CCF_2, email: 'buyer@example.com', created_at: '2025-01-01T00:00:00Z' }
+  const AT_UN1T = { id: 'c-un1t', location_id: LOC_UN1T, email: 'buyer@example.com', created_at: '2024-01-01T00:00:00Z' }
+
+  beforeEach(() => {
+    verifyWebhookSignature.mockReturnValue(true)
+    recordWebhookEvent.mockResolvedValue({ seen: false })
+    getOrder.mockResolvedValue({ state: 'completed', amount: 50000 })
+  })
+
+  it('enrols the contact at the car\'s own studio, through a location-scoped lookup', async () => {
+    const db = makeOrgDb({ car: BUYER_CAR, locations: LOCATIONS, contacts: [AT_UN1T, AT_CCF] })
+    createServerClient.mockReturnValue(db)
+
+    expect((await POST(makeRequest())).status).toBe(200)
+
+    expect(triggerSequencesForOrderStatus).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-ccf', locationId: LOC_CCF }))
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-ccf' }))
+    const lookup = db._contactLookups.find((l) => l.filters.some(([k, c]) => k === 'ilike' && c === 'email'))
+    expect(lookup.filters).toContainEqual(['in', 'location_id', expect.arrayContaining([LOC_CCF, LOC_CCF_2])])
+    expect(lookup.filters.find(([k, c]) => k === 'in' && c === 'location_id')[2]).not.toContain(LOC_UN1T)
+  })
+
+  it('a sibling studio of the same organisation is still a match', async () => {
+    const db = makeOrgDb({ car: BUYER_CAR, locations: LOCATIONS, contacts: [AT_CCF_2] })
+    createServerClient.mockReturnValue(db)
+
+    await POST(makeRequest())
+
+    expect(triggerSequencesForOrderStatus).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-ccf-2' }))
+  })
+
+  it('never enrols another organisation\'s contact, even as the only holder', async () => {
+    const db = makeOrgDb({ car: BUYER_CAR, locations: LOCATIONS, contacts: [AT_UN1T] })
+    createServerClient.mockReturnValue(db)
+
+    expect((await POST(makeRequest())).status).toBe(200)
+
+    expect(triggerSequencesForOrderStatus).not.toHaveBeenCalled()
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ contactId: null, contactEmail: 'Buyer@Example.com' }))
+  })
+
+  it('two holders in the organisation no longer cancel each other out (no PGRST116 → nobody)', async () => {
+    const db = makeOrgDb({ car: BUYER_CAR, locations: LOCATIONS, contacts: [AT_CCF_2, AT_CCF] })
+    createServerClient.mockReturnValue(db)
+
+    await POST(makeRequest())
+
+    // The car's own studio beats the older sibling row.
+    expect(triggerSequencesForOrderStatus).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-ccf' }))
+  })
+
+  it('a failed sibling read narrows to the car\'s studio, never the estate', async () => {
+    const db = makeOrgDb({ car: BUYER_CAR, locations: [], contacts: [AT_UN1T, AT_CCF_2] })
+    createServerClient.mockReturnValue(db)
+
+    await POST(makeRequest())
+
+    expect(triggerSequencesForOrderStatus).not.toHaveBeenCalled()
+    const lookup = db._contactLookups.find((l) => l.filters.some(([k, c]) => k === 'ilike' && c === 'email'))
+    expect(lookup.filters).toContainEqual(['in', 'location_id', [LOC_CCF]])
+  })
+})
+
+// ── REVOLUT.1 — the cars select must name buyer_email ─────────────────
+//
+// The contact + order_* sequence branch reads car.buyer_email, and so does
+// syncOrderFromCarDeposit (it returns null without it). The select never named
+// the column, so in production car.buyer_email was undefined and neither the
+// orders ledger, the contact event nor the sequence enrolment ever ran from
+// this webhook.
+describe('POST — the car-buyer branch actually runs (REVOLUT.1)', () => {
+  const LOCATIONS = [{ id: 'loc-1', organization_id: 'org-1' }]
+  const BUYER = { id: 'c-1', location_id: 'loc-1', email: 'buyer@example.com', created_at: '2026-01-01T00:00:00Z' }
+  const carsSelect = (db) => db._selects.find((s) => s.table === 'cars')?.cols || ''
+  const columns = (sel) => sel.replace(/\w+\s*\([^)]*\)/g, '').split(',').map((c) => c.trim()).filter(Boolean)
+
+  beforeEach(() => {
+    getOrder.mockResolvedValue({ state: 'completed', amount: 50000 })
+  })
+
+  it('the cars select names buyer_email and every column the orders sync reads', async () => {
+    const db = makeOrgDb({ car: { ...CAR, buyer_email: 'buyer@example.com', deposit_revolut_order_id: 'ord-1' }, locations: LOCATIONS })
+    createServerClient.mockReturnValue(db)
+    await POST(makeRequest())
+    const cols = columns(carsSelect(db))
+    for (const c of ['buyer_email', 'buyer_name', 'buyer_phone', 'location_id', 'deposit_revolut_order_id', 'deposit_link_sent_at']) {
+      expect(cols).toContain(c)
+    }
+  })
+
+  it('with a buyer_email on the row, the contact is looked up, the event emitted and the sequences triggered', async () => {
+    const db = makeOrgDb({ car: { ...CAR, buyer_email: 'Buyer@Example.com', deposit_revolut_order_id: 'ord-1' }, locations: LOCATIONS, contacts: [BUYER] })
+    createServerClient.mockReturnValue(db)
+
+    expect((await POST(makeRequest())).status).toBe(200)
+
+    expect(db._contactLookups.length).toBe(1)
+    expect(emitEvent).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-1', contactEmail: 'Buyer@Example.com', eventType: 'order.completed' }))
+    expect(triggerSequencesForOrderStatus).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c-1', locationId: 'loc-1', status: 'completed', orderId: 'car-1' }))
+  })
+
+  it.each([null, '', '   '])('a buyer_email of %j skips the lookup, the event and the sequences', async (email) => {
+    const db = makeOrgDb({ car: { ...CAR, buyer_email: email, deposit_revolut_order_id: 'ord-1' }, locations: LOCATIONS, contacts: [BUYER] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).applied.deposit_status).toBe('paid')
+
+    expect(db._contactLookups).toHaveLength(0)
+    expect(emitEvent).not.toHaveBeenCalled()
+    expect(triggerSequencesForOrderStatus).not.toHaveBeenCalled()
   })
 })

@@ -10,7 +10,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// SECFIX.1 — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   getUserLocationIds: (u) => (u?.locations || []).map((l) => l.id),
 }))
@@ -84,7 +86,7 @@ describe('GET /api/contacts/[id]/devices — IDOR gate', () => {
   })
 
   it('403 when the contact is in another studio — cross-tenant read blocked', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }], rolesByLocation: { 'loc-OTHER': 'manager' } })
     createServerClient.mockReturnValue(mockDb({ contact: { id: 'c1', location_id: 'loc-1' } }))
     const res = await GET(getReq(), { params: { id: 'c1' } })
     expect(res.status).toBe(403)
@@ -115,7 +117,7 @@ describe('GET /api/contacts/[id]/devices — IDOR gate', () => {
 
 describe('GET /api/contacts/[id]/devices — person group aggregation', () => {
   it('returns devices from all linked contacts when in a person group', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', location_id: 'loc-1' },
       ownerRows: [
@@ -152,14 +154,14 @@ describe('GET /api/contacts/[id]/devices — person group aggregation', () => {
 
 describe('POST /api/contacts/[id]/devices — location guard (repaired)', () => {
   it('403 when a manager is at a different location', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-OTHER' }], rolesByLocation: { 'loc-OTHER': 'manager' } })
     createServerClient.mockReturnValue(mockDb({ contact: { id: 'c1', location_id: 'loc-1' } }))
     const res = await POST(postReq(), { params: { id: 'c1' } })
     expect(res.status).toBe(403)
   })
 
   it('201 when a manager is at the contact location — guard now actually passes', async () => {
-    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }] })
+    getCurrentUser.mockResolvedValue({ isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
     createServerClient.mockReturnValue(mockDb({
       contact: { id: 'c1', location_id: 'loc-1' },
       insertResult: { id: 'd1', device_type: 'hr_strap', identifier: 'AA:BB:CC:DD:EE:FF', label: null, manufacturer: null, is_active: true, added_by_contact: false, created_at: '2026-06-08T00:00:00Z' },
@@ -169,5 +171,36 @@ describe('POST /api/contacts/[id]/devices — location guard (repaired)', () => 
     const json = await res.json()
     expect(json.ok).toBe(true)
     expect(json.device.id).toBe('d1')
+  })
+})
+
+// SECFIX.1 — the write role is judged AT THE CONTACT's location, never at the
+// caller's ACTIVE studio (`user.role`). Synthetic ids only.
+describe('POST /api/contacts/[id]/devices — role judged at the contact\'s location', () => {
+  const INSERTED = { id: 'd1', device_type: 'hr_strap', identifier: 'AA:BB:CC:DD:EE:FF', label: null, manufacturer: null, is_active: true, added_by_contact: false, created_at: '2026-06-08T00:00:00Z' }
+
+  it('403 Admin only for staff at the contact\'s location whose ACTIVE studio makes them a manager', async () => {
+    getCurrentUser.mockResolvedValue({
+      isMaster: false, profileRole: 'staff', role: 'manager',
+      locations: [{ id: 'loc-1' }, { id: 'loc-OTHER' }],
+      rolesByLocation: { 'loc-1': 'staff', 'loc-OTHER': 'manager' },
+    })
+    const db = mockDb({ contact: { id: 'c1', location_id: 'loc-1' }, insertResult: INSERTED })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(postReq(), { params: { id: 'c1' } })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ ok: false, error: 'Admin only' })
+    expect(db.from).not.toHaveBeenCalledWith('contact_devices')
+  })
+
+  it('201 for a manager at the contact\'s location while a studio where they are staff is active', async () => {
+    getCurrentUser.mockResolvedValue({
+      isMaster: false, profileRole: 'staff', role: 'staff',
+      locations: [{ id: 'loc-1' }, { id: 'loc-OTHER' }],
+      rolesByLocation: { 'loc-1': 'manager', 'loc-OTHER': 'staff' },
+    })
+    createServerClient.mockReturnValue(mockDb({ contact: { id: 'c1', location_id: 'loc-1' }, insertResult: INSERTED }))
+    const res = await POST(postReq(), { params: { id: 'c1' } })
+    expect(res.status).toBe(201)
   })
 })

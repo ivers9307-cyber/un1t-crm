@@ -28,7 +28,7 @@
 // only renders + validates. The API route is responsible for
 // persisting the issued row and for state-machine transitions.
 
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 
 /**
  * Build the auto-fill variable map from a profile row.
@@ -41,9 +41,11 @@ import { dublinTodayStr } from '@/lib/dublin-time'
  *                          role, employment_type, annual_salary,
  *                          hourly_rate, contracted_rate,
  *                          contracted_hours_per_week.
+ * @param {{ zone?: string }} [opts] TZ.8b — the issuing studio's zone, for
+ *                          {{today}} (DEFAULT_TZ when omitted).
  * @returns {Record<string, string>}
  */
-export function profileVariables(profile) {
+export function profileVariables(profile, { zone = DEFAULT_TZ } = {}) {
   if (!profile) return {}
   const v = {}
   // Identity
@@ -77,8 +79,9 @@ export function profileVariables(profile) {
   }
 
   // Today, pre-computed for templates that want a default
-  // {{today}} when the issuer doesn't override start_date.
-  v.today = dublinTodayStr()
+  // {{today}} when the issuer doesn't override start_date. TZ.8b: the
+  // issuing studio's day.
+  v.today = todayStrIn(zone)
 
   return v
 }
@@ -109,9 +112,9 @@ export function formatEuro(value) {
  * arguments win — so customVariables (from the issuer) overrides
  * profile auto-fills.
  */
-export function mergeVariables(profile, customVariables) {
+export function mergeVariables(profile, customVariables, { zone = DEFAULT_TZ } = {}) {
   return {
-    ...profileVariables(profile),
+    ...profileVariables(profile, { zone }),
     ...(customVariables || {}),
   }
 }
@@ -133,8 +136,9 @@ export const LOCATION_VAR_KEYS = [
   // LEGALENT.1 — the contracting COMPANY (org_settings.legal_entity_name,
   // mig 425), distinct from company_name, which is the brand. A party
   // clause must name the entity; resolved server-side at issue time via
-  // getContractingEntity() and always non-empty (it degrades to the
-  // brand), so it can never leave an unresolved placeholder.
+  // getContractingEntity() (entity -> configured brand -> the org's own
+  // name). POST /api/contracts refuses with a 503 when that resolves
+  // empty (W1.S1a), so an issued contract never leaves it unresolved.
   'legal_entity_name',
 ]
 
@@ -142,8 +146,8 @@ export const LOCATION_VAR_KEYS = [
  * Build the location-derived auto-fill variable map. Pure — caller
  * passes the location row (from `public.locations`: name, address,
  * phone, email) and the resolved branding object (from
- * getLocationBranding(), which already inherits location ->
- * organisation -> 'UN1T' defaults). Only keys that resolve to a
+ * getLocationBranding(), which already inherits company_settings ->
+ * org_settings -> locations.name). Only keys that resolve to a
  * non-empty string are included, same convention as
  * profileVariables() — a template referencing an unset field falls
  * through to the "still unresolved" path instead of rendering an
@@ -342,14 +346,108 @@ export function unresolvedPlaceholders(bodyMarkdown, recipient, customVariables,
  *
  * @param {Array<{employment_type?: string|null}>} recipients
  * @param {Array<{employment_type: string}>} templates
+ * @param {Record<string, string>|null} [locationOrgs] C140: the caller's
+ *   { location_id: organization_id }; when given, a template must also be in
+ *   an org every recipient belongs to (recipientInTemplateOrg).
  * @returns {Array}
  */
-export function eligibleTemplatesFor(recipients, templates) {
+export function eligibleTemplatesFor(recipients, templates, locationOrgs = null) {
   const all = templates || []
   if (!recipients || recipients.length === 0) return all
   return all.filter((t) =>
-    recipients.every((r) => t.employment_type === 'both' || t.employment_type === r?.employment_type)
+    recipients.every((r) =>
+      (t.employment_type === 'both' || t.employment_type === r?.employment_type)
+      // C140 — with the caller's location→org map, also the template's org.
+      && (!locationOrgs || recipientInTemplateOrg(r, t, locationOrgs)))
   )
+}
+
+/**
+ * C140 CONTRACTRECIPIENT.1 (folds C138 d) — does this person belong to the
+ * template's organisation, through any of their studios? POST /api/contracts
+ * refuses anyone else; the issue wizard uses this to list only that org's
+ * people. A null-org template (master-only) fits anyone, as the route allows.
+ * `locationOrgs` is the CALLER's own { location_id: organization_id } map
+ * (the wizard's staff list only holds people at the caller's studios).
+ * Pure.
+ *
+ * @param {{ profile_locations?: Array<{ location_id: string }> }|null} recipient
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {Record<string, string>} locationOrgs
+ * @returns {boolean}
+ */
+export function recipientInTemplateOrg(recipient, template, locationOrgs) {
+  if (!template?.organization_id) return true
+  return (recipient?.profile_locations || [])
+    .some((l) => (locationOrgs || {})[l?.location_id] === template.organization_id)
+}
+
+/** C140 — the wizard's recipient list, narrowed to the chosen template's org (no template: everyone). Pure. */
+export function recipientsForTemplate(staff, template, locationOrgs) {
+  const all = staff || []
+  if (!template) return all
+  return all.filter((r) => recipientInTemplateOrg(r, template, locationOrgs))
+}
+
+// A studio link's embedded location row: POST /api/contracts embeds it as
+// `location`, GET /api/staff (the wizard's list) as `locations`.
+const linkLocation = (link) => link?.location ?? link?.locations ?? null
+
+/**
+ * The recipient's studio links in the template's organisation (all of them
+ * for a null-org template, which only a master may issue). The org is read
+ * off the embedded location row, else the caller's `locationOrgs` map.
+ * POST /api/contracts and the issue wizard share it. Pure.
+ *
+ * @param {Array<{ location_id?: string }>|null|undefined} links
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {Record<string, string>|null} [locationOrgs]
+ * @returns {Array}
+ */
+export function linksInTemplateOrg(links, template, locationOrgs = null) {
+  const all = links || []
+  const orgId = template?.organization_id
+  if (!orgId) return all
+  return all.filter((l) => (linkLocation(l)?.organization_id ?? locationOrgs?.[l?.location_id] ?? null) === orgId)
+}
+
+/**
+ * The studio a contract is issued at when the issuer names none: the
+ * recipient's default studio in the template's org, else their first studio
+ * there. This is POST /api/contracts' rule (the wizard never sends a
+ * location_id), so the wizard's preview and the stored body agree. Pure.
+ *
+ * @param {{ profile_locations?: Array }|null} recipient
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {Record<string, string>|null} [locationOrgs]
+ * @returns {object|null} the link row, or null
+ */
+export function issuingLocationLink(recipient, template, locationOrgs = null) {
+  const links = linksInTemplateOrg(recipient?.profile_locations, template, locationOrgs)
+  return links.find((l) => l?.is_default) || links[0] || null
+}
+
+/**
+ * The zone a contract's {{today}} is rendered in: the issuing studio's
+ * (issuingLocationLink). `locationZones` ({ location_id: zone }, built on the
+ * server from the issuer's own studios) wins; else the link's embedded row;
+ * else DEFAULT_TZ, which is what the route does with no location row. Never
+ * the browser's zone. Pure.
+ *
+ * @param {{ profile_locations?: Array }|null} recipient
+ * @param {{ organization_id?: string|null }|null} template
+ * @param {{ locationOrgs?: Record<string, string>|null, locationZones?: Record<string, string>|null }} [opts]
+ * @returns {string} canonical IANA zone
+ */
+export function issuingZone(recipient, template, { locationOrgs = null, locationZones = null } = {}) {
+  const link = issuingLocationLink(recipient, template, locationOrgs)
+  if (!link) return DEFAULT_TZ
+  const held = locationZones?.[link.location_id]
+  if (held) return zoneOfLocation({ id: link.location_id, timezone: held })
+  const row = linkLocation(link)
+  // A slim embed without the column says nothing about the zone.
+  if (row && Object.prototype.hasOwnProperty.call(row, 'timezone')) return zoneOfLocation(row)
+  return DEFAULT_TZ
 }
 
 /**
@@ -443,13 +541,18 @@ const REMINDER_THRESHOLD_DAYS = [3, 7]
  *   - reminder_count 0 -> due once issued_at is >= 3 days old.
  *   - reminder_count 1 -> due once issued_at is >= 7 days old.
  *   - reminder_count >= 2 -> never (capped at 2 reminders total).
+ *   - PUSHDONE.1a: a later reminder also waits the planned spacing (7 - 3 =
+ *     4 days) after the RECORDED previous one (last_reminded_at). The cron
+ *     records a reminder only once it reached someone, so retries can hold
+ *     reminder 1 until day 7; without this, reminder 2 followed next day.
+ *     No last_reminded_at → the day-since-issued rule alone (as before).
  *
  * Diffs two Date instants directly via getTime() — no string
  * parsing, so this is timezone-agnostic (issued_at is a UTC
  * timestamptz; "days old" is the same wall-clock-independent
  * duration regardless of the caller's local timezone).
  *
- * @param {object} contract — { status, issued_at, reminder_count }
+ * @param {object} contract — { status, issued_at, reminder_count, last_reminded_at? }
  * @param {Date|number|string} [now=new Date()]
  * @returns {boolean}
  */
@@ -465,5 +568,15 @@ export function reminderDue(contract, now = new Date()) {
   const issuedAt = contract.issued_at instanceof Date ? contract.issued_at : new Date(contract.issued_at)
   const nowDate = now instanceof Date ? now : new Date(now)
   const ageDays = (nowDate.getTime() - issuedAt.getTime()) / MS_PER_DAY
-  return ageDays >= thresholdDays
+  if (ageDays < thresholdDays) return false
+
+  if (count > 0 && contract.last_reminded_at) {
+    const spacingDays = thresholdDays - REMINDER_THRESHOLD_DAYS[count - 1]
+    const lastAt = contract.last_reminded_at instanceof Date ? contract.last_reminded_at : new Date(contract.last_reminded_at)
+    const sinceLastDays = (nowDate.getTime() - lastAt.getTime()) / MS_PER_DAY
+    // An unparseable stamp is NaN; NaN < spacing is false, so it falls back
+    // to the day-since-issued rule rather than holding the reminder forever.
+    if (sinceLastDays < spacingDays) return false
+  }
+  return true
 }

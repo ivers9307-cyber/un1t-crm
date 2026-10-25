@@ -110,6 +110,16 @@ describe('canEditStaffMember — owner cannot edit themselves or peers', () => {
     expect(canEditStaffMember(ownerA, ownerB)).toBe(false)
   })
 
+  // ACTIVEUSER.1 (review R2-S1) — the doc always said an owner edits "manager /
+  // head_coach / staff", but the code only refused an `owner` target. A master
+  // who HOLDS A ROW at the owner's studio (prod's does, at three) passed — and
+  // editing now includes deactivating, which bans the login.
+  it('owner CANNOT edit a MASTER, even one assigned at a studio they own', () => {
+    const masterAtA = { id: 'm1', role: 'master', locationIds: ['A'] }
+    expect(canEditStaffMember(ownerA, masterAtA)).toBe(false)
+    expect(canEditStaffMember(master, masterAtA)).toBe(true)
+  })
+
   it('owner CAN edit manager / head_coach / staff at a location they own', () => {
     expect(canEditStaffMember(ownerA, manager)).toBe(true)
     expect(canEditStaffMember(ownerA, { id: 'hc', role: 'head_coach', locationIds: ['A'] })).toBe(true)

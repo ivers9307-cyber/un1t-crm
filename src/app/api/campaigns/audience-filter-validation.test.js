@@ -9,7 +9,7 @@
 // creates and the sequences PUT; these two routes were missed.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { GLOBAL_KEY } from '@/lib/api-auth.test-helpers.js'
+import { ORG1_KEY } from '@/lib/api-auth.test-helpers.js'
 
 let inserted = []
 let updated = []
@@ -49,13 +49,13 @@ const LOCATION = 'a0000000-0000-0000-0000-000000000001'
 
 const post = (audience_filter) => POST(new Request('http://localhost/api/campaigns', {
   method: 'POST',
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${GLOBAL_KEY}` },
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${ORG1_KEY}` },
   body: JSON.stringify({ location_id: LOCATION, name: 'Sale', audience_filter }),
 }))
 
 const put = (audience_filter) => PUT(new Request('http://localhost/api/campaigns/cam-1', {
   method: 'PUT',
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${GLOBAL_KEY}` },
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${ORG1_KEY}` },
   body: JSON.stringify({ audience_filter }),
 }), { params: Promise.resolve({ id: 'cam-1' }) })
 

@@ -18,12 +18,23 @@ import { logInfo, logWarn } from '@/lib/log'
 import { buildTcx } from '@/lib/tcx-builder'
 import { refreshAccessToken, uploadTcx, pollUpload } from '@/lib/strava'
 import { selectAll } from '@/lib/select-all'
+import { getLocationBranding } from '@/lib/location-branding'
+import { productName } from '@/lib/brand-name'
+import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import {
   publishQueuePush,
   STRAVA_EXPORTS_WORKER_PATH,
   STRAVA_EXPORTS_QUEUE_NAME,
   STRAVA_EXPORTS_QUEUE_PARALLELISM,
 } from '@/lib/qstash'
+
+/**
+ * TZ.17 — the Strava activity title's date ('2/7/2026'): the same fields and
+ * locale as the Date#toLocaleDateString('en-IE') it replaces, in `zone`.
+ */
+export function stravaTitleDate(startedAt, zone = DEFAULT_TZ) {
+  return formatInZone(new Date(startedAt), zone, { year: 'numeric', month: 'numeric', day: 'numeric' }, 'en-IE')
+}
 
 const MAX_ATTEMPTS = 5
 const RETRY_DELAYS_MS = [
@@ -194,7 +205,7 @@ async function processOneJob(db, job) {
         .eq('provider', job.provider)
         .maybeSingle(),
       db.from('heart_rate_sessions')
-        .select('id, contact_id, started_at, ended_at, avg_hr_bpm, peak_hr_bpm, effort_points, zones_seconds')
+        .select('id, contact_id, location_id, started_at, ended_at, avg_hr_bpm, peak_hr_bpm, effort_points, zones_seconds')
         .eq('id', job.session_id)
         .maybeSingle(),
       selectAll((from, to) => db.from('hr_samples')
@@ -244,13 +255,22 @@ async function processOneJob(db, job) {
     await markStatus(db, job, 'skipped', 'provider not yet implemented')
     return { skipped: true }
   }
+  // W1.S1a — the activity is named for the session studio's product
+  // ("UN1T HR"; productName on the SHORT brand), bare "HR" when unresolved.
+  // getLocationBranding never throws.
+  const { shortName } = await getLocationBranding(db, session.location_id)
+  const hrName = productName(shortName, 'hr')
+  // TZ.17 — the title's date is the session's day on its studio's calendar
+  // (it was the server's: UTC on Vercel). A label, so an unreadable zone falls
+  // back to Europe/Dublin rather than hold the upload.
+  const titleZone = await getLocationZone(db, session.location_id).catch(() => DEFAULT_TZ)
   const tcxXml = buildTcx({
     session,
     samples,
-    title: `UN1T HR · ${new Date(session.started_at).toLocaleDateString('en-IE')}`,
+    title: `${hrName} · ${stravaTitleDate(session.started_at, titleZone)}`,
     sport: 'Other',
   })
-  const upload = await uploadTcx({ accessToken, tcxXml, name: `UN1T HR · ${session.effort_points || ''} pts` })
+  const upload = await uploadTcx({ accessToken, tcxXml, name: `${hrName} · ${session.effort_points || ''} pts` })
   let activityId = upload.activityId
   if (!activityId) {
     activityId = await pollUpload({ accessToken, uploadId: upload.uploadId })

@@ -33,12 +33,18 @@ const STATUSES = ['', 'new_lead', 'first_class', 'second_class', 'trial_done',
 export default function ContactsView({
   initialContacts,
   locationId,
+  // TZ.4 — the studio's IANA zone: the audience builder's "today".
+  locationTimeZone = null,
   crossoverContext = {},
   listFlags = {},
   initialStatus = '',
   initialSearch = '',
   canMerge = false,
   canDelete = false,
+  // SEGMENTROUTE.1 (R1): saving and deleting a segment need Contacts AND
+  // Email at this studio; the page passes the server's canWriteSegmentsAt.
+  // Default false so a caller that forgets it offers nothing the API refuses.
+  canSaveSegments = false,
 }) {
   const [status, setStatus] = useState(initialStatus)
   const [search, setSearch] = useState(initialSearch)
@@ -167,10 +173,8 @@ export default function ContactsView({
     filter: filterRowCount > 0 ? filter : undefined,
     search: search || undefined,
     location_id: locationId,
-    // The contacts list shows crossover deal-holders (owned ∪ deal-at-
-    // this-studio); other callers of this route (e.g. the send people-
-    // picker) omit this and stay owned-only.
-    include_crossovers: true,
+    // ORGCONTACTS.2 — the route lists every contact with a relationship at
+    // the studio (the crossover pill reads studio_is_crossover); no opt-in.
     // Fold linked people to one row unless the operator opted to see dupes.
     primary_only: !showDuplicates,
   }), [filterRowCount, filter, search, locationId, showDuplicates])
@@ -232,7 +236,9 @@ export default function ContactsView({
   // 'classpass' stage, so they never share a chip with trialists.
   const visibleContacts = useMemo(() => {
     let rows = clientContacts !== null ? clientContacts : initialContacts
-    if (status) rows = rows.filter(c => c.pipeline_stage_slug === status)
+    // ORGCONTACTS.4 (decision 3): the stage AT this studio, the column the
+    // server page filtered on (studio_contacts.studio_stage_slug).
+    if (status) rows = rows.filter(c => c.studio_stage_slug === status)
     // SEARCH.1: when apiActive, the API has already done a wider
     // search (name + email + first_name + last_name + phone, multi-
     // token). Re-applying a name/email-only filter client-side would
@@ -384,13 +390,15 @@ export default function ContactsView({
                 >
                   {s.name}
                 </button>
-                <button
-                  onClick={() => deleteSegment(s.id)}
-                  className="pr-2 text-un1t-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Delete segment"
-                >
-                  <Trash2 size={11} />
-                </button>
+                {canSaveSegments && (
+                  <button
+                    onClick={() => deleteSegment(s.id)}
+                    className="pr-2 text-un1t-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Delete segment"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                )}
               </span>
             )
           })}
@@ -405,11 +413,13 @@ export default function ContactsView({
             onChange={handleFilterChange}
             audienceCount={apiActive ? count : null}
             locationId={locationId}
+            timeZone={locationTimeZone}
           />
 
           {/* Save-as-segment row. Only visible when there's at least
-              one filter row to save. */}
-          {filterRowCount > 0 && (
+              one filter row to save, and only to a caller the API lets
+              save (SEGMENTROUTE.1: Contacts AND Email here). */}
+          {canSaveSegments && filterRowCount > 0 && (
             <div className="pt-3 border-t border-un1t-border flex items-center gap-2">
               {showSaveForm ? (
                 <>

@@ -40,10 +40,10 @@ const defaultCall = (name, token, groupId, ...args) => CLIENT[name](token, group
 // → { ok: true, groups }
 // | { ok: false, code, reason?, statusCode?, applied?, failedGroups? }
 //
-// `target` is { scheduleId } XOR { groupId } — exactly one, truthy. The
-// routes enforce exactly-one before calling; this function re-checks as
-// defence in depth and answers { ok: false, code: 'invalid' } for anything
-// else (including the old positional string signature).
+// `target` is { scheduleId } XOR { groupId } XOR { playerId } — exactly one,
+// truthy. The routes enforce exactly-one before calling; this function
+// re-checks as defence in depth and answers { ok: false, code: 'invalid' }
+// for anything else (including the old positional string signature).
 //
 // The schedule path loads the row scoped to the location and resolves
 // group ids from player_ids. The group path reads NO db row at all — the
@@ -53,6 +53,14 @@ const defaultCall = (name, token, groupId, ...args) => CLIENT[name](token, group
 // are ephemeral by design, so "the speakers regrouped — refresh and try
 // again"
 // is the honest copy, not no_group's schedule-speaker wording).
+//
+// WIDGET.1 — the player path also reads no db row: a widget stores one
+// permanent player id (sonos/groups.js:28) chosen at configuration time,
+// with no schedule to look up. It reuses resolveGroupIds() exactly like the
+// schedule path, just against a single-element player list, so the same
+// four-speakers-one-group dedupe applies. Unlike a group id, a player id is
+// never "stale" by design, so an unresolvable one answers `not_found` (the
+// schedule branch's unknown-target shape) rather than `regrouped`.
 //
 // `code` is a stable tag the route maps to an HTTP status and copy.
 //
@@ -78,10 +86,12 @@ export async function runLiveAction(db, locationId, target, action, value, deps 
   const isTargetObject = target !== null && typeof target === 'object'
   const scheduleId = isTargetObject ? target.scheduleId : undefined
   const groupId = isTargetObject ? target.groupId : undefined
-  if (!isTargetObject || (!scheduleId && !groupId) || (scheduleId && groupId)) {
+  const playerId = isTargetObject ? target.playerId : undefined
+  const modesGiven = [scheduleId, groupId, playerId].filter(Boolean).length
+  if (!isTargetObject || modesGiven !== 1) {
     return { ok: false, code: 'invalid' }
   }
-  const targetMeta = scheduleId ? { scheduleId } : { groupId }
+  const targetMeta = scheduleId ? { scheduleId } : groupId ? { groupId } : { playerId }
 
   const plan = planLiveAction(action, value)
   if (!plan) return { ok: false, code: 'invalid' }
@@ -117,6 +127,13 @@ export async function runLiveAction(db, locationId, target, action, value, deps 
   if (scheduleId) {
     groupIds = resolveGroupIds(groups, schedule.player_ids)
     if (!groupIds.length) return { ok: false, code: 'no_group' }
+  } else if (playerId) {
+    // Same helper as the schedule path, against a single-element player
+    // list — reused, not reimplemented, so there is one place that knows
+    // "which group is this player in right now" and one place the
+    // four-speakers-one-group dedupe lives.
+    groupIds = resolveGroupIds(groups, [playerId])
+    if (!groupIds.length) return { ok: false, code: 'not_found' }
   } else {
     groupIds = groups.some((g) => g.id === groupId) ? [groupId] : []
     if (!groupIds.length) return { ok: false, code: 'regrouped' }

@@ -5,7 +5,7 @@
 // and can be mutation-tested.
 //
 // THE SERVER IS THE GATE, THIS FILE IS THE AFFORDANCE. The compose route
-// (POST /api/email/tickets/compose) validates addresses with the strict Zod
+// (POST /api/email/mail/compose) validates addresses with the strict Zod
 // email schema, enforces the 25-recipient cap and dedupes across To/Cc/Bcc —
 // none of that is re-implemented here (CONTRACTS: surface refusals, don't
 // re-derive them). What this file DOES own is the phone-side experience the
@@ -30,7 +30,7 @@
 // No React Native imports — this file runs under vitest's node environment
 // (vitest.config.js includes mobile/lib).
 
-import { formatAttachmentSize } from './email-tickets'
+import { formatAttachmentSize } from './mail-conversations'
 
 // ── Recipients ───────────────────────────────────────────────────────
 
@@ -365,7 +365,7 @@ export function sendFailureMessage(res) {
 /**
  * Which account the sheet opens on: an explicit initial id when it is in the
  * caller's visible set, else the location's default, else the first, else
- * null. Same precedence as the web composer (TicketCompose.jsx) — the two
+ * null. Same precedence as the web composer (ComposeForm.jsx) — the two
  * surfaces must not open on different accounts for the same person.
  */
 export function defaultMailboxId(mailboxes, initialId = null) {

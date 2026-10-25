@@ -18,7 +18,7 @@
 //          hidden, not removed.
 //
 // MOBILE IS UNTOUCHED: below `md` this renders as the plain full-pane thread
-// it always was (TicketThread's own back arrow is already md:hidden), the
+// it always was (ConversationThread's own back arrow is already md:hidden), the
 // title bar does not exist, and none of the dock modes apply — `min` set on a
 // desktop that was then narrowed degrades to the visible pane rather than to
 // a vanished conversation.

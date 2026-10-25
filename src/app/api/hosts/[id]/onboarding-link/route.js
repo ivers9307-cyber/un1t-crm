@@ -8,7 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
 import { signHostOnboardingToken } from '@/lib/host-onboarding-tokens'
@@ -36,5 +36,8 @@ export async function POST(_request, props) {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
   if (!secret) return NextResponse.json({ success: false, error: 'server_misconfigured' }, { status: 500 })
   const token = signHostOnboardingToken({ hostId: host.id }, secret)
-  return NextResponse.json({ success: true, data: { url: `${getAppUrl()}/host-connect/${token}` } })
+  // W1.L3b — a host is a customer of the platform: the link lands on the
+  // tenant host of their anchor location (NULL → the CRM host).
+  const baseUrl = await resolveCustomerBaseUrl(db, host.anchor_location_id)
+  return NextResponse.json({ success: true, data: { url: `${baseUrl}/host-connect/${token}` } })
 }

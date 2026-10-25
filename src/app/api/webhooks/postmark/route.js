@@ -93,12 +93,26 @@ export function buildWebhookEventId(body) {
     case 'Bounce':
       return `Bounce:${messageId}:${body?.ID ?? ''}`
     case 'SubscriptionChange':
+      // PMSUBCHANGE.1 — a suppression made by the account (API or UI,
+      // Origin "Customer"), by Postmark ("Admin") or any reactivation arrives
+      // with MessageID NULL (Postmark's docs). Nothing per-message to key on,
+      // so key on the change itself: a retry repeats every field, while the
+      // same address suppressed again later carries a new ChangedAt.
+      if (!messageId) {
+        return `SubscriptionChange:none:${body?.ServerID ?? ''}:${body?.MessageStream ?? ''}:` +
+          `${body?.Recipient ?? ''}:${body?.ChangedAt ?? ''}:${body?.SuppressSending === true}`
+      }
       return isZeroGuid(messageId)
         ? `SubscriptionChange:${messageId}:${body?.Recipient ?? ''}`
         : `SubscriptionChange:${messageId}`
     default:
       return `${recordType}:${messageId}`
   }
+}
+
+/** PMSUBCHANGE.1 — record types Postmark may send without a MessageID. */
+export function messageIdOptional(recordType) {
+  return recordType === 'SubscriptionChange'
 }
 
 function isZeroGuid(messageId) {
@@ -140,11 +154,19 @@ export async function POST(request) {
   }
 
   const messageId = body?.MessageID
-  if (!messageId) {
+  const recordType = body?.RecordType || 'unknown'
+  // PMSUBCHANGE.1 — SubscriptionChange is the one record type Postmark sends
+  // with MessageID NULL: every suppression the account makes (our own
+  // consent-drift pushes via the API, a manual one in the UI) and every
+  // reactivation. Refusing those 400'd every one of them, silently (this
+  // branch logs nothing), and on 12 Oct 2026 a 355-address push to the new
+  // tenant server failed 355 deliveries in a burst and Postmark DISABLED that
+  // server's webhook. Every other record type is message-bound and still
+  // needs one.
+  if (!messageId && !messageIdOptional(recordType)) {
     return NextResponse.json({ success: false, error: 'Missing MessageID' }, { status: 400 })
   }
 
-  const recordType = body.RecordType || 'unknown'
   const db = createServerClient()
 
   // Idempotency (mig 107) — short-circuits duplicate Postmark retries BEFORE

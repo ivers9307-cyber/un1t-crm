@@ -16,7 +16,7 @@
 // one legitimate way to set wa_phone from phone — see the broadcast-
 // reachability note in MEMORY).
 
-import { toE164Ireland } from '@/lib/twilio'
+import { contactWhatsAppNumber } from '@/lib/phone-validate'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
@@ -24,7 +24,10 @@ import {
   getOrCreateConversation,
 } from '@/lib/whatsapp'
 import { logWarn } from '@/lib/log'
+import { flowTokenFor } from '@/lib/whatsapp-flow/config'
+import { flowButtonComponentFor } from '@/lib/whatsapp-template-buttons'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { resolvePurposeTemplate } from '@/lib/whatsapp-purpose-templates'
 
 // The template's only body variable {{1}} is the lead's first name.
 const VARIABLE_MAPPING = { '1': 'first_name' }
@@ -34,9 +37,13 @@ const VARIABLE_MAPPING = { '1': 'first_name' }
  * lead and logs it to the inbox. Never throws — callers run it as a
  * fire-and-forget side effect that must not fail the lead capture.
  *
+ * `purpose` ('meta_ad_welcome'): the template is the studio's own pick for that
+ * purpose (WAORGNUMBER.2 R5), else `templateName` (the campaign's) at the
+ * studio. A location's Flow-button template still takes precedence.
+ *
  * @returns {Promise<{sent: boolean, reason?: string, messageId?: string}>}
  */
-export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact, templateName }) {
+export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact, templateName, purpose }) {
   try {
     // If this location has the booking Flow enabled, prefer its FLOW-button
     // template over the classic quick-reply welcome, and mint a per-lead
@@ -44,14 +51,20 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     // `features` rides the same row (TENANT.8 item 3b) — one query serves
     // both the flow-config read AND the bundle/feature gate below.
     let flowToken = null
+    let flowTemplate = false
     let location = null
     try {
       const { data: loc } = await db.from('locations').select('settings, features').eq('id', locationId).maybeSingle()
       location = loc
       const flowCfg = loc?.settings?.whatsapp_flow
-      if (flowCfg?.enabled && flowCfg.template_name) {
+      // FLOWTOKENDEDUP.1 — THE token format lives in flowTokenFor. It is null
+      // without a contact id; the lead then gets the classic welcome rather
+      // than a Flow whose token the endpoint could never resolve.
+      const token = flowCfg?.enabled && flowCfg.template_name ? flowTokenFor(contact?.id, locationId) : null
+      if (token) {
         templateName = flowCfg.template_name
-        flowToken = `${contact?.id}.${locationId}`
+        flowTemplate = true
+        flowToken = token
       }
     } catch (e) { logWarn('meta-ad-wa-welcome', 'flow config read failed', { err: e }) }
 
@@ -62,24 +75,34 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       return { sent: false, reason: 'bundle_disabled' }
     }
 
-    if (!templateName) return { sent: false, reason: 'no_template_configured' }
-    if (!contact?.phone) return { sent: false, reason: 'no_phone' }
+    if (!templateName && !purpose) return { sent: false, reason: 'no_template_configured' }
+    if (!contact?.phone && !contact?.wa_phone) return { sent: false, reason: 'no_phone' }
 
-    const waPhone = toE164Ireland(contact.phone)
-    // toE164Ireland returns the cleaned digits unchanged when it can't
-    // confidently format (e.g. a foreign/garbage number) — require a
-    // plausible E.164 before we hand it to Meta.
-    if (!waPhone || !/^\+\d{10,15}$/.test(waPhone)) return { sent: false, reason: 'unnormalisable_phone' }
+    // WAPHONE.1 — the contact's WhatsApp number (a stored wa_phone, else the
+    // phone through the one rule the contacts trigger also uses), E.164 digits
+    // without '+' (Meta accepts both; wa_phone is stored without). Null for a
+    // landline, junk, or a bare foreign number with no country-code marker.
+    const waPhone = contactWhatsAppNumber(contact)
+    if (!waPhone) return { sent: false, reason: 'unnormalisable_phone' }
 
     // Resolve the template; must be this location's and APPROVED to send.
-    const { data: template } = await db
-      .from('whatsapp_templates')
-      .select('*')
-      .eq('name', templateName)
-      .eq('location_id', locationId)
-      .maybeSingle()
-    if (!template) return { sent: false, reason: 'template_not_found' }
-    if (template.status !== 'APPROVED') return { sent: false, reason: `template_${template.status}` }
+    let template
+    if (purpose && !flowTemplate) {
+      // The studio's own pick (or the campaign's default name at the studio):
+      // already APPROVED, or null.
+      template = await resolvePurposeTemplate(db, locationId, purpose, templateName ? { fallbackName: templateName } : {})
+      if (!template) return { sent: false, reason: 'template_not_found' }
+    } else {
+      const { data } = await db
+        .from('whatsapp_templates')
+        .select('*')
+        .eq('name', templateName)
+        .eq('location_id', locationId)
+        .maybeSingle()
+      template = data
+      if (!template) return { sent: false, reason: 'template_not_found' }
+      if (template.status !== 'APPROVED') return { sent: false, reason: `template_${template.status}` }
+    }
 
     // Build header (media auto-attached from the template row) + body var.
     const components = buildTemplateComponents(
@@ -89,17 +112,18 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       template.header_media_url || null,
     )
     // FLOW-button template: attach the per-lead flow_token to the button so the
-    // tapped Flow round-trips it back to /api/whatsapp/flow.
-    if (flowToken) {
-      components.push({ type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
-    }
+    // tapped Flow round-trips it back to /api/whatsapp/flow. The shared builder
+    // puts it on the FLOW button's real index (it was hard-coded '0').
+    const flowComponent = flowButtonComponentFor(template.components, flowToken)
+    if (flowComponent) components.push(flowComponent)
 
     const result = await sendTemplateMessage(
       waPhone,
       template.name,
       template.language || 'en',
       components,
-      { locationId },
+      // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+      { locationId, ...(template.business_account_id && { businessAccountId: template.business_account_id }) },
     )
 
     // Meta accepted it. NOW persist wa_phone (only if unset) so the inbox
@@ -107,7 +131,8 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     // the outbound so staff/Mia see what was sent.
     if (!contact.wa_phone) {
       try {
-        await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null)
+        const { error: waErr } = await db.from('contacts').update({ wa_phone: waPhone }).eq('id', contact.id).is('wa_phone', null)
+        if (waErr) logWarn('meta-ad-wa-welcome', 'wa_phone backfill failed', { err: waErr })
       } catch (e) { logWarn('meta-ad-wa-welcome', 'wa_phone backfill failed', { err: e }) }
       contact = { ...contact, wa_phone: waPhone }
     }

@@ -14,7 +14,7 @@
 // retries is now captured in webhook_dead_letter instead of vanishing.
 // The count is surfaced in the response AND in the heartbeat's last_outcome.
 //
-// Pattern matches run-sms-broadcasts / run-sequences — uses
+// Pattern matches run-sequences — uses
 // CRON_SECRET bearer auth, stamps a heartbeat, returns a small
 // JSON summary.
 //

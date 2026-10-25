@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
 import { fetchRadarGlance } from '../../../lib/radar-api'
+import { overdueValueNote, overdueValueText } from '../../../lib/arrears-estimate-label'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
 // Whole euros — the glance never needs cent precision.
@@ -191,13 +192,16 @@ export default function RadarGlance() {
                   <StatRow
                     key={r.key}
                     label={r.label}
-                    value={r.money ? fmtMoney(churn[r.key]) : fmtCount(churn[r.key])}
+                    value={r.key === 'overdueValueCents' ? overdueValueText(churn, fmtMoney) : r.money ? fmtMoney(churn[r.key]) : fmtCount(churn[r.key])}
                     delta={churn.trend?.deltas?.[r.key]}
                     goodDir={r.goodDir}
                     money={r.money}
                     isLast={i === CHURN_ROWS.length - 1 && !churn.recovery?.contacted}
                   />
                 ))}
+                {overdueValueNote(churn) && (
+                  <Text className="text-xs text-un1t-subtle px-4 py-2">Overdue value {overdueValueNote(churn)}</Text>
+                )}
                 {churn.recovery?.contacted > 0 && (
                   <EffectivenessLine
                     text={`Outreach: ${churn.recovery.recovered} of ${churn.recovery.contacted} members contacted in the last 90 days came back training (${Math.round((churn.recovery.recoveryRate || 0) * 100)}%).`}

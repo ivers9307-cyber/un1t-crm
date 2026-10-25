@@ -36,7 +36,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -64,7 +64,8 @@ function requireAdmin(user) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!user.isMaster && user.role !== 'owner') {
+  // ROLESWEEP.1c — coarse pre-check; loadContact judges owner at the contact's location.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ['owner'])) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
   return null
@@ -83,6 +84,10 @@ async function loadContact(db, user, id) {
   }
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return { response: guard }
+  // ROLESWEEP.1c — owner at the contact's location, not the active studio.
+  if (!user.isMaster && !hasRoleAtLocation(user, contact.location_id, ['owner'])) {
+    return { response: NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 }) }
+  }
   return { contact }
 }
 

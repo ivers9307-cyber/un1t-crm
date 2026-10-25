@@ -28,8 +28,8 @@ describe('pushNoteToGlofox', () => {
     const db = makeDb({ id: 'c1', location_id: 'l1', glofox_member_id: 'gm1' }, ledger)
     const r = await pushNoteToGlofox(db, { contactId: 'c1', sourceTable: 'notes', sourceId: 'n1', type: 'NOTE', authorName: 'Jane', content: 'hi' })
     expect(r.pushed).toBe(true)
-    expect(createGlofoxInteraction).toHaveBeenCalledWith(CREDS, 'gm1', { type: 'NOTE', description: '[UN1T CRM · Jane] hi' })
-    expect(ledger.mock.calls[0][0]).toMatchObject({ contact_id: 'c1', location_id: 'l1', glofox_member_id: 'gm1', source_table: 'notes', source_id: 'n1', type: 'NOTE', description: '[UN1T CRM · Jane] hi', status: 'sent' })
+    expect(createGlofoxInteraction).toHaveBeenCalledWith(CREDS, 'gm1', { type: 'NOTE', description: '[Repset · Jane] hi' })
+    expect(ledger.mock.calls[0][0]).toMatchObject({ contact_id: 'c1', location_id: 'l1', glofox_member_id: 'gm1', source_table: 'notes', source_id: 'n1', type: 'NOTE', description: '[Repset · Jane] hi', status: 'sent' })
   })
   it('skips (no push, no throw) when the contact has no glofox_member_id', async () => {
     const ledger = vi.fn()
@@ -46,6 +46,15 @@ describe('pushNoteToGlofox', () => {
     const r = await pushNoteToGlofox(db, { contactId: 'c1', sourceTable: 'notes', sourceId: 'n1', type: 'NOTE', content: 'hi' })
     expect(r.pushed).toBe(false)
     expect(createGlofoxInteraction).not.toHaveBeenCalled()
+  })
+  it('REGISTRYREAD.1b: an unreadable settings row skips with reason glofox_settings_unreadable, not "no glofox creds"', async () => {
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
+    const ledger = vi.fn()
+    const db = makeDb({ id: 'c1', location_id: 'l1', glofox_member_id: 'gm1' }, ledger)
+    const r = await pushNoteToGlofox(db, { contactId: 'c1', sourceTable: 'notes', sourceId: 'n1', type: 'NOTE', content: 'hi' })
+    expect(r).toEqual({ pushed: false, reason: 'glofox_settings_unreadable' })
+    expect(createGlofoxInteraction).not.toHaveBeenCalled()
+    expect(ledger).not.toHaveBeenCalled()
   })
   it('skips when the location has no branch id (non-Glofox location — creds object with null fields)', async () => {
     // glofoxCredentialsForLocation never returns falsy; it returns an object

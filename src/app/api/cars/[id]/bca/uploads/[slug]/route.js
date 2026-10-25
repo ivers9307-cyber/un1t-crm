@@ -17,7 +17,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { getBcaConfig, BCA_STORAGE } from '@/lib/bca'
 import { overlayConnections } from '@/lib/connection-registry'
 
@@ -45,6 +45,10 @@ async function preflight(db, params, user) {
   }
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return { error: guard }
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) {
+    return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
+  }
 
   const { data: locationRow } = await db
     .from('locations')
@@ -88,7 +92,7 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -159,7 +163,7 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

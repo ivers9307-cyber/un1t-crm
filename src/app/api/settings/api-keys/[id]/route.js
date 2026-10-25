@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -14,10 +15,12 @@ export const dynamic = 'force-dynamic'
 export async function DELETE(request, ctx) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!['master', 'owner'].includes(user.role)) {
+  // C18 ORGROLE.1 — an organisation admin of the active org (master or an
+  // org_admin grant), not the ACTIVE studio's role.
+  const orgId = activeOrganizationId(user)
+  if (!isOrgAdmin(user, orgId)) {
     return NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 })
   }
-  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) return NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 })
 
   const { id } = (await ctx.params) || {}

@@ -1,10 +1,10 @@
 // Challenge leaderboard pure helpers. Byte-synced with champ-app/shared/challenges.js
-// below line 1 EXCEPT the import path — un1t-crm resolves the Dublin day-boundary
-// helpers via '@/lib/dublin-time', champ-app via './dublin-time.js' (line 5). The
+// below line 1 EXCEPT the import path — un1t-crm resolves the zone day-boundary
+// helpers via '@shared/zoned-time', champ-app via './zoned-time.js' (line 7). The
 // window/phase MATH is identical on both surfaces. No IO — standings DB reads live
 // in challenges-io.js (un1t-crm) / load-challenges.js (champ-app).
 
-import { dublinDayStartMs, dublinDateKey, DUBLIN_DAY_MS } from '@/lib/dublin-time'
+import { dayStartMsIn, addDaysIn, DEFAULT_TZ } from '@shared/zoned-time'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -32,38 +32,49 @@ export function rankStandings(rows) {
   })
 }
 
-// UTC-ms of 00:00 Europe/Dublin on a 'YYYY-MM-DD' challenge date.
-// Challenge windows are Europe/Dublin CALENDAR days — a challenge that
-// runs 10th → 20th includes every session on the Dublin 10th and 20th,
-// and excludes a session at 00:30 Dublin on the 21st (which is 23:30 UTC
-// on the 20th during IST — a UTC-midnight boundary would wrongly count
-// it). MUST match the un1t-crm challenge_standings RPC day boundaries.
-function dayMsDublin(dateStr) {
-  return dublinDayStartMs(String(dateStr))
+// UTC-ms of 00:00 in the CHALLENGE's studio zone on a 'YYYY-MM-DD' date.
+// Challenge windows are calendar days in the zone of the challenge's own
+// location (challenges.location_id → locations.timezone; TZ.13, D7), so every
+// participant shares ONE window. A challenge that runs 10th → 20th includes
+// every session on the local 10th and 20th, and excludes a session at 00:30
+// local on the 21st (23:30 UTC on the 20th during Irish summer time — a
+// UTC-midnight boundary would wrongly count it). The caller resolves the zone
+// (getLocationZone / zoneOfLocation); omitted, it is Europe/Dublin. The
+// challenge_standings RPC takes the instants computed here, so the two agree.
+function dayStartIn(dateStr, zone) {
+  return dayStartMsIn(String(dateStr), zone)
 }
 
-/** 'upcoming' | 'active' | 'ended' from inclusive Europe/Dublin day window. */
-export function challengePhase(challenge, nowMs = Date.now()) {
-  const start = dayMsDublin(challenge.starts_on)
-  // end-exclusive = 00:00 Dublin on the day AFTER ends_on.
-  const endExclusive = dublinDayStartMs(dublinDateKey(dayMsDublin(challenge.ends_on) + DUBLIN_DAY_MS))
+// End-exclusive = 00:00 local on the day AFTER ends_on, stepped with addDaysIn
+// (anchored at local noon). TZ.13: this used to be midnight + 24h, which on a
+// clocks-back Sunday (a 25-hour day: 25 Oct 2026 in Dublin, 1 Nov 2026 in New
+// York) lands at 23:00 the SAME day, so a challenge ending that Sunday lost its
+// last day (the DUBLINDAY.1 shape dublinDayRangeMs already fixed).
+function endExclusiveIn(endsOn, zone) {
+  return dayStartIn(addDaysIn(String(endsOn), 1, zone), zone)
+}
+
+/** 'upcoming' | 'active' | 'ended' from the inclusive local-day window in `zone`
+ *  (the challenge's studio zone). */
+export function challengePhase(challenge, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  const start = dayStartIn(challenge.starts_on, zone)
+  const endExclusive = endExclusiveIn(challenge.ends_on, zone)
   if (nowMs < start) return 'upcoming'
   if (nowMs < endExclusive) return 'active'
   return 'ended'
 }
 
-/** Inclusive Europe/Dublin day range → ISO window
- *  [00:00 Dublin start, 00:00 Dublin (end+1)). */
-export function windowIso(challenge) {
-  const endExclusive = dublinDayStartMs(dublinDateKey(dayMsDublin(challenge.ends_on) + DUBLIN_DAY_MS))
+/** Inclusive local-day range in `zone` (the challenge's studio zone) → ISO
+ *  window [00:00 local start, 00:00 local (end+1)). */
+export function windowIso(challenge, zone = DEFAULT_TZ) {
   return {
-    fromIso: new Date(dayMsDublin(challenge.starts_on)).toISOString(),
-    toIso: new Date(endExclusive).toISOString(),
+    fromIso: new Date(dayStartIn(challenge.starts_on, zone)).toISOString(),
+    toIso: new Date(endExclusiveIn(challenge.ends_on, zone)).toISOString(),
   }
 }
 
 /** Full contact name → "First L." privacy projection. `contacts` has a single
- * `name` column (NOT first_name/last_name) — this mirrors /api/public/live's split. */
+ * `name` column (NOT first_name/last_name) — this mirrors /api/public/tv-live's split. */
 export function shortName(fullName) {
   const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return 'Member'

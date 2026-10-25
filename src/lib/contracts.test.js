@@ -15,6 +15,8 @@ import {
   extractPlaceholders,
   unresolvedPlaceholders,
   eligibleTemplatesFor,
+  recipientInTemplateOrg,
+  recipientsForTemplate,
   unresolvedPlaceholdersUnion,
   canTransition,
   reminderDue,
@@ -588,6 +590,25 @@ describe('reminderDue', () => {
     expect(reminderDue({ status: 'viewed', issued_at: daysAgo(10), reminder_count: 1 }, NOW)).toBe(true)
   })
 
+  // PUSHDONE.1a — reminder 1 can be held back by retries (the cron records a
+  // reminder only once it reached someone). Held from day 3 to day 7, the
+  // day-7 rule alone would send reminder 2 the very next day. Reminder 2 also
+  // waits the planned 3→7 spacing (4 days) after the RECORDED reminder 1.
+  it('reminder 2 waits 4 days after the recorded reminder 1, even past day 7', () => {
+    const late = { status: 'issued', issued_at: daysAgo(8), reminder_count: 1, last_reminded_at: daysAgo(1) }
+    expect(reminderDue(late, NOW)).toBe(false)
+    expect(reminderDue({ ...late, last_reminded_at: daysAgo(3.9) }, NOW)).toBe(false)
+    expect(reminderDue({ ...late, last_reminded_at: daysAgo(4) }, NOW)).toBe(true)
+  })
+
+  it('the spacing never pulls reminder 2 earlier than day 7', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(6), reminder_count: 1, last_reminded_at: daysAgo(5) }, NOW)).toBe(false)
+  })
+
+  it('with no recorded last_reminded_at the day-since-issued rule alone applies', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(7), reminder_count: 1, last_reminded_at: null }, NOW)).toBe(true)
+  })
+
   it('is never due once reminder_count reaches the cap of 2', () => {
     expect(reminderDue({ status: 'issued', issued_at: daysAgo(100), reminder_count: 2 }, NOW)).toBe(false)
     expect(reminderDue({ status: 'issued', issued_at: daysAgo(365), reminder_count: 5 }, NOW)).toBe(false)
@@ -610,5 +631,52 @@ describe('reminderDue', () => {
 
   it('defaults reminder_count to 0 when absent', () => {
     expect(reminderDue({ status: 'issued', issued_at: daysAgo(3) }, NOW)).toBe(true)
+  })
+})
+
+// C140 CONTRACTRECIPIENT.1 (folds C138 d) — the issue wizard listed every
+// person at the caller's studios whatever the template's org, so an owner of
+// two orgs could pick org A's template for a person only in org B (the route
+// now refuses it). `locationOrgs` is the caller's own { location_id: org id }.
+describe('recipientInTemplateOrg / recipientsForTemplate / eligibleTemplatesFor with orgs (C140)', () => {
+  const locationOrgs = { 'loc-a1': 'org-a', 'loc-a2': 'org-a', 'loc-b1': 'org-b' }
+  const inA = { id: 'p-a', employment_type: 'fte', profile_locations: [{ location_id: 'loc-a2' }] }
+  const inB = { id: 'p-b', employment_type: 'fte', profile_locations: [{ location_id: 'loc-b1' }] }
+  const inBoth = { id: 'p-ab', employment_type: 'fte', profile_locations: [{ location_id: 'loc-b1' }, { location_id: 'loc-a1' }] }
+  const elsewhere = { id: 'p-x', employment_type: 'fte', profile_locations: [{ location_id: 'loc-unknown' }] }
+  const tplA = { id: 't-a', organization_id: 'org-a', employment_type: 'both' }
+  const tplB = { id: 't-b', organization_id: 'org-b', employment_type: 'both' }
+  const tplNull = { id: 't-null', organization_id: null, employment_type: 'both' }
+
+  it('a person belongs to a template\'s org through any studio of theirs in it', () => {
+    expect(recipientInTemplateOrg(inA, tplA, locationOrgs)).toBe(true)
+    expect(recipientInTemplateOrg(inBoth, tplA, locationOrgs)).toBe(true)
+    expect(recipientInTemplateOrg(inB, tplA, locationOrgs)).toBe(false)
+    expect(recipientInTemplateOrg(elsewhere, tplA, locationOrgs)).toBe(false)
+    expect(recipientInTemplateOrg({ id: 'p-none' }, tplA, locationOrgs)).toBe(false)
+  })
+
+  it('a null-org template (master-only) fits anyone', () => {
+    expect(recipientInTemplateOrg(inB, tplNull, locationOrgs)).toBe(true)
+  })
+
+  it('the recipient list narrows to the chosen template\'s org', () => {
+    const staff = [inA, inB, inBoth, elsewhere]
+    expect(recipientsForTemplate(staff, tplA, locationOrgs)).toEqual([inA, inBoth])
+    expect(recipientsForTemplate(staff, tplB, locationOrgs)).toEqual([inB, inBoth])
+    expect(recipientsForTemplate(staff, null, locationOrgs)).toEqual(staff)
+    expect(recipientsForTemplate(staff, tplNull, locationOrgs)).toEqual(staff)
+  })
+
+  it('the template list narrows to orgs every selected person belongs to', () => {
+    const templates = [tplA, tplB, tplNull]
+    expect(eligibleTemplatesFor([inA], templates, locationOrgs)).toEqual([tplA, tplNull])
+    expect(eligibleTemplatesFor([inBoth], templates, locationOrgs)).toEqual([tplA, tplB, tplNull])
+    expect(eligibleTemplatesFor([inA, inB], templates, locationOrgs)).toEqual([tplNull])
+    expect(eligibleTemplatesFor([], templates, locationOrgs)).toEqual(templates)
+  })
+
+  it('without locationOrgs eligibleTemplatesFor is unchanged (employment type only)', () => {
+    expect(eligibleTemplatesFor([inA, inB], [tplA, tplB], undefined)).toEqual([tplA, tplB])
   })
 })

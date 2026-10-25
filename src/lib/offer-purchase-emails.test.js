@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const sendTransactionalEmail = vi.fn(async () => ({ messageId: 'm1' }))
 vi.mock('./postmark', () => ({ sendTransactionalEmail: (...a) => sendTransactionalEmail(...a) }))
+// W1.S1a — the brand resolver, as it answers for Stillorgan.
+const branding = { companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' }
+vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => branding) }))
 
 import {
   bonusPhrase, applyTokens, defaultCopy, sendOfferPurchaseEmail, PURCHASE_EMAIL_TEMPLATES,
@@ -31,7 +34,7 @@ describe('applyTokens', () => {
 })
 
 describe('defaultCopy', () => {
-  const tokens = { first_name: 'Sam', offer_name: '20 Class Pack', bonus: '5 extra classes', amount: '€380', studio: 'UN1T Stillorgan' }
+  const tokens = { first_name: 'Sam', offer_name: '20 Class Pack', bonus: '5 extra classes', amount: '€380', studio: 'UN1T Stillorgan', short_name: 'UN1T' }
 
   it("the paid email does NOT claim the purchase is usable yet", () => {
     const { subject, htmlBody } = defaultCopy('paid', tokens)
@@ -51,6 +54,14 @@ describe('defaultCopy', () => {
     const { htmlBody } = defaultCopy('ready', { ...tokens, bonus: '' })
     expect(htmlBody).not.toContain('included')
     expect(htmlBody).toContain('20 Class Pack')
+  })
+
+  it('W1.S1a: names the member app for the short brand, and never another gym when unknown', () => {
+    expect(defaultCopy('ready', tokens).htmlBody).toContain('through the UN1T app the way')
+    expect(defaultCopy('ready', { ...tokens, short_name: 'Northside' }).htmlBody).toContain('through the Northside app the way')
+    const bare = defaultCopy('ready', { ...tokens, short_name: '', studio: 'Northside Strength' }).htmlBody
+    expect(bare).toContain('through the app the way')
+    expect(bare).not.toContain('UN1T')
   })
 
   it('carries no em-dashes or emoji in either variant (house style)', () => {

@@ -95,6 +95,17 @@ describe('writeMembershipSnapshot', () => {
     expect(out.snapshot_date).toBe('2026-06-01')
   })
 
+  it('UN1TREAD.5 — writes the counts it is handed and reads no contacts', async () => {
+    const upsert = vi.fn()
+    const contactsReads = vi.fn()
+    const db = fakeCountDb((state) => { contactsReads(state); return 0 }, upsert)
+    const counts = { total_members: 7, monthly_recurring: 4, class_packs: 3, payg: 0, active_recurring: 4, dead_packs: 1, detail: { recurring_by_interval: {} } }
+    const out = await writeMembershipSnapshot(db, 'loc-1', { snapshotDate: '2026-06-01', counts })
+    expect(contactsReads).not.toHaveBeenCalled()
+    expect(upsert.mock.calls[0][0]).toEqual({ location_id: 'loc-1', snapshot_date: '2026-06-01', ...counts })
+    expect(out).toEqual({ snapshot_date: '2026-06-01', ...counts })
+  })
+
   it('derives the Dublin calendar day from now when not supplied', async () => {
     const upsert = vi.fn()
     const db = fakeCountDb(() => 0, upsert)

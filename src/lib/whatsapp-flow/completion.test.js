@@ -7,19 +7,30 @@ vi.mock('@/lib/qstash.js', () => ({
   CLASS_BOOKINGS_WORKER_PATH: '/api/webhooks/qstash/class-bookings',
 }))
 
-import { handleFlowCompletion } from './completion.js'
+import { handleFlowCompletion, publishFlowClassBooking } from './completion.js'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent.js'
 import { createEventBooking } from '@/lib/bookings-write.js'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash.js'
 
-function fakeDb(inserts, { insertResult = { data: { id: 'cbr1' }, error: null } } = {}) {
+function fakeDb(inserts, { insertResult = { data: { id: 'cbr1' }, error: null }, existing = { data: null, error: null }, reads = [] } = {}) {
   return {
-    from: (t) => ({
-      insert: (row) => {
-        ;(inserts[t] ||= []).push(row)
-        return { select: () => ({ maybeSingle: async () => insertResult }) }
-      },
-    }),
+    from: (t) => {
+      // FLOWACK.1 review — the 23505 path reads the row that already holds the class.
+      const read = { ops: [] }
+      const b = {
+        insert: (row) => {
+          ;(inserts[t] ||= []).push(row)
+          return { select: () => ({ maybeSingle: async () => insertResult }) }
+        },
+        select: (cols) => { read.ops.push(['select', cols]); return b },
+        eq: (c, v) => { read.ops.push(['eq', c, v]); return b },
+        in: (c, v) => { read.ops.push(['in', c, v]); return b },
+        order: () => b,
+        limit: () => b,
+        maybeSingle: async () => { reads.push({ table: t, ops: read.ops }); return existing },
+      }
+      return b
+    },
   }
 }
 
@@ -36,7 +47,7 @@ describe('handleFlowCompletion', () => {
 
     const res = await handleFlowCompletion(fakeDb(inserts), { interactive, contact, locationId: 'loc1' })
 
-    expect(res).toEqual({ handled: true, kind: 'class' })
+    expect(res).toEqual({ handled: true, kind: 'class', requestId: 'cbr1' })
     expect(inserts.class_booking_requests[0]).toMatchObject({
       contact_id: 'ct1', location_id: 'loc1', glofox_event_id: 'c1', class_name: 'HIIT',
       starts_at: '2026-07-03T18:00:00Z', status: 'queued',
@@ -45,12 +56,18 @@ describe('handleFlowCompletion', () => {
     expect(applyFormMarketingConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'ct1', consent: true, source: 'whatsapp_flow' }))
   })
 
-  it('class path → fire-and-forget QStash push for the queued row (dash-only dedup id)', async () => {
-    const inserts = {}
+  // FLOWACK.1 review — the push is NOT sent from here any more: the webhook
+  // publishes it after the acknowledgement, so a fast outcome ("the team is
+  // confirming") can never reach the customer before "we're booking your spot".
+  it('class path → no QStash push from the completion itself (the webhook publishes after the ack)', async () => {
     const interactive = { type: 'nfm_reply', nfm_reply: { response_json: JSON.stringify({
       path: 'class', slot: 'c1|2026-07-03T18:00:00Z|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: false }) } }
+    await handleFlowCompletion(fakeDb({}), { interactive, contact, locationId: 'loc1' })
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
 
-    await handleFlowCompletion(fakeDb(inserts), { interactive, contact, locationId: 'loc1' })
+  it('publishFlowClassBooking → fire-and-forget QStash push for the queued row (dash-only dedup id)', async () => {
+    await publishFlowClassBooking('cbr1')
 
     expect(publishQueuePush).toHaveBeenCalledWith({
       path: CLASS_BOOKINGS_WORKER_PATH,
@@ -59,29 +76,43 @@ describe('handleFlowCompletion', () => {
     })
   })
 
-  it('23505 dedupe → still handled, but NO publish (no id — the original submit published)', async () => {
-    const inserts = {}
+  // FLOWACK.1 review — a duplicate submission names itself and the row that
+  // already holds the class, so the webhook answers it honestly.
+  it('23505 dedupe → handled as a duplicate, with the existing row\'s status, and no id to publish', async () => {
+    const reads = []
     const interactive = { type: 'nfm_reply', nfm_reply: { response_json: JSON.stringify({
       path: 'class', slot: 'c1|2026-07-03T18:00:00Z|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: false }) } }
 
     const res = await handleFlowCompletion(
-      fakeDb(inserts, { insertResult: { data: null, error: { code: '23505', message: 'dup' } } }),
+      fakeDb({}, {
+        insertResult: { data: null, error: { code: '23505', message: 'dup' } },
+        existing: { data: { status: 'booked', class_name: 'HIIT', starts_at: '2026-07-03T18:00:00Z' }, error: null },
+        reads,
+      }),
       { interactive, contact, locationId: 'loc1' },
     )
 
-    expect(res).toEqual({ handled: true, kind: 'class' })
+    expect(res).toEqual({ handled: true, kind: 'class', duplicate: true, existingStatus: 'booked', className: 'HIIT', startsAt: '2026-07-03T18:00:00Z' })
+    expect(reads[0].ops).toEqual(expect.arrayContaining([
+      ['eq', 'contact_id', 'ct1'], ['eq', 'glofox_event_id', 'c1'], ['in', 'status', ['queued', 'processing', 'booked']],
+    ]))
     expect(publishQueuePush).not.toHaveBeenCalled()
   })
 
-  it('a publish rejection never breaks the booking result (belt-and-braces)', async () => {
-    publishQueuePush.mockRejectedValueOnce(new Error('qstash down'))
-    const inserts = {}
+  it('23505 dedupe with an unreadable existing row → still a duplicate, status unknown', async () => {
     const interactive = { type: 'nfm_reply', nfm_reply: { response_json: JSON.stringify({
       path: 'class', slot: 'c1|2026-07-03T18:00:00Z|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: false }) } }
+    const res = await handleFlowCompletion(
+      fakeDb({}, { insertResult: { data: null, error: { code: '23505', message: 'dup' } }, existing: { data: null, error: { message: 'boom' } } }),
+      { interactive, contact, locationId: 'loc1' },
+    )
+    expect(res).toEqual({ handled: true, kind: 'class', duplicate: true, existingStatus: null, className: 'HIIT', startsAt: '2026-07-03T18:00:00Z' })
+  })
 
-    const res = await handleFlowCompletion(fakeDb(inserts), { interactive, contact, locationId: 'loc1' })
-
-    expect(res).toEqual({ handled: true, kind: 'class' })
+  it('a publish rejection never throws (belt-and-braces)', async () => {
+    publishQueuePush.mockRejectedValueOnce(new Error('qstash down'))
+    await expect(publishFlowClassBooking('cbr1')).resolves.toBeUndefined()
+    await expect(publishFlowClassBooking(null)).resolves.toBeUndefined()
   })
 
   it('consult path → creates a booking via createEventBooking', async () => {
@@ -91,7 +122,8 @@ describe('handleFlowCompletion', () => {
 
     const res = await handleFlowCompletion(fakeDb(inserts), { interactive, contact, locationId: 'loc1' })
 
-    expect(res).toEqual({ handled: true, kind: 'consult' })
+    // FLOWACK.1 — the slot rides back for the webhook's confirmation.
+    expect(res).toEqual({ handled: true, kind: 'consult', date: '2026-07-03', startTime: '18:00' })
     expect(createEventBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       event: { id: 'ev1', location_id: 'loc1' }, date: '2026-07-03', startTime: '18:00', endTime: '18:30', source: 'whatsapp_flow',
     }))

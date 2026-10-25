@@ -1,3 +1,6 @@
+// Richard, 24 Oct 2026: the free-class campaign is finished; /trial sells the paid trial at both studios.
+// This page now redirects to /trial with the studio preselected and the ad query kept.
+// To bring it back, delete the redirect(...) line in the default export.
 // /start — public Meta-ad landing page (Stillorgan). A full landing page that
 // mirrors the welcome-page layout: a hero (Ken Burns push-in + bottom-weighted
 // scrim + film grain, lp-* classes from globals.css) with the ClassFunnel
@@ -13,13 +16,18 @@
 // (un1t-marketing) + proxy.js + AppShell. noindex: a paid funnel shouldn't
 // compete in organic search.
 
+import { redirect } from 'next/navigation'
+import { trialRedirectFor } from '@/lib/trial-studios'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
+import VisitOriginCapture from '@/components/VisitOriginCapture'
 import ClassFunnel from '@/components/ClassFunnel'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
+import { resolveOrgChrome, resolveLocationBrand } from '@/lib/host-brand'
+import { UN1T_GROUP_ORG_ID } from '@/lib/brands'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,6 +35,13 @@ export const dynamic = 'force-dynamic'
 // landing_page_settings row (the operator-editable source /stillorgan
 // itself renders) with the old hardcoded URL as fallback; live value is
 // identical today, so paid traffic sees no change.
+
+// W1.S1b — the studio this funnel books into. Its name on the page (the
+// funnel card, the content blocks, the logo alt) is Stillorgan's configured
+// brand (resolveLocationBrand, cached), not a literal; the static metadata
+// below stays UN1T's own (Appendix A `keep`: /start is a UN1T-only paid
+// funnel, unreachable on a tenant host).
+const STILLORGAN_LOCATION_ID = 'a0000000-0000-0000-0000-000000000001'
 
 const HERO_IMAGE =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg'
@@ -57,18 +72,27 @@ async function loadContentBlocks() {
   }
 }
 
-export default async function StartPage() {
-  const [blocks, logoUrl] = await Promise.all([
+export default async function StartPage(props) {
+  const sp = await props.searchParams
+  redirect(trialRedirectFor('stillorgan', sp))
+  // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
+  // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
+  // cached), so the shared footer component carries no gym literal of its own.
+  const [blocks, logoUrl, chrome, studio] = await Promise.all([
     loadContentBlocks(),
     getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO),
+    resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID }),
+    resolveLocationBrand({ locationId: STILLORGAN_LOCATION_ID }),
   ])
+  const studioName = studio.companyName || chrome.companyName
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
+      <VisitOriginCapture />
       <RevealManager />
       <SiteHeader
         logoUrl={logoUrl}
-        logoAlt="UN1T Stillorgan"
+        logoAlt={studioName}
         logoWidthPx={150}
         sticky
         ctaHref={CTA_HREF}
@@ -88,7 +112,7 @@ export default async function StartPage() {
         />
 
         <div className="relative z-10 flex-1 flex items-center justify-center px-5 pt-28 pb-16">
-          <ClassFunnel />
+          <ClassFunnel locationName={studioName} />
         </div>
       </section>
 
@@ -99,10 +123,12 @@ export default async function StartPage() {
           publicPath="stillorgan"
           ctaHref={CTA_HREF}
           ctaLabel={CTA_LABEL}
+          wordmark={chrome.shortName}
+          locationName={studioName}
         />
       ))}
 
-      <SiteFooter ctaHref={CTA_HREF} ctaLabel={CTA_LABEL} />
+      <SiteFooter ctaHref={CTA_HREF} ctaLabel={CTA_LABEL} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

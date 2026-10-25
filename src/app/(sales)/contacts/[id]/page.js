@@ -4,17 +4,19 @@ import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 import { canViewContact } from '@/lib/contact-crossovers'
-import { hasPermission } from '@/lib/permissions'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates, un1tBookingStudios } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
+// WAITLIST.6 — PIPELINES.5's board resolver, reused: never hardcode a pipeline.
+import { findPrimaryPipeline } from '@/lib/deal-lookup'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import ContactBookingCard from '@/components/ContactBookingCard'
+import Un1tClassBookingCard from '@/components/Un1tClassBookingCard'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
@@ -26,6 +28,9 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
+import { loadContactStudios } from '@/lib/contact-studios-display'
+// HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
+import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
@@ -37,6 +42,7 @@ import ConsultationsList from '@/components/ConsultationsList'
 import SendKudosCard from '@/components/SendKudosCard'
 import ProgressPhotos from '@/components/ProgressPhotos'
 import InBodyProgress from '@/components/InBodyProgress'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,9 +65,13 @@ export default async function ContactDetailPage(props) {
   // membership, LTV, DOB, message history — by enumerating ids. Load the
   // contact FIRST, authorise, and only THEN fetch its sub-resources, so a
   // stranger's deals / notes / bookings / WhatsApp are never queried at
-  // all. canViewContact allows owned ∪ crossover (a deal at the caller's
-  // studio) ∪ master, mirroring the contacts list so crossover rows the
-  // operator can see stay openable.
+  // all. canViewContact allows owned ∪ crossover (a deal, an ACTIVE
+  // membership since UN1TDUAL / mig 731, or a un1t.online client row of any
+  // status since UN1TDUAL.4 / mig 732, at one of the caller's studios) ∪
+  // master, mirroring the contacts list so crossover rows the operator can
+  // see stay openable. A crossover viewer is not a member of the contact's
+  // studio, so the cards whose routes require that are hidden through
+  // contactWorkGates (canBook, canReadConsent, canReadStudioCards).
   const { data: contact } = await db.from('contacts').select('*').eq('id', id).single()
   if (!contact) notFound()
   if (!(await canViewContact(db, user, contact))) notFound()
@@ -79,7 +89,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -95,6 +105,24 @@ export default async function ContactDetailPage(props) {
     loadContactArrears(db, id),
     // CANCEL-FORM.4 — latest issued cancellation-form link → header chip.
     latestLinkForContact(db, id),
+    // WAITLIST.6 — which board does this contact's studio run? The header
+    // band's Cold item only means anything on a DERIVED board (it stamps
+    // pipeline_dismissed_at, which only the classifier reads, and mig 594's
+    // `mode` fences the classifier out of a manual board). Resolved HERE, in
+    // the round trip the page already makes, rather than by the component:
+    // ContactHeaderBand is a server component with no fetching of its own, and
+    // giving it one would put a network call on every profile render.
+    //
+    // .catch → null on purpose. A board we cannot read must not blank a
+    // profile, and null falls through to `derived` below — the button stays,
+    // exactly as it does today.
+    findPrimaryPipeline(db, contact.location_id).catch(() => null),
+    // HATCHPIPE.2 — un1t.online payments for the studios the VIEWER can see.
+    // Never throws; an unreadable studio is dropped, never shown as zero.
+    loadUn1tBilling(db, user, id),
+    // ORGCONTACTS.2 — every studio the person has a relationship with
+    // (contact_studios), the Studios card. Never throws; a failed read hides it.
+    loadContactStudios(db, id, { primaryLocationId: contact.location_id }),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -117,6 +145,28 @@ export default async function ContactDetailPage(props) {
   const activities = activitiesRes.data || []
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
+
+  // UN1TWRITE.15 — the un1t.online studios this contact can be booked at
+  // from here: an account there (un1t_clients), writes on, and the viewer a
+  // member. Only the writes_enabled boolean leaves the settings (a JSON
+  // path), never the settings object. Best-effort: no card on a failed read.
+  let un1tStudios = []
+  try {
+    const { data: clientRows, error: clientErr } = await db.from('un1t_clients')
+      .select('location_id').eq('contact_id', contact.id).limit(50)
+    const ids = [...new Set((clientRows || []).map((r) => r.location_id).filter(Boolean))]
+    if (!clientErr && ids.length > 0) {
+      const { data: locs, error: locErr } = await db.from('locations')
+        .select('id, name, membership_source, writes_enabled:settings->un1t_online->writes_enabled').in('id', ids)
+      if (!locErr) {
+        un1tStudios = un1tBookingStudios({
+          user,
+          clientRows,
+          locations: (locs || []).map((l) => ({ id: l.id, name: l.name, membership_source: l.membership_source, writes_enabled: l.writes_enabled === true })),
+        })
+      }
+    }
+  } catch { un1tStudios = [] }
   const bookableEventTypes = eventTypesRes?.data || []
 
   // CHURN-CONTACT.1 — make the contact page prospective, not just a
@@ -141,8 +191,11 @@ export default async function ContactDetailPage(props) {
   const churnClass = classifyContact(activityContact, arrearsCtx)
   const churnScored = churnClass === 'active' ? scoreMember(activityContact, Date.now()) : null
   let risk = null
+  const un1tRisk = un1tHeaderRisk(un1tBilling)
   if (churnClass === 'overdue') {
     risk = { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
+  } else if (un1tRisk) {
+    risk = un1tRisk
   } else if (churnScored) {
     const sigs = churnScored.signals.map((s) => `${s.label}: ${s.detail}`).join(' · ')
     risk = churnScored.tier === 'high'
@@ -160,7 +213,7 @@ export default async function ContactDetailPage(props) {
     journey = await loadContactJourney(db, id)
   } catch { journey = null }
 
-  const [seqRes, emailRes, smsRes] = await Promise.all([
+  const [seqRes, emailRes] = await Promise.all([
     db.from('sequence_enrollments')
       .select('id, next_step_at, email_sequences(name)')
       .eq('contact_id', id)
@@ -174,21 +227,16 @@ export default async function ContactDetailPage(props) {
       .eq('contact_id', id)
       .order('sent_at', { ascending: false, nullsFirst: false })
       .limit(8),
-    // SMS broadcast sends (ad-hoc / sequence SMS aren't logged per-contact).
-    db.from('sms_broadcast_recipients')
-      .select('id, status, sent_at, delivered_at, failed_at, undelivered_at, error_message, sms_broadcasts(name)')
-      .eq('contact_id', id)
-      .order('sent_at', { ascending: false, nullsFirst: false })
-      .limit(8),
   ])
   const activeSequences = seqRes.data || []
-  const messages = buildMessageHistory(emailRes.data || [], smsRes.data || [])
+  const messages = buildMessageHistory(emailRes.data || [])
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
-  const canWhatsApp = hasPermission(user, 'whatsapp')
-  const canSms = hasPermission(user, 'sms')
-  // DRAWER.4 — ad-hoc email channel (same gate as the /email route).
-  const canEmail = hasPermission(user, 'email')
+  // DRAWER.4 — ad-hoc email channel.
+  // ROLESWEEP.1c — each flag is the send route's own decision: the web OR the
+  // mobile toggle at the CONTACT's location, not the active studio. canWhatsApp
+  // also gates the template read below.
+  const { whatsapp: canWhatsApp, email: canEmail } = contactChannelFlags(user, contact.location_id)
   const latestWaConversation = waConversations[0] || null
   const whatsappWindowOpen = latestWaConversation?.window_expires_at
     ? new Date(latestWaConversation.window_expires_at) > new Date()
@@ -220,7 +268,18 @@ export default async function ContactDetailPage(props) {
   // runs through createServerClient() (service role — RLS doesn't bind
   // it), so the permission check IS the access gate here, mirroring the
   // goals/consultations/photos API routes.
-  const canConsultations = hasPermission(user, 'consultations')
+  // ROLESWEEP.1c — judged at the CONTACT's location: a caller with
+  // consultations on at their active studio and off at the contact's must not
+  // get this contact's consultations, goals, photos or scans loaded.
+  const canConsultations = canLoadContactConsultations(user, contact.location_id)
+  // ROLEUI.1 — the action buttons, each the decision of the route it calls,
+  // judged at the CONTACT's location (never user.role, the active studio's).
+  // ORGCONTACTS.4 — Edit widens to the studios the person has a relationship
+  // with (contact_studios); Delete / Change primary studio stay with the
+  // primary studio's admins, an organisation admin or a master.
+  const actions = contactActionGates(user, contact, { relationshipStudioIds: contactStudios.rows.map((r) => r.location_id) })
+  // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
+  const work = contactWorkGates(user, contact)
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
@@ -266,6 +325,9 @@ export default async function ContactDetailPage(props) {
     }))
     const signedPhotos = photos.filter((p) => p.url)
 
+    // TZ.13 — a new consultation defaults to today in the contact's home
+    // studio zone. Display default only, so an unreadable zone falls back.
+    const consultZone = await getLocationZone(db, contact.location_id).catch(() => DEFAULT_TZ)
     consultationsTab = (
       <div className="space-y-5">
         <SendKudosCard contactId={contact.id} />
@@ -275,6 +337,7 @@ export default async function ContactDetailPage(props) {
           consultations={consultations}
           coaches={coaches}
           currentUserId={user.id}
+          zone={consultZone}
         />
         <ProgressPhotos contactId={contact.id} photos={signedPhotos} />
         <InBodyProgress scans={inbodyScans} contactId={contact.id} />
@@ -282,9 +345,18 @@ export default async function ContactDetailPage(props) {
     )
   }
 
-  const today = dublinTodayStr()
-  const upcomingBookings = bookings.filter(b => b.booking_date >= today && b.status === 'confirmed')
-  const pastBookings = bookings.filter(b => b.booking_date < today || b.status !== 'confirmed')
+  // TZ.7: each booking's date is its own studio's calendar day (a contact can
+  // book at more than one), falling back to the contact's studio. One batched
+  // zone read; display only, so an unreadable zone splits on the default day.
+  const bookingZones = await getLocationZones(db, [contact.location_id, ...bookings.map((b) => b.location_id)])
+    .catch(() => new Map())
+  const nowMs = Date.now()
+  const contactZone = bookingZones.get(contact.location_id) || DEFAULT_TZ
+  // The contact's own studio day (the needs-attention chips below).
+  const today = todayStrIn(contactZone, nowMs)
+  const todayFor = (b) => todayStrIn(bookingZones.get(b.location_id) || contactZone, nowMs)
+  const upcomingBookings = bookings.filter(b => b.booking_date >= todayFor(b) && b.status === 'confirmed')
+  const pastBookings = bookings.filter(b => b.booking_date < todayFor(b) || b.status !== 'confirmed')
 
   // Build unified timeline from notes + activities, sorted by date
   // (DRAWER.1 — the merge moved to contact-view so the drawer shares it).
@@ -301,7 +373,8 @@ export default async function ContactDetailPage(props) {
   //    cross-member LTV roll-up), so we keep the primary contact's figure
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
-  const metricArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
+  const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
+  const metricArrearsCents = mergeArrearsCents(glofoxArrearsCents, un1tBilling)
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
 
@@ -326,8 +399,11 @@ export default async function ContactDetailPage(props) {
   const attention = deriveNeedsAttention({
     contact: { ...contact, next_class_at: nextClassAt },
     arrearsCents: metricArrearsCents || 0,
+    // The chase-list is Glofox's: only the Glofox part says "on the list".
+    glofoxArrearsCents: glofoxArrearsCents || 0,
     openTasks,
     todayStr: today,
+    overdue: un1tBilling.overdue,
   })
 
   // ── CC.2 — command-centre layout (tabs removed) ─────────────────────────
@@ -349,11 +425,24 @@ export default async function ContactDetailPage(props) {
         journey={journey}
         attention={attention}
         nextClassAt={nextClassAt}
-        canToggleExempt={MANAGER_ROLES.includes(user?.role)}
+        // TZ.16 — the contact's studio zone (TZ.7's read above) for the
+        // next-class chip; the viewer's active studio decides the suffix.
+        timezone={contactZone}
+        viewerZone={viewerZoneOf(user)}
+        canToggleExempt={actions.canToggleExempt}
+        actionGates={work}
         cancellationLink={cancellationLink}
+        // WAITLIST.6 — a location with no readable primary board resolves null
+        // here, which is FALSE, which is today's behaviour (Cold shown).
+        manual={primaryPipeline?.mode === 'manual'}
         metrics={{
           ltvCents,
           arrearsCents: metricArrearsCents,
+          un1t: {
+            overdue: un1tBilling.overdue,
+            amountUnreported: un1tBilling.amountUnreported,
+            amountNotEur: un1tBilling.amountNotEur,
+          },
           attended: metricAttended,
           deals: metricDeals,
           currency: contact.lifetime_currency,
@@ -368,7 +457,12 @@ export default async function ContactDetailPage(props) {
             person={person}
             identityEmails={identityEmails}
             identityPhones={identityPhones}
-            canEditPrefs={user?.isMaster || ['owner'].includes(user?.role)}
+            canEditPrefs={actions.canEditPrefs}
+            canLinkAccounts={work.canLinkAccounts}
+            contactStudios={contactStudios.rows}
+            canReadStudioCards={work.canReadStudioCards}
+            canRehome={actions.admin.canRehome}
+            un1tBilling={un1tBilling}
           />
         </div>
 
@@ -384,12 +478,9 @@ export default async function ContactDetailPage(props) {
               contactLocationId={contact.location_id}
               contactEmail={contact.email || null}
               canWhatsApp={canWhatsApp}
-              canSms={canSms}
               canEmail={canEmail}
               hasWaPhone={!!(contact.wa_phone || contact.phone)}
-              hasPhone={!!contact.phone}
               hasEmail={!!contact.email}
-              smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
               emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
               whatsappWindowOpen={whatsappWindowOpen}
               whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
@@ -405,6 +496,9 @@ export default async function ContactDetailPage(props) {
               <ContactActions
                 contactId={contact.id}
                 locationId={contact.location_id}
+                canNote={work.canNote}
+                canTask={work.canTask}
+                canSequence={work.canSequence}
               />
             </div>
             <ContactTimeline timeline={timeline} person={person} showFilters />
@@ -441,11 +535,13 @@ export default async function ContactDetailPage(props) {
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-1.5">
                   <MessageCircle size={12} /> WhatsApp
                 </h3>
-                <StartWhatsAppButton
-                  contactId={contact.id}
-                  contactPhone={contact.phone}
-                  waPhone={contact.wa_phone}
-                />
+                {work.canStartWhatsApp && (
+                  <StartWhatsAppButton
+                    contactId={contact.id}
+                    contactPhone={contact.phone}
+                    waPhone={contact.wa_phone}
+                  />
+                )}
               </div>
               {contact.wa_phone && (
                 <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
@@ -489,29 +585,32 @@ export default async function ContactDetailPage(props) {
             sequences={activeSequences}
             upcomingBookings={upcomingBookings}
             deals={deals}
-            admin={{
-              canPasswordOverride: Boolean(contact.user_id) && ['master', 'owner'].includes(user?.role),
-              canEditDelete: MANAGER_ROLES.includes(user?.role),
-              canInvite: (user?.isMaster || ['owner', 'manager'].includes(user?.role)) && Boolean(contact.email),
-              hasUserAccount: Boolean(contact.user_id),
-              canEditDevices: user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role),
-              // REPSET-P5 — admin contact-linking tool: master/owner ONLY
-              // (staff never self-link their member contact; the route
-              // re-enforces this server-side).
-              canLinkAccount: user?.isMaster || ['master', 'owner'].includes(user?.role),
-            }}
+            admin={actions.admin}
+            canReadStudioCards={work.canReadStudioCards}
           />
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or
               Glofox class, same engine as the inbox Book tab. */}
-          <ContactBookingCard
-            contactId={contact.id}
-            locationId={contact.location_id}
-            glofoxMemberId={contact.glofox_member_id || null}
-            eventTypes={bookableEventTypes}
-            waConversationId={latestWaConversation?.id || null}
-            waWindowOpen={whatsappWindowOpen}
-          />
+          {work.canBook && (
+            <ContactBookingCard
+              contactId={contact.id}
+              locationId={contact.location_id}
+              glofoxMemberId={contact.glofox_member_id || null}
+              eventTypes={bookableEventTypes}
+              waConversationId={latestWaConversation?.id || null}
+              waWindowOpen={whatsappWindowOpen}
+            />
+          )}
+          {un1tStudios.map((studio) => (
+            <Un1tClassBookingCard
+              key={studio.locationId}
+              contactId={contact.id}
+              locationId={studio.locationId}
+              studioName={studio.studioName}
+              waConversationId={latestWaConversation?.id || null}
+              waWindowOpen={whatsappWindowOpen}
+            />
+          ))}
         </div>
       </div>
 
@@ -525,9 +624,11 @@ export default async function ContactDetailPage(props) {
 
       {/* CONSENT.3 — full-width consent history table (collapsed +
           lazy-loading, as before). */}
-      <div className="mt-8">
-        <ContactConsentHistoryCard contactId={contact.id} />
-      </div>
+      {work.canReadConsent && (
+        <div className="mt-8">
+          <ContactConsentHistoryCard contactId={contact.id} />
+        </div>
+      )}
     </div>
   )
 }
@@ -543,21 +644,13 @@ function emailStatusPill(e) {
   return { text: 'Sent', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
 }
 
-function smsStatusPill(s) {
-  if (s.failed_at || s.undelivered_at) return { text: 'Failed', cls: 'bg-red-50 text-red-700 border-red-200' }
-  if (s.delivered_at) return { text: 'Delivered', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
-  return { text: 'Sent', cls: 'bg-un1t-bg text-un1t-subtle border-un1t-border' }
-}
-
-// Merge email + SMS sends into one "what we've sent + did it land"
-// list, newest first, capped.
-function buildMessageHistory(emails, smses) {
+// Email sends as one "what we've sent + did it land" list, newest
+// first, capped. (SMS broadcast sends used to merge in here until SMS
+// was retired with Twilio, TWILIO-RETIRE.1.)
+function buildMessageHistory(emails) {
   const out = []
   for (const e of emails) {
     out.push({ id: `e-${e.id}`, channel: 'email', label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
-  }
-  for (const s of smses) {
-    out.push({ id: `s-${s.id}`, channel: 'sms', label: s.sms_broadcasts?.name ? `SMS · ${s.sms_broadcasts.name}` : 'SMS broadcast', at: s.sent_at, status: smsStatusPill(s) })
   }
   return out
     .filter((m) => m.at)

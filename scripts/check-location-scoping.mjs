@@ -2,9 +2,10 @@
 // Location-scoping presence lint (SAAS-9, sibling of check-route-guards.mjs).
 //
 // Fails CI when an /api route — or, since PAGE-SCOPE.1, an app-dir server
-// page — queries a location_id-bearing table with no detectable tenant
-// scoping. Every route runs createServerClient() (service role — RLS
-// bypassed), so an authenticated-but-unscoped
+// page, or, since PAGE-SCOPE.2, an app-dir layout — queries a
+// location_id-bearing table with no detectable tenant scoping. Every route
+// runs createServerClient() (service role — RLS bypassed), so an
+// authenticated-but-unscoped
 // `.from('contacts').select(...)` serves ANY tenant's rows to whoever passes
 // the auth guard. That's the exact class SAAS-1..5 kept finding by hand
 // (assistant executeTool cross-tenant reads, bare-id template fetches);
@@ -13,7 +14,14 @@
 // comms audit) shipped precisely because only src/app/api was scanned —
 // src/app/**/page.js files that call createServerClient() are now classified
 // too (pages without it are skipped: client/API-fed pages query through
-// guarded routes or the RLS-bound browser client).
+// guarded routes or the RLS-bound browser client). Layouts are the same
+// surface again (PAGE-SCOPE.2): src/app/offers/layout.js selected
+// sale_offers across EVERY location in both generateMetadata and the footer
+// until W0.4 (#1958) pinned it to the home location, and the gate never saw
+// it because only page.js was walked. The app-dir walk now reads page.js,
+// page.jsx, layout.js and layout.jsx (APP_SURFACE_FILES) with ONE classifier,
+// and the classifier is whole-file, so a query inside generateMetadata (or
+// any other export) counts exactly like one inside the default export.
 //
 // Model (token-presence heuristic, same spirit as check-route-guards):
 //   1. The set of tenant tables is DERIVED from supabase/migrations at
@@ -48,25 +56,36 @@
 // SCOPING_HELPERS asserts you've READ it and it scopes internally — don't
 // add names blind.
 //
-// Known gap (PAGE-SCOPE.1, checked and empty as of 2026-08-09): a page that
-// reads tenant rows ONLY through a src/lib helper which makes its own
-// service-role client is skipped, since the page itself never names
-// createServerClient. Audited at the time: the only such data-reading
+// Known gap (PAGE-SCOPE.1, checked and empty as of 2026-08-09; layouts
+// joined the scan in PAGE-SCOPE.2 and the gap is the same shape for them): a
+// page or layout that reads tenant rows ONLY through a src/lib helper which
+// makes its own service-role client is skipped, since the file itself never
+// names createServerClient. Audited at the time: the only such data-reading
 // delegates were tenant-privacy.js (filters organization_id),
 // landing-logo.js (public_path — public marketing content) and policies.js
-// (policies/policy_versions/policy_views carry NO location_id — estate-wide
-// staff policies, so they aren't tenant tables at all). @/lib/auth's
+// (filters policies.organization_id via policyOrgIdFor — W0.5, mig 713;
+// policy_versions/policy_views hang off policies). @/lib/auth's
 // internal client is the auth lookup itself, not a tenant read. If you add
 // a lib that fetches tenant rows on its own client, scope it there and add
-// it to SCOPING_HELPERS.
+// it to SCOPING_HELPERS. Still outside the walk by design: loading.js,
+// error.js, template.js, default.js and not-found.js (chrome that renders
+// no tenant data; add the name to APP_SURFACE_FILES the day one grows a
+// service-role query).
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { sqlCode } from './lib/sql-code.mjs'
 
 const API_ROOT = 'src/app/api'
 const APP_ROOT = 'src/app'
 const MIGRATIONS_ROOT = 'supabase/migrations'
+
+// App-dir files the scan reads (PAGE-SCOPE.1 pages, PAGE-SCOPE.2 layouts).
+// Exact basenames, both extensions the repo uses — a *.test.js, a css file or
+// an underscore-prefixed helper next to them is never a Next.js segment file.
+export const APP_SURFACE_FILES = new Set(['page.js', 'page.jsx', 'layout.js', 'layout.jsx'])
+export const isAppSurfaceFile = (name) => APP_SURFACE_FILES.has(name)
 
 // ---------------------------------------------------------------------------
 // Tables where a location_id column exists but is NOT the tenant boundary a
@@ -90,6 +109,20 @@ export const TABLE_EXCLUDE = {
 // counts as file-level evidence.
 // ---------------------------------------------------------------------------
 const SCOPING_HELPERS = [
+  // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
+  // through contactsAtStudio filters on the studio it is asked for.
+  'contactsAtStudio(',
+  // src/lib/contact-edit-gates.js (ORGCONTACTS.4) — decisions on a contact row
+  // fetched by pk: canEditContact admits a master, MANAGER_ROLES at the row's
+  // location_id, or MANAGER_ROLES + Contacts at one of its contact_studios
+  // studios; canDeleteOrRehomeContact admits a master, MANAGER_ROLES at the
+  // row's location_id, or an organisation admin of its organization_id.
+  // Verified in src/app/api/contacts/[id]/route.js, …/impact/route.js and
+  // …/primary-studio/route.js; the page gates (contact-page-gates.js) delegate.
+  'canEditContact(',
+  'canDeleteOrRehomeContact(',
+  'canWriteContact(',
+  'canOpenContactEditor(',
   // src/lib/auth.js — 403/404 guards on the caller's allowed location set.
   'assertLocationAccess(',
   'assertLocationAccessOr404(',
@@ -113,6 +146,10 @@ const SCOPING_HELPERS = [
   // by ticket_id, contacts by the ticket's own contact_id — inherit that
   // scoping, which is why the handlers look unscoped in isolation.
   'loadTicketForUser(',
+  // MAIL-RENAME.1 — loadTicketForUser was renamed to loadConversationForUser
+  // in src/app/api/email/mail/_conversation.js; the old name stays above
+  // until the identifier sweep (Task 9) removes every caller of it.
+  'loadConversationForUser(',
   'loadVisibleMailboxes(',
   // src/app/api/email/tickets/_helpers.js — the SEND-AS gate (EMAIL-OUTBOUND
   // -ATTACH.1), extracted verbatim from the compose route. Reads the named
@@ -123,6 +160,24 @@ const SCOPING_HELPERS = [
   // hands back, which is why the handlers that use it look unscoped in
   // isolation.
   'loadSendingMailbox(',
+  // src/lib/booking-web-writes.js — C134 WEBBOOKINGWRITES.1. Reads the
+  // booking by id, resolves its studio (location_id, else its booking type's),
+  // runs assertLocationAccessOr404 there and then hasPermissionForLocation
+  // ('bookings') there, and returns that row; the routes' write is then by
+  // that row's id, which is why the handlers look unscoped in isolation.
+  'loadBookingForWebWrite(',
+  // src/lib/booking-web-writes.js — BOOKINGOUTCOME.1. The judge
+  // loadBookingForWebWrite applies after its read, for a row already in hand:
+  // resolves the booking's studio (location_id, else its booking type's),
+  // runs assertLocationAccessOr404 there and then hasPermissionForLocation
+  // ('bookings') there. POST /api/bookings/outcomes reads up to 200 bookings
+  // by id, judges each one with it, and writes only the accepted ids.
+  'judgeBookingForWebWrite(',
+  // src/lib/activity-web-writes.js — C148 ACTWRITEGATEWEB.1. Reads the task
+  // by id (kind='task' only; no studio = 404), runs assertLocationAccessOr404
+  // at its location_id and then canWriteActivitiesAt there, and returns that
+  // row; POST /api/activities/tasks/[id]/status then writes by that row's id.
+  'loadTaskForWebWrite(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',
@@ -135,18 +190,57 @@ const SCOPING_HELPERS = [
   // src/app/api/invoices-inbox/_helpers.js — getCurrentUser + master/owner-
   // at-location + invoice fetched via its location (401/403/404).
   'loadInvoiceForUser(',
+  // src/lib/campaign-session-access.js (MEMBERWRITESWEEP.1e) — reads the
+  // campaign by pk, 404s a campaign with no location_id, then runs
+  // assertLocationAccessOr404 at the CAMPAIGN's location_id and
+  // hasPermissionForLocation(…, 'email') there; the handlers then write only
+  // by that campaign's id (/api/communications/campaigns/[id]*).
+  'loadCampaignForUser(',
+  // src/lib/tv-admin.js (MEMBERWRITESWEEP.1f) — authoriseTvLocation runs
+  // assertLocationAccessOr404 at the given studio, then web OR mobile
+  // tv_displays there; loadTvDisplayForUser / loadTvTemplateForUser read the
+  // TV / template by pk, 404 a row with no location_id, and run
+  // authoriseTvLocation at the ROW's location_id. The handlers then list by
+  // that studio or write by that row's id AND location_id
+  // (/api/admin/tv-displays*, /api/admin/tv-templates*).
+  'authoriseTvLocation(',
+  'loadTvDisplayForUser(',
+  'loadTvTemplateForUser(',
   // src/app/api/accounting/coverage/[id]/_line.js — permission check +
   // active-location scoping + 404-not-403 line lookup.
   'loadLineForUser(',
   // src/app/api/invoices-inbox/_bulk-helpers.js — bookkeeper permission +
   // per-row location checks on the bulk surface.
   'loadBookkeeper(',
+  // src/lib/event-visibility.js (W0.3) — builds the race_events .or() string:
+  // `location_id.eq.<active>` plus shared events whose location_id is IN the
+  // active studio's organisation (orgLocationIdsFor → siblingLocationIds); a
+  // lookup error narrows to the active studio alone. Verified in
+  // src/app/(members)/events/page.js, src/app/api/events/route.js and
+  // src/app/welcome/[location]/events/page.js.
+  'sharedEventsOrFilterFor(',
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
   'hasPermissionForLocation(',
+  // src/lib/fte-expense-access.js (FINALTIDY.1) — fetch-claim-by-pk-then-judge
+  // for /api/expenses/[id]/*: claimant, master, owner AT claim.location_id,
+  // else hasPermissionForLocation(user, claim.location_id, …). A caller who
+  // fails canSeeExpenseClaim gets the missing-claim 404.
+  'canSeeExpenseClaim(',
+  'canApproveExpenseClaim(',
   // src/lib/auth.js — org ids the caller OWNS; used for
   // row.organization_id membership compares (contracts revoke/detail).
   'getOwnerOrganizationIds(',
+  // src/lib/contract-gates.js (GATES-2) — master, or
+  // getOwnerOrganizationIds(user).includes(row.organization_id): the same
+  // row-org membership compare, used by contracts revoke/resend/send/discard
+  // after their fetch-by-id (404 on a foreign org).
+  'canManageContractsInOrg(',
+  // src/lib/org-admin.js (C18 ORGROLE.1) — master, or an org_admin grant on
+  // the organisation passed. The wallet routes (settings/billing/topup,
+  // auto-topup) fetch the location by pk and 404 unless
+  // isOrgAdmin(user, location.organization_id): the same row-org compare.
+  'isOrgAdmin(',
   // src/lib/hosts.js — loads an event host and returns null unless
   // host.organization_id === orgId (events review surface).
   'loadHostForOrg(',
@@ -240,10 +334,6 @@ export const EXEMPT = {
   // ——— SAAS-9 triage (2026-07-19). Category (b) = cross-tenant/public by
   // design; TODO-LEAK = real finding, needs its own fix PR. ———
 
-  'src/app/api/admin/backfill-host-contacts/route.js': {
-    race_events:
-      'Master/owner-gated one-off admin backfill that walks EVERY hosted event to link host contacts at each host\'s anchor location — hosted-events hosts are a platform-level surface, and the route returns counts only (no tenant rows).',
-  },
   'src/app/api/unsubscribe/host/[token]/route.js': {
     contacts:
       'HOST-CONSENT.1 — RFC 8058 one-click target for host marketing mail. The contacts row is reached ONLY via the HMAC host-unsubscribe token (src/lib/host-unsubscribe.js) that names exactly one (host, contact) pair; the capability IS the scoping, the same argument as /api/unsubscribe/[token]. The query reads a single email column to push the Postmark suppression on the host\'s own stream and returns nothing about the contact.',
@@ -279,6 +369,12 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/display/route.js': {
     race_events: 'Public race-day display for a published slug (TV screen at the venue).',
   },
+  'src/app/api/public/events/[slug]/waitlist/route.js': {
+    race_events: 'EVENT-WAITLIST.1 public waitlist join: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the waitlist row is written at that event\'s own location_id by joinWaitlist. Answers only the new row id.',
+  },
+  'src/app/api/public/events/[slug]/donate/route.js': {
+    race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
+  },
   'src/app/api/public/classes/route.js': {
     landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',
   },
@@ -289,16 +385,17 @@ export const EXEMPT = {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
   },
   'src/app/api/public/offers/[slug]/checkout/route.js': {
-    sale_offers: 'Public sale catalogue (OFFERS.4): the row is looked up by its globally-unique slug and every active offer is deliberately world-readable — it IS the product page data. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
+    sale_offers: 'Public sale checkout (OFFERS.4): the row is looked up by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer answers 404 until Wave 2 gives tenants their own offers route and payment rail. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
   },
-  'src/app/api/public/countdown.gif/route.js': {
-    sale_offers: 'Countdown image for marketing email (COUNTDOWN.1): reads ONLY ends_at of the latest active offer — the same deadline already rendered publicly on /offers and printed in the email itself. No location context exists (it is an <img> fetched by a mail client), and the response is pixels, not data.',
+  'src/app/api/public/trial-purchases/[id]/route.js': {
+    trial_purchases: 'PAIDTRIAL.1 public paid-trial status poll: the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no buyer PII. Mirrors public/class-booking-payments/[id].',
+  },
+  'src/app/api/public/donations/[id]/route.js': {
+    donations: 'CHARITY.6 public donation status poll: the row is resolved by its own unguessable UUID (the donationId handed to the donor in the donate response); the id IS the capability token, not enumerable. Returns only display-safe checkout fields and the public state, no donor PII. The race_events row is read by the donation\'s own race_event_id. Mirrors public/trial-purchases/[id].',
+    race_events: 'CHARITY.6 public donation status poll: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
   },
   'src/app/api/public/offer-purchases/[id]/route.js': {
     offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
-  },
-  'src/app/api/public/branding/route.js': {
-    company_settings: 'Anonymous login-screen branding: deliberately serves the FIRST configured row (logo/name only) when no location context exists yet. Known single-tenant shortcut — revisit when a second org onboards, but it exposes no contact/tenant data.',
   },
 
   // Webhooks — sender authenticated by signature/secret (enforced by
@@ -310,6 +407,14 @@ export const EXEMPT = {
   'src/app/api/webhooks/revolut/route.js': {
     cars: 'Signature-verified webhook resolves the car by deposit_revolut_order_id — the provider\'s order id from the verified payload IS the row identity.',
     contacts: 'Buyer-email ilike lookup to link the deposit event to an existing contact; input comes from the signature-verified payload\'s order, only the contact id is used for the event emit.',
+  },
+  'src/app/api/webhooks/revolut/donations/route.js': {
+    donations: 'CHARITY.7 signature-verified donations webhook: the re-read is by the row\'s own id, taken from resolveDonationByRef on the provider\'s order id from the verified payload — the provider\'s order id IS the row identity.',
+    race_events: 'CHARITY.7 signature-verified donations webhook: the event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
+  },
+  'src/app/api/webhooks/stripe/route.js': {
+    donations: 'CHARITY.7 signature-verified Stripe webhook (constructEvent): the post-mark re-read is by the row\'s own id, taken from resolveDonationByRef on the verified Checkout Session id — the provider\'s session id IS the row identity.',
+    race_events: 'CHARITY.7 signature-verified Stripe webhook: the donation\'s event row is read by the donation\'s own race_event_id (never by caller input) for the match multiplier and the paid side effects.',
   },
   'src/app/api/webhooks/xero/route.js': {
     cars: 'Signature-verified webhook resolves the car by xero_invoice_id — the provider\'s invoice id IS the row identity (per-location Xero connections mint the ids).',
@@ -334,13 +439,25 @@ export const EXEMPT = {
     race_events:
       'Public iframe-embeddable signup for a published slug — same resolution and surface as /event/[slug].',
   },
-  'src/app/offers/page.js': {
-    sale_offers:
-      'Public sale catalogue (OFFERS.7): active offers are deliberately world-readable — they ARE the landing-page content (same rationale as /api/public/offers/[slug]/checkout).',
+  'src/app/h/[slug]/page.js': {
+    race_events:
+      'HOST-EVENTS-PAGE.1 — public host page: event_hosts row resolved by its published slug (the same public selector as /event/[slug]), then race_events filtered to THAT host_id + active=true + status=published + upcoming. Host events sit on a hidden anchor location, so host_id is their tenancy boundary (HOST-PORTAL.1); published content by design, and the embedded waves/registrations feed only the sold-out boolean — no count or capacity is rendered. Verified in src/app/h/[slug]/page.js loadHostEvents().',
   },
   'src/app/offers/[slug]/page.js': {
     sale_offers:
-      'Public sale product page: row resolved by its globally-unique slug; price is rendered server-side from the row so the client can never supply an amount.',
+      'Public sale product page: row resolved by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer 404s until Wave 2 gives tenants their own offers route. Price is rendered server-side from the row so the client can never supply an amount.',
+  },
+  'src/app/legal/un1t/[slug]/[doc]/page.js': {
+    landing_page_settings:
+      'UN1TWRITE.17 — public legal page resolved by public_path (the path IS the tenant selector); 404s unless the studio is un1t.online, and renders only that studio\'s published terms or waiver text.',
+  },
+  'src/app/start/[path]/page.js': {
+    landing_page_settings:
+      "Public per-studio class-booking page (proxy publicPaths via '/start'): resolves ONE row by its sanitised public_path and renders only its published blocks + logo — public marketing content; the public_path IS the tenant selector (same rationale as /start and /welcome/[location]). MANUALFUNNEL.1.",
+  },
+  'src/app/trial/page.js': {
+    landing_page_settings:
+      "PAIDTRIAL.1 public Meta-ads product page (proxy publicPaths via '/trial'): reads the fixed stillorgan row's published paid_trial block + content blocks (and hatch-street's content blocks as the /start fallback); public marketing content, the public_path IS the tenant selector (same rationale as /start).",
   },
   'src/app/start/page.js': {
     landing_page_settings:
@@ -353,12 +470,6 @@ export const EXEMPT = {
   'src/app/welcome/[location]/status/page.js': {
     landing_page_settings:
       'Public status page: public_path → location resolution (the path IS the published tenant selector); renders only the coy member view from buildStatusView(), never internal detail.',
-  },
-
-  // Settings fleet dashboard — deliberately estate-wide.
-  'src/app/settings/notifications/health/page.js': {
-    profile_locations:
-      'Push-delivery fleet dashboard (NOTIF.4 + STAFF-DEV.4) gated by hasPermission(settings): groups active staff under EVERY location on purpose — it is the estate-wide device/app-version fleet view. Single-org estate today; revisit when a second org onboards (same caveat as public/branding).',
   },
 
   // The first page scan's four real findings needed NO exemption in the end:
@@ -374,10 +485,12 @@ export const EXEMPT = {
 // Pure functions (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** Strip `-- …` line comments so commented-out DDL can't add tables. */
-function stripSqlComments(sql) {
-  return sql.replace(/--[^\n]*/g, '')
-}
+/**
+ * Blank `-- …` and `/* … *\/` comments so commented-out DDL can't add tables,
+ * by the one quote-aware, $tag$-pairing scan (scripts/lib/sql-code.mjs), not a
+ * regex: a '--' inside a string ended the old strip early (GUARDSTRIP.1).
+ */
+const stripSqlComments = (sql) => sqlCode(sql)
 
 /**
  * Derive the tables that gain a location_id column from one migration file's
@@ -542,6 +655,22 @@ export function classifyRoute(rel, src, tables, exemptMap = EXEMPT) {
  * client. No cron/qstash path skips — those are /api system surfaces.
  */
 export function classifyPage(rel, src, tables, exemptMap = EXEMPT) {
+  return classifyAppFile(rel, src, tables, exemptMap)
+}
+
+/**
+ * Classify one app-dir layout.js (PAGE-SCOPE.2, the W0.4 /offers class).
+ * Identical rules to classifyPage — a layout's generateMetadata and body run
+ * the same service-role client, for every page under it, and the
+ * whole-file classifier reads both. Kept as its own export so a test can
+ * pin that layouts and pages get the same verdict for the same source.
+ */
+export function classifyLayout(rel, src, tables, exemptMap = EXEMPT) {
+  return classifyAppFile(rel, src, tables, exemptMap)
+}
+
+/** Shared page/layout classifier: skip without the service-role client. */
+function classifyAppFile(rel, src, tables, exemptMap) {
   if (!src.includes('createServerClient(')) return { skipped: 'no-service-role' }
   return classifySource(rel, src, tables, exemptMap)
 }
@@ -580,11 +709,12 @@ export function findStaleExemptions(exemptMap, readFile = (p) => {
 // Runner
 // ---------------------------------------------------------------------------
 
-function walk(dir, filename, out = []) {
+function walk(dir, match, out = []) {
+  const wanted = typeof match === 'function' ? match : (name) => name === match
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, entry.name)
-    if (entry.isDirectory()) walk(p, filename, out)
-    else if (entry.name === filename) out.push(p)
+    if (entry.isDirectory()) walk(p, match, out)
+    else if (wanted(entry.name)) out.push(p)
   }
   return out
 }
@@ -592,9 +722,12 @@ function walk(dir, filename, out = []) {
 function main() {
   const tables = collectLocationTables(MIGRATIONS_ROOT)
   const files = walk(API_ROOT, 'route.js')
-  // PAGE-SCOPE.1 — app-dir server pages are the same service-role surface
-  // (page.js never exists under src/app/api, so the two walks don't overlap).
-  const pageFiles = walk(APP_ROOT, 'page.js')
+  // PAGE-SCOPE.1 — app-dir server pages are the same service-role surface;
+  // PAGE-SCOPE.2 — so are layouts (generateMetadata + body). Neither basename
+  // exists under src/app/api, so the two walks don't overlap.
+  const appFiles = walk(APP_ROOT, isAppSurfaceFile)
+  const pageFiles = appFiles.filter((f) => path.basename(f).startsWith('page.'))
+  const layoutFiles = appFiles.filter((f) => path.basename(f).startsWith('layout.'))
 
   const failures = []
   let exemptCount = 0
@@ -605,6 +738,10 @@ function main() {
   let scopedPages = 0
   let queryingPages = 0
   let pagesSkipped = 0
+  let layoutExemptCount = 0
+  let scopedLayouts = 0
+  let queryingLayouts = 0
+  let layoutsSkipped = 0
 
   for (const file of files) {
     const rel = file.split(path.sep).join('/')
@@ -640,6 +777,23 @@ function main() {
     if (queried.length && !failed && !exempted) scopedPages++
   }
 
+  for (const file of layoutFiles) {
+    const rel = file.split(path.sep).join('/')
+    const src = fs.readFileSync(file, 'utf8')
+    const res = classifyLayout(rel, src, tables)
+    if (res.skipped) { layoutsSkipped++; continue }
+    const queried = tablesQueried(src, tables)
+    if (queried.length) queryingLayouts++
+    let failed = false
+    let exempted = false
+    for (const f of res.findings) {
+      if (f.exempt) { layoutExemptCount++; exempted = true; continue }
+      failures.push({ file: rel, table: f.table })
+      failed = true
+    }
+    if (queried.length && !failed && !exempted) scopedLayouts++
+  }
+
   const stale = findStaleExemptions(EXEMPT)
   const todoLeaks = Object.entries(EXEMPT).flatMap(([relFile, byTable]) =>
     Object.entries(byTable)
@@ -653,7 +807,9 @@ function main() {
       `${files.length} routes — ${queryingRoutes} query tenant tables ` +
       `(${scopedRoutes} scoped, ${exemptCount} table-exemptions), ${systemSkipped} cron/qstash skipped; ` +
       `${pageFiles.length} pages — ${queryingPages} query tenant tables ` +
-      `(${scopedPages} scoped, ${pageExemptCount} table-exemptions), ${pagesSkipped} without service-role client`
+      `(${scopedPages} scoped, ${pageExemptCount} table-exemptions), ${pagesSkipped} without service-role client; ` +
+      `${layoutFiles.length} layouts — ${queryingLayouts} query tenant tables ` +
+      `(${scopedLayouts} scoped, ${layoutExemptCount} table-exemptions), ${layoutsSkipped} without service-role client`
     )
     if (todoLeaks.length) {
       console.log(`  ⚠ ${todoLeaks.length} TODO-LEAK exemption(s) awaiting a fix PR:`)
@@ -668,8 +824,9 @@ function main() {
   if (failures.length) {
     console.error(`
 ${failures.length} file/table pair(s) query a location_id-bearing table with no
-detectable tenant scoping. Routes and server pages both run the service-role
-client (RLS bypassed), so an unscoped query serves ANY tenant's rows. Fix by either:
+detectable tenant scoping. Routes, server pages and layouts (generateMetadata
+included) all run the service-role client (RLS bypassed), so an unscoped query
+serves ANY tenant's rows. Fix by either:
   1. Scoping the query — .eq('location_id', …) / .in('location_id', ids)
      after assertLocationAccess(user, …), or an embedded-resource filter
      ('parent.location_id'), or fetch-by-pk + assertLocationAccessOr404 on

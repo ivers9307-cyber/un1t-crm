@@ -10,12 +10,13 @@
 // (YYYY-MM-DD), like bookings.booking_date — not a wall-clock instant.
 // Local-time Date parsing shifts these across the BST/GMT boundary and
 // silently corrupts a business "today" (CLAUDE.md "Timezones").
-// addDaysISO (dublin-time.js) parses via `new Date(dateStr +
+// addDaysISO (shared/zoned-time.js, zone-free) parses via `new Date(dateStr +
 // 'T00:00:00Z')` and formats off the UTC fields, so results are
-// identical under TZ=Europe/Dublin and a US timezone, and across the
-// BST/GMT boundary. It does no I/O, so this file stays mock-free.
+// identical under any host timezone, and across a DST boundary. It does
+// no I/O, so this file stays mock-free. TZ.8b: "today" arrives from the
+// caller as the studio's own day (todayStrIn of locations.timezone).
 
-import { addDaysISO } from '@/lib/dublin-time'
+import { addDaysISO } from '@shared/zoned-time'
 
 // Defined HERE, not in ./equipment.js, and re-exported from there for callers.
 // rollForward's range guard is the only place these are enforced, so importing

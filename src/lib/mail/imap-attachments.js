@@ -9,7 +9,7 @@
 // and hands back Postmark-shaped `Attachments` entries carrying the SAME
 // `_un1t_staged` marker the Supabase Edge shim writes.
 //
-// IT FILES NOTHING. No row, no counter, no ticket. The poller POSTs the
+// IT FILES NOTHING. No row, no counter, no conversation. The poller POSTs the
 // payload this produces to the existing inbound webhook, and that route —
 // unchanged — reads these markers through readStagedMarker(), records the
 // email_ticket_attachments rows and meters the bytes. This module is the
@@ -178,7 +178,7 @@ function isAttachmentNode(node, type, partId) {
   // text/plain + text/html with no disposition and no name ARE the body; they
   // become TextBody/HtmlBody, not files. message/* is a container — the walk
   // descends into a forwarded message and picks up ITS attachments, which is
-  // what an operator expects to see on the ticket.
+  // what an operator expects to see on the conversation.
   if (type.startsWith('text/')) return false
   if (type.startsWith('message/')) return false
 
@@ -237,13 +237,13 @@ export function attachmentParts(bodyStructure) {
     // a scanner or fax-to-email message (top-level `application/pdf;
     // name="scan.pdf"`, `Content-Disposition: attachment`) with no row, no
     // skipped_reason and no log line. selectBodyParts() declines it too — it is
-    // not text/* — so the ticket arrived completely empty. RFC 3501 numbers the
+    // not text/* — so the conversation arrived completely empty. RFC 3501 numbers the
     // body of a non-multipart message '1', which is exactly what the sibling
     // module already asks for (imap-poll.js).
     //
     // ROOT ONLY, deliberately: a partless node further down is a structure we
     // cannot address, and claiming '1' for it would stage some other part's
-    // bytes onto the ticket under this one's name.
+    // bytes onto the conversation under this one's name.
     const partId = node.part ? String(node.part) : (depth === 0 ? '1' : '')
 
     if (isAttachmentNode(node, type, partId)) {
@@ -339,7 +339,7 @@ function postmarkEntry(part) {
  * `ok:false` and `bytes:null` are DIFFERENT ANSWERS. A part that genuinely
  * holds nothing has no legal row and produces none; a fetch that FAILED means a
  * file demonstrably arrived and we do not have it, which must reach the route
- * as `rehost_failed` so it is on the ticket.
+ * as `rehost_failed` so it is on the conversation.
  */
 async function downloadPart(client, uid, part) {
   try {
@@ -399,7 +399,7 @@ async function stageOne(db, client, { part, index, uid, messageId, canStage }) {
   }
 
   // No usable key ⇒ no upload. Marked rather than dropped so the file is on the
-  // ticket, and NOT uploaded, so there are no bytes in a metered bucket that
+  // conversation, and NOT uploaded, so there are no bytes in a metered bucket that
   // nothing will ever name.
   if (!canStage) {
     return { attachment: failedAttachment(entry, { reason: 'upload_failed' }), reason: 'rehost_failed' }
@@ -518,7 +518,7 @@ export async function stageImapAttachments(db, client, msg, { mailboxId, message
     // the ARRAY POSITION — past MAX_ATTACHMENTS_PER_MESSAGE by construction,
     // since the walk bound is ten times it — before it ever consults one, and
     // records a row from `ContentLength`. An operator then sees "…N more files
-    // were not recorded — not stored" on the ticket and can ask for a resend,
+    // were not recorded — not stored" on the conversation and can ask for a resend,
     // instead of the files existing nowhere. 'too_many' is in mig 496's CHECK.
     const name = safeAttachmentFilename(`${overflow} more files were not recorded`)
     console.error(

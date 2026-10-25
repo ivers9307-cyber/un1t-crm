@@ -53,7 +53,8 @@ const CASCADE_TABLES = Object.freeze([
   { table: 'email_sends',               column: 'contact_id', label: 'email send history' },
   { table: 'notes',                     column: 'contact_id', label: 'notes' },
   { table: 'sequence_enrollments',      column: 'contact_id', label: 'sequence enrolments' },
-  { table: 'sms_broadcast_recipients',  column: 'contact_id', label: 'SMS broadcast history' },
+  // sms_broadcast_recipients left this list with the table: SMSTABLESDROP.1,
+  // mig 688 (SMS retired 30 Sep 2026). The catalog path never needed it.
 ])
 
 // Tables that point at contacts.id with ON DELETE SET NULL — these
@@ -247,8 +248,9 @@ function bucketCatalogRows(rows) {
 }
 
 /**
- * Pre-538 behaviour, kept verbatim apart from the `partial` flag: count the 21
- * hand-listed pairs one request at a time. It under-reports by ~60 columns and
+ * Pre-538 behaviour, kept verbatim apart from the `partial` flag: count the
+ * hand-listed pairs (21, then 20 once mig 688 dropped sms_broadcast_recipients)
+ * one request at a time. It under-reports by ~60 columns and
  * never populates block_delete, which is why `partial` is set unconditionally
  * here — the operator is told the list may be incomplete, because it is.
  */

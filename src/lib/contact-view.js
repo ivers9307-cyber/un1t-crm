@@ -32,30 +32,45 @@ export function timelineFilterGroup(item) {
 // Needs-attention derivation for the drawer + the contact page's right
 // rail. Returns [{ key, label, detail, tone }]; tone maps to the
 // light-theme chip ramp (danger → red, warn → amber).
-export function deriveNeedsAttention({ contact, arrearsCents = 0, openTasks = [], todayStr = null }) {
+//
+// `arrearsCents` is the total the viewer sees (Glofox plus un1t.online's EUR);
+// `glofoxArrearsCents` is the Glofox part alone (default: all of it), which
+// decides whether the person is on Glofox's Overdue chase-list. `overdue` is
+// un1t.online's flag.
+export function deriveNeedsAttention({ contact, arrearsCents = 0, glofoxArrearsCents = arrearsCents, openTasks = [], todayStr = null, overdue = false }) {
   const items = []
+  // A NULL count is "no count" (C145): still flag the missing class, with no
+  // number. A known 0 means the trial is spent, so no flag.
+  const credits = contact?.trial_credits_remaining
+  const hasCount = Number.isFinite(credits)
   if (
     FUNNEL_SLUGS.has(contact?.pipeline_stage_slug) &&
     !contact?.next_class_at &&
-    (contact?.trial_credits_remaining ?? 0) > 0
+    (!hasCount || credits > 0)
   ) {
     items.push({
       key: 'no_next_class',
       label: 'No next class booked',
-      detail: `${contact.trial_credits_remaining} trial credit${contact.trial_credits_remaining === 1 ? '' : 's'} unused`,
+      detail: hasCount ? `${credits} trial credit${credits === 1 ? '' : 's'} unused` : '',
       tone: 'danger',
     })
   }
-  if (arrearsCents > 0) {
-    items.push({ key: 'arrears', label: 'Payment overdue', detail: 'On the Overdue chase-list', tone: 'danger' })
+  // HATCHPIPE.2 — `overdue` is un1t.online's flag, which can be true while the
+  // amount is unreported (null → no cents), so it raises the item by itself.
+  if (arrearsCents > 0 || overdue) {
+    const detail = [
+      glofoxArrearsCents > 0 ? 'On the Overdue chase-list' : null,
+      overdue ? 'Past due on un1t.online' : null,
+    ].filter(Boolean).join(' · ')
+    items.push({ key: 'arrears', label: 'Payment overdue', detail, tone: 'danger' })
   }
   if (todayStr) {
-    const overdue = (openTasks || []).filter((t) => t.due_date && t.due_date <= todayStr)
-    if (overdue.length > 0) {
+    const overdueTasks = (openTasks || []).filter((t) => t.due_date && t.due_date <= todayStr)
+    if (overdueTasks.length > 0) {
       items.push({
         key: 'task_overdue',
-        label: `${overdue.length} task${overdue.length === 1 ? '' : 's'} overdue`,
-        detail: overdue[0].subject || '',
+        label: `${overdueTasks.length} task${overdueTasks.length === 1 ? '' : 's'} overdue`,
+        detail: overdueTasks[0].subject || '',
         tone: 'warn',
       })
     }

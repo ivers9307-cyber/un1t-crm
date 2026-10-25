@@ -9,6 +9,11 @@
 
 import { toMillis, occurrenceIsLive, resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { logWarn } from '@/lib/log'
+import { scopeToCrmActionable } from '@/lib/class-booking-platform'
+
+// UN1TBOOK.7 — the constant lives with the predicate; re-exported so existing
+// imports (and tests/class-bookings-readers-guard.test.js) keep working.
+export { CRM_CLASS_MESSAGING_PLATFORM } from '@/lib/class-booking-platform'
 
 /**
  * Pure: shape one Glofox Booking (per /2.0/bookings) into a class_bookings
@@ -97,14 +102,16 @@ export function resolveClassLinkSource({ liveClass, booked }) {
  */
 export async function lookupBookedMember(db, { locationId, glofoxEventId, glofoxMemberId } = {}) {
   if (!db || !locationId || !glofoxEventId || !glofoxMemberId) return false
-  const { data } = await db
+  // UN1TBOOK.9: HR linking only ever matches a Glofox booking (a un1t row never
+  // carries glofox_member_id), and the scope keeps that true by construction.
+  const { data } = await scopeToCrmActionable(db
     .from('class_bookings')
     .select('id')
     .eq('location_id', locationId)
     .eq('glofox_event_id', glofoxEventId)
     .eq('glofox_member_id', glofoxMemberId)
     .not('status', 'eq', 'CANCELLED')
-    .limit(1)
+    .limit(1))
   return Array.isArray(data) && data.length > 0
 }
 
@@ -218,13 +225,13 @@ export async function resolveBookedOccurrenceForMember(db, { locationId, glofoxM
   if (!db || !locationId || !glofoxMemberId) return null
   const sinceIso = new Date(nowMs - 3 * 60 * 60_000).toISOString()
   const untilIso = new Date(nowMs + preMs).toISOString()
-  const { data: bookings } = await db
+  const { data: bookings } = await scopeToCrmActionable(db
     .from('class_bookings')
     .select('glofox_event_id, status, starts_at')
     .eq('location_id', locationId)
     .eq('glofox_member_id', glofoxMemberId)
     .gte('starts_at', sinceIso)
-    .lte('starts_at', untilIso)
+    .lte('starts_at', untilIso))
   if (!bookings || bookings.length === 0) return null
 
   const eventIds = [...new Set(bookings.map((b) => b.glofox_event_id).filter(Boolean))]

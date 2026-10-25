@@ -25,6 +25,7 @@ import Svg, { Polyline } from 'react-native-svg'
 import { supabase } from '../../../../lib/member/supabase'
 import { api } from '../../../../lib/member/api'
 import { markRecapSeen } from '../../../../lib/member/recap-seen'
+import { useMemberBrand } from '../../../../lib/member/use-member-brand'
 import { recapModel } from 'shared/wrapped'
 import { tracePolyline } from 'shared/share-card'
 import { PEARL, VOLT } from '../../../../lib/member/brand'
@@ -50,7 +51,7 @@ function downsample(samples, max) {
 const SCRIM = 'rgba(19,19,22,0.62)'
 
 // ── animated points count-up ──────────────────────────────────────
-function PointsCountUp({ target, reduceMotion }) {
+function PointsCountUp({ target, reduceMotion, pointsName = 'Points' }) {
   const [display, setDisplay] = useState(reduceMotion ? target : 0)
   const val = useRef(new Animated.Value(0)).current
 
@@ -70,7 +71,7 @@ function PointsCountUp({ target, reduceMotion }) {
     <Text
       className="text-chalk font-display-black"
       style={{ fontSize: 88, lineHeight: 96, letterSpacing: -2 }}
-      accessibilityLabel={`${target} UN1T Points`}
+      accessibilityLabel={`${target} ${pointsName}`}
     >
       {display}
     </Text>
@@ -144,6 +145,8 @@ function Stat({ label, value, unit }) {
 export default function SessionWrapped() {
   const { id } = useLocalSearchParams()
   const router = useRouter()
+  // W1.S5 — product name + share title from the member's studio brand.
+  const { shortName, productNames } = useMemberBrand()
   const { width } = useWindowDimensions()
 
   const [model, setModel] = useState(null)
@@ -232,7 +235,7 @@ export default function SessionWrapped() {
     try {
       const r = await api('/api/sessions/' + id + '/share', { method: 'POST' })
       if (r?.url) {
-        await Share.share({ message: r.url, url: r.url, title: 'My UN1T session' })
+        await Share.share({ message: r.url, url: r.url, title: shortName ? `My ${shortName} session` : 'My session' })
       }
     } catch { /* fail quietly */ } finally { setSharing(false) }
   }
@@ -312,8 +315,8 @@ export default function SessionWrapped() {
             {model.className ? (
               <Text className="text-sm font-body-medium mb-2" style={{ color: 'rgba(241,238,231,0.85)' }}>{model.className}</Text>
             ) : null}
-            <PointsCountUp target={model.points} reduceMotion={reduceMotion} />
-            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.8)' }}>UN1T Points</Text>
+            <PointsCountUp target={model.points} reduceMotion={reduceMotion} pointsName={productNames.points} />
+            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.8)' }}>{productNames.points}</Text>
             {zoneLabel ? (
               <View className="mt-3 flex-row items-center rounded-full px-3 py-1" style={{ backgroundColor: 'rgba(241,238,231,0.14)' }}>
                 <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: floodColor, marginRight: 6 }} />

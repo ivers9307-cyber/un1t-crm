@@ -32,7 +32,7 @@
 //     behaviour, not a bug in this mapper". It was a bug, and a cross-tenant
 //     one (IMAP-ROUTE-FORGE.1): studio A connects hello@studioA.com, a stranger
 //     mails that address with a forged `To: accounts@studioB.com`, and the
-//     webhook resolves studio B — filing the ticket at B's location, staging
+//     webhook resolves studio B — filing the conversation at B's location, staging
 //     the attachments there, contact-matching against B's contacts and pushing
 //     it to B's staff. Studio A never sees it at all, because the POST returned
 //     2xx and the poller's watermark advanced past it.
@@ -46,8 +46,8 @@
 //   • Headers — an array of { Name, Value }, because that is the shape
 //     getHeader() reads. The route pulls Message-ID, In-Reply-To and
 //     References out of it and that is how a reply threads onto an existing
-//     ticket (extractCandidateMessageIds → email_sends.postmark_message_id).
-//     Drop those and every reply opens a brand new ticket.
+//     conversation (extractCandidateMessageIds → email_sends.postmark_message_id).
+//     Drop those and every reply opens a brand new conversation.
 //
 // EXACTLY WHICH `body.*` FIELDS THE ROUTE READS (audited against
 // src/app/api/webhooks/postmark-inbound/[token]/route.js, 2026-08-26):
@@ -63,7 +63,7 @@
 //   body.ToFull / body.To            → recipientEmails() + inboundAddresses()
 //   body.CcFull / body.Cc            → recipientEmails() + inboundAddresses()
 //   body.OriginalRecipient           → recipientEmails() (last resort)
-//   body.Subject                     → ticket + message subject
+//   body.Subject                     → conversation + message subject
 //   body.TextBody / body.HtmlBody    → message bodies (HTML falls back to
 //                                      htmlToPlainText for the text column)
 //   body.Date                        → parseEmailDate(); falls back to now()
@@ -99,7 +99,7 @@ import { normalizeEmail } from '../email-inbox'
  * bodyStructure, downloads the selected text/html parts and hangs the decoded
  * strings on the message object before calling in. Two spellings are accepted
  * because both are natural to write and a body that silently arrives empty
- * would file a member's email as a blank ticket — precisely the silent failure
+ * would file a member's email as a blank conversation — precisely the silent failure
  * this codebase refuses. `text`/`html` is the mailparser/imapflow idiom and is
  * the preferred one; `textBody`/`htmlBody` mirrors the Postmark naming.
  */
@@ -112,7 +112,7 @@ const HTML_KEYS = ['html', 'htmlBody']
  * Since IMAP-CONN.3.3b the synthetic id is a fixed-width digest, so this no
  * longer protects an index row — the value it bounds is the one written to
  * `email_inbox_messages.rfc_message_id` (via the Headers array) and re-read on
- * every render of the ticket. Message-IDs are attacker-suppliable and a
+ * every render of the conversation. Message-IDs are attacker-suppliable and a
  * multi-kilobyte one would ride along forever for no benefit. Truncating risks
  * a collision only between two ids sharing a 400-character prefix, which no
  * real mail system produces.
@@ -417,17 +417,17 @@ function toAddressList(list) {
  *     by an unauthenticated header.
  *   • DOUBLE-FILING. With sales@ and accounts@ both connected and a member
  *     mailing `To: sales@, Cc: accounts@`, the accounts@ poll ALSO resolved
- *     sales@ — so sales@ got two tickets and accounts@ got none. Mailbox
+ *     sales@ — so sales@ got two conversations and accounts@ got none. Mailbox
  *     visibility is grant-gated, so a coach granted only accounts@ never saw
  *     their own correspondence. After the drop, each poll files its own copy,
  *     which is what syntheticMessageId's per-mailbox namespacing has always
  *     said is intended.
  *
  * LOSING THOSE ENTRIES FROM `to_emails`/`cc_emails` IS THE CONSISTENT OUTCOME,
- * not a cost. loadOwnAddresses() (src/app/api/email/tickets/_helpers.js) already
+ * not a cost. loadOwnAddresses() (src/app/api/email/mail/_conversation.js) already
  * strips every connected address out of a reply-all at SEND time — deliberately
  * unscoped to location, for the same reason — so an address dropped here would
- * have been dropped there anyway the moment anyone answered the ticket. The one
+ * have been dropped there anyway the moment anyone answered the conversation. The one
  * address that must survive is this mailbox's own, and it survives twice over:
  * it is never in the drop-set (see the filter below) and it is the payload's
  * OriginalRecipient regardless.
@@ -520,7 +520,7 @@ function toIsoDate(value) {
  * lowercase-hex uuid), so a Postmark delivery webhook can never correlate
  * against an IMAP row — and folding `mailboxId` into the digest keeps two
  * connected mailboxes that were both copied on the same email as two separate
- * tickets, which is what an operator expects when accounts@ and sales@ are
+ * conversations, which is what an operator expects when accounts@ and sales@ are
  * both on a thread.
  *
  * Stable across re-polls because both inputs are stable and the function is

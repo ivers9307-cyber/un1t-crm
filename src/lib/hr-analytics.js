@@ -1,6 +1,7 @@
 // BYTE-SYNC: champ-app/shared/hr-analytics.js ↔ un1t-crm/src/lib/hr-analytics.js.
-// The two files are identical except the dublin-time import below
-// ('./dublin-time.js' in champ-app, '@/lib/dublin-time' in un1t-crm).
+// The two files are identical except the two imports below
+// ('./zoned-time.js' + './brand-name.js' in champ-app,
+// '@shared/zoned-time' + '@/lib/brand-name' in un1t-crm).
 // champ-app is the canonical copy — edit there first, then mirror the change.
 // Both apps render these numbers to the SAME member: drift here means the CRM
 // coach view and the member app disagree on totals. The twin test files are
@@ -31,7 +32,8 @@
 // type) and percentile rounding is fine for "you were faster than
 // 8 of your last 10 RIDE classes".
 
-import { dublinDateKey, dublinDayStartMs, dublinAddDays, dublinWeekStartMs } from '@/lib/dublin-time'
+import { dateKeyIn, dayStartMsIn, addDaysIn, weekStartMsIn, DEFAULT_TZ } from '@shared/zoned-time'
+import { productName } from '@/lib/brand-name'
 
 const RECENT_DAYS = 28
 const PRIOR_DAYS = 56
@@ -184,7 +186,8 @@ const HIGHLIGHT_RULES = [
     },
     msg: ({ thisSession }) => `New peak heart rate: ${thisSession.peak_hr_bpm} bpm.`,
   },
-  // Highest UN1T Points ever for this class type.
+  // Highest points ever for this class type. The product name is the
+  // tenant's (W1.S4): `${shortName} Points`, bare "Points" with no brand.
   {
     id: 'best_class_type_points',
     test: ({ thisSession, sameTypeExclThis }) => {
@@ -194,8 +197,8 @@ const HIGHLIGHT_RULES = [
       const prior = sameTypeExclThis.map((s) => Number(s.effort_points)).filter(Number.isFinite)
       return prior.length >= 2 && pts > Math.max(...prior)
     },
-    msg: ({ thisSession, eventTypeName }) =>
-      `Personal best for ${eventTypeName || 'this class'} — ${thisSession.effort_points} UN1T Points.`,
+    msg: ({ thisSession, eventTypeName, shortName }) =>
+      `Personal best for ${eventTypeName || 'this class'} — ${thisSession.effort_points} ${productName(shortName, 'points')}.`,
   },
   // Top-quartile points across the last 30 days (any class).
   {
@@ -205,30 +208,30 @@ const HIGHLIGHT_RULES = [
       const pct = percentileOf(Number(thisSession.effort_points), recentSessionsExclThis, 'effort_points')
       return pct != null && pct >= 0.75
     },
-    msg: ({ thisSession, recentSessionsExclThis }) => {
+    msg: ({ thisSession, recentSessionsExclThis, shortName }) => {
       const pct = percentileOf(Number(thisSession.effort_points), recentSessionsExclThis, 'effort_points')
       const pctRound = Math.round(pct * 100)
       // Clamp to 1: a best-ever session has percentile 1 → 100-100 = 0,
       // which would read "top 0%" (nonsense). "Top 1%" is the floor.
       const topPct = Math.max(1, 100 - pctRound)
-      return `In the top ${topPct}% of your last 4 weeks — ${thisSession.effort_points} UN1T Points.`
+      return `In the top ${topPct}% of your last 4 weeks — ${thisSession.effort_points} ${productName(shortName, 'points')}.`
     },
   },
   // Streak — Nth class in N days.
   {
     id: 'streak',
-    test: ({ thisSession, historyExclThis }) => {
-      const streak = computeStreak(thisSession, historyExclThis)
+    test: ({ thisSession, historyExclThis, zone }) => {
+      const streak = computeStreak(thisSession, historyExclThis, zone)
       return streak >= 3
     },
-    msg: ({ thisSession, historyExclThis }) => {
-      const streak = computeStreak(thisSession, historyExclThis)
+    msg: ({ thisSession, historyExclThis, zone }) => {
+      const streak = computeStreak(thisSession, historyExclThis, zone)
       return `${streak}-day streak — keep it rolling.`
     },
   },
 ]
 
-export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
+export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Date.now(), shortName = '' }, zone = DEFAULT_TZ) {
   if (!thisSession) return null
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameTypeExclThis = sameClass(historyExclThis, thisSession.class_name)
@@ -239,7 +242,7 @@ export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Dat
   // the test's anchor date drifts more than 28d behind today.
   const recentSessionsExclThis = withinDays(historyExclThis, RECENT_DAYS, nowMs)
 
-  const ctx = { thisSession, historyExclThis, sameTypeExclThis, recentSessionsExclThis, eventTypeName }
+  const ctx = { thisSession, historyExclThis, sameTypeExclThis, recentSessionsExclThis, eventTypeName, shortName, zone }
   for (const rule of HIGHLIGHT_RULES) {
     if (rule.test(ctx)) return { id: rule.id, message: rule.msg(ctx) }
   }
@@ -251,23 +254,24 @@ export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Dat
 /**
  * Counts consecutive days ending on `thisSession`'s day on which the
  * member trained. `thisSession` counts as its own day; we walk back one
- * Europe/Dublin calendar day at a time while history covers it.
+ * local calendar day at a time while history covers it.
  *
- * Day-buckets are Europe/Dublin calendar days (via dublinDateKey), the
- * same boundary `currentStreak` uses — so the email `streak` highlight
- * and the in-app live streak agree near midnight during IST/BST.
+ * Day-buckets are calendar days in `zone` — the MEMBER's zone, their home
+ * studio's (TZ.13, D7; omitted = Europe/Dublin) — the same boundary
+ * `currentStreak` uses, so the email `streak` highlight and the in-app live
+ * streak agree near midnight during summer time.
  */
-function computeStreak(thisSession, history) {
-  const days = new Set([dublinDateKey(thisSession.started_at)])
-  for (const s of history) days.add(dublinDateKey(s.started_at))
+function computeStreak(thisSession, history, zone = DEFAULT_TZ) {
+  const days = new Set([dateKeyIn(thisSession.started_at, zone)])
+  for (const s of history) days.add(dateKeyIn(s.started_at, zone))
 
   let streak = 0
-  // Walk back one Europe/Dublin calendar day per step. dublinAddDays
-  // steps via a Dublin-noon anchor so it never drifts across a DST edge.
-  let cursorKey = dublinDateKey(thisSession.started_at)
+  // Walk back one local calendar day per step. addDaysIn steps via a
+  // local-noon anchor so it never drifts across a DST edge.
+  let cursorKey = dateKeyIn(thisSession.started_at, zone)
   while (days.has(cursorKey)) {
     streak++
-    cursorKey = dublinAddDays(cursorKey, -1)
+    cursorKey = addDaysIn(cursorKey, -1, zone)
   }
   return streak
 }
@@ -275,7 +279,8 @@ function computeStreak(thisSession, history) {
 /**
  * Live consecutive-day training streak as of `nowMs`.
  *
- * `current` = the run of consecutive Europe/Dublin calendar days ending
+ * `current` = the run of consecutive local calendar days (in `zone`, the
+ * member's home studio zone; omitted = Europe/Dublin) ending
  * today OR yesterday
  * (one-day gap tolerance, so a member who hasn't trained YET today still
  * sees yesterday's streak). 0 if the most recent session is older than
@@ -290,31 +295,31 @@ function computeStreak(thisSession, history) {
  * @param {number} nowMs
  * @returns {{current:number, best:number, lastDayMs:number|null}}
  */
-export function currentStreak(sessions, nowMs = Date.now()) {
-  // Bucket each session into its Europe/Dublin calendar day.
+export function currentStreak(sessions, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  // Bucket each session into its local calendar day.
   const days = new Set()
   for (const s of sessions || []) {
     const iso = s && (s.started_at || s.ended_at)
-    if (iso) days.add(dublinDateKey(iso))
+    if (iso) days.add(dateKeyIn(iso, zone))
   }
   if (days.size === 0) return { current: 0, best: 0, lastDayMs: null }
 
   // Sort descending: 'YYYY-MM-DD' strings sort lexicographically.
   const sorted = [...days].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
-  // lastDayMs = UTC-ms of Dublin midnight for the most recent day, the
-  // same anchor streakAtRisk compares against (Dublin day boundaries).
-  const lastDayMs = dublinDayStartMs(sorted[0])
+  // lastDayMs = UTC-ms of local midnight for the most recent day, the
+  // same anchor streakAtRisk compares against (local day boundaries).
+  const lastDayMs = dayStartMsIn(sorted[0], zone)
 
-  const todayKey = dublinDateKey(nowMs)
-  const yesterdayKey = dublinAddDays(todayKey, -1)
+  const todayKey = dateKeyIn(nowMs, zone)
+  const yesterdayKey = addDaysIn(todayKey, -1, zone)
 
   let current = 0
   if (sorted[0] === todayKey || sorted[0] === yesterdayKey) {
     current = 1
     let cursor = sorted[0]
     for (let i = 1; i < sorted.length; i++) {
-      // The previous Europe/Dublin calendar day.
-      const prevKey = dublinAddDays(cursor, -1)
+      // The previous local calendar day.
+      const prevKey = addDaysIn(cursor, -1, zone)
       if (sorted[i] === prevKey) { current++; cursor = sorted[i] } else break
     }
   }
@@ -322,7 +327,7 @@ export function currentStreak(sessions, nowMs = Date.now()) {
   let best = 1
   let run = 1
   for (let i = 1; i < sorted.length; i++) {
-    const prevKey = dublinAddDays(sorted[i - 1], -1)
+    const prevKey = addDaysIn(sorted[i - 1], -1, zone)
     if (sorted[i] === prevKey) { run++; if (run > best) best = run } else { run = 1 }
   }
   if (current > best) best = current
@@ -331,7 +336,7 @@ export function currentStreak(sessions, nowMs = Date.now()) {
 }
 
 /**
- * Weeks-based training streak — the count of consecutive Europe/Dublin ISO
+ * Weeks-based training streak — the count of consecutive local (`zone`) ISO
  * weeks (Mon-anchored) in which the member trained at least `minPerWeek`
  * sessions, ending on the CURRENT week or the LAST completed week (one-week
  * grace so a member who hasn't trained yet THIS week still sees last week's
@@ -347,21 +352,21 @@ export function currentStreak(sessions, nowMs = Date.now()) {
  * @param {number} [opts.nowMs=Date.now()]
  * @returns {{current:number, best:number, thisWeekCount:number, minPerWeek:number}}
  */
-export function weeklyStreak(sessions, { minPerWeek = 1, nowMs = Date.now() } = {}) {
+export function weeklyStreak(sessions, { minPerWeek = 1, nowMs = Date.now() } = {}, zone = DEFAULT_TZ) {
   const min = Math.max(1, Number(minPerWeek) || 1)
 
-  // Count sessions per Dublin ISO-week-start (UTC ms of that Monday 00:00).
+  // Count sessions per local ISO-week-start (UTC ms of that Monday 00:00).
   const perWeek = new Map()
   for (const s of sessions || []) {
     const iso = s && (s.started_at || s.ended_at)
     if (!iso) continue
-    const wk = dublinWeekStartMs(iso)
+    const wk = weekStartMsIn(iso, zone)
     perWeek.set(wk, (perWeek.get(wk) || 0) + 1)
   }
 
-  const thisWeekMs = dublinWeekStartMs(nowMs)
+  const thisWeekMs = weekStartMsIn(nowMs, zone)
   // Previous week's Monday: step back 7 days from mid-week to dodge any DST edge.
-  const prevWeekMs = (ms) => dublinWeekStartMs(ms - 3.5 * 24 * 3600 * 1000)
+  const prevWeekMs = (ms) => weekStartMsIn(ms - 3.5 * 24 * 3600 * 1000, zone)
   const thisWeekCount = perWeek.get(thisWeekMs) || 0
 
   if (perWeek.size === 0) return { current: 0, best: 0, thisWeekCount: 0, minPerWeek: min }
@@ -402,7 +407,7 @@ export function weeklyStreak(sessions, { minPerWeek = 1, nowMs = Date.now() } = 
  * Roll up everything the email composer needs in one pass over
  * the data. The composer doesn't need to know about windows / fields.
  */
-export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
+export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now(), shortName = '' }, zone = DEFAULT_TZ) {
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameType = sameClass(historyExclThis, thisSession.class_name)
   // The "last 8" MUST be the 8 most RECENT qualifying sessions. The loader
@@ -424,7 +429,7 @@ export function buildSessionAnalytics({ thisSession, history, eventTypeName, now
   const categoryMean = meanField(sameCatRecent, 'effort_points')
   const categoryPercentile = percentileOf(Number(thisSession.effort_points), sameCatRecent, 'effort_points')
 
-  const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName, nowMs })
+  const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName, nowMs, shortName }, zone)
 
   return {
     highlight,

@@ -4,16 +4,31 @@
 // version if at least one completed (ended_at IS NOT NULL) view row
 // exists for that (profile_id, policy_version_id).
 //
+// W0.5 (mig 713) — policies belong to an ORGANISATION. Every read here is
+// scoped to the caller's active organisation (policyOrgIdFor); a caller
+// with no organisation reads nothing. Before, every signed-in user on the
+// platform saw UN1T's handbook, AUP and staff privacy notice. Editing
+// stays master-only (src/lib/policies-access.js).
+//
 // Public surface:
-//   - listPoliciesWithStatus(user)   for the staff /policies page
-//   - getPolicyBySlug(slug, user)    for the /policies/[slug] page
+//   - policyOrgIdFor(user)           the organisation whose policies a user reads
+//   - listPoliciesWithStatus(user)   for the staff /policies page (that org only)
+//   - getPolicyBySlug(slug, user)    for the /policies/[slug] page (that org only)
 //   - outstandingPolicyCount(user)   for the banner badge
 //   - listVersions(policyId)         for the admin version list
 //   - publishVersion(...)            admin publish flow
 //   - sectionDwellAggregate(versionId)  admin "hot sections" report
-//   - listVersionViewers(versionId)   admin per-version viewer list
+//   - listVersionViewers(versionId, user)  admin per-version viewer list
+//                                    (the caller's organisation only, C115)
+//   - currentVersionOpenCounts(ids, user)  the manage list's "N / M opened" (same scope)
 
 import { createServerClient } from '@/lib/supabase'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
+
+/** W0.5 — the organisation whose policies this user reads. null = none. */
+export function policyOrgIdFor(user) {
+  return user?.activeOrganization?.id || user?.activeLocation?.organization_id || null
+}
 
 /**
  * Returns all active policies with their current version metadata
@@ -26,10 +41,13 @@ import { createServerClient } from '@/lib/supabase'
  *      viewed_at: timestamptz | null,    // most recent completed view
  *      view_count: number }]
  *
- * Sorted by display_order then title.
+ * Sorted by display_order then title. W0.5: the caller's organisation's
+ * policies only; no organisation reads nothing.
  */
 export async function listPoliciesWithStatus(user) {
   if (!user?.id) return []
+  const orgId = policyOrgIdFor(user)
+  if (!orgId) return []
   const db = createServerClient()
 
   const { data: policies, error: policiesErr } = await db
@@ -39,6 +57,7 @@ export async function listPoliciesWithStatus(user) {
       policy_versions ( id, version_number, body_markdown, change_summary,
                         effective_date, published_at, is_current )
     `)
+    .eq('organization_id', orgId)
     .eq('active', true)
     .order('display_order')
     .order('title')
@@ -95,10 +114,14 @@ export async function listPoliciesWithStatus(user) {
 
 /**
  * Single policy lookup with the calling user's view status. Returns
- * null if the policy is missing or inactive.
+ * null if the policy is missing or inactive. W0.5: the slug resolves inside
+ * the caller's organisation only (slugs are unique per organisation); no
+ * organisation finds nothing.
  */
 export async function getPolicyBySlug(slug, user) {
   if (!slug) return null
+  const orgId = policyOrgIdFor(user)
+  if (!orgId) return null
   const db = createServerClient()
 
   const { data: policy, error } = await db
@@ -108,6 +131,7 @@ export async function getPolicyBySlug(slug, user) {
       policy_versions ( id, version_number, body_markdown, change_summary,
                         effective_date, published_at, is_current )
     `)
+    .eq('organization_id', orgId)
     .eq('slug', slug)
     .eq('active', true)
     .maybeSingle()
@@ -184,25 +208,52 @@ export async function listVersions(policyId) {
  * who's viewed at least once, with their session count, total time
  * across sessions, and most-recent view timestamp. Plus the list of
  * staff who haven't viewed.
+ *
+ * C115 POLICYVIEWERS.1 — scoped to the caller's ACTIVE organisation's
+ * people (members of its studios plus its org admins, the same set
+ * loadFleetScope gives the staff device fleet). A policy belongs to one
+ * organisation (W0.5, mig 713), so every member of that organisation could
+ * see this version; nobody outside it is listed. Before, the "haven't opened" list was every
+ * active profile in the estate, so an owner at one gym read the name and
+ * email of every other tenant's staff. A master keeps the estate (the
+ * platform view). No caller, or no active organisation, lists nobody. Every
+ * read's error throws (the page's error boundary), never an unscoped or
+ * empty list passed off as the answer.
+ *
+ * @param {string} versionId
+ * @param {object|null} user  getCurrentUser() result
  */
-export async function listVersionViewers(versionId) {
+export async function listVersionViewers(versionId, user) {
+  const empty = { viewers: [], outstanding: [], all_views: [] }
+  if (!user) return empty
   const db = createServerClient()
-  const [viewsRes, staffRes] = await Promise.all([
-    db.from('policy_views')
-      .select(`
-        profile_id, started_at, ended_at, total_duration_seconds,
-        section_dwell, viewed_via,
-        profiles!profile_id ( full_name, email )
-      `)
-      .eq('policy_version_id', versionId)
-      .order('started_at', { ascending: false }),
-    db.from('profiles')
-      .select('id, full_name, email')
-      .eq('active', true)
-      .order('full_name'),
-  ])
+  const scope = await loadFleetScope(db, user)
+  if (!scope.all && scope.profileIds.size === 0) return empty
 
-  const views = viewsRes.data || []
+  let viewsQuery = db.from('policy_views')
+    .select(`
+      profile_id, started_at, ended_at, total_duration_seconds,
+      section_dwell, viewed_via,
+      profiles!profile_id ( full_name, email )
+    `)
+    .eq('policy_version_id', versionId)
+  let staffQuery = db.from('profiles')
+    .select('id, full_name, email')
+    .eq('active', true)
+  if (!scope.all) {
+    const memberIds = [...scope.profileIds]
+    viewsQuery = viewsQuery.in('profile_id', memberIds)
+    staffQuery = staffQuery.in('id', memberIds)
+  }
+  const [viewsRes, staffRes] = await Promise.all([
+    viewsQuery.order('started_at', { ascending: false }),
+    staffQuery.order('full_name'),
+  ])
+  if (viewsRes.error) throw new Error(`policy viewers: policy_views read failed: ${viewsRes.error.message}`)
+  if (staffRes.error) throw new Error(`policy viewers: profiles read failed: ${staffRes.error.message}`)
+
+  // Belt and braces: the reads above are already scoped.
+  const views = (viewsRes.data || []).filter((v) => inFleetScope(scope, v.profile_id))
   const completed = views.filter((v) => v.ended_at)
 
   // Group by profile.
@@ -230,9 +281,60 @@ export async function listVersionViewers(versionId) {
     (b.latest_at || '').localeCompare(a.latest_at || ''))
 
   const viewedIds = new Set(viewers.map((v) => v.profile_id))
-  const outstanding = (staffRes.data || []).filter((s) => !viewedIds.has(s.id))
+  const outstanding = (staffRes.data || [])
+    .filter((s) => inFleetScope(scope, s.id))
+    .filter((s) => !viewedIds.has(s.id))
 
   return { viewers, outstanding, all_views: views }
+}
+
+/**
+ * The /policies/manage list's "N / M opened" column: per version, the number
+ * of distinct people with a completed view, and the number of active people.
+ *
+ * C115 POLICYVIEWERS.1 — the same people listVersionViewers lists: the
+ * caller's ACTIVE organisation (members of its studios plus its org admins);
+ * a master keeps the estate; no caller or no active organisation counts
+ * nobody. Before, both numbers were estate-wide, so the list disagreed with
+ * the version page it links to and told one tenant another's headcount. A
+ * failed read throws (the page's error boundary), never a zero.
+ *
+ * @param {string[]} versionIds
+ * @param {object|null} user  getCurrentUser() result
+ * @returns {Promise<{ viewerCount: Map<string, number>, activeStaffCount: number }>}
+ */
+export async function currentVersionOpenCounts(versionIds, user) {
+  const viewerCount = new Map()
+  if (!user) return { viewerCount, activeStaffCount: 0 }
+  const db = createServerClient()
+  const scope = await loadFleetScope(db, user)
+  if (!scope.all && scope.profileIds.size === 0) return { viewerCount, activeStaffCount: 0 }
+  const memberIds = scope.all ? null : [...scope.profileIds]
+
+  let staffQuery = db.from('profiles').select('id').eq('active', true)
+  if (memberIds) staffQuery = staffQuery.in('id', memberIds)
+  const { data: staff, error: staffErr } = await staffQuery
+  if (staffErr) throw new Error(`policy open counts: profiles read failed: ${staffErr.message}`)
+  const activeStaffCount = (staff || []).filter((s) => inFleetScope(scope, s.id)).length
+
+  if (versionIds.length > 0) {
+    let viewsQuery = db.from('policy_views')
+      .select('policy_version_id, profile_id, ended_at')
+      .in('policy_version_id', versionIds)
+    if (memberIds) viewsQuery = viewsQuery.in('profile_id', memberIds)
+    const { data: views, error: viewsErr } = await viewsQuery
+    if (viewsErr) throw new Error(`policy open counts: policy_views read failed: ${viewsErr.message}`)
+    const setsByVersion = new Map()
+    for (const v of views || []) {
+      // Unique completed viewers: one row per session would over-count.
+      if (!v.ended_at || !inFleetScope(scope, v.profile_id)) continue
+      const set = setsByVersion.get(v.policy_version_id) || new Set()
+      set.add(v.profile_id)
+      setsByVersion.set(v.policy_version_id, set)
+    }
+    for (const [vid, set] of setsByVersion) viewerCount.set(vid, set.size)
+  }
+  return { viewerCount, activeStaffCount }
 }
 
 /**

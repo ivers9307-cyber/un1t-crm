@@ -19,7 +19,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   // Mirror the real helper: null when allowed, a 404 Response otherwise
   // (detail routes 404 — not 403 — so contact ids can't be enumerated).
@@ -110,9 +112,9 @@ beforeEach(() => {
 })
 
 const master = { isMaster: true, role: 'master' }
-const owner = { isMaster: false, role: 'owner', locations: [{ id: 'loc-1' }] }
-const manager = { isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }] }
-const staff = { isMaster: false, role: 'staff', locations: [{ id: 'loc-1' }] }
+const owner = { isMaster: false, role: 'owner', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'owner' } }
+const manager = { isMaster: false, role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } }
+const staff = { isMaster: false, role: 'staff', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'staff' } }
 
 const U1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const U_GHOST = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'

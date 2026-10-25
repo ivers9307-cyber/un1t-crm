@@ -11,6 +11,7 @@
 
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { escapeHtml } from '@/lib/event-email'
 import { ADMIN_ROLES } from '@/lib/schemas'
 
@@ -34,14 +35,15 @@ export function assembleHostRecipients(host, links) {
 }
 
 /**
- * Email to the HOST after staff review their event.
- * @param {{ event: { name: string, slug: string }, action: 'approve'|'reject', reason?: string|null, appUrl: string }} args
+ * Email to the HOST after staff review their event. `baseUrl` is the tenant
+ * host the host's links land on (W1.L3b; notifyHostEventReviewed resolves it).
+ * @param {{ event: { name: string, slug: string }, action: 'approve'|'reject', reason?: string|null, baseUrl: string }} args
  * @returns {{ subject: string, htmlBody: string }}
  */
-export function buildReviewedEmail({ event, action, reason, appUrl }) {
+export function buildReviewedEmail({ event, action, reason, baseUrl }) {
   const name = escapeHtml(event?.name || 'Your event')
   if (action === 'approve') {
-    const publicUrl = `${appUrl}/event/${event.slug}`
+    const publicUrl = `${baseUrl}/event/${event.slug}`
     return {
       subject: `${event?.name || 'Your event'} is live`,
       htmlBody:
@@ -50,7 +52,7 @@ export function buildReviewedEmail({ event, action, reason, appUrl }) {
         `<p>You can track sales and attendees from your host portal.</p>`,
     }
   }
-  const portalUrl = `${appUrl}/host`
+  const portalUrl = `${baseUrl}/host`
   return {
     subject: `${event?.name || 'Your event'} needs changes`,
     htmlBody:
@@ -62,7 +64,8 @@ export function buildReviewedEmail({ event, action, reason, appUrl }) {
 }
 
 /**
- * Email to ORG ADMINS when a host submits an event for review.
+ * Email to ORG ADMINS when a host submits an event for review. A STAFF link:
+ * `appUrl` stays the CRM host (getAppUrl), untouched by W1.L3b.
  * @param {{ event: { name: string }, host: { name?: string|null }, appUrl: string }} args
  * @returns {{ subject: string, htmlBody: string }}
  */
@@ -88,7 +91,12 @@ export async function notifyHostEventReviewed({ db, event, host, action, reason 
   const { data: links } = await db.from('host_users').select('email').eq('host_id', host.id)
   const recipients = assembleHostRecipients(host, links || [])
   if (recipients.length === 0) return
-  const msg = buildReviewedEmail({ event, action, reason, appUrl: getAppUrl() })
+  // W1.L3b — the host is a customer of the platform: their links land on the
+  // tenant host of their anchor location (the event's own location when the
+  // caller's host row carries no anchor; NULL → the resolver floors to the CRM
+  // host and never throws past it).
+  const baseUrl = await resolveCustomerBaseUrl(db, host?.anchor_location_id || event?.location_id || null)
+  const msg = buildReviewedEmail({ event, action, reason, baseUrl })
   for (const to of recipients) {
     await sendTransactionalEmail({
       to,

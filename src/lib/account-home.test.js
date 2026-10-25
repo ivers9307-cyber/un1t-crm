@@ -8,8 +8,35 @@
 //      (no row fetch) and that per-studio failures are isolated.
 
 import { describe, it, expect, vi } from 'vitest'
+
+// W1.M2 — the studio card's integration chip is the membership-source STATE
+// (src/lib/membership/source.js), not a sniff of settings.glofox. Mocked
+// here so the table-scripted db below never sees a `locations` read.
+const un1tProvider = vi.hoisted(() => ({ capabilities: { memberships: true } }))
+vi.mock('@/lib/membership/source', () => ({
+  membershipSourceState: vi.fn(async (_db, locationId) => (
+    locationId === 'loc-1' ? { source: 'glofox', state: 'configured' }
+      : locationId === 'loc-un1t' ? { source: 'un1t_online', state: 'configured' }
+      : locationId === 'loc-un1t-bad' ? { source: 'un1t_online', state: 'configured' }
+      : locationId === 'loc-err' ? { source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' }
+        : { source: 'none', state: 'none' }
+  )),
+  // the providers' STATIC capability; un1t_online's is flipped per test
+  MEMBERSHIP_SOURCES: {
+    glofox: { capabilities: { memberships: true } },
+    none: { capabilities: { memberships: false } },
+    un1t_online: un1tProvider,
+  },
+}))
+
+// UN1TRADAR.3 — the source-key registry, so a un1t studio counts members through the seam.
+const un1tCounts = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/membership/reads/registry', () => ({
+  READS_BY_SOURCE: { glofox: { membershipCounts: vi.fn() }, none: {}, un1t_online: { membershipCounts: un1tCounts } },
+}))
+
 import {
-  dublinWeekWindow,
+  studioWeekWindow,
   aggregateOrgKpis,
   rollupAttention,
   resolveAccountScope,
@@ -17,7 +44,10 @@ import {
   MEMBER_STATUSES,
 } from './account-home.js'
 
-describe('dublinWeekWindow', () => {
+// TZ.18b: the Dublin-named alias is gone; pin studioWeekWindow on Europe/Dublin.
+const dublinWeekWindow = (now) => studioWeekWindow(now, 'Europe/Dublin')
+
+describe('studioWeekWindow (Europe/Dublin)', () => {
   it('is a 7-day inclusive window ending today (Dublin)', () => {
     // 2026-07-20 12:00 UTC — squarely inside a Dublin day.
     const now = Date.parse('2026-07-20T12:00:00Z')
@@ -71,8 +101,8 @@ describe('rollupAttention', () => {
   })
 })
 
-// getOwnerOrganizationIds derives owner orgs from rolesByLocation +
-// locations, so build users with that real shape.
+// C141 ORGROLE.2 — the Account Home is organisation-level: a master or an
+// org_admin grant (user.orgAdminOrgIds). An owner at a studio is not enough.
 function ownerUser(orgId, locId = 'loc-1') {
   return {
     role: 'owner',
@@ -80,7 +110,11 @@ function ownerUser(orgId, locId = 'loc-1') {
     activeOrganization: { id: orgId },
     rolesByLocation: { [locId]: 'owner' },
     locations: [{ id: locId, organization_id: orgId }],
+    orgAdminOrgIds: [],
   }
+}
+function orgAdminUser(orgId, locId = 'loc-1') {
+  return { ...ownerUser(orgId, locId), orgAdminOrgIds: [orgId] }
 }
 
 describe('resolveAccountScope — org access matrix', () => {
@@ -98,12 +132,25 @@ describe('resolveAccountScope — org access matrix', () => {
     expect(resolveAccountScope(master, null)).toEqual({ ok: true, orgId: 'org-a', isMaster: true })
   })
 
-  it('owner defaults to (and is allowed) their own org', () => {
-    expect(resolveAccountScope(ownerUser('org-a'), null)).toEqual({ ok: true, orgId: 'org-a', isMaster: false })
+  it('org admin defaults to (and is allowed) their own org', () => {
+    expect(resolveAccountScope(orgAdminUser('org-a'), null)).toEqual({ ok: true, orgId: 'org-a', isMaster: false })
   })
 
-  it('owner requesting a FOREIGN org gets 404 (not 403 — no existence probe)', () => {
-    expect(resolveAccountScope(ownerUser('org-a'), 'org-b')).toEqual({ ok: false, status: 404 })
+  it('org admin requesting a FOREIGN org gets 404 (not 403 — no existence probe)', () => {
+    expect(resolveAccountScope(orgAdminUser('org-a'), 'org-b')).toEqual({ ok: false, status: 404 })
+  })
+
+  it('C141 — an owner at a studio without an org_admin grant → 403 (not an organisation admin)', () => {
+    expect(resolveAccountScope(ownerUser('org-a'), null)).toEqual({ ok: false, status: 403 })
+  })
+
+  it('C141 — an owner asking for their own org by id, without a grant → 404', () => {
+    expect(resolveAccountScope(ownerUser('org-a'), 'org-a')).toEqual({ ok: false, status: 404 })
+  })
+
+  it('C141 — an org admin of another org, working in a studio of this one → 403', () => {
+    const u = { ...ownerUser('org-a'), orgAdminOrgIds: ['org-b'] }
+    expect(resolveAccountScope(u, null)).toEqual({ ok: false, status: 403 })
   })
 
   it('manager / staff (own no org, not master) → 403', () => {
@@ -190,13 +237,14 @@ describe('assembleAccountHome', () => {
     const still = res.studios.find((s) => s.id === 'loc-1')
     expect(still).toMatchObject({
       name: 'Stillorgan', members: 268, bookings7d: 90, atRiskHigh: 4,
-      openApprovals: 3, integrationConnected: true,
+      openApprovals: 3, membershipSource: { source: 'glofox', state: 'configured' },
     })
+    expect(still).not.toHaveProperty('integrationConnected')
     // 3 open approvals → purple "to review" pill.
     expect(still.attention).toEqual({ tone: 'purple', label: '3 to review', needsAttention: true })
 
     const hatch = res.studios.find((s) => s.id === 'loc-2')
-    expect(hatch).toMatchObject({ integrationConnected: false, openApprovals: 0, atRiskHigh: 0 })
+    expect(hatch).toMatchObject({ membershipSource: { source: 'none', state: 'none' }, openApprovals: 0, atRiskHigh: 0 })
     expect(hatch.attention).toEqual({ tone: 'teal', label: 'All clear', needsAttention: false })
 
     // Every count query is HEAD-only (no rows transferred → 1000-row cap
@@ -239,5 +287,60 @@ describe('assembleAccountHome', () => {
       members: 0, bookings7d: 0, atRiskHigh: 0, openApprovals: 0,
     })
     expect(res.studios[0].attention.tone).toBe('teal')
+    // The membership-source state still rides through: it is resolved by the
+    // seam, not by one of the failing count queries.
+    expect(res.studios[0].membershipSource).toEqual({ source: 'glofox', state: 'configured' })
+  })
+
+  it('W1.M2 — a failed membership-source read is "unknown" on the card, never "none"', async () => {
+    const { db } = mockDb({ 'loc-err': {} })
+    const res = await assembleAccountHome(db, {
+      organization: org,
+      locations: [{ id: 'loc-err', name: 'Broken', slug: 'broken', settings: {} }],
+      now: Date.now(),
+    })
+    expect(res.studios[0].membershipSource).toEqual({ source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+  })
+})
+
+// UN1TRADAR.3 — Glofox keeps its contacts head-count (Stillorgan unchanged);
+// another source with a membershipCounts read reports its total_members.
+describe('assembleAccountHome members by source', () => {
+  it('account-home members: glofox head-count unchanged; un1t from membershipCounts; a failed read is 0', async () => {
+    un1tProvider.capabilities.memberships = true // as after UN1TRADAR.4
+    un1tCounts.mockImplementation(async (_db, id) => {
+      if (id === 'loc-un1t-bad') throw new Error('down')
+      return { total_members: 26 }
+    })
+    const { db, selectCalls } = mockDb({ 'loc-1': { members: 268 }, 'loc-un1t': { members: 999 }, 'loc-un1t-bad': { members: 999 } })
+    const res = await assembleAccountHome(db, {
+      organization: { id: 'o', name: 'O', slug: 'o' },
+      locations: [{ id: 'loc-1', name: 'S' }, { id: 'loc-un1t', name: 'H' }, { id: 'loc-un1t-bad', name: 'X' }],
+      now: Date.parse('2026-10-18T12:00:00Z'),
+    })
+    const by = Object.fromEntries(res.studios.map((st) => [st.id, st.members]))
+    expect(by).toEqual({ 'loc-1': 268, 'loc-un1t': 26, 'loc-un1t-bad': 0 })
+    expect(un1tCounts).toHaveBeenCalledWith(db, 'loc-un1t')
+    // the contacts head-count ran for the Glofox studio only
+    expect(selectCalls.filter((c) => c.table === 'contacts')).toHaveLength(1)
+  })
+
+  it('a un1t studio whose provider does not supply memberships yet keeps the contacts head-count (main today)', async () => {
+    un1tProvider.capabilities.memberships = false
+    un1tCounts.mockReset()
+    try {
+      const { db, selectCalls } = mockDb({ 'loc-1': { members: 268 }, 'loc-un1t': { members: 41 } })
+      const res = await assembleAccountHome(db, {
+        organization: { id: 'o', name: 'O', slug: 'o' },
+        locations: [{ id: 'loc-1', name: 'S' }, { id: 'loc-un1t', name: 'H' }],
+        now: Date.parse('2026-10-18T12:00:00Z'),
+      })
+      const by = Object.fromEntries(res.studios.map((st) => [st.id, st.members]))
+      expect(by).toEqual({ 'loc-1': 268, 'loc-un1t': 41 })
+      expect(un1tCounts).not.toHaveBeenCalled()
+      expect(selectCalls.filter((c) => c.table === 'contacts')).toHaveLength(2)
+    } finally {
+      un1tProvider.capabilities.memberships = true
+    }
   })
 })

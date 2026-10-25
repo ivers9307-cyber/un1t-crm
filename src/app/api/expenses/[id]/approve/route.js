@@ -6,16 +6,17 @@
 // the central invoices_queue, where the bookkeeper handles the
 // Claude Vision analysis + final Xero forward in /invoices.
 //
-// Reimbursement still happens via payroll. The bookkeeper handoff
-// is invisible to the submitter — they just see "Approved by your
-// manager · Awaiting accountant sign-off before forwarding to
-// Xero."
+// Reimbursement still happens via payroll. EXPENSELIFE.1: the claim
+// row stays 'awaiting_accountant_review' for good; the submitter sees
+// an honest lifecycle label derived from the per-item queue rows
+// (queued → sent to Xero → paid, or rejected) — see
+// shared/accountant-queue-lifecycle.js. The notification no longer
+// promises "the next payroll run": the accountant can still reject.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermissionForLocation } from '@/lib/permissions'
-import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
+import { canApproveExpenseClaim, canSeeExpenseClaim } from '@/lib/fte-expense-access'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromFteExpenseClaim } from '@/lib/invoices-queue/enqueue'
@@ -40,9 +41,20 @@ export async function POST(request, { params }) {
     `)
     .eq('id', id)
     .maybeSingle()
-  if (!claim) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  // APPROVALS-PERCAT.1 — permission is the only gate.
-  if (!hasPermissionForLocation(user, claim.location_id, APPROVAL_CATEGORY_PERMISSION.fte_expenses)) {
+  // FINALTIDY.1 — a caller who can't see the claim gets the same 404 as a
+  // missing one. APPROVALS-PERCAT.1 — the permission is still the only gate
+  // to ACT; a caller who can see the claim (the claimant, an owner whose
+  // approvals_fte_expenses was switched off) keeps the honest 403.
+  if (!claim || !canSeeExpenseClaim(user, claim)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  // FINALTIDY.1 — nobody decides on their own spend, master included. The
+  // claimant can see the claim, so this is an honest 403; to pull a claim
+  // back they revoke it instead.
+  if (claim.profile_id === user.id) {
+    return NextResponse.json({ success: false, error: "You can't approve your own expense claim. Revoke it instead if you need to change it." }, { status: 403 })
+  }
+  if (!canApproveExpenseClaim(user, claim)) {
     return NextResponse.json({ success: false, error: 'You do not have permission to approve expenses.' }, { status: 403 })
   }
   if (!canTransition(claim.status, 'approved')) {
@@ -90,7 +102,7 @@ export async function POST(request, { params }) {
   try {
     await notifyUsersOnce(db, `expense_approved:${claim.id}`, [claim.profile_id], {
       title: 'Expense claim approved',
-      body: `Your €${Number(claim.total_amount).toFixed(2)} claim for ${periodLabel(claim.period_start)} was approved. Reimbursement goes through with the next payroll run.`,
+      body: `Your €${Number(claim.total_amount).toFixed(2)} claim for ${periodLabel(claim.period_start)} was approved and queued for the accountant. Reimbursement goes through payroll once the accountant has processed it.`,
       emailSubject: `Expense claim approved — ${periodLabel(claim.period_start)}`,
       category: 'expense_approved',
       data: { type: 'expense_approved', claim_id: claim.id },

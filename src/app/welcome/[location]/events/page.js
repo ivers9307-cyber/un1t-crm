@@ -3,15 +3,20 @@
 // /welcome layout (Poppins + #lp-shell). Lists active, upcoming race_events
 // for the studio; cards link to the existing /event/[slug] booking.
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 import { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import { isPubliclyVisible } from '@/lib/landing-page-visibility'
-import { orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { orderEventsForBrowse, todayIsoIn } from '@shared/events'
+import { zoneOfLocation } from '@/lib/location-time'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
 import PublicEventsList from '@/components/landing-page/PublicEventsList'
 import InstagramStrip from '@/components/landing-page/InstagramStrip'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,7 +26,7 @@ async function loadByPath(path) {
     const db = createServerClient()
     const { data, error } = await db
       .from('landing_page_settings')
-      .select('*, locations:location_id ( id, name )')
+      .select('*, locations:location_id ( id, name, organization_id, timezone )')
       .eq('public_path', path)
       .maybeSingle()
     if (error) return null
@@ -50,11 +55,16 @@ async function loadInstagramPosts(db, locationId) {
   return { posts, username: data[0].ig_username || null }
 }
 
+// W1.L4 — the OG site name is THIS studio's brand and the not-found title
+// is the host's organisation brand; neither is a literal (mirrors
+// welcome/[location]/page.js).
 export async function generateMetadata(props) {
   const params = await props.params
   const row = await loadByPath(params.location)
-  if (!row || !isPubliclyVisible(row.publish_state)) return { title: 'UN1T Dublin' }
-  const studioName = row.locations?.name || 'UN1T Dublin'
+  const hostBrand = await resolveGymSiteName({ host: (await headers()).get('host') })
+  if (!row || !isPubliclyVisible(row.publish_state)) return { title: hostBrand }
+  const brand = (await resolveLocationBrand({ locationId: row.location_id })).companyName || hostBrand
+  const studioName = row.locations?.name || brand
   const title = `Events — ${studioName}`
   const description = `Upcoming races, workshops and open days at ${studioName}. Book your spot.`
   return {
@@ -63,7 +73,7 @@ export async function generateMetadata(props) {
     openGraph: {
       title,
       description,
-      siteName: 'UN1T Dublin',
+      siteName: brand,
       type: 'website',
     },
   }
@@ -74,24 +84,37 @@ export default async function StudioEventsPage(props) {
   const row = await loadByPath(params.location)
   if (!row || !isPubliclyVisible(row.publish_state)) notFound()
 
+  // W0.3 — a page row with no location is a 404 before any query, never a
+  // `location_id.eq.undefined` reaching PostgREST.
   const locationId = row.locations?.id
-  const studioName = row.locations?.name || 'UN1T Dublin'
-  const today = todayIsoDublin()
+  if (!locationId) notFound()
+  // W1.S1b — the studio's brand and its org's site chrome, cached
+  // (host-brand.js); the fallbacks name THIS studio, never a literal.
+  const [brand, chrome] = await Promise.all([
+    resolveLocationBrand({ locationId }),
+    resolveOrgChrome({ orgId: row.locations?.organization_id || null }),
+  ])
+  const studioName = row.locations?.name || brand.companyName
+  // TZ.9 — the studio's own day and clock (the zone rides the page row).
+  const zone = zoneOfLocation(row.locations)
+  const today = todayIsoIn(zone)
   const nowMs = Date.now()
 
   const logoUrl     = row.logo_url || null
-  const logoAlt     = row.logo_alt || 'UN1T Dublin'
+  const logoAlt     = row.logo_alt || brand.companyName
   const logoWidthPx = row.logo_width_px || 200
 
   const db = createServerClient()
   // Public-safe SELECT, scoped to this studio's active upcoming events.
-  // Includes shared events (visible across locations). Embeds waves +
+  // Includes shared events (visible across the owning organisation, W0.3).
+  // Embeds waves +
   // registrations ONLY to compute a coy sold-out boolean — raw
   // capacity/counts are never rendered.
+  const orFilter = await sharedEventsOrFilterFor(db, locationId)
   const { data: rows } = await db
     .from('race_events')
-    .select('slug, name, kind, race_date, start_time, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity ), registrations:race_registrations ( status, wave_id, team:teams ( size ) )')
-    .or(`location_id.eq.${locationId},shared.eq.true`)
+    .select('slug, name, kind, race_date, start_time, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )')
+    .or(orFilter)
     .eq('active', true)
     .eq('status', 'published')
     .is('host_id', null)
@@ -104,7 +127,7 @@ export default async function StudioEventsPage(props) {
   })
   const { upcoming } = orderEventsForBrowse(open, today)
   const cards = upcoming.map((e) =>
-    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs })
+    toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs, zone })
   )
 
   // Instagram strip (EVENTS-IG.1) — cached posts for this studio, gated on the
@@ -123,6 +146,7 @@ export default async function StudioEventsPage(props) {
         logoUrl={logoUrl}
         logoAlt={logoAlt}
         logoWidthPx={logoWidthPx}
+        wordmark={brand.shortName}
         sticky
         eventsHref={eventsHref}
       />
@@ -138,7 +162,7 @@ export default async function StudioEventsPage(props) {
           </div>
         </div>
       )}
-      <SiteFooter ctaHref={`/${row.public_path}#book`} />
+      <SiteFooter ctaHref={`/${row.public_path}#book`} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

@@ -157,3 +157,41 @@ describe('runHostLeadMigration', () => {
     expect(summary.errors).toEqual([])
   })
 })
+
+describe('runHostLeadMigration — organisation scope (TENANTSCOPE.1)', () => {
+  const TWO_ORGS = () => ({
+    locations: [
+      { id: 'anchor-1', organization_id: 'org-1', is_host_anchor: true },
+      { id: 'anchor-2', organization_id: 'org-2', is_host_anchor: true },
+    ],
+    organizations: [
+      { id: 'org-1', master_location_id: 'master-1' },
+      { id: 'org-2', master_location_id: 'master-2' },
+    ],
+    contacts: [
+      { id: 'a1', email: 'one@x.com', location_id: 'anchor-1' },
+      { id: 'a2', email: 'two@x.com', location_id: 'anchor-2' },
+    ],
+  })
+  const touched = (db) => db.writes.flatMap((w) => w.filters.filter(([, col]) => col === 'id' || col === 'contact_id').map(([, , v]) => v))
+
+  it("walks only the named organisations' anchors", async () => {
+    const db = makeDb(TWO_ORGS())
+    const summary = await runHostLeadMigration(db, { dryRun: false, organizationIds: ['org-1'] })
+    expect(summary.moved_ids).toEqual(['a1']) // main: ['a1', 'a2']
+    expect(touched(db)).not.toContain('a2')
+  })
+
+  it('null walks every organisation (a master run, as before)', async () => {
+    const db = makeDb(TWO_ORGS())
+    const summary = await runHostLeadMigration(db, { dryRun: true, organizationIds: null })
+    expect(summary.moved_ids.sort()).toEqual(['a1', 'a2'])
+  })
+
+  it('an EMPTY list walks nothing — "no organisation" never means "all"', async () => {
+    const db = makeDb(TWO_ORGS())
+    const summary = await runHostLeadMigration(db, { dryRun: false, organizationIds: [] })
+    expect(summary.planned).toBe(0) // main: 2
+    expect(db.writes).toEqual([])
+  })
+})

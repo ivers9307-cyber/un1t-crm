@@ -13,10 +13,14 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { sequenceNotFound } from '@/lib/sequence-access'
+import { logError } from '@/lib/log'
+import { uuidLike } from '@/lib/schemas'
 import { enrolContacts } from '@/lib/sequences'
+import { contactIdsLinkedToStudio } from '@/lib/contact-studio-link'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -35,7 +39,7 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
@@ -43,26 +47,42 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const parsed = { data: validation.data }
 
+  // SEQPAGEGATE.1 — a missing sequence and another studio's answer the same
+  // 404 (was 404 vs 403, which confirmed the id existed). A failed read is a
+  // logged 500, not "not found"; a garbage id is not found without a read.
+  if (!uuidLike.safeParse(params.id).success) return sequenceNotFound()
   const db = createServerClient()
-  // Verify sequence exists + the caller can see it (RLS-by-location).
-  const { data: sequence } = await db
+  const { data: sequence, error: seqErr } = await db
     .from('email_sequences')
     .select('id, location_id, name')
     .eq('id', params.id)
-    .single()
-  if (!sequence) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const locationIds = getUserLocationIds(user)
-  if (user.role !== 'master' && !locationIds.includes(sequence.location_id)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    .maybeSingle()
+  if (seqErr) {
+    logError('sequences', 'enrol: sequence read failed', { sequenceId: params.id, code: seqErr.code || null })
+    return NextResponse.json({ success: false, error: 'Could not load the sequence' }, { status: 500 })
+  }
+  if (!sequence) return sequenceNotFound()
+  const hidden = assertLocationAccessOr404(user, sequence.location_id)
+  if (hidden) return hidden
+  // ROLESWEEP.1a — the permission is judged at the sequence's location.
+  if (!hasPermissionForLocation(user, sequence.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
-  // Constrain enrolments to contacts at the same location.
-  const { data: validContacts } = await db
-    .from('contacts')
-    .select('id')
-    .eq('location_id', sequence.location_id)
-    .in('id', parsed.data.contact_ids)
-  const validIds = (validContacts || []).map(c => c.id)
+  // Constrain enrolments to the sequence's studio's people: its own contacts,
+  // plus a sibling studio's contact (same organisation) who has joined it, a
+  // deal on its board or a marketing-preference row there (SHAREDCONTACT.1).
+  // Every step then acts as the sequence's studio: its consent row, its number,
+  // its branding.
+  const linked = await contactIdsLinkedToStudio(db, {
+    locationId: sequence.location_id,
+    contactIds: parsed.data.contact_ids,
+  })
+  if (!linked.ok) {
+    logError('sequences', 'enrol: contact studio check failed', { sequenceId: params.id, reason: linked.reason, err: linked.err || null })
+    return NextResponse.json({ success: false, error: 'Could not check the contacts' }, { status: 500 })
+  }
+  const validIds = linked.ids
   const invalidIds = parsed.data.contact_ids.filter((id) => !validIds.includes(id))
   const invalidCount = invalidIds.length
 
@@ -99,11 +119,9 @@ export async function POST(request, props) {
         .from('contacts')
         .select('id, name, first_name, last_name, email')
         .in('id', sampleIds)
-      // Annotate each row with the classification bucket. Defensive: a
-      // contact in `invalidIds` won't actually be returned because the
-      // RLS filter on contacts is also location-scoped — show those
-      // as "no_access" so the operator sees something rather than a
-      // silent omission.
+      // Annotate each row with the classification bucket. A contact in
+      // `invalidIds` belongs to another studio it has not joined (or to no
+      // contact at all): shown as wrong_location rather than silently omitted.
       const byId = new Map((contactRows || []).map((c) => [c.id, c]))
       sample = sampleIds.map((id) => {
         const c = byId.get(id)

@@ -19,14 +19,34 @@ import Link from 'next/link'
 import { X, ChevronLeft, ChevronRight, Clock } from 'lucide-react'
 import PersonHeader from '@/components/PersonHeader'
 import PersonActionBar from '@/components/PersonActionBar'
+import { personActionsFor } from '@/lib/activity-write-gate'
 import ContactComposer from '@/components/ContactComposer'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
+import { nextClassLabel } from '@/components/contact/format'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
 const TONE_CHIP = {
   danger: 'bg-red-500/10 text-red-700',
   warn: 'bg-amber-500/10 text-amber-700',
+}
+
+// WAITLIST.6 — Cold is a DERIVED-board affordance (the same set DealCard
+// carries, minus Message: the drawer has the composer itself a few inches
+// below). All Cold does is stamp contacts.pipeline_dismissed_at, and the only
+// reader of that stamp is the classifier, which mig 594's `pipelines.mode`
+// keeps off a manual board entirely. On Hatch Street's waitlist board it was
+// therefore a second, invisible way to say what column 4 ("Not interested")
+// already says by hand — an item that looks like a move and produces none.
+//
+// `manual` comes down from KanbanBoard, which is the ONLY thing that renders
+// this drawer and already knows the board (the pipeline page resolved
+// pipelines.mode to draw the tabs). So the board context is free here: no
+// lookup, and no fetch on a panel that opens dozens of times a shift.
+const DRAWER_ACTIONS = {
+  derived: ['task', 'sequence', 'cancel_form', 'cold'],
+  manual: ['task', 'sequence', 'cancel_form'],
 }
 
 // Compact label/value row for the key-details card. Rows with no value
@@ -45,7 +65,16 @@ function DetailRow({ label, value, href = null }) {
   )
 }
 
-export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose }) {
+// `manual` defaults FALSE — i.e. Cold shown — so any future caller that cannot
+// resolve a board behaves exactly as today. Hiding an operator action because a
+// lookup came back empty is a worse failure than offering an inert one.
+// C146 TASKSNEEDCONTACTS.1 — `canTask` comes down from the pipeline page
+// through KanbanBoard (canWriteActivitiesAt at the board's studio); false drops
+// the Task item. Defaults true, like DealCard's.
+// TZ.16 (D3 = A) — `timezone` is the board's studio zone (the chip matches the
+// card it was opened from).
+export default function ContactDrawer({ contactId, columnContactIds = [], locationId, timezone = null, onNavigate, onClose, manual = false, canTask = true }) {
+  const viewerZone = useViewerZone()
   const [bundle, setBundle] = useState(null)
   const [error, setError] = useState(null)
 
@@ -129,7 +158,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                   <PersonActionBar
                     contactId={contact.id}
                     locationId={locationId}
-                    actions={['task', 'sequence', 'cancel_form', 'cold']}
+                    actions={personActionsFor(DRAWER_ACTIONS[manual ? 'manual' : 'derived'], { canTask })}
                     isCold={contact.pipeline_stage_slug === 'cold_lead'}
                   />
                 </PersonHeader>
@@ -185,7 +214,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                   ))}
                   {funnel && nextClassAt && (
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700">
-                      Next: {new Date(nextClassAt).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+                      Next: {nextClassLabel(nextClassAt, timezone, viewerZone)}
                     </span>
                   )}
                   {funnel && contact.trial_credits_remaining != null && (
@@ -216,12 +245,9 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                 contactLocationId={contact.location_id}
                 contactEmail={contact.email || null}
                 canWhatsApp={bundle.permissions?.whatsapp}
-                canSms={bundle.permissions?.sms}
                 canEmail={bundle.permissions?.email}
                 hasWaPhone={!!(contact.wa_phone || contact.phone)}
-                hasPhone={!!contact.phone}
                 hasEmail={!!contact.email}
-                smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
                 emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
                 whatsappWindowOpen={bundle.wa?.window_open}
                 whatsappWindowExpiresAt={bundle.wa?.window_expires_at}

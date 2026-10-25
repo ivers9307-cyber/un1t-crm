@@ -5,19 +5,23 @@ import { expandSession, HYROX_MODEL } from './generate'
 import { sessionRowFrom, slotsForWeek } from './plan-block'
 import { weeksNeedingExpansion } from './expand-plan'
 import { resolveHyroxSettings } from './settings'
-import { dublinDateKey } from '@/lib/dublin-time'
+import { dateKeyIn, zoneOfLocation } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 
 export async function runExpandHyroxWeeks(db, { nowMs = Date.now(), aheadWeeks = 2 } = {}) {
   const stats = { blocks: 0, weeksExpanded: 0, sessionsCreated: 0 }
-  const nowYmd = dublinDateKey(new Date(nowMs).toISOString())
+  // TZ.9 — the zone rides the block read (the locations embed), so there is
+  // no separate zone read to fail.
   const { data: blocks } = await db
     .from('hyrox_blocks')
-    .select('id, location_id, starts_on, weeks, sessions_per_week, difficulty_dial, arc')
+    .select('id, location_id, starts_on, weeks, sessions_per_week, difficulty_dial, arc, locations:location_id ( id, timezone )')
     .eq('status', 'active')
   for (const block of blocks || []) {
     stats.blocks++
     try {
+      // "Today" is the block's own studio day (TZ.9): starts_on is a local
+      // Monday, so the week a block is in turns over at ITS midnight.
+      const nowYmd = dateKeyIn(nowMs, zoneOfLocation(block.locations))
       const { data: existing } = await db.from('hyrox_sessions').select('week_no').eq('block_id', block.id)
       const haveWeeks = [...new Set((existing || []).map((r) => r.week_no))]
       const need = weeksNeedingExpansion(block, haveWeeks, nowYmd, aheadWeeks)
@@ -30,7 +34,7 @@ export async function runExpandHyroxWeeks(db, { nowMs = Date.now(), aheadWeeks =
         if (!week) continue
         const rows = []
         for (const slot of slotsForWeek(block.sessions_per_week)) {
-          const sRes = await expandSession({ week, slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, autoTuneSignal: null }, { caller })
+          const sRes = await expandSession({ week, slot, dial: block.difficulty_dial, locationLabel: (loc?.name || '').toUpperCase(), charter, autoTuneSignal: null }, { caller })
           if (sRes.ok) rows.push(sessionRowFrom(block.id, block.location_id, { ...sRes.data, week_no: weekNo, slot }))
         }
         if (rows.length) {

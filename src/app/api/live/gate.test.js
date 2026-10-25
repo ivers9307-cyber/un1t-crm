@@ -20,7 +20,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async () => ({
+  // ROLESWEEP.1b — the session-end pre-check reads hasRoleAtAnyLocation.
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   // Mirror the real helper (src/lib/auth.js) so the fixtures below are the
   // single source of truth for who is a member of what.
@@ -57,14 +59,21 @@ const LOC = 'loc1'
 const OTHER = 'loc2'
 const props = { params: Promise.resolve({ locationId: LOC }) }
 
-function userAt(locationId, role, { studio = true } = {}) {
+function userAt(locationId, role, { studio = true, roster } = {}) {
   return {
     id: 'u1',
     role,
     isMaster: false,
     locations: [{ id: locationId, features: {} }],
+    rolesByLocation: { [locationId]: role },
     assignmentsByLocation: {
-      [locationId]: { role, permissions: studio === null ? {} : { studio_management: studio } },
+      [locationId]: {
+        role,
+        permissions: {
+          ...(studio === null ? {} : { studio_management: studio }),
+          ...(roster === undefined ? {} : { class_roster: roster }),
+        },
+      },
     },
     roleTemplatesByLocation: {},
   }
@@ -135,6 +144,12 @@ describe.each(ROUTES)('%s — gate', (_label, handler, makeReq, isMutation) => {
 
   it('403s a member with an explicit studio_management: false', async () => {
     getCurrentUser.mockResolvedValue(userAt(LOC, 'manager', { studio: false }))
+    createServerClient.mockReturnValue(throwingDb())
+    expect((await handler(makeReq(), props)).status).toBe(403)
+  })
+
+  it('403s a class_roster-only member (UN1TBOOK.12: the roster permission opens /roster, nothing here)', async () => {
+    getCurrentUser.mockResolvedValue(userAt(LOC, 'head_coach', { studio: false, roster: true }))
     createServerClient.mockReturnValue(throwingDb())
     expect((await handler(makeReq(), props)).status).toBe(403)
   })

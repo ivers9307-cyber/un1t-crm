@@ -118,7 +118,7 @@ describe('buildRichPayload', () => {
   it('trims every string, drops empty link rows, and nulls an unset photo', () => {
     const payload = buildRichPayload({
       enabled: true,
-      name: '  Sarah Doyle ',
+      name: '  Sam Demo ',
       title: ' Head Coach ',
       phone: ' 01 234 5678 ',
       note: '  Stillorgan  ',
@@ -130,7 +130,7 @@ describe('buildRichPayload', () => {
     })
     expect(payload).toEqual({
       enabled: true,
-      name: 'Sarah Doyle',
+      name: 'Sam Demo',
       title: 'Head Coach',
       phone: '01 234 5678',
       note: 'Stillorgan',

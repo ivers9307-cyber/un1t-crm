@@ -1,0 +1,447 @@
+{
+  "_note": "CACHED_ACCOUNT_TOOLS at base commit 29b26df4 (before MIAORG.1 Task 5). The Glofox tool block; must never change. MIACONSULT.1 (2026-10-19) re-captured the consultation lines only: the slot label + slot_id rule and the list_consultation_slots / book_consultation definitions.",
+  "names": [
+    "verify_identity",
+    "get_my_membership",
+    "get_my_payment_reminder",
+    "get_my_next_class",
+    "get_my_recent_attendance",
+    "request_pause",
+    "request_cancellation",
+    "request_membership_purchase",
+    "list_upcoming_classes",
+    "book_class",
+    "list_consultation_slots",
+    "book_consultation",
+    "list_my_upcoming_bookings",
+    "cancel_class_booking",
+    "save_lead_details",
+    "list_upcoming_events",
+    "get_my_event_registrations",
+    "book_event",
+    "cancel_event_registration",
+    "reschedule_event_wave",
+    "list_event_move_options",
+    "move_event_entry",
+    "send_card_set"
+  ],
+  "cached_tools": [
+    {
+      "name": "verify_identity",
+      "description": "Verify the customer's identity before sharing any of their account details. Call this when the customer asks about THEIR OWN account (membership status, plan, next class, recent attendance) and they have not been verified yet this conversation. Provide whatever identifying details the customer gives. Verification uses the email on their account, plus their surname on channels the studio cannot already tie to an account. NEVER ask for a date of birth — the studio does not hold one. If it fails, ask for exactly what the returned hint says and nothing more.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email the customer gives, matched against the email on their account."
+          },
+          "last_name": {
+            "type": "string",
+            "description": "Surname, matched against the account."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_my_membership",
+      "description": "Get the verified customer's current membership status (active, paused, cancelled), their plan name, and (when the plan is in the studio catalog) a short description of what the plan includes — its pricing and commitment terms. Only works after verify_identity has succeeded this conversation. Use for \"is my membership active\", \"what plan am I on\", \"what does my plan include\". For live billing standing or payment issues, hand off.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_my_payment_reminder",
+      "description": "Look up whether the verified customer has been sent an overdue membership payment reminder, the amount, the pay link, and whether Glofox still shows the payment as outstanding. Call this before answering anything about a payment reminder, a failed payment, or a Pay now link. Only works after verify_identity has succeeded this conversation.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_my_next_class",
+      "description": "Get the verified customer's next upcoming booked class (name + date/time). Only works after verify_identity has succeeded this conversation. Use for \"when is my next class\", \"what have I got booked\".",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_my_recent_attendance",
+      "description": "Get a short summary of the verified customer's recent class attendance (how many classes attended in the last 30 days, and when they last attended). Only works after verify_identity has succeeded. Use for \"how many classes have I done\", \"when did I last come in\".",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "request_pause",
+      "description": "Log a request to PAUSE the verified customer's membership for a human to approve. Only after verify_identity has succeeded. Gather what you can first: when they want the pause to start and end (or how long), and the reason. You are NOT pausing it yourself — this queues the request for the team. Tell the customer it has been requested and the team will confirm; never say it is done.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "description": "Requested pause start, YYYY-MM-DD if given."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "Requested pause end / return date, YYYY-MM-DD if given."
+          },
+          "reason": {
+            "type": "string",
+            "description": "The customer's reason for pausing, in their words."
+          }
+        }
+      }
+    },
+    {
+      "name": "request_cancellation",
+      "description": "Log a request to CANCEL the verified customer's membership for a human to approve. Only after verify_identity has succeeded. Per the studio flow, the assistant first offers a pause as an alternative ONCE; call this tool when the customer still wants to cancel (or declines the pause). Gather the reason and any desired cancellation date. You are NOT cancelling it yourself — capture the request and queue it; the team handles any further retention. Tell the customer it has been requested and the team will be in touch; never say it is done.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "The customer's reason for cancelling, in their words."
+          },
+          "desired_date": {
+            "type": "string",
+            "description": "Requested cancellation date, YYYY-MM-DD if given."
+          }
+        }
+      }
+    },
+    {
+      "name": "request_membership_purchase",
+      "description": "Log that this customer wants to BUY or START a membership / accept a membership offer (e.g. they replied \"yes\" to a studio offer message, or asked to join). No verification needed — this queues the request for the team, who set up the membership and billing and confirm with the customer. Capture which offer or plan they mean (quote the studio message they're replying to if that's what named it). Tell the customer the team will set it up and confirm shortly — never say it is done, and never quote a price that isn't in KNOWLEDGE or the offer message.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "offer": {
+            "type": "string",
+            "description": "The offer or plan they accepted, as named in the studio message or by the customer (e.g. \"Kickstarter — first month €99\")."
+          },
+          "note": {
+            "type": "string",
+            "description": "Anything else useful for the team, in the customer's words."
+          }
+        }
+      }
+    },
+    {
+      "name": "list_upcoming_classes",
+      "description": "List the studio's upcoming classes over the next few days (name and time) so a VERIFIED member can pick one to book. Only works after verify_identity has succeeded this conversation. Use when a member asks \"what classes are on\", \"can I book a class\", \"what's available tomorrow\". Classes carry full and limited flags, never a count — never tell the customer how many spaces are left. Offer an alternative to a full class.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "number",
+            "description": "How many days ahead to look (1-7). Default 7 — the full visible week. NEVER ask the customer how far ahead to look; infer it from their request (a named day like \"Friday\" is always within 7)."
+          }
+        }
+      }
+    },
+    {
+      "name": "book_class",
+      "description": "Book the VERIFIED member into a class from list_upcoming_classes. CRITICAL: before calling this, restate the exact class name and day/time back to the customer and get a clear yes — never book on an ambiguous message. Pass the event_id from list_upcoming_classes plus the class name and time you confirmed. If the studio is set to review bookings first, tell the customer the team will confirm shortly; otherwise relay the result honestly (booked, class full, already booked).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The 24-hex Glofox event id from list_upcoming_classes."
+          },
+          "class_name": {
+            "type": "string",
+            "description": "The class name you confirmed with the customer."
+          },
+          "class_time": {
+            "type": "string",
+            "description": "The class date/time you confirmed, as shown in the list."
+          },
+          "starts_at": {
+            "type": "string",
+            "description": "The starts_at value for the chosen class, copied EXACTLY from list_upcoming_classes. Never invent or reformat it."
+          }
+        },
+        "required": [
+          "event_id"
+        ]
+      }
+    },
+    {
+      "name": "list_consultation_slots",
+      "description": "List available consultation (intro session) slots for a given date — for NEW or prospective customers; no identity verification needed. Use when someone asks to come in, try a class, book a consultation or intro. Returns the bookable times for that date; if none, try the next day. Dates are YYYY-MM-DD. Work the date out from Today in Context, then check the returned day_label is the day the customer asked for. Each slot has a label (weekday, date and time, e.g. \"Fri 23 Oct, 11:00\") and a slot_id: offer times with the day exactly as the label gives it, and book with that slot_id.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "The date to check, YYYY-MM-DD."
+          }
+        },
+        "required": [
+          "date"
+        ]
+      }
+    },
+    {
+      "name": "book_consultation",
+      "description": "Book a consultation slot from list_consultation_slots. If the studio already has this person's name and email on file (Context says their identity is known, or you already know it from earlier in the chat), do NOT ask again — leave name/email out and the booking uses the details on file. Only ask a brand-new person we know nothing about for their name and email (a phone number too if it flows naturally). CRITICAL either way: restate the slot by its label (day, date and time) and get a clear yes before calling. Pass the slot_id from list_consultation_slots and the label you confirmed. Only a slot on a day list_consultation_slots returned in this conversation can be booked; if the listing was in an earlier message, list that same date again for its slot_id. Never work a date out from a weekday name. If the booking is refused, relay the reason the result gives and nothing else. They will receive a confirmation automatically.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "slot_id": {
+            "type": "string",
+            "description": "The slot_id of the chosen slot, copied exactly from list_consultation_slots."
+          },
+          "confirmed_label": {
+            "type": "string",
+            "description": "The slot as you confirmed it with the customer, e.g. \"Fri 23 Oct, 11:00\"."
+          },
+          "name": {
+            "type": "string",
+            "description": "The customer's full name. Omit if already on file — do not re-ask a known person."
+          },
+          "email": {
+            "type": "string",
+            "description": "The customer's email address. Omit if already on file — do not re-ask a known person."
+          },
+          "phone": {
+            "type": "string",
+            "description": "Phone number if given."
+          }
+        },
+        "required": [
+          "slot_id",
+          "confirmed_label"
+        ]
+      }
+    },
+    {
+      "name": "list_my_upcoming_bookings",
+      "description": "List the VERIFIED member's own upcoming class bookings (class, day/time, booking id) straight from the booking system. Use when a member asks what they are booked into, or before cancelling/rescheduling so you have the booking_id. Only works after identity is verified.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "cancel_class_booking",
+      "description": "Cancel one of the VERIFIED member's upcoming bookings from list_my_upcoming_bookings. CRITICAL: restate the exact class and day/time and get a clear yes before calling — never cancel on an ambiguous message. The studio may have a no-late-cancellation rule; if the system refuses, relay its reason honestly. For a RESCHEDULE: confirm BOTH the cancellation and the new class with the customer first, then cancel and book the new one.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string",
+            "description": "The 24-hex booking id from list_my_upcoming_bookings."
+          },
+          "class_name": {
+            "type": "string",
+            "description": "The class name you confirmed with the customer."
+          },
+          "class_time": {
+            "type": "string",
+            "description": "The class date/time you confirmed, as shown in the list."
+          }
+        },
+        "required": [
+          "booking_id"
+        ]
+      }
+    },
+    {
+      "name": "save_lead_details",
+      "description": "Save what you've learned about the person you're talking to — their name, email, and what they want from the studio (goal, preferred times, interest). Works for anyone, no verification needed. Call it once you naturally learn something new — never interrogate people for details. Existing contact details are never overwritten.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "first_name": {
+            "type": "string",
+            "description": "First name, if they gave it."
+          },
+          "last_name": {
+            "type": "string",
+            "description": "Last name, if they gave it."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address, if they gave it."
+          },
+          "interest": {
+            "type": "string",
+            "description": "What they're after — goal, classes of interest, timing. One or two sentences."
+          }
+        }
+      }
+    },
+    {
+      "name": "list_upcoming_events",
+      "description": "List the studio's upcoming special events — races (e.g. Hyrox sims), workshops, seminars, open days, masterclasses — with dates, start waves, pricing and the signup link. Waves carry full and limited flags, never a count: never tell the customer how many spaces are left. No verification needed. Use when someone asks about races/events, or AFTER answering their question when an event is genuinely relevant to their interests. For paid events, share the signup link — payment happens securely on that page.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_my_event_registrations",
+      "description": "The customer's own upcoming event registrations (event, date, wave, status). Works for the person this conversation belongs to. Use when they ask \"am I signed up for the race?\", \"what wave am I in?\".",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "book_event",
+      "description": "Register the customer (solo entry) for an upcoming event from list_upcoming_events — ONLY when the event is free for them (the tool refuses paid entries and tells you to share the signup link instead; team entries also go via the link). CRITICAL: restate the exact event, date and wave time and get a clear yes before calling. For someone new, collect their full name and email first — the confirmation goes there. For an existing member, identity must be verified first (the tool says so if it is not).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The event_id from list_upcoming_events."
+          },
+          "wave_id": {
+            "type": "string",
+            "description": "The wave_id they chose (required when the event has multiple waves)."
+          },
+          "event_name": {
+            "type": "string",
+            "description": "The event name you confirmed with the customer."
+          },
+          "event_date": {
+            "type": "string",
+            "description": "The date you confirmed, as shown in the list."
+          },
+          "name": {
+            "type": "string",
+            "description": "Full name, if they're new or not on file."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address, if not on file — confirmations go there."
+          }
+        },
+        "required": [
+          "event_id"
+        ]
+      }
+    },
+    {
+      "name": "cancel_event_registration",
+      "description": "Cancel one of the VERIFIED customer's own upcoming event registrations from get_my_event_registrations (identity must be verified first, same as cancelling a class). CRITICAL: restate the exact event and date and get a clear yes before calling. FREE entries cancel immediately. PAID entries are passed to the team to confirm (they also handle any refund question) — tell the customer the team will confirm shortly and NEVER promise a refund yourself. A result with handoff: true means this event does not let the customer cancel themselves (switched off, or too close to the start): relay its customer_message as written and hand off to the team; never say it is cancelled or that a request was filed.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "The registration_id from get_my_event_registrations."
+          },
+          "event_name": {
+            "type": "string",
+            "description": "The event name you confirmed with the customer."
+          },
+          "event_date": {
+            "type": "string",
+            "description": "The date you confirmed."
+          }
+        },
+        "required": [
+          "registration_id"
+        ]
+      }
+    },
+    {
+      "name": "reschedule_event_wave",
+      "description": "Move the VERIFIED customer's registration to a DIFFERENT START WAVE of the SAME event (e.g. from the 9am wave to the 10:30 wave), capacity permitting, once their identity is verified. Get the wave_id from list_upcoming_events and confirm the new time with them first. Moving to a different EVENT or a different date is NOT this tool, and never a cancel plus a new booking: use list_event_move_options, then move_event_entry. A result with handoff: true means this event does not let the customer change their time themselves: relay its customer_message as written and hand off to the team.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "The registration_id from get_my_event_registrations."
+          },
+          "new_wave_id": {
+            "type": "string",
+            "description": "The target wave_id from list_upcoming_events."
+          },
+          "new_wave_time": {
+            "type": "string",
+            "description": "The new wave time you confirmed with the customer."
+          }
+        },
+        "required": [
+          "registration_id",
+          "new_wave_id"
+        ]
+      }
+    },
+    {
+      "name": "list_event_move_options",
+      "description": "Use when a VERIFIED customer asks to change the date of an event entry they already have, or to move it to a different event (e.g. from the 18 Oct Hyrox sim to the 25 Oct one). Shows the dates and times their entry can move to, with the price difference as a sentence. Identity must be verified first; get the registration_id from get_my_event_registrations. Offer only what this lists, and never say how many places are left. Do not promise the move: it needs staff approval, and only move_event_entry asks for it. A different time on the SAME event is reschedule_event_wave instead. Never cancel and rebook to change the event. A result with handoff: true means the event does not allow the customer to change it themselves: relay its customer_message as written and hand off to the team.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "The registration_id from get_my_event_registrations."
+          }
+        },
+        "required": [
+          "registration_id"
+        ]
+      }
+    },
+    {
+      "name": "move_event_entry",
+      "description": "Ask the team to move the VERIFIED customer's event entry to one of the dates from list_event_move_options. It files a request for staff approval and NEVER moves the entry itself. CRITICAL: restate the new event, date and time (and the price difference when there is one) and get a clear yes before calling. This is the only way to change the event of an entry: never cancel and rebook instead. Afterwards, say the request is with the team and they will confirm; never say it is moved.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "registration_id": {
+            "type": "string",
+            "description": "The registration_id from get_my_event_registrations."
+          },
+          "target_event_id": {
+            "type": "string",
+            "description": "The event_id of the chosen option from list_event_move_options."
+          },
+          "target_wave_id": {
+            "type": "string",
+            "description": "The wave_id of the chosen time (required when the option lists times)."
+          },
+          "note": {
+            "type": "string",
+            "description": "The customer's reason, in a few words, if they gave one."
+          }
+        },
+        "required": [
+          "registration_id",
+          "target_event_id"
+        ]
+      }
+    },
+    {
+      "name": "send_card_set",
+      "description": "Send one of the studio's visual card sets (swipeable image cards, optionally with tap-through links) to this customer on WhatsApp. Use when a set directly matches what they are asking about. Send at most one set per conversation.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "set_name": {
+            "type": "string",
+            "description": "Exact name of the card set to send"
+          }
+        },
+        "required": [
+          "set_name"
+        ]
+      },
+      "cache_control": {
+        "type": "ephemeral",
+        "ttl": "1h"
+      }
+    }
+  ]
+}

@@ -16,9 +16,12 @@
 // blanks its own cells ('unavailable'), never the column — only a
 // wholesale failure shows BlockError. The pre-KPI operational Studio
 // view (pending time-off / swaps / unread) lives on in the Business
-// "needs you" rail, /schedule and the mobile Studio tab
-// (fetchStudioDashboardData is untouched — mobile still consumes it).
+// "needs you" rail, /schedule and the mobile Studio tab (its WhatsApp
+// unread total through shared fetchStudioDashboardData; its pending lists
+// through /api/schedule/time-off and /api/schedule/swaps; its contact
+// numbers through /api/dashboard/studio-contacts).
 
+import { ESTIMATE_NOTE, amountOrUnavailable } from '@/lib/radar-copy'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -26,7 +29,7 @@ import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadRadar } from '@/lib/churn-radar-data'
 import {
-  fetchMrr, fetchGrowth, fetchRevenueChurn, fetchEngagement,
+  fetchRevenueChurn,
   fetchFloor, fetchAdSpend, fetchAcquisition,
 } from '@shared/studio-kpis'
 import { BlockSkeleton, BlockError } from '@/components/dashboard/BusinessBlocks'
@@ -35,6 +38,9 @@ import {
   ScoreCell, ScoreGrid, RoleSection, FloorTable, LocationEmptyState,
   NotTrackedYet, euros,
 } from '@/components/dashboard/StudioScorecard'
+import { membershipSettingsHref, canManageMembershipSource, providesCapability } from '@/lib/membership/state-for-page'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,45 +70,139 @@ function soft(promise) {
   return promise.then(r => (r?.success ? r.data : null)).catch(() => null)
 }
 
-async function loadLocationScorecard(locationId) {
+// UN1TREAD.4 — MRR, net growth and the active-member rate come through the
+// membership read seam (`r` is membershipReadsFor()'s answer, resolved ONCE by
+// the column). A Glofox adapter forwards the same arguments to the same
+// fetchers, so a Glofox column is unchanged. un1t.online supplies those three;
+// revenue churn needs membership_transitions.price_cents (Glofox only) and the
+// radar cells read Glofox tables (behind the memberships capability), so both
+// are null there and draw '— unavailable'. So does acquisition (UN1TREAD.7):
+// fetchAcquisition counts contacts.converted_at / joined_at / pipeline_stage_slug,
+// which only the Glofox sync and classifier set, so New members, Trial
+// conversion, New leads, Trials done and CAC are Glofox-fed too. The floor
+// reads class tables and stays source-agnostic, EXCEPT that its booking-derived
+// figures only exist for Glofox (UN1TCLASS.3): see withoutBookingKpis().
+
+// UN1TCLASS.3 / UN1TBOOK.4 — Hatch Street's class_occurrences are projected from
+// its un1t.online timetable (raw.booked = bookings_count), so Classes and Fill
+// compute honestly. Since UN1TBOOK.3 its bookings are projected into
+// class_bookings too (source_platform 'un1t_online'), and the no-show rate and
+// attended visits (and the per-group no-show) are real there: keepAttendance.
+// A un1t row carries an explicit verdict: ATTENDED and NO_SHOW count, and a
+// past un1t BOOKED is UNDECIDED, outside the numerator and the denominator
+// (bookingOutcome, shared/studio-kpi-math.js). So an unmarked past un1t class
+// is not a no-show, unlike an unmarked Glofox booking.
+//
+// Until the projection has decided anything (the window between this deploy
+// and the projection landing, or a studio whose past rows are all undecided)
+// computeFloor returns noShowPct null but attendedVisits 0 (pastBooked minus
+// noShows). That 0 is not a count of visits, so when keepAttendance and
+// noShowPct is null the attended figure is null too: both cells draw
+// '— unavailable', never a plausible-looking 0.
+//
+// New-joiner activation stays unavailable for un1t_online: its cohort is
+// contacts.converted_at, which spec A never writes (A, Anti-goals), and which
+// would miss the dual-studio members. A source with no projection at all
+// keeps all three booking cells "no data", not 0: an empty class_bookings table
+// would compute 0% / 0, a plausible-looking wrong number. Null them so the cells
+// draw '— unavailable'. Per-group fill is kept; the per-group no-show follows
+// the no-show rate (FloorTable draws '—'). Everything else (classes, fill,
+// 7-day fill, noData, groupedBy) passes through as fetchFloor computed it.
+function withoutBookingKpis(floor, { keepAttendance = false } = {}) {
+  if (!floor) return floor
+  return {
+    ...floor,
+    activation: null,
+    ...(keepAttendance
+      ? (floor.noShowPct == null ? { attendedVisits: null } : {})
+      : {
+        noShowPct: null,
+        attendedVisits: null,
+        groupTable: (floor.groupTable || []).map((g) => ({ ...g, noShowPct: null })),
+      }),
+  }
+}
+
+async function loadLocationScorecard(locationId, r) {
   const db = createServerClient()
+  const glofox = r.source === 'glofox'
+  // Booking-derived no-show and attended visits exist where class_bookings is
+  // written: Glofox's sync and the un1t.online projection (UN1TBOOK.3).
+  const attendanceKpis = glofox || r.source === 'un1t_online'
+  const radarOk = providesCapability(r, 'memberships')
   // MRR first — its average yield prices unstamped (pre-mig-480)
   // cancels in the revenue-churn figure. Everything else is parallel.
-  const mrr = await soft(fetchMrr(db, locationId))
+  const mrr = await soft(r.reads.mrr(db, locationId))
   const estYield = mrr?.yieldCents || 0
 
   const [growth, churn, acq, engagement, floor, spend, radar] =
     await Promise.all([
-      soft(fetchGrowth(db, locationId)),
-      soft(fetchRevenueChurn(db, locationId, estYield)),
-      soft(fetchAcquisition(db, locationId)),
-      soft(fetchEngagement(db, locationId)),
-      soft(fetchFloor(db, locationId)),
+      supportsRead(r, 'growth') ? soft(r.reads.growth(db, locationId)) : null,
+      glofox ? soft(fetchRevenueChurn(db, locationId, estYield)) : null,
+      glofox ? soft(fetchAcquisition(db, locationId)) : null,
+      supportsRead(r, 'engagement') ? soft(r.reads.engagement(db, locationId)) : null,
+      soft(fetchFloor(db, locationId)).then((f) => (glofox ? f : withoutBookingKpis(f, { keepAttendance: attendanceKpis }))),
       soft(fetchAdSpend(db, locationId)),
-      loadRadar(db, locationId).catch(() => null),
+      radarOk ? loadRadar(db, locationId).catch(() => null) : null,
     ])
   // Wholesale failure (e.g. DB unreachable) → column-level error.
   if (!mrr && !growth && !acq && !engagement && !floor) return null
   return {
     mrr, growth, churn, acq, engagement, floor, spend,
+    // Activation and the Glofox trainer footer exist only for Glofox; the
+    // no-show and attended-visits cells follow attendanceKpis.
+    bookingKpis: glofox,
+    attendanceKpis,
     radarSummary: radar?.summary || null,
   }
 }
 
-async function LocationColumn({ location }) {
+async function LocationColumn({ user, location }) {
+  // W1.M3a — every KPI here is a membership or class-sync figure, so the
+  // column gates on THIS studio's membership source before any query
+  // runs (the board is per-studio: Stillorgan's column is unchanged while
+  // Hatch Street's says why it is empty). The state read is cached 60 s.
+  // UN1TREAD.4 — asked ONCE through the read seam: the gate copy and the
+  // numbers are drawn from the same answer, so they cannot disagree. The
+  // column renders when the adapter reads MRR (Glofox and un1t.online);
+  // otherwise the gate, with capability forced off so a CONFIGURED source
+  // that cannot read MRR says "does not provide" rather than rendering nothing.
+  const r = await membershipReadsFor(createServerClient(), location.id)
+  if (!supportsRead(r, 'mrr')) {
+    const gateState = {
+      source: r.source, state: r.state, label: r.label, readError: r.error,
+      missing: r.missing, capabilities: { ...(r.capabilities || {}), memberships: false },
+    }
+    return (
+      <MembershipSourceGate
+        state={gateState}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(location.id)}
+        canManage={canManageMembershipSource(user, location.id)}
+        padding="md"
+        className="bg-un1t-surface border border-un1t-border rounded-2xl"
+      />
+    )
+  }
+
   let vm = null
   try {
-    vm = await loadLocationScorecard(location.id)
+    vm = await loadLocationScorecard(location.id, r)
   } catch {
     vm = null
   }
   if (!vm) return <BlockError label={`${location.name} scorecard`} />
 
-  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary } = vm
+  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary, bookingKpis, attendanceKpis } = vm
   const W = WINDOW_DAYS
+  // A projected (non-Glofox) column with nothing decided yet has no no-show
+  // rate and no attended count: both cells say unavailable, sublabels too.
+  // Glofox keeps its long-standing cells (its floor is never null-attended).
+  const attendanceShown = Boolean(floor && attendanceKpis && (bookingKpis || floor.noShowPct != null))
 
-  // A location with no recurring base AND no class sync has no Glofox
-  // connection yet (Hatch until onboarded) — say so instead of zeros.
+  // A CONFIGURED source with no recurring base AND no class sync has not
+  // synced anything yet (a studio in its first hours) — say so instead
+  // of zeros. "Not connected" is the gate's job above, not this inference's.
   if (mrr && floor && mrr.recurringMembers === 0 && floor.noData) {
     return <LocationEmptyState name={location.name} />
   }
@@ -180,9 +280,9 @@ async function LocationColumn({ location }) {
         />
         <ScoreCell
           label="Arrears"
-          value={radarSummary ? euros(radarSummary.overdueValueCents) : null}
+          value={radarSummary ? amountOrUnavailable(radarSummary.overdueValueCents, { estimated: radarSummary.overdueValueEstimated === true }, euros) : null}
           sublabel={radarSummary
-            ? `${radarSummary.overdue} member${radarSummary.overdue === 1 ? '' : 's'} overdue`
+            ? `${radarSummary.overdue} member${radarSummary.overdue === 1 ? '' : 's'} overdue${radarSummary.overdueValueEstimated ? `, ${ESTIMATE_NOTE}` : ''}`
             : UNAVAILABLE}
           accent={radarSummary?.overdue > 0 ? 'text-red-700' : undefined}
           href="/dashboard/churn-radar"
@@ -214,7 +314,7 @@ async function LocationColumn({ location }) {
           <ScoreCell
             label="CAC"
             value={cac != null ? `€${cac}` : null}
-            sublabel={spend ? `Meta spend ÷ new members, ${W}d` : UNAVAILABLE}
+            sublabel={spend && acq ? `Meta spend ÷ new members, ${W}d` : UNAVAILABLE}
             delta={cacDelta}
             deltaHigherIsBetter={false}
             deltaFormat={n => `€${n}`}
@@ -275,13 +375,13 @@ async function LocationColumn({ location }) {
           <ScoreCell
             label="No-show rate 28d"
             value={floor?.noShowPct != null ? `${floor.noShowPct}%` : null}
-            sublabel={floor ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
+            sublabel={attendanceShown ? `target under ${TARGETS.noShowPct}%` : UNAVAILABLE}
             accent={toneBelow(floor?.noShowPct, TARGETS.noShowPct)}
           />
           <ScoreCell
             label="New-joiner activation"
-            value={floor?.activation.activatedPct != null ? `${floor.activation.activatedPct}%` : null}
-            sublabel={floor
+            value={floor?.activation?.activatedPct != null ? `${floor.activation.activatedPct}%` : null}
+            sublabel={floor && bookingKpis
               ? (floor.activation.cohort > 0
                 ? `≥3 visits in first 14d · ${floor.activation.cohort} joiner${floor.activation.cohort === 1 ? '' : 's'}`
                 : 'no complete cohort yet')
@@ -290,11 +390,11 @@ async function LocationColumn({ location }) {
           <ScoreCell
             label="Attended visits 28d"
             value={floor ? floor.attendedVisits : null}
-            sublabel={floor ? `across ${floor.classes} classes` : UNAVAILABLE}
+            sublabel={attendanceShown ? `across ${floor.classes} classes` : UNAVAILABLE}
           />
         </ScoreGrid>
         <div className="mt-2">
-          <FloorTable rows={floor?.groupTable || []} groupedBy={floor?.groupedBy} />
+          <FloorTable rows={floor?.groupTable || []} groupedBy={floor?.groupedBy} bookingKpis={bookingKpis} />
         </div>
       </RoleSection>
     </div>
@@ -330,7 +430,7 @@ export default async function StudioDashboardPage() {
           <div key={loc.id}>
             <h2 className="text-sm font-semibold text-un1t-text mb-2 px-1">{loc.name}</h2>
             <Suspense fallback={<BlockSkeleton lines={8} />}>
-              <LocationColumn location={loc} />
+              <LocationColumn user={user} location={loc} />
             </Suspense>
           </div>
         ))}

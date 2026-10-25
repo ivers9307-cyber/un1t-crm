@@ -1,4 +1,5 @@
 // Join ad spend to CRM bookings attributed to each ad via contacts.ad_external_id.
+import { dayRangeMsIn, DEFAULT_TZ } from '@/lib/location-time'
 
 export function computeCostPerBooking(spendByAd, bookingsByAd) {
   const out = {}
@@ -21,16 +22,27 @@ export function resolveAdId(contact, nameToId = {}) {
   return null
 }
 
+/** TZ.17 — half-open [startIso, endIso) instants for the inclusive local-day
+ *  range [since, until] in `zone`. Pure. */
+export function createdAtWindow(since, until, zone = DEFAULT_TZ) {
+  const { startMs, endMs } = dayRangeMsIn(since, until, zone)
+  return { startIso: new Date(startMs).toISOString(), endIso: new Date(endMs).toISOString() }
+}
+
 /** Count /start bookings attributed to each ad for a location in [since,until].
  *  A "booking" = a booked class request OR a meta_book consult booking whose
- *  contact carries ad_external_id. Returns { [ad_external_id]: count }. */
-export async function loadBookingsByAd(db, locationId, since, until, nameToId = {}) {
+ *  contact carries ad_external_id. Returns { [ad_external_id]: count }.
+ *  TZ.17 — `since`/`until` are days in `zone` (the dashboard's day zone, the
+ *  same one the spend dates are in), so a request's created_at instant is
+ *  bounded by those days' local midnights. It was bounded by their UTC days. */
+export async function loadBookingsByAd(db, locationId, since, until, nameToId = {}, zone = DEFAULT_TZ) {
   const out = {}
+  const { startIso, endIso } = createdAtWindow(since, until, zone)
   // Class bookings that reached 'booked'
   const { data: cbr } = await db.from('class_booking_requests')
     .select('contact_id, contacts!inner(ad_external_id, utm_content)')
     .eq('location_id', locationId).eq('status', 'booked')
-    .gte('created_at', since).lte('created_at', until + 'T23:59:59')
+    .gte('created_at', startIso).lt('created_at', endIso)
   for (const r of cbr || []) {
     const id = resolveAdId(r.contacts, nameToId)
     if (id) out[id] = (out[id] || 0) + 1

@@ -17,14 +17,62 @@ import { verifyStripeWebhook, getStripe } from '@/lib/stripe'
 import { createServerClient } from '@/lib/supabase'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
 import { syncOrderFromRacePayment } from '@/lib/orders'
-import { sendRaceConfirmations } from '@/lib/race-confirmations'
+import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
 import { refundPatchFromCharge } from '@/lib/stripe-refund-sync'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
+import {
+  DONATION_COLS,
+  resolveDonationByRef,
+  markDonationPaymentStatus,
+  markDonationRefunded,
+  runPaidDonationSideEffects,
+} from '@/lib/donation-payments'
+import { resolveCharitySettings } from '@/lib/charity-donations'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+const DONATION_EVENT_COLS = 'id, name, slug, location_id, host_id, sending_location_id, charity_enabled, charity, payment_currency'
+
+// CHARITY.7 — a donation's Checkout Session completed. Mark, RE-READ the row
+// (side effects get it as stored, never a guess), then run the stamp-keyed side
+// effects on every observation of a paid row: a Stripe retry reaches here on an
+// already-paid donation and the stamps make the effects idempotent. The event
+// is read whatever its charity switch says now: the money was taken. An
+// unreadable event row skips both steps (logged) so a later observation redoes
+// them.
+async function settleDonationCompleted(db, session) {
+  const donation = await resolveDonationByRef(db, session.id)
+  if (!donation) return
+  const { data: race, error: raceErr } = await db.from('race_events').select(DONATION_EVENT_COLS).eq('id', donation.race_event_id).maybeSingle()
+  if (raceErr || !race) {
+    logWarn('stripe-webhook', 'donation event row unreadable', { donationId: donation.id, err: raceErr })
+    return
+  }
+  const marked = await markDonationPaymentStatus({
+    db,
+    donation,
+    providerState: 'completed',
+    providerAmount: Number.isFinite(session.amount_total) ? session.amount_total : null,
+    multiplier: resolveCharitySettings(race).match_multiplier,
+  })
+  const { data: fresh, error: readErr } = await db.from('donations').select(DONATION_COLS).eq('id', donation.id).maybeSingle()
+  if (readErr || !fresh) {
+    logWarn('stripe-webhook', 'donation re-read after mark failed', { donationId: donation.id, err: readErr })
+    return
+  }
+  if (fresh.status === 'paid') {
+    try {
+      // observerWon: only the delivery that flipped the row sends in the first minute.
+      await runPaidDonationSideEffects({ db, donation: fresh, race, ipAddress: null, observerWon: marked?.changed === true })
+    } catch (e) {
+      logWarn('stripe-webhook', 'donation paid side effects failed', { err: e, donationId: donation.id })
+    }
+  }
+}
 
 export async function POST(request) {
   const signature = request.headers.get('stripe-signature') || ''
@@ -94,6 +142,10 @@ export async function POST(request) {
         }
         return NextResponse.json({ received: true })
       }
+      if (session.metadata?.domain === 'un1t_donation') {
+        await settleDonationCompleted(db, session)
+        return NextResponse.json({ received: true })
+      }
       const payment = await resolveRacePaymentByProviderRef(db, session.id)
       if (payment) {
         const result = await markRacePaymentStatus({
@@ -102,7 +154,16 @@ export async function POST(request) {
           revolutState: 'completed',
           revolutAmount: Number.isFinite(session.amount_total) ? session.amount_total : null,
         })
-        if (result.applied?.status === 'completed') {
+        if (result.applied?.status === 'completed' && payment.kind === GAP_PAYMENT_KIND) {
+          // EVENT-MOVE.5 — a paid price difference: markRacePaymentStatus
+          // settled the move; the payer gets the gap receipt, never the
+          // entry confirmation.
+          try {
+            await sendGapPaidEmail({ db, paymentId: payment.id })
+          } catch (e) {
+            logWarn('stripe-webhook', 'gap receipt failed', { err: e, paymentId: payment.id })
+          }
+        } else if (result.applied?.status === 'completed') {
           try {
             await sendRaceConfirmations({ db, paymentId: payment.id })
           } catch (e) {
@@ -116,6 +177,11 @@ export async function POST(request) {
       if (session.metadata?.domain === 'un1t_class_booking') {
         const row = await resolveClassBookingPaymentByRef(db, session.id)
         if (row) await markClassBookingPaymentStatus({ db, request: row, providerState: 'cancelled', providerAmount: null })
+        return NextResponse.json({ received: true })
+      }
+      if (session.metadata?.domain === 'un1t_donation') {
+        const donation = await resolveDonationByRef(db, session.id)
+        if (donation) await markDonationPaymentStatus({ db, donation, providerState: 'expired', providerAmount: null })
         return NextResponse.json({ received: true })
       }
       const payment = await resolveRacePaymentByProviderRef(db, session.id)
@@ -158,15 +224,31 @@ export async function POST(request) {
         } else {
           const payment = await resolveRacePaymentByProviderRef(db, session.id)
           if (!payment) {
-            // A session WAS found but no race_payments row matches it — one of
-            // our own checkouts with no ledger row. That's an anomaly worth
-            // surfacing (still 200s below).
-            logError('stripe-webhook', 'charge.refunded: no matching race_payment', {
-              chargeId: charge.id,
-              sessionId: session.id,
-              account: event.account || null,
-            })
+            // CHARITY.7 — not a race payment: a donation's Checkout Session
+            // lives in `donations`. A Stripe-side refund is recorded with no
+            // staff actor (markDonationRefunded only moves paid -> refunded,
+            // so redeliveries and unpaid rows are no-ops).
+            const donation = await resolveDonationByRef(db, session.id)
+            if (donation) {
+              await markDonationRefunded({ db, donationId: donation.id, byProfileId: null })
+            } else {
+              // A session WAS found but neither ledger has a row for it — one
+              // of our own checkouts with no ledger row. That's an anomaly
+              // worth surfacing (still 200s below).
+              logError('stripe-webhook', 'charge.refunded: no matching race_payment', {
+                chargeId: charge.id,
+                sessionId: session.id,
+                account: event.account || null,
+              })
+            }
           } else {
+            if (payment.kind === GAP_PAYMENT_KIND) {
+              // EVENT-MOVE.5 — a refunded price difference does NOT un-settle
+              // its move: whether the customer still owes it is staff's call.
+              logWarn('stripe-webhook', 'charge.refunded on a move_gap payment; the move stays settled, staff decide', {
+                paymentId: payment.id, moveId: payment.registration_move_id || null,
+              })
+            }
             const patch = refundPatchFromCharge(charge, payment, new Date().toISOString())
             if (patch) {
               // Atomic monotonic write: the filter re-checks the cumulative in

@@ -9,7 +9,7 @@
 // mutation traffic via /api/admin/*; the server page just hydrates
 // the initial list.
 
-import { useState } from 'react'
+import { createContext, useContext, useState } from 'react'
 import {
   Plus, Pencil, Trash2, ArrowUp, ArrowDown, Power, PowerOff,
   RefreshCw, FlaskConical, Save, X, ChevronDown, ChevronUp, Loader2,
@@ -25,8 +25,12 @@ const RULE_TYPES = [
   { value: 'location_visit',      label: 'Location visit count' },
 ]
 const CATEGORIES = ['milestone', 'streak', 'volume', 'class_type', 'session_quality', 'exploration']
-const FIELDS = [
-  { value: 'effort_points',   label: 'UN1T points' },
+// W1.S2 — the points field is named after the brand ("{Brand} Points"); the
+// label reaches ConfigEditor through a context so the three layers between
+// need not carry it.
+const PointsLabelContext = createContext('Points')
+const fieldOptions = (pointsLabel) => [
+  { value: 'effort_points',   label: pointsLabel },
   { value: 'classes',         label: 'Classes' },
   { value: 'z3_minutes',      label: 'Z3 minutes' },
   { value: 'z4_minutes',      label: 'Z4 minutes' },
@@ -36,7 +40,7 @@ const FIELDS = [
 ]
 const PERIODS = ['week', 'month', 'year', 'all_time']
 
-export default function AchievementsAdminTable({ initialRules, eventTypes, locations }) {
+export default function AchievementsAdminTable({ initialRules, eventTypes, locations, pointsLabel = 'Points' }) {
   const [rules, setRules] = useState(initialRules)
   const [expandedId, setExpandedId] = useState(null)
   const [adding, setAdding] = useState(false)
@@ -137,6 +141,7 @@ export default function AchievementsAdminTable({ initialRules, eventTypes, locat
   }
 
   return (
+    <PointsLabelContext.Provider value={pointsLabel}>
     <div>
       {globalError && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
@@ -207,6 +212,7 @@ export default function AchievementsAdminTable({ initialRules, eventTypes, locat
         </table>
       </div>
     </div>
+    </PointsLabelContext.Provider>
   )
 }
 
@@ -478,6 +484,7 @@ function RuleEditor({ rule, isCreate, eventTypes, locations, onCancel, onSubmit 
 // ── ConfigEditor — switches form per rule_type ────────────────
 
 function ConfigEditor({ ruleType, config, onChange, eventTypes, locations }) {
+  const FIELDS = fieldOptions(useContext(PointsLabelContext))
   function set(patch) { onChange({ ...config, ...patch }) }
 
   if (ruleType === 'first_event') {

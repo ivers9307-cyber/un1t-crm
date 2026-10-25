@@ -32,8 +32,9 @@
 // support tickets, into "look at this offer" texts. Anything the token can
 // resolve is therefore readable by whoever ends up holding it. Binding a
 // contact to it turns a forwarded link into a disclosure of that person's
-// name, email, phone, pipeline stage and Glofox passcode, and hands the holder
-// their working unsubscribe capability too.
+// name, email, phone and pipeline stage, and hands the holder their working
+// unsubscribe capability too. (It also named their Glofox passcode until
+// PASSCODEREAD.1 retired {{glofox_passcode}}: passwords are no longer stored.)
 //
 // So the token names the campaign only, and the merge tags are rendered
 // against an EMPTY contact. The hosted copy is byte-identical for every
@@ -275,8 +276,10 @@ export function prependViewInBrowserLink(html, url, copy = null) {
  * because they could not find the real one.
  *
  * @param {object} campaign  A campaigns row, optionally with `locations(name)`.
- * @param {{ baseUrl?: string, copy?: object|null }} [opts]  `copy` is the
- *   location's company_settings copy (K7); omit for the defaults.
+ * @param {{ baseUrl?: string, copy?: object|null, companyName?: string }} [opts]
+ *   `copy` is the location's company_settings copy (K7); omit for the
+ *   defaults. `companyName` (W1.S1a) is the campaign location's brand for
+ *   {{company_name}}, a property of the sender like {{location_name}}.
  * @returns {string|null} null when there is nothing to show.
  */
 export function renderCampaignWebView(campaign, opts = {}) {
@@ -288,11 +291,12 @@ export function renderCampaignWebView(campaign, opts = {}) {
   // future fails loudly in review here instead of silently rendering.
   const anonymousContact = {
     first_name: '', last_name: '', name: '', email: '', phone: '',
-    pipeline_stage_slug: '', glofox_passcode: '',
+    pipeline_stage_slug: '',
   }
 
   const merged = applyMergeTags(html, anonymousContact, {
     location_name: campaign?.locations?.name || '',
+    company_name: opts?.companyName || '',
     unsubscribe_url: `#${UNSUB_ANCHOR}`,
     preference_url: `#${UNSUB_ANCHOR}`,
   })

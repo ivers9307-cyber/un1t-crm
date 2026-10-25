@@ -12,13 +12,18 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
-import { logWarn } from '@/lib/log'
-import { resolveLandingPath, classFunnelConfigFromBlocks } from '@/lib/public-landing'
+import { logWarn, logError } from '@/lib/log'
+import { placeWaitlistEntry } from '@/lib/waitlist-entry'
+import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUnavailableMessage } from '@/lib/public-landing'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
+import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
+import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
+import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 
 export const runtime = 'nodejs'
 
@@ -41,7 +46,25 @@ const Schema = z.object({
     utm_term: z.string().max(200).optional(),
     ad_provider: z.string().max(50).optional(),
     ad_external_id: z.string().max(200).optional(),
+    // METADATASET.1 — the ad click id off the landing URL. Never stored: it
+    // only rides on the Lead event sent to Meta below.
+    fbclid: z.string().max(500).optional(),
+    // MATCHQUALITY.1 — the Pixel's browser id cookie, when consent let it set.
+    fbp: z.string().max(100).optional(),
   }).optional(),
+  // BROWSERLEAD.1 — the id the browser's Pixel Lead will carry, so the CAPI
+  // Lead below shares it and Meta dedupes the pair. Opaque, shape-checked.
+  lead_event_id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(),
+  // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
+  // sanitiseVisitOrigin reduces it before anything is stored.
+  visit: z.object({
+    referrer: z.string().max(2000).optional(),
+    landing_path: z.string().max(500).optional(),
+  }).optional(),
+  // UN1TWRITE.18 — the un1t.online terms and waiver tick. Required (true)
+  // only at a un1t.online studio with the funnel on; judged below, after
+  // the studio is known.
+  terms_accepted: z.boolean().optional(),
 })
 
 export async function POST(request) {
@@ -73,6 +96,32 @@ export async function POST(request) {
   // mistagged 'stillorgan-start' or misreported to Meta as /start.
   const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode, priceCents, currency } = classFunnelConfigFromBlocks(page.blocks, landingPath)
 
+  // UN1TWRITE.18 — at a un1t.online studio with the funnel on, the person
+  // must accept the studio's terms and liability waiver; the acceptance is
+  // recorded on the queue row (the create-account step copies it onto the
+  // ledger). An unreadable settings row never blocks a booking: the request
+  // is queued with no acceptance, and the processor (which reads the
+  // settings again) never creates an account without one.
+  let un1tFunnel = false
+  let un1tStudioName = null
+  try {
+    const un1t = await readUn1tWriteSettings(db, locationId)
+    un1tFunnel = un1t.membershipSource === 'un1t_online' && un1t.settings.funnelEnabled
+    un1tStudioName = un1t.studioName
+  } catch (e) {
+    logWarn('classbook', 'un1t.online settings unreadable; terms not judged', { locationId, err: e })
+  }
+  if (un1tFunnel && b.terms_accepted !== true) {
+    // The tick's wording rides on the refusal, so a page that loaded before
+    // the funnel switched on (or whose class list read missed it) can show
+    // the tick and try again instead of being refused with nothing to tick.
+    const terms = un1tTermsPayload({ blocks: page.blocks, studioName: un1tStudioName, publicPath: landingPath })
+    return NextResponse.json({
+      success: false, code: 'terms_required', error: terms.required_message,
+      issues: { terms_accepted: terms.required_message }, terms,
+    }, { status: 400 })
+  }
+
   // Paid intro? Load the location's payment settings so we can resolve the rail.
   // `wantsPayment` gates the paid branch; `paid` is only true once we've also
   // confirmed the location can actually charge (Revolut always; Stripe needs a
@@ -80,22 +129,47 @@ export async function POST(request) {
   const wantsPayment = Number.isFinite(priceCents) && priceCents > 0
   let locationForPay = null
   if (wantsPayment) {
-    const { data: loc } = await db.from('locations').select('id, settings').eq('id', locationId).maybeSingle()
+    const { data: loc } = await db.from('locations').select('id, settings, membership_source').eq('id', locationId).maybeSingle()
     locationForPay = loc || null
   }
-  const paid = wantsPayment && locationCanTakePayments(locationForPay)
+  // UN1TWRITE.18 — no paid intro at a un1t.online studio: anything paid there
+  // goes through un1t.online checkout, and the editor refuses to save a price.
+  // A price stored before that guard is ignored (the free path), loudly.
+  const un1tStudio = locationForPay?.membership_source === 'un1t_online'
+  if (wantsPayment && un1tStudio) {
+    logError('classbook', 'class_funnel price ignored at a un1t.online studio', { locationId })
+  }
+  const paid = wantsPayment && !un1tStudio && locationCanTakePayments(locationForPay)
 
   // Validate the chosen class against the live bookable list — never trust the
   // client's event_id / class_name / starts_at. We use the SERVER's name + start
   // for storage so spoofed text can't reach Glofox, /approvals or the WhatsApp
   // confirmation, and an event_id not in the list is rejected (don't capture a
   // lead for a class that can't be booked).
-  const { listPublicClasses } = await import('@/lib/public-classes')
+  const { readPublicClasses } = await import('@/lib/public-classes')
   let chosen = null
+  let timetableErr = null
   try {
-    const classes = await listPublicClasses(db, locationId, 14)
-    chosen = classes.find((c) => c.event_id === b.event_id) || null
-  } catch (e) { logWarn('classbook', 'class validate failed', { err: e }) }
+    const r = await readPublicClasses(db, locationId, 14)
+    timetableErr = r.error
+    chosen = r.classes.find((c) => c.event_id === b.event_id) || null
+  } catch (e) {
+    logWarn('classbook', 'class validate failed', { err: e })
+    timetableErr = 'validate_threw'
+  }
+  if (timetableErr) {
+    // REGISTRYREAD.1a: a timetable we could not read is not "that class is
+    // gone". class_unavailable told the customer it "filled up while you were
+    // typing" and sent them to an empty picker. The funnel shows this error
+    // and keeps what they typed. The words are the operator's (the
+    // class_funnel block's timetable_unavailable_message), default otherwise.
+    logWarn('classbook', 'timetable unreadable', { locationId, error: timetableErr })
+    return NextResponse.json({
+      success: false,
+      code: 'timetable_unavailable',
+      error: classFunnelTimetableUnavailableMessage(page.blocks),
+    }, { status: 503 })
+  }
   if (!chosen) {
     // STARTCONV.1 — a machine-readable code, because the funnel now collects
     // details AFTER the class is chosen. That widens the gap between picking
@@ -108,10 +182,17 @@ export async function POST(request) {
 
   // restrictToOrg (LEADCAP.1): a public form must not resolve (and then enqueue
   // a Glofox booking / write consent against) a contact in another ORGANISATION.
-  // Sibling locations in the same org are fine — and necessary, since
-  // `contacts_email_unique` is global and a location-only match left a known
-  // email unable to insert (23505 → 500).
-  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true })
+  // Sibling locations in the same org are fine — and necessary: a Stillorgan
+  // member booking at Hatch is one person. (Under mig 008's global
+  // `contacts_email_unique` a location-only match also left a known email
+  // unable to insert, 23505 → 500; since W0.6, mig 712, the index is per
+  // organisation and org scope is the helper's default.)
+  // SOURCE-LABEL.1 — the helper's INSERT defaults to the race shape
+  // (source 'race_signup'), which is wrong for a class-booking lead and
+  // made every Hatch ad lead look like a race entrant in the contacts
+  // list. insertFields applies on CREATE only; a matched contact keeps
+  // whatever source it already has.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true, insertFields: { source: 'class_booking' } })
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
@@ -139,18 +220,43 @@ export async function POST(request) {
       await db.from('contacts').update(patch).eq('id', contactId).is('ad_external_id', null)
     }
   } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
+  // VISIT-ORIGIN.1 — first touch, stamp-if-null, best-effort. Stamped for
+  // organic visitors too: that is the whole point (an ad lead already has
+  // ad_provider; the label helper lets the ad win).
+  try {
+    const v = sanitiseVisitOrigin(b.visit)
+    if (v) {
+      await db.from('contacts')
+        .update({ visit_referrer: v.referrer, visit_landing_path: v.landing_path, visit_captured_at: new Date().toISOString() })
+        .eq('id', contactId)
+        .is('visit_captured_at', null)
+    }
+  } catch (e) { logWarn('attribution', 'visit origin failed', { err: e }) }
   try { await writeContactTag(db, { contactId, locationId, tag }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
     await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip, locationId })
   } catch (e) { logWarn('classbook', 'consent failed', { err: e }) }
+  // Open (or re-open) this lead's place on the studio's primary board.
+  // Best-effort — losing the deal must never cost the booking. Same helper as
+  // the website lead form, which is where the reasoning for each line of the
+  // placement and for the manual-board re-signup bump lives (WAITLIST.4).
   try {
-    const { data: openDeal } = await db.from('deals').select('id').eq('contact_id', contactId).eq('status', 'open').maybeSingle()
-    if (!openDeal) {
-      const { data: stage } = await db.from('pipeline_stages').select('id').eq('location_id', locationId).eq('slug', 'new_lead').maybeSingle()
-      if (stage) await db.from('deals').insert({ title: b.first_name || 'Class lead', contact_id: contactId, stage_id: stage.id, location_id: locationId, status: 'open' })
-    }
-  } catch (e) { logWarn('classbook', 'deal failed', { err: e }) }
+    await placeWaitlistEntry(db, {
+      contactId,
+      locationId,
+      title: b.first_name || 'Class lead',
+    })
+  } catch (e) { logWarn('classbook', 'deal placement failed', { err: e }) }
+
+  // UN1TWRITE.18 — the acceptance, with the documents' version at the time of
+  // the tick (null when they could not be read; the tick still stands).
+  let termsRecord = {}
+  if (un1tFunnel && b.terms_accepted === true) {
+    let version = null
+    try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('classbook', 'legal documents version unread', { err: e }) }
+    termsRecord = { terms_accepted_at: new Date().toISOString(), terms_source: 'website', terms_version: version }
+  }
 
   // Dedupe: if this contact already has an active/booked request for this class
   // (double-submit, refresh, retry), don't create a second. Treat as success.
@@ -161,11 +267,23 @@ export async function POST(request) {
     const { data: existing } = await db.from('class_booking_requests')
       .select('id').eq('contact_id', contactId).eq('glofox_event_id', b.event_id)
       .in('status', ['queued', 'processing', 'booked', 'awaiting_payment']).limit(1).maybeSingle()
-    if (existing) return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
+    if (existing) {
+      // A retry that now carries the tick records it on the row the first
+      // try queued without one (never over an acceptance already there).
+      if (termsRecord.terms_source) {
+        try {
+          const { error: termsErr } = await db.from('class_booking_requests').update(termsRecord)
+            .eq('id', existing.id).is('terms_accepted_at', null)
+          if (termsErr) logWarn('classbook', 'terms record on the deduped row failed', { err: termsErr })
+        } catch (e) { logWarn('classbook', 'terms record on the deduped row failed', { err: e }) }
+      }
+      return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
+    }
   } catch (e) { logWarn('classbook', 'dedupe check failed', { err: e }) }
 
   // class_name + starts_at come from the SERVER-validated class, not the client.
   const { data: queuedRow, error: insErr } = await db.from('class_booking_requests').insert({
+    ...termsRecord,
     location_id: locationId, contact_id: contactId,
     glofox_event_id: b.event_id, class_name: chosen.name,
     starts_at: chosen.starts_at,
@@ -221,12 +339,21 @@ export async function POST(request) {
   // class-keyed event_id makes double-submits dedupe at Meta; gated on
   // settings.meta_ads.dataset_id inside the helper. Never blocks the response.
   try {
-    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+    const { sendWebsiteConversion, fbcFromFbclid } = await import('@/lib/meta-capi')
     await sendWebsiteConversion(db, {
       locationId, eventName: 'Lead', email: b.email, phone: b.phone,
       eventSourceUrl,
-      eventId: `classlead-${contactId}-${b.event_id}`,
+      // BROWSERLEAD.1 — the browser's id when it sent one (dedupe with the
+      // Pixel's Lead); the old contact+class key otherwise.
+      eventId: b.lead_event_id || `classlead-${contactId}-${b.event_id}`,
       contentName: chosen.name,
+      // METADATASET.1 — what lets Meta credit this lead to the ad click.
+      fbc: fbcFromFbclid(b.attribution?.fbclid),
+      clientIp: ip,
+      userAgent: request.headers.get('user-agent') || undefined,
+      // MATCHQUALITY.1 — name, our contact id and the browser id cookie.
+      firstName: b.first_name, lastName: b.last_name, externalId: contactId,
+      fbp: b.attribution?.fbp,
     })
   } catch (e) { logWarn('classbook', 'capi lead failed', { err: e }) }
 

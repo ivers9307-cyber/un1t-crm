@@ -1,29 +1,30 @@
 // Tier decay (approved decision #4) — the ROLLING-WINDOW count of months a
-// member hit their monthly target. Pure + Europe/Dublin-correct.
+// member hit their monthly target. Pure; month keys in the member's zone
+// (their home studio's, TZ.13 D7; omitted = Europe/Dublin).
 //
 // Why this lives in its own module (not tiers.js): `shared/tiers.js` is a
 // verbatim cross-repo copy of un1t-crm/src/lib/tiers.js (the ladder + the
 // count→tier functions) and must stay byte-identical. Decay adds a
-// Dublin-time dependency (month keys), so it lives here instead of coupling
-// the shared ladder to dublin-time.js. `tierForMonths` / `nextTier` still take
+// zone dependency (month keys), so it lives here instead of coupling
+// the shared ladder to zoned-time.js. `tierForMonths` / `nextTier` still take
 // a plain count — this module only decides WHICH count to feed them.
 //
 // SHARED CONTRACT (mirrored by the un1t-crm operator-config agent):
 //   config path : location.settings.scoring.tier_window_months
 //   value       : integer N >= 1  → rolling window of N calendar months
 //                 absent / null   → NO DECAY (cumulative behaviour, today)
-//   windowed count = number of DISTINCT Europe/Dublin calendar months the
+//   windowed count = number of DISTINCT local calendar months the
 //   member hit target within [startOfMonth(now) − (N−1) months .. now],
 //   inclusive of the current month.
 //
 // DEFAULT-OFF: when windowMonths is absent/null, resolveTierMonths returns the
 // cumulative count unchanged → identical output to the pre-decay path.
 
-import { dublinMonthKey } from './dublin-time.js'
+import { monthKeyIn, DEFAULT_TZ } from './zoned-time.js'
 
 /**
- * The set of Europe/Dublin month keys ('YYYY-MM') that fall inside the rolling
- * window of `windowMonths` months ending at (and including) the Dublin month of
+ * The set of month keys ('YYYY-MM') in `zone` that fall inside the rolling
+ * window of `windowMonths` months ending at (and including) the local month of
  * `nowMs`. Pure string arithmetic on year/month — DST-agnostic (a month key has
  * no clock component).
  *
@@ -31,10 +32,10 @@ import { dublinMonthKey } from './dublin-time.js'
  * @param {number} nowMs         UTC ms "now"
  * @returns {Set<string>}        N keys, e.g. {'2026-01', ..., '2026-06'}
  */
-export function windowMonthKeys(windowMonths, nowMs = Date.now()) {
+export function windowMonthKeys(windowMonths, nowMs = Date.now(), zone = DEFAULT_TZ) {
   const n = Math.trunc(Number(windowMonths))
   if (!Number.isFinite(n) || n < 1) return new Set()
-  const nowKey = dublinMonthKey(nowMs)
+  const nowKey = monthKeyIn(nowMs, zone)
   let [y, m] = nowKey.split('-').map(Number) // m is 1..12
   const keys = new Set()
   for (let i = 0; i < n; i++) {
@@ -55,8 +56,8 @@ export function windowMonthKeys(windowMonths, nowMs = Date.now()) {
  * @param {number} [nowMs=Date.now()]      UTC ms "now"
  * @returns {number}                       count in [0, windowMonths]
  */
-export function monthsHitInWindow(hitMonthKeys, windowMonths, nowMs = Date.now()) {
-  const win = windowMonthKeys(windowMonths, nowMs)
+export function monthsHitInWindow(hitMonthKeys, windowMonths, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  const win = windowMonthKeys(windowMonths, nowMs, zone)
   if (win.size === 0) return 0
   const hit = new Set()
   for (const k of hitMonthKeys || []) {
@@ -79,9 +80,9 @@ export function monthsHitInWindow(hitMonthKeys, windowMonths, nowMs = Date.now()
  * @param {number}   [args.nowMs=Date.now()]
  * @returns {number} the resolved months-hit count
  */
-export function resolveTierMonths({ hitMonthKeys, cumulativeMonths, windowMonths, nowMs = Date.now() } = {}) {
+export function resolveTierMonths({ hitMonthKeys, cumulativeMonths, windowMonths, nowMs = Date.now() } = {}, zone = DEFAULT_TZ) {
   const n = Math.trunc(Number(windowMonths))
   const cumulative = Math.max(0, Math.trunc(Number(cumulativeMonths) || 0))
   if (!Number.isFinite(n) || n < 1) return cumulative // decay off → today's behaviour
-  return monthsHitInWindow(hitMonthKeys, n, nowMs)
+  return monthsHitInWindow(hitMonthKeys, n, nowMs, zone)
 }

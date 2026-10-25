@@ -23,7 +23,13 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('./ScoringClient', () => ({
-  default: () => <div>scoring-client-rendered</div>,
+  default: ({ pointsName }) => <div>scoring-client-rendered:{pointsName}</div>,
+}))
+
+// W1.S2 — the page resolves the studio brand for "{Brand} Points".
+vi.mock('@/lib/supabase', () => ({ createServerClient: () => ({}) }))
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(async () => ({ companyName: 'Example Gym Dublin', shortName: 'Example Gym' })),
 }))
 
 import ScoringSettingsPage from './page.js'
@@ -56,6 +62,7 @@ describe('/settings/scoring page', () => {
       getCurrentUser.mockResolvedValue(user(role))
       const html = renderToStaticMarkup(await ScoringSettingsPage())
       expect(html).toContain('scoring-client-rendered')
+      expect(html).toContain('Example Gym Points')
     })
   }
 })

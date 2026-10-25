@@ -260,3 +260,35 @@ describe('GET /api/locations/[id]/holidays — unchanged: membership only', () =
     expect((await GET(get(LOC_A), props(LOC_A))).status).toBe(401)
   })
 })
+
+// RANGEVALID.1 — GET's start/end went to Postgres as given (2026-02-30 or 'abc'
+// came back as a 500 carrying the database's text), and POST checked only the
+// shape of its date.
+describe('holidays — dates the calendar does not have, and the range (RANGEVALID.1)', () => {
+  const getQ = (id, qs) => new Request(`http://localhost/api/locations/${id}/holidays?${qs}`)
+
+  it('GET refuses an impossible, reversed or over-a-year range before any read', async () => {
+    for (const [qs, error] of [
+      ['start=2026-02-30&end=2026-03-06', 'start: not a real date'],
+      ['start=abc', 'start: not a real date'],
+      ['start=2026-10-01&end=2026-09-01', 'end must be on or after start'],
+      ['start=2026-01-01&end=2027-01-02', 'The range can cover at most 366 days'],
+    ]) {
+      const res = await GET(getQ(LOC_A, qs), props(LOC_A))
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ success: false, error })
+    }
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('GET still serves the calendar\'s range and the settings list (no range)', async () => {
+    expect((await GET(getQ(LOC_A, 'start=2026-08-31&end=2026-10-11'), props(LOC_A))).status).toBe(200)
+    expect((await GET(get(LOC_A), props(LOC_A))).status).toBe(200)
+  })
+
+  it('POST refuses a date the calendar does not have, and writes nothing', async () => {
+    const res = await POST(post(LOC_A, { date: '2026-02-30', name: 'X' }), props(LOC_A))
+    expect(res.status).toBe(400)
+    expect(db.writes).toEqual([])
+  })
+})

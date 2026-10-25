@@ -102,7 +102,7 @@ describe('SETTINGS_TREE structure', () => {
       expect(typeof row.description).toBe('string')
       expect(row.description.length).toBeGreaterThan(0)
       expect(row.gate, `${row.id} has no gate`).toBeTruthy()
-      const gateKinds = ['permission', 'anyPermission', 'roles', 'masterOnly', 'openToAll']
+      const gateKinds = ['permission', 'anyPermission', 'roles', 'orgAdmin', 'masterOnly', 'openToAll']
       const kind = gateKinds.find((k) => row.gate[k] !== undefined)
       expect(kind, `${row.id}'s gate is not one of ${gateKinds.join('/')}`).toBeTruthy()
     }
@@ -184,6 +184,25 @@ describe('settingsRowVisible()', () => {
     expect(settingsRowVisible(gate, { role: 'owner' }, hasNone)).toBe(false)
   })
 
+  // C18 ORGROLE.1 — the organisation-level rows (billing, usage, API keys,
+  // email domain): master or an org_admin grant on the ACTIVE organisation.
+  it('orgAdmin: master or an org admin of the active org; never a studio owner', () => {
+    const gate = { orgAdmin: true }
+    const inOrg = { activeOrganization: { id: 'org-1' } }
+    expect(settingsRowVisible(gate, { role: 'master', isMaster: true, ...inOrg }, hasNone)).toBe(true)
+    expect(settingsRowVisible(gate, { role: 'staff', orgAdminOrgIds: ['org-1'], ...inOrg }, hasNone)).toBe(true)
+    expect(settingsRowVisible(gate, { role: 'owner', orgAdminOrgIds: [], ...inOrg }, hasAll)).toBe(false)
+    expect(settingsRowVisible(gate, { role: 'owner', orgAdminOrgIds: ['org-2'], ...inOrg }, hasAll)).toBe(false)
+    expect(settingsRowVisible(gate, null, hasAll)).toBe(false)
+  })
+
+  it('the four organisation-level rows carry the orgAdmin gate', () => {
+    const rows = Object.fromEntries(SETTINGS_TREE.flatMap((g) => g.rows).map((r) => [r.id, r]))
+    for (const id of ['email-domain', 'billing', 'usage', 'api-keys']) {
+      expect(rows[id].gate, id).toEqual({ orgAdmin: true })
+    }
+  })
+
   it('openToAll is visible to any signed-in user, invisible signed out', () => {
     const gate = { openToAll: true }
     expect(settingsRowVisible(gate, { id: 'u1', role: 'staff' }, hasNone)).toBe(true)
@@ -214,5 +233,22 @@ describe('visibleSettingsTree()', () => {
     expect(out.length).toBe(SETTINGS_TREE.length)
     const totalIn = (tree) => tree.reduce((n, g) => n + g.rows.length, 0)
     expect(totalIn(out)).toBe(totalIn(SETTINGS_TREE))
+  })
+})
+
+describe('INTEGONE.3 — the hub is the only integrations row for health, numbers and Zoom', () => {
+  it('has no integration-health or zoom-contacts row, and the hub row says what it now holds', () => {
+    expect(ALL_ROWS.find((r) => r.id === 'integration-health')).toBeUndefined()
+    expect(ALL_ROWS.find((r) => r.id === 'zoom-contacts')).toBeUndefined()
+    expect(ALL_ROWS.some((r) => /integration-health|zoom-contacts|whatsapp-numbers/.test(r.href || ''))).toBe(false)
+    const hub = ALL_ROWS.find((r) => r.id === 'integrations-hub')
+    expect(hub.description).toMatch(/integration health/i)
+    expect(hub.description).toMatch(/WhatsApp numbers/)
+    expect(hub.description).toMatch(/Zoom phone directory/)
+  })
+
+  it('keeps the status page and the dead letters in the Integrations group', () => {
+    const ids = ALL_ROWS.filter((r) => r.groupId === 'integrations').map((r) => r.id)
+    expect(ids).toEqual(['integrations-hub', 'status-page', 'webhook-dead-letter'])
   })
 })

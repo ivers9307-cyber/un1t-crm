@@ -20,14 +20,16 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { RevolutError } from '@/lib/revolut'
 import { paymentsFor } from '@/lib/payments'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { validateBody } from '@/lib/validate'
+import { logError } from '@/lib/log'
+import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -118,10 +120,10 @@ export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'orders')) {
+  if (!hasPermissionAtAnyLocation(user, 'orders')) {
     return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
   }
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -141,6 +143,13 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, order.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the order's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, order.location_id, 'orders')) {
+    return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
+  }
+  if (!hasRoleAtLocation(user, order.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   // Partial vs full — delegates all guards to the pure resolveRefund helper.
   const resolution = resolveRefund(order, body.amount_cents)
@@ -203,14 +212,26 @@ export async function POST(request, props) {
   await db.from('orders').update(updates).eq('id', order.id)
 
   // Cascade to source. Both target tables have their own status enum.
+  // EVENT-MOVE.5 — the write answers the payment's kind: a refunded price
+  // difference (move_gap) skips tag rules below, which are written for entry
+  // payments. It never un-settles the move (staff decide).
+  let sourceKind = null
   if (order.source_type === 'race_registration') {
-    await db.from('race_payments')
+    const { data: srcRows, error: srcErr } = await db.from('race_payments')
       .update({
         status: resolution.isFull ? 'refunded' : 'completed',
         refunded_at: nowIso,
         refunded_amount_cents: resolution.newRefundedTotal,
       })
       .eq('id', order.source_id)
+      .select('kind')
+    if (srcErr) {
+      // The money has gone back; the source row did not follow. Logged so it
+      // can be put right; tag rules then run as they always did.
+      logError('orders-refund', 'refund issued but race_payments was NOT updated', { err: srcErr, orderId: order.id, paymentId: order.source_id })
+    } else {
+      sourceKind = srcRows?.[0]?.kind || null
+    }
   } else if (order.source_type === 'car_deposit' && resolution.isFull) {
     // Car deposits are fixed-amount; only a full refund clears the deposit.
     await db.from('cars')
@@ -236,7 +257,7 @@ export async function POST(request, props) {
         actor_id: user.id,
       },
     })
-    if (order.contact_id) {
+    if (order.contact_id && sourceKind !== GAP_PAYMENT_KIND) {
       await applyTagRules({ db, contactId: order.contact_id })
     }
   } catch (e) {

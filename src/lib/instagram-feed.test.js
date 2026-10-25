@@ -45,6 +45,14 @@ describe('fetchIgMedia', () => {
     const fetchImpl = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'bad scope' } }) })
     await expect(fetchIgMedia(conn, { fetchImpl })).rejects.toThrow(/bad scope/)
   })
+  it('carries the HTTP status and Graph error object on the throw (so the cron can tell a dead token from a blip)', async () => {
+    const graphError = { message: 'Error validating access token: The session has been invalidated', type: 'OAuthException', code: 190, error_subcode: 460 }
+    const fetchImpl = async () => ({ ok: false, status: 401, json: async () => ({ error: graphError }) })
+    const err = await fetchIgMedia(conn, { fetchImpl }).catch((e) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.status).toBe(401)
+    expect(err.graphError).toEqual(graphError)
+  })
   it('throws when the connection lacks id/token', async () => {
     await expect(fetchIgMedia({}, {})).rejects.toThrow(/external_account_id/)
   })

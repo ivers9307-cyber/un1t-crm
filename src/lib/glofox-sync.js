@@ -5,12 +5,17 @@
 // /api/glofox/sync-member endpoint (dry-run + apply); used
 // tomorrow by the daily bulk-sync cron.
 
-import { fetchUserCredits, fetchMembership, fetchUserBookings, fetchUserInteractions } from './glofox.js'
+import { fetchUserCreditsResult, fetchMembershipResult, fetchUserBookings, fetchUserInteractions } from './glofox.js'
 import { classifyContact } from './pipeline-classifier.js'
 import { upsertClassBookings } from './class-bookings.js'
-import { logWarn } from './log.js'
+import { logWarn, logError } from './log.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
+import { findOpenDealForPipeline, findPrimaryPipeline } from './deal-lookup.js'
+import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
+import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
+import { upsertContactStudio } from './contact-studios.js'
+import { hasBookableMembership } from './person-accounts.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -410,22 +415,19 @@ export function targetDealStageForSync(previousStatus, newStatus, currentStageSl
 }
 
 /**
- * Look up the current open deal for a contact + its stage slug.
- * Returns null when no open deal exists. Used by both preview
+ * Look up the contact's open deal ON A GIVEN BOARD + its stage slug.
+ * Returns null when no open deal exists there. Used by both preview
  * (to compute the proposed action) and apply (to execute it).
+ *
+ * PIPELINES.5 — the lookup was `.limit(1)` with no `.order()` and no board
+ * filter, so a contact with two open deals handed back an ARBITRARY one and
+ * this path moved whichever row the planner happened to return. The board
+ * filter is what makes "the" open deal a well-defined thing again; the shared
+ * helper owns the query so the two public forms cannot drift from it.
  */
-export async function getOpenDealWithStage(db, contactId) {
-  if (!db || !contactId) return null
-  // Two queries — deal first, then resolve the stage slug. Avoids
-  // Supabase relation-syntax quirks and keeps the test fake simple.
-  const { data: deals, error: dealErr } = await db
-    .from('deals')
-    .select('id, stage_id')
-    .eq('contact_id', contactId)
-    .eq('status', 'open')
-    .limit(1)
-  if (dealErr || !deals?.[0]) return null
-  const deal = deals[0]
+export async function getOpenDealWithStage(db, contactId, pipelineId) {
+  const deal = await findOpenDealForPipeline(db, contactId, pipelineId)
+  if (!deal) return null
   const { data: stages } = await db
     .from('pipeline_stages')
     .select('slug')
@@ -435,16 +437,22 @@ export async function getOpenDealWithStage(db, contactId) {
 }
 
 /**
- * Resolve a pipeline stage slug → stage id at a location. Returns
- * the id, or null if the stage doesn't exist (caller decides
+ * Resolve a pipeline stage slug → stage id ON A BOARD. Returns the
+ * id, or null if the stage doesn't exist there (caller decides
  * fallback). Cached-per-call by keeping it inline — sync runs are
  * low-volume; we don't need a Map cache.
+ *
+ * PIPELINES.5 — scoped by pipeline, not location: a location running two
+ * boards has two stage sets, and a location-wide slug lookup would place the
+ * deal on whichever board happened to answer first. Every caller is in this
+ * file (the create, the fallback and the move below).
  */
-export async function findStageIdBySlug(db, locationId, stageSlug) {
+export async function findStageIdBySlug(db, pipelineId, stageSlug) {
+  if (!db || !pipelineId || !stageSlug) return null
   const { data, error } = await db
     .from('pipeline_stages')
     .select('id')
-    .eq('location_id', locationId)
+    .eq('pipeline_id', pipelineId)
     .eq('slug', stageSlug)
     .limit(1)
   if (error || !data?.[0]) return null
@@ -456,7 +464,8 @@ export async function findStageIdBySlug(db, locationId, stageSlug) {
  * status. Four terminal states:
  *
  *   { action: 'create',  deal_id, stage_slug }              fresh deal made
- *   { action: 'move',    deal_id, from_slug, to_slug }       existing deal moved
+ *   { action: 'move',    deal_id, from_slug, to_slug,        existing deal moved
+ *                        pipeline_id, location_id }          (HATCHPIPE.1: the board it moved on)
  *   { action: 'leave',   deal_id, stage_slug }               nothing to do (no status
  *                                                             change, operator-only slot,
  *                                                             or already at target)
@@ -483,7 +492,38 @@ export async function findStageIdBySlug(db, locationId, stageSlug) {
  *     trial_credits_remaining, recent_bookings, converted_at, pack_customer_at }
  * @param {string?} contactName       fallback for deals.title on create
  */
-export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null) {
+export const SIBLING_STUDIO_NO_ACTIVITY = 'sibling_studio_no_activity'
+
+/**
+ * CROSSOVERDEAL.1 — has this person actually done anything at the Glofox
+ * studio the sync is running for? Judged on the studio's own Glofox read
+ * (the classifier snapshot: attendance and bookings from this studio's
+ * bookings fetch, this studio's membership status, the conversion and pack
+ * stamps only the Glofox sync writes). A sibling-studio contact (GLOFOXSIBLING.1,
+ * home at Hatch Street) whose Stillorgan Glofox account is only a race entry
+ * or an untouched trial has none of these, and gets NO deal on Stillorgan's
+ * board: 12 Hatch clients landed in Stillorgan's New Leads / Dormant columns
+ * the night the crossover link shipped (19 Oct 2026) and were cold-called as
+ * Stillorgan leads. A sibling contact who trained, booked, paid or bought a
+ * pack here is a Stillorgan prospect too and keeps their deal.
+ */
+export function hasActivityAtStudio(snapshot = {}) {
+  const s = snapshot || {}
+  if (s.last_attended_at) return true
+  if ((Number(s.total_attended_30d) || 0) > 0 || (Number(s.total_attended_7d) || 0) > 0) return true
+  if (Array.isArray(s.recent_bookings) && s.recent_bookings.length > 0) return true
+  if (s.converted_at || s.pack_customer_at) return true
+  if (MEMBER_STATUSES.has(String(s.glofox_membership_status || '').toLowerCase())) return true
+  return false
+}
+
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.noCreate]  CROSSOVERDEAL.1 — move or leave an existing
+ *   deal as usual, but never CREATE one: answers
+ *   { action: 'skipped', reason: 'sibling_studio_no_activity' } instead.
+ */
+export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null, opts = {}) {
   if (!db || !locationId || !contactId) {
     return { action: 'error', error: 'missing arguments' }
   }
@@ -492,17 +532,36 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   // the nightly /api/cron/pipeline-classify, so the two converge.
   const targetSlug = classifyContact(contactSnapshot || {})
 
-  const existing = await getOpenDealWithStage(db, contactId)
+  // PIPELINES.5 — placement from this path is only ever about the location's
+  // PRIMARY board, and only when that board is derived. A manual board's deals
+  // move by hand and nothing else (mig 594): writing one from a webhook is the
+  // same defect FUNNEL.1 removed drag-drop to avoid, one layer up. No enabled
+  // primary board is the disabled-location case (CCF Autos, SourceIt) — leave
+  // it alone rather than invent a placement.
+  const primary = await findPrimaryPipeline(db, locationId)
+  if (!primary || primary.mode !== PIPELINE_MODES.DERIVED) {
+    return { action: 'leave', deal_id: null, stage_slug: null }
+  }
+  const pipelineId = primary.id
+
+  const existing = await getOpenDealWithStage(db, contactId, pipelineId)
+
+  if (!existing && opts?.noCreate) {
+    // CROSSOVERDEAL.1 — a sibling-studio contact with nothing done at this
+    // studio: no deal on this studio's board. (A deal that already exists,
+    // from a class booking here or a person's hand, still moves above.)
+    return { action: 'skipped', reason: SIBLING_STUDIO_NO_ACTIVITY, deal_id: null, stage_slug: targetSlug }
+  }
 
   if (!existing) {
     // CREATE path — first time this contact has had a deal.
-    let stageId = await findStageIdBySlug(db, locationId, targetSlug)
+    let stageId = await findStageIdBySlug(db, pipelineId, targetSlug)
     let resolvedSlug = targetSlug
     if (!stageId) {
       // New-lead fallback so the contact still surfaces somewhere
       // visible. Mig 147 ensures every location has the standard
       // stage set, so this should be unreachable in practice.
-      const fallback = await findStageIdBySlug(db, locationId, 'new_lead')
+      const fallback = await findStageIdBySlug(db, pipelineId, 'new_lead')
       if (!fallback) return { action: 'error', error: `Pipeline stage '${targetSlug}' not found and no new_lead fallback` }
       stageId = fallback
       resolvedSlug = 'new_lead'
@@ -513,7 +572,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     const title = (contactName && contactName.trim()) || 'Glofox member'
     const { data, error } = await db
       .from('deals')
-      .insert({ title, contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open' })
+      .insert({ title, contact_id: contactId, stage_id: stageId, location_id: locationId, status: 'open', pipeline_id: pipelineId })
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
@@ -526,7 +585,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   if (existing.stage_slug === targetSlug) {
     return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug }
   }
-  const targetStageId = await findStageIdBySlug(db, locationId, targetSlug)
+  const targetStageId = await findStageIdBySlug(db, pipelineId, targetSlug)
   if (!targetStageId) {
     return { action: 'error', deal_id: existing.id, error: `Target stage '${targetSlug}' not found at location` }
   }
@@ -535,7 +594,17 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     .update({ stage_id: targetStageId })
     .eq('id', existing.id)
   if (moveErr) return { action: 'error', deal_id: existing.id, error: moveErr.message }
-  return { action: 'move', deal_id: existing.id, from_slug: existing.stage_slug, to_slug: targetSlug }
+  // HATCHPIPE.1 — name the board the move happened on. The sequence fence
+  // (triggerSequencesForDealPlacement) refuses a move whose board it cannot
+  // place at the contact's own studio.
+  return {
+    action: 'move',
+    deal_id: existing.id,
+    from_slug: existing.stage_slug,
+    to_slug: targetSlug,
+    pipeline_id: pipelineId,
+    location_id: locationId,
+  }
 }
 
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
@@ -1162,6 +1231,10 @@ export function mapMembershipStatus(member, ctx = null) {
 // the same precedence: glofox_member_id first, then email). We
 // scope to the location we're syncing for so a member at one
 // location can't accidentally merge into a contact at another.
+// GLOFOXSIBLING.1 — only when that finds nothing does it look across the
+// ORGANISATION (glofox-crossover.js): the email can belong to just one contact
+// there, so a sibling studio's contact is the same person, attached, never
+// moved. Returns `crossover` / `crossoverConflict` / `lookupError` for it.
 
 export async function findExistingContact(db, locationId, mapped) {
   if (!db || !locationId || !mapped) return { byGlofox: null, byEmail: null }
@@ -1197,10 +1270,25 @@ export async function findExistingContact(db, locationId, mapped) {
     )
   }
   const results = await Promise.all(queries)
-  return {
-    byGlofox: results[0]?.data?.[0] || null,
-    byEmail:  results[1]?.data?.[0] || null,
-  }
+  // GLOFOXSIBLING.1 — a failed read is not "no contact". Read as a miss it sent
+  // the caller down the create path, which inserts a duplicate or (with the
+  // org email index) fails for a reason nobody can see.
+  const readError = results.find((r) => r?.error)?.error
+  if (readError) return { byGlofox: null, byEmail: null, lookupError: `contact lookup: ${readError.message || readError}` }
+  const byGlofox = results[0]?.data?.[0] || null
+  const byEmail  = results[1]?.data?.[0] || null
+  if (byGlofox || byEmail) return { byGlofox, byEmail }
+
+  // GLOFOXSIBLING.1 — nothing at this studio: the member's contact may live at
+  // a sibling studio of the same organisation (one contact per email per org,
+  // mig 712). Attach to it rather than insert a duplicate the index refuses.
+  const x = await findGlofoxCrossoverContact(db, locationId, {
+    glofoxMemberId: mapped.glofox_member_id, email: mapped.email, select: SELECT_COLS,
+  })
+  if (x.error) return { byGlofox: null, byEmail: null, lookupError: x.error }
+  if (x.conflict) return { byGlofox: null, byEmail: null, crossoverConflict: x.conflict }
+  if (x.contact) return { byGlofox: null, byEmail: null, crossover: { row: x.contact, how: x.how } }
+  return { byGlofox: null, byEmail: null }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1504,27 +1592,39 @@ export function mergeBookingAggregates(existing, fresh) {
  * unique active pack's parent Membership via /2.0/memberships/{id}
  * (cached across the sync run).
  *
- * Best-effort: failures during fetch return an empty/partial ctx
- * so the caller can still proceed with standard mapping. Caller
- * passes the optional `membershipCache` Map to share across many
- * member syncs in a bulk run (the Class Packs membership is the
- * same object for every Credit Member).
+ * CREDITSREAD.1 — a read that FAILED is flagged, never passed off as
+ * "no packs": creditsFailed (the /credits read failed, so the balance is
+ * unknown) and membershipsFailed (some active pack's membership could
+ * not be read and none that was read rules credit_member out, so the rule
+ * cannot run). previewMemberSync
+ * keeps the stored balance / label for whatever it could not read.
+ * Never throws; the caller's sync always proceeds.
  */
 export async function buildCreditMemberContext(creds, member, membershipCache = null) {
-  if (!creds || !member) return { credits: [], memberships: new Map() }
-  const memberId = member._id || member.id || member.member_id
-  if (!memberId) return { credits: [], memberships: new Map() }
-  const credits = await fetchUserCredits(creds, memberId)
   const cache = membershipCache || new Map()
+  const unread = { credits: [], memberships: cache, creditsFailed: true, membershipsFailed: true }
+  if (!creds || !member) return unread
+  const memberId = member._id || member.id || member.member_id
+  if (!memberId) return unread
+  const { ok, credits } = await fetchUserCreditsResult(creds, memberId)
+  if (!ok) return unread
   // Only resolve memberships for ACTIVE packs — saves API calls
   // when historical packs are present.
   const uniqueIds = Array.from(new Set(
     credits.filter(c => c?.active === true).map(c => c?.membership_id).filter(Boolean),
   ))
+  let membershipsFailed = false
+  let readNonClassPack = false
   for (const mid of uniqueIds) {
-    await fetchMembership(creds, mid, cache)
+    const r = await fetchMembershipResult(creds, mid, cache)
+    if (!r.ok) membershipsFailed = true
+    else if (!isClassPackMembership(r.membership)) readNonClassPack = true
   }
-  return { credits, memberships: cache }
+  // credit_member needs EVERY active pack's membership to be a Class Pack, so
+  // one that was read and is not one already settles it: a failure on another
+  // cannot change the answer, and must not hold a stored credit_member.
+  if (readNonClassPack) membershipsFailed = false
+  return { credits, memberships: cache, creditsFailed: false, membershipsFailed }
 }
 
 // GLOFOX-DETAIL (2026-05-30) — the rich membership detail fields that
@@ -1560,7 +1660,12 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   } else if (opts.ctx) {
     ctx = opts.ctx
   }
-  const mapped = mapGlofoxMember(member, ctx)
+  // CREDITSREAD.1 — what the credit context actually knows. A context passed
+  // in without flags (tests, opts.ctx) counts as read.
+  const balanceKnown = !!ctx?.credits && !ctx.creditsFailed
+  const classKnown = balanceKnown && !ctx.membershipsFailed
+  const creditsUnread = !!ctx && !classKnown
+  const mapped = mapGlofoxMember(member, classKnown ? ctx : null)
   if (!mapped) {
     return { action: 'invalid', reason: 'Could not extract glofox_member_id from payload', mapped: null }
   }
@@ -1571,7 +1676,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // source of truth for any contact with a glofox_member_id. Sum
   // 'available' across active credit packs (data we already
   // fetched for credit_member detection — zero extra API cost).
-  if (ctx?.credits) {
+  // CREDITSREAD.1 — only a credits read that worked sets the balance; a failed
+  // one leaves `mapped` without the key, so the stored value is kept.
+  if (balanceKnown) {
     mapped.trial_credits_remaining = computeCreditsRemaining(ctx.credits)
   }
 
@@ -1641,8 +1748,50 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped._glofox_interactions = interactions
   }
 
-  const { byGlofox, byEmail } = await findExistingContact(db, locationId, mapped)
-  const existingRow = byGlofox || byEmail
+  const { byGlofox, byEmail, crossover, crossoverConflict, lookupError } = await findExistingContact(db, locationId, mapped)
+  if (lookupError) {
+    return { action: 'error', mapped, error: lookupError }
+  }
+  // GLOFOXSIBLING.1 — the organisation holds this person under a contact a
+  // person must choose between (or one linked to another Glofox account).
+  if (crossoverConflict) {
+    return {
+      action: 'ambiguous',
+      mapped,
+      conflicts: { sibling_studio_contact_ids: crossoverConflict.contact_ids },
+      reason: `${crossoverConflict.reason}. Merge or relink in the CRM, then re-run.`,
+    }
+  }
+  const existingRow = byGlofox || byEmail || crossover?.row || null
+  // LASTATTEND.1 — the bookings fetch is a 30-day window, so a member who last
+  // trained before it comes back with null dates. last_attended_at /
+  // last_booked_at are advance-only (mergeBookingAggregates): keep the stored
+  // value unless the fresh one is newer, so the classifier, the diff and the
+  // apply write below all see the same date. Writing the null straight over
+  // the row wiped 120 attendees' dates by 14 Oct 2026.
+  if (bookingAggs && existingRow) {
+    const advanced = mergeBookingAggregates(existingRow, bookingAggs)
+    mapped.last_attended_at = advanced.last_attended_at ?? existingRow.last_attended_at ?? null
+    mapped.last_booked_at   = advanced.last_booked_at   ?? existingRow.last_booked_at   ?? null
+  }
+  // CREDITSREAD.1 — the credit_member rule could not run (a credits or
+  // membership read failed), so the standard mapping's 'member' is not
+  // evidence against a stored 'credit_member'. Keep it until a read works.
+  // Anything else Glofox says (trial, ex_member, lead, …) still wins:
+  // credit detection only ever chooses between member and credit_member.
+  if (creditsUnread) {
+    if (mapped.glofox_membership_status === 'member' && existingRow?.glofox_membership_status === 'credit_member') {
+      mapped.glofox_membership_status = 'credit_member'
+    }
+    const unread = ctx.creditsFailed ? 'credits' : 'memberships'
+    logWarn('glofox-sync', unread === 'credits'
+      ? 'Glofox credits read failed; stored credit balance and credit_member label kept'
+      : 'Glofox memberships read failed; balance written, stored credit_member label kept', {
+      locationId,
+      contactId: existingRow?.id ?? null,
+      unread,
+    })
+  }
   // PIPELINE5.4 — proposed pipeline placement comes from the
   // unified classifier (status × engagement × recency), not just
   // glofox_membership_status. Computed from the post-sync mapped
@@ -1655,7 +1804,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // recently-active, paid-up member is wrongly demoted to dormant — flapping
   // against pipeline-reclassify (the nightly cron), which classifies off the
   // SAME persisted columns. The two classifiers must consume the same source.
-  const proposedStageSlug = classifyContact({
+  const previewSnapshot = {
     glofox_membership_status: mapped.glofox_membership_status,
     glofox_membership_state: mapped.glofox_membership_state ?? existingRow?.glofox_membership_state ?? null,
     glofox_membership_expiry: mapped.glofox_membership_expiry ?? existingRow?.glofox_membership_expiry ?? null,
@@ -1679,7 +1828,8 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     pipeline_dismissed_at: existingRow?.pipeline_dismissed_at ?? null,
     // GYMPASS.2 — off-funnel gympass pile; mapped value or persisted fallback.
     gympass_member_id: mapped.gympass_member_id ?? existingRow?.gympass_member_id ?? null,
-  })
+  }
+  const proposedStageSlug = classifyContact(previewSnapshot)
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
   if (byGlofox && byEmail && byGlofox.id !== byEmail.id) {
@@ -1694,13 +1844,14 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
-  const existing = byGlofox || byEmail
+  const existing = existingRow
   if (!existing) {
     // CREATE path — uses the mapped lead_source (Glofox source
     // → leadSourceSchema enum). Falls back to 'other' when
     // Glofox didn't tell us where the contact came from.
     return {
       action: 'create',
+      ...(creditsUnread ? { credits_unread: true } : {}),
       mapped,
       changes: {
         glofox_member_id:         { from: null, to: mapped.glofox_member_id },
@@ -1775,7 +1926,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // trial_credits_remaining on Glofox-linked contacts will be
   // overwritten on next sync — by design (the operator should comp
   // credits in Glofox, not in the CRM).
-  if (ctx?.credits) {
+  if (balanceKnown) {
     const newRemaining = mapped.trial_credits_remaining
     if (newRemaining !== existing.trial_credits_remaining) {
       changes.trial_credits_remaining = {
@@ -1800,12 +1951,18 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
-  // GLOFOX2.1.14 — booking aggregates always overwrite when fetched
+  // GLOFOX2.1.14 — the windowed counts always overwrite when fetched
   // (full recompute is the source of truth; cron is the safety net
-  // that corrects any webhook-counter drift).
+  // that corrects any webhook-counter drift). The two timestamps are
+  // advance-only (LASTATTEND.1): mapped already holds the stored date
+  // unless the fetch found a newer one, so diff against that.
   if (bookingAggs) {
-    changes.last_booked_at        = { from: existing.last_booked_at ?? null,        to: bookingAggs.last_booked_at }
-    changes.last_attended_at      = { from: existing.last_attended_at ?? null,      to: bookingAggs.last_attended_at }
+    if ((existing.last_booked_at ?? null) !== mapped.last_booked_at) {
+      changes.last_booked_at      = { from: existing.last_booked_at ?? null,        to: mapped.last_booked_at }
+    }
+    if ((existing.last_attended_at ?? null) !== mapped.last_attended_at) {
+      changes.last_attended_at    = { from: existing.last_attended_at ?? null,      to: mapped.last_attended_at }
+    }
     changes.total_bookings_30d    = { from: existing.total_bookings_30d ?? 0,       to: bookingAggs.total_bookings_30d }
     changes.total_attended_30d    = { from: existing.total_attended_30d ?? 0,       to: bookingAggs.total_attended_30d }
     changes.total_attended_7d     = { from: existing.total_attended_7d ?? 0,        to: bookingAggs.total_attended_7d }
@@ -1827,9 +1984,22 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // input, so a no-op sync produces 'leave'.
   const previousStatus = existing.glofox_membership_status
   const newStatus = mapped.glofox_membership_status
-  const openDeal = await getOpenDealWithStage(db, existing.id)
+  // PIPELINES.5 — preview reads the same board apply will write, so the two
+  // agree. A location with no enabled primary board, or a manual one, resolves
+  // to null here and the deal lookup returns null with it; the apply path
+  // (ensureDealForContact) answers 'leave' for exactly that case, so this
+  // preview must not promise a create it will refuse to make.
+  const primary = await findPrimaryPipeline(db, locationId)
+  const pipelineId = primary && primary.mode === PIPELINE_MODES.DERIVED ? primary.id : null
+  const openDeal = await getOpenDealWithStage(db, existing.id, pipelineId)
   let dealAction
-  if (!openDeal) {
+  if (!pipelineId) {
+    dealAction = { action: 'leave', deal_id: null, stage_slug: null, reason: 'no enabled derived primary board at this location' }
+  } else if (!openDeal && crossover && !hasActivityAtStudio(previewSnapshot)) {
+    // CROSSOVERDEAL.1 — a sibling-studio contact who has done nothing at this
+    // studio gets no deal here; apply refuses the create the same way.
+    dealAction = { action: 'skipped', reason: SIBLING_STUDIO_NO_ACTIVITY, stage_slug: proposedStageSlug }
+  } else if (!openDeal) {
     // No deal yet → backfill at the classifier's target.
     dealAction = { action: 'create', stage_slug: proposedStageSlug }
   } else if (openDeal.stage_slug !== proposedStageSlug) {
@@ -1857,6 +2027,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 
   return {
     action: 'update',
+    ...(creditsUnread ? { credits_unread: true } : {}),
     existing_id: existing.id,
     // PIPELINE-FLAP.2 — expose the matched persisted row so applyMemberSync's
     // reclassify snapshot can fall back to its recency columns
@@ -1869,6 +2040,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     changes,
     deal_action: dealAction,
     interactions_to_sync: interactions ? interactions.length : 0,
+    // GLOFOXSIBLING.1 — the contact lives at a sibling studio; apply links it
+    // here (its contact_studios row with source glofox, mig 768, + this studio's preferences row).
+    ...(crossover ? { crossover: { how: crossover.how, home_location_id: crossover.row.location_id ?? null } } : {}),
   }
 }
 
@@ -1882,6 +2056,12 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 export async function applyMemberSync(db, locationId, member, opts = {}) {
   const preview = await previewMemberSync(db, locationId, member, opts)
   if (preview.action === 'invalid' || preview.action === 'ambiguous') return preview
+  // GLOFOXSIBLING.1 — the contact lookup failed: write nothing (a create here
+  // could duplicate a contact the failed read would have found).
+  if (preview.action === 'error') {
+    if (preview.mapped) delete preview.mapped.__bookings_list
+    return preview
+  }
   // HR-CLASS-ALLOC.2 — lift the stashed raw bookings off the preview before any
   // further work so it can't ride along on a returned preview object.
   const bookingsForRoster = Array.isArray(preview.mapped?.__bookings_list) ? preview.mapped.__bookings_list : null
@@ -1974,6 +2154,46 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     const { error } = await db.from('contacts').update(updates).eq('id', preview.existing_id)
     if (error) return { ...preview, error: error.message }
     contactId = preview.existing_id
+  }
+
+  // ORGCONTACTS.1 — the relationship row at this studio (contact_studios, mig
+  // 764): member while the Glofox membership is bookable, else client; source
+  // glofox; first_seen_at from joined_at (the helper only moves it earlier),
+  // never last_seen_at (a sync is not activity). For a sibling-studio contact
+  // the crossover link below writes it, with the same columns. Logged and
+  // reported, never fatal: the contact write above already happened.
+  let studioRel = null
+  if (!preview.crossover) {
+    studioRel = await upsertContactStudio(db, {
+      contactId, locationId, source: 'glofox', status: 'active',
+      kind: hasBookableMembership(preview.mapped) ? 'member' : 'client',
+      firstSeenAt: preview.mapped?.joined_at || null,
+    })
+    if (!studioRel.ok) logError('glofox-sync', 'contact_studios row not written', { locationId, contactId, error: studioRel.error })
+  }
+
+  // GLOFOXSIBLING.1 — the contact lives at a sibling studio: link it here so
+  // staff holding Contacts at this studio can read it (mig 758), with this
+  // studio's preferences row. Re-run on every sync (idempotent), so a link
+  // that failed once is made by the next tick. A failure is logged loudly and
+  // reported, never fatal: the contact write above already happened.
+  let crossoverLink = null
+  if (preview.crossover) {
+    crossoverLink = await recordGlofoxCrossover(db, {
+      locationId,
+      glofoxMemberId: preview.mapped.glofox_member_id,
+      contactId,
+      contactLocationId: preview.crossover.home_location_id,
+      contactRow: preview.mapped,
+    })
+    if (crossoverLink.contact_studio && !crossoverLink.contact_studio.ok) {
+      logError('glofox-sync', 'contact_studios row not written', { locationId, contactId, error: crossoverLink.contact_studio.error })
+    }
+    if (crossoverLink.error) {
+      logError('glofox-sync', 'Glofox crossover link not recorded', {
+        locationId, contactId, how: preview.crossover.how, error: crossoverLink.error,
+      })
+    }
   }
 
   // FUNNEL.1 — stamp the conversion moment. Runs on the webhook path
@@ -2110,9 +2330,15 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // pipeline-reclassify input, so the two writers converge).
         gympass_member_id: m.gympass_member_id ?? ex.gympass_member_id ?? null,
       }
+      // CROSSOVERDEAL.1 — the contact lives at a sibling studio: a deal on
+      // THIS studio's board only when the snapshot (this studio's Glofox
+      // read) shows them trained, booked, paying or holding a pack here. An
+      // existing deal still moves; a create is refused.
+      const siblingIdle = !!preview.crossover && !hasActivityAtStudio(contactSnapshot)
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,
         m.name || null,
+        { noCreate: siblingIdle },
       )
     } catch (e) {
       dealResult = { action: 'error', error: e?.message || 'deal write threw' }
@@ -2210,7 +2436,10 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   if (dealResult?.action === 'move') {
     try {
       const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
-      await triggerSequencesForDealPlacement(contactId, dealResult)
+      await triggerSequencesForDealPlacement(contactId, dealResult, {
+        dealLocationId: dealResult?.location_id,
+        pipelineId: dealResult?.pipeline_id,
+      })
       stageChangeTriggerResult = { fired: true, from: dealResult.from_slug ?? null, to: dealResult.to_slug ?? null }
     } catch (e) {
       stageChangeTriggerResult = { error: e?.message || 'pipeline_stage_change trigger threw' }
@@ -2238,5 +2467,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     gympass_tag: gympassTagResult,
     stage_change_trigger: stageChangeTriggerResult,
     membership_state_trigger: membershipStateTriggerResult,
+    ...(crossoverLink ? { crossover_link: crossoverLink } : {}),
+    ...(studioRel ? { contact_studio: studioRel.ok ? { ok: true } : { ok: false, error: studioRel.error } } : {}),
   }
 }

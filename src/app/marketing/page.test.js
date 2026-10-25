@@ -32,6 +32,10 @@
 // checks it against the union); these cases prove it end-to-end through
 // the page. `sms: false` joins allDenied so the fallback case fails for
 // the right reason rather than riding on a role default.
+//
+// TWILIO-RETIRE.1 — `sms` left the union and the chain together with the SMS
+// channel, so an sms-only holder now lands on '/' ON PURPOSE: there is nothing
+// left behind that door.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -107,22 +111,11 @@ describe('/marketing index page', () => {
     await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/settings\/landing-page$/)
   })
 
-  it('redirects to /communications/send when only sms is held (HUBDOOR.1 — this persona used to bounce to /)', async () => {
+  it('an sms-only holder falls back to / — the SMS door is retired (TWILIO-RETIRE.1)', async () => {
     getCurrentUser.mockResolvedValue(
       user({ perms: { sms: true } })
     )
-    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/communications\/send$/)
-  })
-
-  it('sms stays behind automations and landing_page in the chain (tab order)', async () => {
-    getCurrentUser.mockResolvedValue(
-      user({ perms: { sms: true, automations: true } })
-    )
-    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/automations$/)
-    getCurrentUser.mockResolvedValue(
-      user({ perms: { sms: true, landing_page: true } })
-    )
-    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/settings\/landing-page$/)
+    await expect(MarketingIndexPage()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
   })
 
   // Anchored: 'NEXT_REDIRECT:/' as a bare string is a SUBSTRING of every

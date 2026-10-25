@@ -9,6 +9,7 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { contractDetailActions } from '@/lib/contract-gates'
 import { contractCountersignatureLabel } from '@/lib/contracting-entity'
 import ContractRevokeButton from '@/components/ContractRevokeButton'
 import ContractResendButton from '@/components/ContractResendButton'
@@ -16,12 +17,11 @@ import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
 import ContractIssueWarningBanner from '@/components/ContractIssueWarningBanner'
 import ContractDraftActions from '@/components/ContractDraftActions'
+import ContractPdfGenerateButton from '@/components/ContractPdfGenerateButton'
+import { contractZone, contractStamp, contractSignedStamp } from '@/lib/contract-display-time'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 const STATUS_BADGE = {
   issued:   { label: 'Sent · awaiting signature', class: 'bg-blue-500/15 text-blue-700' },
@@ -32,22 +32,13 @@ const STATUS_BADGE = {
   draft:    { label: 'Draft', class: 'bg-purple-500/15 text-purple-700' },
 }
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleString('en-IE', {
-    timeZone: 'Europe/Dublin',
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
-
 export default async function ContractDetailAdmin(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   // CONTRACTS-GATES.1 — read surface follows the grantable `contracts`
-  // permission (mirrors the list page); the Revoke action below stays
-  // owner/master-only via the local isOwnerOrMaster check.
+  // permission (mirrors the list page); the actions below are judged at the
+  // contract's org (GATES-2, contractDetailActions).
   if (!hasPermission(user, 'contracts')) redirect('/')
 
   // CONTRACTS-SCOPE.1 — service role bypasses RLS, so scope by org in app
@@ -63,12 +54,18 @@ export default async function ContractDetailAdmin(props) {
       *,
       profile:profiles!profile_id (id, full_name, email, role, employment_type),
       issuer:profiles!issued_by (id, full_name, email),
-      template:contract_templates!template_id (name, version)
+      template:contract_templates!template_id (name, version),
+      location:locations!location_id ( id, timezone )
     `)
     .eq('id', params.id)
   if (!user.isMaster) q = q.eq('organization_id', orgId)
   const { data: c } = await q.maybeSingle()
   if (!c) notFound()
+  // TZ.16 (D3 = A) — the contract's studio zone; the abbreviation follows only
+  // when it differs from the viewer's active studio (Dublin on Dublin: no change).
+  const zone = contractZone(c, user)
+  const viewerZone = viewerZoneOf(user)
+  const fmtDate = (iso) => contractStamp(iso, zone, viewerZone)
 
   // LEGALENT.1 — the countersignature label asserts the CONTRACTING
   // COMPANY. It is read from the contract's own FROZEN variables_data,
@@ -84,12 +81,14 @@ export default async function ContractDetailAdmin(props) {
   // resend is the notification-replay twin of revoke, so it stays
   // owner/master-only rather than following the grantable read
   // permission that gates this page.
-  const canManage = (c.status === 'issued' || c.status === 'viewed') && isOwnerOrMaster(user)
-  const canRevoke = canManage
-  const canResend = canManage
-  // CONTRACTS-DRAFT.1 — draft management + re-issue affordances.
-  const canManageDraft = c.status === 'draft' && isOwnerOrMaster(user)
-  const canReissue = (c.status === 'revoked' || c.status === 'declined') && isOwnerOrMaster(user)
+  // GATES-2 — judged at the CONTRACT's org (the revoke/resend/send/discard
+  // routes' rule), not the active studio's role; Download PDF follows the
+  // /pdf route, which a `contracts`-permission manager is refused by.
+  // GATES-3 (c) — Re-issue opens /contracts/issue?from=<id>, whose prefill and
+  // POST /api/contracts decide at the contract's org too.
+  // CONTRACTS-PDF.2 — a signed contract with no stored PDF shows the /pdf
+  // route's 409 message and, for a master / org admin, Generate PDF (the POST).
+  const { canRevoke, canResend, canManageDraft, canDownloadPdf, canReissue, pdfMissing, canGeneratePdf } = contractDetailActions(user, c)
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
@@ -151,6 +150,8 @@ export default async function ContractDetailAdmin(props) {
             label={`For ${entityLabel}`}
             name={c.issuer_signature}
             timestamp={c.issued_at}
+            zone={zone}
+            viewerZone={viewerZone}
           />
           {c.status === 'signed' ? (
             <SignatureBlock
@@ -158,6 +159,8 @@ export default async function ContractDetailAdmin(props) {
               name={c.signature_value}
               timestamp={c.signed_at}
               ip={c.signed_ip}
+              zone={zone}
+              viewerZone={viewerZone}
             />
           ) : (
             <div>
@@ -173,12 +176,13 @@ export default async function ContractDetailAdmin(props) {
         {/* CONTRACTS-PDF.1 — the stored dual-signed artifact. Plain <a>
             (not <Link>) because the route 302s to a signed Storage URL,
             which is a real navigation, not a client-side route. */}
-        {c.signed_pdf_path && (
+        {canDownloadPdf && (
           <a
             href={`/api/contracts/${c.id}/pdf`}
             className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
           >Download PDF</a>
         )}
+        {pdfMissing && <ContractPdfGenerateButton contractId={c.id} canGenerate={canGeneratePdf} />}
         {canResend && <ContractResendButton contractId={c.id} />}
         {canRevoke && (
           <>
@@ -204,7 +208,7 @@ export default async function ContractDetailAdmin(props) {
   )
 }
 
-function SignatureBlock({ label, name, timestamp, ip }) {
+function SignatureBlock({ label, name, timestamp, ip, zone, viewerZone }) {
   return (
     <div>
       <p className="text-[10px] uppercase tracking-wider text-gray-500">{label}</p>
@@ -212,7 +216,7 @@ function SignatureBlock({ label, name, timestamp, ip }) {
         {name || ''}
       </p>
       <p className="text-[10px] text-gray-500 mt-1">
-        Signed {new Date(timestamp).toLocaleString('en-IE', { timeZone: 'Europe/Dublin' })}
+        Signed {contractSignedStamp(timestamp, zone, viewerZone)}
         {ip ? ` · ${ip}` : ''}
       </p>
     </div>

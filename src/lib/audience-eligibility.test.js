@@ -11,11 +11,9 @@ vi.mock('./supabase', () => ({ createServerClient: vi.fn() }))
 
 import { buildEligibleAudienceQuery } from './audience-eligibility'
 import { buildAudienceQueryAsync } from './postmark'
-import { buildSmsAudienceAsync } from './sms'
 import { buildWhatsAppAudienceAsync } from './whatsapp'
 
 vi.mock('./postmark', () => ({ buildAudienceQueryAsync: vi.fn(async () => ({ query: 'email-q' })) }))
-vi.mock('./sms', () => ({ buildSmsAudienceAsync: vi.fn(async () => ({ query: 'sms-q' })) }))
 vi.mock('./whatsapp', () => ({ buildWhatsAppAudienceAsync: vi.fn(async () => ({ query: 'wa-q' })) }))
 
 const FILTER = { logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] }
@@ -33,18 +31,14 @@ describe('buildEligibleAudienceQuery delegates to the SEND-PATH builder', () => 
     expect(buildAudienceQueryAsync).toHaveBeenCalledWith(db, FILTER, 'loc-1', {
       columns: 'id, email', selectOpts: { count: 'exact' }, consentField: 'email_marketing',
     })
-    expect(buildSmsAudienceAsync).not.toHaveBeenCalled()
     expect(buildWhatsAppAudienceAsync).not.toHaveBeenCalled()
   })
 
-  it('sms -> buildSmsAudienceAsync', async () => {
-    const r = await buildEligibleAudienceQuery({
-      db, channel: 'sms', filter: FILTER, locationId: 'loc-1', columns: 'id, phone',
-    })
-    expect(r.query).toBe('sms-q')
-    expect(buildSmsAudienceAsync).toHaveBeenCalledWith(db, FILTER, 'loc-1', {
-      columns: 'id, phone', selectOpts: undefined,
-    })
+  // TWILIO-RETIRE.1 — SMS left with Twilio. A stale caller asking for it must
+  // hit the unknown-channel throw, never fall through to the match set.
+  it('sms is an unknown channel now', async () => {
+    await expect(buildEligibleAudienceQuery({ db, channel: 'sms', filter: FILTER, locationId: 'loc-1' }))
+      .rejects.toThrow(/Unknown audience channel: sms/)
   })
 
   it('whatsapp -> buildWhatsAppAudienceAsync', async () => {
@@ -82,13 +76,14 @@ describe('buildEligibleAudienceQuery with NO channel is a MATCH set (the sequenc
     })
     const rawDb = { from: vi.fn(() => chain) }
     await buildEligibleAudienceQuery({ db: rawDb, channel: null, filter: FILTER, locationId: 'loc-1' })
-    expect(rawDb.from).toHaveBeenCalledWith('contacts')
-    expect(calls).toContainEqual(['eq', ['location_id', 'loc-1']])
+    // ORGCONTACTS.4 — the match set is the studio's relationships (studio_contacts
+    // at studio_location_id), and the stage lands on the stage AT this studio.
+    expect(rawDb.from).toHaveBeenCalledWith('studio_contacts')
+    expect(calls).toContainEqual(['eq', ['studio_location_id', 'loc-1']])
     // The filter still applies — a match set is filtered, just not gated.
-    expect(calls).toContainEqual(['eq', ['pipeline_stage_slug', 'member']])
+    expect(calls).toContainEqual(['eq', ['studio_stage_slug', 'member']])
     // No channel builder was consulted.
     expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
-    expect(buildSmsAudienceAsync).not.toHaveBeenCalled()
     expect(buildWhatsAppAudienceAsync).not.toHaveBeenCalled()
   })
 })

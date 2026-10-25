@@ -32,7 +32,11 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { dublinScheduleLabel, scheduleErrorCopy } from '@/lib/host-schedule-time'
+import { scheduleLabelIn, scheduleErrorCopy } from '@/lib/host-schedule-time'
+import { formatRecordTime, needsZoneSuffix, zoneAbbreviation } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
+import { resolveZone } from '@shared/zoned-time'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 const AUDIENCE_LABEL = {
   all: 'All contacts',
@@ -41,25 +45,34 @@ const AUDIENCE_LABEL = {
   non_openers: "People who didn't open the original email",
 }
 
-const WHEN_FORMATTER = new Intl.DateTimeFormat('en-IE', {
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: 'Europe/Dublin',
-})
+const WHEN_OPTIONS = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
 
 /**
- * '2026-09-04T10:58:14Z' -> '4 Sept, 11:58'. Null-safe (no sent_at, no
+ * '2026-09-04T10:58:14Z' -> '4 Sept, 11:58' (Dublin). Null-safe (no sent_at, no
  * outcome timestamp yet) — returns '' rather than throwing or printing
  * "Invalid Date".
+ * TZ.16 (D3 = A) — on the host's studio clock (`zone`, the recipients route's
+ * `timezone`: the host's anchor location), with the zone's abbreviation only
+ * when the viewer's browser is elsewhere.
  * @param {string|null|undefined} iso
+ * @param {string} [zone] the host's studio zone (Dublin floor when absent)
+ * @param {string|null} [viewerZone]
  */
-export function formatWhen(iso) {
+export function formatWhen(iso, zone, viewerZone = null) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return WHEN_FORMATTER.format(d)
+  return formatRecordTime(d, zone, WHEN_OPTIONS, 'en-IE', viewerZone)
+}
+
+/**
+ * "Scheduled for" label on the host's clock: scheduleLabelIn (the composer's
+ * own format, TZ.9) plus the abbreviation under the same rule as formatWhen.
+ */
+export function scheduledLabel(iso, zone, viewerZone = null) {
+  const z = resolveZone(zone)
+  const label = scheduleLabelIn(iso, z)
+  return label && needsZoneSuffix(z, viewerZone) ? `${label} ${zoneAbbreviation(iso, z)}` : label
 }
 
 /**
@@ -209,18 +222,21 @@ export function reminderConfirmCopy(count, sentAt, nowMs = Date.now()) {
 }
 
 /**
- * The "Paused. <reason>. Ask UN1T." line for a sending campaign the
- * scheduler has stalled on. Empty string when there is no reason (the
- * normal "still sending" case).
+ * The "Paused. <reason>. Ask <organisation>." line for a sending campaign
+ * the queue has halted. Empty string when there is no reason (the normal
+ * "still sending" case). W1.S1c: the host asks its organisation, never a
+ * literal gym; the brand floors on the platform name.
  * @param {string|null|undefined} reason
+ * @param {string} [brandName=PLATFORM_NAME]
  */
-export function pausedCopy(reason) {
-  return reason ? `Paused. ${scheduleErrorCopy(reason)}. Ask UN1T.` : ''
+export function pausedCopy(reason, brandName = PLATFORM_NAME) {
+  return reason ? `Paused. ${scheduleErrorCopy(reason)}. Ask ${brandName}.` : ''
 }
 
 const HOUR_MS = 60 * 60 * 1000
 
-export default function HostEmailReport({ campaignId }) {
+// brandName (W1.S1c): the host's organisation, resolved by the server page.
+export default function HostEmailReport({ campaignId, brandName = PLATFORM_NAME }) {
   const [state, setState] = useState('loading') // 'loading' | 'error' | 'not_found' | 'ready'
   const [campaign, setCampaign] = useState(null)
   const [recipients, setRecipients] = useState([])
@@ -232,6 +248,8 @@ export default function HostEmailReport({ campaignId }) {
   const [navigating, setNavigating] = useState(false)
   const [actionError, setActionError] = useState('')
   const router = useRouter()
+  const [zone, setZone] = useState(null) // the host's studio zone, from the route
+  const viewerZone = useViewerZone()
 
   useEffect(() => {
     let cancelled = false
@@ -245,6 +263,7 @@ export default function HostEmailReport({ campaignId }) {
         if (cancelled) return
         if (!res.ok || !json.success) { setState('error'); return }
         setCampaign(json.data?.campaign || null)
+        setZone(json.data?.timezone || null)
         setRecipients(Array.isArray(json.data?.recipients) ? json.data.recipients : [])
         setLinks(Array.isArray(json.data?.links) ? json.data.links : [])
         setState('ready')
@@ -313,9 +332,9 @@ export default function HostEmailReport({ campaignId }) {
   const counts = Object.fromEntries(FILTERS.map((f) => [f.key, filterRecipients(recipients, f.key).length]))
 
   const sentAt = campaign?.sent_at
-  const whenStr = formatWhen(sentAt)
-  const resentStr = formatWhen(campaign?.resent_at)
-  const scheduledStr = dublinScheduleLabel(campaign?.scheduled_for)
+  const whenStr = formatWhen(sentAt, zone, viewerZone)
+  const resentStr = formatWhen(campaign?.resent_at, zone, viewerZone)
+  const scheduledStr = scheduledLabel(campaign?.scheduled_for, zone, viewerZone)
   const headerBits = [
     whenStr && `Sent ${whenStr}`,
     resentStr && `Resent ${resentStr}`,
@@ -369,11 +388,11 @@ export default function HostEmailReport({ campaignId }) {
         </p>
         {campaign?.status === 'sending' && (
           <p className="text-amber-300 text-xs mt-2">
-            {campaign.paused_reason ? pausedCopy(campaign.paused_reason) : 'Still sending, numbers update as it goes.'}
+            {campaign.paused_reason ? pausedCopy(campaign.paused_reason, brandName) : 'Still sending, numbers update as it goes.'}
           </p>
         )}
         {staleNoDelivery && (
-          <p className="text-red-300 text-xs mt-2">Nothing delivered yet. If this persists, contact UN1T.</p>
+          <p className="text-red-300 text-xs mt-2">Nothing delivered yet. If this persists, contact {brandName}.</p>
         )}
       </div>
 
@@ -461,7 +480,7 @@ export default function HostEmailReport({ campaignId }) {
                         <p className="text-xs text-white/45 mt-1">{r.failure_copy}</p>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-white/55">{formatWhen(r.outcome_at)}</td>
+                    <td className="px-3 py-2 text-white/55">{formatWhen(r.outcome_at, zone, viewerZone)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -478,7 +497,7 @@ export default function HostEmailReport({ campaignId }) {
                   {r.outcome === 'failed' && r.failure_copy && (
                     <p className="text-xs text-white/45 mt-1">{r.failure_copy}</p>
                   )}
-                  <p className="text-xs text-white/40 mt-1">{formatWhen(r.outcome_at)}</p>
+                  <p className="text-xs text-white/40 mt-1">{formatWhen(r.outcome_at, zone, viewerZone)}</p>
                 </li>
               ))}
             </ul>

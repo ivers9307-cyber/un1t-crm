@@ -3,42 +3,46 @@
 // resolver, which must not import auth/next) — this module is imported only
 // by the /api/settings/email-domain routes, so it may pull in auth.
 //
-// It owns: org-target resolution (owner-of-org / master, cross-org 404),
+// It owns: org-target resolution (organisation admin / master, cross-org 404),
 // the raw row load (service-role — the row carries the SECRET server token,
 // callers redact via tenantEmailStatePayload before returning), and the
 // Postmark provisioning + verify orchestration (idempotent, persists ids +
 // token the moment they are minted).
 
-import { getOwnerOrganizationIds } from '@/lib/auth'
-import { logWarn } from '@/lib/log'
+import { resolveAdminOrgId } from '@/lib/org-admin'
+import { logInfo, logWarn, logError } from '@/lib/log'
+import { escapeLikePattern } from '@/lib/like-escape'
 import {
   createTenantServer,
   createTenantDomain,
+  findTenantDomainByName,
+  isDomainAlreadyExistsError,
   getTenantDomain,
   verifyTenantDomainDkim,
   verifyTenantReturnPath,
   domainIsFullyVerified,
+  ensureTenantServerStreams,
+  ensureTenantServerWebhooks,
 } from '@/lib/postmark-account'
 
 /**
  * Resolve the target org for a caller (mirrors resolveBillingOrgId):
- *   - master:  any org (?organization_id, defaults to active)
- *   - owner:   orgs they own ONLY (getOwnerOrganizationIds — includes
- *              SAAS-4 org admins); a foreign organization_id resolves to
- *              { notFound: true } so ids can't be existence-probed.
- * Role gating (owner/master) is done by the route BEFORE calling this.
+ *   - master:     any org (?organization_id, defaults to active)
+ *   - org admin:  their admin orgs ONLY (org_admin grant, mig 417; C18
+ *                 ORGROLE.1 — a studio owner is not an org admin); a foreign
+ *                 organization_id resolves to { notFound: true } so ids
+ *                 can't be existence-probed; nothing to act on is
+ *                 { orgId: null }.
+ * The routes' coarse gate (isOrgAdminSomewhere) runs BEFORE calling this.
  * @returns {{ orgId?: string|null, notFound?: boolean }}
  */
 export function resolveEmailDomainOrgId(user, requested) {
-  if (user.role === 'master') {
-    return { orgId: requested || user.activeOrganization?.id || null }
-  }
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  if (!target) return { orgId: null }
-  if (!owned.includes(target)) return { notFound: true }
-  return { orgId: target }
+  // C18 ORGROLE.1 — organisation admins only (master or an org_admin grant).
+  return resolveAdminOrgId(user, requested)
 }
+
+// CHANNELREAD.1 — what a failed tenant_email_domains read says to operators.
+export const EMAIL_DOMAIN_READ_FAILED = 'Could not read the email domain just now, so nothing was changed. Try again.'
 
 /**
  * Load the raw tenant_email_domains row for an org (service-role client).
@@ -46,11 +50,22 @@ export function resolveEmailDomainOrgId(user, requested) {
  * tenantEmailStatePayload before returning it to a client.
  */
 export async function loadEmailDomainRow(db, orgId) {
-  const { data } = await db
+  const { data, error } = await db
     .from('tenant_email_domains')
     .select('*')
     .eq('organization_id', orgId)
     .maybeSingle()
+  // CHANNELREAD.1 — a failed read is not "no domain". Returning null here
+  // showed the set-up wizard over a provisioned domain, and made
+  // provisionEmailDomain mint a SECOND Postmark server and overwrite the
+  // stored server id + token. Callers turn the throw into a 500/502.
+  // The message is plain copy because it reaches operators: the POST route
+  // stores it as last_error and answers it in its 502. The Postgres text is
+  // logged here, structurally, and never shown.
+  if (error) {
+    logError('tenant-email-domain', 'tenant_email_domains read failed', { orgId, err: error.message })
+    throw new Error(EMAIL_DOMAIN_READ_FAILED)
+  }
   return data || null
 }
 
@@ -73,7 +88,9 @@ async function upsertRow(db, orgId, patch) {
 // Fold a shaped Postmark domain response into the row's verification
 // state. status → 'live' only when BOTH records verify; a disabled/failed
 // row is not silently reactivated by a verify pass.
-function persistDomainState(db, orgId, row, shaped) {
+// `lastError` is the webhook step's message when that step failed on this
+// pass (W1.E3) — it must survive this write so the status endpoint shows it.
+function persistDomainState(db, orgId, row, shaped, lastError = null) {
   const status = domainIsFullyVerified(shaped)
     ? 'live'
     : (row.status === 'disabled' || row.status === 'failed' ? row.status : 'verifying')
@@ -85,8 +102,106 @@ function persistDomainState(db, orgId, row, shaped) {
     return_path_cname_value: shaped.returnPathCnameValue ?? row.return_path_cname_value,
     return_path_verified: shaped.returnPathVerified,
     status,
-    last_error: null,
+    last_error: lastError,
   })
+}
+
+/**
+ * W1.E3 — make sure the org's Postmark server carries the broadcast stream
+ * and the six-trigger webhooks, then stamp webhooks_registered_at (mig 718).
+ * Idempotent: a stamped row is left alone; a NULL stamp (never done, or a
+ * failed earlier pass) runs both helpers again, and they only create what is
+ * missing. A failure is NOT fatal to provisioning or verification: it is
+ * logged structurally and returned as `error` so the caller writes it to
+ * last_error, and the stamp stays NULL so the next provision OR verify call
+ * retries. The server token is read off the row and never logged.
+ *
+ * @returns {Promise<{ row: object, error: string|null }>}
+ */
+async function ensureServerWebhooksRecorded(db, orgId, row) {
+  if (!row?.postmark_server_token || row.webhooks_registered_at) return { row, error: null }
+  try {
+    await ensureTenantServerStreams(row.postmark_server_token)
+    await ensureTenantServerWebhooks(row.postmark_server_token)
+  } catch (e) {
+    const message = e?.message || 'Postmark webhook registration failed.'
+    // The raw message goes to the structured log for ops; what reaches
+    // last_error is rendered in red to the org admin by EmailDomainWizard,
+    // so it says what did not happen and what to press.
+    logWarn('tenant-email-domain', 'server streams/webhook registration failed; will retry on the next provision or verify', { orgId, err: message })
+    return { row, error: `Event webhooks were not registered on the sending server (${message}). Press Verify to retry.` }
+  }
+  const stamped = await upsertRow(db, orgId, { webhooks_registered_at: new Date().toISOString() })
+  return { row: stamped, error: null }
+}
+
+// ADOPTDOMAIN.1 — what an operator reads when the sending domain is already a
+// Domain in the platform's Postmark account and this caller may not take it
+// over. Operator-neutral: it never says whose it is.
+export const EMAIL_DOMAIN_TAKEN_CODE = 'EMAIL_DOMAIN_TAKEN'
+export function emailDomainTakenMessage(domain) {
+  return `This domain is already registered on the platform. Use a subdomain such as mail.${domain}, or contact support.`
+}
+function domainTakenError(domain) {
+  const err = new Error(emailDomainTakenMessage(domain))
+  err.code = EMAIL_DOMAIN_TAKEN_CODE
+  return err
+}
+export const EMAIL_DOMAIN_CLAIM_CHECK_FAILED = 'Could not check whether this domain is already in use, so nothing was changed. Try again.'
+
+/**
+ * ADOPTDOMAIN.1 — is this Postmark domain (by id or by name) already held by
+ * ANOTHER organisation's tenant_email_domains row? A failed read throws
+ * (fails closed): an unanswered question is never "unclaimed".
+ */
+async function domainClaimedByAnotherOrg(db, orgId, sendingDomain, postmarkDomainId) {
+  const byId = await db
+    .from('tenant_email_domains')
+    .select('organization_id')
+    .eq('postmark_domain_id', postmarkDomainId)
+    .neq('organization_id', orgId)
+    .limit(1)
+  // sending_domain is stored sanitized lower-case, but compare
+  // case-insensitively anyway; escaped so `_`/`%` are not wildcards.
+  const byName = await db
+    .from('tenant_email_domains')
+    .select('organization_id')
+    .ilike('sending_domain', escapeLikePattern(sendingDomain))
+    .neq('organization_id', orgId)
+    .limit(1)
+  if (byId.error || byName.error) {
+    logError('tenant-email-domain', 'domain claim check failed', {
+      orgId, err: byId.error?.message || byName.error?.message,
+    })
+    throw new Error(EMAIL_DOMAIN_CLAIM_CHECK_FAILED)
+  }
+  return (byId.data?.length || 0) > 0 || (byName.data?.length || 0) > 0
+}
+
+/**
+ * ADOPTDOMAIN.1 — Postmark refused POST /domains with "Domain already exists"
+ * (a domain name exists once per Postmark ACCOUNT, and the account is the
+ * platform's). Adopt the existing account domain, but ONLY when it is safe:
+ *   (a) the caller is a platform MASTER — the platform owns the account, and
+ *       a tenant adopting a domain someone else verified could send as it;
+ *   (b) no OTHER organisation's row holds that sending_domain or
+ *       postmark_domain_id.
+ * Anything else refuses with the operator-neutral EMAIL_DOMAIN_TAKEN error.
+ * A domain the list does not show (a race, a stale account) rethrows the
+ * original Postmark error unchanged.
+ * @returns {Promise<object>} the shaped domain (as getTenantDomain)
+ */
+async function adoptExistingAccountDomain(db, { orgId, sendingDomain, isMaster, originalError }) {
+  if (!isMaster) throw domainTakenError(sendingDomain)
+  const existing = await findTenantDomainByName(sendingDomain)
+  if (!existing?.ID) throw originalError
+  if (await domainClaimedByAnotherOrg(db, orgId, sendingDomain, existing.ID)) {
+    throw domainTakenError(sendingDomain)
+  }
+  const shaped = await getTenantDomain(existing.ID)
+  if (!shaped.id) throw new Error('Postmark did not return a domain id.')
+  logInfo('tenant-email-domain', 'adopted an existing Postmark account domain', { orgId, domainId: shaped.id })
+  return shaped
 }
 
 /**
@@ -105,15 +220,19 @@ function persistDomainState(db, orgId, row, shaped) {
  * @param {string} [args.fromLocal]   - local-part (default 'hello')
  * @param {string} [args.fromName]
  * @param {string} [args.createdBy]
+ * @param {boolean} [args.isMaster] - platform master: may adopt a domain the
+ *   platform's Postmark account already holds (ADOPTDOMAIN.1)
  * @returns {Promise<object>} the persisted row (raw — caller redacts)
  */
-export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, fromLocal, fromName, createdBy }) {
+export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, fromLocal, fromName, createdBy, isMaster = false }) {
   let row = await loadEmailDomainRow(db, orgId)
 
-  // Already fully provisioned → idempotent re-read, no new Postmark resources.
+  // Already fully provisioned → idempotent re-read, no new Postmark resources
+  // (but a NULL webhooks stamp is retried — W1.E3).
   if (row?.postmark_server_id && row?.postmark_domain_id) {
+    const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
     const shaped = await getTenantDomain(row.postmark_domain_id)
-    return persistDomainState(db, orgId, row, shaped)
+    return persistDomainState(db, orgId, hooks.row, shaped, hooks.error)
   }
 
   // Step 1 — server. Persist id + token the moment they are minted.
@@ -131,13 +250,27 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
     })
   }
 
-  // Step 2 — domain. Reuse an existing domain id, else create it.
-  const fromEmail = `${fromLocal || 'hello'}@${sendingDomain}`
+  // Step 1b — W1.E3: streams + webhooks on the server, with the token just
+  // persisted. Its own try (inside the helper): a failure records last_error
+  // below and never blocks the domain.
+  const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
+  row = hooks.row
+
+  // Step 2 — domain. Reuse an existing domain id, else create it; when the
+  // account already holds that name, adopt it if that is safe (ADOPTDOMAIN.1).
+  // Addresses are case-insensitive; store (and display) them lower-case.
+  const local = String(fromLocal || '').trim().toLowerCase() || 'hello'
+  const fromEmail = `${local}@${String(sendingDomain).toLowerCase()}`
   let shaped
   if (row.postmark_domain_id) {
     shaped = await getTenantDomain(row.postmark_domain_id)
   } else {
-    shaped = await createTenantDomain(sendingDomain)
+    try {
+      shaped = await createTenantDomain(sendingDomain)
+    } catch (e) {
+      if (!isDomainAlreadyExistsError(e)) throw e
+      shaped = await adoptExistingAccountDomain(db, { orgId, sendingDomain, isMaster, originalError: e })
+    }
     if (!shaped.id) throw new Error('Postmark did not return a domain id.')
   }
 
@@ -153,7 +286,7 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
     return_path_cname_value: shaped.returnPathCnameValue,
     return_path_verified: shaped.returnPathVerified,
     status: domainIsFullyVerified(shaped) ? 'live' : 'verifying',
-    last_error: null,
+    last_error: hooks.error,
   })
 }
 
@@ -162,11 +295,22 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
  * and flip status → 'live' when both verify. IDEMPOTENT — re-running once
  * live keeps it live.
  *
- * @returns {Promise<{ row?: object, notProvisioned?: boolean, error?: string }>}
+ * @returns {Promise<{ row?: object, notProvisioned?: boolean, readFailed?: boolean, error?: string }>}
  */
 export async function verifyEmailDomain(db, orgId) {
-  const row = await loadEmailDomainRow(db, orgId)
+  let row
+  try {
+    row = await loadEmailDomainRow(db, orgId)
+  } catch (e) {
+    return { readFailed: true, error: e.message }
+  }
   if (!row?.postmark_domain_id) return { notProvisioned: true }
+
+  // W1.E3 — the verify button is the retry an operator can reach once the
+  // domain exists (the wizard never POSTs the initiate route again), so a
+  // NULL webhooks stamp is retried here too. Never fatal.
+  const hooks = await ensureServerWebhooksRecorded(db, orgId, row)
+  row = hooks.row
 
   // Best-effort re-checks: Postmark rejects these while DNS is still
   // wrong, so the getTenantDomain read below is the source of truth.
@@ -184,5 +328,5 @@ export async function verifyEmailDomain(db, orgId) {
     await upsertRow(db, orgId, { last_error: e?.message || 'domain read failed' })
     return { error: e?.message || 'Could not read the sending domain.' }
   }
-  return { row: await persistDomainState(db, orgId, row, shaped) }
+  return { row: await persistDomainState(db, orgId, row, shaped, hooks.error) }
 }

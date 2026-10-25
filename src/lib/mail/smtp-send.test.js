@@ -207,7 +207,7 @@ describe('the From is the mailbox address, or nothing', () => {
 
 /* ─────────────────────── the verdict envelope ─────────────────────── */
 //
-// sendTicketEmail's three routes branch on `reason` — 503 for not_configured,
+// sendConversationEmail's three routes branch on `reason` — 503 for not_configured,
 // 400 for send_failed — and neither of them knows a second transport exists.
 // So every exit from this module has to land in one of those two buckets, and
 // the bucket has to mean what the route thinks it means.
@@ -372,7 +372,7 @@ describe('delivery is honestly untracked', () => {
   // bracket-STRIPPED candidates (parseMessageIdTokens), and every inbound row
   // is stored bare via extractRfcMessageId. Storing `<x@y>` matched neither
   // that column nor postmark_message_id (NULL on SMTP by design), so every
-  // customer reply to an SMTP-sent message opened a new ticket while the
+  // customer reply to an SMTP-sent message opened a new conversation while the
   // original sat unanswered. The test pinned the defect in place.
   it('returns the RFC Message-ID BARE, which is the form threading matches on', async () => {
     const t = fakeTransport()
@@ -515,7 +515,7 @@ describe('the message handed to nodemailer', () => {
 // Postmark's `[{Name, Value}]` and nodemailer's `[{key, value}]` look alike
 // enough that handing one to the other produces no error at all — just a
 // message with no threading anchors, which starts a fresh thread in the
-// member's client and opens a duplicate ticket when they reply.
+// member's client and opens a duplicate conversation when they reply.
 describe('threading headers survive the transport swap', () => {
   it('maps Name/Value onto key/value', () => {
     expect(toNodemailerHeaders([

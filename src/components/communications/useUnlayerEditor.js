@@ -8,18 +8,12 @@
 // mountId so it can never collide with another Unlayer instance's global init.
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const MERGE_TAGS = [
-  { name: 'First Name', value: '{{first_name}}' },
-  { name: 'Last Name', value: '{{last_name}}' },
-  { name: 'Full Name', value: '{{name}}' },
-  { name: 'Email', value: '{{email}}' },
-  { name: 'Phone', value: '{{phone}}' },
-  { name: 'Pipeline Stage', value: '{{pipeline_stage}}' },
-  { name: 'Location', value: '{{location_name}}' },
-  { name: 'Unsubscribe', value: '{{unsubscribe_url}}' },
-  { name: 'Preferences', value: '{{preference_url}}' },
-  { name: 'Year', value: '{{current_year}}' },
-]
+// K3 — from @/lib/merge-tags, which is checked against what
+// applyMergeTags() actually substitutes (src/lib/merge-tags.test.js). This
+// used to be its own hand-kept array here and had already drifted from the
+// registry (missing {{booking_token}}, which IS offered) — render the
+// registry, don't re-copy it.
+import { UNLAYER_MERGE_TAGS } from '@/lib/merge-tags'
 
 // COMMSFIX.D.2a — the single operator-facing message for a failed export.
 // Exported so callers can compare/re-use it rather than re-wording the reason.
@@ -68,7 +62,7 @@ export function useUnlayerEditor({ mountId, active = true } = {}) {
         heading: { enabled: true }, html: { enabled: true }, menu: { enabled: true },
         social: { enabled: true }, text: { enabled: true }, timer: { enabled: true }, video: { enabled: true },
       },
-      mergeTags: MERGE_TAGS,
+      mergeTags: [...UNLAYER_MERGE_TAGS],
       features: { textEditor: { spellChecker: true } },
     })
     // COMMSFIX.D.4a — Unlayer fires design:updated on every real edit. A fresh

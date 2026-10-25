@@ -40,17 +40,27 @@ import {
   ChevronRight, Layers,
 } from 'lucide-react'
 import {
-  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId,
+  BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId, OFFER_DEFAULT,
 } from '@/lib/landing-page-blocks'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
+import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
+import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
+import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
+import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
+import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
 // each other and ignore the noise from extensions / dev tools.
 const MESSAGE_NAMESPACE = 'lp-editor'
 
-export default function LandingPageSettingsForm({ locationId, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [] }) {
+// W1.S1b — `brand` is the studio's resolved brand ({ companyName, shortName },
+// getLocationBranding on the server page): new blocks' consent defaults, the
+// logo hints and the embed snippet's title name it, never a literal gym.
+export default function LandingPageSettingsForm({ locationId, membershipSource = null, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [], brand = null }) {
+  const brandName = (brand?.companyName || '').trim()
+  const wordmarkText = (brand?.shortName || '').trim() || brandName
   // LP multi-page: the preview iframe + "View live" links point at the
   // SELECTED studio's public page when known (public_path from mig 227),
   // falling back to the generic /welcome for a single-studio install.
@@ -203,7 +213,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         // (0 = at top; blocks.length = at bottom; n = between
         // existing[n-1] and existing[n]).
         let added = null
-        try { added = newBlockOfType(msg.blockType) } catch { return }
+        try { added = newBlockOfType(msg.blockType, { brand: brandName }) } catch { return }
         setBlocks((prev) => {
           const idx = Math.max(0, Math.min(prev.length, msg.atIndex))
           const next = prev.slice()
@@ -226,7 +236,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [buildState])
+  }, [buildState, brandName])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -237,7 +247,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
     setExpanded((prev) => { const next = new Set(prev); next.delete(id); return next })
   }
   function addBlock(type) {
-    const block = newBlockOfType(type)
+    const block = newBlockOfType(type, { brand: brandName })
     setBlocks((prev) => [...prev, block])
     setExpanded((prev) => new Set(prev).add(block.id))
     setPickerOpen(false)
@@ -370,7 +380,9 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
       <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Site header</h3>
-          <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering. Leave the logo blank to fall back to the &ldquo;UN1T&rdquo; wordmark text.</p>
+          <p className="text-[11px] text-un1t-muted mt-1">Logo for the top nav. Renders on every page state regardless of section ordering.{wordmarkText
+            ? <> Leave the logo blank to fall back to the &ldquo;{wordmarkText}&rdquo; wordmark text.</>
+            : ' Leave the logo blank to fall back to the brand wordmark text.'}</p>
         </div>
         <Field label="Logo image" hint="PNG / JPEG / WebP — large images are auto-optimized on upload. Transparent PNG works best on the dark nav background.">
           <MediaSlot
@@ -385,8 +397,8 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
           />
         </Field>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Alt text" hint="What screen readers announce. Defaults to &ldquo;UN1T Dublin&rdquo; if blank.">
-            <Input value={logoAlt} onChange={setLogoAlt} maxLength={200} placeholder="UN1T Dublin" />
+          <Field label="Alt text" hint={brandName ? `What screen readers announce. Defaults to “${brandName}” if blank.` : 'What screen readers announce. Defaults to the brand name if blank.'}>
+            <Input value={logoAlt} onChange={setLogoAlt} maxLength={200} placeholder={brandName} />
           </Field>
           <Field label="Logo width (px)" hint="40-600. Defaults to 200px. Width drives the rendered size — height auto-follows the image's aspect ratio. Bump it up for a chunky wordmark, down for a square brand mark.">
             <input
@@ -451,11 +463,14 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   onUpdate={(patch) => updateBlock(block.id, patch)}
                   availableBookingTypes={availableBookingTypes}
                   availableEvents={availableEvents}
+                  brandName={brandName}
                   uploadMedia={uploadMedia}
                   uploading={uploading}
                   uploadErr={uploadErr}
                   progress={progress}
                   locationId={locationId}
+                  membershipSource={membershipSource}
+                  publicPath={publicPath}
                 />
               </div>
             ))}
@@ -569,7 +584,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
   availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
-  locationId,
+  locationId, membershipSource, publicPath, brandName,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -624,11 +639,14 @@ function SortableBlockCard({
             onUpdate={onUpdate}
             availableBookingTypes={availableBookingTypes}
             availableEvents={availableEvents}
+            brandName={brandName}
             uploadMedia={uploadMedia}
             uploading={uploading}
             uploadErr={uploadErr}
             progress={progress}
             locationId={locationId}
+            membershipSource={membershipSource}
+            publicPath={publicPath}
           />
         </div>
       )}
@@ -677,6 +695,7 @@ function BlockEditPanel(props) {
     case 'event':       return <EventEdit       {...props} />
     case 'lead_form':   return <LeadFormEdit    {...props} />
     case 'class_funnel': return <ClassFunnelEdit {...props} />
+    case 'paid_trial':  return <PaidTrialEdit   {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -757,11 +776,11 @@ function BookingEdit({ block, onUpdate, availableBookingTypes }) {
   )
 }
 
-function EventEdit({ block, onUpdate, availableEvents }) {
+function EventEdit({ block, onUpdate, availableEvents, brandName = '' }) {
   const events = availableEvents || []
   const origin = (typeof window !== 'undefined' && window.location?.origin) || 'https://un1tdublin.com'
   const snippet = block.slug
-    ? `<iframe src="${origin}/embed/event/${block.slug}" width="100%" height="900" style="border:0;max-width:760px" loading="lazy" title="UN1T event signup"></iframe>`
+    ? `<iframe src="${origin}/embed/event/${block.slug}" width="100%" height="900" style="border:0;max-width:760px" loading="lazy" title="${escapeAttr(brandName ? `${brandName} event signup` : 'Event signup')}"></iframe>`
     : ''
   return (
     <>
@@ -803,16 +822,27 @@ function EventEdit({ block, onUpdate, availableEvents }) {
 }
 
 function LeadFormEdit({ block, onUpdate }) {
+  // The offer group is nested, and updateBlock() shallow-merges the
+  // patch into the block — so every offer edit must spread the whole
+  // current group or it would drop the other fields.
+  const offer = (block.offer && typeof block.offer === 'object' && !Array.isArray(block.offer)) ? block.offer : {}
+  const setOffer = (patch) => onUpdate({ offer: { ...offer, ...patch } })
+  const ticks = Array.isArray(offer.ticks) ? offer.ticks : []
+  const setTick = (i, v) => {
+    const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
+    next[i] = v
+    setOffer({ ticks: next })
+  }
   return (
     <>
       <Field label="Heading">
-        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Join the founding members" />
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Keep me posted" />
       </Field>
       <Field label="Sub-copy" hint="Paragraph under the heading.">
         <Textarea value={block.subtext || ''} onChange={(v) => onUpdate({ subtext: v })} maxLength={600} rows={3} />
       </Field>
       <Field label="Button label">
-        <Input value={block.button_label || ''} onChange={(v) => onUpdate({ button_label: v })} maxLength={60} placeholder="Join the waitlist" />
+        <Input value={block.button_label || ''} onChange={(v) => onUpdate({ button_label: v })} maxLength={60} placeholder="Keep me posted" />
       </Field>
       <Field label="Success message" hint="Shown after a successful submit.">
         <Textarea value={block.success_message || ''} onChange={(v) => onUpdate({ success_message: v })} maxLength={300} rows={2} />
@@ -820,11 +850,432 @@ function LeadFormEdit({ block, onUpdate }) {
       <Field label="Consent checkbox text" hint="Shown beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
         <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
       </Field>
+      <Field
+        label="Panel beside the offer"
+        hint="Only applies while the offer below is on. The class-funnel button needs that funnel shown on this page; if it is hidden, the form stays."
+      >
+        <select
+          value={block.second_path === 'class_funnel' ? 'class_funnel' : 'form'}
+          onChange={(e) => onUpdate({ second_path: e.target.value })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          <option value="form">This form (heading, sub-copy, button)</option>
+          <option value="class_funnel">Button to the class booking funnel (heading and sub-copy still show)</option>
+        </select>
+      </Field>
+
+      <div className="pt-4 mt-2 border-t border-un1t-border">
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={offer.enabled === true}
+            onChange={(e) => setOffer(
+              // Seed the defaults on the way ON, so a block saved
+              // before this group existed doesn't open a blank panel.
+              // The operator's own values win over the defaults, and
+              // turning it OFF keeps their copy for next time.
+              e.target.checked ? { ...OFFER_DEFAULT(), ...offer, enabled: true } : { enabled: false }
+            )}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="block text-sm text-un1t-text">Show a membership offer beside this form</span>
+            <span className="block text-[11px] text-un1t-muted mt-0.5">Adds a price panel to the left of the form and points the hero&apos;s main button at it. Untick when the offer closes and the section goes back to the form on its own.</span>
+          </span>
+        </label>
+      </div>
+
+      {offer.enabled === true && (
+        <>
+          <Field label="Section eyebrow">
+            <Input value={offer.section_eyebrow || ''} onChange={(v) => setOffer({ section_eyebrow: v })} maxLength={60} placeholder="Two ways in" />
+          </Field>
+          <Field label="Section heading" hint="Line breaks are kept exactly as you type them.">
+            <Textarea value={offer.section_heading || ''} onChange={(v) => setOffer({ section_heading: v })} maxLength={200} rows={2} placeholder={'Fix your rate\nbefore we open'} />
+          </Field>
+          <Field label="Offer label">
+            <Input value={offer.eyebrow || ''} onChange={(v) => setOffer({ eyebrow: v })} maxLength={60} placeholder="Foundation membership" />
+          </Field>
+          <Field label="Price">
+            <Input value={offer.price || ''} onChange={(v) => setOffer({ price: v })} maxLength={20} placeholder="€189" />
+          </Field>
+          <Field label="Struck-out price" hint="Shown with a red line through it, left of the price. Leave empty for no strike.">
+            <Input value={offer.was_price || ''} onChange={(v) => setOffer({ was_price: v })} maxLength={20} placeholder="€219" />
+          </Field>
+          <Field label="Struck-out price, spoken" hint="Screen readers only. A struck price on its own is heard as “it used to be €219”, so say which way it goes.">
+            <Input value={offer.was_price_note || ''} onChange={(v) => setOffer({ was_price_note: v })} maxLength={120} placeholder="a month from 19 September" />
+          </Field>
+          <Field label="Price caption" hint="Line breaks are kept exactly as you type them.">
+            <Textarea value={offer.unit || ''} onChange={(v) => setOffer({ unit: v })} maxLength={80} rows={2} placeholder={'per month\nfixed for life'} />
+          </Field>
+          <Field label="Deadline chip" hint="Small pill in the corner of the panel. Leave empty to hide it.">
+            <Input value={offer.deadline || ''} onChange={(v) => setOffer({ deadline: v })} maxLength={60} placeholder="Offer ends 19 September" />
+          </Field>
+          <Field label="What's included — line 1">
+            <Input value={ticks[0] || ''} onChange={(v) => setTick(0, v)} maxLength={120} placeholder="Unlimited classes, full access from day one" />
+          </Field>
+          <Field label="What's included — line 2">
+            <Input value={ticks[1] || ''} onChange={(v) => setTick(1, v)} maxLength={120} placeholder="Your rate never rises while your membership stays active" />
+          </Field>
+          <Field label="What's included — line 3">
+            <Input value={ticks[2] || ''} onChange={(v) => setTick(2, v)} maxLength={120} placeholder="Pay today, next payment October" />
+          </Field>
+          <Field label="Offer button label">
+            <Input value={offer.cta_label || ''} onChange={(v) => setOffer({ cta_label: v })} maxLength={60} placeholder="Claim your rate" />
+          </Field>
+          <Field label="Offer button label — short" hint="Used by the sticky header only, where a long label gets cut off on phones. Leave empty to reuse the full label.">
+            <Input value={offer.cta_label_short || ''} onChange={(v) => setOffer({ cta_label_short: v })} maxLength={30} placeholder="Foundation Offer" />
+          </Field>
+          <Field label="Offer button link" hint="Where the button sends people to pay. Leave empty and the button is hidden rather than dead.">
+            <Input value={offer.cta_url || ''} onChange={(v) => setOffer({ cta_url: v })} maxLength={500} placeholder="https://hatchstreet.un1t.online/#join" />
+          </Field>
+        </>
+      )}
     </>
   )
 }
 
-function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId }) {
+// MANUALFUNNEL.1 — for a studio with no Glofox (Hatch Street books on its own
+// platform). The operator types the weekly timetable; the funnel lists it,
+// and every request lands in Approvals for staff to book by hand. A studio
+// WITH Glofox ignores all of this and keeps listing its live classes; a
+// un1t.online studio lists its synced classes instead of the typed text
+// (HATCHSTART.1) but keeps the notice and the confirmation email.
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function ManualTimetableFields({ block, onUpdate, publicPath }) {
+  const text = typeof block.timetable === 'string' ? block.timetable : ''
+  const { slots, rejected } = useMemo(() => parseManualTimetable(text), [text])
+  const byDay = DAY_NAMES.map((name, i) => ({ name, times: slots.filter((s) => s.dow === i + 1) }))
+    .filter((d) => d.times.length > 0)
+  return (
+    <div className="pt-4 mt-2 border-t border-un1t-border space-y-4">
+      <div>
+        <p className="text-sm font-medium text-un1t-text">Typed-in timetable (studio without Glofox)</p>
+        <p className="text-[11px] text-un1t-muted mt-1">
+          Only used when this studio has no Glofox connection. Visitors pick one of these times and leave their details. Nothing is booked automatically: each request appears in Approvals for staff to create the account and booking by hand.
+        </p>
+        <p className="text-[11px] text-un1t-muted mt-1">
+          A studio that runs on un1t.online ignores the typed-in timetable and the first bookable date: visitors see its real classes from un1t.online. The minimum notice and the confirmation email below still apply.
+        </p>
+      </div>
+      <Field
+        label="Weekly timetable"
+        hint="One line per class: day, time, class name. Several days or times can share a line, e.g. “Mon-Fri 06:15, 07:15 Strength” or “Sat 9am Conditioning”."
+      >
+        <Textarea
+          value={text}
+          onChange={(v) => onUpdate({ timetable: v })}
+          maxLength={4000}
+          rows={8}
+          placeholder={'Mon-Fri 06:15 Strength\nMon-Fri 18:00 Conditioning\nSat 09:00 Strength'}
+        />
+        {text.trim() && (
+          <div className="mt-2 rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-xs text-un1t-text space-y-1">
+            {byDay.length === 0 ? (
+              <p className="text-red-700">No class times could be read yet.</p>
+            ) : (
+              <>
+                <p className="text-un1t-subtle">How it reads ({slots.length} class {slots.length === 1 ? 'time' : 'times'} a week):</p>
+                {byDay.map((d) => (
+                  <p key={d.name}>
+                    <span className="font-medium">{d.name}</span>{' '}
+                    {d.times.map((s) => `${s.time} ${s.name}`).join(' · ')}
+                  </p>
+                ))}
+              </>
+            )}
+            {rejected.length > 0 && (
+              <div className="text-red-700 pt-1">
+                <p>Not understood, so not shown to visitors:</p>
+                {rejected.map((line, i) => <p key={`${i}-${line}`} className="font-mono">{line}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+      </Field>
+      <Field label="First bookable date" hint="Optional. No class before this date is offered, e.g. the studio's opening day.">
+        <input
+          type="date"
+          value={block.timetable_start_date || ''}
+          onChange={(e) => onUpdate({ timetable_start_date: e.target.value })}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        />
+      </Field>
+      <Field label="Minimum notice (hours)" hint={`A class starting sooner than this is not offered, so staff have time to book it by hand. Blank = ${DEFAULT_MIN_NOTICE_HOURS} hours.`}>
+        <Input
+          value={block.min_notice_hours === 0 ? '0' : (block.min_notice_hours || '')}
+          onChange={(v) => {
+            const t = v.trim()
+            const n = Number(t)
+            onUpdate({ min_notice_hours: t === '' || !Number.isFinite(n) || n < 0 ? '' : n })
+          }}
+          maxLength={3}
+          placeholder={String(DEFAULT_MIN_NOTICE_HOURS)}
+        />
+      </Field>
+      {/* MANUALCONFIRM.1 — the email the customer gets when staff approve. */}
+      <Field label="Confirmation email subject" hint="Sent when staff approve a request. You can use {first_name}, {class_name}, {class_time}, {studio_name} and {address}. Blank keeps the default.">
+        <Input value={block.confirm_email_subject || ''} onChange={(v) => onUpdate({ confirm_email_subject: v })} maxLength={150} placeholder={DEFAULT_MANUAL_CONFIRM_EMAIL.subject} />
+      </Field>
+      <Field label="Confirmation email body" hint="Plain text; line breaks are kept. Same placeholders as the subject. Blank keeps the default.">
+        <Textarea value={block.confirm_email_body || ''} onChange={(v) => onUpdate({ confirm_email_body: v })} maxLength={2000} rows={8} placeholder={DEFAULT_MANUAL_CONFIRM_EMAIL.body} />
+      </Field>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={block.show_on_landing !== false}
+          onChange={(e) => onUpdate({ show_on_landing: e.target.checked })}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="block text-sm text-un1t-text">Show this funnel on the main landing page</span>
+          <span className="block text-[11px] text-un1t-muted mt-0.5">
+            Untick to keep it off this page. It always shows on its own booking page{publicPath ? `: /start/${publicPath}` : ' at /start/ followed by this page’s address'}.
+          </span>
+        </span>
+      </label>
+    </div>
+  )
+}
+
+// UN1TWRITE.18 — the terms and waiver tick a un1t.online studio's funnel
+// shows while its funnel switch is on. Blank keeps each default.
+function Un1tFunnelCopyFields({ block, onUpdate }) {
+  const D = DEFAULT_FUNNEL_TERMS_COPY
+  return (
+    <>
+      <Field label="Terms tick (un1t.online studios)" hint="Shown when this studio books through un1t.online. {studio_name} is the studio; {terms} and {waiver} become the two document links. Leave blank for the default.">
+        <Input value={block.terms_label || ''} onChange={(v) => onUpdate({ terms_label: v })} maxLength={200} placeholder={D.terms_label} />
+      </Field>
+      <Field label="Terms link text (un1t.online studios)">
+        <Input value={block.terms_link_label || ''} onChange={(v) => onUpdate({ terms_link_label: v })} maxLength={60} placeholder={D.terms_link_label} />
+      </Field>
+      <Field label="Waiver link text (un1t.online studios)">
+        <Input value={block.waiver_link_label || ''} onChange={(v) => onUpdate({ waiver_link_label: v })} maxLength={60} placeholder={D.waiver_link_label} />
+      </Field>
+      <Field label="Terms not ticked: message (un1t.online studios)">
+        <Input value={block.terms_required_message || ''} onChange={(v) => onUpdate({ terms_required_message: v })} maxLength={200} placeholder={D.terms_required_message} />
+      </Field>
+      {/* UN1TWRITE.21 — the un1t.online funnel's two customer emails. */}
+      <Field label="New account email: subject (un1t.online studios)" hint="Sent when a booking made a new un1t.online account. {first_name} {class_name} {class_time} {studio_name} {address}. Leave blank for the default.">
+        <Input value={block.account_email_subject || ''} onChange={(v) => onUpdate({ account_email_subject: v })} maxLength={150} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.account_email_subject} />
+      </Field>
+      <Field label="New account email: message (un1t.online studios)">
+        <Textarea value={block.account_email_body || ''} onChange={(v) => onUpdate({ account_email_body: v })} maxLength={2000} rows={6} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.account_email_body} />
+      </Field>
+      <Field label="Trial already used email: subject (un1t.online studios)" hint="Sent when someone has had the free trial, so nothing was booked. {options} is the studio's offer list. Leave blank for the default.">
+        <Input value={block.trial_used_email_subject || ''} onChange={(v) => onUpdate({ trial_used_email_subject: v })} maxLength={150} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.trial_used_email_subject} />
+      </Field>
+      <Field label="Trial already used email: message (un1t.online studios)">
+        <Textarea value={block.trial_used_email_body || ''} onChange={(v) => onUpdate({ trial_used_email_body: v })} maxLength={2000} rows={6} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.trial_used_email_body} />
+      </Field>
+      <Field label="Terms page could not load: message (un1t.online studios)">
+        <Textarea value={block.legal_unavailable_message || ''} onChange={(v) => onUpdate({ legal_unavailable_message: v })} maxLength={300} rows={2} placeholder={D.legal_unavailable_message} />
+      </Field>
+    </>
+  )
+}
+
+// PAIDTRIAL.1 — the paid trial product (/trial). Price in euros as a draft
+// string, coerced to cents on write (same reasoning as ClassFunnelEdit). The
+// Glofox product is REQUIRED: the page sells nothing until both ids are set.
+// Exported for its test (PaidTrialEdit.test.jsx).
+export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
+  const isUn1tOnline = membershipSource === 'un1t_online'
+  const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
+  useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [memberships, setMemberships] = useState([])
+  const [membershipsLoading, setMembershipsLoading] = useState(false)
+  useEffect(() => {
+    if (!locationId || isUn1tOnline) return
+    let alive = true
+    setMembershipsLoading(true)
+    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
+      .catch(() => {})
+      .finally(() => { if (alive) setMembershipsLoading(false) })
+    return () => { alive = false }
+  }, [locationId, isUn1tOnline])
+  // A un1t.online studio sells one of its mirrored paid products (the GET
+  // answers `paid_products`; the text input stays until it arrives).
+  const [paidProducts, setPaidProducts] = useState([])
+  const [paidProductsLoading, setPaidProductsLoading] = useState(false)
+  useEffect(() => {
+    if (!locationId || !isUn1tOnline) return
+    let alive = true
+    setPaidProductsLoading(true)
+    fetch(`/api/locations/${locationId}/un1t-online`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (alive && j && j.success !== false) setPaidProducts(Array.isArray(j.data?.paid_products) ? j.data.paid_products : []) })
+      .catch(() => {})
+      .finally(() => { if (alive) setPaidProductsLoading(false) })
+    return () => { alive = false }
+  }, [locationId, isUn1tOnline])
+  const productId = block.un1t_product_id || ''
+  const productKnown = paidProducts.some((p) => p.un1t_id === productId)
+  const planKey = (block.membership_id && block.plan_code) ? `${block.membership_id}:${block.plan_code}` : ''
+  const setPlan = (value) => {
+    const [mid, pc] = value ? value.split(':') : ['', '']
+    onUpdate({ membership_id: mid || '', plan_code: pc || '' })
+  }
+  const planOptions = buildTrialOptions(memberships, planKey)
+  const ticks = Array.isArray(block.ticks) ? block.ticks : []
+  const setTick = (i, v) => {
+    const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
+    next[i] = v
+    onUpdate({ ticks: next })
+  }
+  return (
+    <>
+      <Field label="Studio label on /trial" hint="The name on this studio's choice card. Blank shows the studio's own name.">
+        <Input value={block.studio_label || ''} onChange={(v) => onUpdate({ studio_label: v })} maxLength={60} />
+      </Field>
+      <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
+        <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
+      </Field>
+      {/* A new block starts on Stillorgan's words (the factory does not know the studio). */}
+      <p className="text-[11px] text-un1t-muted">Check the heading, button and paid messages name this studio&apos;s product.</p>
+      <Field label="Heading">
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="The 14 Day Reset" />
+      </Field>
+      <Field label="Sub-copy">
+        <Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} />
+      </Field>
+      <Field label="Product name" hint="On the checkout line, the receipt and the confirmation email.">
+        <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="The 14 Day Reset" />
+      </Field>
+      {!isUn1tOnline && (
+        <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
+          <Input
+            value={priceDraft}
+            onChange={(v) => { setPriceDraft(v); const c = eurosToCents(v); if (c !== null) onUpdate({ price_cents: c }) }}
+            maxLength={10}
+            placeholder="39"
+          />
+        </Field>
+      )}
+      <Field label="Trial length (days)">
+        <Input value={String(block.duration_days ?? 14)} onChange={(v) => { const n = parseInt(v, 10); if (Number.isFinite(n)) onUpdate({ duration_days: n }) }} maxLength={3} placeholder="14" />
+      </Field>
+      <Field label="What's included" hint="Three ticks on the price panel. Blank lines are skipped.">
+        <div className="space-y-2">
+          <Input value={ticks[0] || ''} onChange={(v) => setTick(0, v)} maxLength={120} placeholder="Unlimited classes for 14 days" />
+          <Input value={ticks[1] || ''} onChange={(v) => setTick(1, v)} maxLength={120} placeholder="Every session coach-led" />
+          <Input value={ticks[2] || ''} onChange={(v) => setTick(2, v)} maxLength={120} placeholder="Book straight after you pay" />
+        </div>
+      </Field>
+      <Field label="Button label">
+        <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder="Start my 14 Day Reset" />
+      </Field>
+      <Field label="Consent checkbox text" hint="Beside the opt-in checkbox. Name the channels (email/SMS/WhatsApp).">
+        <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
+      </Field>
+      <Field label="Paid — title" hint="Shown once the plan is on their account.">
+        <Input value={block.done_title || ''} onChange={(v) => onUpdate({ done_title: v })} maxLength={120} placeholder="You're in 🎉" />
+      </Field>
+      <Field label="Paid — message">
+        <Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} />
+      </Field>
+      {isUn1tOnline && (
+        <Field label="Being confirmed — message" hint="Shown after un1t.online's checkout until the purchase is confirmed (up to about 15 minutes).">
+          <Textarea value={block.pending_body || ''} onChange={(v) => onUpdate({ pending_body: v })} maxLength={400} rows={2} />
+        </Field>
+      )}
+      {!isUn1tOnline && (
+        <Field
+          label="Glofox product granted after payment"
+          hint="REQUIRED. A €0 plan in Glofox for this trial (the money is taken here, not by Glofox). Until both ids are set the page sells nothing."
+        >
+          {planOptions.length > 0 ? (
+            <select
+              value={planKey}
+              onChange={(e) => setPlan(e.target.value)}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+            >
+              <option value="">— Not set (page sells nothing) —</option>
+              {planOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              value={planKey}
+              onChange={(v) => setPlan(v)}
+              maxLength={120}
+              placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode'}
+            />
+          )}
+        </Field>
+      )}
+      {isUn1tOnline && (
+        <Field
+          label="un1t.online product"
+          hint="The product in un1t.online. The price shown on /trial is the product's live price."
+        >
+          {paidProducts.length > 0 ? (
+            <select
+              value={productId}
+              onChange={(e) => onUpdate({ un1t_product_id: e.target.value })}
+              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+            >
+              <option value="">— Not set (page sells nothing) —</option>
+              {productId && !productKnown && <option value={productId}>{productId}</option>}
+              {paidProducts.map((p) => (
+                <option key={p.un1t_id} value={p.un1t_id}>{`${p.title} · €${centsToEuros(p.price_cents)}`}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              value={productId}
+              onChange={(v) => onUpdate({ un1t_product_id: v.trim() })}
+              maxLength={64}
+              placeholder={paidProductsLoading ? 'Loading un1t.online products…' : 'un1t.online product id'}
+            />
+          )}
+        </Field>
+      )}
+      <Field label="Already had a trial — message" hint="Shown when the buyer's email has had a trial at this studio.">
+        <Textarea value={block.trial_used_text || ''} onChange={(v) => onUpdate({ trial_used_text: v })} maxLength={500} rows={3} />
+      </Field>
+      <Field label="Already a member — message" hint="Shown when the buyer is already an active member.">
+        <Textarea value={block.active_member_text || ''} onChange={(v) => onUpdate({ active_member_text: v })} maxLength={500} rows={3} />
+      </Field>
+      <Field label="Help button label">
+        <Input value={block.help_cta_label || ''} onChange={(v) => onUpdate({ help_cta_label: v })} maxLength={40} placeholder="I need help" />
+      </Field>
+      <Field label="Help sent — message" hint="Shown after the buyer taps the help button.">
+        <Textarea value={block.help_sent_text || ''} onChange={(v) => onUpdate({ help_sent_text: v })} maxLength={400} rows={2} />
+      </Field>
+      {isUn1tOnline && (
+        <>
+          <Field
+            label="New account email — subject"
+            hint="Sent once the purchase is confirmed to a buyer whose un1t.online account we made, before un1t.online's set-password code. Blank uses the default."
+          >
+            <Input
+              value={block.account_email_subject || ''}
+              onChange={(v) => onUpdate({ account_email_subject: v })}
+              maxLength={200}
+              placeholder={PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject}
+            />
+          </Field>
+          <Field label="New account email — message" hint="Placeholders: {first_name}, {product_name}, {studio_name}.">
+            <Textarea
+              value={block.account_email_body || ''}
+              onChange={(v) => onUpdate({ account_email_body: v })}
+              maxLength={1000}
+              rows={4}
+            />
+          </Field>
+        </>
+      )}
+    </>
+  )
+}
+
+function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath }) {
   const bts = availableBookingTypes || []
   // Price is edited as a raw euros string (draft) and only coerced to integer
   // cents on write — a fully-controlled input re-derived from cents each
@@ -869,6 +1320,17 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId })
       <Field label="Class booked — message">
         <Textarea value={block.class_done_body || ''} onChange={(v) => onUpdate({ class_done_body: v })} maxLength={400} rows={2} />
       </Field>
+      {/* REGISTRYREAD.1a — shown when the timetable could not be read at the
+          moment someone books (the booking is not taken; their details stay
+          in the form). Blank keeps the default. */}
+      <Field label="Timetable unavailable — message" hint="Shown if we can't check the timetable when someone books. Leave blank for the default.">
+        <Textarea value={block.timetable_unavailable_message || ''} onChange={(v) => onUpdate({ timetable_unavailable_message: v })} maxLength={300} rows={2} placeholder={DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE} />
+      </Field>
+      <Field label="Button label" hint="On the buttons that scroll to this funnel (page header, sections, footer). Leave blank for the default.">
+        <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder={DEFAULT_CLASS_FUNNEL_CTA_LABEL} />
+      </Field>
+      <Un1tFunnelCopyFields block={block} onUpdate={onUpdate} />
+      <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} />
       <Field
         label="Trial product granted on booking"
         hint="Which Glofox membership/plan a NEW member gets on booking. Leave on the location default unless this funnel should grant a different intro offer."
@@ -1328,4 +1790,10 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
       {error && <p className="text-[11px] text-red-700">{error}</p>}
     </div>
   )
+}
+
+// W1.S1b — the embed snippet is HTML an operator pastes elsewhere; the brand
+// is operator text, so it is attribute-escaped.
+function escapeAttr(v) {
+  return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }

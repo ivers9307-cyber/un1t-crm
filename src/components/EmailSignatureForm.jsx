@@ -22,7 +22,7 @@ import { useState } from 'react'
 import { Check, AlertCircle, Loader2 } from 'lucide-react'
 import { MAX_SIGNATURE_LENGTH, SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
 import RichSignatureEditor from '@/components/account/RichSignatureEditor'
-import { markSignatureUpdated } from '@/components/tickets/SignatureHint'
+import { markSignatureUpdated } from '@/components/mail/SignatureHint'
 
 // MAIL-SIG.1 adds the structured rich signature as a section of this card
 // (RichSignatureEditor — toggle, fields, photo, links, sandboxed preview).

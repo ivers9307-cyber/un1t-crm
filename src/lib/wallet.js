@@ -8,9 +8,10 @@
 // write path — balance_cents is never edited directly, and the ledger
 // is append-only.
 //
-// BILLING-MONTH ASSUMPTION (v1): billing month = Dublin CALENDAR
-// month (period boundaries are the 1st, per dublinTodayStr()
-// conventions). When the Stripe top-up leg lands and subscriptions
+// BILLING-MONTH ASSUMPTION (v1): billing month = the PLATFORM's
+// calendar month (D5 = B, Richard 11 Oct 2026: PLATFORM_TZ =
+// Europe/Dublin for every tenant, whatever its own zone; period
+// boundaries are the 1st at 00:00 Irish time). When the Stripe top-up leg lands and subscriptions
 // get real billing anchors, the wallets/billing track revisits this —
 // nextPeriodStart/currentPeriodStart/shouldReset are the only places
 // that encode it.
@@ -24,7 +25,7 @@
 // exported for unit tests; DB access goes through an injected service
 // client so route handlers stay the only place that constructs one.
 
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, dayStartMsIn, formatInZone, canonicalZone, resolveZone, PLATFORM_TZ } from '@/lib/location-time'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -36,10 +37,10 @@ function assertDateStr(value, label) {
 
 /**
  * Pure: first day of the billing period containing a date.
- * Billing month = Dublin calendar month (v1 — see header).
+ * Billing month = the platform's calendar month (D5 — see header).
  *
- * @param {string} dateStr - 'YYYY-MM-DD' (Dublin business date — use
- *   dublinTodayStr() for "today", never a UTC-derived date string)
+ * @param {string} dateStr - 'YYYY-MM-DD' (a platform billing date — use
+ *   todayStrIn(PLATFORM_TZ) for "today", never a UTC-derived date string)
  * @returns {string} 'YYYY-MM-01'
  */
 export function currentPeriodStart(dateStr) {
@@ -74,14 +75,56 @@ export function nextPeriodStart(dateStr) {
  * same-day rerun (period_start already == this period) answers false.
  *
  * @param {{ period_start?: string|null }|null} wallet
- * @param {string} [todayDublin] - 'YYYY-MM-DD'; defaults to the Dublin
- *   business today (repo TZ convention — see CLAUDE.md)
+ * @param {string} [todayDublin] - 'YYYY-MM-DD'; defaults to today on the
+ *   platform billing calendar (D5: PLATFORM_TZ)
  * @returns {boolean}
  */
-export function shouldReset(wallet, todayDublin = dublinTodayStr()) {
+export function shouldReset(wallet, todayDublin = todayStrIn(PLATFORM_TZ)) { // D5: the platform billing calendar (PLATFORM_TZ)
   if (!wallet) return false
   if (!wallet.period_start) return true
   return String(wallet.period_start) < currentPeriodStart(todayDublin)
+}
+
+/**
+ * TZ.11a / D5 — the instant the wallet next resets: the 1st of the next
+ * billing month at 00:00 Irish time (PLATFORM_TZ). Pure.
+ *
+ * @param {string} todayStr - 'YYYY-MM-DD' on the platform billing calendar
+ * @returns {number} UTC ms
+ */
+export function walletResetMs(todayStr) {
+  return dayStartMsIn(nextPeriodStart(todayStr), PLATFORM_TZ)
+}
+
+/** Tenant-facing wording of the reset (D5). */
+export const WALLET_RESET_COPY = 'Resets on the 1st at 00:00 Irish time'
+
+/**
+ * TZ.11a / D5 — the next reset on a STUDIO's clock, e.g. '31 Oct, 20:00'
+ * for America/New_York, so a tenant UI can say "Resets on the 1st at 00:00
+ * Irish time (31 Oct, 20:00 your time)". null for a studio on the platform's
+ * own zone: 00:00 Irish time already is its time, so its text is unchanged.
+ * Pure.
+ *
+ * @param {string} todayStr - 'YYYY-MM-DD' on the platform billing calendar
+ * @param {string|null|undefined} zone - the studio's zone
+ * @returns {string|null}
+ */
+export function walletResetLocalLabel(todayStr, zone) {
+  const z = resolveZone(zone)
+  if (z === canonicalZone(PLATFORM_TZ)) return null
+  return formatInZone(walletResetMs(todayStr), z, {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  })
+}
+
+/**
+ * The tenant-facing sentence: "Resets on the 1st at 00:00 Irish time (31 Oct,
+ * 20:00 your time)." null on the platform's own zone (nothing new to say).
+ */
+export function walletResetNote(todayStr, zone) {
+  const local = walletResetLocalLabel(todayStr, zone)
+  return local ? `${WALLET_RESET_COPY} (${local} your time).` : null
 }
 
 /**

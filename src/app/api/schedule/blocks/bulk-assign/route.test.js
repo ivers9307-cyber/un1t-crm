@@ -13,19 +13,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
-  getUserLocationIds: vi.fn(),
-}))
+vi.mock('@/lib/auth', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    getCurrentUser: vi.fn(),
+    getUserLocationIds: vi.fn(),
+    // SCHEDROLES.1 — REAL: each block is judged by the role at its studio.
+    hasRoleAtLocation: real.hasRoleAtLocation,
+    hasRoleAtAnyLocation: real.hasRoleAtAnyLocation,
+  }
+})
+vi.mock('@/lib/roster-change-notify', () => ({ notifyRosterChanges: vi.fn(() => Promise.resolve({ notified: 0 })) }))
+// AVAIL.3 D1 — the availability read (src/lib/availability-leave.test.js pins its query).
+vi.mock('@/lib/availability-leave', () => ({ readAvailabilityLeave: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser, getUserLocationIds } = await import('@/lib/auth')
 const { POST } = await import('./route.js')
+const { notifyRosterChanges } = await import('@/lib/roster-change-notify')
+const { readAvailabilityLeave } = await import('@/lib/availability-leave')
+const { availabilityLeaveRows } = await import('@shared/unavailable-days')
 
 beforeEach(() => {
   createServerClient.mockReset()
   getCurrentUser.mockReset()
   getUserLocationIds.mockReset()
+  notifyRosterChanges.mockClear()
+  readAvailabilityLeave.mockReset()
+  readAvailabilityLeave.mockResolvedValue({ rows: [], error: null })
 })
 
 function buildRequest(body) {
@@ -38,9 +53,30 @@ function buildRequest(body) {
 // Mock supabase client backed by a fixture of blocks. Each insert
 // returns one row per requested row (id synthesised) — that's what
 // the production route does via .select() on the insert.
-function buildDb({ blocks, insertError = null, timeOff = [] }) {
+// `coachLocations`: the coach's profile_locations. Defaults to every block's
+// studio so the older cases below are about their own disposition only.
+function buildDb({ blocks, insertError = null, timeOff = [], coachLocations = null, coachLinksError = null,
+  // STAFFDELETE.1 — the coach's profiles row; default an active, living coach.
+  person = { id: 'coach', full_name: 'Coach', active: true, deleted_at: null }, personError = null }) {
+  const links = coachLocations ?? [...new Set((blocks || []).map((b) => b.location_id))]
+  const insertSpy = vi.fn()
+  const timeOffSpy = vi.fn()
   return {
+    insertSpy,
+    timeOffSpy,
     from: vi.fn((table) => {
+      if (table === 'profiles') {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: personError ? null : person, error: personError }) }) }) }
+      }
+      if (table === 'profile_locations') {
+        return {
+          select: () => ({
+            eq: () => Promise.resolve(coachLinksError
+              ? { data: null, error: coachLinksError }
+              : { data: links.map((location_id) => ({ location_id })), error: null }),
+          }),
+        }
+      }
       if (table === 'shift_blocks') {
         return {
           select: vi.fn().mockReturnThis(),
@@ -49,7 +85,7 @@ function buildDb({ blocks, insertError = null, timeOff = [] }) {
       }
       if (table === 'shift_assignments') {
         return {
-          insert: (rows) => ({
+          insert: (rows) => (insertSpy(rows), {
             select: () => Promise.resolve({
               data: insertError ? null : rows.map((r, i) => ({ id: `new-${i}`, block_id: r.block_id })),
               error: insertError,
@@ -58,6 +94,7 @@ function buildDb({ blocks, insertError = null, timeOff = [] }) {
         }
       }
       if (table === 'time_off_requests') {
+        timeOffSpy()
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
@@ -85,7 +122,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
     })
 
     it('403s for non-manager roles', async () => {
-      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff' })
+      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', profileRole: 'staff', rolesByLocation: { 'loc-1': 'staff' } })
       const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
       expect(res.status).toBe(403)
     })
@@ -93,7 +130,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
   describe('validation', () => {
     beforeEach(() => {
-      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master' })
+      getCurrentUser.mockResolvedValue({ id: 'u1', role: 'master', profileRole: 'master', rolesByLocation: {} })
     })
 
     it('400s on empty block_ids array', async () => {
@@ -115,7 +152,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
   describe('skip-with-reason dispositions', () => {
     beforeEach(() => {
-      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master' })
+      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master', profileRole: 'master', rolesByLocation: {} })
       getUserLocationIds.mockReturnValue(['loc-1'])
     })
 
@@ -135,7 +172,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
     })
 
     it('reports cross_location when non-master user lacks location access', async () => {
-      getCurrentUser.mockResolvedValue({ id: 'u-mgr', role: 'manager' })
+      getCurrentUser.mockResolvedValue({ id: 'u-mgr', role: 'manager', profileRole: 'manager', rolesByLocation: { 'loc-allowed': 'manager' } })
       getUserLocationIds.mockReturnValue(['loc-allowed'])
       createServerClient.mockReturnValue(buildDb({
         blocks: [
@@ -236,7 +273,7 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
 
   describe('happy path', () => {
     beforeEach(() => {
-      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master' })
+      getCurrentUser.mockResolvedValue({ id: 'u-master', role: 'master', profileRole: 'master', rolesByLocation: {} })
       getUserLocationIds.mockReturnValue([])
     })
 
@@ -284,5 +321,195 @@ describe('POST /api/schedule/blocks/bulk-assign', () => {
       const reasons = j.skipped.map((s) => s.reason).sort()
       expect(reasons).toEqual(['already_assigned', 'at_capacity'])
     })
+  })
+})
+
+describe('POST /api/schedule/blocks/bulk-assign — NOTIFY.1', () => {
+  it('notifies the coach once, covering only the blocks on a published roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master', profileRole: 'master', rolesByLocation: {} })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
+    expect(notifyRosterChanges.mock.calls[0][1]).toMatchObject({ locationId: 'loc-1', actorId: 'mgr-1' })
+    expect(notifyRosterChanges.mock.calls[0][1].changes).toEqual([
+      { coachId: PROFILE_A, blockId: VALID_UUID_A, blockDate: '2026-05-18', action: 'assigned' },
+    ])
+  })
+
+  it('does not notify when every assigned block is on a draft roster', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master', profileRole: 'master', rolesByLocation: {} })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'draft' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).not.toHaveBeenCalled()
+  })
+
+  it('notifies once per location when published blocks span two locations', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'mgr-1', role: 'master', profileRole: 'master', rolesByLocation: {} })
+    createServerClient.mockReturnValue(buildDb({
+      blocks: [
+        { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+        { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, rosters: { status: 'published' }, shift_assignments: [] },
+      ],
+    }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect((await res.json()).success).toBe(true)
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(2)
+    const callsByLocation = new Map(notifyRosterChanges.mock.calls.map(([, opts]) => [opts.locationId, opts]))
+    expect(callsByLocation.get('loc-1')).toMatchObject({
+      locationId: 'loc-1',
+      actorId: 'mgr-1',
+      changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_A, blockDate: '2026-05-18', action: 'assigned' }],
+    })
+    expect(callsByLocation.get('loc-2')).toMatchObject({
+      locationId: 'loc-2',
+      actorId: 'mgr-1',
+      changes: [{ coachId: PROFILE_A, blockId: VALID_UUID_B, blockDate: '2026-05-19', action: 'assigned' }],
+    })
+  })
+})
+
+// SCHEDROLES.1 — head coach at loc-1, plain staff at loc-2. Each block used to
+// be judged by `user.role` (the ACTIVE studio's) plus membership only.
+describe('POST /api/schedule/blocks/bulk-assign — role at each block\'s studio (SCHEDROLES.1)', () => {
+  const mixed = (active) => ({
+    id: 'mix', role: active === 'loc-1' ? 'head_coach' : 'staff', profileRole: 'staff',
+    activeLocation: { id: active },
+    rolesByLocation: { 'loc-1': 'head_coach', 'loc-2': 'staff' },
+  })
+  const blocks = [
+    { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, shift_assignments: [] },
+    { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, shift_assignments: [] },
+  ]
+
+  it('assigns the block at the managed studio and skips the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-1'))
+    getUserLocationIds.mockReturnValue(['loc-1', 'loc-2'])
+    createServerClient.mockReturnValue(buildDb({ blocks }))
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
+    expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'cross_location' }])
+  })
+
+  it('gives the same answer with the ACTIVE studio set to the one where the caller is staff', async () => {
+    getCurrentUser.mockResolvedValue(mixed('loc-2'))
+    getUserLocationIds.mockReturnValue(['loc-1', 'loc-2'])
+    createServerClient.mockReturnValue(buildDb({ blocks }))
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))
+    expect(res.status).toBe(200)
+    const j = await res.json()
+    expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
+    expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'cross_location' }])
+  })
+})
+
+// SCHEDROLES.1 — the coach must belong to each block's studio (master
+// included), checked before any leave read or insert.
+describe('POST /api/schedule/blocks/bulk-assign — coach must be at the block\'s studio (SCHEDROLES.1)', () => {
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', rolesByLocation: {} }
+  const blocks = [
+    { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, shift_assignments: [] },
+    { id: VALID_UUID_B, location_id: 'loc-2', block_date: '2026-05-19', max_coaches: 5, shift_assignments: [] },
+  ]
+
+  it('skips a block at a studio the coach is not on as not_at_location, even for master', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, coachLocations: ['loc-1'], timeOff: [{ type: 'holiday', start_date: '2026-05-19', end_date: '2026-05-19', profiles: { full_name: 'Someone Else' } }] })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned.map((a) => a.block_id)).toEqual([VALID_UUID_A])
+    expect(j.skipped).toEqual([{ block_id: VALID_UUID_B, reason: 'not_at_location' }])
+    expect(db.insertSpy).toHaveBeenCalledTimes(1)
+    expect(db.insertSpy.mock.calls[0][0].map((r) => r.block_id)).toEqual([VALID_UUID_A])
+  })
+
+  it('a coach at no studio of any requested block: nothing inserted and no leave read', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, coachLocations: ['loc-9'] })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned).toEqual([])
+    expect(j.skipped.every((x) => x.reason === 'not_at_location')).toBe(true)
+    expect(j.warnings ?? []).toEqual([])
+    expect(db.insertSpy).not.toHaveBeenCalled()
+    expect(db.timeOffSpy).not.toHaveBeenCalled()
+  })
+
+  it('fails closed (500, nothing inserted) when the membership read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, coachLinksError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
+    expect(res.status).toBe(500)
+    expect(db.insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// STAFFDELETE.1 review A — the same rule as every other write path.
+describe('POST /api/schedule/blocks/bulk-assign — a deactivated coach cannot be assigned', () => {
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', rolesByLocation: {} }
+  const blocks = [{ id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-05-18', max_coaches: 5, shift_assignments: [] }]
+
+  it('400 with what to do about it; nothing inserted, no leave read', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, person: { id: PROFILE_A, full_name: 'Former Coach', active: false, deleted_at: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('Former Coach is deactivated and cannot be rostered. Reactivate them in Settings > Staff first.')
+    expect(db.insertSpy).not.toHaveBeenCalled()
+    expect(db.timeOffSpy).not.toHaveBeenCalled()
+  })
+
+  it('fails closed (500) when the profile read errors', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const db = buildDb({ blocks, personError: { message: 'down' } })
+    createServerClient.mockReturnValue(db)
+    expect((await POST(buildRequest({ block_ids: [VALID_UUID_A], profile_id: PROFILE_A }))).status).toBe(500)
+    expect(db.insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+// AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day "can't
+// work" availability date warns on bulk assign like approved leave: once per
+// window, only when it touches an assigned date.
+describe('POST /api/schedule/blocks/bulk-assign — availability warns like leave (AVAIL.3 D1)', () => {
+  const MASTER = { id: 'boss', role: 'master', profileRole: 'master', rolesByLocation: {} }
+  const blocks = [
+    { id: VALID_UUID_A, location_id: 'loc-1', block_date: '2026-11-12', max_coaches: 5, shift_assignments: [] },
+    { id: VALID_UUID_B, location_id: 'loc-1', block_date: '2026-11-14', max_coaches: 5, shift_assignments: [] },
+  ]
+  const rule = (id, start, end) => ({ id, profile_id: PROFILE_A, kind: 'dated', start_date: start, end_date: end, all_day: true, note: null, profiles: { full_name: 'Coach One' } })
+
+  it('warns once for a "can\u2019t work" window covering an assigned date, not for one between them', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    readAvailabilityLeave.mockResolvedValue({ rows: availabilityLeaveRows([rule('u1', '2026-11-12', '2026-11-12'), rule('u2', '2026-11-13', '2026-11-13')]), error: null })
+    const db = buildDb({ blocks })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned).toHaveLength(2)
+    expect(j.warnings).toEqual(['Coach One can’t work from 2026-11-12 to 2026-11-12 (My availability)'])
+    expect(readAvailabilityLeave).toHaveBeenCalledWith(db, { profileIds: [PROFILE_A], startDate: '2026-11-12', endDate: '2026-11-14' })
+  })
+
+  it('a failed availability read still assigns (an advisory)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    readAvailabilityLeave.mockResolvedValue({ rows: null, error: { message: 'down' } })
+    const db = buildDb({ blocks })
+    createServerClient.mockReturnValue(db)
+    const j = await (await POST(buildRequest({ block_ids: [VALID_UUID_A, VALID_UUID_B], profile_id: PROFILE_A }))).json()
+    expect(j.assigned).toHaveLength(2)
+    expect(j.warnings).toContain('Could not check My availability from 2026-11-12 to 2026-11-14: confirm this coach can work before publishing')
   })
 })

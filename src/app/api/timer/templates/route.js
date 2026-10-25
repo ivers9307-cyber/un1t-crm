@@ -9,7 +9,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { validateStructure, buildTimeline } from '@/lib/class-timer'
@@ -26,7 +26,7 @@ const CreateSchema = z.object({
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const url = new URL(request.url)
@@ -36,6 +36,9 @@ export async function GET(request) {
   }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, locationId, 'class_timer')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data, error } = await db
@@ -50,7 +53,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const validation = await validateBody(request, CreateSchema)
@@ -59,6 +62,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, body.location_id, 'class_timer')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const v = validateStructure(body.structure)
   if (!v.ok) return NextResponse.json({ success: false, error: v.error }, { status: 400 })

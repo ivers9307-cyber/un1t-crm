@@ -18,6 +18,7 @@ import { View, Text, Pressable, TextInput, ActivityIndicator } from 'react-nativ
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 'shared/approvals-next-steps'
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from 'shared/approval-cards'
 import { decideApproval } from '../lib/inbox-approvals-api'
+import { failedCardExplanation } from '../lib/approval-outcome'
 
 // House tone-object idiom (see ISSUE_STATUS_TONE in mobile/lib/issues-api.js):
 // bg on the chip View, fg on the Text.
@@ -72,7 +73,10 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
       // CANCEL-FORM.6 — whether the member heard about a pause/cancellation decision.
       if (res.customer_notified) setNotified(res.customer_notified)
       if (status === 'declined') {
-        onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
+        // An empty draft (a refund_request: Mia already answered) must not
+        // overwrite what staff are typing.
+        const draft = buildDeclineDraft(request.kind, reason, ctx)
+        if (draft) onPrefillComposer?.(draft)
       }
     } catch {
       setError('Network error — try again')
@@ -83,6 +87,9 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
 
   const status = request.status
   const decided = status !== 'pending'
+  // C85 (c) — a failed execution in the operator's words (what went wrong and
+  // what to fix), not the raw `(CODE)` it used to print.
+  const failWhy = failedCardExplanation(request)
   const steps = decided
     ? getNextSteps(request.kind, status, ctx).filter(s => s.type === 'composer')
     : []
@@ -201,13 +208,13 @@ export default function ThreadApprovalCard({ request, contactFirstName, onDecide
           </View>
         )}
 
-        {decided && (request.decision_note || (request.details?.result?.message_code && status === 'failed')) && (
+        {decided && (request.decision_note || failWhy) && (
           <View className="mt-1.5">
             {request.decision_note ? (
               <Text className="text-xs text-un1t-subtle">{request.decision_note}</Text>
             ) : null}
-            {request.details?.result?.message_code && status === 'failed' ? (
-              <Text className="text-xs text-red-700"> ({request.details.result.message_code})</Text>
+            {failWhy ? (
+              <Text className="text-xs text-red-700">{failWhy}</Text>
             ) : null}
           </View>
         )}

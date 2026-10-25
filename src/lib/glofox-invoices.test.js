@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseInvoicePayload,
   recomputeContactLifetimeValue,
+  applyInvoiceWebhook,
 } from './glofox-invoices.js'
 
 // Sample INVOICE_UPDATED payload shape per the spec.
@@ -137,10 +138,12 @@ describe('parseInvoicePayload', () => {
 })
 
 // recomputeContactLifetimeValue uses Supabase chains we mock.
-function fakeDb({ invoices = [], updateOk = true } = {}) {
+function fakeDb({ invoices = [], updateOk = true, upsertOk = true } = {}) {
   const updates = []
+  const upserts = []
   return {
     updates,
+    upserts,
     from(table) {
       if (table === 'glofox_invoices') {
         // recomputeContactLifetimeValue now pages via selectAll:
@@ -154,6 +157,14 @@ function fakeDb({ invoices = [], updateOk = true } = {}) {
               }),
             }),
           }),
+          upsert(row) {
+            upserts.push(row)
+            return {
+              select: () => ({
+                single: () => Promise.resolve(upsertOk ? { data: row, error: null } : { data: null, error: { message: 'upsert fail' } }),
+              }),
+            }
+          },
         }
       }
       if (table === 'contacts') {
@@ -237,5 +248,19 @@ describe('recomputeContactLifetimeValue', () => {
       updateOk: false,
     })
     expect(await recomputeContactLifetimeValue(db, 'c1')).toBeNull()
+  })
+})
+
+describe('applyInvoiceWebhook', () => {
+  it('PAYLINK.4 — success return carries invoice_id, is_membership AND glofox_user_id (the invoice\'s own Glofox user id)', async () => {
+    const db = fakeDb({ invoices: [] })
+    const out = await applyInvoiceWebhook(db, 'loc1', 'c1', SAMPLE_EVENT)
+    expect(out).toMatchObject({
+      ok: true,
+      invoice_id: 'inv_001',
+      invoice_status: 'PAID',
+      is_membership: true,
+      glofox_user_id: 'usr_glofox_001',
+    })
   })
 })

@@ -1,12 +1,18 @@
 // EQUIP-MAINT.3 — Vercel cron, daily 06:00 UTC.
+// TZ.6 — the schedule is hourly; each location acts at its daily slot:
+// 06:00 UTC for a Europe/Dublin studio (as before), 06:00 local for any
+// other zone, at most once per local day (src/lib/cron-daily-slot.js). "Today"
+// is the location's own day.
 //
-// For each enabled location whose inspection weekday is today (Dublin),
+// For each enabled location whose inspection weekday is today (its own day),
 // count what is due and push it to everyone holding equipment_inspect.
 // Silent when the count is zero — a "nothing due" push trains people to
 // ignore the channel.
 //
 // Per-location error isolation: one bad location never stops the loop.
 // Push delivery is best-effort; sendPush returns counts and never throws.
+// A failed recipients read (recipients_failed) is not recorded or audited
+// as a sent reminder (C1 RECIPIENTS.1).
 //
 // Auth: CRON_SECRET Bearer, same as every other cron.
 
@@ -16,7 +22,7 @@ import { listEnabledSettings, listActiveEquipment, listSubmittedSince } from '@/
 import { isInspectionDay, selectOutstanding, buildReminderBody } from '@/lib/equipment-cron'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { gateDailySlot, slotFor, slotTickStampable } from '@/lib/cron-daily-slot'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn } from '@/lib/log'
 
@@ -33,8 +39,17 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const today = dublinTodayStr()
   const results = []
+
+  // TZ.6 — which locations are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'equipment-inspection-reminder', { module: 'equipment-cron' })
+  if (!gate.ok) return NextResponse.json({ success: false, error: 'locations unreadable', slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // TZ.6: a quiet tick (no slot taken) never stamps, so the row keeps the legacy
+    // clock; a faulted one (a claim write failed) answers 500 and the slot pages.
+    return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
+  }
 
   let settingsRows = []
   try {
@@ -45,6 +60,9 @@ export async function GET(request) {
   }
 
   for (const settings of settingsRows) {
+    const slot = slotFor(gate.slots, settings.location_id)
+    if (!slot) continue // TZ.6: not this location's slot
+    const today = slot.day
     if (!isInspectionDay(settings, today)) continue
     try {
       const [assets, submitted] = await Promise.all([
@@ -57,14 +75,34 @@ export async function GET(request) {
         continue
       }
 
-      await sendPushToRolesAtLocation(settings.location_id, ROLES, {
+      const r = await sendPushToRolesAtLocation(settings.location_id, ROLES, {
         title: 'Equipment inspections due',
         body: buildReminderBody(outstanding),
         data: { type: 'equipment_inspection' },
-        // Registered in MOBILE_PERMISSIONS — an unregistered category
-        // resolves false for every role but master.
-        category: 'notify_inspection_due',
+        // BARE — push.js prepends `notify_` itself, so this gates on
+        // notify_inspection_due (registered in MOBILE_PERMISSIONS). The
+        // prefixed form resolved notify_notify_…, which is unregistered
+        // and reaches no one but master (PUSHCAT.1).
+        category: 'inspection_due',
       })
+
+      // C1 RECIPIENTS.1 — the recipients read failed (push.js logged it):
+      // nobody was told, so this is not a sent reminder and is not audited
+      // as one. The 19:00 UTC overdue sweep does chase the same assets
+      // today, but it notifies ONLY owner + master; this reminder goes to all
+      // six ROLES, including the staff who do the inspections. Those staff
+      // (and manager, head_coach, reception) are NOT re-chased the same day.
+      if (r?.recipients_failed) {
+        results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, recipients_failed: true })
+        continue
+      }
+      // C16 PUSHREADERR.1 — push.js could not read who may be told or their
+      // devices, and nobody was told: not a sent reminder, not audited as one.
+      // Someone told (a partial send under an unreadable template) still counts.
+      if (r?.read_failed && !((r.sent || 0) > 0)) {
+        results.push({ locationId: settings.location_id, due: outstanding.length, pushed: false, read_failed: true })
+        continue
+      }
 
       await logAuditEvent({
         category: 'business',
@@ -83,6 +121,8 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('equipment-inspection-reminder')
-  return NextResponse.json({ success: true, data: { today, locations: results } })
+  if (slotTickStampable(gate)) {
+    await stampHeartbeat('equipment-inspection-reminder')
+  }
+  return NextResponse.json({ success: !gate.faulted, data: { locations: results, slot: gate.summary } }, { status: gate.faulted ? 500 : 200 })
 }

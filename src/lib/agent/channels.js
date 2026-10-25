@@ -11,6 +11,7 @@
 // platform.
 
 import { createServerClient } from '@/lib/supabase'
+import { SECRET_MASK, maskSecretKeysDeep } from '@/lib/secret-keys'
 
 export const META_GRAPH_VERSION = 'v21.0'
 export const META_GRAPH_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`
@@ -29,14 +30,16 @@ export const SUPPORTED_PLATFORMS = Object.freeze(['instagram', 'messenger'])
 export const SECRET_FIELDS = Object.freeze(['access_token', 'app_secret'])
 
 /**
- * Mask a secret for display: keep the last `keep` chars behind dots.
- * Returns null for empty input. Pure.
+ * Mask a secret for display: presence only. Returns null for empty input and
+ * the fixed mask otherwise. Pure.
+ *
+ * SECFIX.3a (review S1) — it used to keep the last 6 characters as a hint.
+ * No character of a stored credential leaves the server now; the card shows
+ * "Connected" (has_access_token) and a password field of dots.
  */
-export function maskSecret(value, keep = 6) {
+export function maskSecret(value) {
   if (!value) return null
-  const s = String(value)
-  if (s.length <= keep) return '••••••'
-  return `••••••${s.slice(-keep)}`
+  return SECRET_MASK
 }
 
 /** Is a submitted secret a real new value (vs blank or the masked echo)? */
@@ -51,10 +54,18 @@ export function isFreshSecret(value) {
 /**
  * Shape a DB row for the browser: mask every secret field and add a
  * has_<field> boolean so the UI can show "set / not set". Pure.
+ *
+ * SECFIX.3a (review S1) — the two columns were not the only secrets on a
+ * row: the registry (connection-registry.js) keeps whatever a provider's
+ * legacy slice holds beyond its mapped columns in `config`, which for Glofox
+ * is the api_token. So every secret-named key at any depth (mig 647's rule,
+ * src/lib/secret-keys.js) is masked first, then the columns get their
+ * null-when-empty mask and has_ flags (added last: `has_access_token` itself
+ * ends in "token" and would otherwise be masked).
  */
 export function maskConnectionRow(row) {
   if (!row) return row
-  const out = { ...row }
+  const out = { ...maskSecretKeysDeep(row) }
   for (const f of SECRET_FIELDS) {
     out[`has_${f}`] = !!row[f]
     out[f] = maskSecret(row[f])
@@ -83,9 +94,14 @@ export function buildConnectionPatch(body, opts = {}) {
   // A freshly pasted access token is a NEW token — the stored lifecycle
   // stamps (mig 408) describe the old one. Null them so nothing reads a
   // stale expiry as current; the weekly refresh cron repopulates them.
+  // Same for the hub health stamps: an auth error flagged by the IG crons
+  // or the DM send path described the old token, and no sweep clears a
+  // non-expiry last_error, so without this a reconnect stayed red forever.
   if (patch.access_token) {
     patch.token_expires_at = null
     patch.token_refreshed_at = null
+    patch.status = 'connected'
+    patch.last_error = null
   }
   return patch
 }
@@ -145,17 +161,23 @@ export async function resolveChannelConnection(locationId, platform, db = null) 
 /**
  * Reverse lookup for inbound webhooks: which location owns this Meta
  * account id on this platform? Returns { locationId, connection } | null.
+ * THROWS on a query error (W0.14) — null means "no active row", never
+ * "the read failed".
  */
 export async function resolveLocationByExternalAccount(platform, externalAccountId, db = null) {
   if (!platform || !externalAccountId) return null
   const client = db || createServerClient()
-  const { data } = await client.from('channel_connections')
+  const { data, error } = await client.from('channel_connections')
     .select('*')
     .eq('platform', platform)
     .eq('external_account_id', externalAccountId)
     .eq('is_active', true)
     .limit(1)
     .maybeSingle()
+  // W0.14 — a failed read is NOT "unmatched": the caller has already claimed
+  // the dedup row, so swallowing this made Meta's retry a no-op and lost the
+  // message for good. Throw so the webhook answers non-2xx and Meta retries.
+  if (error) throw new Error(`channel_connections lookup failed: ${error.message}`)
   if (!data) return null
   return { locationId: data.location_id, connection: data }
 }

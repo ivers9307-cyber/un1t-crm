@@ -78,6 +78,9 @@ export const STG_B2 = tid('57b2')
 export const TPL_A = tid('7e0a') // contract template, org-scoped
 export const TPL_B = tid('7e0b')
 
+export const EMT_A1 = tid('e3a1') // email template (campaigns.template_id) at A1
+export const EMT_B1 = tid('e3b1')
+
 export const SHT_A1 = tid('5fa1') // shift template (assistant tools)
 export const SHT_B1 = tid('5fb1')
 
@@ -113,10 +116,10 @@ export const P_STAFF_B2 = tid('90b2')
 export const P_ORGADMIN_A = tid('9ada')
 export const P_MASTER = tid('9a57')
 
-// Raw bearer tokens. LEGACY_KEY stands in for the shared CRM_API_KEY
-// (tests stub the env to it — unscoped BY DESIGN until n8n migrates);
-// the unitk_ keys resolve against the api_keys rows by real SHA-256.
-export const LEGACY_KEY = 'legacy-shared-crm-key-abcdefabcdefabcdefabcdefabcdefabcdef0123'
+// Raw bearer tokens. The unitk_ keys resolve against the api_keys rows by
+// real SHA-256. RETIRED_SHARED_KEY has the shape of the shared integration
+// key APIKEYS.4 removed; tests stub the old env var to it and expect a 401.
+export const RETIRED_SHARED_KEY = 'abcdef0123456789'.repeat(4)
 export const ORG_A_KEY = 'unitk_' + 'a'.repeat(40)
 export const ORG_B_KEY = 'unitk_' + 'b'.repeat(40)
 
@@ -127,7 +130,7 @@ export const ORG_B_KEY = 'unitk_' + 'b'.repeat(40)
 const locRow = (id, orgId, name) => ({ id, organization_id: orgId, name, slug: name.toLowerCase().replace(/ /g, '-'), active: true })
 
 export function makeWorld() {
-  return {
+  const world = {
     organizations: [
       { id: ORG_A, name: 'Org A', slug: 'org-a', active: true },
       { id: ORG_B, name: 'Org B', slug: 'org-b', active: true },
@@ -211,6 +214,12 @@ export function makeWorld() {
       { id: TASK_B2, location_id: LOC_B2, kind: 'task', type: 'task', subject: 'Task B-Two', status: 'todo', contact_id: null, assignee_id: null, created_at: '2026-06-04T00:00:00Z' },
     ],
     notes: [],
+    // W0.1b — campaigns.template_id references these; one per org so a
+    // cross-org template reference has something real to point at.
+    email_templates: [
+      { id: EMT_A1, location_id: LOC_A1, name: 'Template A-One', subject: 'A1', category: 'general', created_at: '2026-05-01T00:00:00Z', updated_at: '2026-05-01T00:00:00Z' },
+      { id: EMT_B1, location_id: LOC_B1, name: 'Template B-One', subject: 'B1', category: 'general', created_at: '2026-05-02T00:00:00Z', updated_at: '2026-05-02T00:00:00Z' },
+    ],
     contract_templates: [
       { id: TPL_A, organization_id: ORG_A, name: 'Org A Contract', description: null, body_markdown: 'ORG A SALARY TERMS', variables_schema: [], employment_type: null, version: 1, active: true, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: TPL_B, organization_id: ORG_B, name: 'Org B Contract', description: null, body_markdown: 'ORG B SALARY TERMS', variables_schema: [], employment_type: null, version: 1, active: true, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },
@@ -274,6 +283,20 @@ export function makeWorld() {
       },
     ],
   }
+  // ORGCONTACTS.2 (mig 764/765) — every contact has a contact_studios row at
+  // its own studio, and public.studio_contacts is that join (what the
+  // contacts list and /api/contacts/search read, filtered on studio_location_id).
+  world.contact_studios = world.contacts.map((c) => ({
+    contact_id: c.id, location_id: c.location_id, kind: 'lead', status: 'active', source: 'deal',
+    stage_slug: c.pipeline_stage_slug ?? null, first_seen_at: c.created_at, last_seen_at: null, ended_at: null,
+  }))
+  world.studio_contacts = world.contact_studios.map((r) => ({
+    ...world.contacts.find((c) => c.id === r.contact_id),
+    studio_location_id: r.location_id, studio_kind: r.kind, studio_status: r.status, studio_source: r.source,
+    studio_stage_slug: r.stage_slug, studio_first_seen_at: r.first_seen_at, studio_last_seen_at: r.last_seen_at,
+    studio_is_crossover: false,
+  }))
+  return world
 }
 
 // ─── the in-memory supabase double ───────────────────────────────────
@@ -301,11 +324,13 @@ function splitOrClauses(str) {
 // One or() clause → predicate. Supports col.ilike.pat / col.eq.val /
 // col.in.(a,b) / col.is.null — the forms the covered routes emit.
 function orClausePredicate(clause, colVal) {
-  const m = clause.match(/^([^.]+(?:\.[^.]+)*?)\.(ilike|eq|in|is)\.(.*)$/)
+  const m = clause.match(/^([^.]+(?:\.[^.]+)*?)\.(ilike|eq|neq|in|is)\.(.*)$/)
   if (!m) return () => false
   const [, col, op, rest] = m
   if (op === 'ilike') { const rx = ilikeToRegExp(rest); return (r) => { const v = colVal(r, col); return v != null && rx.test(String(v)) } }
   if (op === 'eq') return (r) => String(colVal(r, col)) === rest
+  // neq as Postgres evaluates it: a NULL never satisfies it (applyAudienceFilter adds the `is.null` disjunct itself).
+  if (op === 'neq') return (r) => { const v = colVal(r, col); return v != null && String(v) !== rest }
   if (op === 'is') return (r) => (colVal(r, col) ?? null) === (rest === 'null' ? null : rest === 'true')
   if (op === 'in') {
     const vals = rest.replace(/^\(/, '').replace(/\)$/, '').split(',').map((s) => s.trim()).filter(Boolean)

@@ -61,6 +61,9 @@ export async function importClassKnowledge(db, locationId, { updatedBy = null } 
   const { glofoxCredentialsForLocation, fetchUpcomingEvents } = await import('@/lib/glofox')
 
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not connected". The
+  // weekly cron skips not-connected locations silently; this one it lists.
+  if (creds?.readError) return { ok: false, reason: creds.readError }
   if (!creds?.branchId || !creds?.apiKey || !creds?.apiToken) {
     return { ok: false, reason: 'glofox_not_connected' }
   }

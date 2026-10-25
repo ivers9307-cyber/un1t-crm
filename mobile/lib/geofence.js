@@ -36,52 +36,143 @@ async function writeQueue(q) {
   try { await SecureStore.setItemAsync(QUEUE_KEY, JSON.stringify(q.slice(-QUEUE_MAX))) } catch {}
 }
 
+function newItemId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+// Items queued before ARRIVAL.2 have no id; their location + time is unique enough.
+const itemKey = (item) => item?.id || `${item?.location_id}|${item?.entered_at}`
+
 export async function enqueueCheckin(locationId) {
   const q = await readQueue()
-  q.push({ location_id: locationId, entered_at: new Date().toISOString() })
+  q.push({ id: newItemId(), location_id: locationId, entered_at: new Date().toISOString() })
   await writeQueue(q)
 }
 
-/** POST every queued check-in; keep whatever still fails. */
-export async function flushQueue() {
-  const q = await readQueue()
-  if (q.length === 0) return
-  const remaining = []
-  for (const item of q) {
-    try {
-      const res = await api('/api/attendance/geofence-checkin', {
-        method: 'POST',
-        locationId: item.location_id,
-        body: item,
-      })
-      // Server-rejected (4xx → success:false with a real error) is
-      // terminal — retrying an exempt/disabled ping forever is noise.
-      // Transient failures stay queued, via three channels:
-      //   1. api()'s own envelopes, tagged transport:true (SONOSMOB.4c):
-      //      a dropped fetch (no status) or a non-JSON body (status
-      //      carried). Only a non-JSON 5xx is transient — an edge error
-      //      page; a non-JSON 4xx is an HTML 404 off a wrong base URL and
-      //      retrying it forever is the noise this guard exists to stop.
-      //      GEOFENCE-TRANSPORT.1 — this used to regex the error STRING
-      //      ("^Network error", "^Non-JSON response \(5\d\d\)"), which
-      //      silently stops matching if api() ever rewords its message.
-      //   2. "HTTP 5xx" for a bare non-2xx JSON without our envelope —
-      //      that one reached the server, so api() deliberately leaves it
-      //      untagged and the status lives only in the string.
-      //   3. The checkin route's own 503s carry transient:true in the
-      //      envelope (their error string is a raw DB message, so it
-      //      can't be sniffed) — api() passes the flag through verbatim.
-      const transportBlip =
-        res.transport === true && !(res.status >= 400 && res.status < 500)
-      if (
-        !res.success &&
-        (res.transient === true ||
-          transportBlip ||
-          /^HTTP 5\d\d/.test(res.error || ''))
-      ) remaining.push(item)
-    } catch { remaining.push(item) }
+/** POST one queued check-in. Returns true when it should stay queued. */
+async function shouldKeep(item) {
+  try {
+    const res = await api('/api/attendance/geofence-checkin', {
+      method: 'POST',
+      locationId: item.location_id,
+      body: item,
+    })
+    // Server-rejected (4xx → success:false with a real error) is
+    // terminal — retrying an exempt/disabled ping forever is noise.
+    // Transient failures stay queued, via three channels:
+    //   1. api()'s own envelopes, tagged transport:true (SONOSMOB.4c):
+    //      a dropped fetch (no status) or a non-JSON body (status
+    //      carried). Only a non-JSON 5xx is transient — an edge error
+    //      page; a non-JSON 4xx is an HTML 404 off a wrong base URL and
+    //      retrying it forever is the noise this guard exists to stop.
+    //      GEOFENCE-TRANSPORT.1 — this used to regex the error STRING
+    //      ("^Network error", "^Non-JSON response \(5\d\d\)"), which
+    //      silently stops matching if api() ever rewords its message.
+    //   2. "HTTP 5xx" for a bare non-2xx JSON without our envelope —
+    //      that one reached the server, so api() deliberately leaves it
+    //      untagged and the status lives only in the string.
+    //   3. The checkin route's own 503s carry transient:true in the
+    //      envelope (their error string is a raw DB message, so it
+    //      can't be sniffed) — api() passes the flag through verbatim.
+    const transportBlip =
+      res.transport === true && !(res.status >= 400 && res.status < 500)
+    return !res.success && (
+      res.transient === true ||
+      transportBlip ||
+      /^HTTP 5\d\d/.test(res.error || '')
+    )
+  } catch {
+    return true
   }
-  await writeQueue(remaining)
+}
+
+let drainGeneration = 0
+
+async function drainQueue(generation) {
+  // ARRIVAL.2 — a second pass picks up check-ins enqueued while the first was
+  // posting. Three passes bound the loop if the phone keeps re-entering.
+  for (let pass = 0; pass < 3; pass++) {
+    // ARRIVAL.2 review round 2 — a drain that lost the race to the budget
+    // timer (see runDrainWithBudget) keeps running in the background; its
+    // caller has already moved on and possibly started a NEWER drain. This
+    // stale drain must never write — worst case an item it already posted
+    // stays queued and gets re-posted next pass, a duplicate the server
+    // dedups, which beats it clobbering state a newer drain just wrote.
+    if (generation !== drainGeneration) return
+    const q = await readQueue()
+    if (q.length === 0) return
+    const taken = new Set(q.map(itemKey))
+    const remaining = []
+    for (const item of q) {
+      if (await shouldKeep(item)) remaining.push(item)
+    }
+    if (generation !== drainGeneration) return
+    // Re-read before writing: the old code wrote `remaining` over the queue
+    // and silently dropped anything the background task added meanwhile.
+    const latest = await readQueue()
+    const added = latest.filter((item) => !taken.has(itemKey(item)))
+    await writeQueue([...remaining, ...added])
+    if (added.length === 0) return
+  }
+}
+
+const FLUSH_BUDGET_MS = 25_000
+
+let inFlight = null
+// A flushQueue() call that arrives while a drain is already running sets
+// this instead of starting a second one; the running drain checks it once
+// it finishes and, if set, runs exactly one more pass before resolving —
+// so a caller that enqueued late still gets its item posted in THIS call,
+// not stranded until the next unrelated flush. One flag, not a counter:
+// any number of calls arriving mid-drain coalesce into a single follow-up.
+let rerunRequested = false
+
+async function runDrainWithBudget(budgetMs) {
+  for (;;) {
+    // A fresh generation per drain attempt — including a rerun pass, which
+    // must NOT reuse the generation it's replacing (it is the current
+    // legitimate drain, not the stale one the budget timer walked away
+    // from).
+    const generation = ++drainGeneration
+    let timer
+    const budget = new Promise((resolve) => { timer = setTimeout(resolve, budgetMs) })
+    try {
+      // api() has no timeout of its own, so a stuck POST (the OS suspending
+      // the app mid-fetch is the real case) would otherwise wedge
+      // drainQueue() forever — and every caller shares this one promise, so
+      // a hang here would stall syncGeofences (which awaits the flush
+      // before region sync) and LocationGate right along with it. Racing a
+      // budget means the abandoned drain's eventual write can still land
+      // after we've moved on; that's an accepted rare duplicate post, and
+      // the server dedups it — the generation check above just keeps it
+      // from overwriting whatever a newer drain wrote in the meantime.
+      await Promise.race([drainQueue(generation), budget])
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!rerunRequested) return
+    rerunRequested = false
+  }
+}
+
+/**
+ * POST every queued check-in; keep whatever still fails.
+ * ARRIVAL.2 — single-flight. Four callers can flush at once (the background
+ * task, syncGeofences, the app layout and LocationGate); running them in
+ * parallel posted the same arrival twice, 100 ms apart, which is how one
+ * arrival stamped two shifts on 16 Sep. Every caller now awaits one drain.
+ * This only coalesces callers inside THIS JS runtime — an Android headless
+ * task runs in a separate JS context from the foreground app, so duplicates
+ * across the two are not deduped here; that's the server's job (PR #1694).
+ * `budgetMs` is for tests only; real callers never pass it.
+ */
+export function flushQueue({ budgetMs = FLUSH_BUDGET_MS } = {}) {
+  if (inFlight) {
+    rerunRequested = true
+    return inFlight
+  }
+  inFlight = runDrainWithBudget(budgetMs).finally(() => { inFlight = null })
+  return inFlight
 }
 
 // ── Background task — MUST be at module top level ──────────────────

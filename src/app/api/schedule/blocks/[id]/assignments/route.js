@@ -22,17 +22,27 @@
 // so an admin override ("we really do need a 16th coach today") stays
 // possible by passing { allow_over_capacity: true }.
 //
+// SCHEDROLES.1 — authority is the caller's role at the BLOCK's location, not
+// `user.role` (the ACTIVE studio's). The pre-check is only "manages
+// somewhere"; the real decision runs once the block is loaded.
+//
 // Time-off conflicts are surfaced as warnings (advisory; mirrors the
 // legacy /api/schedule/shifts POST), not a hard block.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
-import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { notifyRosterChanges } from '@/lib/roster-change-notify'
+import { isLiveAssignment, liveAssignments } from '@/lib/roster'
+import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
+import { findShiftOverlaps } from '@/lib/shift-overlaps'
+import { readAvailabilityLeave } from '@/lib/availability-leave'
+import { leaveWarningLine, availabilityUncheckedLine } from '@shared/unavailable-days'
+import { logWarn } from '@/lib/log'
 
 const AssignSchema = z.object({
   profile_id: uuidLike.optional(),
@@ -52,7 +62,7 @@ const ASSIGNMENT_SELECT = `
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -66,7 +76,7 @@ export async function POST(request, props) {
   // Block lookup — also our location-ownership gate.
   const { data: block, error: blockErr } = await db
     .from('shift_blocks')
-    .select('id, location_id, block_date, max_coaches, start_time, end_time, roster_id, rosters:roster_id(status), shift_assignments(count)')
+    .select('id, location_id, block_date, max_coaches, start_time, end_time, roster_id, rosters:roster_id(status)')
     .eq('id', params.id)
     .single()
 
@@ -74,31 +84,104 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Block not found' }, { status: 404 })
   }
 
-  if (user.role !== 'master') {
-    const userLocationIds = getUserLocationIds(user)
-    if (!userLocationIds.includes(block.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
+  // SCHEDROLES.1 — an outsider to the block's studio gets 404 (the id is not
+  // confirmed); a member who is not a manager THERE gets 403. Master bypasses
+  // both inside the helpers.
+  const notHere = assertLocationAccessOr404(user, block.location_id)
+  if (notHere) return notHere
+  if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   // Normalise to an array; dedupe so a doubled-up client send doesn't
   // produce ambiguous outcomes.
-  const requestedIds = isLegacySingle
+  const allRequestedIds = isLegacySingle
     ? [body.profile_id]
     : Array.from(new Set(body.profile_ids))
 
+  // SCHEDROLES.1 — only a coach who belongs to the BLOCK's studio can be put
+  // on it, master included. Checked before any leave or double-booking read
+  // and before the insert, so a foreign profile id never produces a warning
+  // naming someone at another studio, their leave, or their other shifts.
+  // Fail closed: an unreadable membership list assigns nobody.
+  const { data: memberRows, error: memberErr } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .eq('location_id', block.location_id)
+    .in('profile_id', allRequestedIds)
+  if (memberErr) {
+    return NextResponse.json({ success: false, error: memberErr.message }, { status: 500 })
+  }
+  const membersHere = new Set((memberRows || []).map((r) => r.profile_id))
+  if (isLegacySingle && !membersHere.has(body.profile_id)) {
+    return NextResponse.json(
+      { success: false, error: 'This coach is not on the staff of this studio.' },
+      { status: 400 },
+    )
+  }
+  // STAFFDELETE.1 — the same rule as every other write path
+  // (isRosterableProfile): a deactivated or permanently deleted coach cannot
+  // be put on a shift, even while still linked to the studio. Members only, so
+  // nothing about a foreign profile is read. Fail closed on a read error.
+  const memberIds = allRequestedIds.filter((id) => membersHere.has(id))
+  const peopleById = new Map()
+  if (memberIds.length > 0) {
+    const { data: people, error: peopleErr } = await db
+      .from('profiles')
+      .select('id, full_name, active, deleted_at')
+      .in('id', memberIds)
+    if (peopleErr) {
+      return NextResponse.json({ success: false, error: peopleErr.message }, { status: 500 })
+    }
+    for (const p of people || []) peopleById.set(p.id, p)
+  }
+  const notRosterableIds = memberIds.filter((id) => !isRosterableProfile(peopleById.get(id)))
+  if (isLegacySingle && notRosterableIds.includes(body.profile_id)) {
+    return NextResponse.json(
+      { success: false, error: notRosterableError(peopleById.get(body.profile_id)).message },
+      { status: 400 },
+    )
+  }
+  const requestedIds = memberIds.filter((id) => !notRosterableIds.includes(id))
+
   // Who's already on this block? Skip them silently — same posture
   // as bulk-assign. Pulled once up-front to avoid an N+1.
-  const { data: existingAssigns } = await db
+  //
+  // ROSTER-FIX.1 — this used to read profile_id only, and capacity came from
+  // a `shift_assignments(count)` embed, so a CANCELLED row (an approved
+  // swap-drop tombstone, pre-D4) both consumed a slot and made the coach look
+  // already-assigned — the block was full of people who weren't working it and
+  // the dropped coach could never be put back on.
+  //
+  // ROSTER-FIX.1 — the error is checked, not discarded. A failed read here
+  // resolves `data: null`, which reads as "the block is empty": every coach
+  // clears the capacity gate, nothing looks already-assigned, and the
+  // tombstone map is empty so a re-assign hits the unique key instead. Fail
+  // the request the way the block lookup above does.
+  const { data: existingAssigns, error: existingErr } = await db
     .from('shift_assignments')
-    .select('profile_id')
+    .select('id, profile_id, status')
     .eq('block_id', params.id)
-  const alreadyAssignedIds = new Set((existingAssigns || []).map((a) => a.profile_id))
 
-  let runningCount = block.shift_assignments?.[0]?.count ?? 0
+  if (existingErr) {
+    return NextResponse.json({ success: false, error: existingErr.message }, { status: 400 })
+  }
+
+  const liveExisting = liveAssignments(existingAssigns)
+  const alreadyAssignedIds = new Set(liveExisting.map((a) => a.profile_id))
+  // Tombstone → its row id. Cleared just before the insert so the
+  // (block_id, profile_id) unique key doesn't fire on the re-assign.
+  const cancelledByProfile = new Map(
+    (existingAssigns || []).filter((a) => !isLiveAssignment(a)).map((a) => [a.profile_id, a.id]),
+  )
+
+  let runningCount = liveExisting.length
 
   const assigned = []
-  const skipped = []
+  const skipped = allRequestedIds
+    .filter((id) => !membersHere.has(id))
+    .map((id) => ({ profile_id: id, reason: 'not_at_location' }))
+  for (const id of notRosterableIds) skipped.push({ profile_id: id, reason: 'not_rosterable' })
   const warnings = []
 
   for (const profileId of requestedIds) {
@@ -112,6 +195,7 @@ export async function POST(request, props) {
     }
 
     // Per-coach time-off advisory. Mirrors the legacy shifts POST.
+    // `profileId` is a verified member of the block's studio (above).
     const { data: timeOff } = await db
       .from('time_off_requests')
       .select('type, start_date, end_date, profiles!profile_id(full_name)')
@@ -119,8 +203,33 @@ export async function POST(request, props) {
       .eq('status', 'approved')
       .lte('start_date', block.block_date)
       .gte('end_date', block.block_date)
-    for (const t of timeOff || []) {
-      warnings.push(`${t.profiles?.full_name} has approved ${t.type} from ${t.start_date} to ${t.end_date}`)
+    // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day
+    // "can't work" availability date warns like approved leave. Advisory:
+    // a failed read never blocks the assign, and it SAYS it could not check
+    // (a silent miss would read as "free that day").
+    const { rows: unavailable, error: availErr } = await readAvailabilityLeave(db, {
+      profileIds: [profileId], startDate: block.block_date, endDate: block.block_date,
+    })
+    for (const t of [...(timeOff || []), ...(unavailable || [])]) {
+      warnings.push(leaveWarningLine(t.profiles?.full_name, t))
+    }
+    if (availErr) {
+      logWarn('schedule-assign', 'availability read failed; assigned without the can\'t-work check', { blockId: block.id, err: availErr.message })
+      warnings.push(availabilityUncheckedLine(block.block_date, block.block_date))
+    }
+
+    // ROSTER-FIX.1 — clear this coach's tombstone first; the unique key is on
+    // (block_id, profile_id) and does not care that the old row is cancelled.
+    const tombstoneId = cancelledByProfile.get(profileId)
+    if (tombstoneId) {
+      const { error: delErr } = await db.from('shift_assignments').delete().eq('id', tombstoneId)
+      if (delErr) {
+        // Say so rather than let the insert fail as a misleading
+        // "already_assigned" — the operator needs to know the row is stuck.
+        skipped.push({ profile_id: profileId, reason: delErr.message || 'tombstone_clear_failed' })
+        continue
+      }
+      cancelledByProfile.delete(profileId)
     }
 
     const { data: ins, error: insErr } = await db
@@ -154,36 +263,32 @@ export async function POST(request, props) {
   // SCHEDULE-DOUBLE-BOOKING.1 — advisory: a coach can't be in two places
   // at once. Warn (don't block, same posture as the time-off advisory)
   // when a coach we just assigned already has an overlapping shift on the
-  // same date, at ANY location. Best-effort — never fails the assignment.
+  // same date, at any studio OF THIS ORGANISATION. Best-effort — never fails
+  // the assignment.
+  //
+  // ORGSCOPE.1 — this read was open ("any location"). Nothing keeps a coach
+  // inside one organisation, and the warning prints the other shift's name,
+  // times and studio, so an open read showed one tenant another tenant's
+  // roster. Scope: this studio plus its organisation's other studios.
+  // Unreadable siblings narrow the check to this studio (logged); they never
+  // widen it and never touch the assignment that already succeeded.
   const assignedIds = assigned.map((a) => a.profile_id).filter(Boolean)
   if (assignedIds.length > 0 && block.start_time && block.end_time) {
-    try {
-      const { data: clashes } = await db
-        .from('shift_assignments')
-        .select('profile_id, shift_blocks!inner(start_time, end_time, block_date, shift_templates(name), locations(name)), profiles:profile_id(full_name)')
-        .in('profile_id', assignedIds)
-        .eq('shift_blocks.block_date', block.block_date)
-        .neq('block_id', params.id)
-      for (const c of clashes || []) {
-        const ob = c.shift_blocks
-        if (ob && timeRangesOverlap(block.start_time, block.end_time, ob.start_time, ob.end_time)) {
-          const who = c.profiles?.full_name || 'This coach'
-          const tpl = ob.shift_templates?.name || 'another shift'
-          const loc = ob.locations?.name ? ` at ${ob.locations.name}` : ''
-          warnings.push(`${who} is already on ${tpl} ${fmtTime(ob.start_time)}–${fmtTime(ob.end_time)}${loc} that day — overlaps this shift.`)
-        }
-      }
-    } catch {
-      // Advisory only — a double-booking check failure must never block
-      // the assignment that already succeeded.
-    }
+    // BLOCKEDIT.1 review 4 — the check is shared with the shift editor
+    // (src/lib/shift-overlaps.js). Advisory only, never throws.
+    const { clashes } = await findShiftOverlaps(db, {
+      locationId: block.location_id,
+      blockId: params.id,
+      blockDate: block.block_date,
+      windows: assignedIds.map((profileId) => ({ profileId, start_time: block.start_time, end_time: block.end_time })),
+      logTag: 'schedule-assign',
+    })
+    for (const c of clashes) warnings.push(c.text)
   }
 
-  // SCHEDULE-CHANGE-LOG.1 — if this block belongs to a published roster,
-  // record each new assignment as a post-publish change so the next
-  // re-publish re-notifies the affected coach. Best-effort (logRosterChange
-  // no-ops on a draft roster and never throws).
-  if (block.rosters?.status === 'published') {
+  // SCHEDULE-CHANGE-LOG.1 — record each new assignment on a published roster
+  // (audit, and the re-publish safety net). NOTIFY.1 — and tell the coach now.
+  if (block.rosters?.status === 'published' && assignedIds.length > 0) {
     for (const coachId of assignedIds) {
       await logRosterChange(db, {
         isPublished: true,
@@ -195,6 +300,11 @@ export async function POST(request, props) {
         action: 'assigned',
       })
     }
+    await notifyRosterChanges(db, {
+      locationId: block.location_id,
+      actorId: user.id,
+      changes: assignedIds.map((coachId) => ({ coachId, blockId: block.id, blockDate: block.block_date, action: 'assigned' })),
+    })
   }
 
   // Legacy single-coach response shape — preserve byte-for-byte so
@@ -215,7 +325,11 @@ export async function POST(request, props) {
       )
     }
     if (skip?.reason === 'at_capacity') {
-      const currentCount = block.shift_assignments?.[0]?.count ?? 0
+      // ROSTER-FIX.1 — report the live occupancy the gate refused on. In this
+      // legacy single-coach branch nothing was inserted, so runningCount equals
+      // liveExisting.length; the running value keeps the message right if the
+      // branch ever serves a batch.
+      const currentCount = runningCount
       return NextResponse.json(
         {
           success: false,

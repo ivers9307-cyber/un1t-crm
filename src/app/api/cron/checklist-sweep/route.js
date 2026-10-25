@@ -14,6 +14,51 @@
 // stops the loop. Push delivery itself is best-effort; sendPush
 // returns counts and never throws.
 //
+// C21 PUSHDONE.1 — the "claim" here is the business write (pending →
+// incomplete), and it is the truth whatever the pushes do, so it is never
+// undone and the pushes are not retried (nothing re-reads an incomplete
+// instance, and a retry column for a feature with 0 instances on prod is not
+// worth a migration). What changed: a push that reached nobody because
+// something broke is no longer silent — it is counted in `push_failed` (in
+// the response and the heartbeat's last_outcome) and logged with logWarn.
+//
+// COVERLOOP.1 — SECOND ARM: the swap cover sweep (src/lib/swap-cover-server.js
+// runSwapCoverSweep). It re-pushes a studio's approvers about an unresolved
+// swap at T-48h and T-12h, and closes a swap whose shift has started; outside
+// 07:00-22:00 studio time it does nothing and a later tick tries again. It
+// lives here rather than on a cron of its own because it is the same job in
+// the same domain at the same grain: a coach-owed thing whose deadline passed,
+// flipped with a status-guarded UPDATE, coach and managers pushed. vercel.json
+// already carries 79 crons.
+//
+// The two arms are ISOLATED, in both directions. The checklist arm runs first
+// (sweepChecklists) and whatever happens to it, an unreadable table or an
+// unexpected throw, the swap arm still runs; the swap arm runs inside its own
+// try/catch, so it can never cost the checklist sweep its response or its
+// heartbeat. The 'checklist-sweep' heartbeat row's last_ok_at still means what
+// it always meant: the CHECKLIST sweep succeeded. The swap arm's own health is
+// `swap_cover` (its counts, null if it threw) and `swap_sweep_failed` (1 if it
+// threw or reported errors): in the response, in that row's last_outcome, and
+// as a logError.
+//
+// SWAPHB.1 — none of those three pages anybody: the health-check reads only
+// cron_health.is_stale, never last_outcome. So the arm has a heartbeat row of
+// its own, 'swap-cover-sweep' (mig 623), stamped ONLY when the arm ran and
+// swap_sweep_failed is 0. An arm that fails on every tick now goes STALE and
+// 503s the health-check. It is stamped before the checklist arm's 500 is
+// answered, so a checklist outage never reads as a swap outage too. A
+// quiet-hours tick returns normally with errors: 0 and therefore stamps: the
+// row does not go stale overnight.
+//
+// AVAIL.1 — THIRD ARM: availability notices (src/lib/availability-notify.js
+// runAvailabilityNoticeSweep). A coach's availability save tells the roster
+// builders at once inside 07:00-22:00 studio time; a save outside it (or an
+// immediate push that did not land) is owed, and this arm sends it, folding a
+// coach's overnight saves into one notice. Isolated like the swap arm, in
+// both directions, with its own heartbeat row 'availability-notice-sweep'
+// (mig 630), stamped ONLY when the arm ran and reported errors: 0. A quiet
+// tick reports errors: 0 and stamps.
+//
 // Auth: CRON_SECRET header, same pattern as the other crons.
 
 import { NextResponse } from 'next/server'
@@ -21,7 +66,8 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { logAuditEvent } from '@/lib/audit'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { pushOutcome } from '@/lib/push-outcome'
 import {
   COMPLIANCE_ROLES,
   listMissedItems,
@@ -29,6 +75,8 @@ import {
   isEligibleForSweep,
   markIncomplete,
 } from '@/lib/checklist-sweep'
+import { runSwapCoverSweep } from '@/lib/swap-cover-server'
+import { runAvailabilityNoticeSweep } from '@/lib/availability-notify'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,15 +91,85 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const nowIso = new Date().toISOString()
   const stats = {
     found: 0,
     swept: 0,
     skipped: 0,
     push_overdue: 0,
     push_compliance: 0,
+    push_failed: 0,
     errors: 0,
   }
+
+  // Arm 1 — checklists. A throw is caught here ONLY so that arm 2 still runs;
+  // it is still answered as a 500 below, with no heartbeat, as it always was.
+  let checklistError = null
+  try {
+    checklistError = await sweepChecklists(db, stats)
+  } catch (e) {
+    checklistError = e?.message || 'checklist sweep threw'
+    logError('cron-checklist-sweep', 'checklist sweep threw', { err: e?.message })
+  }
+
+  // Arm 2 — COVERLOOP.1 swap cover (see the header). runSwapCoverSweep does
+  // not throw; the try/catch is for the day someone changes that.
+  let swapCover = null
+  let swapSweepFailed = 0
+  try {
+    swapCover = await runSwapCoverSweep(db)
+    if ((swapCover?.errors || 0) > 0) swapSweepFailed = 1
+  } catch (e) {
+    // Not stats.errors++: `stats` is the CHECKLIST arm's.
+    swapSweepFailed = 1
+    logError('cron-checklist-sweep', 'swap cover sweep threw', { err: e?.message })
+  }
+
+  // SWAPHB.1 — the swap arm's own heartbeat (see the header). Before the
+  // checklist 500 below, and with its own catch: neither arm's stamp can cost
+  // the other arm anything.
+  if (swapSweepFailed === 0 && swapCover) {
+    await stampHeartbeat('swap-cover-sweep', swapCover).catch((err) =>
+      logWarn('cron-checklist-sweep', 'swap heartbeat failed', { err }))
+  }
+
+  // Arm 3 — AVAIL.1 availability notices. Same isolation as arm 2, and its
+  // own heartbeat stamped before the checklist 500 for the same reason.
+  let availabilityNotices = null
+  let availabilitySweepFailed = 0
+  try {
+    availabilityNotices = await runAvailabilityNoticeSweep(db)
+    if ((availabilityNotices?.errors || 0) > 0) availabilitySweepFailed = 1
+  } catch (e) {
+    availabilitySweepFailed = 1
+    availabilityNotices = null
+    logError('cron-checklist-sweep', 'availability notice sweep threw', { err: e?.message })
+  }
+  if (availabilitySweepFailed === 0 && availabilityNotices) {
+    await stampHeartbeat('availability-notice-sweep', availabilityNotices).catch((err) =>
+      logWarn('cron-checklist-sweep', 'availability heartbeat failed', { err }))
+  }
+  const availabilityFields = { availability_notices: availabilityNotices, availability_sweep_failed: availabilitySweepFailed }
+
+  if (checklistError) {
+    return NextResponse.json(
+      { success: false, error: checklistError, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields },
+      { status: 500 },
+    )
+  }
+
+  // The swap arm's outcome still rides in this row's last_outcome as well, the
+  // way other crons report theirs, so "stamped but the swap arm is failing" is
+  // readable from cron_heartbeats and not only from a response nobody keeps.
+  await stampHeartbeat('checklist-sweep', { ...stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields }).catch((err) =>
+    logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
+
+  return NextResponse.json({ success: true, stats, swap_cover: swapCover, swap_sweep_failed: swapSweepFailed, ...availabilityFields })
+}
+
+// The checklist arm. Returns null on success, or the error message of an
+// unreadable checklist_instances read (the route answers that as a 500).
+async function sweepChecklists(db, stats) {
+  const nowIso = new Date().toISOString()
 
   // Pull pending instances whose deadline has passed. The partial
   // index (mig 215) makes this cheap.
@@ -69,9 +187,7 @@ export async function GET(request) {
     .order('deadline_at', { ascending: true })
     .limit(BATCH_LIMIT)
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  }
+  if (error) return error.message
   stats.found = expired?.length || 0
 
   for (const row of expired || []) {
@@ -114,6 +230,10 @@ export async function GET(request) {
         },
       })
       stats.push_overdue += r.sent || 0
+      if (pushOutcome(r) === 'failed') {
+        stats.push_failed++
+        logWarn('cron-checklist-sweep', 'overdue push reached nobody; not retried', { id: row.id, read_failed: !!r?.read_failed })
+      }
     } catch (e) {
       logWarn('cron-checklist-sweep', 'overdue push failed', { id: row.id, err: e?.message })
       stats.errors++
@@ -143,6 +263,12 @@ export async function GET(request) {
         }
       )
       stats.push_compliance += r.sent || 0
+      if (pushOutcome(r) === 'failed') {
+        stats.push_failed++
+        logWarn('cron-checklist-sweep', 'compliance push reached nobody; not retried', {
+          id: row.id, read_failed: !!r?.read_failed, recipients_failed: !!r?.recipients_failed,
+        })
+      }
     } catch (e) {
       logWarn('cron-checklist-sweep', 'compliance push failed', { id: row.id, err: e?.message })
       stats.errors++
@@ -175,8 +301,5 @@ export async function GET(request) {
     })
   }
 
-  await stampHeartbeat('checklist-sweep').catch((err) =>
-    logWarn('cron-checklist-sweep', 'heartbeat failed', { err }))
-
-  return NextResponse.json({ success: true, stats })
+  return null
 }

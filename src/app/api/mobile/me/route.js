@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 
@@ -82,6 +83,11 @@ export async function GET() {
         name: l.name,
         slug: l.slug,
         country: l.country || null,
+        // TZ.14 — the studio's IANA zone (canonical; Europe/Dublin for a NULL
+        // or invalid column). The phone shows a record in its studio's zone
+        // (D3) and takes the roster's "today" on the studio's calendar. A
+        // phone ahead of this server reads it as absent → Europe/Dublin.
+        timezone: zoneOfLocation(l),
         // Per-location feature gate (migration 032). Mobile reads
         // this via canMobile()/canDashboard() so a feature switched
         // off at the user's active location is hidden from every
@@ -106,6 +112,7 @@ export async function GET() {
             name: user.activeLocation.name,
             slug: user.activeLocation.slug,
             country: user.activeLocation.country || null,
+            timezone: zoneOfLocation(user.activeLocation),
             features: user.activeLocation.features || {},
             permissions: user.activeAssignment?.permissions || {},
             roleTemplate: user.activeRoleTemplate || {},

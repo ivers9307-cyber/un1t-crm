@@ -23,13 +23,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.test' }))
+// W1.L3a — customer-facing links are minted on the campaign location's tenant
+// host. The default answers the CRM host so every pre-existing assertion on
+// 'https://crm.test' still reads as before; the W1.L3a suite overrides it.
+vi.mock('./tenant-host.js', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('./postmark.js', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, sendBatch: vi.fn(), buildAudienceQueryAsync: vi.fn() }
 })
 
 import { sendBatch, buildAudienceQueryAsync } from './postmark.js'
+import { _resetTenantEmailCache } from './tenant-email.js'
+import { wireFrom, resolvedFromOf } from './platform-sender.js'
 import { tickCampaignSend, MAX_SEND_ATTEMPTS, SENDING_LEASE_MS } from './campaign-sender.js'
+import { resolveCustomerBaseUrl } from './tenant-host.js'
 
 // ── chainable fake ─────────────────────────────────────────────────
 // Each db.from() call creates a recorded "statement" ({ table, ops }).
@@ -100,7 +107,6 @@ const makeContact = (id) => ({
   email_status: 'active',
   email_marketing: true,
   email_administrative: true,
-  glofox_passcode: null,
   contact_preferences: [{ unsubscribe_token: `tok-${id}` }],
 })
 
@@ -403,6 +409,124 @@ describe('tickCampaignSend — Reply-To (EMAIL-MAILBOX-ADMIN.1)', () => {
     await tickCampaignSend(db, campaign)
 
     expect(sendBatch.mock.calls[0][0][0].replyTo).toBeUndefined()
+  })
+})
+
+// ── W1.E2 — pre-domain the campaign's From NAME stays, its ADDRESS never does ──
+describe('W1.E2 — a campaign sends as "{from_name} <platform address>" pre-domain, never campaign.from_email', () => {
+  // The resolver reads the brand chain through the same fake db: a
+  // company_settings row names the studio, no tenant_email_domains row is live.
+  function routeWithBrand(base) {
+    return (state) => {
+      if (state.table === 'company_settings') return { data: [{ company_name: 'Gym A', logo_url: null, favicon_url: null }] }
+      if (state.table === 'locations') return { data: [{ id: 'loc-1', name: 'Gym A', organization_id: 'org-a', email: null }] }
+      return base(state)
+    }
+  }
+
+  // The resolver caches the whole sender per location for 60 s: earlier tests
+  // in this file resolved 'loc-1' unbranded, so clear it before each of these.
+  beforeEach(() => { _resetTenantEmailCache(); vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test') })
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it("from_name 'Garrett at Gym A' → fromName on the batch, no `from`, the platform sender resolved for the chunk", async () => {
+    const { db, statements } = makeDb(routeWithBrand(routeFor({ candidates: [makeRecipient('r1', 0)] })))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, from_name: 'Garrett at Gym A', from_email: 'ops@gyma.ie' })
+
+    const [batch, opts] = sendBatch.mock.calls[0]
+    expect(batch[0].fromName).toBe('Garrett at Gym A')
+    expect(batch[0].from).toBeUndefined()
+    expect(opts.sender).toMatchObject({ serverToken: null, fromEmail: 'hello@platform.test', fromName: 'Gym A' })
+    // email_sends.from_email is the ADDRESS that went on the wire (never a header).
+    const insert = statements.find(s => s.table === 'email_sends' && s.ops[0].method === 'insert')
+    expect(insert.ops[0].args[0][0].from_email).toBe('hello@platform.test')
+    expect(JSON.stringify(sendBatch.mock.calls[0])).not.toContain('ops@gyma.ie')
+  })
+
+  it('no from_name → the platform address is logged, and campaign.from_email is nowhere on the wire', async () => {
+    const { db, statements } = makeDb(routeWithBrand(routeFor({ candidates: [makeRecipient('r1', 0)] })))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, from_name: null, from_email: 'ops@gyma.ie' })
+
+    expect(sendBatch.mock.calls[0][0][0].fromName).toBeUndefined()
+    const insert = statements.find(s => s.table === 'email_sends' && s.ops[0].method === 'insert')
+    expect(insert.ops[0].args[0][0].from_email).toBe('hello@platform.test')
+    expect(JSON.stringify(sendBatch.mock.calls[0])).not.toContain('ops@gyma.ie')
+  })
+})
+
+// ── FROMDOMAIN — campaign.from_email sends when it is on the org's VERIFIED domain ──
+describe('FROMDOMAIN — a campaign may send from any address on the org\'s verified domain', () => {
+  // The real resolver, through the fake db: a LIVE tenant_email_domains row for
+  // un1tdublin.com (or none), a branded location.
+  function routeWithTenant(base, liveRow) {
+    return (state) => {
+      if (state.table === 'tenant_email_domains') return { data: liveRow }
+      if (state.table === 'locations') return { data: { id: 'loc-1', name: 'Gym A', organization_id: 'org-a', email: null } }
+      if (state.table === 'company_settings') return { data: [{ company_name: 'Gym A', logo_url: null, favicon_url: null }] }
+      return base(state)
+    }
+  }
+  const LIVE_ROW = {
+    organization_id: 'org-a', status: 'live', postmark_server_token: 'tenant-srv-tok',
+    from_email: 'hello@un1tdublin.com', from_name: 'UN1T', sending_domain: 'un1tdublin.com',
+  }
+
+  beforeEach(() => { _resetTenantEmailCache(); vi.stubEnv('POSTMARK_FROM_EMAIL', 'hello@platform.test') })
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  async function tick(liveRow, fields) {
+    const { db, statements } = makeDb(routeWithTenant(routeFor({ candidates: [makeRecipient('r1', 0)] }), liveRow))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+    await tickCampaignSend(db, { ...campaign, ...fields })
+    const [batch, opts] = sendBatch.mock.calls.at(-1)
+    const insert = statements.find(st => st.table === 'email_sends' && st.ops[0].method === 'insert')
+    return { batch, opts, logged: insert.ops[0].args[0][0].from_email }
+  }
+
+  it('live un1tdublin.com + garrett@un1tdublin.com → From "Garrett Ivers <garrett@un1tdublin.com>" on the tenant server; email_sends logs that address', async () => {
+    const { batch, opts, logged } = await tick(LIVE_ROW, { from_name: 'Garrett Ivers', from_email: 'garrett@un1tdublin.com' })
+    expect(opts.sender).toMatchObject({ serverToken: 'tenant-srv-tok', fromEmail: 'garrett@un1tdublin.com', sendingDomain: 'un1tdublin.com' })
+    expect(batch[0].from).toBeUndefined()
+    // The From sendBatch puts on the wire (same functions it calls).
+    expect(wireFrom({ from: batch[0].from, fromName: batch[0].fromName, resolvedFrom: resolvedFromOf(opts.sender) }))
+      .toBe('Garrett Ivers <garrett@un1tdublin.com>')
+    expect(logged).toBe('garrett@un1tdublin.com')
+  })
+
+  it('requested x@other.com → the tenant fromEmail, and x@other.com is nowhere in the batch', async () => {
+    const { opts, logged, batch } = await tick(LIVE_ROW, { from_name: 'Garrett Ivers', from_email: 'x@other.com' })
+    expect(opts.sender.fromEmail).toBe('hello@un1tdublin.com')
+    expect(logged).toBe('hello@un1tdublin.com')
+    expect(JSON.stringify([batch, opts])).not.toContain('other.com')
+  })
+
+  it('subdomain mismatch (garrett@mail.un1tdublin.com) → the tenant fromEmail', async () => {
+    const { opts, logged } = await tick(LIVE_ROW, { from_email: 'garrett@mail.un1tdublin.com' })
+    expect(opts.sender.fromEmail).toBe('hello@un1tdublin.com')
+    expect(logged).toBe('hello@un1tdublin.com')
+  })
+
+  it('case-insensitive: Garrett@UN1TDublin.COM sends and logs lower-cased', async () => {
+    const { opts, logged } = await tick(LIVE_ROW, { from_email: 'Garrett@UN1TDublin.COM' })
+    expect(opts.sender.fromEmail).toBe('garrett@un1tdublin.com')
+    expect(logged).toBe('garrett@un1tdublin.com')
+  })
+
+  it('no live tenant domain → the platform address regardless of the requested one', async () => {
+    const { opts, logged, batch } = await tick(null, { from_name: 'Garrett Ivers', from_email: 'garrett@un1tdublin.com' })
+    expect(opts.sender).toMatchObject({ serverToken: null, fromEmail: 'hello@platform.test' })
+    expect(logged).toBe('hello@platform.test')
+    expect(JSON.stringify([batch, opts])).not.toContain('garrett@')
+  })
+
+  it('no from_email → the tenant fromEmail (W1.E2 unchanged)', async () => {
+    const { opts, logged } = await tick(LIVE_ROW, { from_email: null })
+    expect(opts.sender.fromEmail).toBe('hello@un1tdublin.com')
+    expect(logged).toBe('hello@un1tdublin.com')
   })
 })
 
@@ -1768,6 +1892,32 @@ describe('tickCampaignSend — subject merge tags resolve the location (COMMSFIX
   })
 })
 
+// W1.S1a — {{company_name}} renders the campaign location's brand in the
+// body, the hidden preheader and the subject (the same extras everywhere).
+describe('tickCampaignSend — {{company_name}} (W1.S1a)', () => {
+  it('renders the location brand in body, preheader and subject', async () => {
+    // The REAL getLocationBranding reads the brand through the fake db.
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb((state) => (state.table === 'company_settings'
+      ? { data: [{ company_name: 'UN1T Stillorgan', logo_url: null, favicon_url: null }] }
+      : base(state)))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      subject: 'News from {{company_name}}',
+      preview_text: 'This week at {{company_name}}',
+      html_content: '<html><body><p>Hi {{first_name}}, {{company_name}} here.</p></body></html>',
+    })
+
+    const sent = sendBatch.mock.calls[0][0][0]
+    expect(sent.subject).toBe('News from UN1T Stillorgan')
+    expect(sent.htmlBody).toContain('This week at UN1T Stillorgan')
+    expect(sent.htmlBody).toContain('<p>Hi Alice, UN1T Stillorgan here.</p>')
+    expect(sent.htmlBody).not.toContain('{{company_name}}')
+  })
+})
+
 // WEBVIEW.1 — the view-in-browser link has to actually reach the wire, at the
 // top of the body, or it does not solve the problem it exists for (Gmail
 // clipping the bottom of the message together with the unsubscribe footer).
@@ -1821,5 +1971,53 @@ describe('tickCampaignSend — view in browser (WEBVIEW.1)', () => {
     await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
 
     expect(sendBatch.mock.calls[0][0][0].htmlBody).not.toContain('/view-email/')
+  })
+})
+
+// W1.L3a — every customer-facing link in a campaign email (unsubscribe,
+// preference centre, view in browser) is minted on the CAMPAIGN LOCATION's
+// tenant host — resolveCustomerBaseUrl(db, campaign.location_id) — never on
+// the CRM host. A second gym's members must never see crm.repset.ie.
+describe('tickCampaignSend — links on the tenant host (W1.L3a)', () => {
+  const ORIGINAL_SECRET = process.env.SUPABASE_SERVICE_ROLE_KEY
+  beforeEach(() => { process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-signing-secret' })
+  afterEach(() => {
+    if (ORIGINAL_SECRET === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = ORIGINAL_SECRET
+  })
+
+  it("unsubscribe, preferences and view-in-browser links use the campaign location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      location_id: 'loc-a1',
+      html_content: '<html><body><p>Hi {{first_name}} — {{preference_url}}</p></body></html>',
+    })
+
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc-a1')
+    const email = sendBatch.mock.calls[0][0][0]
+    expect(email.unsubscribeUrl).toContain('https://gym-a.repset.ie/unsubscribe/')
+    expect(email.htmlBody).toContain('https://gym-a.repset.ie/unsubscribe/')
+    expect(email.htmlBody).toContain('https://gym-a.repset.ie/preferences/')
+    expect(email.htmlBody).toContain('https://gym-a.repset.ie/view-email/')
+    expect(email.htmlBody).not.toContain('crm.test')
+    expect(email.unsubscribeUrl).not.toContain('crm.test')
+  })
+
+  it('resolves the host ONCE per chunk, not once per recipient', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)] }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-1' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+    ])
+    resolveCustomerBaseUrl.mockClear()
+
+    await tickCampaignSend(db, campaign)
+
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledTimes(1)
+    expect(sendBatch.mock.calls[0][0]).toHaveLength(2)
   })
 })

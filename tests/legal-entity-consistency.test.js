@@ -103,7 +103,13 @@ const DOCUMENT_SURFACES = [
   // attached to the confirmation emails, so it is the archived binding
   // artifact. It was outside the LEGALENT.1 sweep entirely and still
   // labelled its countersignature with the BRAND.
-  { file: 'src/app/api/contracts/[id]/sign/route.js', needs: 'contractCountersignatureLabel' },
+  // CONTRACTS-PDF.2 moved the render into src/lib/contract-pdf-store.js,
+  // shared with the backfill POST; the PDF's label rule
+  // (contractPdfCountersignatureLabel) prefers the legacy row's own frozen
+  // employer_name over the retired literal, and the frozen entity over both.
+  { file: 'src/lib/contract-pdf-store.js', needs: 'contractPdfCountersignatureLabel' },
+  { file: 'src/app/api/contracts/[id]/sign/route.js', needs: 'renderAndStoreSignedContractPdf' },
+  { file: 'src/app/api/contracts/[id]/pdf/route.js', needs: 'renderAndStoreSignedContractPdf' },
 ]
 
 const LIVE_SURFACES = [
@@ -164,6 +170,7 @@ describe('contract surfaces resolve the entity, never hard-code one', () => {
 describe('the signed PDF countersigns with the entity, not the brand', () => {
   const PDF = 'src/lib/contract-pdf.js'
   const SIGN = 'src/app/api/contracts/[id]/sign/route.js'
+  const STORE = 'src/lib/contract-pdf-store.js'
 
   it('renderContractPdf takes a contracting entity distinct from the brand', () => {
     const src = read(PDF)
@@ -175,9 +182,18 @@ describe('the signed PDF countersigns with the entity, not the brand', () => {
     expect(src).toContain('label: `For ${entity}`')
   })
 
-  it('the sign route feeds it the same frozen label the pages render', () => {
+  // CONTRACTS-PDF.2 — the sign route and the backfill POST render through
+  // one helper, which reads the FROZEN row (legal_entity_name, else the
+  // body's own employer_name for a pre-LEGALENT.1 row, else the legacy
+  // label: contractPdfCountersignatureLabel). Never the live resolver.
+  it('the sign route feeds the shared store helper the signed row; the helper reads the frozen label', () => {
     const src = read(SIGN)
-    expect(src).toContain('contractingEntity: contractCountersignatureLabel(updated)')
+    expect(src).toContain('renderAndStoreSignedContractPdf({')
+    expect(src).toContain('contract: updated,')
+    expect(src).not.toContain('getContractingEntity')
+    const store = read(STORE)
+    expect(store).toContain('contractingEntity: contractPdfCountersignatureLabel(contract)')
+    expect(store).not.toContain('getContractingEntity')
   })
 
   // A source grep proves the argument is threaded, not that the string
@@ -224,6 +240,33 @@ describe('the signed PDF countersigns with the entity, not the brand', () => {
       .not.toContain('For A-BRAND-ONLY')
     // The brand legitimately survives as the running header wordmark.
     expect(strings).toContain('A-BRAND-ONLY')
+    vi.doUnmock('@react-pdf/renderer')
+    vi.resetModules()
+  })
+
+  // W1.S1a — a branding blip at sign time (no brand resolved) must not store
+  // a PDF with a blank running header or author: they fall back to the
+  // contracting entity, never to a fixed gym's name.
+  it('with no brand the header and author fall back to the entity', async () => {
+    const captured = []
+    vi.doMock('@react-pdf/renderer', () => ({
+      Document: 'Document', Page: 'Page', Text: 'Text', View: 'View',
+      StyleSheet: { create: (s) => s },
+      renderToBuffer: (doc) => { captured.push(doc); return Promise.resolve(Buffer.from('%PDF-')) },
+    }))
+    const { renderContractPdf } = await import('../src/lib/contract-pdf.js')
+    await renderContractPdf({ bodyRendered: '# A', issuerSignature: 'I', companyName: '  ', contractingEntity: 'AN-ENTITY-ONLY' })
+    const strings = []
+    const walkTree = (node) => {
+      if (node == null || node === false) return
+      if (typeof node === 'string') { strings.push(node); return }
+      if (Array.isArray(node)) { node.forEach(walkTree); return }
+      if (node.props) walkTree(node.props.children)
+    }
+    walkTree(captured[0])
+    expect(captured[0].props.author).toBe('AN-ENTITY-ONLY')
+    expect(strings).toContain('AN-ENTITY-ONLY')
+    expect(strings).toContain('For AN-ENTITY-ONLY')
     vi.doUnmock('@react-pdf/renderer')
     vi.resetModules()
   })
@@ -371,9 +414,14 @@ describe('contractingEntityLabel', () => {
       .toBe('UN1T Dublin')
   })
 
-  it('is never empty', () => {
-    expect(contractingEntityLabel()).toBe('UN1T')
-    expect(contractingEntityLabel({ legalEntityName: '   ', companyName: '  ' })).toBe('UN1T')
+  // W1.S1a — the floor is the organisation's own name; past it the label is
+  // empty, never a fixed gym's wordmark (which was this function's last
+  // resort until the literal sweep, and which asserted ONE gym as the
+  // contracting party on every other organisation's document).
+  it('floors on the org name, then on nothing: never a fixed gym name', () => {
+    expect(contractingEntityLabel({ organizationName: 'UN1T Group' })).toBe('UN1T Group')
+    expect(contractingEntityLabel()).toBe('')
+    expect(contractingEntityLabel({ legalEntityName: '   ', companyName: '  ' })).toBe('')
   })
 })
 
@@ -444,9 +492,10 @@ describe('getContractingEntity', () => {
     const out = await getContractingEntity(db, { locationId: 'loc-ccf' })
     expect(out.label).not.toBe('UN1T')
     expect(out.label).toBe('CCF Autos')
-    // The brand resolver still reports its own default — the point is
-    // that the ENTITY label no longer inherits it.
-    expect(out.companyName).toBe('UN1T')
+    // Since W1.B1 the brand resolver returns '' here (no configured name,
+    // and this fixture's locations row carries no name), and since W1.S1a
+    // the wordmark field no longer re-applies a fixed gym literal on top.
+    expect(out.companyName).toBe('')
     expect(out.entityName).toBeNull()
   })
 
@@ -461,14 +510,25 @@ describe('getContractingEntity', () => {
     expect(out.label).toBe('Givers Consultancy')
   })
 
-  it('never throws and never returns an empty label', async () => {
-    // A contract surface must render a party name even when every
-    // lookup is unavailable — a blank "For " on a document someone is
-    // about to sign is worse than an under-specified one.
+  // W1.S1a — when every lookup is unavailable there is no honest name to
+  // give: the old last resort was a fixed gym's wordmark, i.e. a WRONG
+  // counterparty on any other organisation's document. The new floor is
+  // the org's own name (above); past it, empty.
+  it('never throws, and with nothing readable floors on empty rather than a fixed gym', async () => {
     const exploding = { from() { throw new Error('db down') } }
     await expect(getContractingEntity(exploding, { organizationId: 'org-1' })).resolves
-      .toMatchObject({ label: 'UN1T' })
-    await expect(getContractingEntity(null, {})).resolves.toMatchObject({ label: 'UN1T' })
+      .toMatchObject({ label: '', companyName: '' })
+    await expect(getContractingEntity(null, {})).resolves.toMatchObject({ label: '', companyName: '' })
+  })
+
+  it('W1.S1a: an unconfigured org whose org row reads floors on organizations.name', async () => {
+    const db = makeDb({
+      locations: [{ organization_id: 'org-u' }],
+      company_settings: [],
+      org_settings: [],
+      organizations: [{ name: 'UN1T Group' }],
+    })
+    await expect(getContractingEntity(db, { locationId: 'loc-u' })).resolves.toMatchObject({ label: 'UN1T Group' })
   })
 })
 

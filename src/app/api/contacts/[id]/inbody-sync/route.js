@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,7 +23,8 @@ export async function POST(_request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
-  if (!hasPermission(user, 'consultations')) {
+  // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
+  if (!hasPermissionAtAnyLocation(user, 'consultations')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
@@ -39,6 +40,10 @@ export async function POST(_request, props) {
 
   if (!user.isMaster && !getUserLocationIds(user).includes(contact.location_id)) {
     return NextResponse.json({ success: false, error: 'Location not in your scope' }, { status: 403 })
+  }
+  // ROLESWEEP.1c — `consultations` judged at the contact's location.
+  if (!hasPermissionForLocation(user, contact.location_id, 'consultations')) {
+    return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
   const phone = contact.phone || contact.wa_phone

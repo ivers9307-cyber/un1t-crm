@@ -1,5 +1,5 @@
 // POST /api/admin/policies/[slug]/versions — publish a NEW version
-// of a policy. Master/owner only. Atomically (via the partial-unique
+// of a policy. Master only (C141 ORGROLE.2; policies are estate-wide). Atomically (via the partial-unique
 // index race-safety) flips the previous current to false and inserts
 // the new version with is_current = true.
 //
@@ -15,8 +15,9 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { publishVersion } from '@/lib/policies'
+import { publishVersion, policyOrgIdFor } from '@/lib/policies'
 import { logAuditEvent } from '@/lib/audit'
+import { canManagePolicies } from '@/lib/policies-access'
 
 export const runtime = 'nodejs'
 
@@ -26,15 +27,16 @@ const PublishSchema = z.object({
   effective_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner' || user?.profileRole === 'master'
-}
+// C141 ORGROLE.2 — managing policies is MASTER ONLY (Richard, 2 Oct);
+// canManagePolicies lives in src/lib/policies-access.js. W0.5 (mig 713) —
+// policies belong to an organisation: the slug resolves inside the caller's
+// ACTIVE organisation only, so a version is published into that tenant alone.
 
 export async function POST(request, { params }) {
   const { slug } = await params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  if (!canManagePolicies(user)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -42,10 +44,15 @@ export async function POST(request, { params }) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
+  const orgId = policyOrgIdFor(user)
+  if (!orgId) {
+    return NextResponse.json({ success: false, error: 'Policy not found' }, { status: 404 })
+  }
   const db = createServerClient()
   const { data: policy } = await db
     .from('policies')
     .select('id, active')
+    .eq('organization_id', orgId)
     .eq('slug', slug)
     .maybeSingle()
   if (!policy || !policy.active) {

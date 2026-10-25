@@ -310,3 +310,62 @@ describe('unsuppressAtPostmark', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+// ────────────────────────────────────────────────────────────────────
+// W1.E4 — every export takes `{ serverToken }`. A tenant on its own Postmark
+// server (tenant_email_domains, mig 427) has its own suppression list; a
+// suppression pushed to the GLOBAL server would not refuse one of its sends.
+// With no serverToken the global token is used, byte-for-byte as before.
+describe('serverToken (W1.E4 — per Postmark server)', () => {
+  it('suppressAtPostmark sends X-Postmark-Server-Token: <serverToken> when given one', async () => {
+    stubFetch(echo('Suppressed'))
+    const res = await suppressAtPostmark('a@x.com', { serverToken: 'tenant-tok' })
+    expect(res).toEqual({ ok: 1, failed: [] })
+    expect(calls()[0][1].headers['X-Postmark-Server-Token']).toBe('tenant-tok')
+  })
+
+  it('suppressAtPostmark uses the global token with no serverToken (unchanged)', async () => {
+    stubFetch(echo('Suppressed'))
+    await suppressAtPostmark('a@x.com', {})
+    expect(calls()[0][1].headers['X-Postmark-Server-Token']).toBe('test-server-token')
+    await suppressAtPostmark('a@x.com', { serverToken: null })
+    expect(calls()[1][1].headers['X-Postmark-Server-Token']).toBe('test-server-token')
+  })
+
+  it('a tenant serverToken works even when NO global token is configured', async () => {
+    vi.stubEnv('POSTMARK_API_KEY', '')
+    vi.stubEnv('POSTMARK_SERVER_TOKEN', '')
+    stubFetch(echo('Suppressed'))
+    const res = await suppressAtPostmark('a@x.com', { serverToken: 'tenant-tok' })
+    expect(res.ok).toBe(1)
+    expect(calls()[0][1].headers['X-Postmark-Server-Token']).toBe('tenant-tok')
+  })
+
+  it('listPostmarkSuppressions dumps the given server', async () => {
+    stubFetch(async () => dump([]))
+    await listPostmarkSuppressions({ serverToken: 'tenant-tok' })
+    expect(calls()[0][1].headers['X-Postmark-Server-Token']).toBe('tenant-tok')
+    await listPostmarkSuppressions()
+    expect(calls()[1][1].headers['X-Postmark-Server-Token']).toBe('test-server-token')
+  })
+
+  it('unsuppressAtPostmark reads AND deletes on the given server', async () => {
+    stubFetch(async (url, init) => {
+      if (String(url).includes('/suppressions/dump')) return dump([{ EmailAddress: 'a@x.com', SuppressionReason: 'ManualSuppression' }])
+      return echo('Deleted')(url, init)
+    })
+    const res = await unsuppressAtPostmark('a@x.com', { serverToken: 'tenant-tok' })
+    expect(res.ok).toBe(1)
+    expect(calls()).toHaveLength(2)
+    expect(calls()[0][1].headers['X-Postmark-Server-Token']).toBe('tenant-tok')
+    expect(calls()[1][1].headers['X-Postmark-Server-Token']).toBe('tenant-tok')
+  })
+
+  it('never puts the server token anywhere but the header', async () => {
+    stubFetch(echo('Suppressed'))
+    await suppressAtPostmark('a@x.com', { serverToken: 'tenant-tok' })
+    expect(String(calls()[0][0])).not.toContain('tenant-tok')
+    expect(calls()[0][1].body).not.toContain('tenant-tok')
+    expect(console.error).not.toHaveBeenCalled()
+  })
+})

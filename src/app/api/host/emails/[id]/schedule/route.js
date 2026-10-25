@@ -23,7 +23,8 @@ import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateScheduledFor } from '@/lib/host-schedule-time'
-import { LAUNCH_MESSAGES, hostSendBlockReason } from '@/lib/host-campaign-launch'
+import { LAUNCH_MESSAGES, hostSendBlockReason, hostSetupMessages } from '@/lib/host-campaign-launch'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import { HOST_CAMPAIGN_LIST_COLUMNS } from '@/lib/host-campaign-draft'
 
 export const runtime = 'nodejs'
@@ -64,8 +65,16 @@ export async function POST(request, props) {
     .maybeSingle()
   if (hostReadErr) return NextResponse.json({ success: false, error: hostReadErr.message }, { status: 500 })
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  // W1.S1c: the setup refusals name the host's organisation, as the launch
+  // path's do (hostSetupMessages; the brand is read only on this path).
+  // HOST-EMAILS.2: the condition is the shared hostSendBlockReason predicate.
   const blocked = hostSendBlockReason(host, campaign)
-  if (blocked) return NextResponse.json({ success: false, error: LAUNCH_MESSAGES[blocked] }, { status: 409 })
+  if (blocked) {
+    return NextResponse.json(
+      { success: false, error: hostSetupMessages((await resolveHostOrgBrand(db, session.host)).name)[blocked] },
+      { status: 409 },
+    )
+  }
 
   // CAS on draft|scheduled — a fire or a send that landed between the read
   // and this write matches 0 rows → 409, never a silent overwrite.

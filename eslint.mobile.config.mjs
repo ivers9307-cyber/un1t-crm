@@ -190,6 +190,18 @@ const config = [
     },
   },
 
+  // ─── Tests: async assertions are awaited (D2 EXPECTLINT.1) ─────────────────
+  // expect(…).resolves/.rejects and expect.poll return a promise; one nothing
+  // waits for races the test's end (#1762). Same rule as check:guardrails,
+  // which does not see mobile/**. Every mobile test lives under mobile/lib/.
+  {
+    files: ['mobile/**/*.test.js'],
+    plugins: { guardrails },
+    rules: {
+      'guardrails/no-unawaited-async-expect': 'error',
+    },
+  },
+
   // ─── Build-time config files: CommonJS, Node runtime ──────────────────────
   // babel/metro/tailwind configs are `module.exports = ...` and run in Node
   // (Metro's config loader), not in the RN bundle — so they need the Node

@@ -9,7 +9,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { withFreshToken, XeroError } from '@/lib/xero/client'
 import { mapPayableInvoices, agePayables } from '@/lib/xero/aged-payables'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,8 +48,14 @@ export async function GET() {
       }
     }
 
-    const aged = agePayables(rows, dublinTodayStr())
-    return NextResponse.json({ success: true, data: { ...aged, asOf: dublinTodayStr() } })
+    // TZ.11c: Xero due dates are org-local, and one location is one Xero
+    // organisation (xero_connections_tenant_id_unique, mig 554), so bills age
+    // on the location's today. (Xero's own Organisation.Timezone is a Windows
+    // zone id, e.g. GMTSTANDARDTIME, not an IANA name; the location column is
+    // the IANA twin of it.) zoneOfLocation reads the row already on the user.
+    const today = todayStrIn(zoneOfLocation(user.activeLocation))
+    const aged = agePayables(rows, today)
+    return NextResponse.json({ success: true, data: { ...aged, asOf: today } })
   } catch (e) {
     // Surface the REAL cause — never blanket-label an API error as
     // "not connected" (that masked a bad `order` field as a missing

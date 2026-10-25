@@ -3,7 +3,6 @@ import {
   eventIsPublic,
   hostEventDefaults,
   computeEditTransition,
-  deriveSlug,
   HOST_EVENT_KINDS,
 } from './host-events'
 import { ensureAnchorLocation, resolveMasterLocationId, resolveMasterLocationIdStrict } from './host-events'
@@ -81,16 +80,6 @@ describe('computeEditTransition', () => {
   it('draft/rejected edits never trigger re-review and keep their status', () => {
     expect(computeEditTransition({ status: 'draft', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'draft', reReview: false })
     expect(computeEditTransition({ status: 'rejected', non_member_fee_cents: 2500 }, { non_member_fee_cents: 9999 })).toEqual({ status: 'rejected', reReview: false })
-  })
-})
-
-describe('deriveSlug', () => {
-  it('slugifies a name', () => {
-    expect(deriveSlug('Summer Throwdown 2026!')).toBe('summer-throwdown-2026')
-  })
-  it('falls back to a non-empty slug', () => {
-    expect(deriveSlug('###')).toBe('event')
-    expect(deriveSlug('')).toBe('event')
   })
 })
 

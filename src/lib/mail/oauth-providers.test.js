@@ -280,7 +280,7 @@ describe('the three refusals stay apart — three fixes, one symptom', () => {
     expect(verdict.reason).toBe('not_configured')
   })
 
-  // The env var NAMES turn "it does not work" into a ticket somebody can
+  // The env var NAMES turn "it does not work" into a conversation somebody can
   // close. The VALUES are never touched.
   it('names the env vars in the not_configured sentence, never their values', () => {
     const verdict = resolveOAuthProvider('microsoft', {

@@ -1,37 +1,6 @@
-import { NextResponse } from 'next/server'
-import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
-import { loadTicketForUser } from '../../_helpers'
-
-// POST /api/email/tickets/[id]/read — zero the unread badge
-// (EMAIL-TICKET.4).
-//
-// Its own endpoint rather than a side effect of the detail GET, so opening a
-// ticket to read it is an explicit, idempotent action and the GET stays free
-// of writes. Same 404 rules as every other ticket route.
-//
-// updated_at is deliberately NOT bumped: reading a ticket is not a change to
-// it, and bumping it would reorder any queue sorted on it.
-//
-// BOTH GATES LIVE IN loadTicketForUser (EMAIL-TICKET-CLEANUP.1) — the
-// `email_inbox` surface permission resolved at the TICKET'S location, and the
-// per-mailbox grant. The permission check used to sit here, above the load,
-// where it could only ever resolve at the caller's ACTIVE location and so
-// answered a different question than this route asks.
-export async function POST(request, props) {
-  const params = await props.params
-  const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
-  if (loaded.response) return loaded.response
-  const { ticket } = loaded
-
-  const { error } = await db.from('email_tickets')
-    .update({ unread_count: 0 })
-    .eq('id', ticket.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-
-  return NextResponse.json({ success: true, data: { unread_count: 0 } })
-}
+// MAIL-RENAME.1 — DEPRECATED SHIM. The handler lives at
+// /api/email/mail/[id]/read. This path stays only for the staff-app bundle
+// already in the field (mobile/lib/email-api.js before MAIL-RENAME.1); an OTA
+// lands on next launch, not on deploy. Delete in the shim sweep (~2 weeks
+// after the OTA publishes), with the matching row in shims.test.js.
+export { POST } from '@/app/api/email/mail/[id]/read/route'

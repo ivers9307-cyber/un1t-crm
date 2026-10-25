@@ -1,7 +1,15 @@
 // progress-analytics.js — pure multi-session aggregations for the member progress
-// dashboard. No IO. champ-app-only (like goals.js). All bucketing is UTC-anchored.
+// dashboard. No IO. champ-app-only (like goals.js). Every day, week and month
+// bucket is on the MEMBER's calendar: `zone` is their home studio's (TZ.13 /
+// TZ.17, D7; omitted = Europe/Dublin). Weeks and months were UTC until TZ.17,
+// so a session at 00:30 Dublin summer time on a Monday (or the 1st) landed in
+// the previous week (or month) while the streak beside it counted it today.
+//
+// A week's `weekStartMs` is a CALENDAR anchor, not an instant: 00:00 UTC on the
+// date of the local Monday (render it with timeZone 'UTC', as the screens do).
+// Weeks step in whole UTC days from it, which no clock change can bend.
 import { currentStreak } from './hr-analytics.js'
-import { dublinDateKey, dublinDayStartMs, dublinAddDays } from './dublin-time.js'
+import { dateKeyIn, dayStartMsIn, addDaysIn, DEFAULT_TZ } from './zoned-time.js'
 
 const DAY = 24 * 3600 * 1000
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -14,13 +22,15 @@ function minutesOf(s) {
   return m > 0 ? m : 0
 }
 function pointsOf(s) { return Number.isFinite(s?.effort_points) ? s.effort_points : 0 }
-function utcDayStart(ms) { const d = new Date(ms); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) }
-function utcWeekStart(ms) { const day = utcDayStart(ms); const dow = (new Date(day).getUTCDay() + 6) % 7; return day - dow * DAY } // Monday
+// 00:00 UTC on the instant's LOCAL calendar date in `zone` (a date anchor).
+function localDayAnchor(ms, zone) { const [y, m, d] = dateKeyIn(ms, zone).split('-').map(Number); return Date.UTC(y, m - 1, d) }
+// The anchor of the local Monday of the instant's week.
+function weekAnchor(ms, zone) { const day = localDayAnchor(ms, zone); const dow = (new Date(day).getUTCDay() + 6) % 7; return day - dow * DAY } // Monday
 function weekLabel(ms) { const d = new Date(ms); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}` }
 function monthLabel(y, m) { return `${MONTHS[m]} ${y}` }
 
-export function weeklyBuckets(sessions, nowMs = Date.now(), weeks = 12) {
-  const thisWeek = utcWeekStart(nowMs)
+export function weeklyBuckets(sessions, nowMs = Date.now(), weeks = 12, zone = DEFAULT_TZ) {
+  const thisWeek = weekAnchor(nowMs, zone)
   const startWeek = thisWeek - (weeks - 1) * 7 * DAY
   const buckets = []
   for (let i = 0; i < weeks; i++) {
@@ -29,7 +39,7 @@ export function weeklyBuckets(sessions, nowMs = Date.now(), weeks = 12) {
   }
   for (const s of sessions || []) {
     const t = startedMs(s); if (t === null || t >= nowMs) continue
-    const ws = utcWeekStart(t)
+    const ws = weekAnchor(t, zone)
     if (ws < startWeek || ws > thisWeek) continue
     const b = buckets[Math.round((ws - startWeek) / (7 * DAY))]; if (!b) continue
     b.count++; b.points += pointsOf(s); b.minutes += minutesOf(s)
@@ -42,11 +52,11 @@ export function weeklyBuckets(sessions, nowMs = Date.now(), weeks = 12) {
   }))
 }
 
-export function monthlyRecap(sessions, nowMs = Date.now(), months = 6) {
+export function monthlyRecap(sessions, nowMs = Date.now(), months = 6, zone = DEFAULT_TZ) {
   const byMonth = new Map()
   for (const s of sessions || []) {
     const t = startedMs(s); if (t === null || t >= nowMs) continue
-    const d = new Date(t), y = d.getUTCFullYear(), m = d.getUTCMonth(), key = `${y}-${m}`
+    const d = new Date(localDayAnchor(t, zone)), y = d.getUTCFullYear(), m = d.getUTCMonth(), key = `${y}-${m}`
     let a = byMonth.get(key)
     if (!a) { a = { year: y, month: m, count: 0, points: 0, minutes: 0, _ps: 0, _pn: 0 }; byMonth.set(key, a) }
     a.count++; a.points += pointsOf(s); a.minutes += minutesOf(s)
@@ -56,7 +66,7 @@ export function monthlyRecap(sessions, nowMs = Date.now(), months = 6) {
   for (const a of byMonth.values()) {
     if (a.points > 0 && (!fittest || a.points > fittest.points)) fittest = { year: a.year, month: a.month, points: Math.round(a.points) }
   }
-  const now = new Date(nowMs), out = []
+  const now = new Date(localDayAnchor(nowMs, zone)), out = []
   for (let i = months - 1; i >= 0; i--) {
     const dd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
     const a = byMonth.get(`${dd.getUTCFullYear()}-${dd.getUTCMonth()}`)
@@ -69,7 +79,9 @@ export function monthlyRecap(sessions, nowMs = Date.now(), months = 6) {
   return { months: out, fittest }
 }
 
-export function personalRecords(sessions) {
+// `zone` (TZ.13/TZ.17, D7): the member's home studio zone, for the day-streak
+// and the best-week bucket (a local Monday-to-Sunday week).
+export function personalRecords(sessions, zone = DEFAULT_TZ) {
   const list = (sessions || []).filter(s => startedMs(s) !== null)
   let bestSessionPoints = null, highestPeakHr = null, longestSessionMin = null
   const weekPoints = new Map()
@@ -79,27 +91,28 @@ export function personalRecords(sessions) {
     if (Number.isFinite(s?.peak_hr_bpm) && (!highestPeakHr || s.peak_hr_bpm > highestPeakHr.value)) highestPeakHr = { value: s.peak_hr_bpm, sessionId: s.id, atMs: t }
     const mins = minutesOf(s)
     if (mins > 0 && (!longestSessionMin || mins > longestSessionMin.value)) longestSessionMin = { value: Math.round(mins), sessionId: s.id, atMs: t }
-    const ws = utcWeekStart(t); weekPoints.set(ws, (weekPoints.get(ws) || 0) + p)
+    const ws = weekAnchor(t, zone); weekPoints.set(ws, (weekPoints.get(ws) || 0) + p)
   }
   let bestWeekPoints = null
   for (const [ws, pts] of weekPoints) {
     if (pts > 0 && (!bestWeekPoints || pts > bestWeekPoints.value)) bestWeekPoints = { value: Math.round(pts), weekStartMs: ws }
   }
-  return { bestSessionPoints, highestPeakHr, longestSessionMin, bestWeekPoints, bestStreak: currentStreak(list).best }
+  return { bestSessionPoints, highestPeakHr, longestSessionMin, bestWeekPoints, bestStreak: currentStreak(list, Date.now(), zone).best }
 }
 
-// Day-buckets in Europe/Dublin (NOT UTC) so the heatmap agrees with the
-// Dublin-keyed streak + milestone numbers shown beside it — a BST session at
-// 00:00–01:00 Dublin must light today's cell, not yesterday's. Days are walked
-// via dublinAddDays (not a fixed 24h step) so the grid never drifts across the
-// GMT/IST clock change. `dayMs` is the Dublin-midnight instant of each cell.
-export function activityCalendar(sessions, nowMs = Date.now(), days = 84) {
-  const todayKey = dublinDateKey(nowMs)
-  const startKey = dublinAddDays(todayKey, -(days - 1))
+// Day-buckets in `zone` — the member's home studio zone (TZ.13, D7; omitted =
+// Europe/Dublin), NOT UTC — so the heatmap agrees with the locally-keyed streak
+// + milestone numbers shown beside it: a summer-time session at 00:00–01:00
+// Dublin must light today's cell, not yesterday's. Days are walked via
+// addDaysIn (not a fixed 24h step) so the grid never drifts across a clock
+// change. `dayMs` is the local-midnight instant of each cell.
+export function activityCalendar(sessions, nowMs = Date.now(), days = 84, zone = DEFAULT_TZ) {
+  const todayKey = dateKeyIn(nowMs, zone)
+  const startKey = addDaysIn(todayKey, -(days - 1), zone)
   const map = new Map()
   for (const s of sessions || []) {
     const t = startedMs(s); if (t === null || t >= nowMs) continue
-    const key = dublinDateKey(t)
+    const key = dateKeyIn(t, zone)
     if (key < startKey || key > todayKey) continue // 'YYYY-MM-DD' sorts lexically
     const a = map.get(key) || { count: 0, points: 0 }; a.count++; a.points += pointsOf(s); map.set(key, a)
   }
@@ -108,8 +121,8 @@ export function activityCalendar(sessions, nowMs = Date.now(), days = 84) {
   for (let i = 0; i < days; i++) {
     const a = map.get(key) || { count: 0, points: 0 }
     if (a.count > maxCount) maxCount = a.count
-    out.push({ dayMs: dublinDayStartMs(key), dateKey: key, count: a.count, points: Math.round(a.points) })
-    key = dublinAddDays(key, 1)
+    out.push({ dayMs: dayStartMsIn(key, zone), dateKey: key, count: a.count, points: Math.round(a.points) })
+    key = addDaysIn(key, 1, zone)
   }
   return { days: out, maxCount }
 }

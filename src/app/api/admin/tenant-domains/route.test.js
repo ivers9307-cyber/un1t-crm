@@ -19,6 +19,7 @@ const ORG_ID = 'a0000000-0000-0000-0000-0000000000aa'
 const OTHER_ORG_ID = 'a0000000-0000-0000-0000-0000000000ab'
 const ROW_ID = 'b0000000-0000-0000-0000-0000000000bb'
 const MISSING_ID = 'c0000000-0000-0000-0000-0000000000cc'
+const PLATFORM_ROW_ID = 'b0000000-0000-0000-0000-0000000000bc'
 const LOC_ID = 'd0000000-0000-0000-0000-0000000000dd'          // belongs to ORG_ID
 const OTHER_LOC_ID = 'd0000000-0000-0000-0000-0000000000de'    // belongs to OTHER_ORG_ID
 
@@ -36,7 +37,9 @@ function fixture() {
       { id: OTHER_LOC_ID, name: 'Other Studio', organization_id: OTHER_ORG_ID },
     ],
     tenant_domains: [
-      { id: ROW_ID, hostname: 'members.acmegym.ie', organization_id: ORG_ID, location_id: null, brand: {}, active: true },
+      { id: ROW_ID, hostname: 'members.acmegym.ie', organization_id: ORG_ID, location_id: null, brand: {}, active: true, source: 'custom' },
+      // W1.L1 (mig 716): the org's automatic platform host.
+      { id: PLATFORM_ROW_ID, hostname: 'acme-gyms.repset.ie', organization_id: ORG_ID, location_id: null, brand: {}, active: true, source: 'platform' },
     ],
   }
 }
@@ -85,7 +88,7 @@ describe('GET — list', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.data.map((r) => r.hostname)).toEqual(['members.acmegym.ie'])
+    expect(body.data.map((r) => r.hostname)).toEqual(['members.acmegym.ie', 'acme-gyms.repset.ie'])
   })
 })
 
@@ -172,6 +175,26 @@ describe('POST — create', () => {
     expect(body.error).toContain("CRM's own hostname")
   })
 
+  // W1.L1 (mig 716): <slug>.repset.ie rows are automatic — born with the
+  // org — so a hand-made one is refused whatever slug it names (its own
+  // org's would duplicate the platform row; another's would squat it).
+  it('any *.repset.ie hostname is refused — the platform row is automatic', async () => {
+    for (const hostname of ['acme-gyms.repset.ie', 'other-org.repset.ie', 'anything.repset.ie', 'Deep.Sub.Repset.IE']) {
+      const res = await POST(postReq({ hostname, organization_id: ORG_ID }))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toContain('<slug>.repset.ie hosts are automatic')
+    }
+    expect((await db.from('tenant_domains').select('id')).data).toHaveLength(2)
+  })
+
+  it('a custom row is written with source=custom', async () => {
+    const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: ORG_ID }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.source).toBe('custom')
+  })
+
   it('unknown organization → 400', async () => {
     const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: MISSING_ID }))
     expect(res.status).toBe(400)
@@ -236,6 +259,39 @@ describe('PATCH — update', () => {
     expect(res.status).toBe(400)
   })
 
+  it('re-pointing the hostname at *.repset.ie → 400 (platform rows are automatic)', async () => {
+    const res = await PATCH(idReq('PATCH', { hostname: 'acme.repset.ie' }), props(ROW_ID))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain('<slug>.repset.ie hosts are automatic')
+  })
+
+  it('a platform row: rename / brand / org / location → 409, untouched (W1.L1)', async () => {
+    for (const patch of [
+      { hostname: 'members2.acmegym.ie' },
+      { brand: { rootHandler: 'reject' } },
+      { organization_id: OTHER_ORG_ID },
+      { location_id: LOC_ID },
+      { active: false, hostname: 'members2.acmegym.ie' }, // active mixed with a frozen key is still refused
+    ]) {
+      const res = await PATCH(idReq('PATCH', patch), props(PLATFORM_ROW_ID))
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.code).toBe('platform_host')
+    }
+    const row = (await db.from('tenant_domains').select('*').eq('id', PLATFORM_ROW_ID).maybeSingle()).data
+    expect(row).toMatchObject({ hostname: 'acme-gyms.repset.ie', active: true, brand: {}, organization_id: ORG_ID, location_id: null })
+  })
+
+  it('a platform row: active alone is the kill switch and stays available (suspend contract)', async () => {
+    let res = await PATCH(idReq('PATCH', { active: false }), props(PLATFORM_ROW_ID))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.active).toBe(false)
+    res = await PATCH(idReq('PATCH', { active: true }), props(PLATFORM_ROW_ID))
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.active).toBe(true)
+  })
+
   it('empty patch → 400', async () => {
     const res = await PATCH(idReq('PATCH', {}), props(ROW_ID))
     expect(res.status).toBe(400)
@@ -282,6 +338,15 @@ describe('DELETE — remove', () => {
     const res = await DELETE(idReq('DELETE'), props(ROW_ID))
     expect(res.status).toBe(200)
     const remaining = await db.from('tenant_domains').select('id')
-    expect(remaining.data).toEqual([])
+    expect(remaining.data.map((r) => r.id)).toEqual([PLATFORM_ROW_ID])
+  })
+
+  it('a platform row → 409, still there (W1.L1)', async () => {
+    const res = await DELETE(idReq('DELETE'), props(PLATFORM_ROW_ID))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('platform_host')
+    const remaining = await db.from('tenant_domains').select('id')
+    expect(remaining.data).toHaveLength(2)
   })
 })

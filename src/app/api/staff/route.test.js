@@ -12,9 +12,16 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   getUserLocationIds: (u) => (u?.locations || []).map((l) => l.id),
+  // ROSTER-FIX.6c — a spy, not a re-implementation: what matters here is that
+  // the route CONSULTS the shared guard for a caller-supplied location and
+  // returns its refusal untouched. The guard's own rules are pinned in
+  // src/lib/auth.test.js.
+  assertLocationAccess: vi.fn(() => null),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/staff', () => ({ listStaffForUser: vi.fn() }))
@@ -25,13 +32,14 @@ vi.mock('@/lib/staff-write', () => ({
   ),
 }))
 
-import { POST } from './route.js'
-import { getCurrentUser } from '@/lib/auth'
+import { POST, GET } from './route.js'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { STAFF_MANAGED_SELECT } from '@/lib/staff-fields'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
-function mockDb({ inviteError, profileUpdate, clearError } = {}) {
+function mockDb({ inviteError, profileUpdate, clearError, finalProfile } = {}) {
   const inviteUserByEmail = vi.fn((_email, _opts) =>
     Promise.resolve(inviteError
       ? { data: null, error: inviteError }
@@ -56,7 +64,7 @@ function mockDb({ inviteError, profileUpdate, clearError } = {}) {
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               single: vi.fn(() => Promise.resolve({
-                data: { id: 'new-user-id', full_name: 'New Coach', profile_locations: [] },
+                data: finalProfile || { id: 'new-user-id', full_name: 'New Coach', profile_locations: [] },
                 error: null,
               })),
             })),
@@ -191,5 +199,164 @@ describe('POST /api/staff — unchecked write regressions', () => {
 
     expect(res.status).toBe(500)
     expect((await res.json()).error).toMatch(/deadlock detected/)
+  })
+})
+
+// ROSTER-FIX.2 — the roster coach picker asks for the pay-free shape; the
+// route must forward that choice rather than falling back to the admin
+// select. The shape itself is pinned in src/lib/staff.test.js.
+describe('GET /api/staff — ?fields=picker', () => {
+  it('forwards fields=picker to the read service for a master caller', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'master', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+    const res = await GET({ url: 'http://x/api/staff?fields=picker', headers: { get: () => '' } })
+    expect(res.status).toBe(200)
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ fields: 'picker' }))
+  })
+
+  it('passes fields=null for a plain list', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'master', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+    await GET({ url: 'http://x/api/staff', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ fields: null }))
+  })
+})
+
+// ROSTER-FIX.6c — `?location_id=` was accepted and IGNORED. listStaffForUser
+// scopes to every location the caller holds, so a manager at two studios asking
+// for one studio's coaches was handed both studios' — and the roster's
+// colleague picker had been sending the param all along. The narrowing itself
+// (only that location's staff come back) is pinned against the real link query
+// in src/lib/staff.test.js; what belongs here is that the route validates the
+// param, guards it, and hands it on.
+describe('GET /api/staff — ?location_id=', () => {
+  const OTHER = 'a0000000-0000-0000-0000-000000000002'
+
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', locations: [{ id: LOC }, { id: OTHER }] })
+    createServerClient.mockReturnValue({})
+  })
+
+  it('scopes the read to the requested location', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    const res = await GET({ url: `http://x/api/staff?location_id=${LOC}`, headers: { get: () => '' } })
+    expect(res.status).toBe(200)
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ locationId: LOC }))
+    expect(assertLocationAccess).toHaveBeenCalledWith(expect.anything(), LOC)
+  })
+
+  it('carries the picker shape and the location together, the way the picker asks', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: `http://x/api/staff?location_id=${LOC}&fields=picker`, headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenCalledWith(
+      expect.objectContaining({ locationId: LOC, fields: 'picker' })
+    )
+  })
+
+  it('is unchanged when the param is absent: every location, no guard call', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    const res = await GET({ url: 'http://x/api/staff', headers: { get: () => '' } })
+    expect(res.status).toBe(200)
+    expect(listStaffForUser).toHaveBeenCalledWith(expect.objectContaining({ locationId: null }))
+    expect(assertLocationAccess).not.toHaveBeenCalled()
+  })
+
+  it('403s a location the caller cannot access, before any read', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    assertLocationAccess.mockReturnValueOnce(
+      new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 })
+    )
+    const res = await GET({
+      url: 'http://x/api/staff?location_id=b0000000-0000-0000-0000-000000000009',
+      headers: { get: () => '' },
+    })
+    expect(res.status).toBe(403)
+    expect(listStaffForUser).not.toHaveBeenCalled()
+  })
+
+  it('400s a malformed location_id without asking the guard', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    const res = await GET({ url: 'http://x/api/staff?location_id=not-a-uuid', headers: { get: () => '' } })
+    expect(res.status).toBe(400)
+    expect(assertLocationAccess).not.toHaveBeenCalled()
+    expect(listStaffForUser).not.toHaveBeenCalled()
+  })
+})
+
+// CONTRACTVIS.1 — the picker's opt-in. The read service decides per row who
+// may see a contract; the route only forwards the ask, and only with the picker.
+describe('GET /api/staff — ?include=contract', () => {
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', locations: [{ id: LOC }] })
+    createServerClient.mockReturnValue({})
+  })
+
+  it('forwards the opt-in with the picker shape', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?fields=picker&include=contract', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ fields: 'picker', includeContract: true }))
+  })
+
+  it('ignores it without fields=picker', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?include=contract', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ fields: null, includeContract: false }))
+  })
+
+  it('is off by default', async () => {
+    const { listStaffForUser } = await import('@/lib/staff')
+    listStaffForUser.mockResolvedValue({ ok: true, data: [] })
+    await GET({ url: 'http://x/api/staff?fields=picker', headers: { get: () => '' } })
+    expect(listStaffForUser).toHaveBeenLastCalledWith(expect.objectContaining({ includeContract: false }))
+  })
+})
+
+// SECFIX.3a — the create echo re-reads the new profile with
+// profile_locations(*, locations(*)), so it used to hand the caller every
+// stored credential on each assigned studio. The response is redacted.
+describe('POST /api/staff — SECFIX.3a: the echo carries no location credential', () => {
+  it('masks the embedded locations\' credentials in the 201 body', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db } = mockDb({
+      finalProfile: {
+        id: 'new-user-id', full_name: 'New Coach',
+        pin_hash: 'SYNTH-PIN-HASH', unifi_user_id: 'SYNTH-UU', email_signature: 'SYNTH-SIG', auth_disposition: null,
+        profile_locations: [{
+          location_id: LOC, role: 'staff',
+          locations: {
+            id: LOC, name: 'Studio', sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+            settings: { glofox: { branch_id: 'b1', api_key: 'SYNTH-GK', api_token: 'SYNTH-GT', webhook_secret: 'SYNTH-GW' }, unifi: { api_token: 'SYNTH-UT' }, customer_agent: { test_phones: ['+353000000000'] } },
+          },
+        }],
+      },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({ email: 'new@example.com', full_name: 'New Coach', assignments: [{ location_id: LOC, role: 'staff' }] }))
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(JSON.stringify(body)).not.toMatch(/SYNTH-/)
+    expect(body.data.profile_locations[0].locations.name).toBe('Studio')
+    // STAFFPROFILEPICK.1 — the echo re-reads the named managed shape.
+    const profileSelects = db.from.mock.results
+      .map((r) => r.value)
+      .filter((v) => v && typeof v.select === 'function' && v.select.mock)
+      .flatMap((v) => v.select.mock.calls.map((c) => c[0]))
+    expect(profileSelects).toContain(STAFF_MANAGED_SELECT)
+    expect(body.data.id).toBe('new-user-id')
+    expect(body.data.profile_locations[0].locations).not.toHaveProperty('settings')
+    expect(JSON.stringify(body)).not.toMatch(/pin_hash|unifi_user_id|email_signature|auth_|test_phones|\+353000000000/)
   })
 })

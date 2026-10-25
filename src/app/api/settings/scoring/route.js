@@ -5,6 +5,8 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { resolveScoringConfig, SCORING_DEFAULTS } from '@/lib/heart-rate'
+import { logError } from '@/lib/log'
+import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
 
 // INCLUSION-CORE T5 — operator editor for the UN1T-Points scoring
 // figures. Stored on locations.settings.scoring (jsonb), sibling of
@@ -55,7 +57,13 @@ export async function GET() {
   const locationId = user.activeLocation?.id
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
-  const { data: loc } = await db.from('locations').select('name, settings').eq('id', locationId).single()
+  // SETTINGSWIPE.1 — a failed read is not "the default scoring": answering
+  // SCORING_DEFAULTS here let Save write them over the studio's own figures.
+  const { data: loc, error: locErr } = await db.from('locations').select('name, settings').eq('id', locationId).single()
+  if (locErr || !loc) {
+    logError('settings-scoring', 'settings read failed', { locationId, err: locErr?.message || 'no row' })
+    return NextResponse.json({ success: false, code: 'settings_unreadable', error: 'Could not load the scoring settings just now.' }, { status: 500 })
+  }
   // resolveScoringConfig returns camelCase { zonePoints, participationPoints };
   // the page consumes the snake_case stored shape, so re-shape here so GET and
   // PUT speak the same language.
@@ -98,38 +106,36 @@ export async function PUT(request) {
   const v = await validateBody(request, ScoringSchema)
   if (!v.ok) return v.response
 
-  // Merge into the existing settings object — read current, set the scoring
-  // key, write the whole object back so sibling keys (customer_agent,
-  // social_enabled, …) are never clobbered. Same approach the customer-agent
-  // route uses.
-  const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
-  const settings = loc?.settings || {}
-  const scoring = {
-    zone_points: {
-      1: v.data.zone_points[1],
-      2: v.data.zone_points[2],
-      3: v.data.zone_points[3],
-      4: v.data.zone_points[4],
-      5: v.data.zone_points[5],
-    },
-    participation_points: v.data.participation_points,
-  }
-  // Tier decay: null (or omitted-as-null) = no decay. Only persist a positive
-  // integer; anything else clears the key so "No decay" is the stored default.
-  // If the field is absent from the payload entirely, preserve the existing
-  // value (a client that predates the control never clears it by accident).
-  if ('tier_window_months' in v.data) {
-    if (Number.isInteger(v.data.tier_window_months) && v.data.tier_window_months >= 1) {
-      scoring.tier_window_months = v.data.tier_window_months
+  // Merge ONE key (settings.scoring) through mergeLocationSettings
+  // (SETTINGSWIPE.1): this used to discard its read error and write the WHOLE
+  // settings column, so a blip wiped every sibling key.
+  const saved = await mergeLocationSettings(db, locationId, (settings) => {
+    const scoring = {
+      zone_points: {
+        1: v.data.zone_points[1],
+        2: v.data.zone_points[2],
+        3: v.data.zone_points[3],
+        4: v.data.zone_points[4],
+        5: v.data.zone_points[5],
+      },
+      participation_points: v.data.participation_points,
     }
-    // else: leave unset → no decay
-  } else if (settings.scoring?.tier_window_months != null) {
-    scoring.tier_window_months = settings.scoring.tier_window_months
-  }
-  settings.scoring = scoring
-
-  const { error: updErr } = await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+    // Tier decay: null (or omitted-as-null) = no decay. Only persist a positive
+    // integer; anything else clears the key so "No decay" is the stored default.
+    // If the field is absent from the payload entirely, preserve the existing
+    // value (a client that predates the control never clears it by accident).
+    if ('tier_window_months' in v.data) {
+      if (Number.isInteger(v.data.tier_window_months) && v.data.tier_window_months >= 1) {
+        scoring.tier_window_months = v.data.tier_window_months
+      }
+    } else if (settings.scoring?.tier_window_months != null) {
+      scoring.tier_window_months = settings.scoring.tier_window_months
+    }
+    settings.scoring = scoring
+    return settings
+  }, { scope: 'settings-scoring' })
+  if (!saved.ok) return settingsSaveFailure(saved)
+  const scoring = saved.settings.scoring
   // Echo a normalised shape (tier_window_months always present, null = no decay)
   // so the client can setScoring(res.scoring) without special-casing.
   return NextResponse.json({

@@ -28,6 +28,8 @@ import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
+import { resolveOrgChrome } from '@/lib/host-brand'
+import { UN1T_GROUP_ORG_ID } from '@/lib/brands'
 
 // SAAS-7 — the header logo resolves from Stillorgan's
 // landing_page_settings row (the operator-editable source /stillorgan
@@ -128,6 +130,10 @@ export const metadata = {
 
 export default async function FreeClassPage() {
   const logoUrl = await getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO)
+  // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
+  // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
+  // cached), so the shared footer component carries no gym literal of its own.
+  const chrome = await resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID })
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
@@ -147,9 +153,10 @@ export default async function FreeClassPage() {
           campaign="stillorgan-free-class"
           ctaHref={CTA.href}
           ctaLabel={CTA.label}
+          wordmark={chrome.shortName}
         />
       ))}
-      <SiteFooter ctaHref={CTA.href} ctaLabel={CTA.label} />
+      <SiteFooter ctaHref={CTA.href} ctaLabel={CTA.label} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

@@ -213,6 +213,17 @@ describe('claimAndProcessQueueRow — exhaustion dead-letter', () => {
     expect(args.error).toContain('contacts update failed')
   })
 
+  // PURGEEXHAUSTED.1 — the retention purge deletes an exhausted queue row
+  // only when it finds this twin by the prefix of its error text. If the
+  // capture's wording drifts, the purge silently keeps every exhausted row.
+  it('the twin error text starts with the prefix the retention purge matches', async () => {
+    const { exhaustedTwinErrorPrefix } = await import('@/app/api/cron/purge-webhook-payloads/route')
+    const db = makeDb({ claimData: [{ id: 'row-7', attempts: 4 }] })
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: 'boom' })
+    await claimAndProcessQueueRow(db, { id: 'row-7', payload: unsubPayload, attempts: 4 })
+    expect(deadLetterWebhook.mock.calls[0][1].error.startsWith(exhaustedTwinErrorPrefix('row-7'))).toBe(true)
+  })
+
   it('captures under a provider key that is NOT auto-replayable', async () => {
     // 'postmark' re-inserts into postmark_webhook_queue with attempts = 0 —
     // resetting the budget that just ran out (unbounded loop) — and marks the

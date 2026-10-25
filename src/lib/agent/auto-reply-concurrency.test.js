@@ -37,7 +37,7 @@ vi.mock('./booking-tools', () => ({ BOOKING_TOOLS: [], executeBookingTool: vi.fn
 vi.mock('./event-tools', () => ({ EVENT_TOOLS: [], EVENT_TOOL_NAMES: new Set(), executeEventTool: vi.fn() }))
 vi.mock('./card-tools', () => ({ CARD_TOOLS: [], CARD_TOOL_NAMES: new Set(), executeCardTool: vi.fn() }))
 
-import { runChannelAgent } from './auto-reply'
+import { runChannelAgent, CACHED_ACCOUNT_TOOLS } from './auto-reply'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { executeAccountTool } from './account-tools'
 
@@ -58,7 +58,9 @@ function agentDb({ conv, history, calls, convUpdate, replyCount = 0, agentSettin
         return { data: [{ id: 'conv-1' }], error: null }
       }
       if (table === 'locations') {
-        return { data: { name: 'Stillorgan', settings: { customer_agent: agentSettings || { enabled: true } } }, error: null }
+        // MIAORG.1 Task 5 — a Glofox studio, so this harness runs the full
+        // (booking) tool block and prompt it was written against.
+        return { data: { name: 'Stillorgan', membership_source: 'glofox', settings: { customer_agent: agentSettings || { enabled: true } } }, error: null }
       }
       if (table === 'whatsapp_conversations') return { data: conv, error: null }
       if (table === 'whatsapp_messages') {
@@ -354,6 +356,8 @@ describe('agent turn — tool executor exceptions', () => {
     expect(marked).toHaveLength(1)
     expect(body.tools.at(-1).cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+    // MIAORG.1 Task 5 — and it is the FULL (Glofox) block at a Glofox studio.
+    expect(body.tools).toEqual(JSON.parse(JSON.stringify(CACHED_ACCOUNT_TOOLS)))
   })
 
   // The API rejects a request where a 1h breakpoint appears AFTER a 5m one:

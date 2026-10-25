@@ -112,10 +112,10 @@ describe('splitStagesByFunnel', () => {
   })
 
   it('is defensive about garbage input', () => {
-    expect(splitStagesByFunnel(null)).toEqual({ funnel: [], offFunnel: [], returning: [] })
-    expect(splitStagesByFunnel(undefined)).toEqual({ funnel: [], offFunnel: [], returning: [] })
-    expect(splitStagesByFunnel('nope')).toEqual({ funnel: [], offFunnel: [], returning: [] })
-    expect(splitStagesByFunnel([null, undefined])).toEqual({ funnel: [], offFunnel: [], returning: [] })
+    expect(splitStagesByFunnel(null)).toEqual({ funnel: [], offFunnel: [] })
+    expect(splitStagesByFunnel(undefined)).toEqual({ funnel: [], offFunnel: [] })
+    expect(splitStagesByFunnel('nope')).toEqual({ funnel: [], offFunnel: [] })
+    expect(splitStagesByFunnel([null, undefined])).toEqual({ funnel: [], offFunnel: [] })
   })
 
   it('does not mutate the input array', () => {
@@ -123,5 +123,48 @@ describe('splitStagesByFunnel', () => {
     const snapshot = rows.map((r) => r.slug)
     splitStagesByFunnel(rows)
     expect(rows.map((r) => r.slug)).toEqual(snapshot)
+  })
+})
+
+describe('PIPELINES.6 — splitStagesByFunnel without the board column', () => {
+  it("partitions one board's stages on is_dormant only", () => {
+    const stages = [
+      { id: 'a', slug: 'new_lead',  is_dormant: false, display_order: 301, archived: false },
+      { id: 'b', slug: 'member',    is_dormant: true,  display_order: 306, archived: false },
+      { id: 'c', slug: 'converted', is_dormant: false, display_order: 305, archived: false },
+    ]
+    const { funnel, offFunnel } = splitStagesByFunnel(stages)
+    expect(funnel.map((s) => s.slug)).toEqual(['new_lead', 'converted'])
+    expect(offFunnel.map((s) => s.slug)).toEqual(['member'])
+  })
+
+  it('drops archived stages', () => {
+    const stages = [
+      { id: 'a', slug: 'new_lead', is_dormant: false, display_order: 301, archived: false },
+      { id: 'z', slug: 'lapsed',   is_dormant: false, display_order: 206, archived: true },
+    ]
+    expect(splitStagesByFunnel(stages).funnel.map((s) => s.slug)).toEqual(['new_lead'])
+  })
+
+  it('orders a manual board\'s stages by display_order with no funnel split', () => {
+    const stages = [
+      { id: 'b', slug: 'waitlist_no_answer',    is_dormant: false, display_order: 502, archived: false },
+      { id: 'a', slug: 'waitlist_new_enquiry',  is_dormant: false, display_order: 501, archived: false },
+    ]
+    const { funnel } = splitStagesByFunnel(stages)
+    expect(funnel.map((s) => s.slug)).toEqual(['waitlist_new_enquiry', 'waitlist_no_answer'])
+  })
+  // The three cases above already passed before PIPELINES.6 — they never hand
+  // in a `board` and never read `.returning`. THIS is the one that fails on the
+  // old implementation: the board axis is gone, so the return shape is exactly
+  // two keys and a legacy `board` value on a row is inert data, not routing.
+  it('returns only funnel and offFunnel, and ignores a legacy board value', () => {
+    const stages = [
+      { id: 'a', slug: 'new_lead',          is_dormant: false, display_order: 301, archived: false, board: 'acquisition' },
+      { id: 'b', slug: 'returning_booked',  is_dormant: false, display_order: 401, archived: false, board: 'returning' },
+    ]
+    const out = splitStagesByFunnel(stages)
+    expect(Object.keys(out).sort()).toEqual(['funnel', 'offFunnel'])
+    expect(out.funnel.map((s) => s.slug)).toEqual(['new_lead', 'returning_booked'])
   })
 })

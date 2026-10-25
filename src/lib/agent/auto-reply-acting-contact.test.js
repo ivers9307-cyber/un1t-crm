@@ -55,7 +55,9 @@ function agentDb({ conv, history, calls, settings, phoneMatches = [], contactRow
         return { data: [{ id: 'conv-1' }], error: null }
       }
       if (table === 'locations') {
-        return { data: { name: 'Stillorgan', settings: { customer_agent: settings } }, error: null }
+        // MIAORG.1 Task 5 — a Glofox studio: booking tools are offered only where
+        // the membership source takes bookings.
+        return { data: { name: 'Stillorgan', membership_source: 'glofox', settings: { customer_agent: settings } }, error: null }
       }
       if (table === 'whatsapp_conversations') return { data: conv, error: null }
       if (table === 'whatsapp_messages') {

@@ -111,16 +111,19 @@ export async function aggregatePerson(db, groupId) {
       'PAID',
       'glofox_user_id, amount_cents, invoice_date',
     ),
-    // Deals count — select ids and count client-side (avoids head-only count
-    // which supabase-js requires on the FIRST .select() call, not chained)
-    db.from('deals').select('id').in('contact_id', memberIds),
+    // Deals count — select ids + pipeline_id and count DISTINCT BOARDS
+    // client-side (avoids head-only count, which supabase-js requires on the
+    // FIRST .select() call, not chained). PIPELINES.6b: a person can now sit
+    // on two boards at once, so counting rows would read "2 deals" for what
+    // is one pipeline relationship.
+    db.from('deals').select('id, pipeline_id').in('contact_id', memberIds),
     // Timeline: newest 50 activities across all members. `note` carries the
     // body of a Glofox-synced note/call/email (mapGlofoxInteraction), `source`
     // flags 'glofox' vs CRM-authored — both surfaced so the grouped timeline
     // shows note content + provenance (GLOFOX-NOTES-FIX).
     db
       .from('activities')
-      .select('id, contact_id, type, title, note, source, created_at')
+      .select('id, contact_id, type, subject, note, source, created_at')
       .in('contact_id', memberIds)
       .order('created_at', { ascending: false })
       .limit(50),
@@ -222,12 +225,18 @@ export async function aggregatePerson(db, groupId) {
     return new Date(c.last_attended_at) > new Date(max) ? c.last_attended_at : max
   }, null)
 
-  // ── Step 9: Deals count ───────────────────────────────────────────────────
-  const dealsCount = Array.isArray(dealCountRes?.data) ? dealCountRes.data.length : 0
+  // ── Step 9: Deals count — DISTINCT BOARDS, not rows ───────────────────────
+  // PIPELINES.6b: a contact can hold a deal on more than one board at once,
+  // so counting rows over-reports. Count distinct pipeline_id instead; a
+  // legacy row with no pipeline_id (pre-PIPELINES.1) falls back to its own
+  // id so it still counts once rather than collapsing several such rows
+  // into one via a shared `null` key.
+  const dealRows = Array.isArray(dealCountRes?.data) ? dealCountRes.data : []
+  const dealsCount = new Set(dealRows.map(d => d.pipeline_id || d.id)).size
 
   // ── Step 10: Timeline — merge activities + notes, newest-first, capped at 50,
   //    each tagged with sourceContactId. `body` carries the display text: an
-  //    activity's title (or its note body for Glofox-synced notes/calls/emails),
+  //    activity's subject (or its note body for Glofox-synced notes/calls/emails),
   //    or a CRM note's content. `source` flags 'glofox' for the provenance chip.
   const rawActivities = timelineRes?.data || []
   const rawNotes = notesRes?.data || []
@@ -235,8 +244,8 @@ export async function aggregatePerson(db, groupId) {
     ...rawActivities.map(e => ({
       sourceContactId: e.contact_id,
       type: e.type || null,
-      title: e.title || null,
-      body: e.title || e.note || null,
+      title: e.subject || null,
+      body: e.subject || e.note || null,
       source: e.source || null,
       createdAt: e.created_at,
     })),

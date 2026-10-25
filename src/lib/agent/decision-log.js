@@ -14,13 +14,15 @@ const META_MAX_INPUT_CHARS = 200
 // MIA-HYGIENE.4 — upstream error text (an Anthropic body, a stack line) can be
 // long; the trace wants the shape of the failure, not the essay.
 const META_MAX_ERROR_CHARS = 160
+// MIAHATCH.1 — a person is at a handful of studios, never dozens.
+const META_MAX_STUDIOS = 8
 
 /**
  * Compact a turn trace into the agent_decisions.meta payload (mig 444).
  * Returns null when the trace holds nothing worth persisting, so decision
  * rows from skip paths (never called the model) stay meta-free. Pure.
- * @param {{tools?: Array<{name:string,input?:object}>, stopReason?: string|null, iterations?: number}} [trace]
- * @returns {{tools?: Array, stop_reason?: string, iterations?: number}|null}
+ * @param {{tools?: Array<{name:string,input?:object,intentId?:string}>, stopReason?: string|null, iterations?: number}} [trace]
+ * @returns {{tools?: Array, stop_reason?: string, iterations?: number, member_studios?: Array, tool_block?: string}|null}
  */
 export function compactDecisionMeta(trace = {}) {
   const meta = {}
@@ -34,7 +36,11 @@ export function compactDecisionMeta(trace = {}) {
       } catch {
         input = '{}'
       }
-      return { name: String(t.name || 'unknown'), input }
+      // MIAHATCH.6 — a purchase tool's intent (mia_purchase_intents.id), so a
+      // payment link can be traced back to the turn that sent it. An id only.
+      return typeof t.intentId === 'string' && t.intentId
+        ? { name: String(t.name || 'unknown'), input, intent_id: t.intentId.slice(0, 64) }
+        : { name: String(t.name || 'unknown'), input }
     })
     if (tools.length > META_MAX_TOOLS) meta.tools_truncated = tools.length
   }
@@ -55,6 +61,22 @@ export function compactDecisionMeta(trace = {}) {
     }
     if (Object.keys(e).length) meta.error = e
   }
+  // MIAHATCH.1 — which studios the turn resolved this person at, so a reply
+  // that named another studio (or said nothing about one) can be explained
+  // after the fact. Ids and flags ONLY: no studio names, no contact ids, no
+  // member ids. Absent when the turn did not resolve (Instagram, a failed
+  // read, no organisation).
+  if (Array.isArray(trace.memberStudios) && trace.memberStudios.length) {
+    meta.member_studios = trace.memberStudios.slice(0, META_MAX_STUDIOS).map((s) => ({
+      location_id: s?.locationId ?? null,
+      provider: s?.providerKey ?? null,
+      active: s?.active === true,
+      answerable: s?.answerable === true,
+    }))
+  }
+  // MIAHATCH.2 — the tool block the turn's last request sent (glofox,
+  // no_booking, un1t_read, un1t_read_dual, un1t_full): a name, nothing else.
+  if (typeof trace.toolBlock === 'string' && trace.toolBlock) meta.tool_block = trace.toolBlock.slice(0, 20)
   return Object.keys(meta).length ? meta : null
 }
 

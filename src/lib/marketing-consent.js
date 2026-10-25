@@ -77,7 +77,7 @@ export async function applyFormMarketingConsent(db, args) {
   //    - decide whether email_status needs flipping
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, email, glofox_membership_status, email_status')
+    .select('id, email, location_id, glofox_membership_status, email_status')
     .eq('id', contactId)
     .maybeSingle()
   if (contactErr) {
@@ -227,10 +227,17 @@ export async function applyFormMarketingConsent(db, args) {
   // consent already true) does not make a Postmark round-trip per submission.
   // A contact who is already opted in has no suppression this call created,
   // and the daily consent-drift-check is what reconciles pre-existing residue.
+  //
+  // W1.E4 — lifted on the server the person's mail comes from: the org's own
+  // Postmark server when it has a live tenant_email_domains row, else the
+  // global one. The CONTACT's home location names the org; the form's
+  // location is only the fallback for a contact row that carries none.
   if (emailFlipped && consent && contact.email) {
     try {
       const { unsuppressAtPostmark } = await import('@/lib/postmark-suppressions')
-      const result = await unsuppressAtPostmark(contact.email)
+      const { serverTokenForLocation } = await import('@/lib/postmark-server-for-location')
+      const serverToken = await serverTokenForLocation(db, contact.location_id || locationId)
+      const result = await unsuppressAtPostmark(contact.email, { serverToken })
       if (result?.failed?.length) {
         logWarn('marketing-consent', 'Postmark suppression lift failed — the opt-in IS recorded, but mail stays blocked until it is lifted', {
           contactId, message: result.failed[0]?.message,

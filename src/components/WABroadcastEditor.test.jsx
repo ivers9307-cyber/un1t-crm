@@ -14,7 +14,7 @@
 //      finished. Email and SMS both fill the column; WhatsApp now does too.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), replace: vi.fn(), back: vi.fn() }),
@@ -224,5 +224,96 @@ describe('WABroadcastEditor — the drip panel names the parked share of Remaini
       />,
     )
     expect(screen.queryByTestId('wa-drip-capped')).toBeNull()
+  })
+})
+
+// WAORGNUMBER.4 (R7) — blast sign-off on the Send button. `signoff` is set
+// by the page only while the studio's window is open. Fictional ids only.
+describe('WABroadcastEditor — blast sign-off', () => {
+  const DRAFT = { id: 'b2', name: 'Launch', status: 'draft', delivery_mode: 'blast', template_id: 't1', whatsapp_broadcast_recipients: [] }
+  const TEMPLATES = [{ id: 't1', name: 'launch', status: 'APPROVED', components: [] }]
+  const COPY = 'Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2026.'
+  const renderWith = (signoff) => render(
+    <WABroadcastEditor broadcast={DRAFT} signoff={signoff} templates={TEMPLATES} locationId="loc-1" userId="u1" />
+  )
+
+  it('blocked: shows the copy and a Request sign-off note in place of the button', () => {
+    renderWith({ message: COPY, canSignOff: false, signedOff: false })
+    expect(screen.getByText(COPY)).toBeTruthy()
+    expect(screen.getByText(/Request sign-off/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Send Broadcast/ })).toBeNull()
+  })
+  it('signed off: a manager sees the Send button', () => {
+    renderWith({ message: COPY, canSignOff: false, signedOff: true })
+    expect(screen.getByRole('button', { name: /Send Broadcast/ })).toBeTruthy()
+    expect(screen.queryByText(COPY)).toBeNull()
+  })
+  it('an org admin sees Sign off beside Send', () => {
+    renderWith({ message: COPY, canSignOff: true, signedOff: false })
+    expect(screen.getByRole('button', { name: /Sign off/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Send Broadcast/ })).toBeTruthy()
+  })
+  it('no window: no notice', () => {
+    renderWith(null)
+    expect(screen.getByRole('button', { name: /Send Broadcast/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Sign off/ })).toBeNull()
+  })
+})
+
+// Review of #2108, Minor 1 — a SCHEDULED unsigned broadcast inside the window
+// is refused by the cron when its time comes, and the sign-off route accepts
+// 'scheduled': the row says so, and an org admin can sign it off from it.
+describe('WABroadcastEditor — sign-off on a scheduled broadcast', () => {
+  const SCHEDULED = { id: 'b3', name: 'Launch', status: 'scheduled', scheduled_at: '2999-01-01T09:00:00.000Z', delivery_mode: 'blast', template_id: 't1', whatsapp_broadcast_recipients: [] }
+  const TEMPLATES = [{ id: 't1', name: 'launch', status: 'APPROVED', components: [] }]
+  const COPY = 'Blasts at UN1T Hatch Street need sign-off from an organisation admin until 16 Nov 2026.'
+  const renderWith = (signoff) => render(
+    <WABroadcastEditor broadcast={SCHEDULED} signoff={signoff} templates={TEMPLATES} locationId="loc-1" userId="u1" />
+  )
+
+  it('unsigned, manager: the notice says it will not go out until an org admin signs it off; no Sign off button', () => {
+    renderWith({ message: COPY, canSignOff: false, signedOff: false, contentKey: 'k1' })
+    const notice = screen.getByTestId('wa-signoff-scheduled')
+    expect(notice.textContent).toContain(COPY)
+    expect(notice.textContent).toContain('organisation admin opens this broadcast and presses Sign off')
+    expect(screen.queryByRole('button', { name: /Sign off/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /Cancel schedule/ })).toBeTruthy()
+  })
+  it('unsigned, org admin: Sign off beside Cancel schedule, and it posts the page’s content key', async () => {
+    const fetchMock = vi.fn(async () => ({ json: async () => ({ success: true }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderWith({ message: COPY, canSignOff: true, signedOff: false, contentKey: 'k1' })
+    expect(screen.getByTestId('wa-signoff-scheduled').textContent).toContain('until you sign it off')
+    expect(screen.getByRole('button', { name: /Cancel schedule/ })).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Sign off/ })) })
+    expect(fetchMock).toHaveBeenCalledWith('/api/whatsapp/broadcasts/b3/sign-off', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ content_key: 'k1' }),
+    }))
+    expect(screen.queryByTestId('wa-signoff-scheduled')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Sign off/ })).toBeNull()
+  })
+  it('signed off: no notice, no Sign off', () => {
+    renderWith({ message: COPY, canSignOff: true, signedOff: true, contentKey: 'k1' })
+    expect(screen.queryByTestId('wa-signoff-scheduled')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Sign off/ })).toBeNull()
+  })
+  it('no window: no notice', () => {
+    renderWith(null)
+    expect(screen.queryByTestId('wa-signoff-scheduled')).toBeNull()
+  })
+  it('a Save the PUT answers signoff_cleared on says the sign-off was cleared', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ success: true, broadcast: SCHEDULED, signoff_cleared: true }) })))
+    renderWith({ message: COPY, canSignOff: false, signedOff: true, contentKey: 'k1' })
+    expect(screen.queryByTestId('wa-signoff-cleared')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save/ })) })
+    expect(screen.getByTestId('wa-signoff-cleared').textContent).toContain("cleared this broadcast's sign-off")
+    // One notice, not two.
+    expect(screen.queryByTestId('wa-signoff-scheduled')).toBeNull()
+  })
+  it('a plain Save shows nothing about sign-off', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ success: true, broadcast: SCHEDULED }) })))
+    renderWith({ message: COPY, canSignOff: false, signedOff: true, contentKey: 'k1' })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save/ })) })
+    expect(screen.queryByTestId('wa-signoff-cleared')).toBeNull()
   })
 })

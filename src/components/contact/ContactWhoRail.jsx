@@ -8,6 +8,9 @@ import { Mail, Phone } from 'lucide-react'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import GlofoxProfileCard from './GlofoxProfileCard'
+import ContactStudiosCard from './ContactStudiosCard'
+import Un1tPaymentsCard from './Un1tPaymentsCard'
+import { visitOriginLabel } from '@/lib/visit-origin'
 
 function InfoRow({ label, value }) {
   return (
@@ -18,11 +21,11 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] } }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
-      <LinkedAccountsCard person={person} contactId={contact.id} locationId={contact.location_id} />
+      <LinkedAccountsCard person={person} contactId={contact.id} locationId={contact.location_id} canManage={canLinkAccounts} />
 
       {/* Identity — emails + phones (deduped across the group when linked). */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
@@ -57,19 +60,32 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Details</h3>
         <InfoRow label="Source" value={contact.lead_source || contact.source} />
+        {/* VISIT-ORIGIN.1 — only when something is known; no "unknown" row. */}
+        {visitOriginLabel(contact) && <InfoRow label="Came via" value={visitOriginLabel(contact)} />}
         <InfoRow label="Label" value={contact.label || '—'} />
         <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
       </div>
 
+      {/* ORGCONTACTS.2 — every studio the person has a relationship with (the
+          memberships card it replaced went with ORGCONTACTS.5). */}
+      <ContactStudiosCard studios={contactStudios} primaryLocationId={contact?.location_id ?? null} canRehome={canRehome} contactId={contact?.id ?? null} />
+
+      {/* HATCHPIPE.2 — what un1t.online says this contact owes and has paid. */}
+      <Un1tPaymentsCard studios={un1tBilling?.studios} />
+
       <GlofoxProfileCard contact={contact} />
 
       {/* CONSENT.1 — operator toggles for marketing email / SMS /
-          WhatsApp. Transactional sends stay on regardless. */}
-      <ContactMarketingPreferencesCard
-        contactId={contact.id}
-        canEdit={canEditPrefs}
-        glofoxMembershipStatus={contact.glofox_membership_status}
-      />
+          WhatsApp. Transactional sends stay on regardless. Members of the
+          contact's studio only (contactWorkGates.canReadStudioCards): the
+          route 404s anyone else, e.g. a crossover viewer. */}
+      {canReadStudioCards && (
+        <ContactMarketingPreferencesCard
+          contactId={contact.id}
+          canEdit={canEditPrefs}
+          glofoxMembershipStatus={contact.glofox_membership_status}
+        />
+      )}
     </>
   )
 }

@@ -33,7 +33,12 @@ import { buildSessionReport } from '@/lib/hr-session-report'
 import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
+import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 import { getAppUrl, getMemberAppUrl } from '@/lib/app-url'
+import { getLocationBranding } from '@/lib/location-branding'
+import { productName } from '@/lib/brand-name'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { resolveAgentSettings } from '@/lib/agent/settings-resolve'
 
 const HISTORY_LOOKBACK_DAYS = 90
 
@@ -58,6 +63,13 @@ const HISTORY_LOOKBACK_DAYS = 90
 //
 // Both bases are resolved per call (not at module load) so a stubbed env is
 // honoured and the throw lands at the site that needs the value.
+//
+// W1.L3a — the stop-emails link is now minted on the SESSION LOCATION's
+// tenant host (<org.slug>.repset.ie or its custom domain): sendPostClassEmail
+// resolves it (resolveCustomerBaseUrl, which floors to getAppUrl() and never
+// throws past it) and hands it to the pure composeEmail as `customerBaseUrl`.
+// A compose with no host handed in keeps the getAppUrl() seam above, so the
+// throw-when-unset contract is unchanged.
 
 // ── (1) load ────────────────────────────────────────────────────
 
@@ -107,8 +119,15 @@ export async function loadContextForSession(db, sessionId) {
   const catMap = new Map((catRows || []).map((c) => [c.class_name_normalized, c.category]))
   const categoryFor = (name) => catMap.get(normalizeClassName(name)) ?? null
 
-  const { data: loc } = await db.from('locations').select('settings').eq('id', session.location_id).single()
-  const ca = loc?.settings?.customer_agent || {}
+  // TZ.13 — `timezone` rides the same read: the studio's zone labels the
+  // session start and buckets the streak highlight (D7, the member's studio).
+  // MIAORG.1 — Mia's settings resolved DEFAULTS <- org <- studio (the
+  // membership link + label are studio-only keys, so they are always the
+  // studio's own). An unreadable row is no CTA and the default zone, as before.
+  const resolved = await resolveAgentSettings(db, session.location_id)
+  const loc = resolved.ok ? resolved.location : null
+  const zone = zoneOfLocation(loc)
+  const ca = resolved.ok ? resolved.settings : {}
   // Pulse stays out of booking (Glofox owns it), so no booking CTA is passed —
   // only the membership/join conversion action for non-members. See buildNextAction.
   const cta = {
@@ -176,6 +195,14 @@ export async function loadContextForSession(db, sessionId) {
     unsubscribeToken = pref?.unsubscribe_token || null
   }
 
+  // W1.S4 — the highlight names the product in the studio's brand ("UN1T
+  // Points"). Resolved last, after every read the tests count; the resolver
+  // never throws and answers '' when unresolved (bare "Points").
+  // W1.S1a — the same lookup yields the studio's configured brand
+  // (companyName), which the eyebrow, the "big day at" subject and the
+  // footer name; product names stay on the SHORT brand.
+  const { shortName, companyName } = await getLocationBranding(db, session.location_id)
+
   return {
     ok: true,
     session,
@@ -185,6 +212,9 @@ export async function loadContextForSession(db, sessionId) {
     cta,
     contact: session.contact,
     unsubscribeToken,
+    shortName,
+    companyName,
+    zone,
   }
 }
 
@@ -195,9 +225,15 @@ export async function loadContextForSession(db, sessionId) {
  * no Date.now() unless caller passes nowMs. Returns subject + html
  * + text. Tested standalone.
  */
-export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
-  const { session, thisSession, history, eventTypeName, contact } = ctx
-  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta }, { nowMs })
+export function composeEmail(ctx, { nowMs = Date.now(), customerBaseUrl = null } = {}) {
+  const { session, thisSession, history, eventTypeName, contact, shortName = '', companyName = '', zone = DEFAULT_TZ } = ctx
+  // W1.S1a — product names on the SHORT brand ("UN1T Points" / "UN1T HR"),
+  // the studio named by its configured brand ("UN1T Stillorgan"). Either
+  // blank degrades to the bare noun / a sentence without a name.
+  const pointsName = productName(shortName, 'points')
+  const hrName = productName(shortName, 'hr')
+  const brand = String(companyName || '').trim()
+  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta, shortName }, { nowMs }, zone)
   // Adapt the report back to the shapes the existing renderers read, so
   // the email's output is byte-identical while the numbers now flow from
   // the one canonical builder.
@@ -222,7 +258,7 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
 
   const firstName = (contact?.name || 'there').split(/\s+/)[0]
   const classLabel = eventTypeName ? eventTypeName : 'your workout'
-  const startedAt = formatStartLabel(session.started_at)
+  const startedAt = formatStartLabel(session.started_at, zone)
   const points = Number.isFinite(session.effort_points) ? session.effort_points : 0
   const peak = Number.isFinite(session.peak_hr_bpm) ? session.peak_hr_bpm : null
   const avg = Number.isFinite(session.avg_hr_bpm) ? session.avg_hr_bpm : null
@@ -237,34 +273,42 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
   const vcLine = (vc && vc.percentile != null && vc.sample_size >= 2)
     ? (Math.round(vc.percentile * 100) >= 50
         ? `Top ${100 - Math.round(vc.percentile * 100)}% of your last ${vc.sample_size} ${vc.category} classes.`
-        : `Building back up in your ${vc.category} classes — avg ${vc.mean_points} pts over your last ${vc.sample_size}.`)
+        : `Building back up in your ${vc.category} classes: avg ${vc.mean_points} pts over your last ${vc.sample_size}.`)
     : null
 
-  const subject = pickSubject({ firstName, classLabel, points, highlight: analytics.highlight })
+  const subject = pickSubject({ firstName, classLabel, points, highlight: analytics.highlight, pointsName, hrName, brand })
 
   return {
     subject,
     text: renderText({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, vcLine, sessionUrl, na,
+      breakdown, analytics, vcLine, sessionUrl, na, pointsName,
     }),
     html: renderHtml({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
       breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id, na,
       unsubscribeToken: ctx.unsubscribeToken || null,
+      customerBaseUrl, pointsName, brand,
     }),
     analytics,
   }
 }
 
-function pickSubject({ firstName, classLabel, points, highlight }) {
-  if (highlight?.id === 'first_ever') return `Welcome to UN1T HR, ${firstName}`
+// W1.S1a — every subject names the studio's own brand (pointsName / hrName
+// from productName, `brand` = the configured company name), and customer
+// copy carries no em-dashes.
+function pickSubject({ firstName, classLabel, points, highlight, pointsName, hrName, brand }) {
+  if (highlight?.id === 'first_ever') return `Welcome to ${hrName}, ${firstName}`
   if (highlight?.id === 'first_z5') return `${firstName}, you hit Z5 today`
   if (highlight?.id === 'new_peak') return `New peak HR for ${firstName} 🔥`
-  if (highlight?.id === 'best_class_type_points') return `${firstName} — personal best in ${classLabel}`
-  if (highlight?.id === 'top_quartile_recent') return `${firstName}, big day at UN1T (${points} UN1T Points)`
+  if (highlight?.id === 'best_class_type_points') return `${firstName}, a personal best in ${classLabel}`
+  if (highlight?.id === 'top_quartile_recent') {
+    return brand
+      ? `${firstName}, big day at ${brand} (${points} ${pointsName})`
+      : `${firstName}, big day (${points} ${pointsName})`
+  }
   if (highlight?.id === 'streak') return `${firstName}, you're on a streak`
-  return `Your ${classLabel} — ${points} UN1T Points`
+  return `Your ${classLabel}: ${points} ${pointsName}`
 }
 
 function trendLabel(trend) {
@@ -285,14 +329,14 @@ function classTypeLabel(classType) {
   if (pctRound >= 75) return `Top ${100 - pctRound}% of your last ${classType.recentCount} ${classType.eventTypeName || 'sessions'}.`
   if (pctRound >= 50) return `Above your usual for ${classType.eventTypeName || 'this class'} (mean ${classType.meanPoints} pts over your last ${classType.recentCount}).`
   if (pctRound >= 25) return `A bit below your usual for ${classType.eventTypeName || 'this class'} (mean ${classType.meanPoints} pts).`
-  return `Lighter than your usual ${classType.eventTypeName || 'session'} — yours mean ${classType.meanPoints} pts.`
+  return `Lighter than your usual ${classType.eventTypeName || 'session'}: your mean is ${classType.meanPoints} pts.`
 }
 
-function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, na }) {
+function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, na, pointsName }) {
   const lines = []
   lines.push(`Hi ${firstName},`)
   lines.push('')
-  lines.push(`${classLabel} on ${startedAt} — ${points} UN1T Points.`)
+  lines.push(`${classLabel} on ${startedAt}: ${points} ${pointsName}.`)
   if (analytics.highlight) lines.push('')
   if (analytics.highlight) lines.push(`★ ${analytics.highlight.message}`)
   lines.push('')
@@ -311,17 +355,17 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   const ctLabel = classTypeLabel(analytics.classType)
   if (ctLabel) {
     lines.push('')
-    lines.push(`Class trend — ${ctLabel}`)
+    lines.push(`Class trend: ${ctLabel}`)
   }
   if (vcLine) {
     lines.push('')
-    lines.push(`Category trend — ${vcLine}`)
+    lines.push(`Category trend: ${vcLine}`)
   }
 
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   if (tPoints) {
     lines.push('')
-    lines.push(`Overall: UN1T Points ${tPoints.label}.`)
+    lines.push(`Overall: ${pointsName} ${tPoints.label}.`)
   }
 
   lines.push('')
@@ -333,7 +377,7 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na, unsubscribeToken, customerBaseUrl, pointsName, brand }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -374,7 +418,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
   if (vcLine) insightLines.push(`<strong>Category:</strong> ${escapeHtml(vcLine)}`)
   if (tPoints) {
     const arrow = tPoints.dir === 'up' ? '↑' : tPoints.dir === 'down' ? '↓' : '→'
-    insightLines.push(`<strong>UN1T Points overall:</strong> ${arrow} ${escapeHtml(tPoints.label)}`)
+    insightLines.push(`<strong>${escapeHtml(pointsName)} overall:</strong> ${arrow} ${escapeHtml(tPoints.label)}`)
   }
   if (tPeak && tPeak.dir !== 'flat') {
     const arrow = tPeak.dir === 'up' ? '↑' : '↓'
@@ -389,14 +433,14 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
       </ul>
     </div>`
 
-  const unsubUrl = unsubscribeUrl({ contactId: contact?.id, sessionId, unsubscribeToken })
+  const unsubUrl = unsubscribeUrl({ contactId: contact?.id, sessionId, unsubscribeToken, customerBaseUrl })
 
   return `
 <!doctype html>
 <html><body style="margin:0;background:#f4f4f5;padding:24px 12px;font-family:Arial,sans-serif;">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="max-width:560px;width:100%;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;">
   <tr><td style="padding:24px 28px;">
-    <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#888;">UN1T &middot; ${escapeHtml(startedAt)}</div>
+    <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#888;">${brand ? `${escapeHtml(brand)} &middot; ` : ''}${escapeHtml(startedAt)}</div>
     <h1 style="margin:6px 0 4px 0;font-size:22px;color:#111;">Hi ${escapeHtml(firstName)},</h1>
     <p style="margin:0;color:#444;font-size:14px;line-height:1.5;">
       Here's how your <strong>${escapeHtml(classLabel)}</strong> went.
@@ -407,7 +451,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:18px 0;">
       <tr>
         <td style="background:#fafafa;border-radius:8px;padding:14px;text-align:center;width:33.33%;border:1px solid #e5e7eb;">
-          <div style="font-size:11px;color:#666;letter-spacing:.1em;text-transform:uppercase;">UN1T Points</div>
+          <div style="font-size:11px;color:#666;letter-spacing:.1em;text-transform:uppercase;">${escapeHtml(pointsName)}</div>
           <div style="font-size:28px;font-weight:bold;color:#111;margin-top:2px;">${points}</div>
         </td>
         <td style="width:6px;"></td>
@@ -445,7 +489,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
 
     <p style="margin:24px 0 0 0;font-size:11px;color:#9ca3af;text-align:center;">
       You're getting this because you trained with a heart-rate
-      monitor at UN1T. <a href="${escapeHtml(unsubUrl)}" style="color:#9ca3af;">Stop these emails</a>.
+      monitor${brand ? ` at ${escapeHtml(brand)}` : ''}. <a href="${escapeHtml(unsubUrl)}" style="color:#9ca3af;">Stop these emails</a>.
     </p>
   </td></tr>
 </table>
@@ -468,23 +512,29 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
  * the legacy `cid`+`sid` PAIR, which the endpoint still accepts — the session
  * has to belong to the contact, so the pair is a capability too.
  */
-function unsubscribeUrl({ contactId, sessionId, unsubscribeToken }) {
+function unsubscribeUrl({ contactId, sessionId, unsubscribeToken, customerBaseUrl }) {
   const params = unsubscribeToken
     ? new URLSearchParams({ scope: 'hr', token: unsubscribeToken })
     : new URLSearchParams({ scope: 'hr', cid: contactId || '', sid: sessionId || '' })
-  // CRM base — this deployment serves /api/preferences/hr-emails (see top).
-  return `${getAppUrl()}/api/preferences/hr-emails?${params.toString()}`
+  // W1.L3a — the session location's tenant host when the send path handed one
+  // in; otherwise the CRM base (this deployment serves
+  // /api/preferences/hr-emails, and so does every tenant host since W1.L2).
+  const baseUrl = customerBaseUrl || getAppUrl()
+  return `${baseUrl}/api/preferences/hr-emails?${params.toString()}`
 }
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
-function formatStartLabel(iso) {
+// TZ.13 — in the session's studio zone (`zone`, from loadContextForSession).
+// The catch only fires for a zone Intl rejects; TZ.17 made its fallback the
+// platform zone, explicitly (it was the server's clock: UTC on Vercel).
+function formatStartLabel(iso, zone) {
   try {
-    return formatWeekdayShortDateTimeInTZ(iso)
+    return formatWeekdayShortDateTimeInTZ(iso, zone)
   } catch {
-    return new Date(iso).toLocaleString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    return new Date(iso).toLocaleString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: DEFAULT_TZ })
   }
 }
 
@@ -578,7 +628,12 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
 
   let composed
   try {
-    composed = composeEmail(ctx, { nowMs })
+    // W1.L3a — the stop-emails link lands on the session location's tenant
+    // host. Inside the try on purpose: the resolver's floor is getAppUrl(),
+    // which throws when unset, and that throw must take the same stamp-and-
+    // stop exit as a compose throw (the catch below), never re-arm the sweep.
+    const customerBaseUrl = await resolveCustomerBaseUrl(db, session.location_id)
+    composed = composeEmail(ctx, { nowMs, customerBaseUrl })
   } catch (e) {
     // URLSEAM.1 review — this catch used to `return` without stamping, which
     // re-armed the exact loop `markProcessed` exists to stop: the auto-end
@@ -586,9 +641,10 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
     // minutes, so a compose that throws meant a re-compose (and a re-fired
     // "session ready" push) on every tick, forever.
     //
-    // That was latent before URLSEAM.1 and reachable after it: `composeEmail`
-    // now calls `getAppUrl()` (via unsubscribeUrl), which THROWS by design
-    // when NEXT_PUBLIC_APP_URL is unset. Every way composeEmail can throw is
+    // That was latent before URLSEAM.1 and reachable after it: the host
+    // resolve above floors to `getAppUrl()` (and a bare `composeEmail` still
+    // calls it via unsubscribeUrl), which THROWS by design when
+    // NEXT_PUBLIC_APP_URL is unset. Every way this try block can throw is
     // permanent for the life of the deployment — it is a pure function of the
     // already-loaded ctx plus env, so nothing about the next tick differs —
     // which makes "stamp and stop" strictly better than "retry forever".

@@ -24,6 +24,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/lib/tcx-builder', () => ({ buildTcx: vi.fn(() => '<tcx/>') }))
+// W1.S1a — the activity is named for the session studio's product.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 vi.mock('@/lib/strava', () => ({
   refreshAccessToken: vi.fn(),
   uploadTcx: vi.fn(),
@@ -401,6 +403,19 @@ describe('runExportWorker — HR samples pagination', () => {
     expect(callArgs.samples).toHaveLength(TOTAL)
     // Spot-check that the last sample is present, not truncated at 1000
     expect(callArgs.samples[TOTAL - 1]).toEqual(allSamples[TOTAL - 1])
+  })
+
+  it('W1.S1a: names the TCX title and the Strava activity for the studio product', async () => {
+    const db = makeWorkerDb({
+      jobs: [baseJob],
+      integration: baseIntegration,
+      service: baseService,
+      session: baseSession,
+      allSamples: makeSamples(20, 'sess-1'),
+    })
+    await runExportWorker(db)
+    expect(buildTcx.mock.calls[0][0].title).toMatch(/^UN1T HR · /)
+    expect(uploadTcx.mock.calls[0][0].name).toMatch(/^UN1T HR · /)
   })
 
   it('skips (does not upload) when sample count < 10', async () => {

@@ -1,0 +1,103 @@
+// @vitest-environment jsdom
+//
+// ORGCONTACTS.2 — the contact page's Studios card: every studio the person
+// has a relationship with (contact_studios, mig 764), the primary studio
+// first, each with its kind, status and first / last seen.
+import { describe, it, expect, afterEach } from 'vitest'
+import { render, cleanup } from '@testing-library/react'
+import ContactStudiosCard from './ContactStudiosCard.jsx'
+
+afterEach(cleanup)
+
+const rows = [
+  { location_id: 'hatch', kind: 'client', status: 'ended', source: 'un1t_online', first_seen_at: '2026-02-01T00:00:00Z', last_seen_at: null, location: { id: 'hatch', name: 'UN1T Hatch Street' } },
+  { location_id: 'still', kind: 'member', status: 'active', source: 'glofox', first_seen_at: '2026-01-05T00:00:00Z', last_seen_at: '2026-10-12T00:00:00Z', location: { id: 'still', name: 'UN1T Stillorgan' } },
+]
+
+describe('ContactStudiosCard', () => {
+  it('renders nothing with no rows', () => {
+    const { container } = render(<ContactStudiosCard studios={[]} primaryLocationId="still" />)
+    expect(container.innerHTML).toBe('')
+  })
+  it('lists each studio, the primary first, with kind, status, source and seen dates', () => {
+    const { container } = render(<ContactStudiosCard studios={rows} primaryLocationId="still" />)
+    const items = [...container.querySelectorAll('li')].map((li) => li.textContent)
+    expect(items).toHaveLength(2)
+    expect(items[0]).toContain('UN1T Stillorgan')
+    expect(items[0]).toContain('Primary')
+    expect(items[0]).toContain('Member')
+    expect(items[0]).toContain('Active')
+    expect(items[0]).toContain('Glofox')
+    expect(items[0]).toContain('last seen 12 Oct 2026')
+    expect(items[1]).toContain('UN1T Hatch Street')
+    expect(items[1]).toContain('Client')
+    expect(items[1]).toContain('Ended')
+    expect(items[1]).toContain('un1t.online')
+    expect(items[1]).not.toContain('Primary')
+  })
+  it('a studio the read could not name shows as Studio', () => {
+    const { container } = render(<ContactStudiosCard studios={[{ ...rows[0], location: null }]} primaryLocationId="still" />)
+    expect(container.textContent).toContain('Studio')
+  })
+})
+
+// ORGCONTACTS.7 (mig 770) — the un1t.online membership facts on the row: plan,
+// member since, membership ended. A row with none recorded shows neither phrase.
+describe('ContactStudiosCard — membership facts', () => {
+  it('an active membership shows the plan and member since; an ended one its end; none shows neither', () => {
+    const active = { ...rows[0], location_id: 'hatch', status: 'active', kind: 'member', membership_plan: 'Founding Membership — Unlimited', membership_status: 'active', membership_since: '2026-02-01T00:00:00Z', membership_ended_at: null }
+    const ended = { ...rows[0], location_id: 'other', location: { id: 'other', name: 'UN1T Other' }, kind: 'client', status: 'active', membership_plan: 'Monthly', membership_status: 'ended', membership_since: '2026-03-01T00:00:00Z', membership_ended_at: '2026-09-01T00:00:00Z' }
+    const { container } = render(<ContactStudiosCard studios={[active, ended, rows[1]]} primaryLocationId="still" />)
+    const items = [...container.querySelectorAll('li')].map((li) => li.textContent)
+    expect(items.find((t) => t.includes('UN1T Hatch Street'))).toContain('Founding Membership — Unlimited · member since 1 Feb 2026')
+    expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · membership ended 1 Sept 2026')
+    expect(items.find((t) => t.includes('UN1T Stillorgan'))).not.toMatch(/member since|membership ended/)
+  })
+
+  // ORGCONTACTS.8 — a stamp that failed to record never renders as "null".
+  it('a missing since / ended date shows the status without a date, never "null"', () => {
+    const noSince = { ...rows[0], location_id: 'hatch', status: 'active', kind: 'member', membership_plan: 'Monthly', membership_status: 'active', membership_since: null, membership_ended_at: null }
+    const noEnd = { ...rows[0], location_id: 'other', location: { id: 'other', name: 'UN1T Other' }, kind: 'client', status: 'active', membership_plan: 'Monthly', membership_status: 'ended', membership_since: null, membership_ended_at: 'not-a-date' }
+    const noFirstSeen = { ...rows[1], first_seen_at: null, last_seen_at: null }
+    const { container } = render(<ContactStudiosCard studios={[noSince, noEnd, noFirstSeen]} primaryLocationId="still" />)
+    const items = [...container.querySelectorAll('li')].map((li) => li.textContent)
+    expect(items.find((t) => t.includes('UN1T Hatch Street'))).toContain('Monthly · active')
+    expect(items.find((t) => t.includes('UN1T Other'))).toContain('Monthly · ended')
+    for (const t of items) {
+      expect(t).not.toMatch(/null|undefined|Invalid Date/)
+      expect(t).not.toMatch(/since\s*$|since ·/)
+    }
+  })
+})
+
+// ORGCONTACTS.4 (decision 4) — "Change primary studio": only for a caller the
+// delete / rehome gate admits, and only when there is another studio to move to.
+describe('ContactStudiosCard — change primary studio', () => {
+  it('renders the control with the other studios as options when canRehome; not otherwise; not with one studio', () => {
+    const { container } = render(<ContactStudiosCard studios={rows} primaryLocationId="still" canRehome contactId="c-1" />)
+    const select = container.querySelector('select[name="primary_location_id"]')
+    expect(select).not.toBeNull()
+    expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['hatch'])
+    expect(container.textContent).toMatch(/Change primary studio/)
+
+    const { container: noGate } = render(<ContactStudiosCard studios={rows} primaryLocationId="still" contactId="c-1" />)
+    expect(noGate.querySelector('select[name="primary_location_id"]')).toBeNull()
+
+    const { container: one } = render(<ContactStudiosCard studios={[rows[1]]} primaryLocationId="still" canRehome contactId="c-1" />)
+    expect(one.querySelector('select[name="primary_location_id"]')).toBeNull()
+  })
+
+  // Review Focus 1 (final review I3): a deactivated studio or a host anchor is
+  // never offered as a primary studio, whatever relationship the person holds there.
+  it('offers neither a deactivated studio nor a host anchor; with none left the control is not rendered', () => {
+    const closed = { ...rows[0], location_id: 'closed', location: { id: 'closed', name: 'UN1T Closed', active: false } }
+    const anchor = { ...rows[0], location_id: 'anchor', location: { id: 'anchor', name: 'Host anchor', is_host_anchor: true } }
+    const { container } = render(<ContactStudiosCard studios={[...rows, closed, anchor]} primaryLocationId="still" canRehome contactId="c-1" />)
+    const select = container.querySelector('select[name="primary_location_id"]')
+    expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['hatch'])
+    expect(container.textContent).toContain('UN1T Closed') // the card still lists the relationship
+
+    const { container: none } = render(<ContactStudiosCard studios={[rows[1], closed, anchor]} primaryLocationId="still" canRehome contactId="c-1" />)
+    expect(none.querySelector('select[name="primary_location_id"]')).toBeNull()
+  })
+})

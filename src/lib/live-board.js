@@ -1,9 +1,8 @@
-// Live HR board payload builder — shared by the two public entrypoints:
-//   - /api/public/live/[locationId]   (legacy, location-keyed; P0-3 transition)
+// Live HR board payload builder — the payload behind the public entrypoint:
 //   - /api/public/tv-live/[token]     (P0-3 token-gated; resolves the location
 //                                       from tv_displays.token first)
-// Both return the IDENTICAL board payload so the TV client is agnostic to which
-// URL it polls. Keeping the builder here (not in a route) means there is a
+// The location-keyed /api/public/live/[locationId] used to share it until W0.9c
+// removed that route. Keeping the builder here (not in the route) keeps a
 // single privacy/opt-out filter to maintain.
 //
 // Privacy floor (unchanged): first name + last initial only, no contact ids, no
@@ -16,8 +15,9 @@ import { zoneForBpm } from '@/lib/heart-rate'
 import { isBridgeOnline, latestBridgeSeenMs, maskStrapLabel } from '@/lib/bridge-samples'
 import { getAvailableStraps } from '@/lib/live-class'
 import { resolveCurrentClassForTv } from '@/lib/class-occurrences'
-import { dublinTimeLabel } from '@/lib/dublin-time'
+import { zoneOfLocation, timeLabelIn } from '@/lib/location-time'
 import { selectAll } from '@/lib/select-all'
+import { buildIdleContent } from '@/lib/tv-idle-content'
 
 const RECENT_BPM_WINDOW_MS = 30 * 1000   // moving-avg window for "current"
 const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag
@@ -27,12 +27,18 @@ const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag
  *
  * @param {object} db        service-role Supabase client
  * @param {object} opts
- * @param {{ id: string, name: string }} opts.location  the resolved location row
+ * @param {{ id: string, name: string, timezone?: string|null }} opts.location  the resolved location row
+ * @param {string|null} [opts.displayId]  the tv_displays.id the token resolved to; scopes the operator idle scene
  * @param {number} [opts.nowMs]
- * @returns {Promise<object>} the JSON body ({ ok, server_time, location, bridge, sessions, available_straps, timer, current_class })
+ * @returns {Promise<object>} the JSON body ({ ok, server_time, timezone, location, bridge, sessions, available_straps, timer, current_class }), plus `idle` when no session is open
  */
-export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }) {
+export async function buildLiveBoardPayload(db, { location, displayId = null, nowMs = Date.now() }) {
   const locationId = location.id
+  // TZ.12 — the board tells its own studio's time: the class label below, and
+  // `timezone` in the payload for the TV's header clock and overnight poll
+  // back-off. The caller's location row carries `timezone` (no extra read); a
+  // missing/NULL/invalid value is Europe/Dublin (zoneOfLocation warns once).
+  const zone = zoneOfLocation(location)
 
   // Bridge liveness for the TV connection dot. Keyed off last_seen_at
   // freshness, not the status column — a Pi that loses power can't send
@@ -97,19 +103,29 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
 
   const liveClass = await resolveCurrentClassForTv(db, { locationId, nowMs })
   const currentClass = liveClass
-    ? { class_name: liveClass.class_name, program: liveClass.program, starts_at: liveClass.starts_at, starts_at_label: dublinTimeLabel(liveClass.starts_at), glofox_event_id: liveClass.glofox_event_id }
+    ? { class_name: liveClass.class_name, program: liveClass.program, starts_at: liveClass.starts_at, starts_at_label: timeLabelIn(liveClass.starts_at, zone), glofox_event_id: liveClass.glofox_event_id }
     : null
 
   if (!sessions || sessions.length === 0) {
+    // TVSCENE.1 — idle scenes. Built ONLY here, so a live class pays nothing
+    // for these three reads. Each one fails to absent, never to an error.
+    const idle = await buildIdleContent(db, {
+      locationId,
+      displayId,
+      zone,
+      nowMs,
+    })
     return {
       ok: true,
       server_time: new Date().toISOString(),
+      timezone: zone,
       location: { id: location.id, name: location.name },
       bridge,
       sessions: [],
       available_straps: availableStraps,
       timer: timerRun || null,
       current_class: currentClass,
+      idle,
     }
   }
 
@@ -203,6 +219,7 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
   return {
     ok: true,
     server_time: new Date().toISOString(),
+    timezone: zone,
     location: { id: location.id, name: location.name },
     bridge,
     sessions: tiles,

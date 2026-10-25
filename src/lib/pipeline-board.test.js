@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  toBoardDeal, pipelineContactFields, PIPELINE_PAGE_SIZE,
+  toBoardDeal, boardDealMapper, badgeEnabledForModule, boardCardOptionsForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
+  initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
   ageDays, formatAge, dealAge, PIPELINE_BACKFILL_CUTOFF,
 } from './pipeline-board.js'
 
@@ -114,5 +115,187 @@ describe('pipelineContactFields', () => {
   })
   it('page size is a sane positive number', () => {
     expect(PIPELINE_PAGE_SIZE).toBeGreaterThan(0)
+  })
+})
+
+describe('boardDealMapper', () => {
+  // unix SECONDS (Glofox convention), a day ahead of the real clock.
+  const FUTURE_SECONDS = Math.floor(Date.now() / 1000) + 86400
+  const deal = {
+    id: 'd1', stage_id: 's1', title: 't', created_at: '2026-09-01T00:00:00Z',
+    contacts: {
+      id: 'c1', name: 'Ann', pipeline_stage_slug: 'new_lead',
+      recent_bookings: [{ status: 'BOOKED', time_start: FUTURE_SECONDS }],
+    },
+  }
+
+  it('positive control: the default mapper and toBoardDeal derive an ISO next_class_at for this deal', () => {
+    const expected = new Date(FUTURE_SECONDS * 1000).toISOString()
+    expect(boardDealMapper()(deal).contacts.next_class_at).toBe(expected)
+    expect(toBoardDeal(deal).contacts.next_class_at).toBe(expected)
+  })
+
+  it('boardDealMapper({ badge:false }) sets next_class_at null and still strips recent_bookings', () => {
+    const out = boardDealMapper({ badge: false })(deal)
+    expect(out.contacts.next_class_at).toBeNull()
+    expect(out.contacts.recent_bookings).toBeUndefined()
+    expect(out.contacts.id).toBe('c1')
+    expect(out.age).toBeTruthy()
+  })
+
+  it('toBoardDeal unchanged', () => {
+    const viaDefault = boardDealMapper()(deal)
+    const direct = toBoardDeal(deal)
+    expect(direct.contacts).toEqual(viaDefault.contacts)
+    expect(direct.contacts.recent_bookings).toBeUndefined()
+    expect(direct.contacts.next_class_at).not.toBeNull()
+    // 1-arg: safe in .map (the index must not be read as an option bag)
+    const mapped = [deal, deal].map(toBoardDeal)
+    expect(mapped).toHaveLength(2)
+  })
+
+  // HATCHPIPE.5 — the card must know the badge is OFF (not merely "no class"),
+  // or it shows a red "No class booked" on every early-stage un1t card.
+  it('badge off marks the deal next_class_badge:false; badge on adds no key at all (Stillorgan rows unchanged)', () => {
+    expect(boardDealMapper({ badge: false })(deal).next_class_badge).toBe(false)
+    expect(boardDealMapper(boardCardOptionsForModule('acquisition_un1t'))(deal).next_class_badge).toBe(false)
+    const on = boardDealMapper()(deal)
+    expect(on).not.toHaveProperty('next_class_badge')
+    expect(Object.keys(boardDealMapper(boardCardOptionsForModule('acquisition'))(deal)).sort()).toEqual(Object.keys(toBoardDeal(deal)).sort())
+    expect(Object.keys(on).sort()).toEqual(['age', 'contacts', 'created_at', 'id', 'stage_id', 'title'])
+  })
+
+  it('is safe in .map with a deal that has no contacts', () => {
+    const out = [{ id: 'd' }].map(boardDealMapper({ badge: false }))[0]
+    expect(out.contacts.next_class_at).toBeNull()
+  })
+})
+
+describe('badgeEnabledForModule', () => {
+  it('acquisition true, acquisition_un1t false, unknown true', () => {
+    expect(badgeEnabledForModule('acquisition')).toBe(true)
+    expect(badgeEnabledForModule('acquisition_un1t')).toBe(false)
+    expect(badgeEnabledForModule('nope')).toBe(true)
+    expect(badgeEnabledForModule(null)).toBe(true)
+    expect(badgeEnabledForModule(undefined)).toBe(true)
+  })
+})
+
+// HATCHPIPE.3 — a un1t.online board's card must not show the Glofox credit
+// count: on a dual-studio contact `contacts.trial_credits_remaining` is
+// Stillorgan's. Decided by the board module's inputSource, never a location id.
+describe('Glofox credit count on board cards', () => {
+  const deal = {
+    id: 'd1', stage_id: 's1', title: 't', created_at: '2026-09-01T00:00:00Z',
+    contacts: { id: 'c1', name: 'Ann', pipeline_stage_slug: 'new_lead', trial_credits_remaining: 2, recent_bookings: [] },
+  }
+
+  it('boardCardOptionsForModule: a un1t.online board gets no badge and no Glofox credits', () => {
+    expect(boardCardOptionsForModule('acquisition_un1t')).toEqual({ badge: false, glofoxCredits: false })
+  })
+
+  it('boardCardOptionsForModule: Glofox, unknown and absent modules keep both (today\'s behaviour)', () => {
+    for (const m of ['acquisition', 'returning', 'nope', null, undefined]) {
+      expect(boardCardOptionsForModule(m)).toEqual({ badge: true, glofoxCredits: true })
+    }
+  })
+
+  it('boardDealMapper({ glofoxCredits:false }) strips trial_credits_remaining', () => {
+    const out = boardDealMapper({ badge: false, glofoxCredits: false })(deal)
+    expect(out.contacts).not.toHaveProperty('trial_credits_remaining')
+    expect(out.contacts.id).toBe('c1')
+  })
+
+  it('a Glofox board (Stillorgan) keeps the credit count, byte-identical to the default mapper', () => {
+    const viaOptions = boardDealMapper(boardCardOptionsForModule('acquisition'))(deal)
+    const viaDefault = toBoardDeal(deal)
+    expect(viaOptions.contacts.trial_credits_remaining).toBe(2)
+    expect(JSON.stringify(viaOptions.contacts)).toBe(JSON.stringify(viaDefault.contacts))
+  })
+
+  it('the board mapper never mutates the row it was given', () => {
+    boardDealMapper({ glofoxCredits: false })(deal)
+    expect(deal.contacts.trial_credits_remaining).toBe(2)
+  })
+})
+
+// HATCHPIPE.4 — funnel and manual columns ship every card on the first load;
+// only the huge off-funnel piles keep paging.
+describe('initialPageSizeFor', () => {
+  it('off-funnel on a derived board keeps the 50-card first page', () => {
+    expect(initialPageSizeFor('dormant', false)).toBe(PIPELINE_PAGE_SIZE)
+  })
+  it('funnel columns load whole (null = no page cap)', () => {
+    expect(initialPageSizeFor('active', false)).toBeNull()
+  })
+  it('a manual board loads whole in either view', () => {
+    expect(initialPageSizeFor('active', true)).toBeNull()
+    expect(initialPageSizeFor('dormant', true)).toBeNull()
+  })
+})
+
+describe('readWholeColumn', () => {
+  const rows = (from, to) => Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => ({ id: `d${from + i}` }))
+  // A fake table of `total` rows served by inclusive .range(from, to) like PostgREST.
+  const table = (total) => {
+    const calls = []
+    const readRange = async (from, to) => {
+      calls.push([from, to])
+      return { data: rows(from, Math.min(to, total - 1)), error: null }
+    }
+    return { readRange, calls }
+  }
+
+  it('uses 1,000-row pages (the PostgREST cap)', () => {
+    expect(PIPELINE_READ_PAGE).toBe(1000)
+  })
+
+  it('reads nothing more when the first page already holds the column', async () => {
+    const { readRange, calls } = table(96)
+    const first = await readRange(0, PIPELINE_READ_PAGE - 1)
+    calls.length = 0
+    const out = await readWholeColumn({ readRange, first, count: 96 })
+    expect(out.error).toBeUndefined()
+    expect(out.rows).toHaveLength(96)
+    expect(calls).toEqual([])
+  })
+
+  it('loops .range() pages of 1,000 until the count is reached', async () => {
+    const { readRange, calls } = table(2500)
+    const first = await readRange(0, PIPELINE_READ_PAGE - 1)
+    calls.length = 0
+    const out = await readWholeColumn({ readRange, first, count: 2500 })
+    expect(out.rows).toHaveLength(2500)
+    expect(calls).toEqual([[1000, 1999], [2000, 2999]])
+    expect(new Set(out.rows.map((r) => r.id)).size).toBe(2500)
+  })
+
+  it('stops on a short page even if the count was higher (rows left the column meanwhile)', async () => {
+    const { readRange, calls } = table(1500)
+    const first = await readRange(0, PIPELINE_READ_PAGE - 1)
+    calls.length = 0
+    const out = await readWholeColumn({ readRange, first, count: 1800 })
+    expect(out.rows).toHaveLength(1500)
+    expect(calls).toEqual([[1000, 1999]])
+  })
+
+  it('drops a row served twice by two overlapping pages', async () => {
+    const first = { data: rows(0, 999), error: null }
+    const readRange = async () => ({ data: [{ id: 'd999' }, ...rows(1000, 1098)], error: null })
+    const out = await readWholeColumn({ readRange, first, count: 1100 })
+    expect(out.rows).toHaveLength(1099)
+  })
+
+  it('returns the error of the first page', async () => {
+    const err = { message: 'boom', code: '57014' }
+    const out = await readWholeColumn({ readRange: async () => { throw new Error('unused') }, first: { data: null, error: err }, count: 10 })
+    expect(out.error).toBe(err)
+  })
+
+  it('returns the error of a later page', async () => {
+    const err = { message: 'boom', code: '57014' }
+    const first = { data: rows(0, 999), error: null }
+    const out = await readWholeColumn({ readRange: async () => ({ data: null, error: err }), first, count: 2000 })
+    expect(out.error).toBe(err)
   })
 })

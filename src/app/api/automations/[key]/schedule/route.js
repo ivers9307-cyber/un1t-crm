@@ -3,11 +3,11 @@
 // CLASS-CLIMATE.1 — read the synced class-schedule "spine"
 // (class_occurrences) for a location so the operator can SEE the
 // timetable the automation runs off. Read-only; the cron / Run-now keep
-// the table fresh. class_climate and bathroom_climate use it today.
+// the table fresh. class_climate, bathroom_climate and screen_mode use it.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -15,12 +15,13 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check; the role is judged at the location below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
   const { key } = await params
-  if (key !== 'class_climate' && key !== 'bathroom_climate') {
+  if (key !== 'class_climate' && key !== 'bathroom_climate' && key !== 'screen_mode') {
     return NextResponse.json({ success: false, error: 'not supported for this automation' }, { status: 400 })
   }
 
@@ -31,6 +32,9 @@ export async function GET(request, { params }) {
   }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   // From 30 min ago (so a class that just started still shows) forward.

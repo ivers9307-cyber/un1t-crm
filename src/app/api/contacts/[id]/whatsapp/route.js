@@ -24,16 +24,22 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasMobilePermission } from '@/lib/permissions'
+import {
+  hasPermissionAtAnyLocation, hasPermissionForLocation,
+  hasMobilePermissionAtAnyLocation, hasMobilePermissionForLocation,
+} from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor } from '@/lib/whatsapp'
+import { sendTextMessage, sendTemplateMessage, isWindowOpen, headerComponentFor, getOrCreateConversation } from '@/lib/whatsapp'
 import {
   extractTemplateBody,
   isSendableUtilityTemplate,
   buildBodyComponents,
 } from '@/lib/radar-outreach'
 import { manualTakeoverPatch } from '@/lib/agent/core'
-import { getOrCreateContactConversation } from '@/lib/whatsapp-conversations'
+import { contactWaPhone, loadSendConversation } from '@/lib/whatsapp-conversations'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { getConversationNumberConfig, pickReplyConfig, pickTemplateConfig } from '@/lib/whatsapp-config'
+import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
 
 export const runtime = 'nodejs'
 
@@ -59,7 +65,8 @@ export async function POST(request, props) {
   }
   // Web sidebar `whatsapp` OR the `.mobile.whatsapp` toggle — the
   // composer ships on both the web contact profile and the iOS app.
-  if (!hasPermission(user, 'whatsapp') && !hasMobilePermission(user, 'whatsapp')) {
+  // ROLESWEEP.1c — coarse pre-check; judged at the contact's location below.
+  if (!hasPermissionAtAnyLocation(user, 'whatsapp') && !hasMobilePermissionAtAnyLocation(user, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
   }
 
@@ -82,14 +89,38 @@ export async function POST(request, props) {
   // IDOR guard — caller must be assigned to the contact's location.
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — web OR mobile `whatsapp` judged at the contact's location.
+  if (!hasPermissionForLocation(user, contact.location_id, 'whatsapp') && !hasMobilePermissionForLocation(user, contact.location_id, 'whatsapp')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
+  }
 
-  // CANCEL-FORM.4 — get-or-create moved to lib/whatsapp-conversations so the
-  // cancellation-form send opens the same thread this composer does.
-  const opened = await getOrCreateContactConversation(db, contact)
+  // WACONFIGFALLBACK.1 — the contact's location must have a WhatsApp number of
+  // its own BEFORE a thread is opened: the send used to go out on the global
+  // env number (another studio's), and refusing only at the send would leave
+  // an empty thread in this location's inbox. 409 no number / 500 lookup.
+  // The send below uses this checked config ({ config }), so there is one
+  // lookup and no gap in which a different number could be resolved.
+  const own = await ownNumberOrRefusal(contact.location_id, 'contact-whatsapp-send')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+
+  // WAORGNUMBER.4 (R3) — the composer sends for the contact's HOME studio, so
+  // its thread files there (getOrCreateConversation at contact.location_id),
+  // never on the contact's most recent thread at another studio, which could
+  // pair that studio's thread with this studio's number. The cancellation-form
+  // send opens the same thread (CANCEL-FORM.4).
+  const waPhone = contactWaPhone(contact)
+  if (!waPhone) return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
+  const opened = await loadSendConversation(db,
+    await getOrCreateConversation(db, { ...contact, wa_phone: waPhone }, contact.location_id))
   if (!opened.ok) {
     return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
   }
-  const { conversation, waPhone } = opened
+  const { conversation } = opened
+  // WAREPLYNUMBER.1 (C86) — a reply into this thread goes from the number the
+  // customer wrote to (stamped by the webhook) while it is active here, like
+  // the inbox send; else the checked default. Read by its id: the location is
+  // still resolved once (own, above). null on any failed read → the default.
+  const threadNumber = await getConversationNumberConfig(contact.location_id, conversation.id)
 
   // ── Send ────────────────────────────────────────────────────────
   let result
@@ -102,11 +133,11 @@ export async function POST(request, props) {
       if (!isWindowOpen(conversation)) {
         return NextResponse.json({
           success: false,
-          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation, or use SMS.',
+          error: 'The 24-hour messaging window has closed. Send an approved template to reopen the conversation.',
           window_expired: true,
         }, { status: 409 })
       }
-      result = await sendTextMessage(waPhone, text, { locationId: contact.location_id })
+      result = await sendTextMessage(waPhone, text, { config: pickReplyConfig(threadNumber, own.config) })
       messageType = 'text'
       messageBody = text
     } else {
@@ -114,7 +145,7 @@ export async function POST(request, props) {
       // template; never trust the client's pick.
       const { data: rows } = await db
         .from('whatsapp_templates')
-        .select('name, language, category, status, components, header_media_url')
+        .select('name, language, category, status, components, header_media_url, business_account_id')
         .eq('location_id', contact.location_id)
         .eq('name', template_name)
         .order('created_at', { ascending: false })
@@ -132,16 +163,26 @@ export async function POST(request, props) {
       // template needs one (stored URL from the template upload).
       const headerComponent = headerComponentFor(template.components, template.header_media_url)
       if (headerComponent) components.unshift(headerComponent)
+      // WAORGNUMBER.2 (R5) — from a number on the template's own WABA: the
+      // thread's or the checked default when either is on it, else the
+      // studio's number on that WABA (none → WhatsAppNumberMissingError → 409).
+      const held = pickTemplateConfig(threadNumber, own.config, template.business_account_id || null)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
-        { locationId: contact.location_id },
+        held ? { config: held } : { locationId: contact.location_id, businessAccountId: template.business_account_id },
       )
       messageType = 'template'
       messageBody = `[Template: ${template.name}]`
       sentTemplateName = template.name
     }
   } catch (e) {
-    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: 502 })
+    // WACONFIGFALLBACK.1 — whatsappErrorStatus keeps a typed refusal a 409.
+    // Text and most templates carry a checked config, so none is expected
+    // there; WAORGNUMBER.2: a template whose WABA neither the thread number
+    // nor the checked default is on resolves by location + WABA inside
+    // sendTemplateMessage, and refuses (409) when the studio has no number
+    // switched on on that WABA.
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send WhatsApp message' }, { status: whatsappErrorStatus(e, 502) })
   }
 
   // ── Log ─────────────────────────────────────────────────────────

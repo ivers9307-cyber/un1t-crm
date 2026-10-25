@@ -7,6 +7,7 @@ import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/s
 import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
+import { assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
 
 const ContactCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -24,7 +25,7 @@ const ContactCreateSchema = z.object({
 
 // POST /api/contacts — Create a contact.
 //
-// Originally a pipedrive-replacement n8n endpoint (API-key only).
+// Originally a pipedrive-replacement integration endpoint (API-key only).
 // Now also callable from the web UI (manager+ via cookie). Web
 // callers default location_id to their active location if they
 // didn't provide one.
@@ -36,15 +37,37 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
   // Web callers usually omit location_id — fall back to their
-  // active location. n8n callers always supply it explicitly.
+  // active location. API-key callers always supply it explicitly.
   if (!body.location_id && auth.user?.activeLocation?.id) {
     body.location_id = auth.user.activeLocation.id
+  }
+  // SECFIX.2 — a cookie caller creates only at a location they belong to.
+  // requireApiKeyOrManager judges the role at the ACTIVE studio and nothing
+  // checked the body's location_id, so a cookie manager could create a
+  // contact (firing its new-lead push, contact-created sequences and Glofox
+  // lead provisioning) at ANY location id, another organisation's included.
+  // A body location, not a row, so a non-member gets assertLocationAccess's
+  // 403. Masters reach every location. API-key callers are unchanged.
+  if (auth.user) {
+    if (!body.location_id) {
+      return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
+    }
+    if (!auth.user.isMaster) {
+      const guard = assertLocationAccess(auth.user, body.location_id)
+      if (guard) return guard
+    }
+    // ROLESWEEP.2 — requireApiKeyOrManager's cookie branch only says
+    // "Manager+ somewhere"; THIS is the decision: MANAGER_ROLES at the
+    // location the contact is created at, after membership. A refusal keeps
+    // the helper's 401 body.
+    if (!hasRoleAtLocation(auth.user, body.location_id, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
   }
   const db = createServerClient()
 
   // APIKEYS.3 — a per-org key may only create contacts at a location
-  // within its organization. Legacy shared key + cookie managers have
-  // orgId null and are unchanged.
+  // within its organization. Only cookie managers have orgId null.
   if (auth.orgId) {
     if (!body.location_id) {
       return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
@@ -63,14 +86,28 @@ export async function POST(request) {
     phone: body.phone,
     label: body.label,
     glofox_member_id: body.glofox_member_id,
-    trial_credits_remaining: body.trial_credits_remaining ?? 3,
+    // C145 TRIALDEFAULT.1 (Richard, 2 Oct) — no default trial credits: a new
+    // contact has NO credit count until Glofox says otherwise (the sync sets
+    // it on link). It used to be `?? 3`, shown as "3 credits" before any
+    // Glofox account existed. An explicit NULL, not an omitted key, so the
+    // column's old DEFAULT 3 (mig 001, dropped in mig 702) never applies.
+    trial_credits_remaining: body.trial_credits_remaining ?? null,
     lead_source: body.lead_source,
     lead_created_at: body.lead_created_at || new Date().toISOString(),
     ...(body.location_id ? { location_id: body.location_id } : {}),
   }).select().single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    // W0.6 — a duplicate email answers a generic 409, never the raw unique
+    // violation (it named the index and confirmed the address existed, an
+    // existence oracle across tenants). contacts_email_org_unique (mig 712)
+    // is per organisation, so this is "yours already has them". Any other
+    // failure is a generic 400: the Postgres message is for the logs.
+    if (error.code === '23505') {
+      return NextResponse.json({ success: false, error: 'A contact with this email already exists in your organisation' }, { status: 409 })
+    }
+    logWarn('contacts', 'insert failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not create contact' }, { status: 400 })
   }
 
   // Fire the pipeline_stage_change sequence trigger with oldStage=null
@@ -115,7 +152,7 @@ export async function POST(request) {
     ).catch(err => console.error('[contacts] push failed', err))
   }
 
-  // Return in a shape similar to Pipedrive for easy n8n migration
+  // Return in a shape similar to Pipedrive (the original integration contract)
   return NextResponse.json({ success: true, data })
 }
 
@@ -132,8 +169,8 @@ export async function GET(request) {
   let query = db.from('contacts').select('*')
 
   // APIKEYS.3 — per-org key: restrict to the org's own locations so a
-  // leaked key can't read another org's contacts. Legacy shared key
-  // (orgId null) stays unscoped — unchanged until n8n migrates.
+  // leaked key can't read another org's contacts. Only a cookie session
+  // has orgId null here.
   if (auth.orgId) {
     const locIds = await orgLocationIds(db, auth.orgId)
     // Empty org → match nothing (sentinel uuid) rather than everything.
@@ -146,7 +183,7 @@ export async function GET(request) {
 
   // Filters
   // Accepts ?lead_status= or ?pipeline_stage_slug= for the canonical
-  // stage slug (CLASSIFY.2 — old name kept as alias for n8n/back-compat).
+  // stage slug (CLASSIFY.2 — old name kept as alias for back-compat).
   const status = searchParams.get('pipeline_stage_slug') || searchParams.get('lead_status')
   if (status) query = query.eq('pipeline_stage_slug', status)
 

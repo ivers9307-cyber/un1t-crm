@@ -159,8 +159,8 @@ function StorageRow({ row, onPrune, busy }) {
             Free up space
           </Button>
           <span className="text-[11px] text-un1t-muted">
-            Deletes attachments on solved and closed tickets older than a year. The message and
-            the file&apos;s name stay on the ticket, so you can still ask for a resend.
+            Deletes attachments on solved and closed conversations older than a year. The message and
+            the file&apos;s name stay on the conversation, so you can still ask for a resend.
           </span>
         </div>
       )}
@@ -279,8 +279,8 @@ export default function EmailMailboxesCard({ locationId }) {
   async function prune(row) {
     const name = row.mailbox_id ? (row.label || row.address) : 'the unfiled attachments'
     if (!window.confirm(
-      `Permanently delete attachments on solved and closed tickets older than a year for ${name}?\n\n` +
-      'The messages and the file names stay on the tickets. The files themselves cannot be recovered.'
+      `Permanently delete attachments on solved and closed conversations older than a year for ${name}?\n\n` +
+      'The messages and the file names stay on the conversations. The files themselves cannot be recovered.'
     )) return
 
     setBusy(`storage:${row.mailbox_id || 'unfiled'}`)
@@ -297,7 +297,7 @@ export default function EmailMailboxesCard({ locationId }) {
     const freed = formatBytes(j.data.bytes_freed)
     setStorageNote(
       j.data.pruned === 0
-        ? 'Nothing to remove — every attachment here is either recent or on a ticket that is still open.'
+        ? 'Nothing to remove — every attachment here is either recent or on a conversation that is still open.'
         : `Removed ${j.data.pruned} attachment${j.data.pruned === 1 ? '' : 's'}, freeing ${freed}.` +
           (j.data.remaining > 0 ? ' There is more to clear — run it again.' : '')
     )
@@ -468,7 +468,7 @@ export default function EmailMailboxesCard({ locationId }) {
                 {!m.active && (
                   <p className="mt-2 text-[11px] text-un1t-muted">
                     Deactivated: mail sent here no longer routes anywhere and the tab is hidden from
-                    everyone, owners included. The account and its ticket history are kept, so
+                    everyone, owners included. The account and its conversation history are kept, so
                     reactivating restores them exactly.
                   </p>
                 )}
@@ -554,7 +554,7 @@ export default function EmailMailboxesCard({ locationId }) {
         <p className="text-xs text-un1t-muted">
           Files members send are kept in a private store, {formatBytes(storage?.quota_bytes || EMAIL_MAILBOX_QUOTA_BYTES)} per
           account. <strong>Email is never rejected</strong> — if an account fills up the message still
-          arrives in full, and the attachment is listed on the ticket as &ldquo;not stored&rdquo; so you
+          arrives in full, and the attachment is listed on the conversation as &ldquo;not stored&rdquo; so you
           can ask for a resend.
         </p>
 
@@ -595,7 +595,7 @@ export default function EmailMailboxesCard({ locationId }) {
 
             {storage.unfiled && (
               <p className="mt-2 text-[11px] text-un1t-muted">
-                &ldquo;Unfiled&rdquo; holds files from accounts that no longer exist. Their tickets are
+                &ldquo;Unfiled&rdquo; holds files from accounts that no longer exist. Their conversations are
                 kept, so the files are still charged to this studio until you clear them.
               </p>
             )}

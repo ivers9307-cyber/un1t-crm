@@ -17,6 +17,14 @@ describe('resolveHandoffSlaMinutes', () => {
     expect(resolveHandoffSlaMinutes({})).toBe(60)
     expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: 'nonsense' })).toBe(60)
   })
+  // MIAORG.1 — the contract now writes `handoff_sla_minutes: null` for "not
+  // set". Number(null) is 0, which would read as the 0-disables switch and turn
+  // the SLA off at every studio that saves its settings.
+  it('null / blank means "not set" (the default), never 0-disables', () => {
+    expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: null })).toBe(60)
+    expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: undefined })).toBe(60)
+    expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: '' })).toBe(60)
+  })
   it('honours an operator override and 0-disables', () => {
     expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: 30 })).toBe(30)
     expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: 0 })).toBe(0)

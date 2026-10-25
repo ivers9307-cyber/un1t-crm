@@ -18,6 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { logWarn } from '@/lib/log'
+import { readBookChatTemplate } from '@/lib/book-chat-copy'
 
 export const runtime = 'nodejs'
 
@@ -119,5 +120,13 @@ export async function POST(request) {
     logWarn('booking.staff', 'confirmation send error', { err: e })
   }
 
-  return NextResponse.json({ success: true, data, confirmation })
+  // BOOKCHATCOPY.1 — the studio's editable chat confirmation for the Book
+  // panel. The booking exists, so a failed read never fails this: logged, and
+  // the panel sends the default words.
+  const chat = await readBookChatTemplate(db, event.location_id)
+  if (chat.error) {
+    logWarn('booking.staff', 'chat confirmation template read failed; the default is used', { locationId: event.location_id, err: chat.error })
+  }
+
+  return NextResponse.json({ success: true, data, confirmation, chat_template: chat.template })
 }

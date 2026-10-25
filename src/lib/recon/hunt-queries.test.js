@@ -1,6 +1,6 @@
 // RCOV.P1 — hunt query builder test coverage.
 //
-// Pure module: no mocking needed. addDaysISO (@/lib/dublin-time) is
+// Pure module: no mocking needed. addDaysISO (@shared/zoned-time) is
 // confirmed pure UTC date-string math (no Date.now()/TZ dependency),
 // so these tests run the real implementation end to end.
 

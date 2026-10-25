@@ -4,10 +4,11 @@
 // integration rows with a red/amber/green status. Does NOT rebuild the
 // underlying checks — it reads:
 //   - cron_health view (mig 053): per-cron heartbeat staleness (global).
-//   - whatsapp_numbers: Meta quality/tier + token validity (per location).
+//   - whatsapp_numbers: Meta quality/tier + token validity (per location:
+//     the numbers switched on there, location_whatsapp_numbers, WAORGNUMBER.1).
 //   - webhook_dead_letter (mig 315): unresolved captured events (this
 //     location's rows + the NULL-location orphans — see block 3).
-//   - channel_connections (getConnection): Glofox connection state (per loc).
+//   - channel_connections (readConnection): Glofox connection state (per loc).
 //   - xero_connections: Xero OAuth binding + last sync error (per location).
 //   - email_sends: Postmark bounce/complaint rate over 24h (per location).
 //
@@ -17,8 +18,9 @@
 //
 // Status vocabulary: 'ok' | 'warn' | 'down' | 'unknown'.
 
-import { getConnection } from '@/lib/connection-registry'
+import { readConnection } from '@/lib/connection-registry'
 import { gradeXeroConnection } from '@/lib/integrations-hub'
+import { hubViewHref } from '@/lib/integrations-hub-links'
 // MAILBOX-UNREACHABLE.1 — the structural "can this address receive at all"
 // verdict. Node-only (it resolves MX), which is fine here: every caller of
 // getIntegrationHealth is a server page or an /api route.
@@ -56,6 +58,44 @@ export function backlogStatus(count) {
 const REGISTRY_TO_HEALTH = { connected: 'ok', action_needed: 'warn', error: 'down', not_connected: 'unknown' }
 export function registryHealth(status) {
   return REGISTRY_TO_HEALTH[status] || 'unknown'
+}
+
+// UN1TSYNC.5 — un1t.online tokens are pasted by an operator and expire. Warn
+// this long before the expiry date (an already-expired token is inside it).
+export const UN1T_ONLINE_EXPIRY_WARN_DAYS = 30
+
+/**
+ * Grade one normalised un1t.online connection (readConnection's conn). Pure.
+ * Registry status first; then a token inside the warn window lifts an 'ok'
+ * to 'warn' (it never softens a 'warn'/'down'). The detail names the studio
+ * title and expiry date from the row's non-secret config — never the token.
+ */
+export function un1tOnlineHealth(conn, now = Date.now()) {
+  if (!conn || conn.status === 'not_connected') return { status: 'unknown', detail: 'Not connected' }
+  let status = registryHealth(conn.status)
+  const expMs = conn.tokenExpiresAt ? Date.parse(conn.tokenExpiresAt) : NaN
+  const expiryKnown = Number.isFinite(expMs)
+  const expiringSoon = expiryKnown && expMs - now <= UN1T_ONLINE_EXPIRY_WARN_DAYS * 24 * 60 * 60 * 1000
+  if (status === 'ok' && expiringSoon) status = 'warn'
+  // A run that synced but could not match some members to contacts keeps the
+  // row 'connected' and says so in last_error: that is a warning, not 'ok'.
+  const syncedWithProblems = conn.status === 'connected' && !!conn.lastError
+  if (status === 'ok' && syncedWithProblems) status = 'warn'
+  // UN1THARD.7 — the expiry date rides along on every detail, not only the
+  // healthy one: a warning that is about something else (unmatched contacts,
+  // a refused token) must not hide that the token also runs out next week.
+  const expiry = expiryKnown
+    ? `${expMs <= now ? 'token expired' : 'token expires'} ${new Date(expMs).toISOString().slice(0, 10)}`
+    : null
+  const withExpiry = (text) => (expiry ? `${text} · ${expiry}` : text)
+  if (conn.status !== 'connected') {
+    return { status, detail: withExpiry(conn.lastError ? String(conn.lastError).slice(0, 120) : 'Needs attention') }
+  }
+  if (syncedWithProblems) return { status, detail: withExpiry(String(conn.lastError).slice(0, 160)) }
+  const parts = ['Connected']
+  const title = conn.config?.studio_title
+  if (title) parts.push(String(title))
+  return { status, detail: withExpiry(parts.join(' · ')) }
 }
 
 // Payment health over a 7d window (lower volume than email). race_payments
@@ -297,12 +337,16 @@ export async function getIntegrationHealth(db, locationId) {
   } catch { rows.push({ key: 'crons', name: 'Scheduled jobs (crons)', status: 'unknown', detail: 'Unavailable' }) }
 
   // 2. WhatsApp number(s) — per location (quality/tier + token validity).
+  // WAORGNUMBER.1: the active numbers SWITCHED ON at this studio
+  // (location_whatsapp_numbers), whatever their home studio — an organisation
+  // number reads the same health at every studio it is on.
   try {
-    const { data: nums } = await db
-      .from('whatsapp_numbers')
-      .select('label, quality_rating, messaging_limit_tier, token_invalid_at, quality_checked_at')
+    const { data: links } = await db
+      .from('location_whatsapp_numbers')
+      .select('whatsapp_numbers!inner(label, quality_rating, messaging_limit_tier, token_invalid_at, quality_checked_at)')
       .eq('location_id', locationId)
-      .eq('is_active', true)
+      .eq('whatsapp_numbers.is_active', true)
+    const nums = (links || []).map((l) => l.whatsapp_numbers).filter(Boolean)
     if ((nums || []).length === 0) {
       rows.push({ key: 'wa', name: 'WhatsApp', status: 'unknown', detail: 'No active number' })
     } else {
@@ -348,7 +392,10 @@ export async function getIntegrationHealth(db, locationId) {
   // 4. Glofox — connection registry (only Stillorgan is connected today; other
   // locations legitimately read 'not connected' → unknown, not broken).
   try {
-    const conn = await getConnection(db, locationId, 'glofox')
+    const { conn, error: connErr } = await readConnection(db, locationId, 'glofox')
+    // REGISTRYREAD.1a: an unreadable settings row lands in the catch below
+    // ('Unavailable'), never "Not connected".
+    if (connErr) throw connErr
     rows.push({
       key: 'glofox',
       name: 'Glofox',
@@ -362,6 +409,38 @@ export async function getIntegrationHealth(db, locationId) {
             : conn.lastError ? String(conn.lastError).slice(0, 120) : 'Needs attention',
     })
   } catch { rows.push({ key: 'glofox', name: 'Glofox', status: 'unknown', detail: 'Unavailable' }) }
+
+  // 4b. un1t.online (UN1TSYNC.5) — registry-only. Shown when the location has
+  // an active connection, or when its membership source IS un1t_online (so a
+  // chosen-but-unconnected studio reads "Not connected" rather than nothing).
+  // Every other location has no such row at all: this integration is not part
+  // of its estate. An unreadable registry is "Unavailable", never absent, but
+  // only where the row would otherwise have shown (UN1THARD.7): a failed read
+  // used to paint "un1t.online: Unavailable" on every location in the estate,
+  // Stillorgan included. So a failed read falls through to the membership
+  // source check, and only a un1t_online studio (or one whose source cannot be
+  // read either) reads "Unavailable". A connect flips a 'none' studio to
+  // un1t_online, so every connected studio but one whose flip failed is caught.
+  try {
+    const { conn, error: connErr } = await readConnection(db, locationId, 'un1t_online')
+    let show = !connErr && conn.source === 'registry'
+    if (!show) {
+      const { data: loc, error: locErr } = await db.from('locations').select('membership_source').eq('id', locationId).maybeSingle()
+      if (locErr) throw locErr
+      show = loc?.membership_source === 'un1t_online'
+      if (show && connErr) throw connErr
+    }
+    if (show) {
+      const g = un1tOnlineHealth(conn)
+      rows.push({
+        key: 'un1t_online',
+        name: 'un1t.online',
+        status: g.status,
+        lastSuccess: conn.lastOkAt || null,
+        detail: g.detail,
+      })
+    }
+  } catch { rows.push({ key: 'un1t_online', name: 'un1t.online', status: 'unknown', detail: 'Unavailable' }) }
 
   // 5. Xero — OAuth binding + last sync error (per location). Token expiry is
   // NOT graded (tokens refresh lazily on use — see gradeXeroConnection).
@@ -523,7 +602,7 @@ export async function getIntegrationHealth(db, locationId) {
             : s.status === 'down'
               ? 'Open the sync page and preview a run to see the current error.'
               : undefined,
-          href: '/settings/integrations/zoom-contacts',
+          href: hubViewHref('zoom'),
         })
       }
     }
@@ -532,7 +611,7 @@ export async function getIntegrationHealth(db, locationId) {
     // than silently dropping the row (an omitted row is indistinguishable
     // from "not applicable to this org" — exactly the ambiguity this pane
     // exists to remove).
-    rows.push({ key: 'zoom-contacts', name: 'Zoom phone directory', status: 'unknown', detail: 'Unavailable', href: '/settings/integrations/zoom-contacts' })
+    rows.push({ key: 'zoom-contacts', name: 'Zoom phone directory', status: 'unknown', detail: 'Unavailable', href: hubViewHref('zoom') })
   }
 
   // Attach a runbook (remedy + fix link) to every degraded/down row so the pane
@@ -555,6 +634,7 @@ const REMEDIES = {
   wa: { text: 'Re-authorise the WhatsApp number, or address the Meta message-quality rating, in Settings → Integrations.', href: '/settings/integrations-hub' },
   webhooks: { text: 'Review the captured events in the dead-letter queue (master/owner) — replay the replayable, resolve the rest by hand.', href: '/admin/webhook-dead-letter' },
   glofox: { text: 'Reconnect Glofox in Settings → Integrations.', href: '/settings/integrations-hub' },
+  un1t_online: { text: 'Paste a new un1t.online token in Settings → Integrations.', href: '/settings/integrations-hub' },
   xero: { text: 'Reconnect Xero in Settings → Integrations if the sync error persists.', href: '/settings/integrations-hub' },
   email: { text: 'A high bounce/complaint rate hurts deliverability — review recipients and your sending domain.', href: '/settings/email-domain' },
   email_inbound: { text: 'Inbound email may have stopped arriving. Probe the webhook: POST a bogus token to the shim URL — 404 = healthy, 500 missing_secret = secrets lost. Full runbook in docs/architecture/INTEGRATIONS.md; check the Postmark Activity page for undelivered inbound.', href: null },

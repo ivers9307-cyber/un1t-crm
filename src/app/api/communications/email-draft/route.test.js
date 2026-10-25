@@ -24,7 +24,7 @@ vi.mock('@/lib/auth', () => ({
   getCurrentUser: vi.fn(async () => ({ id: 'user-1', activeLocation: { id: 'loc-1' } })),
   assertLocationAccess: vi.fn(() => null),
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
+vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true), hasPermissionForLocation: vi.fn(() => true) }))
 
 import { POST } from './route.js'
 

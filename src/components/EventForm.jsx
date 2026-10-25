@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
-import { Plus, Trash2, Bell, Check, Mail, MessageSquare, UserPlus } from 'lucide-react'
+import { Plus, Trash2, Bell, Check, Mail, MessageCircle, UserPlus, X } from 'lucide-react'
+import { windowsIssue } from '@/lib/booking-windows'
 
 const DAYS = [
   { key: 'mon', label: 'Monday' },
@@ -26,13 +26,51 @@ const FIELD_TYPES = [
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
 
 const defaultAvailability = {
-  mon: { start: '09:00', end: '18:00' },
-  tue: { start: '09:00', end: '18:00' },
-  wed: { start: '09:00', end: '18:00' },
-  thu: { start: '09:00', end: '18:00' },
-  fri: { start: '09:00', end: '18:00' },
+  mon: [{ start: '09:00', end: '18:00' }],
+  tue: [{ start: '09:00', end: '18:00' }],
+  wed: [{ start: '09:00', end: '18:00' }],
+  thu: [{ start: '09:00', end: '18:00' }],
+  fri: [{ start: '09:00', end: '18:00' }],
   sat: null,
   sun: null,
+}
+
+// BOOKINGWINDOWS.1 — the editor holds every open day as a list of windows.
+// A row saved before then has one { start, end } per day; it is read as a
+// one-window list here and saved back as a list.
+function editableAvailability(availability) {
+  const src = availability && typeof availability === 'object' ? availability : {}
+  const hhmm = (t) => (typeof t === 'string' ? t.slice(0, 5) : '')
+  return Object.fromEntries(DAYS.map(({ key }) => {
+    const day = src[key]
+    const list = Array.isArray(day) ? day : day && typeof day === 'object' ? [day] : []
+    const windows = list
+      .filter((w) => w && (w.start || w.end))
+      .map((w) => ({ start: hhmm(w.start), end: hhmm(w.end) }))
+    return [key, windows.length ? windows : null]
+  }))
+}
+
+// A new window starts an hour after the day's last one ends.
+function nextWindow(windows) {
+  const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m }
+  const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  const lastEnd = windows[windows.length - 1]?.end
+  const from = /^\d{2}:\d{2}$/.test(lastEnd || '') ? Math.min(toMin(lastEnd) + 60, 22 * 60) : 17 * 60
+  return { start: fmt(from), end: fmt(Math.min(from + 60, 23 * 60 + 59)) }
+}
+
+// EVENTTYPERLS.1 — a refusal from the save route, in words the operator can
+// act on. 401/403/404 are the routes' access refusals (canManageEventType);
+// a 400 carries validateBody's issues.
+function saveError(status, json) {
+  if (status === 401) return 'Your session has ended. Sign in again, then save.'
+  if (status === 403 || status === 404) {
+    return "You can't create or edit booking types at this studio."
+  }
+  const issue = Array.isArray(json?.issues) ? json.issues[0] : null
+  if (issue) return `Could not save: ${issue.path ? `${issue.path}: ` : ''}${issue.message}`
+  return json?.error || 'Could not save the booking type. Try again.'
 }
 
 export default function EventForm({ event, locationId }) {
@@ -67,27 +105,35 @@ export default function EventForm({ event, locationId }) {
   // location trial membership + tag for the welcome sequence.
   // Default off — operator opts in per booking type.
   const [createInGlofox, setCreateInGlofox] = useState(!!event?.create_in_glofox)
-  const [availability, setAvailability] = useState(event?.availability || defaultAvailability)
+  const [availability, setAvailability] = useState(() => (event?.availability ? editableAvailability(event.availability) : defaultAvailability))
   const [customFields, setCustomFields] = useState(event?.custom_fields || [])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  // Set once a create has POSTed: if the reminder sync then fails, a retry
+  // PUTs to this row instead of POSTing a second booking type.
+  const [createdId, setCreatedId] = useState(null)
 
   // (mig 081 race-tracking state removed in mig 082 — races are
   // now standalone race_events with their own /races admin UI.)
 
   // Confirmation config (mig 077 — booking confirmation flow).
-  // One-shot message sent at booking creation time. Same channel
-  // set as reminders (email + sms). Stored as columns on
-  // event_types since confirmations are singular per event_type.
+  // One-shot message sent at booking creation time. Stored as columns
+  // on event_types since confirmations are singular per event_type.
+  // Channels: email and/or WhatsApp (EVENTCONFIRM-WA.1, mig 666 — an
+  // approved template picked below). SMS was retired with Twilio
+  // (TWILIO-RETIRE.1): a legacy 'sms' entry is dropped on load, so it
+  // falls away on the next save.
   const [confirmationEnabled, setConfirmationEnabled] = useState(!!event?.confirmation_enabled)
-  const [confirmationChannels, setConfirmationChannels] = useState(
-    Array.isArray(event?.confirmation_channels) && event.confirmation_channels.length > 0
-      ? event.confirmation_channels
-      : ['email']
-  )
+  const [confirmationChannels, setConfirmationChannels] = useState(() => {
+    const kept = (Array.isArray(event?.confirmation_channels) ? event.confirmation_channels : [])
+      .filter(c => c === 'email' || c === 'whatsapp')
+    return kept.length > 0 ? kept : ['email']
+  })
   const [confirmationEmailTemplateId, setConfirmationEmailTemplateId] = useState(event?.confirmation_email_template_id || '')
   const [confirmationEmailSubject, setConfirmationEmailSubject] = useState(event?.confirmation_email_subject || '')
-  const [confirmationSmsBody, setConfirmationSmsBody] = useState(event?.confirmation_sms_body || '')
+  const [confirmationWaTemplateId, setConfirmationWaTemplateId] = useState(event?.confirmation_whatsapp_template_id || '')
+  const confirmEmail = confirmationChannels.includes('email')
+  const confirmWhatsapp = confirmationChannels.includes('whatsapp')
 
   function toggleConfirmationChannel(channel) {
     setConfirmationChannels(prev => prev.includes(channel)
@@ -96,7 +142,8 @@ export default function EventForm({ event, locationId }) {
   }
 
   // Reminders config (mig 076 — multi-reminder).
-  // Each reminder is { _localId|id, hours_before, channels[], email_*, sms_body, active }.
+  // Each reminder is { _localId|id, hours_before, email_*, active } — email
+  // only, same reason as the confirmation above.
   // _localId is a client-only stable key for new rows that
   // haven't been persisted yet. The PUT endpoint mints a real
   // id once the row lands.
@@ -120,10 +167,8 @@ export default function EventForm({ event, locationId }) {
           setReminders(j.data.map(r => ({
             id: r.id,
             hours_before: Math.round((r.minutes_before || 0) / 60 * 10) / 10,
-            channels: Array.isArray(r.channels) ? r.channels : [],
             email_template_id: r.email_template_id || '',
             email_subject: r.email_subject || '',
-            sms_body: r.sms_body || '',
             active: r.active !== false,
           })))
         }
@@ -133,11 +178,9 @@ export default function EventForm({ event, locationId }) {
     return () => { cancelled = true }
   }, [isEditing, event?.id])
 
-  // Email templates loaded lazily — only when at least one
-  // reminder OR the confirmation includes email.
-  const anyEmail =
-    reminders.some(r => r.channels?.includes('email'))
-    || (confirmationEnabled && confirmationChannels.includes('email'))
+  // Email templates loaded lazily — only when there is at least one
+  // reminder OR the confirmation sends email.
+  const anyEmail = reminders.length > 0 || (confirmationEnabled && confirmEmail)
   useEffect(() => {
     if (!anyEmail || !locationId) return
     if (emailTemplates === null) {
@@ -148,14 +191,25 @@ export default function EventForm({ event, locationId }) {
     }
   }, [anyEmail, locationId, emailTemplates])
 
+  // EVENTCONFIRM-WA.1 — approved UTILITY WhatsApp templates at this studio,
+  // loaded only once the WhatsApp channel is picked. A booking arrives from a
+  // web form (no 24h window), and Meta refuses MARKETING templates on a
+  // transactional send, so only UTILITY ones are offered.
+  const [waTemplates, setWaTemplates] = useState(null)
+  useEffect(() => {
+    if (!(confirmationEnabled && confirmWhatsapp) || !locationId || waTemplates !== null) return
+    fetch(`/api/whatsapp/templates?location_id=${encodeURIComponent(locationId)}&status=APPROVED`)
+      .then(r => r.json())
+      .then(j => setWaTemplates(j.success ? (j.templates || []).filter(t => t.category === 'UTILITY') : []))
+      .catch(() => setWaTemplates([]))
+  }, [confirmationEnabled, confirmWhatsapp, locationId, waTemplates])
+
   function addReminder() {
     setReminders(prev => [...prev, {
       _localId: typeof crypto !== 'undefined' ? crypto.randomUUID() : `tmp-${Date.now()}-${prev.length}`,
       hours_before: 24,
-      channels: ['email'],
       email_template_id: '',
       email_subject: '',
-      sms_body: '',
       active: true,
     }])
   }
@@ -168,30 +222,35 @@ export default function EventForm({ event, locationId }) {
     setReminders(prev => prev.filter((_, i) => i !== idx))
   }
 
-  function toggleReminderChannel(idx, channel) {
-    setReminders(prev => prev.map((r, i) => {
-      if (i !== idx) return r
-      const has = r.channels?.includes(channel)
-      const next = has
-        ? r.channels.filter(c => c !== channel)
-        : [...(r.channels || []), channel]
-      return { ...r, channels: next }
-    }))
-  }
-
   function toggleDay(day) {
     setAvailability(prev => ({
       ...prev,
-      [day]: prev[day] ? null : { start: '09:00', end: '18:00' },
+      [day]: prev[day] ? null : [{ start: '09:00', end: '18:00' }],
     }))
   }
 
-  function updateDayTime(day, field, value) {
+  function updateWindow(day, idx, field, value) {
     setAvailability(prev => ({
       ...prev,
-      [day]: { ...prev[day], [field]: value },
+      [day]: prev[day].map((w, i) => (i === idx ? { ...w, [field]: value } : w)),
     }))
   }
+
+  function addWindow(day) {
+    setAvailability(prev => ({ ...prev, [day]: [...prev[day], nextWindow(prev[day])] }))
+  }
+
+  // Removing a day's last window turns the day off.
+  function removeWindow(day, idx) {
+    setAvailability(prev => {
+      const rest = prev[day].filter((_, i) => i !== idx)
+      return { ...prev, [day]: rest.length ? rest : null }
+    })
+  }
+
+  const dayIssues = Object.fromEntries(
+    DAYS.map(({ key }) => [key, availability[key] ? windowsIssue(availability[key]) : null]),
+  )
 
   function addCustomField() {
     setCustomFields(prev => [...prev, {
@@ -218,23 +277,20 @@ export default function EventForm({ event, locationId }) {
 
   async function handleSubmit(e) {
     e.preventDefault()
+    // The save route refuses these too; say so before anything is sent.
+    const badDay = DAYS.find(({ key }) => dayIssues[key])
+    if (badDay) {
+      setError(`Could not save: ${badDay.label}: ${dayIssues[badDay.key]}`)
+      return
+    }
     setSaving(true)
     setError(null)
 
-    const db = createBrowserClient()
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-
     // mig 076 — reminder config moved to event_type_reminders.
-    // event_types.reminder_* columns are still on disk but
-    // deprecated; the runner doesn't read them. We stop
-    // populating them here too. (A re-saved row gets its old
-    // values blanked via update — fine, since they're stale.)
+    // event_types.reminder_* columns were dropped (mig 241).
     //
     // mig 077 — confirmation lives directly on event_types
     // (singular per booking, doesn't need its own table).
-    // Channel-specific fields are nulled out when their channel
-    // isn't selected so old values don't leak through after a
-    // channel toggle.
     const confirmationActive = confirmationEnabled && confirmationChannels.length > 0
     // Coerce + clamp the string-state numeric fields on submit. The
     // raw strings allow the operator to clear+retype mid-edit; the
@@ -244,9 +300,10 @@ export default function EventForm({ event, locationId }) {
       if (!Number.isFinite(n)) return fallback
       return Math.max(min, Math.min(max, n))
     }
+    // No slug: both routes derive it from the name (eventTypeSlug), exactly
+    // as this form used to.
     const payload = {
       name,
-      slug,
       description: description || null,
       duration_minutes: clampInt(duration, 30, 1, 1440),
       buffer_minutes:   clampInt(buffer,    0, 0, 1440),
@@ -266,51 +323,60 @@ export default function EventForm({ event, locationId }) {
       active: true,
       confirmation_enabled: confirmationActive,
       confirmation_channels: confirmationActive ? confirmationChannels : null,
-      confirmation_email_template_id:
-        confirmationActive && confirmationChannels.includes('email')
-          ? (confirmationEmailTemplateId || null) : null,
-      confirmation_email_subject:
-        confirmationActive && confirmationChannels.includes('email')
-          ? (confirmationEmailSubject || null) : null,
-      confirmation_sms_body:
-        confirmationActive && confirmationChannels.includes('sms')
-          ? (confirmationSmsBody || null) : null,
+      // Channel-specific fields are nulled when their channel is off, so an
+      // old value never leaks through after a toggle.
+      confirmation_email_template_id: confirmationActive && confirmEmail ? (confirmationEmailTemplateId || null) : null,
+      confirmation_email_subject: confirmationActive && confirmEmail ? (confirmationEmailSubject || null) : null,
+      confirmation_whatsapp_template_id: confirmationActive && confirmWhatsapp ? (confirmationWaTemplateId || null) : null,
       // GLOFOX3.2 — explicit boolean so toggling off persists.
       create_in_glofox: createInGlofox === true,
-      ...(locationId && !isEditing ? { location_id: locationId } : {}),
+      ...(locationId && !isEditing && !createdId ? { location_id: locationId } : {}),
     }
 
-    let result
-    if (isEditing) {
-      result = await db.from('event_types').update(payload).eq('id', event.id).select().single()
-    } else {
-      result = await db.from('event_types').insert(payload).select().single()
-    }
-
-    if (result.error) {
-      setError(result.error.message)
+    // EVENTTYPERLS.1 — save through the guarded routes, never the browser
+    // Supabase client (RLS let any member of the studio write event_types
+    // that way; mig 650 takes the browser write away). The routes judge
+    // canManageEventType's rule: a master, or MANAGER_ROLES at the studio.
+    const rowId = event?.id || createdId
+    let saved
+    try {
+      const resp = await fetch(
+        rowId ? `/api/bookings/event-types/${rowId}` : '/api/bookings/event-types',
+        {
+          method: rowId ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+      const json = await resp.json().catch(() => null)
+      if (!resp.ok || !json?.success) {
+        setError(saveError(resp.status, json))
+        setSaving(false)
+        return
+      }
+      saved = json.data
+      if (!rowId && saved?.id) setCreatedId(saved.id)
+    } catch (err) {
+      setError(`Could not save the booking type: ${err.message}`)
       setSaving(false)
       return
     }
 
-    // Sync reminders via PUT /api/events/[id]/reminders. The
+    // Sync reminders via PUT /api/bookings/event-types/[id]/reminders. The
     // endpoint takes the full set; server diffs against existing
     // rows. New rows on the form (no id, just _localId) get
     // server-issued ids back.
-    const eventId = result.data?.id || event?.id
+    const eventId = saved?.id || rowId
     if (eventId) {
       try {
-        const reminderPayload = reminders
-          .filter(r => Array.isArray(r.channels) && r.channels.length > 0)
-          .map(r => ({
-            id: r.id,           // omitted for new rows; server treats as insert
-            hours_before: Number(r.hours_before) || 0,
-            channels: r.channels,
-            email_template_id: r.channels.includes('email') ? (r.email_template_id || null) : null,
-            email_subject: r.channels.includes('email') ? (r.email_subject || null) : null,
-            sms_body: r.channels.includes('sms') ? (r.sms_body || null) : null,
-            active: r.active !== false,
-          }))
+        const reminderPayload = reminders.map(r => ({
+          id: r.id,           // omitted for new rows; server treats as insert
+          hours_before: Number(r.hours_before) || 0,
+          channels: ['email'],
+          email_template_id: r.email_template_id || null,
+          email_subject: r.email_subject || null,
+          active: r.active !== false,
+        }))
         const resp = await fetch(`/api/bookings/event-types/${eventId}/reminders`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -352,6 +418,7 @@ export default function EventForm({ event, locationId }) {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="e.g. Free Consultation"
+            maxLength={200}
             required
             className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
           />
@@ -363,6 +430,7 @@ export default function EventForm({ event, locationId }) {
             value={description}
             onChange={e => setDescription(e.target.value)}
             placeholder="Brief description shown on the booking page"
+            maxLength={5000}
             rows={2}
             className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-none"
           />
@@ -443,38 +511,61 @@ export default function EventForm({ event, locationId }) {
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
         <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Availability</h3>
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           {DAYS.map(({ key, label }) => (
-            <div key={key} className="flex items-center gap-3">
+            <div key={key} className="flex items-start gap-3">
               <button
                 type="button"
                 onClick={() => toggleDay(key)}
-                className={`w-20 text-xs py-1.5 rounded text-center transition-colors ${
+                className={`w-20 shrink-0 text-xs py-1.5 rounded text-center transition-colors ${
                   availability[key]
-                    ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30'
+                    ? 'bg-blue-600/20 text-blue-700 border border-blue-600/30'
                     : 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'
                 }`}
               >
                 {label.slice(0, 3)}
               </button>
               {availability[key] ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="time"
-                    value={availability[key].start}
-                    onChange={e => updateDayTime(key, 'start', e.target.value)}
-                    className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
-                  />
-                  <span className="text-un1t-subtle text-sm">to</span>
-                  <input
-                    type="time"
-                    value={availability[key].end}
-                    onChange={e => updateDayTime(key, 'end', e.target.value)}
-                    className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
-                  />
+                <div className="min-w-0 space-y-1.5">
+                  {availability[key].map((win, idx) => (
+                    <div key={idx} className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="time"
+                        aria-label={`${label} window ${idx + 1} start`}
+                        value={win.start}
+                        onChange={e => updateWindow(key, idx, 'start', e.target.value)}
+                        className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                      />
+                      <span className="text-un1t-subtle text-sm">to</span>
+                      <input
+                        type="time"
+                        aria-label={`${label} window ${idx + 1} end`}
+                        value={win.end}
+                        onChange={e => updateWindow(key, idx, 'end', e.target.value)}
+                        className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove ${label} window ${idx + 1}`}
+                        onClick={() => removeWindow(key, idx)}
+                        className="p-1 text-un1t-subtle hover:text-red-700 transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    aria-label={`Add a window on ${label}`}
+                    onClick={() => addWindow(key)}
+                    className="inline-flex items-center gap-1 text-xs text-blue-700 hover:underline"
+                  >
+                    <Plus size={12} /> Add window
+                  </button>
+                  {dayIssues[key] && <p className="text-xs text-red-700">{dayIssues[key]}</p>}
                 </div>
               ) : (
-                <span className="text-xs text-un1t-subtle">Unavailable</span>
+                <span className="text-xs text-un1t-subtle py-1.5">Unavailable</span>
               )}
             </div>
           ))}
@@ -591,7 +682,7 @@ export default function EventForm({ event, locationId }) {
         <p className="text-xs text-un1t-subtle">
           Sent immediately when a customer submits a booking, before any reminders fire.
           Treated as a transactional / utility message — administrative opt-out is honoured,
-          marketing opt-out isn&apos;t. Same channel set as reminders (email + SMS).
+          marketing opt-out isn&apos;t. Send it by email, WhatsApp, or both.
         </p>
 
         {confirmationEnabled && (
@@ -602,6 +693,7 @@ export default function EventForm({ event, locationId }) {
                 <button
                   type="button"
                   onClick={() => toggleConfirmationChannel('email')}
+                  aria-pressed={confirmationChannels.includes('email')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
                     confirmationChannels.includes('email')
                       ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
@@ -612,22 +704,23 @@ export default function EventForm({ event, locationId }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => toggleConfirmationChannel('sms')}
+                  onClick={() => toggleConfirmationChannel('whatsapp')}
+                  aria-pressed={confirmationChannels.includes('whatsapp')}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                    confirmationChannels.includes('sms')
+                    confirmationChannels.includes('whatsapp')
                       ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
                       : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
                   }`}
                 >
-                  <MessageSquare size={14} /> SMS
+                  <MessageCircle size={14} /> WhatsApp
                 </button>
               </div>
               <p className="text-[11px] text-un1t-muted mt-1">
-                Pick one or both. Both = a separate email and SMS go out at booking time.
+                Pick one or both. Both = a separate email and WhatsApp message go out at booking time.
               </p>
             </div>
 
-            {confirmationChannels.includes('email') && (
+            {confirmEmail && (
               <div className="space-y-3 border-t border-un1t-border/50 pt-3">
                 <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
                   <Mail size={11} /> Email
@@ -656,49 +749,49 @@ export default function EventForm({ event, locationId }) {
                     type="text"
                     value={confirmationEmailSubject}
                     onChange={e => setConfirmationEmailSubject(e.target.value)}
+                    maxLength={500}
                     placeholder="Defaults to the template subject, or 'Booking confirmed: <event name>'"
                     className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   />
                   <p className="text-[11px] text-un1t-muted mt-1">
-                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
+                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}. In the email template, {'{{manage_url}}'} is the customer&apos;s link to cancel or reschedule (up to 2 hours before).
                   </p>
                 </div>
               </div>
             )}
 
-            {confirmationChannels.includes('sms') && (
+            {confirmWhatsapp && (
               <div className="space-y-2 border-t border-un1t-border/50 pt-3">
                 <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                  <MessageSquare size={11} /> SMS
+                  <MessageCircle size={11} /> WhatsApp
                 </div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-sm">SMS body</label>
-                  <span className={`text-[11px] ${confirmationSmsBody.length > 160 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
-                    {confirmationSmsBody.length} chars
-                    {confirmationSmsBody.length > 0 && (
-                      <> · {confirmationSmsBody.length <= 160 ? 1 : Math.ceil(confirmationSmsBody.length / 153)} segment{confirmationSmsBody.length <= 160 ? '' : 's'}</>
-                    )}
-                  </span>
-                </div>
-                <textarea
-                  value={confirmationSmsBody}
-                  onChange={e => setConfirmationSmsBody(e.target.value)}
-                  rows={3}
-                  maxLength={1600}
-                  placeholder="Hi {{first_name}}, your {{event_name}} on {{event_time}} is confirmed. See you at {{location_name}}."
-                  className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
-                />
+                <label htmlFor="confirmation-wa-template" className="block text-sm">Approved template</label>
+                <select
+                  id="confirmation-wa-template"
+                  value={confirmationWaTemplateId}
+                  onChange={e => setConfirmationWaTemplateId(e.target.value)}
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="">— Select a template —</option>
+                  {(waTemplates || []).map(t => (
+                    <option key={t.id} value={t.id}>{t.name}{t.language ? ` (${t.language})` : ''}</option>
+                  ))}
+                </select>
+                {waTemplates && waTemplates.length === 0 && (
+                  <p className="text-[11px] text-amber-700">
+                    No approved Utility templates at this studio yet. Add one under WhatsApp → Templates (category: Utility) and sync.
+                  </p>
+                )}
                 <p className="text-[11px] text-un1t-muted">
-                  Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
-                  {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
-                  {' '}<code>{'{{location_name}}'}</code>.
+                  Fills the template&apos;s variables in order: {'{1}'} first name, {'{2}'} day + time, {'{3}'} event name.
+                  Goes to the contact&apos;s WhatsApp number, and is skipped for anyone who has opted out.
                 </p>
               </div>
             )}
 
             {confirmationChannels.length === 0 && (
               <p className="text-[11px] text-amber-700 border-t border-un1t-border/50 pt-3">
-                Pick at least one channel — confirmation won&apos;t be sent without one.
+                Pick at least one channel — the confirmation won&apos;t be sent without one.
               </p>
             )}
           </div>
@@ -720,9 +813,8 @@ export default function EventForm({ event, locationId }) {
           </button>
         </div>
         <p className="text-xs text-un1t-subtle">
-          Set as many reminders as you want — e.g. 24h email + 2h SMS + day-of both.
-          Each reminder picks its own channels (email, SMS, or both). Reminders are
-          treated as <span className="text-un1t-text">transactional / utility</span>
+          Set as many email reminders as you want — e.g. 24h before + 2h before.
+          Reminders are treated as <span className="text-un1t-text">transactional / utility</span>
           messages — marketing opt-outs are ignored, but contacts who've opted out of
           <em> administrative</em> messages won&apos;t receive them. The cron checks every 5
           minutes; actual send time is within ±1 hour of the configured offset.
@@ -739,9 +831,6 @@ export default function EventForm({ event, locationId }) {
         )}
 
         {remindersLoaded && reminders.map((r, idx) => {
-          const hasEmail = r.channels?.includes('email')
-          const hasSms = r.channels?.includes('sms')
-          const smsLen = (r.sms_body || '').length
           return (
             <div
               key={r.id || r._localId || idx}
@@ -777,111 +866,44 @@ export default function EventForm({ event, locationId }) {
                   </div>
                   <p className="text-[11px] text-un1t-muted mt-1">Common: 24 = day before · 2 = couple of hours before · 0.5 = 30 min before</p>
                 </div>
-                <div>
-                  <label className="block text-sm mb-1.5">Channels</label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toggleReminderChannel(idx, 'email')}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                        hasEmail
-                          ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
-                          : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-                      }`}
-                    >
-                      <Mail size={14} /> Email
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleReminderChannel(idx, 'sms')}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
-                        hasSms
-                          ? 'bg-un1t-text text-un1t-bg border border-un1t-text'
-                          : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted'
-                      }`}
-                    >
-                      <MessageSquare size={14} /> SMS
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-un1t-muted mt-1">Pick one or both. Both = a separate email and SMS go out at the same offset.</p>
-                </div>
               </div>
 
-              {hasEmail && (
-                <div className="space-y-3 border-t border-un1t-border/50 pt-3">
-                  <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                    <Mail size={11} /> Email
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1.5">Email template</label>
-                    <select
-                      value={r.email_template_id || ''}
-                      onChange={e => updateReminder(idx, { email_template_id: e.target.value })}
-                      className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                    >
-                      <option value="">— Select a template —</option>
-                      {(emailTemplates || []).map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                    {emailTemplates && emailTemplates.length === 0 && (
-                      <p className="text-[11px] text-amber-700 mt-1">
-                        No email templates yet — create one in Communications → Templates first.
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1.5">Subject (optional override)</label>
-                    <input
-                      type="text"
-                      value={r.email_subject || ''}
-                      onChange={e => updateReminder(idx, { email_subject: e.target.value })}
-                      placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
-                      className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-                    />
-                    <p className="text-[11px] text-un1t-muted mt-1">
-                      Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}
-                    </p>
-                  </div>
+              <div className="space-y-3 border-t border-un1t-border/50 pt-3">
+                <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
+                  <Mail size={11} /> Email
                 </div>
-              )}
-
-              {hasSms && (
-                <div className="space-y-2 border-t border-un1t-border/50 pt-3">
-                  <div className="text-[11px] text-un1t-subtle uppercase tracking-wider flex items-center gap-1.5">
-                    <MessageSquare size={11} /> SMS
-                  </div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-sm">SMS body</label>
-                    <span className={`text-[11px] ${smsLen > 160 ? 'text-amber-700' : 'text-un1t-subtle'}`}>
-                      {smsLen} chars
-                      {smsLen > 0 && (
-                        <> · {smsLen <= 160 ? 1 : Math.ceil(smsLen / 153)} segment{smsLen <= 160 ? '' : 's'}</>
-                      )}
-                    </span>
-                  </div>
-                  <textarea
-                    value={r.sms_body || ''}
-                    onChange={e => updateReminder(idx, { sms_body: e.target.value })}
-                    rows={3}
-                    maxLength={1600}
-                    placeholder="Hi {{first_name}}, just a reminder for {{event_name}} at {{event_time}}. See you at {{location_name}}."
-                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y"
+                <div>
+                  <label className="block text-sm mb-1.5">Email template</label>
+                  <select
+                    value={r.email_template_id || ''}
+                    onChange={e => updateReminder(idx, { email_template_id: e.target.value })}
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="">— Select a template —</option>
+                    {(emailTemplates || []).map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  {emailTemplates && emailTemplates.length === 0 && (
+                    <p className="text-[11px] text-amber-700 mt-1">
+                      No email templates yet — create one in Communications → Templates first.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm mb-1.5">Subject (optional override)</label>
+                  <input
+                    type="text"
+                    value={r.email_subject || ''}
+                    onChange={e => updateReminder(idx, { email_subject: e.target.value })}
+                    placeholder="Defaults to the template subject, or 'Reminder: <event name>'"
+                    className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                   />
-                  <p className="text-[11px] text-un1t-muted">
-                    Merge tags: <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>,
-                    {' '}<code>{'{{event_name}}'}</code>, <code>{'{{event_time}}'}</code>,
-                    {' '}<code>{'{{location_name}}'}</code>.
-                    Sender ID is set per-location in <span className="text-un1t-subtle">Settings → Locations → SMS</span>.
+                  <p className="text-[11px] text-un1t-muted mt-1">
+                    Merge tags: {'{{first_name}}'}, {'{{event_name}}'}, {'{{event_time}}'}. In the email template, {'{{manage_url}}'} is the customer&apos;s link to cancel or reschedule (up to 2 hours before).
                   </p>
                 </div>
-              )}
-
-              {!hasEmail && !hasSms && (
-                <p className="text-[11px] text-amber-700">
-                  Pick at least one channel above. A reminder with no channels is ignored on save.
-                </p>
-              )}
+              </div>
             </div>
           )
         })}
@@ -910,8 +932,9 @@ export default function EventForm({ event, locationId }) {
           When on, every booking on this event type pushes the customer to Glofox:
           first we search by email and link if a Glofox account already exists; if
           not, we create a fresh Glofox account, attach this location&apos;s trial
-          membership, and tag the contact for the welcome sequence (which emails
-          the member their one-time passcode).
+          membership, and tag the contact for the welcome sequence. The member sets
+          their own password with Forgot password? in the Glofox app: no password is
+          saved or emailed.
         </p>
         {createInGlofox && (
           <p className="text-[11px] text-amber-700">
@@ -923,17 +946,17 @@ export default function EventForm({ event, locationId }) {
         )}
       </div>
 
-      {/* Webhook (n8n) */}
+      {/* Webhook */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Webhook (n8n)</h3>
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Webhook</h3>
         <p className="text-xs text-un1t-subtle">
-          When a booking is made, the CRM will POST the booking details to this URL. Use your n8n webhook URL to trigger automations.
+          When a booking is made, the CRM will POST the booking details to this URL. Use your automation tool's webhook URL to trigger automations.
         </p>
         <input
           type="url"
           value={webhookUrl}
           onChange={e => setWebhookUrl(e.target.value)}
-          placeholder="https://your-n8n.com/webhook/xxxxx"
+          placeholder="https://example.com/webhook/xxxxx"
           className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         />
       </div>

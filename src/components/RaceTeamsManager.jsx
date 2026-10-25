@@ -8,13 +8,32 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, MessageSquare, Download } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, Download, ArrowRightCircle, UserPlus, Link2 } from 'lucide-react'
+import MoveEntryDialog from './MoveEntryDialog'
+import EventWaitlistPanel from './EventWaitlistPanel'
 
-export default function RaceTeamsManager({ race }) {
+// GATES-2 — `canCancelEntries` (the page's MANAGER_ROLES-at-the-event's-studio
+// decision, the cancel route's rule) gates Cancel entry. Defaults closed.
+// EVENT-MOVE.1 — `canMoveEntries` gates Move to event the same way (the move
+// route's rule: races + MANAGER_ROLES at the studio). Defaults closed.
+// `currency` is the event's payment_currency, for the outstanding-gap chip.
+// EVENT-WAITLIST.1 — `canManageWaitlist` (races + MANAGER_ROLES at the event's
+// studio, the waitlist routes' rule) shows the waitlist section. Defaults closed.
+// FINDTEAM.6 — `canPlaceSolos` (MANAGER_ROLES at the event's studio, the rule of
+// POST /api/registrations/[id]/place and POST /api/events/[id]/pair-solos) gates
+// the Place in team / Pair up controls. The "Looking for a team" list itself shows
+// to anyone who can open the page. Defaults closed.
+// W1.L3b — `customerOrigin` is the event's tenant-host origin (the page resolves
+// it with resolveCustomerBaseUrl); the copied payment link is minted on it.
+export default function RaceTeamsManager({ race, canCancelEntries = false, canMoveEntries = false, canManageWaitlist = false, canPlaceSolos = false, currency = 'EUR', customerOrigin = '' }) {
   const [registrations, setRegistrations] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [actionError, setActionError] = useState(null)
+  // EVENT-MOVE.1 — a warning that is not a failure (a move that landed but
+  // could not be emailed). Amber, dismissable, separate from actionError.
+  const [actionNotice, setActionNotice] = useState(null)
+  const [movedOut, setMovedOut] = useState([])
 
   const waves = (race?.waves || []).slice().sort((a, b) =>
     (a.display_order ?? 0) - (b.display_order ?? 0) || (a.start_time || '').localeCompare(b.start_time || '')
@@ -29,6 +48,7 @@ export default function RaceTeamsManager({ race }) {
         return
       }
       setRegistrations(j.data || [])
+      setMovedOut(Array.isArray(j.moved_out) ? j.moved_out : [])
       setLoadError(null)
     } catch (e) {
       setLoadError(e.message || 'Network error')
@@ -58,6 +78,12 @@ export default function RaceTeamsManager({ race }) {
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionError}
           <button onClick={() => setActionError(null)} className="ml-auto"><X size={12} /></button>
+        </div>
+      )}
+      {actionNotice && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" /> {actionNotice}
+          <button type="button" onClick={() => setActionNotice(null)} className="ml-auto" aria-label="Dismiss notice"><X size={12} /></button>
         </div>
       )}
 
@@ -104,19 +130,100 @@ export default function RaceTeamsManager({ race }) {
         </div>
       )}
 
+      {/* FINDTEAM.6 — solo entrants waiting for staff to place them. */}
+      <LookingForTeamGroup
+        raceId={race.id}
+        registrations={registrations}
+        waves={waves}
+        canPlace={canPlaceSolos}
+        onChanged={load}
+        onError={setActionError}
+      />
+
       <div className="space-y-3">
         {registrations.map((reg) => (
           <TeamCard
             key={reg.id}
             registration={reg}
+            placedIntoName={reg.placed_into_registration_id
+              ? (registrations.find((r) => r.id === reg.placed_into_registration_id)?.teams?.name || null)
+              : null}
             waves={waves}
             onChanged={load}
             onError={setActionError}
+            onNotice={setActionNotice}
+            canCancel={canCancelEntries}
+            canMove={canMoveEntries}
+            currency={currency}
+            customerOrigin={customerOrigin}
           />
         ))}
       </div>
+
+      {movedOut.length > 0 && (
+        <details className="text-sm text-un1t-subtle">
+          <summary className="cursor-pointer select-none">
+            {/* Counts moves, not entries: an entry moved out, back and out again is two. */}
+            {movedOut.length} {movedOut.length === 1 ? 'move' : 'moves'} to other events
+          </summary>
+          <ul className="mt-2 space-y-1 pl-4">
+            {movedOut.map((m) => (
+              <li key={m.id}>
+                {m.label} → {m.to_event?.name || 'another event'}{m.to_event?.race_date ? ` (${shortRaceDate(m.to_event.race_date)})` : ''} · {new Date(m.created_at).toLocaleDateString('en-IE')} · {actorOf(m)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {canManageWaitlist && (
+        <EventWaitlistPanel
+          listUrl={`/api/events/${race.id}/waitlist`}
+          offerUrl={`/api/events/${race.id}/waitlist/offer`}
+          removeUrlFor={(rowId) => `/api/events/${race.id}/waitlist/${rowId}`}
+        />
+      )}
     </div>
   )
+}
+
+// EVENT-MOVE.1 — who made a move, for the chip and footer. A blank name
+// (an actor with no profile name) reads "staff", never an empty gap.
+function actorOf(move) {
+  const name = typeof move?.actor_name === 'string' ? move.actor_name.trim() : ''
+  return name || 'staff'
+}
+
+// EVENT-MOVE.3 — a settled difference shows nothing on the card except this
+// note on the "Moved from" tooltip: how, who and when.
+function settledNote(move) {
+  if (!move?.gap_settled_at) return ''
+  const how = move.gap_settled_how === 'waived' ? 'waived' : 'collected'
+  const who = (typeof move.gap_settled_by_name === 'string' && move.gap_settled_by_name.trim()) || 'staff'
+  return ` · difference ${how} by ${who} on ${new Date(move.gap_settled_at).toLocaleDateString('en-IE')}`
+}
+
+// EVENT-MOVE.5 — who the payment link goes to, by name: lead_name from the
+// teams list (the person entryLeadEmail writes to), else the captain, else
+// the first person, else the team.
+function leadOf(registration) {
+  if (typeof registration?.lead_name === 'string' && registration.lead_name.trim()) return registration.lead_name.trim()
+  const members = registration?.teams?.team_members || []
+  const lead = members.find((m) => m?.role === 'captain') || members[0]
+  return lead?.name || registration?.payment?.contact_name || registration?.teams?.name || 'the customer'
+}
+
+// Cents in the event's currency (same rendering as MoveEntryDialog).
+function money(cents, currency = 'EUR') {
+  const major = (Math.abs(cents) / 100).toFixed(2)
+  return currency === 'EUR' ? `€${major}` : currency === 'GBP' ? `£${major}` : `${major} ${currency}`
+}
+
+// A race_date ('YYYY-MM-DD') as "1 Nov". Read at noon so no timezone can tip
+// it onto the day before.
+function shortRaceDate(d) {
+  const at = new Date(`${String(d).slice(0, 10)}T12:00:00`)
+  return Number.isNaN(at.getTime()) ? String(d) : at.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })
 }
 
 // ─── Add team form ───────────────────────────────────────────────
@@ -254,18 +361,297 @@ function AddTeamForm({ race, waves, onCancel, onAdded, onError }) {
   )
 }
 
+// ─── Looking for a team (FINDTEAM.6) ─────────────────────────────
+
+const waveTimeText = (w) => (w ? `${w.label ? `${w.label} · ` : ''}${(w.start_time || '').slice(0, 5)}` : '')
+const soloNameOf = (reg) => {
+  const lead = typeof reg?.lead_name === 'string' ? reg.lead_name.trim() : ''
+  if (lead) return lead
+  const c = reg?.contact
+  return [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim() || 'Unnamed entrant'
+}
+const paidText = (reg) => (reg?.payment?.status === 'completed' ? 'Paid' : (reg?.payment?.status || 'No payment').replaceAll('_', ' '))
+
+// Solo entrants (confirmed, looking_for_team) waiting for a team. Anyone who can
+// open the page sees the list; Place in team / Pair up need `canPlace`.
+function LookingForTeamGroup({ raceId, registrations, waves, canPlace, onChanged, onError }) {
+  const solos = registrations.filter((r) => r.status === 'confirmed' && r.looking_for_team)
+  const [ticked, setTicked] = useState([])
+  const [pairing, setPairing] = useState(false)
+  if (solos.length === 0) return null
+
+  // Ticks follow the list: a solo who has just been placed drops out of them.
+  const liveTicked = ticked.filter((id) => solos.some((s) => s.id === id))
+  const tickedSolos = liveTicked.map((id) => solos.find((s) => s.id === id))
+  const waveById = (reg) => waves.find((w) => w.id === reg.wave_id) || reg.wave || null
+  const toggle = (id) => setTicked((t) => (t.includes(id) ? t.filter((x) => x !== id) : [...t, id]))
+
+  return (
+    <section aria-label="Looking for a team" className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h3 className="text-sm font-semibold text-un1t-text inline-flex items-center gap-2">
+          <UserPlus size={14} /> Looking for a team
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700">{solos.length}</span>
+        </h3>
+        {canPlace && (
+          <button
+            type="button"
+            onClick={() => setPairing(true)}
+            disabled={liveTicked.length < 2}
+            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-40 inline-flex items-center gap-1.5"
+            title="Tick two or more solo entrants to make them a new team"
+          >
+            <Users size={12} /> Pair up{liveTicked.length >= 2 ? ` (${liveTicked.length})` : ''}
+          </button>
+        )}
+      </div>
+
+      {canPlace && pairing && tickedSolos.length >= 2 && (
+        <PairUpPanel
+          raceId={raceId}
+          tickedSolos={tickedSolos}
+          waves={waves}
+          onClose={() => setPairing(false)}
+          onPaired={() => { setTicked([]); setPairing(false); onChanged() }}
+          onError={onError}
+        />
+      )}
+
+      <ul className="divide-y divide-un1t-border/50">
+        {solos.map((solo) => (
+          <SoloRow
+            key={solo.id}
+            solo={solo}
+            waveText={waveTimeText(waveById(solo))}
+            registrations={registrations}
+            waves={waves}
+            canPlace={canPlace}
+            ticked={liveTicked.includes(solo.id)}
+            onToggle={() => toggle(solo.id)}
+            onChanged={onChanged}
+            onError={onError}
+          />
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+// One solo: who they are, whether they paid, and (for managers) a team to place
+// them in. Teams offered are the event's confirmed, non-solo entries.
+function SoloRow({ solo, waveText, registrations, waves, canPlace, ticked, onToggle, onChanged, onError }) {
+  const [teamId, setTeamId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const name = soloNameOf(solo)
+  const teams = registrations.filter((r) => r.status === 'confirmed' && !r.looking_for_team)
+  const sameWave = teams.filter((t) => t.wave_id === solo.wave_id)
+  const otherWaves = teams.filter((t) => t.wave_id !== solo.wave_id)
+  const teamName = (t) => t.teams?.name || soloNameOf(t)
+  const timeOf = (t) => (waves.find((w) => w.id === t.wave_id)?.start_time || t.wave?.start_time || '').slice(0, 5)
+
+  async function place() {
+    if (!teamId) return
+    // FINDTEAM.8 (M5) — placing never changes the solo's wave, so a team in
+    // another wave means they run at a time they did not book: ask first.
+    const target = teams.find((t) => t.id === teamId)
+    if (target && target.wave_id !== solo.wave_id) {
+      const ok = window.confirm(`${name} is in the ${timeOf(solo) || 'unassigned'} wave but this team runs at ${timeOf(target) || 'another time'}. Place them anyway?`)
+      if (!ok) return
+    }
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/registrations/${solo.id}/place`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_registration_id: teamId }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        onError(j.message || j.error || 'Could not place the entrant')
+        return
+      }
+      setTeamId('')
+      onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <li className="py-2 flex items-center gap-3 flex-wrap text-sm">
+      {canPlace && (
+        <input
+          type="checkbox"
+          checked={ticked}
+          onChange={onToggle}
+          aria-label={`Select ${name}`}
+        />
+      )}
+      <span className="text-[11px] text-un1t-subtle w-28 shrink-0">{waveText}</span>
+      <span className="font-medium text-un1t-text">{name}</span>
+      <span className="text-xs text-un1t-subtle">{solo.contact?.email}</span>
+      <span className="text-xs text-un1t-subtle">{solo.contact?.phone}</span>
+      <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${solo.payment?.status === 'completed' ? 'bg-emerald-500/10 text-emerald-700' : 'bg-amber-500/10 text-amber-700'}`}>
+        {paidText(solo)}
+      </span>
+      {canPlace && (
+        <span className="ml-auto inline-flex items-center gap-2">
+          <select
+            aria-label={`Place ${name} in a team`}
+            value={teamId}
+            onChange={(e) => setTeamId(e.target.value)}
+            disabled={busy}
+            className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40 max-w-[16rem]"
+          >
+            <option value="">Place in team…</option>
+            {sameWave.length > 0 && (
+              <optgroup label="Same wave">
+                {sameWave.map((t) => <option key={t.id} value={t.id}>{teamName(t)}</option>)}
+              </optgroup>
+            )}
+            {otherWaves.length > 0 && (
+              <optgroup label="Other waves">
+                {otherWaves.map((t) => <option key={t.id} value={t.id}>{`${teamName(t)} · ${timeOf(t)}`}</option>)}
+              </optgroup>
+            )}
+          </select>
+          <button
+            type="button"
+            onClick={place}
+            disabled={busy || !teamId}
+            aria-label={`Place ${name}`}
+            className="text-[11px] border border-un1t-border text-un1t-text px-2.5 py-1 rounded-md hover:bg-un1t-bg disabled:opacity-40 inline-flex items-center gap-1"
+          >
+            {busy ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} Place
+          </button>
+        </span>
+      )}
+    </li>
+  )
+}
+
+// The inline "make these solos a team" panel. The team name defaults to the
+// ticked first names in tick order; a wave is asked for only when the ticked
+// solos are in different waves. A wave_full refusal offers Place anyway.
+function PairUpPanel({ raceId, tickedSolos, waves, onClose, onPaired, onError }) {
+  const defaultName = `Team ${tickedSolos.map((s) => soloNameOf(s).split(/\s+/)[0]).join(' & ')}`
+  const [typedName, setTypedName] = useState(null)
+  const [waveId, setWaveId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [waveFull, setWaveFull] = useState(null)
+  const teamName = typedName ?? defaultName
+  const needsWave = new Set(tickedSolos.map((s) => s.wave_id || '')).size > 1
+
+  async function create(force) {
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/events/${raceId}/pair-solos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          registration_ids: tickedSolos.map((s) => s.id),
+          team_name: teamName.trim(),
+          ...(needsWave && waveId ? { wave_id: waveId } : {}),
+          ...(force ? { force: true } : {}),
+        }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        if (j.error === 'wave_full' || j.code === 'wave_full') setWaveFull(j.message || 'That wave has no team places left.')
+        else onError(j.message || j.error || 'Could not pair the entrants')
+        return
+      }
+      onPaired()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const input = 'bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm text-un1t-text'
+  return (
+    <div className="border border-un1t-border rounded-md p-3 space-y-2 bg-un1t-bg">
+      <div className="text-xs text-un1t-subtle">
+        New team of {tickedSolos.length}: {tickedSolos.map(soloNameOf).join(', ')}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-xs text-un1t-subtle" htmlFor="pair-team-name">Team name</label>
+        <input
+          id="pair-team-name"
+          type="text"
+          value={teamName}
+          maxLength={80}
+          onChange={(e) => { setTypedName(e.target.value); setWaveFull(null) }}
+          className={`${input} w-64`}
+        />
+        {needsWave && (
+          <>
+            <label className="text-xs text-un1t-subtle" htmlFor="pair-team-wave">Wave for the new team</label>
+            <select
+              id="pair-team-wave"
+              value={waveId}
+              required
+              onChange={(e) => { setWaveId(e.target.value); setWaveFull(null) }}
+              className={input}
+            >
+              <option value="">Choose a wave…</option>
+              {waves.map((w) => <option key={w.id} value={w.id}>{waveTimeText(w)}</option>)}
+            </select>
+          </>
+        )}
+      </div>
+      {waveFull && (
+        <div role="alert" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-md p-2 inline-flex items-center gap-3 flex-wrap">
+          <span>{waveFull}</span>
+          <button
+            type="button"
+            onClick={() => create(true)}
+            disabled={busy}
+            className="text-xs border border-amber-500/40 px-2 py-1 rounded-md hover:bg-amber-500/10 disabled:opacity-40"
+          >
+            Place anyway
+          </button>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => create(false)}
+          disabled={busy || !teamName.trim() || (needsWave && !waveId)}
+          className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-40 inline-flex items-center gap-1.5"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Create team
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="text-xs text-un1t-subtle hover:text-un1t-text"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── One-team card ───────────────────────────────────────────────
 
-function TeamCard({ registration, waves, onChanged, onError }) {
+function TeamCard({ registration, placedIntoName = null, waves, onChanged, onError, onNotice, canCancel = false, canMove = false, currency = 'EUR', customerOrigin = '' }) {
   const team = registration.teams
   const wave = registration.wave
+  // FINDTEAM.6 — a placed solo's entry is history: a chip, and no actions.
+  const isPlaced = registration.status === 'placed'
   const members = (team?.team_members || []).slice().sort((a, b) =>
     (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1)
   )
   const [showAddMember, setShowAddMember] = useState(false)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [smsState, setSmsState] = useState(null) // null | 'sending' | 'sent'
+  const [moving, setMoving] = useState(false)
 
   async function moveWave(newWaveId) {
     if (newWaveId === registration.wave_id) return
@@ -277,7 +663,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
         body: JSON.stringify({ wave_id: newWaveId }),
       })
       const j = await r.json()
-      if (!r.ok || j.success === false) onError(j.error || `Move failed`)
+      if (!r.ok || j.success === false) onError(j.message || j.error || `Move failed`)
       else onChanged()
     } catch (e) {
       onError(e.message || 'Network error')
@@ -289,9 +675,13 @@ function TeamCard({ registration, waves, onChanged, onError }) {
   async function copyPaymentLink() {
     // Link to our own /event-pay page (embedded checkout for either
     // provider) rather than a provider-hosted URL — Stripe Connect events
-    // have no hosted URL. Same origin as the CRM, so window.origin is safe.
+    // have no hosted URL. W1.L3b — this is a CUSTOMER link the operator
+    // pastes on, so it is minted on the event's tenant host (customerOrigin,
+    // resolved by the server page), never the CRM host the operator is on.
+    // The CRM origin is only the fallback when the page could not resolve one.
     const paymentId = registration.payment?.id
-    const url = paymentId ? `${window.location.origin}/event-pay/${paymentId}` : null
+    const origin = customerOrigin || window.location.origin
+    const url = paymentId ? `${origin}/event-pay/${paymentId}` : null
     if (!url) { onError('No payment link available for this team yet.'); return }
     try {
       await navigator.clipboard.writeText(url)
@@ -299,32 +689,6 @@ function TeamCard({ registration, waves, onChanged, onError }) {
       setTimeout(() => setCopied(false), 2000)
     } catch {
       onError(`Couldn't copy automatically. Link: ${url}`)
-    }
-  }
-
-  // Text the registrant their payment link via the platform's Twilio
-  // sender (company number, not the operator's phone). The route
-  // re-reads the payment row server-side — the phone surfaced on
-  // registration.payment is only for gating + the confirm dialog.
-  async function sendPaymentSms() {
-    const phone = registration.payment?.contact_phone
-    if (!phone) { onError('No phone number on file for this registrant.'); return }
-    const who = registration.payment?.contact_name || team?.name || 'this registrant'
-    if (!confirm(`Text the payment link to ${who} at ${phone}?`)) return
-    setSmsState('sending')
-    try {
-      const r = await fetch(`/api/registrations/${registration.id}/payment-sms`, { method: 'POST' })
-      const j = await r.json()
-      if (!r.ok || j.success === false) {
-        onError(j.error || 'Could not send the payment SMS.')
-        setSmsState(null)
-        return
-      }
-      setSmsState('sent')
-      setTimeout(() => setSmsState(null), 2500)
-    } catch (e) {
-      onError(e.message || 'Network error')
-      setSmsState(null)
     }
   }
 
@@ -340,6 +704,75 @@ function TeamCard({ registration, waves, onChanged, onError }) {
       const j = await r.json()
       if (!r.ok || j.success === false) onError(j.error || 'Cancel failed')
       else onChanged()
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // EVENT-MOVE.3 — record that the move's price difference was collected
+  // (a payment link, cash, …) or waived. Records a decision, never moves
+  // money; only SQL can undo it, so ask first, like Cancel entry.
+  async function settleGap(how) {
+    const move = registration.last_move
+    if (!move?.id) return
+    if (!confirm(`Mark the ${money(move.price_gap_cents, currency)} difference as ${how}?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/event-registrations/${registration.id}/moves/${move.id}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ how }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) onError(j.message || j.error || 'Could not save the difference')
+      else {
+        // Someone settled it first, the other way: say so rather than let
+        // the reload quietly show an answer that is not the one clicked.
+        const stood = j.data?.unchanged ? j.data.move : null
+        if (stood?.gap_settled_how && stood.gap_settled_how !== how) {
+          onNotice(`Already marked ${stood.gap_settled_how} by ${(typeof stood.gap_settled_by_name === 'string' && stood.gap_settled_by_name.trim()) || 'staff'}.`)
+        }
+        onChanged()
+      }
+    } catch (e) {
+      onError(e.message || 'Network error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // EVENT-MOVE.5 — email the customer a link to pay the difference (the
+  // route reuses a pending one), and copy it so staff hold it either way.
+  // Paying it marks the difference collected on its own.
+  async function sendGapLink() {
+    const move = registration.last_move
+    if (!move?.id) return
+    const lead = leadOf(registration)
+    if (!confirm(`Send ${lead} a payment link for ${money(move.price_gap_cents, currency)}?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/event-registrations/${registration.id}/moves/${move.id}/gap-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: true }),
+      })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        onError(j.message || j.error || 'Could not create the payment link')
+        // Settled meanwhile: reload so the chip clears.
+        if (j.error === 'already_settled') onChanged()
+        return
+      }
+      const url = j.data?.url || ''
+      let copiedLink = false
+      if (url) {
+        try { await navigator.clipboard.writeText(url); copiedLink = true } catch { copiedLink = false }
+      }
+      if (j.data?.emailed) onNotice(`Payment link sent to ${lead}`)
+      else if (copiedLink) onNotice('Payment link copied; the email could not be sent')
+      else onNotice(`The email could not be sent. Payment link: ${url}`)
     } catch (e) {
       onError(e.message || 'Network error')
     } finally {
@@ -372,81 +805,138 @@ function TeamCard({ registration, waves, onChanged, onError }) {
               <Users size={10} /> {team.size}-person
             </span>
           )}
-          <StatusPill status={registration.status} />
+          <StatusPill status={registration.status} lapsed={registration.lapsed === true} />
+          {isPlaced && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1">
+              <Link2 size={10} /> {placedIntoName ? `Placed → team ${placedIntoName}` : 'Placed'}
+            </span>
+          )}
           {registration.team_composition === 'all_members' && (
             <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 inline-flex items-center gap-1">
               <BadgeCheck size={10} /> Members
             </span>
           )}
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={registration.wave_id || ''}
-            onChange={(e) => moveWave(e.target.value)}
-            disabled={busy}
-            className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40"
-            title="Move to a different wave"
-          >
-            {waves.map((w) => (
-              <option key={w.id} value={w.id}>
-                <Clock size={10} />{' '}
-                {w.label ? `${w.label} · ` : ''}{(w.start_time || '').slice(0, 5)}
-              </option>
-            ))}
-          </select>
-          {registration.status === 'pending_payment' && registration.payment?.id && (
-            <button
-              type="button"
-              onClick={copyPaymentLink}
-              disabled={busy}
-              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
-              title="Copy the payment link to send to the customer"
+          {registration.last_move && (
+            <span
+              className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700 inline-flex items-center gap-1"
+              title={`Moved from ${registration.last_move.from_event?.name || 'another event'} by ${actorOf(registration.last_move)} on ${new Date(registration.last_move.created_at).toLocaleDateString('en-IE')}${registration.last_move.forced ? ' (wave was full)' : ''}${settledNote(registration.last_move)}`}
             >
-              <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
-            </button>
-          )}
-          {registration.status === 'pending_payment' && registration.payment?.id && registration.payment?.contact_phone && (
-            <button
-              type="button"
-              onClick={sendPaymentSms}
-              disabled={busy || smsState === 'sending'}
-              className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
-              title={`Text the payment link to ${registration.payment.contact_phone}`}
-            >
-              {smsState === 'sending' ? (
-                <><Loader2 size={11} className="animate-spin" /> Sending…</>
-              ) : smsState === 'sent' ? (
-                <><Check size={11} /> Sent!</>
-              ) : (
-                <><MessageSquare size={11} /> Text link</>
-              )}
-            </button>
-          )}
-          {registration.status === 'cancelled' ? (
-            <span className="text-[11px] text-red-700 inline-flex items-center gap-1 font-medium">
-              <Ban size={11} /> Cancelled
+              <ArrowRightCircle size={10} /> Moved from {registration.last_move.from_event?.name || 'another event'}
             </span>
-          ) : (
+          )}
+          {registration.last_move && registration.last_move.notified_at === null && (
+            <span
+              className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700"
+              title="The customer was not emailed about this move. Tell them yourself."
+            >
+              Not emailed
+            </span>
+          )}
+          {registration.last_move?.price_gap_cents > 0 && !registration.last_move.gap_settled_at && (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
+                {money(registration.last_move.price_gap_cents, currency)} difference outstanding
+              </span>
+              {/* Confirmed only: a cancelled or unpaid entry owes no difference (the routes refuse not_active). */}
+              {canMove && registration.status === 'confirmed' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => settleGap('collected')}
+                    disabled={busy}
+                    className="text-[11px] text-un1t-accent hover:underline disabled:opacity-40"
+                    title="The customer has paid the difference (payment link, cash, …)"
+                  >
+                    Collected
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => settleGap('waived')}
+                    disabled={busy}
+                    className="text-[11px] text-un1t-accent hover:underline disabled:opacity-40"
+                    title="Let the difference go; the customer owes nothing more"
+                  >
+                    Waived
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sendGapLink}
+                    disabled={busy}
+                    className="text-[11px] text-un1t-accent hover:underline disabled:opacity-40"
+                    title="Email the customer a link to pay the difference (the link is copied too). Paying it marks the difference collected."
+                  >
+                    Send payment link
+                  </button>
+                </>
+              )}
+            </span>
+          )}
+        </div>
+        {!isPlaced && (
+          <div className="flex items-center gap-2">
+            <select
+              value={registration.wave_id || ''}
+              onChange={(e) => moveWave(e.target.value)}
+              disabled={busy}
+              className="text-[11px] bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text disabled:opacity-40"
+              title="Move to a different wave"
+            >
+              {waves.map((w) => (
+                <option key={w.id} value={w.id}>
+                  <Clock size={10} />{' '}
+                  {w.label ? `${w.label} · ` : ''}{(w.start_time || '').slice(0, 5)}
+                </option>
+              ))}
+            </select>
+            {registration.status === 'pending_payment' && registration.payment?.id && (
+              <button
+                type="button"
+                onClick={copyPaymentLink}
+                disabled={busy}
+                className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+                title="Copy the payment link to send to the customer"
+              >
+                <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
+              </button>
+            )}
+            {/* Confirmed only: an unpaid entry's payment link is priced for this event (EVENT-MOVE.4). */}
+            {canMove && registration.status === 'confirmed' && (
+              <button
+                type="button"
+                onClick={() => setMoving(true)}
+                disabled={busy}
+                className="text-[11px] text-un1t-accent hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+                title="Move this entry to another event"
+              >
+                <ArrowRightCircle size={11} /> Move to event
+              </button>
+            )}
+            {registration.status === 'cancelled' ? (
+              <span className="text-[11px] text-red-700 inline-flex items-center gap-1 font-medium">
+                <Ban size={11} /> Cancelled
+              </span>
+            ) : canCancel && (
+              <button
+                type="button"
+                onClick={cancelRegistration}
+                disabled={busy}
+                className="text-[11px] text-un1t-subtle hover:text-amber-700 inline-flex items-center gap-1"
+                title="Cancel this entry — frees the spot, keeps the registration and payment history (refunds handled in Revolut)"
+              >
+                <Ban size={11} /> Cancel entry
+              </button>
+            )}
             <button
               type="button"
-              onClick={cancelRegistration}
+              onClick={removeRegistration}
               disabled={busy}
-              className="text-[11px] text-un1t-subtle hover:text-amber-700 inline-flex items-center gap-1"
-              title="Cancel this entry — frees the spot, keeps the registration and payment history (refunds handled in Revolut)"
+              className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
+              title="Remove this team from the race entirely (deletes the registration)"
             >
-              <Ban size={11} /> Cancel entry
+              <Trash2 size={11} /> Remove
             </button>
-          )}
-          <button
-            type="button"
-            onClick={removeRegistration}
-            disabled={busy}
-            className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1"
-            title="Remove this team from the race entirely (deletes the registration)"
-          >
-            <Trash2 size={11} /> Remove
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {wave && (
@@ -455,27 +945,39 @@ function TeamCard({ registration, waves, onChanged, onError }) {
         </div>
       )}
 
-      <div className="mt-3 pt-3 border-t border-un1t-border/50 space-y-1.5">
-        {members.map((m) => (
-          <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
-        ))}
-        {showAddMember ? (
-          <AddMemberRow
-            teamId={team?.id}
-            onAdded={() => { setShowAddMember(false); onChanged() }}
-            onCancel={() => setShowAddMember(false)}
-            onError={onError}
-          />
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowAddMember(true)}
-            className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
-          >
-            <Plus size={11} /> Add member
-          </button>
-        )}
-      </div>
+      {!isPlaced && (
+        <div className="mt-3 pt-3 border-t border-un1t-border/50 space-y-1.5">
+          {members.map((m) => (
+            <MemberRow key={m.id} member={m} onChanged={onChanged} onError={onError} />
+          ))}
+          {showAddMember ? (
+            <AddMemberRow
+              teamId={team?.id}
+              onAdded={() => { setShowAddMember(false); onChanged() }}
+              onCancel={() => setShowAddMember(false)}
+              onError={onError}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowAddMember(true)}
+              className="text-[11px] text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
+            >
+              <Plus size={11} /> Add member
+            </button>
+          )}
+        </div>
+      )}
+
+      {moving && !isPlaced && (
+        <MoveEntryDialog
+          open
+          registration={registration}
+          onClose={() => setMoving(false)}
+          onMoved={() => { setMoving(false); onChanged() }}
+          onNotice={onNotice}
+        />
+      )}
     </div>
   )
 }
@@ -657,12 +1159,23 @@ function AddMemberRow({ teamId, onAdded, onCancel, onError }) {
   )
 }
 
-function StatusPill({ status }) {
+// ENTRYPOLICY.1 — `lapsed`: an unpaid entry past the event's hold (the teams
+// route judges it, holdsPlace). Still pending_payment on the row; shown apart
+// so staff can see it holds no place. Confirm by hand or delete as before.
+function StatusPill({ status, lapsed = false }) {
   const map = {
     confirmed: 'bg-emerald-500/15 text-emerald-700',
     pending_payment: 'bg-amber-500/15 text-amber-700',
     cancelled: 'bg-gray-500/15 text-gray-600',
+    placed: 'bg-sky-500/15 text-sky-700',
     no_show: 'bg-red-500/15 text-red-700',
+  }
+  if (status === 'pending_payment' && lapsed) {
+    return (
+      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-gray-500/15 text-gray-600" title="Unpaid past the event's hold: this entry no longer holds a place. Confirm it by hand or delete it.">
+        Lapsed (unpaid)
+      </span>
+    )
   }
   return (
     <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${map[status] || 'bg-un1t-border/30 text-un1t-subtle'}`}>

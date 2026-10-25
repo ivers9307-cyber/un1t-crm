@@ -6,18 +6,26 @@
 // (we never write consent here). Messages dedup on wa_message_id.
 
 import { normalizeWaPhone } from './whatsapp-coexistence'
+import { manualTakeoverPatch } from './agent/core'
+import { WA_APP_ECHO_SOURCE } from './whatsapp-staff-sources'
+import { logError } from './log'
+import { orgLocationIdsFor, scopeFor } from './inbound-contact-match'
+import { routeInboundThread } from './whatsapp-inbound-route'
 
 /**
  * Match a synced contact to an EXISTING CRM contact by phone. If found,
  * ensure wa_phone linkage (stored without +) and return it. If not found,
  * do nothing (never create). Never touches marketing preferences.
  */
-export async function syncContactMatchOnly(db, { phone }) {
+export async function syncContactMatchOnly(db, { phone, locationId }) {
   const n = normalizeWaPhone(phone)
   if (!n) return { matched: false, contactId: null }
+  // W0.2 — inside the receiving number's organisation only (see
+  // inbound-contact-match.js); never another tenant's row.
   const { data: contact } = await db
     .from('contacts')
     .select('id, wa_phone')
+    .in('location_id', scopeFor(await orgLocationIdsFor(db, locationId)))
     .or(`wa_phone.eq.${n.without},wa_phone.eq.${n.withPlus},phone.eq.${n.without},phone.eq.${n.withPlus}`)
     .limit(1)
     .maybeSingle()
@@ -33,8 +41,20 @@ export async function syncContactMatchOnly(db, { phone }) {
  * Threads to an existing contact if one matches the peer phone (match-only —
  * an unknown peer still gets a conversation/message row so the inbox is
  * complete, but no marketing-eligible contact is created).
+ *
+ * C106 CHECKINRISKS.1 (d) — an ECHO (descriptor.origin 'echo') is a reply a
+ * person typed in the studio's linked WhatsApp Business phone app. It is
+ * stored as source 'app_echo' (no sent_by: there is no CRM user behind it),
+ * which every staff reader counts as staff (whatsapp-staff-sources.js), and
+ * it takes the thread over from Mia exactly as an inbox send does
+ * (manualTakeoverPatch; she re-arms after handoff_cooldown_hours), and it
+ * bumps the thread's last_message_* columns like any send (WA-APPECHO.2).
+ * History rows (origin 'history', or no origin) keep the column default,
+ * take nothing over and bump nothing: they are weeks old, and created_at is
+ * the IMPORT time, so a staff tag would read as "staff just spoke" in every
+ * created_at-ordered reader.
  */
-export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
+export async function ingestCoexistenceMessage(db, { locationId, numberId = null, descriptor }) {
   const { waMessageId, peerPhone, direction, messageType, body, tsSeconds } = descriptor
   if (!waMessageId) return { inserted: false, reason: 'no_id' }
   if (direction !== 'inbound' && direction !== 'outbound') return { inserted: false, reason: 'bad_direction' }
@@ -46,28 +66,72 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
 
   const n = peerPhone ? normalizeWaPhone(peerPhone) : null
   let contactId = null
+  let contactHome = null
   if (n) {
+    // W0.2 — organisation-scoped, as above.
     const { data: contact } = await db
-      .from('contacts').select('id')
+      .from('contacts').select('id, location_id')
+      .in('location_id', scopeFor(await orgLocationIdsFor(db, locationId)))
       .or(`wa_phone.eq.${n.without},wa_phone.eq.${n.withPlus},phone.eq.${n.without},phone.eq.${n.withPlus}`)
       .limit(1).maybeSingle()
     contactId = contact?.id || null
+    contactHome = contact?.location_id || null
   }
 
+  // WAORGNUMBER.5 (R4) — the same rule as the inbound webhook decides the
+  // thread's studio: the member's thread with the latest outbound in 7 days at
+  // a studio the number is switched on at, else their home studio, else the
+  // number's home (`locationId`). Never throws.
   const waPhone = n?.without || peerPhone || 'unknown'
-  const { data: existingConv } = await db
-    .from('whatsapp_conversations').select('id').eq('location_id', locationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+  const route = await routeInboundThread(db, {
+    numberId,
+    numberHomeLocationId: locationId,
+    waPhone,
+    bsuid: null,
+    contact: contactId ? { id: contactId, location_id: contactHome } : null,
+    contextMessageId: null,
+    referral: null,
+    // "Recent" is judged at the message's own time: a history row weeks old
+    // files with whoever spoke in the week before it, not this week.
+    ...(tsSeconds ? { now: tsSeconds * 1000 } : {}),
+  })
+  const threadLocationId = route.locationId
+  // The receiving number goes on the thread when it is switched on at its
+  // studio.
+  const stamp = Boolean(numberId) && route.switchedOn
+
+  const existingConv = route.conversation
   let conversationId = existingConv?.id
+  // An existing thread with no stamp gets the receiving number, or a reply
+  // into it has no number to resolve. Only while unstamped: a history row can
+  // be weeks old, so it must not re-point a stamp the webhook wrote since (an
+  // echo is live, but a stamped thread already replies from a number switched
+  // on there or the inbound webhook re-stamps it). A lost stamp is logged,
+  // never thrown.
+  if (conversationId && stamp && !existingConv.whatsapp_number_id) {
+    const { error: numberStampErr } = await db.from('whatsapp_conversations')
+      .update({ whatsapp_number_id: numberId })
+      .eq('id', conversationId)
+      .is('whatsapp_number_id', null)
+    if (numberStampErr) {
+      logError('wa-coexistence', 'number stamp on the existing thread failed (replies into it have no number)', {
+        conversationId, locationId: threadLocationId, numberId, err: numberStampErr.message,
+      })
+    }
+  }
   if (!conversationId) {
     const { data: newConv, error: convErr } = await db
       .from('whatsapp_conversations')
-      .insert({ location_id: locationId, contact_id: contactId, wa_phone: waPhone, status: 'active' })
+      .insert({
+        location_id: threadLocationId, contact_id: contactId, wa_phone: waPhone, status: 'active',
+        ...(stamp ? { whatsapp_number_id: numberId } : {}),
+      })
       .select('id').single()
     if (convErr) {
       // Lost the (location_id, wa_phone) unique race — re-read the winner.
       const { data: raced } = await db
         .from('whatsapp_conversations').select('id')
-        .eq('location_id', locationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+        .eq('location_id', threadLocationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
       conversationId = raced?.id
     } else {
       conversationId = newConv?.id
@@ -75,12 +139,55 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
   }
   if (!conversationId) return { inserted: false, reason: 'no_conversation' }
 
+  const isEcho = descriptor.origin === 'echo' && direction === 'outbound'
   const sentAt = tsSeconds ? new Date(tsSeconds * 1000).toISOString() : new Date().toISOString()
   const { error: msgErr } = await db.from('whatsapp_messages').insert({
-    conversation_id: conversationId, contact_id: contactId, location_id: locationId,
+    conversation_id: conversationId, contact_id: contactId, location_id: threadLocationId,
     wa_message_id: waMessageId, direction, message_type: messageType, body,
     status: direction === 'outbound' ? 'sent' : 'delivered', sent_at: sentAt,
+    ...(isEcho ? { source: WA_APP_ECHO_SOURCE } : {}),
   })
   if (msgErr) return { inserted: false, reason: msgErr.message }
-  return { inserted: true, conversationId, contactId }
+  if (!isEcho) return { inserted: true, conversationId, contactId }
+
+  // The staff member answered from the phone: Mia stops auto-replying in
+  // this thread, the same take-over the inbox send route applies. The message
+  // is already stored, so a failed write is logged and reported, never thrown
+  // (the webhook must still 200, and a retry would dedup on wa_message_id).
+  const { error: takeoverErr } = await db.from('whatsapp_conversations')
+    .update(manualTakeoverPatch())
+    .eq('id', conversationId)
+  if (takeoverErr) {
+    logError('wa-coexistence', 'phone-app echo stored but the take-over write failed (Mia not paused)', {
+      conversationId, locationId, waMessageId, err: takeoverErr.message,
+    })
+  }
+
+  // WA-APPECHO.2 — bump the thread like every other send path (the inbox send
+  // route, Mia, the inbound webhook): last_message_direction 'outbound' is
+  // what takes it out of "Needs reply" (inbox-queues.js / mobile inbox.js),
+  // and last_message_at is the inbox sort key. A SEPARATE write from the
+  // take-over because it is guarded: the echo's own time, and only when it is
+  // newer than what the thread holds. Echoes can arrive late or out of order,
+  // and stamping 'outbound' over a customer's newer message would hide a
+  // member who is waiting. Same guard as the mail sent-lane bump.
+  const { error: stampErr } = await db.from('whatsapp_conversations')
+    .update({
+      last_message_at: sentAt,
+      last_message_direction: 'outbound',
+      last_message_preview: (body || `[${messageType}]`).substring(0, 100),
+    })
+    .eq('id', conversationId)
+    .or(`last_message_at.is.null,last_message_at.lt.${sentAt}`)
+  if (stampErr) {
+    logError('wa-coexistence', 'phone-app echo stored but the inbox stamp failed (thread will not rise in the inbox)', {
+      conversationId, locationId, waMessageId, err: stampErr.message,
+    })
+  }
+
+  return {
+    inserted: true, conversationId, contactId,
+    ...(takeoverErr ? { takeoverFailed: true } : {}),
+    ...(stampErr ? { stampFailed: true } : {}),
+  }
 }

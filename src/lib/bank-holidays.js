@@ -828,6 +828,26 @@ export function getStaticHolidays(start, end, country = 'IE') {
 }
 
 /**
+ * HOLIDAYLEAVE.1 — the calendar years in [start, end] this file has NO national
+ * list for: every year for an unknown country, and any year before or after
+ * the static list's span for a known one. Pure. For a caller where "no
+ * holidays" and "no list" must not look the same (leave is charged from it).
+ *
+ * @param {string} country  ISO 3166-1 alpha-2
+ * @param {string} start    YYYY-MM-DD
+ * @param {string} end      YYYY-MM-DD
+ * @returns {number[]}      ascending
+ */
+export function uncoveredHolidayYears(country, start, end) {
+  const covered = new Set((HOLIDAYS_BY_COUNTRY[country] || []).map((h) => h.date.slice(0, 4)))
+  const out = []
+  for (let y = Number(start.slice(0, 4)); y <= Number(end.slice(0, 4)); y++) {
+    if (!covered.has(String(y))) out.push(y)
+  }
+  return out
+}
+
+/**
  * Merge static national holidays with a list of custom per-location ones.
  * Custom entries are tagged `source: 'custom'` and override the static name
  * if the date matches (gym wants to relabel St Patrick's Day → "Closed all

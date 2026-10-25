@@ -83,6 +83,7 @@ const WORKFLOW = '.github/workflows/eas-update.yml'
 // reachable by the old `mobile/**` denylist — i.e. each was a live way to
 // publish a no-op OTA. Add to this map when you add a non-bundle entry.
 const NON_BUNDLE = {
+  targets: 'WIDGET.1 — Swift sources for the iOS widget extension (@bacons/apple-targets), generated into the Xcode project at prebuild. The extension is a SEPARATE binary target from the RN app and never runs the Metro bundle, so a Swift-only change must publish no OTA — it cannot take effect without a new native build regardless.',
   docs: 'Runbooks. Never bundled. (#1455 excluded these after #1451 published from a docs-only push.)',
   'asc-screenshots': 'App Store listing images, uploaded to ASC by hand. Capturing fresh ones is a launch step — see mobile/docs/store-release-one-app.md §4.',
   certs: 'EAS Update code-signing key material. Inert (Enterprise-plan-only, see docs/eas-update-code-signing.md) and native-side regardless.',

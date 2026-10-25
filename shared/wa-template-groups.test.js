@@ -13,10 +13,10 @@ const tpl = (name, display_group, body) => ({
 })
 
 describe('templateBodyText', () => {
-  it('prefers the denormalised body_text column (mobile select shape)', () => {
-    expect(templateBodyText({ body_text: 'hi', components: [{ type: 'BODY', text: 'other' }] })).toBe('hi')
+  it('reads the BODY component; a stray body_text (no such column) is ignored', () => {
+    expect(templateBodyText({ body_text: 'hi', components: [{ type: 'BODY', text: 'other' }] })).toBe('other')
   })
-  it('falls back to the BODY component (web shape)', () => {
+  it('reads the BODY component', () => {
     expect(templateBodyText(tpl('a', null, 'from components'))).toBe('from components')
   })
   it('returns empty string for missing/malformed shapes', () => {
@@ -81,9 +81,10 @@ describe('groupWaTemplates', () => {
     expect(groupWaTemplates(templates, 'zzz')).toEqual([])
   })
 
-  it('matches search against body_text column shape too', () => {
-    const groups = groupWaTemplates([{ name: 'x', display_group: null, body_text: 'renewal time' }], 'renewal')
+  it('matches search against the BODY component only (no body_text column)', () => {
+    const groups = groupWaTemplates([{ name: 'x', display_group: null, components: [{ type: 'BODY', text: 'renewal time' }] }], 'renewal')
     expect(groups.flatMap(g => g.templates).map(t => t.name)).toEqual(['x'])
+    expect(groupWaTemplates([{ name: 'y', display_group: null, body_text: 'renewal time' }], 'renewal')).toEqual([])
   })
 
   it('handles empty input', () => {

@@ -10,10 +10,10 @@
 //   isoToLocalDatetime(localDatetimeToIso(v)) === v
 //   localDatetimeToIso(isoToLocalDatetime(iso)) === iso
 //
-// Same shape as the private helpers in SMSBroadcastEditor.jsx, extracted so
+// Same shape as the private helpers the SMS broadcast editor carried, extracted so
 // the behaviour is testable under multiple TZs. Nothing here is Dublin-
 // specific: the wall clock we want is the operator's own — use
-// `@/lib/dublin-time` when the *business* day is what matters.
+// `todayStrIn(zone)` from `@/lib/location-time` when the *business* day matters.
 
 const pad = (n) => String(n).padStart(2, '0')
 

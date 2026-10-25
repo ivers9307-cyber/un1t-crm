@@ -50,10 +50,13 @@ const PAGE_SIZE = 1000 // Supabase default cap; we page through it.
  * @returns {Promise<object>} Supabase query builder ready to .range() + await.
  */
 async function buildMemberQuery(db, segment) {
+  // ORGCONTACTS.4 — a segment's members are the contacts with a relationship
+  // at its studio (studio_contacts, mig 765), judged on the stage AT that
+  // studio; the raw contacts table has neither the crossovers nor the column.
   let query = db
-    .from('contacts')
+    .from('studio_contacts')
     .select('id', { count: 'exact' })
-    .eq('location_id', segment.location_id)
+    .eq('studio_location_id', segment.location_id)
 
   ;({ query } = await applyAudienceFilterAsync({
     db,

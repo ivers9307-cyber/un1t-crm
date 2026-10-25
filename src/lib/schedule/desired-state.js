@@ -23,18 +23,18 @@
 //
 // THE `tz` CONTRACT — POLICY (what the EDGE must do):
 //   Whoever reads locations.timezone — the reconcile in Task 8, the routes
-//   in PR 2 — must pass it through resolveTz() from src/lib/tz-time, which
+//   in PR 2 — must pass it through resolveZone() (@/lib/location-time), which
 //   downgrades an unusable value to Dublin, AND must emit an
 //   operator-visible logWarn naming the location id and the rejected
-//   value. resolveTz is pure and does NOT log, so that warning is the
+//   value. resolveZone is pure and does NOT log, so that warning is the
 //   caller's job, and it is the only thing standing between a typo'd zone
 //   and a studio silently running on Dublin time. A schedule quietly an
 //   hour out is a support ticket nobody knows how to open.
 //
-// The wall-clock maths itself lives in src/lib/tz-time.js, which is also
-// where the DST-edge contract is written down (a nonexistent wall-clock
-// resolves EARLIER; an ambiguous one resolves to one deterministic
-// instant) and where the 23:xx-IST whole-day bug that SHELLY.2 fixed by
+// The wall-clock maths itself lives in shared/zoned-time.js (tz-time.js
+// before TZ.1), which is also where the DST-edge contract is written down
+// (a nonexistent wall-clock resolves EARLIER; an ambiguous one resolves to
+// one deterministic instant) and where the 23:xx-IST whole-day bug that SHELLY.2 fixed by
 // moving onto it is documented in full. One line here: dublinWallMs
 // corrected by minute-of-day, so any boundary whose read-back rolled onto
 // the next calendar date resolved a whole day late.
@@ -52,8 +52,17 @@
 // occurrence INSTANTS, which are already absolute, so `tz` moves fixed
 // windows only.
 
-import { addDaysISO } from '@/lib/dublin-time'
-import { wallMsInTz, dayStartMsInTz, DEFAULT_TZ } from '@/lib/tz-time'
+// TZ.10 — the zone maths is @shared/zoned-time's (tz-time was its shim). Not
+// @/lib/location-time: SonosScheduleClient imports this engine into the
+// browser bundle, and location-time carries the DB side. Every caller passes
+// the location's zone (tests/climate-zone-callers.test.js); the default below
+// is only the engine's convention for "no zone given".
+import { addDaysISO, zonedWallClockToInstant, strictDayStartMsIn as dayStartMsInTz, DEFAULT_TZ } from '@shared/zoned-time'
+
+// tz-time's wallMsInTz, kept exact: HH:MM only (zonedWallClockToInstant also
+// takes a Postgres TIME's HH:MM:SS, which a window boundary never is).
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/
+const wallMsInTz = (dateStr, hhmm, tz) => (HHMM.test(String(hhmm ?? '')) ? zonedWallClockToInstant(dateStr, hhmm, tz) : null)
 
 const DEFAULT_LEAD_MIN = 15
 const DEFAULT_LAG_MIN = 10

@@ -1,20 +1,26 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { isOrgAdminSomewhere, resolveAdminOrgId } from '@/lib/org-admin'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { httpUrl } from '@/lib/schemas'
 
 // Organisation-level branding defaults (mig 317). Locations inherit these via
 // getLocationBranding when they have not set their own. Mirrors
-// /api/settings/branding but keyed on organization_id. Master may target any
-// org; an owner is limited to organisations they own.
+// /api/settings/branding but keyed on organization_id. C18 ORGROLE.1:
+// organisation admins only — master may target any org, an org admin
+// (org_admin grant) only the orgs they administer; a studio owner is not one.
 const OrgBrandingSchema = z.object({
   organization_id: uuidLike.optional(),
   // HYGIENE-PII.1 — http(s) only; these render into <img src> / <link rel=icon>.
   logo_url: httpUrl.nullable().optional(),
   favicon_url: httpUrl.nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),
+  // W1.B1 — the SHORT wordmark productName() builds "{Brand} Points" /
+  // "{Brand} HR" from (mig 715; column CHECK length 1..40, so a blank is
+  // written as null below). NULL = use company_name.
+  short_name: z.string().trim().max(40).nullable().optional(),
   // SAAS4-C2 — the tenant's legal identity for their privacy notice
   // (mig 425). Entity name + privacy email must BOTH be set before the
   // tenant's hostname serves the tenant-entity notice.
@@ -24,14 +30,23 @@ const OrgBrandingSchema = z.object({
   privacy_contact_email: z.string().email().max(200).nullable().optional(),
 })
 
-// Resolve the org the caller may act on. Master targets any org (defaults to
-// active); an owner is constrained to orgs they own (getOwnerOrganizationIds).
-// Returns null when the caller has no claim to the requested/active org.
+// MIAORG.1 final review — the columns this route answers with: every
+// org_settings column it returned while it read `*`, named, so a column added
+// later (mig 729's customer_agent, Mia's organisation defaults, which has its
+// own editor and route) never rides along to the branding page.
+const ORG_BRANDING_COLUMNS = [
+  'organization_id', 'logo_url', 'favicon_url', 'company_name', 'updated_at', 'updated_by', // mig 317
+  'ai_cap_notice_month', 'email_cap_notice_month', // mig 416
+  'ai_hard_cap_cents', 'email_hard_cap_sends', // mig 421
+  'ops_alert_emails', // mig 424
+  'legal_entity_name', 'legal_trading_name', 'legal_address', 'privacy_contact_email', // mig 425
+  'short_name', // mig 715
+].join(', ')
+
+// Resolve the org the caller may act on (resolveAdminOrgId). Returns null when
+// the caller is not an admin of the requested/active org.
 function resolveOrgId(user, requested) {
-  if (user.role === 'master') return requested || user.activeOrganization?.id || null
-  const owned = getOwnerOrganizationIds(user)
-  const target = requested || user.activeOrganization?.id || owned[0] || null
-  return target && owned.includes(target) ? target : null
+  return resolveAdminOrgId(user, requested).orgId || null
 }
 
 // GET /api/settings/org-branding?organization_id=xxx — org branding defaults
@@ -44,19 +59,23 @@ export async function GET(request) {
   if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
 
   const db = createServerClient()
-  const { data } = await db.from('org_settings')
-    .select('*')
+  const { data, error } = await db.from('org_settings')
+    .select(ORG_BRANDING_COLUMNS)
     .eq('organization_id', orgId)
     .maybeSingle()
+  if (error) {
+    return NextResponse.json({ success: false, error: 'Could not load the organisation branding just now.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: data || null })
 }
 
-// PUT /api/settings/org-branding — upsert org branding (owner-of-org or master)
+// PUT /api/settings/org-branding — upsert org branding (organisation admin)
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
-    return NextResponse.json({ success: false, error: 'Only owners or master can update organisation branding' }, { status: 403 })
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!isOrgAdminSomewhere(user)) {
+    return NextResponse.json({ success: false, error: 'Only organisation admins can update organisation branding' }, { status: 403 })
   }
 
   const validation = await validateBody(request, OrgBrandingSchema)
@@ -81,10 +100,15 @@ export async function PUT(request) {
   for (const key of ['legal_entity_name', 'legal_trading_name', 'legal_address', 'privacy_contact_email']) {
     if (key in body) record[key] = body[key]
   }
+  // W1.B1 short_name: same "only when present" rule, so a client that does
+  // not know the field (a pre-deploy tab, a GET that failed and left the
+  // form blank) cannot null the seeded wordmark on Save. Blank → null, since
+  // the column CHECK (mig 715) refuses an empty string.
+  if ('short_name' in body) record.short_name = body.short_name || null
 
   const { data, error } = await db.from('org_settings')
     .upsert(record, { onConflict: 'organization_id' })
-    .select()
+    .select(ORG_BRANDING_COLUMNS)
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

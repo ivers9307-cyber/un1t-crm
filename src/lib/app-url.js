@@ -46,7 +46,8 @@ export const MEMBER_APP_DEFAULT_ORIGIN = 'https://api.repset.ie'
  *   to the repset host precisely because nothing sets the env), and the only
  *   consumer on the send path is a customer email. `NEXT_PUBLIC_APP_URL` is
  *   documented prod config (docs/architecture/INTEGRATIONS.md) and the live
- *   campaign sender calls `getAppUrl()` uncaught, so it is provably set;
+ *   campaign sender reaches `getAppUrl()` uncaught (since W1.L3a as the floor
+ *   of `resolveCustomerBaseUrl()`, which rethrows it), so it is provably set;
  *   `NEXT_PUBLIC_CHAMP_APP_URL` is provably NOT. Throwing here would
  *   therefore delete every post-class email in prod TODAY, in exchange for
  *   nothing — the default is already the correct host.

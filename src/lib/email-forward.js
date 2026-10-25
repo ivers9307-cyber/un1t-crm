@@ -1,4 +1,4 @@
-// EMAIL-FORWARD.1 — the pure rules for forwarding one message off a ticket:
+// EMAIL-FORWARD.1 — the pure rules for forwarding one message off a conversation:
 // the subject, the quoted header block, the body, and which of the original's
 // files may ride along.
 //
@@ -62,9 +62,11 @@
 // stronger guarantee than sanitisation rather than a weaker one.
 //
 // The operator is told, in the composer and in the mail itself, that
-// formatting was dropped. The full original stays on the ticket.
+// formatting was dropped. The full original stays on the conversation.
 
 import { formatBytes } from './email-attachment-quota'
+import { readableText } from './mail-entities'
+import { formatInZone, resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 import {
   MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES,
   exceedsOutboundTotal,
@@ -122,27 +124,29 @@ export function forwardSubject(subject) {
  *
  * EXPLICIT timeZone, always. A bare toLocaleString() would render the studio's
  * correspondence in whatever zone the Vercel region happens to run in (UTC),
- * so a 9am email would be forwarded as having arrived at 8am all summer. The
- * `en-IE` locale + Europe/Dublin pair is the estate's convention, and stating
- * the zone also makes this deterministic under any TZ a test runs in.
+ * so a 9am email would be forwarded as having arrived at 8am all summer. TZ.16:
+ * the zone is the mailbox's studio (the forward route passes the
+ * conversation's location zone; DEFAULT_TZ when none is given), in `en-IE`,
+ * and stating it also makes this deterministic under any TZ a test runs in.
+ * No abbreviation: the reader is the forward's recipient, not a staff viewer.
  *
  * @param {string|null} iso
+ * @param {string} [zone=DEFAULT_TZ] the mailbox's studio zone
  * @returns {string} '' when there is no usable timestamp — the line is then
  *   omitted entirely rather than rendered as "Date: Invalid Date".
  */
-export function forwardTimestamp(iso) {
+export function forwardTimestamp(iso, zone = DEFAULT_TZ) {
   if (!iso) return ''
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return ''
-  return new Intl.DateTimeFormat('en-IE', {
-    timeZone: 'Europe/Dublin',
+  return formatInZone(new Date(t), resolveZone(zone), {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(t))
+  }, 'en-IE')
 }
 
 /**
@@ -164,9 +168,10 @@ export function forwardTimestamp(iso) {
  * after it reads as a message sent to nobody.
  *
  * @param {object|null} message  an email_inbox_messages row
+ * @param {string} [zone=DEFAULT_TZ] the mailbox's studio zone (the Date line)
  * @returns {{ label: string, value: string }[]} in header order
  */
-export function forwardedHeaderLines(message) {
+export function forwardedHeaderLines(message, zone = DEFAULT_TZ) {
   if (!message) return []
   const list = (v) => (Array.isArray(v) ? v.filter(a => typeof a === 'string' && a.trim()) : [])
   // Pre-mig-499 rows carry only the scalar to_email.
@@ -180,7 +185,7 @@ export function forwardedHeaderLines(message) {
     if (v) lines.push({ label, value: v })
   }
   push('From', message.from_email)
-  push('Date', forwardTimestamp(message.sent_at || message.created_at))
+  push('Date', forwardTimestamp(message.sent_at || message.created_at, zone))
   push('Subject', message.subject)
   push('To', to.join(', '))
   push('Cc', list(message.cc_emails).join(', '))
@@ -203,7 +208,11 @@ export function forwardedHeaderLines(message) {
  * @returns {{ text: string, truncated: boolean }}
  */
 export function forwardedBody(message) {
-  const raw = String(message?.text_body || '').replace(/\r\n/g, '\n').trim()
+  // 🔴 readableText BEFORE the cap, because this quote is SENT — to somebody
+  // outside this estate, in their own mail client, where `&#38;` is simply
+  // wrong and unattributable. Every other site that reads text_body is a
+  // screen an operator can squint past; this one is not.
+  const raw = readableText(message?.text_body).replace(/\r\n/g, '\n').trim()
   if (raw.length <= FORWARD_QUOTE_MAX_CHARS) return { text: raw, truncated: false }
   return { text: raw.slice(0, FORWARD_QUOTE_MAX_CHARS).trimEnd(), truncated: true }
 }
@@ -219,11 +228,12 @@ export function forwardedBody(message) {
  * @param {object} args
  * @param {string} args.note      what the operator typed (may be empty)
  * @param {object} args.message   the message being forwarded
+ * @param {string} [args.zone]     the mailbox's studio zone (DEFAULT_TZ when absent)
  * @returns {string}
  */
-export function buildForwardText({ note, message } = {}) {
+export function buildForwardText({ note, message, zone = DEFAULT_TZ } = {}) {
   const { text, truncated } = forwardedBody(message)
-  const headers = forwardedHeaderLines(message).map(l => `${l.label}: ${l.value}`)
+  const headers = forwardedHeaderLines(message, zone).map(l => `${l.label}: ${l.value}`)
 
   const parts = []
   const intro = String(note || '').trim()
@@ -256,7 +266,7 @@ export function buildForwardText({ note, message } = {}) {
  * cannot be sent.
  *
  * TWO SHAPES, ONE QUESTION. The server sees the row and asks `storage_path`;
- * the browser sees what the ticket detail route chose to expose and asks
+ * the browser sees what the conversation detail route chose to expose and asks
  * `stored`, because that route deliberately never returns storage_path to a
  * client (the bucket is private and the path is signed server-side only). They
  * are the same fact — the route computes `stored: !!row.storage_path` — so
@@ -314,7 +324,7 @@ export function selectForwardAttachments(rows, ids) {
     if (!row) {
       return {
         ok: false,
-        error: 'One of the files you chose is not on that message any more. Reopen the ticket and try again — nothing was sent.',
+        error: 'One of the files you chose is not on that message any more. Reopen the conversation and try again — nothing was sent.',
       }
     }
     if (!row.storage_path) {
@@ -387,7 +397,7 @@ export function defaultForwardSelection(rows) {
  */
 export function forwardRefusal(message) {
   if (!message) {
-    return 'That message is not on this ticket.'
+    return 'That message is not on this conversation.'
   }
   if (message.is_internal_note) {
     return 'An internal note was never sent to anyone and is staff-only, so it cannot be forwarded. ' +

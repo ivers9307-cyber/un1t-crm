@@ -4,80 +4,20 @@
 // at the race's location.
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { ADMIN_ROLES, MANAGER_ROLES } from '@/lib/schemas'
+import { judgeEventOwnerChange } from '@/lib/event-owner'
+import { EventUpdateSchema } from '@/lib/event-save-schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const WaveInputSchema = z.object({
-  // id present = update existing wave; absent = create. (Mig 083)
-  // The diff-and-apply path matches by id where present, by start_time
-  // for unidentified rows that happen to align with existing waves.
-  id: z.string().uuid().optional(),
-  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
-  capacity: z.number().int().positive().max(10000).nullable().optional(),
-  label: z.string().max(60).nullable().optional(),
-  display_order: z.number().int().nonnegative().optional(),
-})
-
-export const UpdateSchema = z.object({
-  name: z.string().trim().min(1).max(200).optional(),
-  description: z.string().max(4000).nullable().optional(),
-  race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  registration_opens_at: z.string().datetime().nullable().optional(),
-  registration_closes_at: z.string().datetime().nullable().optional(),
-  allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
-  // Mig 125: staffing requirement edit. Same range as create. UpdateSchema
-  // accepts kind-NULL keep semantics — only patches when explicitly set.
-  staff_required: z.number().int().min(0).max(50).optional(),
-  active: z.boolean().optional(),
-  // EVENTS-CAPACITY-MODE.1 (mig 280): cap by teams or people. Scalar —
-  // flows through the generic `updates` patch in PUT below.
-  capacity_mode: z.enum(['teams', 'people']).optional(),
-  // Member pricing (mig 084).
-  member_pricing_enabled: z.boolean().optional(),
-  members_only: z.boolean().optional(),
-  // EVENTS-LOC.2: shared = show this event in every location's list.
-  shared: z.boolean().optional(),
-  // EVENTS-HOST.4: reassign the payee. NULL = internal UN1T (Revolut);
-  // set = pay that host directly via Stripe. Org-validated in PUT below.
-  host_id: uuidLike.nullable().optional(),
-  member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  payment_currency: z.string().length(3).optional(),
-  // Mig 092: TV-display logos (max 3 in UI, schema allows 6).
-  tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
-  // Public-page hero image + accent colour. hero_image_url is set by
-  // the caller after POST /api/events/[id]/hero returns the bytes URL;
-  // accent_hex is a 6-digit hex (#RRGGBB). Both nullable to clear.
-  hero_image_url: z.string().url().max(2000).nullable().optional(),
-  accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
-  // EVENTS-EMAILCFG.1 (mig 385) — per-event confirmation/reminder email
-  // styling. Scalars flow through the generic `updates` patch below; NULL
-  // clears back to the default copy/look, omit = leave untouched. The
-  // *_template_id fields are location-validated in PUT before persisting.
-  confirmation_email_subject: z.string().max(4000).nullable().optional(),
-  confirmation_email_intro: z.string().max(4000).nullable().optional(),
-  reminder_email_subject: z.string().max(4000).nullable().optional(),
-  reminder_email_intro: z.string().max(4000).nullable().optional(),
-  confirmation_email_template_id: uuidLike.nullable().optional(),
-  reminder_email_template_id: uuidLike.nullable().optional(),
-  // EVENT-COMMS-LOC (mig 553) — flows through the generic scalar patch; in-org
-  // non-anchor validated in PUT.
-  sending_location_id: uuidLike.nullable().optional(),
-  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-  // confirmation. Flows through the generic scalar patch in PUT (omit = leave
-  // untouched). The email receipt is separate and unaffected.
-  confirmation_sms_enabled: z.boolean().optional(),
-  // When provided, replaces the wave set entirely (diff-and-apply).
-  // Omitting leaves waves untouched. At least one wave required if set.
-  waves: z.array(WaveInputSchema).min(1).max(50).optional(),
-})
+// The body schema lives in src/lib/event-save-schemas.js (OPENAPI-EVENTS.1),
+// where the OpenAPI spec reads the same object; re-exported under its old name.
+export const UpdateSchema = EventUpdateSchema
 
 async function loadRace(db, id) {
   return db
@@ -91,8 +31,11 @@ async function loadRace(db, id) {
       hero_image_url, accent_hex,
       confirmation_email_subject, confirmation_email_intro,
       reminder_email_subject, reminder_email_intro,
+      moved_email_subject, moved_email_intro,
+      gap_email_subject, gap_email_intro,
+      waitlist_email_subject, waitlist_email_intro,
       confirmation_email_template_id, reminder_email_template_id,
-      confirmation_sms_enabled, sending_location_id,
+      sending_location_id, charity_enabled, charity, find_team, entry_policy,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
@@ -127,7 +70,7 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -138,6 +81,12 @@ export async function GET(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard && !(await hostEventOrgAccess(db, user, data))) return guard
+  // ROLESWEEP.1b — `races` judged at the event's location on the member path.
+  // The host path (guard set, hostEventOrgAccess passed: ADMIN_ROLES at the
+  // active studio + the active org) acts from the active studio, as before.
+  if (!hasPermissionForLocation(user, guard ? user.activeLocation?.id : data.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   return NextResponse.json({ success: true, data })
 }
@@ -146,7 +95,7 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -157,7 +106,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const { data: existing, error: lookupErr } = await db
     .from('race_events')
-    .select('id, location_id, host_id')
+    .select('id, location_id, host_id, confirmation_email_template_id, reminder_email_template_id')
     .eq('id', params.id)
     .single()
   if (lookupErr || !existing) {
@@ -165,16 +114,34 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard && !(await hostEventOrgAccess(db, user, existing))) return guard
+  // ROLESWEEP.1b — `races` judged at the event's location on the member path.
+  // The host path (guard set, hostEventOrgAccess passed: ADMIN_ROLES at the
+  // active studio + the active org) acts from the active studio, as before.
+  if (!hasPermissionForLocation(user, guard ? user.activeLocation?.id : existing.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   // EVENTS-HOST.4 — changing the payee (assign, switch, or clear) routes
   // ticket money, so it's gated to ADMIN_ROLES — matching who can manage the
   // host itself. An UNCHANGED host_id (staff editing other fields of a
   // hosted event) passes untouched; only an actual payee change is gated.
+  // ROLESWEEP.1b — ADMIN_ROLES judged at the event's location on the member
+  // path. The host path (guard set) already required ADMIN_ROLES in
+  // hostEventOrgAccess, so it is not re-judged here.
   if (body.host_id !== undefined
       && (body.host_id || null) !== (existing.host_id || null)
-      && !ADMIN_ROLES.includes(user.role)) {
+      && !guard && !hasRoleAtLocation(user, existing.location_id, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Changing the payment host requires manager access.' }, { status: 403 })
   }
+
+  // EVENT-OWNER.1 — moving the event to another studio. Every location-bound
+  // check below (host org, templates, sending location) judges the TARGET.
+  const ownerChanging = Boolean(body.location_id) && body.location_id !== existing.location_id
+  if (ownerChanging) {
+    const verdict = await judgeEventOwnerChange({ db, user, existing, targetLocationId: body.location_id, nextHostId: body.host_id })
+    if (!verdict.ok) return NextResponse.json({ success: false, error: verdict.error }, { status: verdict.status })
+  }
+  const ownerLocationId = ownerChanging ? body.location_id : existing.location_id
 
   // EVENTS-HOST.4 — payment-routing security. When the caller reassigns the
   // payee, verify the target host is a real event_hosts row in THIS event's
@@ -186,7 +153,7 @@ export async function PUT(request, props) {
     const { data: loc } = await db
       .from('locations')
       .select('organization_id')
-      .eq('id', existing.location_id)
+      .eq('id', ownerLocationId)
       .single()
     const { data: host } = await db
       .from('event_hosts')
@@ -215,9 +182,18 @@ export async function PUT(request, props) {
     const byId = new Map((templates || []).map((t) => [t.id, t]))
     for (const templateId of emailTemplateIds) {
       const tpl = byId.get(templateId)
-      if (!tpl || tpl.location_id !== existing.location_id) {
+      if (!tpl || tpl.location_id !== ownerLocationId) {
         return NextResponse.json({ success: false, error: 'invalid_template' }, { status: 400 })
       }
+    }
+  }
+  // EVENT-OWNER.1 — a template is per studio, so a move drops a stored
+  // pointer the caller did not replace (back to the shared shell) rather
+  // than leave the event on the old studio's template.
+  const ownerTemplateResets = {}
+  if (ownerChanging) {
+    for (const k of ['confirmation_email_template_id', 'reminder_email_template_id']) {
+      if (body[k] === undefined && existing[k]) ownerTemplateResets[k] = null
     }
   }
 
@@ -229,7 +205,7 @@ export async function PUT(request, props) {
   // DB through the generic `updates = { ...body }` patch below.
   if (body.sending_location_id) {
     const { data: loc } = await db.from('locations')
-      .select('organization_id').eq('id', existing.location_id).single()
+      .select('organization_id').eq('id', ownerLocationId).single()
     const { data: send } = await db.from('locations')
       .select('id, organization_id, is_host_anchor')
       .eq('id', body.sending_location_id).maybeSingle()
@@ -241,8 +217,9 @@ export async function PUT(request, props) {
   // Pull waves out before building the race_events update payload —
   // they go to a different table.
   const wavesInput = body.waves
-  const updates = { ...body }
+  const updates = { ...body, ...ownerTemplateResets }
   delete updates.waves
+  if (!ownerChanging) delete updates.location_id
   if (Array.isArray(updates.allowed_team_sizes)) {
     updates.allowed_team_sizes = [...updates.allowed_team_sizes].sort((a, b) => a - b)
   }
@@ -335,10 +312,10 @@ export async function DELETE(_request, props) {
   // for historical record.
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -351,6 +328,13 @@ export async function DELETE(_request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasRoleAtLocation(user, existing.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, existing.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('race_events')

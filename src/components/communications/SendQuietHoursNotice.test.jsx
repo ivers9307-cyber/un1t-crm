@@ -112,3 +112,19 @@ describe('SendQuietHoursNotice', () => {
     expect(container.textContent).toBe('')
   })
 })
+
+// TZ.4 — the window is the STUDIO's wall clock: the route names the zone.
+describe('SendQuietHoursNotice — TZ.4 the studio zone from the route', () => {
+  it('a New York studio: 02:30Z is 22:30 EDT, warned on New York time and offered 08:00 EDT', async () => {
+    mockConfig({ ...DEFAULTS, timezone: 'America/New_York' })
+    const onSuggest = vi.fn()
+    const { findByRole } = render(
+      <SendQuietHoursNotice locationId="loc-ny" at="2026-08-09T02:30:00Z" onSuggest={onSuggest} />
+    )
+    const notice = await findByRole('status')
+    expect(notice.textContent).toMatch(/22:30/)
+    fireEvent.click(await findByRole('button'))
+    // (on Dublin's clock 02:30Z is 03:30 IST and the slot would be 07:00Z)
+    expect(onSuggest).toHaveBeenCalledWith('2026-08-09T12:00:00.000Z')
+  })
+})

@@ -3,7 +3,9 @@ import {
   TIERS, tierForMonths, nextTier,
   tierWindowMonths, shiftMonthKey, windowedMonthsHit,
 } from './tiers.js'
-import { dublinMonthStr } from './dublin-time.js'
+import { monthStrIn } from '@shared/zoned-time'
+
+const dublinMonthStr = (instant) => monthStrIn(instant, 'Europe/Dublin')
 
 describe('TIERS', () => {
   it('is the 5-rung ladder with metal colours', () => {

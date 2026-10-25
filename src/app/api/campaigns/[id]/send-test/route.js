@@ -18,10 +18,13 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveEmailSender } from '@/lib/tenant-email'
+import { withRequestedFrom } from '@/lib/from-address'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
+import { getLocationBranding } from '@/lib/location-branding'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 
@@ -41,7 +44,9 @@ export async function POST(request, props) {
   }
   // Same gate as the real send — anyone who can send a campaign
   // can also send a test of it.
-  if (!user.isMaster && !ADMIN_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-check; the role is judged at the campaign's
+  // location once it is loaded.
+  if (!user.isMaster && !hasRoleAtAnyLocation(user, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
   }
 
@@ -70,6 +75,9 @@ export async function POST(request, props) {
   // bypasses RLS, so this app-layer check is the only scoping.
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, campaign.location_id, ADMIN_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Admin only' }, { status: 403 })
+  }
   if (!campaign.subject || !campaign.html_content) {
     return NextResponse.json({
       success: false,
@@ -104,13 +112,17 @@ export async function POST(request, props) {
   // Mirror the real send's URL building so the unsubscribe + preference
   // links in the test email are real and clickable. Useful for verifying
   // the footer renders correctly.
+  // W1.L3a — on the campaign location's tenant host, as the real send's are.
   let baseUrl
-  try { baseUrl = getAppUrl() } catch { baseUrl = '' }
+  try { baseUrl = await resolveCustomerBaseUrl(db, campaign.location_id) } catch { baseUrl = '' }
   const unsubscribeUrl = `${baseUrl}/unsubscribe/test-token`
   const preferenceUrl  = `${baseUrl}/preferences/test-token`
 
+  // W1.S1a — {{company_name}}, as the real send resolves it.
+  const { companyName } = await getLocationBranding(db, campaign.location_id)
   const html = applyMergeTags(campaign.html_content, renderContact, {
     location_name: campaign.locations?.name || '',
+    company_name: companyName || '',
     unsubscribe_url: unsubscribeUrl,
     preference_url: preferenceUrl,
   })
@@ -119,20 +131,27 @@ export async function POST(request, props) {
   // {{location_name}} / {{unsubscribe_url}} / {{preference_url}}.
   const subject = '[TEST] ' + applyMergeTags(campaign.subject, renderContact, {
     location_name: campaign.locations?.name || '',
+    company_name: companyName || '',
     unsubscribe_url: unsubscribeUrl,
     preference_url: preferenceUrl,
   })
 
-  const fromHeader = campaign.from_name
-    ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
-    : undefined
+  // W1.E2 — a test send matches a real one: the campaign's location resolves
+  // the sender (brand on the platform address pre-domain, the org's verified
+  // From after, the studio's reply-to), and the operator's From name is a
+  // display name on it. FROMDOMAIN — the same address pick as
+  // campaign-sender.js: campaign.from_email when it is on the org's verified
+  // domain, the resolver's own address otherwise. resolveEmailSender never
+  // throws (any fault → the global default).
+  const sender = withRequestedFrom(await resolveEmailSender(db, campaign.location_id), campaign.from_email)
 
   try {
     const result = await sendEmail({
       to: recipient,
       subject,
       htmlBody: html,
-      from: fromHeader,
+      sender,
+      fromName: campaign.from_name || undefined,
       replyTo: campaign.reply_to,
       stream: 'broadcast',
       tag: `campaign-test-${params.id}`,

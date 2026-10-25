@@ -294,12 +294,33 @@ describe('blastAbortNotification', () => {
   })
 })
 
-function consentDb({ contact, writes }) {
+// `contacts` (optional) = in-memory rows { id, location_id }: the lookup then honours
+// the `.in('location_id', …)` scope. `inScopes` records every scope the lookup asked for.
+function consentDb({ contact, writes, contacts, inScopes = [] }) {
+  const LOCS = { A1: 'orgA', A2: 'orgA', B1: 'orgB' } // location -> organisation
   return {
     from: (table) => ({
-      select: () => ({ or: () => ({ limit: () => Promise.resolve({ data: contact ? [contact] : [] }) }) }),
+      select: () => {
+        if (table === 'locations') {
+          return {
+            eq: (col, val) => col === 'id'
+              ? { maybeSingle: () => Promise.resolve({ data: { id: val, organization_id: LOCS[val] || null }, error: null }) }
+              : { neq: (_c, self) => Promise.resolve({ data: Object.keys(LOCS).filter((l) => LOCS[l] === val && l !== self).map((id) => ({ id })), error: null }) },
+          }
+        }
+        const page = (ids) => {
+          const rows = contacts ? (ids ? contacts.filter((r) => ids.includes(r.location_id)) : contacts) : (contact ? [contact] : [])
+          return { order: () => ({ range: () => Promise.resolve({ data: rows, error: null }) }) }
+        }
+        return {
+          or: () => ({
+            in: (_c, ids) => { inScopes.push(ids); return page(ids) },
+            ...page(null), // unscoped: no .in()
+          }),
+        }
+      },
       upsert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
-      update: (patch) => { writes.push([table, patch]); return { eq: () => Promise.resolve({ error: null }) } },
+      update: (patch) => { writes.push([table, patch]); const r = { eq: () => r, then: (ok, bad) => Promise.resolve({ error: null }).then(ok, bad) }; return r },
       insert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
     }),
   }
@@ -309,11 +330,13 @@ describe('applyMetaUserPreference', () => {
   it('stop → marketing off + wa_status opted_out + consent_log audit', async () => {
     const writes = []
     const db = consentDb({ contact: { id: 'c1' }, writes })
-    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', category: 'marketing_messages', value: 'stop' })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', category: 'marketing_messages', value: 'stop' }, 'A1')
     expect(r).toMatchObject({ applied: true, action: 'opt_out' })
     expect(writes).toEqual([
       // Upserted by contact_id so a contact with no preferences row still opts out.
       ['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: false })],
+      // R17 — a contact-wide opt-out closes every studio row too.
+      ['contact_location_preferences', expect.objectContaining({ whatsapp_marketing: false })],
       ['contacts', { wa_status: 'opted_out' }],
       ['consent_log', expect.objectContaining({ action: 'opt_out', source: 'meta_user_preferences' })],
     ])
@@ -321,14 +344,52 @@ describe('applyMetaUserPreference', () => {
   it('resume → re-opted in', async () => {
     const writes = []
     const db = consentDb({ contact: { id: 'c1' }, writes })
-    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'resume' })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'resume' }, 'A1')
     expect(r.action).toBe('opt_in')
     expect(writes[0]).toEqual(['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: true })])
   })
+  it('Meta preference never touches a contact in another organisation', async () => {
+    const writes = []
+    const inScopes = []
+    // The same person is a contact at orgB's studio only; the preference arrives on orgA's number.
+    const db = consentDb({ writes, inScopes, contacts: [{ id: 'other-org-contact', location_id: 'B1' }] })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' }, 'A1')
+    expect(r).toMatchObject({ applied: false, reason: 'no_contact' })
+    expect(writes).toEqual([])
+    expect(inScopes[0].sort()).toEqual(['A1', 'A2'])
+  })
+  it('finds the contact at a sibling studio of the same organisation and writes CONTACT-WIDE', async () => {
+    const writes = []
+    const db = consentDb({ writes, contacts: [{ id: 'sibling-contact', location_id: 'A2' }] })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' }, 'A1')
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', contactId: 'sibling-contact' })
+    expect(writes).toEqual([
+      ['contact_preferences', expect.objectContaining({ contact_id: 'sibling-contact', whatsapp_marketing: false })],
+      ['contact_location_preferences', expect.objectContaining({ whatsapp_marketing: false })],
+      ['contacts', { wa_status: 'opted_out' }],
+      ['consent_log', expect.objectContaining({ source: 'meta_user_preferences' })],
+    ])
+    // contact-wide: never a studio-scoped upsert (the all-studios CLOSE is the update above)
+    expect(writes.some(([t, row]) => t === 'contact_location_preferences' && row?.location_id)).toBe(false)
+  })
+  it('no receiving studio: an opt-OUT still applies (unscoped, suppression is the safe direction)', async () => {
+    const writes = []
+    const inScopes = []
+    const db = consentDb({ writes, inScopes, contact: { id: 'c1' } })
+    const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'stop' })
+    expect(r).toMatchObject({ applied: true, action: 'opt_out', contactId: 'c1' })
+    expect(inScopes).toEqual([])
+  })
+  it('no receiving studio: an opt-IN is NOT applied', async () => {
+    const writes = []
+    const r = await applyMetaUserPreference(consentDb({ writes, contact: { id: 'c1' } }), { wa_id: '353871234567', value: 'resume' })
+    expect(r).toMatchObject({ applied: false, reason: 'no_receiving_studio' })
+    expect(writes).toEqual([])
+  })
   it('unknown contact / bad value → not applied, no writes', async () => {
     const writes = []
-    expect((await applyMetaUserPreference(consentDb({ contact: null, writes }), { wa_id: '1', value: 'stop' })).applied).toBe(false)
-    expect((await applyMetaUserPreference(consentDb({ contact: { id: 'c1' }, writes }), { wa_id: '1', value: 'nonsense' })).applied).toBe(false)
+    expect((await applyMetaUserPreference(consentDb({ contact: null, writes }), { wa_id: '1', value: 'stop' }, 'A1')).applied).toBe(false)
+    expect((await applyMetaUserPreference(consentDb({ contact: { id: 'c1' }, writes }), { wa_id: '1', value: 'nonsense' }, 'A1')).applied).toBe(false)
     expect(writes).toEqual([])
   })
 })

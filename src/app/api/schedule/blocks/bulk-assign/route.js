@@ -16,7 +16,7 @@
 // Returns:
 //   { success: true,
 //     assigned: [{ block_id, assignment_id }],
-//     skipped:  [{ block_id, reason }],   // 'at_capacity' | 'already_assigned' | 'not_found' | 'cross_location'
+//     skipped:  [{ block_id, reason }],   // 'at_capacity' | 'already_assigned' | 'not_found' | 'cross_location' | 'not_at_location'
 //     warnings: string[]                  // aggregated time-off advisories
 //   }
 //
@@ -33,15 +33,27 @@
 // window.
 //
 // Manager+ gated (matches the single-block assignment route).
+//
+// SCHEDROLES.1 — judged PER BLOCK at that block's location
+// (hasRoleAtLocation), not from `user.role` (the ACTIVE studio's role). A
+// block at a studio where the caller is not a manager — including one where
+// they are merely staff — is skipped as `cross_location`, exactly as a block
+// at a studio they don't belong to always was. The request-level pre-check
+// is only "manages somewhere".
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { timeRangesOverlap, fmtTime } from '@/lib/schedule-overlap'
 import { logRosterChange } from '@/lib/roster-change-log'
+import { notifyRosterChanges } from '@/lib/roster-change-notify'
+import { isRosterableProfile, notRosterableError } from '@/lib/roster-write'
+import { readAvailabilityLeave } from '@/lib/availability-leave'
+import { leaveWarningLine, availabilityUncheckedLine } from '@shared/unavailable-days'
+import { logWarn } from '@/lib/log'
 
 const BulkAssignSchema = z.object({
   block_ids: z.array(uuidLike).min(1, 'At least one block_id is required').max(200, 'Max 200 blocks per request'),
@@ -54,7 +66,7 @@ export const runtime = 'nodejs'
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -79,9 +91,43 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: blocksErr.message }, { status: 500 })
   }
 
-  const allowedLocations = user.role === 'master'
-    ? null  // master sees all
-    : new Set(getUserLocationIds(user))
+
+  // SCHEDROLES.1 — the coach must belong to each block's studio, master
+  // included. Read once, before any leave read or insert; a block at a studio
+  // the coach is not on is skipped as `not_at_location`, so nothing about a
+  // foreign profile (name, leave, other shifts) reaches the warnings. Fail
+  // closed on a read error.
+  const { data: coachLinks, error: coachLinksErr } = await db
+    .from('profile_locations')
+    .select('location_id')
+    .eq('profile_id', body.profile_id)
+  if (coachLinksErr) {
+    return NextResponse.json({ success: false, error: coachLinksErr.message }, { status: 500 })
+  }
+  const coachLocationIds = new Set((coachLinks || []).map((l) => l.location_id))
+
+  // STAFFDELETE.1 — the same rule as every other write path
+  // (isRosterableProfile): a deactivated or permanently deleted coach cannot
+  // be put on a shift, even while still linked. Only read for a coach who is
+  // at a studio of a requested block that the CALLER manages — every other
+  // block is skipped below as not_at_location / cross_location, so nothing
+  // could be written, and a foreign coach is never named (SCHEDROLES.1).
+  // Fail closed on a read error.
+  const couldAssignSomewhere = (blocks || []).some((b) =>
+    coachLocationIds.has(b.location_id) && hasRoleAtLocation(user, b.location_id, MANAGER_ROLES))
+  if (couldAssignSomewhere) {
+    const { data: coach, error: coachErr } = await db
+      .from('profiles')
+      .select('id, full_name, active, deleted_at')
+      .eq('id', body.profile_id)
+      .maybeSingle()
+    if (coachErr) {
+      return NextResponse.json({ success: false, error: coachErr.message }, { status: 500 })
+    }
+    if (!isRosterableProfile(coach)) {
+      return NextResponse.json({ success: false, error: notRosterableError(coach).message }, { status: 400 })
+    }
+  }
 
   const blocksById = new Map((blocks || []).map((b) => [b.id, b]))
   const skipped = []
@@ -94,8 +140,12 @@ export async function POST(request) {
       skipped.push({ block_id: requestedId, reason: 'not_found' })
       continue
     }
-    if (allowedLocations && !allowedLocations.has(block.location_id)) {
+    if (!hasRoleAtLocation(user, block.location_id, MANAGER_ROLES)) {
       skipped.push({ block_id: requestedId, reason: 'cross_location' })
+      continue
+    }
+    if (!coachLocationIds.has(block.location_id)) {
+      skipped.push({ block_id: requestedId, reason: 'not_at_location' })
       continue
     }
     const activeAssignments = (block.shift_assignments || []).filter((a) => a.status !== 'cancelled')
@@ -155,19 +205,29 @@ export async function POST(request) {
       .eq('status', 'approved')
       .lte('start_date', maxDate)
       .gte('end_date', minDate)
+    // AVAIL.3 D1 (Richard, 3 Oct 2026: "treat like leave") — an all-day
+    // "can't work" availability date warns like approved leave. Advisory:
+    // a failed read never blocks the assign, and it SAYS it could not check.
+    const { rows: unavailable, error: availErr } = await readAvailabilityLeave(db, {
+      profileIds: [body.profile_id], startDate: minDate, endDate: maxDate,
+    })
     const seen = new Set()
-    warnings = (timeOff || [])
+    warnings = [...(timeOff || []), ...(unavailable || [])]
       .filter((t) => {
         // Only warn if the leave window actually intersects at
         // least one assigned date — not just the date range bounds.
         return dates.some((d) => d >= t.start_date && d <= t.end_date)
       })
-      .map((t) => `${t.profiles?.full_name} has approved ${t.type} from ${t.start_date} to ${t.end_date}`)
+      .map((t) => leaveWarningLine(t.profiles?.full_name, t))
       .filter((line) => {
         if (seen.has(line)) return false
         seen.add(line)
         return true
       })
+    if (availErr) {
+      logWarn('schedule-bulk-assign', 'availability read failed; assigned without the can\'t-work check', { err: availErr.message })
+      warnings.push(availabilityUncheckedLine(minDate, maxDate))
+    }
   }
 
   // SCHEDULE-DOUBLE-BOOKING.1 — advisory: flag any of this coach's shifts
@@ -208,22 +268,28 @@ export async function POST(request) {
     }
   }
 
-  // SCHEDULE-CHANGE-LOG.1 — record assignments to blocks that belong to a
-  // published roster as post-publish changes, so the next re-publish
-  // re-notifies this coach. Best-effort.
+  // SCHEDULE-CHANGE-LOG.1 — record assignments to blocks on a published roster.
+  // NOTIFY.1 — and tell the coach now, one message per location.
+  const publishedByLocation = new Map()
   for (const a of assigned) {
     const block = blocksById.get(a.block_id)
-    if (block?.rosters?.status === 'published') {
-      await logRosterChange(db, {
-        isPublished: true,
-        locationId: block.location_id,
-        blockId: block.id,
-        blockDate: block.block_date,
-        actorId: user.id,
-        coachId: body.profile_id,
-        action: 'assigned',
-      })
-    }
+    if (block?.rosters?.status !== 'published') continue
+    await logRosterChange(db, {
+      isPublished: true,
+      locationId: block.location_id,
+      blockId: block.id,
+      blockDate: block.block_date,
+      actorId: user.id,
+      coachId: body.profile_id,
+      action: 'assigned',
+    })
+    if (!publishedByLocation.has(block.location_id)) publishedByLocation.set(block.location_id, [])
+    publishedByLocation.get(block.location_id).push({
+      coachId: body.profile_id, blockId: block.id, blockDate: block.block_date, action: 'assigned',
+    })
+  }
+  for (const [locationId, changes] of publishedByLocation) {
+    await notifyRosterChanges(db, { locationId, actorId: user.id, changes })
   }
 
   return NextResponse.json({

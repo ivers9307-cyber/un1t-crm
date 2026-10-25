@@ -19,8 +19,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
@@ -36,10 +36,10 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'orders')) {
+  if (!hasPermissionAtAnyLocation(user, 'orders')) {
     return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
   }
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -59,6 +59,13 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, order.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the order's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, order.location_id, 'orders')) {
+    return NextResponse.json({ success: false, error: 'Orders feature is disabled at this location' }, { status: 403 })
+  }
+  if (!hasRoleAtLocation(user, order.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   if (order.status !== 'pending') {
     return NextResponse.json({

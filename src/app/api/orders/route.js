@@ -13,6 +13,7 @@
 //
 // Response shape:
 //   { success, data: orders[], counts: {<status>: n}, page, total }
+//   Each order carries `timezone`, its studio's zone (TZ.16).
 //
 // counts is computed server-side so the tab strip can show "Failed (12)"
 // without a follow-up call.
@@ -22,6 +23,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,7 +104,8 @@ export async function GET(request) {
       payment_provider, payment_provider_ref,
       retry_of_order_id, superseded_by_order_id,
       created_at, completed_at, failed_at, abandoned_at, refunded_at,
-      metadata
+      metadata,
+      location:locations!location_id ( id, timezone )
     `, { count: 'exact' })
     .order('created_at', { ascending: false })
     .range((page - 1) * limit, page * limit - 1)
@@ -119,9 +122,13 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
+  // TZ.16 — each order carries its studio's zone (a master's unscoped list
+  // spans studios), so the table shows created_at on that studio's clock.
+  const rows = (data || []).map(({ location, ...row }) => ({ ...row, timezone: zoneOfLocation(location) }))
+
   return NextResponse.json({
     success: true,
-    data: data || [],
+    data: rows,
     counts,
     page,
     limit,

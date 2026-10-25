@@ -6,7 +6,7 @@
 // A connected mailbox is a REAL mailbox that people still open. Head office
 // reads hatchstreet@un1t.com in Gmail; a coach answers from their phone. A
 // reply sent that way lands in the account's Sent folder and never touches
-// INBOX, so the INBOX-only poller never sees it: the ticket sits "needs reply"
+// INBOX, so the INBOX-only poller never sees it: the conversation sits "needs reply"
 // forever and the next person to look answers the member a second time. Of the
 // three mail-client divergences in §5's table that is the only customer-facing
 // one, and it is the last gap in the R2 release.
@@ -17,7 +17,7 @@
 // way (see imap-message.js's header). That pattern CANNOT carry us here:
 // processInboundEmail writes `direction: 'inbound'` throughout, and a reply a
 // colleague sent from Gmail is OUTBOUND. Reusing the webhook would file our own
-// answers as if the member had written them — new tickets, unread badges,
+// answers as if the member had written them — new conversations, unread badges,
 // push notifications, all of it backwards. So this lane gets its own writer.
 // It is the one deliberate exception in the design, called out in §5, and it is
 // why coexistence is its own phase rather than a flag on the poller.
@@ -31,11 +31,11 @@
 // ── DEDUPE: ONE MECHANISM, TWO JOBS ──────────────────────────────────
 // There is no "is this ours?" comparison in this file and there must not be
 // one. Mig 574's UNIQUE (ticket_id, rfc_message_id) does both jobs:
-//   • re-polling Sent cannot double-file the same reply onto the same ticket
+//   • re-polling Sent cannot double-file the same reply onto the same conversation
 //     (the poller's cursor only advances on a handled message, so a tick that
 //     dies mid-message is DESIGNED to re-deliver it); and
 //   • OUR OWN SMTP sends land in the same Sent folder, and the reply route
-//     already wrote an outbound row on that ticket carrying that
+//     already wrote an outbound row on that conversation carrying that
 //     rfc_message_id at send time (MAILBOX-CONNECT.7) — so our own copy hits
 //     23505 here and is skipped.
 // Two predicates would eventually disagree; one index cannot.
@@ -43,7 +43,7 @@
 // 🔴 That index is SCOPED PER TICKET, never global on rfc_message_id — read
 // mig 574's comment before touching it. The connector deliberately files one
 // copy per connected mailbox when two are on the same thread, so one RFC id
-// legitimately lands on two tickets.
+// legitimately lands on two conversations.
 //
 // 🔴 AND IT ONLY WORKS IF rfc_message_id IS STORED BARE. The whole threading
 // chain is plain string equality: '<a@b>' matches nothing that 'a@b' matches.
@@ -52,12 +52,12 @@
 // through a raw header value.
 //
 // ── WHAT IT DELIBERATELY DOES NOT DO ─────────────────────────────────
-//   • It NEVER creates a ticket. See fileClientSentReply's orphan branch.
+//   • It NEVER creates a conversation. See fileClientSentReply's orphan branch.
 //   • It NEVER calls src/lib/email-inbound-push.js. Telling staff "new mail"
 //     because a colleague answered is the exact opposite of the point of this
 //     phase. There is no import of it in this file, on purpose.
 //   • It NEVER increments unread_count and NEVER changes status. A staff reply
-//     is not a member reply: a closed ticket stays closed (contrast the inbound
+//     is not a member reply: a closed conversation stays closed (contrast the inbound
 //     rule, where a member's reply reopens), and unread is a per-user counter
 //     about mail somebody owes an answer to.
 //   • It NEVER throws. Every fault is a returned verdict — supabase builders
@@ -67,8 +67,8 @@
 //     not do is advance its cursor.
 //
 // ── THE CONTRACT WITH THE POLLER (Phase 8B) ──────────────────────────
-//   { ok: true,  outcome: 'filed',     ticketId, messageId }
-//   { ok: true,  outcome: 'duplicate', ticketId }   // 23505 — already filed, or OURS
+//   { ok: true,  outcome: 'filed',     conversationId, messageId }
+//   { ok: true,  outcome: 'duplicate', conversationId }   // 23505 — already filed, or OURS
 //   { ok: true,  outcome: 'orphan' }                // no thread we hold
 //   { ok: false, reason, error }                    // a real fault
 // All three ok:true outcomes count as HANDLED and the cursor may advance past
@@ -86,7 +86,7 @@ import {
   truncateHtmlBody,
 } from '../email-inbox'
 import { inboundAddresses } from '../email-recipients'
-import { pickThreadedTicket, shouldStampFirstResponse } from '../email-tickets'
+import { pickThreadedTicket, shouldStampFirstResponse } from './conversation'
 import { logError, logWarn } from '../log'
 
 /**
@@ -110,17 +110,17 @@ const MAX_THREAD_CANDIDATES = 40
 
 /**
  * App-clock vs DB-clock tolerance when deciding whether this message is really
- * the ticket's newest. Same constant and same purpose as the inbound webhook's
+ * the conversation's newest. Same constant and same purpose as the inbound webhook's
  * finish-up bump.
  */
 const BUMP_SKEW_MS = 2_000
 
-/** The ticket columns this writer needs, and no more. */
+/** The conversation columns this writer needs, and no more. */
 const TICKET_COLUMNS = 'id, location_id, contact_id, status, last_message_at, first_response_at'
 
 /**
  * File a reply somebody sent from their own mail client as an OUTBOUND message
- * on the ticket it belongs to.
+ * on the conversation it belongs to.
  *
  * @param {object} db  the service-role supabase client
  * @param {object} args
@@ -155,7 +155,7 @@ async function fileSent(db, { mailbox, msg, payload }) {
   // Every threading query below is filtered by it. An RFC Message-ID is
   // guessable text in a header anyone can write, so without the scope a crafted
   // References chain in a message dropped into a connected Sent folder could
-  // thread onto another studio's ticket — the cross-studio mixing the mailbox
+  // thread onto another studio's conversation — the cross-studio mixing the mailbox
   // routing exists to prevent. Failing here cannot wedge a real lane: the
   // poller reads location_id off the same row it reads the credentials from.
   const locationId = mailbox?.location_id ?? null
@@ -167,7 +167,7 @@ async function fileSent(db, { mailbox, msg, payload }) {
   const headers = Array.isArray(payload.Headers) ? payload.Headers : []
   const subject = sanitizeDbText(payload.Subject) || null
 
-  // ── Which ticket does this join? ─────────────────────────────────
+  // ── Which conversation does this join? ─────────────────────────────────
   // In-Reply-To first, then References newest→oldest — exactly the candidate
   // list the inbound webhook builds, because a client-sent reply carries the
   // same headers a member's reply does. sanitizeDbText on each: a NUL inside a
@@ -178,7 +178,7 @@ async function fileSent(db, { mailbox, msg, payload }) {
     .filter(Boolean)
     .slice(0, MAX_THREAD_CANDIDATES)
 
-  let ticketId = null
+  let conversationId = null
   if (candidates.length) {
     // TWO `.in()` QUERIES RATHER THAN ONE `.or()`, and that is not a style
     // choice: `.or()` takes a RAW PostgREST filter string, so a stray `)` in a
@@ -205,43 +205,43 @@ async function fileSent(db, { mailbox, msg, payload }) {
       logError('sent-lane', 'threading lookup failed', { mailboxId, uid, err: threadErr })
       return { ok: false, reason: 'thread_lookup_failed', error: threadErr }
     }
-    ticketId = pickThreadedTicket([...(byRfc.data || []), ...(byPostmark.data || [])])
+    conversationId = pickThreadedTicket([...(byRfc.data || []), ...(byPostmark.data || [])])
   }
 
-  if (!ticketId) {
+  if (!conversationId) {
     // 🔴 ORPHAN — AND NO TICKET IS CREATED. A Sent message with no ingested
     // thread is almost always a conversation that predates the connection, or
-    // one the operator started somewhere else entirely. Conjuring a ticket for
+    // one the operator started somewhere else entirely. Conjuring a conversation for
     // it would produce one with no inbound message, no requester and no
     // contact: noise an operator has to clear, in the queue this feature exists
     // to make trustworthy. A warn line naming the mailbox and the subject is
     // the whole handling, and it is enough — 'orphan' is a HANDLED outcome, so
     // the poller steps past it and the message is simply not our business.
-    logWarn('sent-lane', 'sent message threads to no ticket we hold — not filed, no ticket created', {
+    logWarn('sent-lane', 'sent message threads to no conversation we hold — not filed, no conversation created', {
       mailboxId, uid, subject,
     })
     return { ok: true, outcome: 'orphan' }
   }
 
-  // Re-read the ticket rather than trusting the thread lookup's ticket_id:
+  // Re-read the conversation rather than trusting the thread lookup's ticket_id:
   // it gives the location check a second, direct assertion, and it is where the
   // bump guard and the first-response stamp read their inputs from.
-  const { data: ticket, error: ticketErr } = await db.from('email_tickets')
+  const { data: conversation, error: conversationErr } = await db.from('email_tickets')
     .select(TICKET_COLUMNS)
-    .eq('id', ticketId)
+    .eq('id', conversationId)
     .eq('location_id', locationId)
     .maybeSingle()
-  if (ticketErr) {
-    logError('sent-lane', 'ticket lookup failed', { mailboxId, uid, ticketId, err: ticketErr })
-    return { ok: false, reason: 'ticket_lookup_failed', error: ticketErr }
+  if (conversationErr) {
+    logError('sent-lane', 'conversation lookup failed', { mailboxId, uid, conversationId, err: conversationErr })
+    return { ok: false, reason: 'ticket_lookup_failed', error: conversationErr }
   }
-  if (!ticket) {
-    // The message row named a ticket that is not readable at this location —
+  if (!conversation) {
+    // The message row named a conversation that is not readable at this location —
     // deleted, or (impossible through the query above, but asserted anyway)
     // somewhere else. Same answer as no thread at all: there is nothing to
     // append to, and inventing one is what the orphan rule forbids.
-    logWarn('sent-lane', 'threaded ticket is not readable at this location — treating as orphan', {
-      mailboxId, uid, ticketId,
+    logWarn('sent-lane', 'threaded conversation is not readable at this location — treating as orphan', {
+      mailboxId, uid, conversationId,
     })
     return { ok: true, outcome: 'orphan' }
   }
@@ -249,7 +249,7 @@ async function fileSent(db, { mailbox, msg, payload }) {
   // ── The message ──────────────────────────────────────────────────
   const now = new Date().toISOString()
   // The message's own Date header, clamped so a mail client with a skewed
-  // clock cannot pin the ticket's queue sort key into the future. Falls back to
+  // clock cannot pin the conversation's queue sort key into the future. Falls back to
   // now when the header is missing or unparseable — parseEmailDate never
   // throws, which is why it exists (a RangeError on an attacker-supplied Date
   // 5xx-looped the inbound webhook once).
@@ -268,13 +268,13 @@ async function fileSent(db, { mailbox, msg, payload }) {
   const rfcMessageId = sanitizeDbText(extractRfcMessageId(headers))
   if (!rfcMessageId) {
     // No Message-ID header at all (scripts, a few ticketing systems). The row
-    // is still filed — a staff reply the member can see beats a ticket that
+    // is still filed — a staff reply the member can see beats a conversation that
     // keeps saying "needs reply" — but mig 574's index is partial, so this one
     // row cannot be deduped and a re-poll of the same UID would file it twice.
     // Logged rather than refused: losing the answer is the worse failure, and
     // the poller only re-polls a message whose tick did not complete.
     logWarn('sent-lane', 'sent message carries no Message-ID — filing it, but it cannot be deduped', {
-      mailboxId, uid, ticketId,
+      mailboxId, uid, conversationId,
     })
   }
 
@@ -305,20 +305,20 @@ async function fileSent(db, { mailbox, msg, payload }) {
     logWarn('sent-lane', 'mailbox has no usable address — filing without a from_email', { mailboxId, uid })
   }
 
-  // ── What the ticket bump would be ────────────────────────────────
-  // Computed BEFORE the insert, off the ticket as it stands, because both the
+  // ── What the conversation bump would be ────────────────────────────────
+  // Computed BEFORE the insert, off the conversation as it stands, because both the
   // filed path and the 23505 finish-up path apply exactly this patch. Two
   // separately-derived patches would eventually disagree about what "answered"
   // means.
-  const patch = ticketPatch(ticket, { sentAt, preview, now })
+  const patch = conversationPatch(conversation, { sentAt, preview, now })
 
   const { data: inserted, error: msgErr } = await db.from('email_inbox_messages').insert({
-    ticket_id: ticketId,
-    // The ticket's contact, matching what the CRM's own reply route writes —
+    ticket_id: conversationId,
+    // The conversation's contact, matching what the CRM's own reply route writes —
     // the member's email history should not depend on which window the answer
     // was typed in. ON DELETE SET NULL, so an erased contact does not take the
     // correspondence with it.
-    contact_id: ticket.contact_id || null,
+    contact_id: conversation.contact_id || null,
     location_id: locationId,
     direction: 'outbound',
     from_email: fromEmail,
@@ -342,7 +342,7 @@ async function fileSent(db, { mailbox, msg, payload }) {
     source: MAIL_CLIENT_SOURCE,
     // 🔴 NO author_profile_id. Nobody signed into the CRM sent this, and the
     // mailbox login is shared — the Sent copy names an address, never a person.
-    // Inventing an author (the ticket's assignee, the mailbox's owner) would
+    // Inventing an author (the conversation's assignee, the mailbox's owner) would
     // put words in a named colleague's mouth on the permanent record.
     author_profile_id: null,
     // The message's OWN lifecycle (mig 394's vocabulary: sent | note |
@@ -356,7 +356,7 @@ async function fileSent(db, { mailbox, msg, payload }) {
 
   if (msgErr) {
     if (msgErr.code === '23505') {
-      // Mig 574 says this reply is already on this ticket. Two ways to get
+      // Mig 574 says this reply is already on this conversation. Two ways to get
       // here, and neither needs telling apart — which is the whole point of
       // having one mechanism:
       //   • our own SMTP send, filed by the reply route at send time; or
@@ -365,35 +365,35 @@ async function fileSent(db, { mailbox, msg, payload }) {
       // The bump still runs, GUARDED BY STATE. Without it the crash window
       // between the insert and the bump would be permanent: a failed bump
       // returns ok:false, the poller holds its cursor, the retry lands here,
-      // and answering a bare 'duplicate' would leave a ticket saying "needs
+      // and answering a bare 'duplicate' would leave a conversation saying "needs
       // reply" with the answer sitting inside it — the exact bug this phase
       // exists to fix, reintroduced by its own error path. For our own SMTP
-      // send the guard finds the ticket already advanced and writes nothing,
+      // send the guard finds the conversation already advanced and writes nothing,
       // which is the "skipped" the design asks for.
-      const finish = await applyTicketPatch(db, ticketId, patch, { mailboxId, uid })
+      const finish = await applyConversationPatch(db, conversationId, patch, { mailboxId, uid })
       if (!finish.ok) return finish
-      return { ok: true, outcome: 'duplicate', ticketId }
+      return { ok: true, outcome: 'duplicate', conversationId }
     }
-    logError('sent-lane', 'could not file the sent message', { mailboxId, uid, ticketId, err: msgErr })
+    logError('sent-lane', 'could not file the sent message', { mailboxId, uid, conversationId, err: msgErr })
     return { ok: false, reason: 'message_insert_failed', error: msgErr }
   }
 
-  const bumped = await applyTicketPatch(db, ticketId, patch, { mailboxId, uid })
+  const bumped = await applyConversationPatch(db, conversationId, patch, { mailboxId, uid })
   if (!bumped.ok) return bumped
 
-  return { ok: true, outcome: 'filed', ticketId, messageId: inserted?.id ?? null }
+  return { ok: true, outcome: 'filed', conversationId, messageId: inserted?.id ?? null }
 }
 
 /**
- * The ticket patch a mail-client reply earns — or an empty object when it earns
+ * The conversation patch a mail-client reply earns — or an empty object when it earns
  * nothing.
  *
  * 🔴 WHAT IS NOT HERE IS AS LOAD-BEARING AS WHAT IS.
- *   • NO `status`. A staff reply is not a member reply: a closed ticket stays
+ *   • NO `status`. A staff reply is not a member reply: a closed conversation stays
  *     closed. The inbound rule is the opposite (a member's reply reopens) and
- *     the CRM's own reply route moves the ticket to `pending`; neither belongs
+ *     the CRM's own reply route moves the conversation to `pending`; neither belongs
  *     to a message we only learned about by reading someone's Sent folder
- *     minutes later, and flipping a closed ticket back open because a colleague
+ *     minutes later, and flipping a closed conversation back open because a colleague
  *     had answered it is a queue that grows by being used correctly.
  *   • NO `unread_count`. It counts mail somebody owes an answer to.
  *
@@ -401,13 +401,13 @@ async function fileSent(db, { mailbox, msg, payload }) {
  * predicate — `status = 'open' AND last_message_direction = 'inbound'`
  * (scopeToNeedsReply). So setting last_message_direction to 'outbound' IS the
  * clear, and no separate column exists to write. That is why status can be left
- * alone and the ticket still leaves the queue.
+ * alone and the conversation still leaves the queue.
  *
  * 🔴 THE ORDERING GUARD. The bump only applies if this reply really is the
- * ticket's newest message. The poller runs up to five minutes behind, so the
+ * conversation's newest message. The poller runs up to five minutes behind, so the
  * member can genuinely have written again between the colleague's reply and our
  * reading it — and blindly stamping 'outbound' would then clear "needs reply"
- * on a ticket where the member IS waiting, which is the double-reply failure
+ * on a conversation where the member IS waiting, which is the double-reply failure
  * this phase exists to prevent, inverted. Same guard, same skew constant, as
  * the inbound webhook's finish-up bump. An unreadable or absent
  * last_message_at reads as "nothing newer", because the cost of guessing wrong
@@ -417,26 +417,26 @@ async function fileSent(db, { mailbox, msg, payload }) {
  * `first_response_at` is stamped separately from the bump and survives the
  * guard: whether or not this is the newest message, it is an outbound non-note
  * one, which is exactly the column's definition (mig 482) and exactly what
- * rebuildTicketDenormals() re-derives on an unmerge. Leaving it null would make
+ * rebuildConversationDenormals() re-derives on an unmerge. Leaving it null would make
  * a merge/unmerge round-trip silently change the value.
  */
-function ticketPatch(ticket, { sentAt, preview, now }) {
+function conversationPatch(conversation, { sentAt, preview, now }) {
   const patch = {}
 
   const messageAt = Date.parse(sentAt)
-  const ticketAt = ticket?.last_message_at ? Date.parse(ticket.last_message_at) : 0
-  const isNewest = !Number.isFinite(ticketAt) || ticketAt < messageAt - BUMP_SKEW_MS
+  const conversationAt = conversation?.last_message_at ? Date.parse(conversation.last_message_at) : 0
+  const isNewest = !Number.isFinite(conversationAt) || conversationAt < messageAt - BUMP_SKEW_MS
   if (isNewest) {
     // sentAt, not `now`: the reply went out when it went out, and
     // last_message_at is the queue's sort key. The guard above has already
-    // established it is later than whatever the ticket held.
+    // established it is later than whatever the conversation held.
     patch.last_message_at = sentAt
     patch.last_message_direction = 'outbound'
     patch.last_message_preview = preview
   }
 
   if (shouldStampFirstResponse({
-    firstResponseAt: ticket?.first_response_at,
+    firstResponseAt: conversation?.first_response_at,
     direction: 'outbound',
     isInternalNote: false,
   })) {
@@ -451,34 +451,34 @@ function ticketPatch(ticket, { sentAt, preview, now }) {
  * Apply the patch, and judge what it touched.
  *
  * An empty patch is a real answer, not a no-op to paper over: it means the
- * ticket already reflects this reply (our own SMTP send) or has moved on past
+ * conversation already reflects this reply (our own SMTP send) or has moved on past
  * it (the member wrote again). Writing nothing is correct in both.
  *
  * A DB error is transient and returns ok:false, so the poller holds its cursor
  * and the retry lands on the 23505 path, which re-runs this same patch.
  *
  * A zero-row UPDATE is NOT an error in PostgREST (CLAUDE.md), and it is not
- * transient either: the ticket was read moments ago, so zero rows means it has
+ * transient either: the conversation was read moments ago, so zero rows means it has
  * been deleted — which cascades its messages away too, including the one just
  * filed. A retry cannot help and would loop the lane forever on a message that
  * no longer has anywhere to go, so it is logged loudly and treated as done.
  */
-async function applyTicketPatch(db, ticketId, patch, { mailboxId, uid }) {
+async function applyConversationPatch(db, conversationId, patch, { mailboxId, uid }) {
   if (!Object.keys(patch).length) return { ok: true }
 
   const { data, error } = await db.from('email_tickets')
     .update(patch)
-    .eq('id', ticketId)
+    .eq('id', conversationId)
     .select('id')
   if (error) {
-    logError('sent-lane', 'ticket bump failed — the reply is filed but the ticket still reads as unanswered', {
-      mailboxId, uid, ticketId, err: error,
+    logError('sent-lane', 'conversation bump failed — the reply is filed but the conversation still reads as unanswered', {
+      mailboxId, uid, conversationId, err: error,
     })
     return { ok: false, reason: 'ticket_bump_failed', error }
   }
   if (!Array.isArray(data) || data.length === 0) {
-    logError('sent-lane', 'ticket bump matched no rows — the ticket has gone since it was read', {
-      mailboxId, uid, ticketId,
+    logError('sent-lane', 'conversation bump matched no rows — the conversation has gone since it was read', {
+      mailboxId, uid, conversationId,
     })
   }
   return { ok: true }

@@ -7,8 +7,9 @@ import Link from 'next/link'
 import { Tv } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceControlPanel from '@/components/RaceControlPanel'
+import { getLocationBranding } from '@/lib/location-branding'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,7 +17,9 @@ export default async function RaceControlPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'races')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the event's
+  // location below, the same one the control-board and race routes make.
+  if (!hasPermissionAtAnyLocation(user, 'races')) redirect('/')
 
   const db = createServerClient()
   const { data: race } = await db
@@ -26,8 +29,8 @@ export default async function RaceControlPage(props) {
     .single()
 
   if (!race) notFound()
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) redirect('/')
+  if (assertLocationAccess(user, race.location_id)) notFound()
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
 
   // Mig 122 (E7): the race-day control panel is race-specific by
   // design — start/finish/reset workflow for live race timing. For
@@ -37,6 +40,9 @@ export default async function RaceControlPage(props) {
   if (race.kind && race.kind !== 'race') {
     redirect(`/events/${params.id}/edit`)
   }
+
+  // W1.S2 — the event location's brand labels verified members on the board.
+  const { companyName: brand } = await getLocationBranding(db, race.location_id)
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl">
@@ -60,7 +66,7 @@ export default async function RaceControlPage(props) {
           </Link>
         )}
       </div>
-      <RaceControlPanel raceId={race.id} />
+      <RaceControlPanel raceId={race.id} brand={brand} />
     </div>
   )
 }

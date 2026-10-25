@@ -7,7 +7,10 @@ import {
   gradeShellyConnection,
   SHELLY_HREF,
   agentSignal,
-  locationTabHref,
+  hubManageHref,
+  HUB_CARD_FOR_TAB_KEY,
+  gradePayments,
+  gradeMembershipSource,
   gradeTenantEmail,
   emailDomainHref,
   buildAttention,
@@ -21,6 +24,7 @@ import {
   LAPSE_WARN_MIN_CENTS,
   LAPSE_WARN_DAYS,
   assembleIntegrationsHub,
+  HUB_UNKNOWN,
 } from './integrations-hub'
 // The tenants console counts hub attention rows THROUGH a.locationId; the
 // Shelly card's card-level row is pinned to a real id so that count works.
@@ -166,9 +170,40 @@ describe('agentSignal', () => {
   })
 })
 
-describe('locationTabHref', () => {
-  it('deep-links into the existing per-location integrations tab', () => {
-    expect(locationTabHref('loc-1', 'glofox')).toBe('/settings/locations/loc-1?tab=glofox')
+describe('hubManageHref (INTEGONE.1)', () => {
+  it('opens the card\'s Manage drawer on the hub, never the old per-location tab', () => {
+    expect(hubManageHref('loc-1', 'glofox')).toBe('/settings/integrations-hub?manage=glofox&location=loc-1')
+    expect(hubManageHref('loc-1', 'un1t-online')).toBe('/settings/integrations-hub?manage=un1t-online&location=loc-1')
+  })
+
+  it('maps the old ac-devices tab key to the climate card', () => {
+    expect(HUB_CARD_FOR_TAB_KEY['ac-devices']).toBe('climate')
+    expect(HUB_CARD_FOR_TAB_KEY.xero).toBeUndefined()
+  })
+})
+
+describe('gradePayments (INTEGONE.1) — the old tab dot', () => {
+  it('Revolut (the default, platform merchant) is connected with no setup', () => {
+    expect(gradePayments({})).toEqual({ provider: 'revolut', hasStripeAccount: false, status: 'connected' })
+    expect(gradePayments(null)).toEqual({ provider: 'revolut', hasStripeAccount: false, status: 'connected' })
+    expect(gradePayments({ payments: { provider: 'revolut' } }).status).toBe('connected')
+  })
+
+  it('Stripe Connect is connected only with a connected account id, which is never surfaced', () => {
+    expect(gradePayments({ payments: { provider: 'stripe_connect' } })).toEqual({ provider: 'stripe_connect', hasStripeAccount: false, status: 'not_connected' })
+    const g = gradePayments({ payments: { provider: 'stripe_connect', stripe_connected_account_id: 'acct_123' } })
+    expect(g).toEqual({ provider: 'stripe_connect', hasStripeAccount: true, status: 'connected' })
+    expect(JSON.stringify(g)).not.toContain('acct_123')
+  })
+})
+
+describe('gradeMembershipSource (INTEGONE.1)', () => {
+  it('maps the seam\'s states onto card statuses; anything unreadable is unknown, never none', () => {
+    expect(gradeMembershipSource({ source: 'glofox', state: 'configured' })).toBe('connected')
+    expect(gradeMembershipSource({ source: 'glofox', state: 'unconfigured', missing: ['api_key'] })).toBe('action_needed')
+    expect(gradeMembershipSource({ source: 'none', state: 'none' })).toBe('not_connected')
+    expect(gradeMembershipSource({ source: null, state: 'unknown' })).toBe(HUB_UNKNOWN)
+    expect(gradeMembershipSource(null)).toBe(HUB_UNKNOWN)
   })
 })
 
@@ -478,7 +513,6 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     thinq_pat: 'SECRET_PAT',
     thinq_client_id: 'cid-1',
     thinq_country_code: 'IE',
-    twilio_alpha_sender_id: 'UN1T STILL',
     bca_config: { send_from: 'a@ccf.com', send_to: 'b@bca.com', documents: [{ slug: 'doc_01', label: 'x' }] },
     features: { bca_submit: true },
   }
@@ -497,7 +531,8 @@ describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak',
     expect(c.thinq).toEqual({ hasPat: true, clientId: 'cid-1', countryCode: 'IE' })
 
     expect(data.bca[0]).toMatchObject({ sendFrom: 'a@ccf.com', sendTo: 'b@bca.com', documentCount: 1 })
-    expect(data.sms[0].senderId).toBe('UN1T STILL')
+    // TWILIO-RETIRE.1 — the SMS card left with the channel.
+    expect(data.sms).toBeUndefined()
 
     // The whole payload must not contain a single raw secret.
     const json = JSON.stringify(data)
@@ -590,7 +625,6 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       message: null,
       host: 'shelly-77-eu.shelly.cloud',
       hasAuthKey: true,
-      keyHint: 'ab12',
       lastOkAt: '2026-07-19T11:58:00Z',
       // last ATTEMPT (updated_at) is carried separately from last SUCCESS:
       // the pair is what distinguishes "still retrying" from "abandoned".
@@ -608,9 +642,10 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
     const json = JSON.stringify(data)
     expect(json).not.toContain('SECRET_SHELLY')
     expect(json).not.toContain('FP_SECRET')
-    // The hint IS non-secret (publicConnectionView returns it) — pinned so a
-    // future over-correction that strips it fails loudly rather than quietly.
-    expect(json).toContain('ab12')
+    // SECRETTAILS.1 — the row still carries a hint (as before mig 659); the
+    // card carries presence only, never a character of the key.
+    expect(data.shelly[0]).not.toHaveProperty('keyHint')
+    expect(json).not.toContain('ab12')
   })
 
   it('a location that never connected yields a not_connected row with zero counts', async () => {
@@ -623,7 +658,6 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
       message: null,
       host: null,
       hasAuthKey: false,
-      keyHint: null,
       lastOkAt: null,
       lastAttemptAt: null,
       // Zero here is a READING, not an absence of one — countsKnown says so.
@@ -768,8 +802,10 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
 
     const a = data.shelly.find((r) => r.locationId === LOC_A.id)
     const b = data.shelly.find((r) => r.locationId === LOC_B.id)
-    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1, keyHint: 'ab12' })
-    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1, keyHint: 'cd34' })
+    expect(a).toMatchObject({ status: 'connected', countsKnown: true, deviceCount: 3, enabledCount: 2, onlineCount: 1 })
+    expect(a.hasAuthKey).toBe(true)
+    expect(b).toMatchObject({ status: 'action_needed', countsKnown: true, deviceCount: 1, enabledCount: 0, onlineCount: 1 })
+    expect(b.hasAuthKey).toBe(true)
     expect(b.message).toMatch(/re-paste/i)
 
     // B's action_needed lands in the warning band with the re-paste prompt;
@@ -777,5 +813,430 @@ describe('assembleIntegrationsHub — Shelly plugs card', () => {
     const nag = data.attention.filter((n) => n.cardKey === 'shelly')
     expect(nag).toHaveLength(1)
     expect(nag[0]).toMatchObject({ severity: 'warning', locationId: LOC_B.id, label: 'Shelly plugs' })
+  })
+})
+
+// ── HUBREAD.1 — a failed read is 'unknown', never not_connected/connected ──
+describe('worstStatus — unknown (HUBREAD.1)', () => {
+  it('an unknown row outranks connected, not_connected and action_needed', () => {
+    expect(worstStatus(['connected', 'unknown'])).toBe('unknown')
+    expect(worstStatus(['not_connected', 'unknown'])).toBe('unknown')
+    expect(worstStatus(['action_needed', 'unknown'])).toBe('unknown')
+  })
+
+  it('a real error still outranks unknown', () => {
+    expect(worstStatus(['unknown', 'error'])).toBe('error')
+  })
+
+  it('exports the status the UI keys on', () => {
+    expect(HUB_UNKNOWN).toBe('unknown')
+  })
+})
+
+describe('buildAttention — unreadable rows (HUBREAD.1)', () => {
+  it('keeps an unknown row, after real errors and before expiring tokens, marked unreadable', () => {
+    const rows = [
+      { cardKey: 'instagram', locationId: 'l1', locationName: 'A', status: 'connected', tokenExpiresAt: '2026-07-22T00:00:00Z', href: '/i' },
+      { cardKey: 'xero', locationId: 'l1', locationName: 'All locations', status: 'unknown', message: 'Could not load Xero just now. Try again in a moment.', href: null },
+      { cardKey: 'glofox', locationId: 'l1', locationName: 'A', status: 'error', message: 'boom', href: '/g' },
+    ]
+    const out = buildAttention(rows, { now: NOW })
+    expect(out.map((a) => a.cardKey)).toEqual(['glofox', 'xero', 'instagram'])
+    expect(out[1]).toMatchObject({
+      severity: 'warning',
+      label: 'Xero',
+      locationName: 'All locations',
+      message: 'Could not load Xero just now. Try again in a moment.',
+      unreadable: true,
+    })
+  })
+
+  it('labels the registry and email rows', () => {
+    const out = buildAttention([
+      { cardKey: 'registry', locationId: 'l1', locationName: 'All locations', status: 'unknown', href: null },
+      { cardKey: 'email', locationId: 'l1', locationName: 'All locations', status: 'unknown', href: null },
+    ], { now: NOW })
+    expect(out.map((a) => a.label)).toEqual(['Connections', 'Email delivery'])
+    expect(out[1].message).toBe('Could not load Email delivery just now. Try again in a moment.')
+  })
+})
+
+describe('assembleIntegrationsHub — a failed read is never "not connected" (HUBREAD.1)', () => {
+  // Live legacy Glofox + UniFi + BCA on A: on main a failed registry read
+  // falls back to these and paints them green.
+  const LIVE_A = {
+    ...LOC_A,
+    settings: {
+      glofox: { branch_id: 'br-1', api_key: 'k', api_token: 't' },
+      unifi: { host: 'https://u:12445', api_token: 'u' },
+    },
+    bca_config: { send_from: 'a@ccf.com' },
+  }
+
+  it('registry read fails → every registry-derived row is unknown, for every location', async () => {
+    const db = tableDb({ channel_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LIVE_A, LOC_B], { now: NOW })
+    for (const key of ['glofox', 'instagram', 'unifi', 'climate', 'bca']) {
+      expect(data[key].map((r) => r.locationId)).toEqual([LIVE_A.id, LOC_B.id])
+      for (const r of data[key]) {
+        expect(r.status).toBe('unknown')
+        expect(r.message).toBe('Could not load this just now. Try again in a moment.')
+      }
+    }
+    // ONE attention row for the one failed read.
+    const nag = data.attention.filter((a) => a.unreadable)
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({
+      cardKey: 'registry',
+      label: 'Connections',
+      locationId: LIVE_A.id,
+      locationName: 'All locations',
+      message: 'Could not load the Glofox, Instagram and studio device connections just now. Try again in a moment.',
+    })
+    expect(JSON.stringify(data)).not.toContain('db exploded')
+  })
+
+  for (const [table, key, label] of [
+    ['xero_connections', 'xero', 'Xero'],
+    ['location_whatsapp_numbers', 'whatsapp', 'WhatsApp'],
+    ['ad_accounts', 'ads', 'Meta Ads'],
+  ]) {
+    it(`${table} read fails → ${key} rows unknown per location + one attention row`, async () => {
+      const db = tableDb({ [table]: { error: { message: 'db exploded' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+      expect(data[key].map((r) => [r.locationId, r.status])).toEqual([
+        [LOC_A.id, 'unknown'],
+        [LOC_B.id, 'unknown'],
+      ])
+      const nag = data.attention.filter((a) => a.cardKey === key)
+      expect(nag).toHaveLength(1)
+      expect(nag[0]).toMatchObject({
+        unreadable: true,
+        locationId: LOC_A.id,
+        message: `Could not load ${label} just now. Try again in a moment.`,
+      })
+      // The other cards still read normally.
+      expect(data.glofox.every((r) => r.status === 'not_connected')).toBe(true)
+    })
+  }
+
+  // WAORGNUMBER.1 — a studio's WhatsApp card lists the numbers SWITCHED ON there
+  // (location_whatsapp_numbers), with the link's own default flag, whatever
+  // the number's home studio. Fictional ids only.
+  it('lists the numbers switched on at each studio, link default first, homed anywhere', async () => {
+    const num = (id, extra = {}) => ({ id, label: id, display_phone: '+353000000000', source: 'cloud_api', token_type: 'permanent', connected_via: 'manual', is_active: true, quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1K', token_invalid_at: null, ...extra })
+    const db = tableDb({
+      location_whatsapp_numbers: { data: [
+        { location_id: LOC_A.id, is_default: true, created_at: '2026-09-01T00:00:00Z', whatsapp_numbers: num('org-number') },
+        { location_id: LOC_B.id, is_default: true, created_at: '2026-09-02T00:00:00Z', whatsapp_numbers: num('org-number') },
+        { location_id: LOC_B.id, is_default: false, created_at: '2026-09-03T00:00:00Z', whatsapp_numbers: num('own-number', { quality_rating: 'RED' }) },
+      ], error: null },
+    })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const a = data.whatsapp.find((r) => r.locationId === LOC_A.id)
+    const b = data.whatsapp.find((r) => r.locationId === LOC_B.id)
+    expect(a.numbers.map((n) => [n.id, n.isDefault])).toEqual([['org-number', true]])
+    expect(b.numbers.map((n) => [n.id, n.isDefault])).toEqual([['org-number', true], ['own-number', false]])
+    expect(b.status).toBe('action_needed')
+    expect(db.inCalls.location_whatsapp_numbers).toContainEqual(['location_id', [LOC_A.id, LOC_B.id]])
+    expect(db.inCalls.whatsapp_numbers).toBeUndefined()
+  })
+
+  it('a WhatsApp unknown row carries no numbers and no budget', async () => {
+    const db = tableDb({ location_whatsapp_numbers: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.whatsapp[0]).toMatchObject({ status: 'unknown', numbers: [], budget: null })
+  })
+
+  it('healthy reads are unchanged: no unknown rows, no unreadable attention', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LIVE_A, LOC_B], { now: NOW })
+    const all = ['glofox', 'whatsapp', 'instagram', 'xero', 'ads', 'unifi', 'climate', 'bca'].flatMap((k) => data[k])
+    expect(all.some((r) => r.status === 'unknown')).toBe(false)
+    expect(data.attention.some((a) => a.unreadable)).toBe(false)
+    expect(data.glofox.find((r) => r.locationId === LIVE_A.id).status).toBe('connected')
+  })
+})
+
+describe('assembleIntegrationsHub — email + plan strip reads (HUBREAD.1)', () => {
+  const ORG_A = { ...LOC_A, organization_id: 'org-1' }
+  const TIER_PIN = {
+    location_id: LOC_A.id,
+    version: {
+      id: 'v1', plan_id: 'p1', effective_from: '2026-01-01', price_cents: 4900, currency: 'EUR',
+      allowances: {}, unit_rates_cents: {}, features: {},
+      plan: { id: 'p1', slug: 'growth', name: 'Growth', kind: 'tier' },
+    },
+  }
+
+  it('a failed sending-domain read is unknown, never "Platform email" + Set up domain', async () => {
+    const db = tableDb({ tenant_email_domains: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [ORG_A], { now: NOW })
+    expect(data.email).toHaveLength(1)
+    expect(data.email[0]).toMatchObject({ organizationId: 'org-1', status: 'unknown', sendingDomain: null })
+    const nag = data.attention.filter((a) => a.cardKey === 'email')
+    expect(nag).toHaveLength(1)
+    expect(nag[0]).toMatchObject({ unreadable: true, message: 'Could not load Email delivery just now. Try again in a moment.' })
+  })
+
+  it('a failed organisations read only drops the label (log only)', async () => {
+    const db = tableDb({ organizations: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [ORG_A], { now: NOW })
+    expect(data.email[0]).toMatchObject({ status: 'platform', orgName: null })
+    expect(data.attention.some((a) => a.cardKey === 'email')).toBe(false)
+  })
+
+  it('a failed plan-pin read is unreadable, never "No platform plan"', async () => {
+    const db = tableDb({ location_plans: { error: { message: 'x' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.billing).toEqual([
+      { locationId: LOC_A.id, plan: null, unreadable: true },
+      { locationId: LOC_B.id, plan: null, unreadable: true },
+    ])
+  })
+
+  for (const table of ['wallets', 'usage_rollups_daily', 'wallet_transactions', 'usage_events']) {
+    it(`a failed ${table} read makes the PINNED row unreadable, never a zero balance/usage`, async () => {
+      const db = tableDb({ location_plans: { data: [TIER_PIN] }, [table]: { error: { message: 'x' } } })
+      const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+      expect(data.billing).toEqual([
+        { locationId: LOC_A.id, plan: null, unreadable: true },
+        { locationId: LOC_B.id, plan: null }, // unpinned: the pin read succeeded, so this is true
+      ])
+    })
+  }
+
+  it('a pinned row with healthy reads still renders its plan (pin)', async () => {
+    const db = tableDb({ location_plans: { data: [TIER_PIN] } })
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(data.billing[0].plan).toMatchObject({ name: 'Growth' })
+    expect(data.billing[0].unreadable).toBeUndefined()
+  })
+})
+
+// C141 ORGROLE.2 — the plan & wallet strip is organisation-level billing
+// data (C18's rule: organisation admins only). The hub stays open to studio
+// owners for their integrations, so the assembler builds the strip only for
+// the locations the caller may see billing for (`billingFor`).
+describe('assembleIntegrationsHub — plan & wallet strip is organisation-admin only (C141)', () => {
+  it('billingFor narrows the strip AND its reads to the admitted locations', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], {
+      now: NOW, billingFor: (loc) => loc.id === LOC_B.id,
+    })
+    expect(data.billing.map((r) => r.locationId)).toEqual([LOC_B.id])
+    expect(db.inCalls.location_plans[0]).toEqual(['location_id', [LOC_B.id]])
+    // The rest of the hub is untouched.
+    expect(data.shelly.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
+  })
+
+  it('no admitted location: no strip rows and no plan read at all', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW, billingFor: () => false })
+    expect(data.billing).toEqual([])
+    expect(db.inCalls.location_plans || []).toEqual([])
+  })
+
+  it('without billingFor every location keeps its row (the master tenants console)', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LOC_A, LOC_B], { now: NOW })
+    expect(data.billing.map((r) => r.locationId)).toEqual([LOC_A.id, LOC_B.id])
+  })
+})
+
+// ── un1t.online card (UN1TSYNC.5) ──
+describe('assembleIntegrationsHub — un1t.online card', () => {
+  const UN1T_ROW = {
+    id: 'row-u', location_id: LOC_B.id, platform: 'un1t_online', status: 'connected', is_active: true,
+    label: null, display_name: 'UN1T Hatch Street', external_account_id: 'studio-9',
+    // A hub select never asks for these two; the fixture carries them anyway
+    // so the leak test would catch a spread of the raw row onto the card.
+    access_token: 'un1t_SECRET_TOKEN', app_secret: 'APP_SECRET_VALUE',
+    config: { token_id: 'tok-1', token_name: 'CRM sync', studio_title: 'Hatch Street', permissions: ['members:read'] },
+    token_expires_at: '2026-07-29T00:00:00Z', last_error: null, last_ok_at: '2026-07-19T11:45:00Z',
+  }
+
+  it('builds one row per location from the registry, linking to its hub Manage drawer', async () => {
+    const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.un1t_online).toEqual([
+      {
+        locationId: LOC_A.id, status: 'not_connected', studioTitle: null, tokenExpiresAt: null,
+        lastOkAt: null, lastError: null, href: hubManageHref(LOC_A.id, 'un1t-online'), offerConnect: false,
+      },
+      {
+        locationId: LOC_B.id, status: 'connected', studioTitle: 'Hatch Street', tokenExpiresAt: '2026-07-29T00:00:00Z',
+        lastOkAt: '2026-07-19T11:45:00Z', lastError: null, href: `/settings/integrations-hub?manage=un1t-online&location=${LOC_B.id}`,
+        offerConnect: false,
+      },
+    ])
+  })
+
+  it('the card never carries the token (or any other column of the raw row)', async () => {
+    const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const json = JSON.stringify(data)
+    expect(json).not.toContain('SECRET_TOKEN')
+    expect(json).not.toContain('APP_SECRET_VALUE')
+    expect(json).not.toContain('CRM sync')
+    expect(Object.keys(data.un1t_online[1]).sort()).toEqual(
+      ['href', 'lastError', 'lastOkAt', 'locationId', 'offerConnect', 'status', 'studioTitle', 'tokenExpiresAt'],
+    )
+  })
+
+  // UN1THUB.1 — before its first connect a studio had no way in from the hub
+  // (the bare Integrations tab redirects here). offerConnect marks the rows that
+  // may connect: no registry row, and a membership source of 'none' or
+  // 'un1t_online'. A Glofox studio, or a row whose source the caller did not
+  // select, is never offered it.
+  it('offers Connect only to a studio with no row whose membership source is none or un1t_online', async () => {
+    const locs = [
+      { ...LOC_A, membership_source: 'none' },
+      { ...LOC_B, membership_source: 'un1t_online' },
+      { ...LOC_A, id: 'loc-glofox', name: 'Glofox studio', membership_source: 'glofox' },
+      { ...LOC_A, id: 'loc-unread', name: 'Unselected', membership_source: undefined },
+    ]
+    const data = await assembleIntegrationsHub(tableDb({ channel_connections: { data: [], error: null } }), locs, { now: NOW })
+    expect(data.un1t_online.map((r) => [r.locationId, r.offerConnect])).toEqual([
+      [LOC_A.id, true], [LOC_B.id, true], ['loc-glofox', false], ['loc-unread', false],
+    ])
+    const connected = await assembleIntegrationsHub(
+      tableDb({ channel_connections: { data: [UN1T_ROW], error: null } }),
+      [{ ...LOC_B, membership_source: 'un1t_online' }], { now: NOW },
+    )
+    expect(connected.un1t_online[0]).toMatchObject({ status: 'connected', offerConnect: false })
+    expect(data.attention.some((x) => x.cardKey === 'un1t_online')).toBe(false)
+  })
+
+  it('asks the registry for the un1t_online platform', async () => {
+    const db = tableDb({ channel_connections: { data: [], error: null } })
+    await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    expect(db.inCalls.channel_connections.some(([col, vals]) => col === 'platform' && vals.includes('un1t_online'))).toBe(true)
+  })
+
+  it('feeds the attention strip: a token expiring within the window nags, naming the un1t.online card', async () => {
+    const db = tableDb({ channel_connections: { data: [UN1T_ROW], error: null } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    const a = data.attention.find((x) => x.cardKey === 'un1t_online')
+    expect(a).toMatchObject({
+      label: 'un1t.online', locationId: LOC_B.id, severity: 'warning',
+      message: 'Access token expires in 10 days.', href: hubManageHref(LOC_B.id, 'un1t-online'),
+    })
+  })
+
+  it('an error connection earns an error attention row with its last error', async () => {
+    const dead = { ...UN1T_ROW, status: 'error', last_error: 'un1t.online refused the token (401)', token_expires_at: null }
+    const data = await assembleIntegrationsHub(tableDb({ channel_connections: { data: [dead], error: null } }), [LOC_B], { now: NOW })
+    expect(data.attention.find((x) => x.cardKey === 'un1t_online')).toMatchObject({
+      severity: 'error', message: 'un1t.online refused the token (401)',
+    })
+    expect(data.un1t_online[0]).toMatchObject({ status: 'error', lastError: 'un1t.online refused the token (401)' })
+  })
+
+  it('a bare absence does not nag', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [LOC_A, LOC_B], { now: NOW })
+    expect(data.un1t_online.every((r) => r.status === 'not_connected')).toBe(true)
+    expect(data.attention.some((x) => x.cardKey === 'un1t_online')).toBe(false)
+  })
+
+  it('an unreadable registry grades the rows unknown, never not_connected', async () => {
+    const db = tableDb({ channel_connections: { error: { message: 'db exploded' } } })
+    const data = await assembleIntegrationsHub(db, [LOC_A, LOC_B], { now: NOW })
+    expect(data.un1t_online.map((r) => [r.locationId, r.status])).toEqual([[LOC_A.id, 'unknown'], [LOC_B.id, 'unknown']])
+  })
+})
+
+// MIAORG.1 Task 2 — the AI-agent row reads the studio's RESOLVED Mia
+// settings: the mode comes from the studio's own switches (enabled/test_mode
+// are studio-only), the name may come from the organisation.
+describe('assembleIntegrationsHub — AI agent row from resolved settings (MIAORG.1)', () => {
+  const ORG = 'org-hub-1'
+  const withOrg = (org) => {
+    const inner = emptyDb()
+    return {
+      from: (t) => {
+        if (t !== 'org_settings') return inner.from(t)
+        const b = { select: () => b, eq: () => b, maybeSingle: () => Promise.resolve({ data: org ? { customer_agent: org } : null, error: null }) }
+        return b
+      },
+    }
+  }
+  const still = (customerAgent) => ({ id: 'loc-s', name: 'Stillorgan', organization_id: ORG, settings: { customer_agent: customerAgent } })
+  const hatch = { id: 'loc-h', name: 'Hatch Street', organization_id: ORG, settings: {} }
+
+  it('an org-only agent_name reaches a live studio; an org enabled:true never makes a studio live', async () => {
+    const data = await assembleIntegrationsHub(withOrg({ agent_name: 'Org Mia', enabled: true }), [still({ enabled: true }), hatch], { now: NOW })
+    expect(data.agent).toEqual([
+      { locationId: 'loc-s', mode: 'live', agentName: 'Org Mia' },
+      { locationId: 'loc-h', mode: 'off', agentName: null },
+    ])
+  })
+
+  it('no behaviour change (org null): Stillorgan live under its own name, Hatch off and unnamed', async () => {
+    const { STILLORGAN_BLOB } = await import('./agent/settings-fixtures.test-helpers')
+    const data = await assembleIntegrationsHub(withOrg(null), [still(STILLORGAN_BLOB), hatch], { now: NOW })
+    expect(data.agent).toEqual([
+      { locationId: 'loc-s', mode: 'live', agentName: STILLORGAN_BLOB.agent_name },
+      { locationId: 'loc-h', mode: 'off', agentName: null },
+    ])
+  })
+})
+
+// ── Membership source + Payments cards (INTEGONE.1) ──
+describe('assembleIntegrationsHub — Membership source and Payments rows', () => {
+  it('one membership-source row per location, from the column on the row (no second read for none)', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [
+      { ...LOC_A, membership_source: 'none' },
+      { ...LOC_B, membership_source: null },
+    ], { now: NOW })
+    expect(data.membershipSource).toEqual([
+      { locationId: LOC_A.id, status: 'not_connected', source: 'none', state: 'none', missing: [], href: hubManageHref(LOC_A.id, 'membership-source') },
+      { locationId: LOC_B.id, status: 'not_connected', source: 'none', state: 'none', missing: [], href: hubManageHref(LOC_B.id, 'membership-source') },
+    ])
+    // The column came with the row: no per-location re-read of locations.
+    expect(db.inCalls.locations).toBeUndefined()
+  })
+
+  it('an un1t.online source with no stored token is unconfigured (action needed), never none', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [{ ...LOC_B, membership_source: 'un1t_online' }], { now: NOW })
+    expect(data.membershipSource[0]).toMatchObject({ source: 'un1t_online', state: 'unconfigured', status: 'action_needed', missing: ['api_token', 'studio'] })
+  })
+
+  it('a provider read that fails is unknown for that location', async () => {
+    const data = await assembleIntegrationsHub(
+      tableDb({ channel_connections: { error: { message: 'db exploded' } } }),
+      [{ ...LOC_B, membership_source: 'un1t_online' }], { now: NOW },
+    )
+    expect(data.membershipSource[0]).toMatchObject({ source: 'un1t_online', state: 'unknown', status: HUB_UNKNOWN })
+  })
+
+  it('a value no provider serves yet keeps its identity as unconfigured (action needed)', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [{ ...LOC_B, membership_source: 'un1t' }], { now: NOW })
+    expect(data.membershipSource[0]).toMatchObject({ source: 'un1t', state: 'unconfigured', status: 'action_needed', missing: ['provider'] })
+  })
+
+  it('a caller that did not select membership_source gets the seam\'s own read', async () => {
+    const db = tableDb()
+    const data = await assembleIntegrationsHub(db, [LOC_A], { now: NOW })
+    // tableDb's maybeSingle answers no row: the seam reads that as no source.
+    expect(data.membershipSource[0]).toMatchObject({ source: 'none', status: 'not_connected' })
+  })
+
+  it('payments rows grade settings.payments and carry no account id', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [
+      { ...LOC_A, settings: {} },
+      { ...LOC_B, settings: { payments: { provider: 'stripe_connect', stripe_connected_account_id: 'acct_SECRETISH' } } },
+    ], { now: NOW })
+    expect(data.payments).toEqual([
+      { locationId: LOC_A.id, provider: 'revolut', hasStripeAccount: false, status: 'connected', href: hubManageHref(LOC_A.id, 'payments') },
+      { locationId: LOC_B.id, provider: 'stripe_connect', hasStripeAccount: true, status: 'connected', href: hubManageHref(LOC_B.id, 'payments') },
+    ])
+    expect(JSON.stringify(data)).not.toContain('acct_SECRETISH')
+  })
+
+  it('neither card adds an attention row', async () => {
+    const data = await assembleIntegrationsHub(tableDb(), [
+      { ...LOC_B, membership_source: 'un1t', settings: { payments: { provider: 'stripe_connect' } } },
+    ], { now: NOW })
+    expect(data.attention.filter((a) => a.cardKey === 'payments' || a.cardKey === 'membership-source')).toEqual([])
   })
 })

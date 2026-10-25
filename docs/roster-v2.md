@@ -95,11 +95,200 @@ The original plan (Conventions above) was to point every `shifts` reader at the 
 3. **Assistant readers** — ✅ shipped (RETIRE-SHIFTS-MIRROR.3). `get_shifts_for_week` + the inline staff_hours / staff_cost report tools in `src/app/api/assistant/chat/route.js` now read the new model via `fetchScheduledShiftRows`.
 4. **Writers** — ✅ shipped:
    - ✅ Assistant `create_shift` now writes the new model via `upsertShiftAssignment()` in `src/lib/roster-write.js` (find-or-create block + upsert assignment, faithful to the mig 069 reverse-trigger INSERT; overrides go on the assignment per mig 100). The mig 068 forward trigger keeps `shifts` in sync for remaining readers. (RETIRE-SHIFTS-MIRROR.4)
-   - ✅ **copy-week / copy-month** (`/api/schedule/shifts/copy-{week,month}`) — migrated (RETIRE-SHIFTS-MIRROR.5b). Source rows now read from the new model via `fetchSourceShiftRows()` in `src/lib/roster-read.js`, which reproduces the legacy collapsed *effective* override (`coalesce(assignment.override, block≠template ? block.start_time : null)`) so copied shifts keep their exact per-coach times — payroll math is preserved. Writes go through `bulkUpsertShiftAssignments()` in `src/lib/roster-write.js` (find-or-create every needed block once, then one upsert for all assignments — avoids a round-trip-trio per row on a month copy). New blocks carry no `roster_id`, so copied shifts read unpublished until publish, same as the old `published: false`.
-   - ✅ **`POST` / `PUT` / `DELETE /api/schedule/shifts` + `/[id]`** — DELETED (RETIRE-SHIFTS-MIRROR.5, #275). Confirmed dead — no UI/mobile/n8n caller. `GET /shifts` stays (reader, phase 5). openapi.js POST registration swapped for GET so the path stays documented.
+   - ✅ **copy-week / copy-month** (`/api/schedule/shifts/copy-{week,month}`) — migrated (RETIRE-SHIFTS-MIRROR.5b). Source rows now read from the new model via `fetchSourceBlocks()` + `buildCopyPlan()` in `src/lib/roster-copy.js` (COPYMODES.1: `mode` `exact` | `template`; was `fetchSourceShiftRows()`), which reproduces the legacy collapsed *effective* override (`coalesce(assignment.override, block≠template ? block.start_time : null)`) so copied shifts keep their exact per-coach times — payroll math is preserved. Writes go through `bulkUpsertShiftAssignments()` in `src/lib/roster-write.js` (find-or-create every needed block once, then one upsert for all assignments — avoids a round-trip-trio per row on a month copy). New blocks carry no `roster_id`, so copied shifts read unpublished until publish, same as the old `published: false`.
+   - ✅ **`POST` / `PUT` / `DELETE /api/schedule/shifts` + `/[id]`** — DELETED (RETIRE-SHIFTS-MIRROR.5, #275). Confirmed dead — no UI/mobile/integration caller. `GET /shifts` stays (reader, phase 5). openapi.js POST registration swapped for GET so the path stays documented.
 5. **Shift-swaps + the swap FK** — ✅ shipped (RETIRE-SHIFTS-MIRROR.5c, mig 237). `shift_swap_requests.{requester,target}_shift_id` repointed from `shifts(id)` → `shift_assignments(id)` (table was empty → no data translation). `swaps` GET/POST + `swaps/[id]` PUT now embed/own/swap **assignments** instead of legacy shifts; the GET response is flattened back to the legacy shift shape via `swapShiftShape()` in `src/lib/roster-read.js`, so every consumer (web approvals, `SwapRequestsManager`, web + mobile dashboards) is unchanged. Mobile (`mobile/app/(tabs)/schedule.jsx`) now posts `shift.shift_assignment_id` (already stitched into the `GET /shifts` row) instead of the legacy `shift.id`; web already sent the assignment id via `flattenBlocksToShifts`. The mig 068 forward trigger mirrors the approve-time profile swap back to `public.shifts` for the remaining readers.
    - ✅ **`GET /api/schedule/shifts` reader** (5d) — migrated. Reads the new model via `fetchApiShiftRows()` in `src/lib/roster-read.js`, normalised to the legacy shift shape (byte-identical for the only consumer, the mobile schedule). `id` is now the assignment id (was `shifts.id` — only used as a React key + the swap requester id, both already on `shift_assignment_id` since 5c). `published` is hard-set `true` to match what the mig 100 forward trigger + web `flattenBlocksToShifts` already produce (roster-derived publish state is a separate concern, out of scope for the mirror retirement). **This was the last reader of `public.shifts`.**
 6. **Phase 6 — teardown** — ✅ shipped (RETIRE-SHIFTS-MIRROR.6, mig 238). The 3 remaining writes turned out **not** to be dead — they flipped `shifts.published false→true` and reused the flipped set as the publish notify-list (`notifyStaffOfPublish`). They were re-sourced from the new model: each publish path now captures the blocks that are **newly** attached to a roster (`roster_id IS NULL` immediately before tagging) and notifies the coaches assigned to them via `publishNotifyRowsForBlocks()` in `src/lib/roster-notify.js`. This preserves the first-publish-notifies / re-publish-uses-the-change-log behaviour. The redundant `POST /api/schedule/shifts/publish` endpoint (a second flip + notify the client fired as a follow-up) was deleted along with its client call. mig 238 then dropped: the forward mirror trigger + fn, the block-cleanup trigger + fn, the reverse mirror trigger + fn, the `schedule_notifications.shift_id → shifts(id)` FK (the column now holds the assignment id), and the `public.shifts` table itself. **Deploy order:** the code shipped + deployed first; the migration was applied via Supabase MCP only afterwards (dropping the table while the old writing code was live would have broken publishes).
 
 **Key unblock:** `shifts.published` / `published_at` have no equivalent on the new tables, but publishing is a roster concept — a shift's published state derives from `shift_blocks.roster_id → rosters.status === 'published'`. So **no new column and no architectural decision** are needed for any phase.
 
+
+## Roster ownership and supersede (ROSTER-SUPERSEDE.1, 2026-09-09)
+
+**Ownership is per BLOCK, not per period.** Publishing INSERTs a `rosters` row
+and then re-tags `shift_blocks.roster_id` for every block in the period. So
+`period_start`/`period_end` is *the range the operator requested*, not a claim
+on those days: a later publish over the same range takes the blocks and leaves
+the older row claiming dates it owns nothing on. Prod on 2026-09-09 had 74
+published rosters, **58 of which owned zero blocks** — every one of them the
+residue of a re-publish or a week-then-month widening.
+
+That residue is what made "which roster published this day" unanswerable, and
+it is why mig 602's exclusion constraint could not be applied. Richard's
+decision (2026-09-09): a publish **supersedes** the rosters it swallows.
+
+- `status` gains **`superseded`**. `superseded_at` records when the row stopped
+  owning blocks; `superseded_by` names the roster that took them, and is
+  **nullable on purpose** — a period whose successor was itself later emptied
+  has no identifiable heir, and "superseded, successor unknown" is truthful.
+- `requested_period_start` / `requested_period_end` keep the range the operator
+  actually clicked. `period_start`/`period_end` are shrunk to the days a roster
+  really owns (that is what the constraint judges); the audit answer to "what
+  did this person ask to publish?" must not be silently rewritten to satisfy a
+  constraint. Mig 602 backfills them for every row that already existed, and
+  **`POST /api/schedule/rosters` writes them on the insert** — the only moment
+  anything can. Approve flips a status rather than creating a row, so the
+  draft's own values stand. Left NULL, the first shrink would destroy the only
+  record of the original ask, which is what these columns exist to prevent.
+- Nothing is deleted. A superseded roster is the audit trail of a real publish
+  event.
+
+**The ordering, which is the whole trick.** The exclusion constraint judges the
+INSERT (and the draft→published UPDATE), which necessarily happens *before* any
+block can carry the new roster's id. So superseding only after the re-tag
+cannot work on its own: an exact re-publish, the commonest flow there is, would
+meet a raw 23P01 first. Both publish paths therefore run two phases, in
+`src/lib/roster-publish.js`:
+
+1. `releasePublishedRostersFor()` — **before** the write. Stands down every
+   published roster the new period fully **contains**. That is exactly the set
+   `findConflictingPublishedRosters()` lets through, so afterwards nothing
+   published overlaps and the write satisfies the constraint. All-or-nothing,
+   and `restorePublishedRosters()` puts them back if the write then fails: a
+   roster superseded with no successor still owns its blocks, and every one of
+   them would read as UNPUBLISHED to its coach. 🔴 Both routes wrap the whole
+   release→write span in `try/catch` and restore on the way out, because a
+   THROW (a PostgREST 5xx, a dropped fetch, the function timing out) never
+   produces an error object to branch on, and an escaping throw left those
+   rosters superseded **forever**. When the restore itself fails — it can, with
+   a legitimate 23P01 if another publish took the range meanwhile — the failure
+   is folded into the reported error and it **names the stranded roster ids**,
+   because putting them back is then a human job.
+2. `supersedeSwallowedRosters()` — **after** the re-tag. Stamps `superseded_by`,
+   then sweeps any other still-published overlapping roster: zero blocks left →
+   supersede, blocks left → shrink `period_*` to the min/max `block_date` it
+   owns (`requested_period_*` untouched). Best-effort: failures surface in the
+   route's existing partial-success `warning`, never roll back a publish, never
+   throw. It excludes the new roster explicitly — without that it would read
+   the new roster as owning nothing and supersede *itself*.
+
+**A DRAFT supersedes nothing.** It owns no blocks until approved, so standing a
+live roster down on its behalf would unpublish that period for a draft that may
+never be approved. `rosters/[id]/approve` does the release at approval time.
+
+**A STRADDLE still 409s.** Two independently sufficient reasons: mig 602 would
+reject it anyway (the un-swallowed half of the older roster keeps overlapping
+whatever we do to it), and resolving it would mean shrinking a roster the
+operator never asked to change. The 409 names the ranges so they can re-publish
+the right one.
+
+**Read paths.** `shift_blocks.roster_id → rosters.status === 'published'` stays
+the one derivation of "is this block published" (`src/lib/roster-read.js`,
+`shared/dashboard-data.js`). A superseded roster reads as unpublished, which is
+correct *and* unreachable — a roster is only superseded once it owns zero
+blocks, so no block can embed one. Both derivations are pinned by a test
+anyway, because the day it becomes reachable is the day a coach's phone
+silently empties. `findPublishedRosterFor` / `findPublishedRosterIdsByDate` /
+`publishedRostersCovering` already filter `status='published'`, so superseding
+correctly removes a roster from consideration for new blocks.
+`GET /api/schedule/rosters` excludes superseded from the default list and keeps
+it reachable with `?status=superseded`.
+
+**Still open:** a widening publish does not re-notify the coaches of the week it
+swallowed. Both publish paths only notify blocks that were `roster_id IS NULL`
+before tagging, and a swallowed week's blocks already carried the old roster's
+id. The change-log path covers the coaches whose shifts actually *changed*,
+which is the case that matters most; re-notifying the rest is a separate
+decision about how much noise a widening publish should make.
+
+## Shift kinds (SHIFTTYPE.1, mig 628, 2026-09)
+
+`shift_templates.kind` is `class` (default) or `admin`; a block reads its kind
+through its template (not snapshotted). Richard's rule (25 Sep 2026): an admin
+shift has **no minimum staffing** (`min_coaches = 0`, DB CHECK
+`shift_templates_admin_no_minimum`), so it is never an empty or short gap:
+`futureBlockStaffing` returns null for it, which removes it from the calendar
+banner, day headers, cards, the Today chip, the publish preview, the runway and
+the phone's Manage chip; the Studio Overview's `underMinEntry` skips it. It is
+**out of the contractor budget** (`blockContractorCost`, `summarizeMonth`,
+`summarizeWeek`) and **in every hours figure** (payroll, week-cost, reports).
+An unreadable kind is `class`. The API refuses an explicit minimum on an admin
+template or slot (400 `admin_has_no_minimum`) and normalises an omitted one.
+
+## Editing one shift and the briefing (BLOCKEDIT.1, mig 629, 2026-09)
+
+- `PUT /api/schedule/blocks/[id]` edits one shift's start/end, min/max coaches and **briefing**. Rules: `src/lib/block-edit.js` (`planBlockEdit`). Manager at the shift's studio; 404 outside the caller's studios.
+- **Template edits leave one-off edits alone:** a template's start/end, minimum or maximum reaches only future blocks still at the template's OLD value, per field (`PUT /api/schedule/templates/[id]`, `propagation.futureBlocksKeptEdited`, shown in the template manager). A switch to admin still zeroes every minimum. A block edited to a value that happens to equal the template's old one cannot be told apart from an unedited block and is treated as unedited.
+- **Overrides:** a coach's override equal to the shift's OLD time moves with it (cleared); any other override is a deliberate partial shift and stays (the response names who kept their hours).
+- **Change log (published only):** one coachless `block_edited` row per edit (born stamped: nobody is messaged about it; `details` never holds the briefing text), and one `time_changed` row, `details.source = 'block_edit'`, per coach whose own hours moved.
+- **Notice:** the route sends nothing. `runShiftTimeChangeNotices` (`src/lib/block-edit-notify.js`) on the */5 `send-push-reminders` cron tells each coach once, inside staff quiet hours, stamped on delivery. Not needed (off the shift, put back, started) = stamped with `details.notice = 'not_needed'`.
+- **Briefing:** `shift_blocks.briefing`, ≤ 500 characters, never blank (DB CHECK). Written by managers for the coaches on that shift. Separate from `notes` (manager-only). Read on the web shift dialog, the calendar card ("Briefing"), Today's week list, the phone Me list and the Manage card. Not copied by copy week/month.
+
+## Calendar subscription (ICSFEED.1, mig 632, 2026-09)
+
+Every staff member can subscribe their calendar app to their OWN published
+shifts: `/account` on web, "Subscribe to my shifts" on the phone's Schedule tab
+(Me view). The feed is `GET /api/calendar-feed/<rcf_token>.ics`, anonymous by
+design; only `sha256(token)` is stored (`staff_calendar_feeds`, one row per
+person, service role only), so the URL is shown once and "Make a new link"
+kills the old one in the same UPDATE.
+
+Contents: own assignments, `rosters.status = 'published'`, not cancelled, every
+studio, Dublin today −14 to +56 days. Effective time = override, else the
+block's time; written in UTC from `locations.timezone` (no VTIMEZONE). UID =
+`shift-<assignment id>@repset.ie`, so edits replace and removals disappear on
+the next poll. No colleague, no assignment notes, no pay.
+
+Deactivation: the feed answers 404 for a profile with `active = false` or
+`deleted_at` set, so every deactivation path stops it with no write here;
+reactivation resumes the same link. A read failure is 503, never an empty
+calendar (a subscriber would lose every shift). Rate limit is per token, never
+per IP. Public on the CRM hosts only (`publicExactPaths` in `src/proxy.js`).
+
+## Publish snapshots (SNAPSHOT.1, mig 634, 2026-09)
+
+Every publish (POST `/api/schedule/rosters`, or an owner approving a draft)
+writes one row to `roster_publish_snapshots`: the period's shift blocks (slot
+`template_id|date`, template name and kind, times, minimum, maximum) and each
+block's live coaches (profile id, effective window: override, else the block's
+own time), as one `jsonb` document with `format_version` 1. One row per
+`rosters` row (`UNIQUE (roster_id)`): every publish and re-publish inserts its
+own roster row, so this is one per publish.
+
+- **When:** after the publish has tagged the period's blocks, before the
+  supersede sweep and the notifications. Not on a draft, not on a dry run,
+  not when the tag failed (those blocks were not published by this roster).
+- **Never blocks a publish:** `writePublishSnapshot` (`src/lib/roster-snapshot.js`)
+  never throws, retries its insert once, and logs a failure with
+  `logError('roster-snapshot', …)`. There is no publish transaction to join
+  (the publish is a chain of PostgREST writes), and a lost audit record must
+  not cost coaches their notification.
+- **Immutable:** service role holds SELECT and INSERT only; triggers refuse
+  any UPDATE, DELETE or TRUNCATE, the owner's included. The one way out is a
+  deleted location (its cascade is let through). The roster FK is NO ACTION,
+  so a roster with a snapshot (one that was published) cannot be deleted at
+  all: only drafts are ever deleted, and reject pins its delete to
+  `status = 'draft'`.
+- **No names, no pay:** profile ids only; names are read when compared (a
+  tombstone keeps `full_name`).
+- **Briefing as a fingerprint:** each block records BLOCKEDIT.1's briefing as
+  `briefing_hash` (SHA-256 of the trimmed text, null when none), never the
+  text: an immutable row could never be corrected or erased, and free text can
+  name a person. The comparison reports `briefing_change` (added, changed,
+  removed after publish), the change log's own vocabulary. A block without the
+  key reads as not recorded, never as a change. It is an **unsalted** digest:
+  a short, guessable briefing could be confirmed by hashing a guess. That is
+  accepted because the table is service role only and the digest only has to
+  tell changed from unchanged.
+- **No backfill:** rosters published before the studio's first snapshot have
+  none, and the view says from when they exist.
+
+**Reading it:** `GET /api/schedule/rosters/[id]/compare?from&to&against`
+(manager at the roster's studio) returns, per shift and coach, published vs
+current window, the change (unchanged, moved, added after publish, removed
+after publish) and the arrival stamp, with totals. Blocks match on the slot,
+coaches on profile id within it (a swap reads as removed + added). Hours are
+wall-clock like payroll's; `'24:00'` counts as midnight in both (PAYROLL24.1).
+Arrival is `arrived_at`, carried onto a back-to-back shift exactly as the
+attendance report carries it: the gap (at most an hour, same coach, same day)
+is measured on the BLOCKS' times, never an override. "Ended" uses the coach's
+own window (override, else the block's time).
+"No arrival recorded" (`no_show_candidate`) is advisory: stamps exist for a
+minority of shifts, and nothing alerts. The web view is "Published vs now" in
+the change-log dialog (the Published chip), one section per published roster
+the period sits on. `against` must be a publish at the same studio whose
+period overlaps this roster's published dates (else 409); the "Compare with"
+list offers only those, always including the current baseline. A baseline
+whose dates miss the period on screen answers `missing_reason:
+'outside_window'` and is never shown as an empty comparison.

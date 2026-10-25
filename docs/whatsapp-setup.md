@@ -4,8 +4,9 @@ Configures the Meta WhatsApp integration for un1t-crm. The platform code is alre
 complete: webhook handler at `src/app/api/webhooks/whatsapp/route.js`, sending via
 Graph API v21.0 (`src/lib/whatsapp.js`), template management against
 `{WABA_ID}/message_templates`, and per-location number config
-(`whatsapp_numbers` table, mig 176) with global env-var fallback
-(`src/lib/whatsapp-config.js`).
+(`whatsapp_numbers` table, mig 176; `src/lib/whatsapp-config.js`). There is no
+global env-var fallback any more (WACONFIGFALLBACK.1): a location with no row of
+its own cannot send WhatsApp.
 
 This runbook covers everything outside the codebase: Meta portal tasks, Vercel
 env vars, and verification.
@@ -77,8 +78,8 @@ The number can still be used for normal calls/SMS after registration.
 3. Set a new **two-step verification PIN** when prompted (Cloud API requires
    one at registration) — store it in your password manager.
 4. Record from this page:
-   - **Phone Number ID** → `WHATSAPP_PHONE_NUMBER_ID`
-   - **WhatsApp Business Account ID (WABA ID)** → `WHATSAPP_BUSINESS_ACCOUNT_ID`
+   - **Phone Number ID** → the number's `whatsapp_numbers` row
+   - **WhatsApp Business Account ID (WABA ID)** → the same row
 4. Set the **display name** (e.g. "UN1T Dublin") — Meta reviews it; usually fast for verified businesses.
 
 ### 1.5 Create a System User + permanent token
@@ -96,8 +97,9 @@ shown on the API Setup page.
    - Permissions (Meta docs specify three — search "business" in the picker):
      `whatsapp_business_messaging`, `whatsapp_business_management`,
      `business_management`
-4. Copy the token once → `WHATSAPP_ACCESS_TOKEN`. Store it only in Vercel env /
-   the `whatsapp_numbers` row — never in the repo.
+4. Copy the token once → the number's `whatsapp_numbers` row (Settings →
+   Locations → Integrations → WhatsApp). Never in the repo, and no longer in
+   Vercel env: the global env number was retired (WACONFIGFALLBACK.1).
 
 ### 1.6 Add a payment method
 WhatsApp Manager → the WABA → **Payment settings** → add card.
@@ -134,9 +136,6 @@ window) are unlimited. Monitor in WhatsApp Manager → Phone numbers → Insight
 Project → Settings → Environment Variables (Production), then **redeploy**:
 
 ```bash
-WHATSAPP_ACCESS_TOKEN=         # 1.5 — permanent system-user token
-WHATSAPP_PHONE_NUMBER_ID=      # 1.4
-WHATSAPP_BUSINESS_ACCOUNT_ID=  # 1.4 — WABA ID
 WHATSAPP_APP_ID=               # 1.2
 WHATSAPP_APP_SECRET=           # 1.2
 WHATSAPP_WEBHOOK_VERIFY_TOKEN= # generated below
@@ -164,11 +163,32 @@ CRM → **Settings → Locations → [location] → Integrations → WhatsApp �
 | Default | ✓ |
 
 Notes:
-- Locations with zero rows fall back to the global `WHATSAPP_*` env vars.
+- Locations with zero rows cannot send WhatsApp (no fallback to another studio's
+  number; WACONFIGFALLBACK.1). Deactivating a row turns WhatsApp off at that
+  studio; to fix a broken token, PATCH the row's token instead.
 - `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` are **env-only**
   (webhook-level, not per-number) — set them in Vercel regardless.
-- Inbound routing: the webhook maps Meta's `phone_number_id` → owning location
-  via the `whatsapp_numbers` unique index.
+- Inbound routing: the webhook maps Meta's `phone_number_id` → the number's
+  row via the `whatsapp_numbers` unique index, then the THREAD's studio by
+  WAORGNUMBER R4: the quoted message's thread, a click-to-WhatsApp ad's
+  studio, the thread with the latest outbound in 7 days, the candidate studio
+  where the person has an active `contact_studios` relationship (latest
+  activity; tie → their primary), else their home studio, else the number's
+  home studio.
+- **Organisation numbers (WAORGNUMBER.1, mig 743):** a number belongs to an
+  organisation (org admins add it at **Settings → WhatsApp numbers**,
+  `/settings/whatsapp-numbers`) and is switched on per studio. The number's
+  **home studio** holds its duties: unknown senders and anything no candidate
+  studio claims file there; its organisation fences where the number may be
+  switched on (a DB trigger refuses another organisation's studio); templates
+  are per studio and a template send picks the number by the template's WABA.
+- **Sign-off until (ORGCONTACTS.0, decision 6):** each studio's WhatsApp
+  settings card carries a "Sign-off until" date
+  (`locations.settings.whatsapp_blast_signoff_until`; `GET`/`PUT
+  /api/locations/[id]/whatsapp/blast-signoff`, editable by a master or an
+  organisation admin). While the date is in the future, broadcasts at that
+  studio go out only once an organisation admin has signed them off
+  (`/api/whatsapp/broadcasts/[id]/sign-off`). Clear the date to end the window.
 
 ### 2.3 Now complete Meta step 1.7 (webhook verification).
 
@@ -298,7 +318,7 @@ App Dashboard → **WhatsApp → Configuration** → subscribe the WABA to:
 - `history`
 - `smb_app_state_sync`
 - `smb_message_echoes`
-- `account_update` ← **handled since WA-COEX.6, 2026-07-31**
+- `account_update` ← **handled since WA-COEX.7, 2026-10-10** (WA-COEX.6 shipped the handler on 2026-07-31, but the webhook's number-health branch claimed the shared field first and `continue`d, so the coexistence branch never ran; both now run per change)
 
 ...in addition to the existing `messages` field. Harmless to subscribe
 anytime — the fields just sit unhandled until the coexistence code path is
@@ -313,7 +333,9 @@ app's `whatsapp_business_account` topic already carries all of: `messages`,
 `smb_app_state_sync`, `smb_message_echoes`. **No console step is outstanding.**
 Note what this means: `account_update` was subscribed but unhandled, so those
 events were being received and silently dropped (the webhook 200s unrecognised
-fields by design). WA-COEX.6 closes a live gap, not a theoretical one.
+fields by design). WA-COEX.6 was meant to close a live gap, not a theoretical
+one — but its branch was unreachable until WA-COEX.7 (2026-10-10), so the
+coexistence link state has never been written from a real webhook yet.
 
 **Why `account_update` matters.** When a client changes phone, reinstalls, or
 re-registers the WhatsApp Business app, Meta **automatically offboards** our
@@ -354,6 +376,18 @@ Settings → Locations → [location] → Integrations → WhatsApp → the
 code is sent to the number's WhatsApp Business app for the owner to enter
 there. Once linked, the number appears in the list with a **"Coexistence"**
 chip (as opposed to "Cloud API" for a fully-migrated number).
+
+**Before linking: switch off the app's Greeting message and Away message**
+(WhatsApp Business app → Business tools). ECHOAUTOREPLIES.1: everything the
+phone app sends reaches the CRM as an `smb_message_echoes` echo, stored as
+source `app_echo`, and every echo takes the thread over from Mia
+(`ingestCoexistenceMessage` → `manualTakeoverPatch`). An auto-reply has not
+been seen in a real echo yet, so nothing can tell it from a reply a person
+typed: left on, the first greeting in each new chat would pause Mia there.
+The connect card says this at the button. Once a studio has linked, capture
+one real greeting echo; if Meta marks it, filter it in the ingest and lift
+this rule. Edit and delete echoes from the app also take over today (they
+are stored as placeholder rows), which is the same open question.
 
 ### 5.4 History import
 The ~6-month message backfill is **one-shot within 24 hours** of linking —

@@ -5,10 +5,14 @@
 // form incl. the branch predicate. Field primitives live here too so any future
 // editor reuses the exact same inputs.
 import { ChevronUp, ChevronDown, Trash2, Pencil, AlertTriangle } from 'lucide-react'
-import { describeNode } from '@/lib/sequences/graph'
+import { describeNode, BRANCH_PREDICATE_TYPES } from '@/lib/sequences/graph'
 import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
+import {
+  dynamicUrlButtonIndex, urlButtonStepBlock, URL_BUTTON_MAPPING_KEY,
+} from '@/lib/whatsapp-template-buttons'
+import { WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
 
 export function IconBtn({ children, label, onClick, disabled, danger }) {
   return (
@@ -71,6 +75,63 @@ export function whatsappBodyVariables(template) {
   return [...set].sort((a, b) => Number(a) - Number(b))
 }
 
+// Contact fields a variable can be mapped to — the same list the unified
+// composer offers, so the two surfaces cannot drift. WA_VARIABLE_FIELDS is a
+// bare array in a dependency-free module (compose.js imports nothing).
+export const STEP_CONTACT_FIELDS = WA_VARIABLE_FIELDS
+
+// Reserved mapping names that resolve from the RUN's metadata rather than the
+// contact row. They are ordinary mapping strings — nothing here imports or
+// interprets them; the STEP SENDER resolves them, in `resolveContactField`
+// (`src/lib/whatsapp.js`) on the PAYLINK branch.
+//
+// 🔴 ORDERING: that branch is a separate PR and this one must land AFTER it.
+// It also updates the gallery installer to write
+// { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } and
+// makes sendWhatsappStep record a SKIP for a dynamic-URL template with no
+// button value. Merged the other way round, these two names are offered here
+// and reach the sender as literal text.
+//
+// Each carries a description because "pay_amount" reads like a contact field
+// and isn't — mapping it on a template that is not the overdue reminder gets
+// an empty string, not an error.
+export const STEP_RESERVED_VARIABLES = [
+  { value: 'pay_amount', description: 'Overdue payment: amount owed' },
+  { value: 'pay_link_suffix', description: 'Overdue payment: link suffix' },
+]
+
+// The BUTTONS component's dynamic URL button, or null.
+function dynamicUrlButton(template) {
+  const idx = dynamicUrlButtonIndex(template?.components)
+  if (idx < 0) return null
+  const comp = (template.components || []).find(c => String(c?.type || '').toUpperCase() === 'BUTTONS')
+  return comp?.buttons?.[idx] || null
+}
+
+/**
+ * SEQ-URLBUTTON.1 — what `config.variables` becomes when the template select
+ * fires. The old code reset to {} unconditionally, so merely re-opening a step
+ * and re-picking the SAME template destroyed a mapping the gallery installer
+ * had written (e.g. { '2': 'pay_amount', url_button: 'pay_link_suffix' }).
+ *
+ * Same template id → keep the mapping untouched. A real change still clears the
+ * body variables (their numbers mean different things in a different template)
+ * but carries `url_button` across when the NEW template also ends its link in a
+ * variable — that value is about the link, not about {{1}}, and re-typing it is
+ * the step that gets forgotten.
+ */
+export function variablesAfterTemplateChange(currentVariables, prevTemplateId, nextTemplate) {
+  const cur = currentVariables || {}
+  const prev = String(prevTemplateId ?? '')
+  const next = String(nextTemplate?.id ?? '')
+  if (prev === next) return cur
+  const carried = {}
+  if (dynamicUrlButton(nextTemplate) && Object.hasOwn(cur, URL_BUTTON_MAPPING_KEY)) {
+    carried[URL_BUTTON_MAPPING_KEY] = cur[URL_BUTTON_MAPPING_KEY]
+  }
+  return carried
+}
+
 export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
   const c = node.config || {}
   switch (node.type) {
@@ -88,10 +149,21 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
       const selected = list.find(t => t.id === c.template_id)
       const vars = whatsappBodyVariables(selected)
       const curVars = c.variables || {}
+      // SEQ-URLBUTTON.1 — a template whose link ends in {{1}} needs a per-send
+      // value or Meta rejects EVERY message with 132012, so the step must be
+      // able to author it here (the broadcast editor always could).
+      const urlBtn = dynamicUrlButton(selected)
+      const urlBlock = selected ? urlButtonStepBlock(selected, curVars) : null
+      const listId = `wa-vars-${node.id}`
+      const setVar = (key, v) => onPatch({ variables: { ...curVars, [key]: v } })
       return (
         <>
           <Labeled label="Template" hint={list.length ? 'Approved WhatsApp templates at this location.' : 'No approved WhatsApp templates at this location yet.'}>
-            <select className={fieldCls} value={c.template_id || ''} onChange={e => onPatch({ template_id: e.target.value || null, variables: {} })}>
+            <select className={fieldCls} value={c.template_id || ''} onChange={e => {
+              const nextId = e.target.value || null
+              const nextTpl = list.find(t => t.id === nextId) || null
+              onPatch({ template_id: nextId, variables: variablesAfterTemplateChange(curVars, c.template_id ?? null, nextTpl) })
+            }}>
               <option value="">Choose a template…</option>
               {/* WA-TPL-GROUPS — optgroups by operator-set display_group
                   (mig 450); a lone Ungrouped bucket renders flat. */}
@@ -106,22 +178,50 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
           </Labeled>
           {selected && vars.length > 0 && (
             <div className="space-y-2">
-              <p className="text-[11px] text-un1t-subtle">Map each variable to a contact field (first_name / name / email / phone) or a literal value.</p>
+              <p className="text-[11px] text-un1t-subtle">
+                Map each variable to a contact field ({STEP_CONTACT_FIELDS.join(' / ')}), one of the
+                reserved names ({STEP_RESERVED_VARIABLES.map(r => r.value).join(' / ')}, filled in from
+                the run), or a literal value.
+              </p>
               {vars.map(n => (
                 <Labeled key={n} label={`Variable {{${n}}}`}>
-                  <Text value={curVars[n]} onChange={v => onPatch({ variables: { ...curVars, [n]: v } })} placeholder="first_name or literal text" />
+                  <Text value={curVars[n]} onChange={v => setVar(n, v)} placeholder="first_name or literal text" list={listId} />
                 </Labeled>
               ))}
             </div>
           )}
-          {selected && vars.length === 0 && <p className="text-[11px] text-un1t-subtle">This template has no variables.</p>}
+          {selected && vars.length === 0 && !urlBtn && <p className="text-[11px] text-un1t-subtle">This template has no variables.</p>}
+          {urlBtn && (
+            <div className="space-y-1">
+              <Labeled label={`Link value for the “${urlBtn.text}” button`}>
+                <Text value={curVars[URL_BUTTON_MAPPING_KEY]} onChange={v => setVar(URL_BUTTON_MAPPING_KEY, v)}
+                  placeholder="pay_link_suffix, a contact field, or literal text"
+                  list={listId} />
+              </Labeled>
+              <p className="text-[11px] text-un1t-subtle/80">Goes on the end of {urlBtn.url}.</p>
+              {urlBlock && (
+                <p className="flex items-start gap-1.5 text-[11px] text-rose-700 leading-relaxed">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                  <span>{urlBlock}</span>
+                </p>
+              )}
+            </div>
+          )}
+          {selected && (vars.length > 0 || urlBtn) && (
+            <datalist id={listId}>
+              {STEP_CONTACT_FIELDS.map(f => <option key={f} value={f} />)}
+              {STEP_RESERVED_VARIABLES.map(r => <option key={r.value} value={r.value}>{r.description}</option>)}
+            </datalist>
+          )}
         </>
       )
     }
     case 'sms':
       return (
-        <Labeled label="Message" hint={`${(c.body || '').length} characters`}>
-          <Area value={c.body} onChange={v => onPatch({ body: v })} rows={3} placeholder="SMS text — keep it short" />
+        // RETIRED (TWILIO-RETIRE.1) — read-only so a legacy draft still shows
+        // what the step said; it cannot publish until the step is removed.
+        <Labeled label="Message" hint="SMS has been retired — remove this step">
+          <p className="text-sm text-un1t-subtle whitespace-pre-wrap">{c.body || '—'}</p>
         </Labeled>
       )
     case 'wait':
@@ -174,8 +274,32 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
         <>
           <Labeled label="Split the flow when…">
             <Select value={ptype} onChange={v => setPred({ type: v })}
-              options={[['has_tag', 'Contact has a tag'], ['field_equals', 'Field equals a value'], ['field_in', 'Field is one of…']]} />
+              options={BRANCH_PREDICATE_TYPES.map(t => [t, BRANCH_PREDICATE_LABELS[t] || t])} />
           </Labeled>
+          {ptype === 'in_pipeline_stage_at_studio' && (
+            <>
+              <Labeled label="Stage (comma-separated)" hint="Stage names as the board stores them, e.g. trial_done">
+                <Text value={(p.stages || []).join(', ')} onChange={v => setPred({ stages: v.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="trial_done" />
+              </Labeled>
+              <p className="text-xs text-un1t-subtle">
+                Yes when the contact has an open deal at this studio, on one of its switched-on boards,
+                in one of these stages. Reads this studio&apos;s own board, so it works for people whose
+                home studio is elsewhere.
+              </p>
+            </>
+          )}
+          {ptype === 'whatsapp_reply_since_enrolment' && (
+            <p className="text-xs text-un1t-subtle">
+              Yes when the contact has sent us a WhatsApp message, at any studio in this organisation,
+              since they entered this flow.
+            </p>
+          )}
+          {ptype === 'booked_class_at_studio' && (
+            <p className="text-xs text-un1t-subtle">
+              Yes when the contact has a class booking at this studio from any booking system
+              (Glofox or un1t.online), or a booking request from the website still being processed.
+            </p>
+          )}
           {ptype === 'has_tag' && (
             <>
               <Labeled label="Tag"><Text value={p.tag} onChange={v => setPred({ tag: v })} placeholder="e.g. vip" /></Labeled>
@@ -218,6 +342,17 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
   }
 }
 
+// The branch predicate picker's labels, keyed by BRANCH_PREDICATE_TYPES (the
+// schema owns the list and its order; a type missing here shows its key).
+const BRANCH_PREDICATE_LABELS = {
+  has_tag: 'Contact has a tag',
+  booked_class_at_studio: 'Contact has booked a class here',
+  in_pipeline_stage_at_studio: 'Contact is in a pipeline stage here',
+  whatsapp_reply_since_enrolment: 'Contact replied on WhatsApp since entering this flow',
+  field_equals: 'Field equals a value',
+  field_in: 'Field is one of…',
+}
+
 // --- field primitives -----------------------------------------------------
 
 const fieldCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
@@ -231,8 +366,11 @@ export function Labeled({ label, hint, children }) {
     </label>
   )
 }
-export function Text({ value, onChange, placeholder }) {
-  return <input type="text" className={fieldCls} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
+// `list` wires an optional <datalist> of suggestions — free text is still
+// allowed, because a mapping value can be a literal.
+export function Text({ value, onChange, placeholder, list }) {
+  return <input type="text" className={fieldCls} value={value ?? ''} placeholder={placeholder}
+    list={list} onChange={e => onChange(e.target.value)} />
 }
 export function Area({ value, onChange, placeholder, rows = 3 }) {
   return <textarea className={`${fieldCls} resize-y`} rows={rows} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} />

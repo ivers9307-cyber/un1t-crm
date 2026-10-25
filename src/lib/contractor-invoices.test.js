@@ -4,7 +4,7 @@
 // — that's an integration concern). These tests cover the date math
 // and option generators which are easy to get subtly wrong.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
   periodForMonth,
   recentMonthOptions,
@@ -15,6 +15,7 @@ import {
   RECEIPT_MIME_TYPES,
   mimeFromFilename,
   sniffReceiptMime,
+  loadQueueRowsForInvoices,
 } from './contractor-invoices'
 
 describe('periodForMonth', () => {
@@ -43,6 +44,40 @@ describe('periodForMonth', () => {
     expect(() => periodForMonth('2026-13')).toThrow()
     expect(() => periodForMonth('2026-1')).toThrow()
     expect(() => periodForMonth('not-a-date')).toThrow()
+  })
+})
+
+// The label is built from a UTC-midnight instant; localising that instant in
+// the HOST zone put '2026-05' down as 'April 2026' anywhere west of UTC, and
+// the month picker (recentMonthOptions) showed every option one month early.
+// Node re-reads process.env.TZ on assignment, so each case pins its own zone.
+describe('periodForMonth / recentMonthOptions labels are timezone-independent', () => {
+  const realTz = process.env.TZ
+  afterEach(() => { process.env.TZ = realTz })
+
+  for (const tz of ['Europe/Dublin', 'America/Los_Angeles', 'Pacific/Kiritimati']) {
+    it(`labels each month by its own name (TZ=${tz})`, () => {
+      process.env.TZ = tz
+      expect(periodForMonth('2026-05').label).toBe('May 2026')
+      expect(periodForMonth('2026-01').label).toBe('January 2026')   // year boundary
+      expect(periodForMonth('2026-07').label).toBe('July 2026')      // BST in Dublin
+      expect(periodForMonth('2026-12').label).toBe('December 2026')
+    })
+
+    it(`the month picker's labels match its keys (TZ=${tz})`, () => {
+      process.env.TZ = tz
+      const opts = recentMonthOptions(new Date(Date.UTC(2026, 4, 15)), 3)
+      expect(opts.map((o) => [o.key, o.label])).toEqual([
+        ['2026-05', 'May 2026'],
+        ['2026-04', 'April 2026'],
+        ['2026-03', 'March 2026'],
+      ])
+    })
+  }
+
+  it('the zone switch really takes effect', () => {
+    process.env.TZ = 'America/Los_Angeles'
+    expect(new Date(Date.UTC(2026, 4, 1)).getDate()).toBe(30)
   })
 })
 
@@ -186,5 +221,57 @@ describe('sniffReceiptMime', () => {
       const got = sniffReceiptMime(s)
       expect(got === null || RECEIPT_MIME_TYPES.includes(got)).toBe(true)
     }
+  })
+})
+
+// INVOICEREVIEW.2 — queue lookup feeding the lifecycle label.
+describe('loadQueueRowsForInvoices', () => {
+  function db(result, calls = []) {
+    const b = {
+      from: (t) => { calls.push(['from', t]); return b },
+      select: () => b,
+      in: (col, vals) => { calls.push(['in', col, vals]); return b },
+      then: (res, rej) => Promise.resolve(result).then(res, rej),
+    }
+    return b
+  }
+
+  it('does not query when no invoice is awaiting the accountant', async () => {
+    const calls = []
+    const lookup = await loadQueueRowsForInvoices(db({ data: [] }, calls), [
+      { id: 'a', status: 'submitted', location_id: 'L' },
+      { id: 'b', status: 'declined', location_id: 'L' },
+    ])
+    expect(calls).toEqual([])
+    expect(lookup('a')).toBeUndefined()
+  })
+
+  it('returns the newest row, null for a looked-up miss, undefined for not looked up', async () => {
+    const calls = []
+    const lookup = await loadQueueRowsForInvoices(db({
+      data: [
+        { id: 'q-old', source_contractor_invoice_id: 'a', created_at: '2026-09-01' },
+        { id: 'q-new', source_contractor_invoice_id: 'a', created_at: '2026-09-02' },
+      ],
+      error: null,
+    }, calls), [
+      { id: 'a', status: 'awaiting_accountant_review', location_id: 'L' },
+      { id: 'b', status: 'awaiting_accountant_review', location_id: 'L' },
+      { id: 'c', status: 'submitted', location_id: 'L' },
+    ])
+    expect(lookup('a').id).toBe('q-new')
+    expect(lookup('b')).toBeNull()
+    expect(lookup('c')).toBeUndefined()
+    // location-scoped as well as source-scoped
+    expect(calls).toContainEqual(['in', 'location_id', ['L']])
+    expect(calls).toContainEqual(['in', 'source_contractor_invoice_id', ['a', 'b']])
+  })
+
+  it('a failed read yields undefined, never a false "not queued"', async () => {
+    const lookup = await loadQueueRowsForInvoices(
+      db({ data: null, error: { message: 'down' } }),
+      [{ id: 'a', status: 'awaiting_accountant_review', location_id: 'L' }],
+    )
+    expect(lookup('a')).toBeUndefined()
   })
 })

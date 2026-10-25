@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
+import { listLocationsByMembershipSource } from '@/lib/membership/source'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logWarn } from '@/lib/log'
 import { isPackCreditDataStale, PACK_CREDIT_MAX_AGE_DAYS } from '@/lib/glofox-data-quality'
@@ -46,8 +47,24 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
+  // W1.M3b — a location with NO membership source has no Glofox-shaped data
+  // to read: skipped with a counted skipped_no_source. A failed seam read is a
+  // 500 with no heartbeat, never "nobody to skip".
+  // UN1TRADAR.3 — Glofox-source locations only: this checks GLOFOX pack-sync
+  // freshness, which means nothing at a source that gains the memberships
+  // capability (un1t.online). Every other active location is a counted skip.
+  const { ids: glofoxIds, error: srcErr } = await listLocationsByMembershipSource(db, 'glofox')
+  if (srcErr) {
+    console.warn(`[cron][glofox-data-quality] failed to read membership sources: ${srcErr.message}`)
+    return NextResponse.json({ success: false, error: srcErr.message }, { status: 500 })
+  }
+  const glofoxSet = new Set(glofoxIds || [])
+  const noSource = { has: (id) => !glofoxSet.has(id) }
+  let skippedNoSource = 0
+
   const perLocation = []
   for (const loc of locations || []) {
+    if (noSource.has(loc.id)) { skippedNoSource++; continue }
     // Most-recent sync in THIS location's pack base. nullsFirst:false so
     // a contact that has actually synced sorts above never-synced ones.
     const { data: row, error } = await db
@@ -93,5 +110,5 @@ export async function GET(request) {
   const healthy = perLocation.length > 0 && perLocation.every((l) => l.healthy)
   if (healthy) await stampHeartbeat('glofox-data-quality').catch(() => {})
 
-  return NextResponse.json({ success: true, healthy, locations: perLocation })
+  return NextResponse.json({ success: true, healthy, locations: perLocation, skipped_no_source: skippedNoSource })
 }

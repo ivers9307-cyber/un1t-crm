@@ -22,6 +22,7 @@ import Card from '../../components/member/ui/Card'
 import ErrorRetry from '../../components/member/ErrorRetry'
 import { PEARL } from '../../lib/member/brand'
 import { toKudosView, kudosRelativeTime, isUnseen } from 'shared/coach-kudos'
+import { useMemberZone } from '../../lib/member/use-member-zone'
 
 const SELECT =
   'id, message, emoji, sender_name, created_at, seen_at'
@@ -161,6 +162,8 @@ function Header({ onBack }) {
 // Deliberately NOT raw seen_at: the mark-seen call stamps rows moments after
 // load, and the accent should hold for the visit, then clear next time.
 function KudosRow({ row, fresh }) {
+  // TZ.14 (D7) — an older kudos' "12 Mar" is a day on the member's studio calendar.
+  const tz = useMemberZone()
   const v = toKudosView(row)
   return (
     <Card className={fresh ? 'border-pearl' : ''}>
@@ -179,7 +182,7 @@ function KudosRow({ row, fresh }) {
               — {v.senderName}
             </Text>
             <Text className="text-xs font-body text-chalk-3">
-              {kudosRelativeTime(v.createdAt)}
+              {kudosRelativeTime(v.createdAt, Date.now(), tz)}
             </Text>
           </View>
         </View>

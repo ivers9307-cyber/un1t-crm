@@ -28,15 +28,16 @@
 // validation lives in the admin routes; this read side
 // re-normalises defensively instead).
 //
-// SAAS-6/7 HANDOFF SEAM: welcome-front-page.js (org chooser) and
-// default-favicon.js resolve "whose front page / whose favicon" —
-// they should thread the request host in and call
-// resolveTenantOrgId(host): a mapped host renders that org's
-// surface; null keeps their existing slug / first-row fallback
-// byte-identical (un1tdublin.com has no row here by design).
+// SAAS-6/7 HANDOFF SEAM, closed by W1.L4: welcome-front-page.js (org
+// chooser), default-site-name.js, default-favicon.js and the anonymous
+// /api/public/branding branch thread the request host in and call
+// resolveTenantOrgId(host): a mapped host renders that org's surface;
+// null means the platform (no org). un1tdublin.com has no row here by
+// design — it resolves through the in-code tier (brands.js
+// organizationId), which resolveTenantOrgId consults first.
 
 import { createServerClient } from '@supabase/ssr'
-import { getCrmHostnames } from './brands.js'
+import { getCrmHostnames, resolveBrand, normalizeHost } from './brands.js'
 
 export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
 
@@ -79,8 +80,53 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // for that reason; a tenant domain is newer than the E3 rename, so no
   // legacy /race link for one can exist. Least privilege — add them to a
   // tenant's own brand override if that ever stops being true.
+  // '/event/entry/' (EVENT-MOVE.6): the customer's own entry page from the
+  // confirmation email, with '/event-pay/' as its paid leg; covered by
+  // '/event/' today, listed so the flow survives a narrowing of it.
   // LATENT, not live: tenant_domains has zero rows today.
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/event-pay/', '/privacy', '/legal/', '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/']),
+  // '/book/manage/' (BOOKINGSELF.1): the customer's own booking page (cancel
+  // or reschedule) from the {{manage_url}} link, minted on this host by
+  // resolveCustomerBaseUrl; covered by '/book/', listed for the same reason.
+  //
+  // W1.L2 — the whole CUSTOMER FLOW. Since mig 716 (W1.L1) every
+  // organisation has an automatic <slug>.repset.ie platform row with
+  // brand = {} → these defaults, and W1.L3 mints customer-facing links
+  // on that host. A link that lands on a path missing here is rewritten
+  // to /welcome (fallbackHandler below): the customer clicks "unsubscribe"
+  // and gets the studio chooser, consent untouched. So the default now
+  // carries the marketing flow an email leads to ('/unsubscribe/',
+  // '/preferences/', '/view-email/' + their '/api/…/' backers), the paid
+  // class leg ('/class-pay/'), the host portal and its onboarding
+  // ('/host', '/host-connect/', '/api/host/', '/h/'), embeds and '/terms'.
+  // Every one of them is already public on the CRM host (src/proxy.js
+  // publicPaths — the token in the path, or the host session inside
+  // /host, is the credential), so the default exposes nothing new.
+  // src/public-compliance-paths.test.jsx §8 pins the flow in both
+  // directions, and '/api/calendar-feed' stays OUT on purpose
+  // (src/calendar-feed-path.test.js: the feed URL is minted on the CRM host).
+  //
+  // Deliberately ABSENT: '/start', '/free-class', '/offers'. They are
+  // Stillorgan literals (src/app/start/page.js, src/app/free-class/page.js,
+  // W0.4's pinned /offers) — serving them on another tenant's host would
+  // show UN1T's funnel under that gym's name. UN1T Group's own platform row
+  // (un1t-group.repset.ie) may list them in brand.allowedPaths, which
+  // replaces (not extends) this default — see resolveTenantDomainBrand —
+  // so that row needs the full list: [...defaults, '/start', '/free-class',
+  // '/offers']. Operator SQL on the row, not code.
+  //
+  // mig 415's COMMENT ON COLUMN tenant_domains.brand still quotes the
+  // original five-entry default; THIS array is the truth (an applied
+  // migration is never edited).
+  allowedPaths: Object.freeze([
+    '/welcome', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/privacy', '/legal/', '/terms',
+    '/account-deletion', '/cancel/', '/api/public/', '/api/webhooks/',
+    // W1.L2 — the marketing flow a tenant's customer reaches from an email:
+    '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/',
+    // the paid class leg, the host portal and host onboarding, embeds:
+    '/class-pay/', '/h/', '/host', '/host-connect/', '/api/host/', '/embed/',
+    // MIAHATCH.6 — the page un1t.online's hosted checkout returns a member to:
+    '/pay-done/',
+  ]),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',
@@ -127,7 +173,7 @@ async function loadRows(db, nowMs) {
     if (client) {
       const { data, error } = await client
         .from('tenant_domains')
-        .select('id, hostname, organization_id, location_id, brand')
+        .select('id, hostname, organization_id, location_id, brand, source')
         .eq('active', true)
       if (!error && Array.isArray(data)) rows = data
     }
@@ -206,16 +252,30 @@ export async function resolveTenantDomainBrand(hostname, { db = null, nowMs = Da
 
 /**
  * Hostname → organization_id, or null when unmapped. The SAAS-6/7
- * handoff seam (see header): welcome-front-page.js renders a mapped
- * host's org chooser and keeps its slug fallback on null;
- * default-favicon.js likewise. Shares the row cache above.
+ * handoff seam (see header), consumed since W1.L4 by every host-keyed
+ * brand resolver: the site name and favicon (default-site-name.js,
+ * default-favicon.js), the anonymous /api/public/branding branch and the
+ * /welcome front page. Shares the row cache above.
+ *
+ * W1.L4 — the in-code tier is consulted FIRST, exactly as the proxy does:
+ * an in-code brand that carries an organizationId (the UN1T hosts,
+ * brands.js) answers without a DB read, and an in-code brand without one
+ * (the car-business hosts) is null — the DB tier is never asked about an
+ * in-code host, which can have no row anyway. The host is normalised ONCE
+ * here (lowercase, port and trailing dot stripped), so `WWW.UN1TDUBLIN.COM`
+ * and `gym-a.repset.ie:443` resolve the same tenant as their canonical
+ * spellings, whichever consumer passed the raw header.
  *
  * @param {string} hostname
  * @param {{ db?: object, nowMs?: number }} [opts]
  * @returns {Promise<string | null>}
  */
 export async function resolveTenantOrgId(hostname, opts = {}) {
-  const brand = await resolveTenantDomainBrand(hostname, opts)
+  const hostKey = normalizeHost(hostname)
+  if (!hostKey) return null
+  const inCode = resolveBrand(hostKey)
+  if (inCode) return inCode.organizationId || null
+  const brand = await resolveTenantDomainBrand(hostKey, opts)
   return brand ? brand.organizationId : null
 }
 

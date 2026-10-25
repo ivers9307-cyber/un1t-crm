@@ -12,7 +12,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { runDetection } from '@/lib/person-detect'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -31,7 +31,8 @@ export async function POST(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'contact_linking')) {
+  // ROLESWEEP.1c — coarse pre-check; judged at the body's location below.
+  if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -54,6 +55,10 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  // ROLESWEEP.1c — `contact_linking` judged at the location being scanned.
+  if (!hasPermissionForLocation(user, locationId, 'contact_linking')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const db = createServerClient()
 

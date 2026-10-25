@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { RefreshCw, ChevronRight } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
+import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
 
 function formatDateTime(s) {
   if (!s) return '—'
@@ -181,6 +182,21 @@ function ProviderList({ provider, loading, onItemDecided }) {
       </div>
     )
   }
+  // PAIDTRIAL.2 — paid trials whose Glofox grant needs a hand are resolved in
+  // place (retry the processor, or mark granted after doing it in Glofox).
+  if (provider.key === 'trial_purchases') {
+    return (
+      <div className="space-y-3">
+        {provider.items.map((it) => (
+          <TrialPurchaseReviewCard
+            key={it.id}
+            item={it}
+            onDecided={() => onItemDecided?.(provider.key)}
+          />
+        ))}
+      </div>
+    )
+  }
   return (
     <ul className="border border-un1t-border rounded-lg divide-y divide-un1t-border/50 overflow-hidden">
       {provider.items.map((it) => (
@@ -199,6 +215,10 @@ function ProviderList({ provider, loading, onItemDecided }) {
                 )}
               </div>
               <div className="text-xs text-un1t-subtle truncate mt-1">{it.subtitle}</div>
+              {/* LEAVE.1 — e.g. "Clashes with 2 rostered shifts" on time off. */}
+              {it.warning && (
+                <div className="text-xs text-amber-700 mt-1">{it.warning}</div>
+              )}
               <div className="text-xs text-un1t-subtle mt-1">
                 Submitted {formatDateTime(it.submittedAt)}
               </div>

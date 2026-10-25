@@ -47,7 +47,9 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTextMessage } from '@/lib/whatsapp'
 import { sendRadarOutreach } from '@/lib/radar-outreach'
+import { isWhatsAppNumberMissing, noNumberSwitchedOnMessage } from '@/lib/whatsapp-number-missing'
 import { enrolContacts } from '@/lib/sequences'
+import { capturePaymentForRun, refreshActiveRunPayment } from '@/lib/dunning-payment'
 import { isMembershipInvoice } from '@/lib/glofox-arrears'
 import { paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
@@ -55,9 +57,14 @@ import { logWarn, logInfo } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { defaultWinbackMessage } from '@/lib/churn-winback'
 import { validateBody } from '@/lib/validate'
+import { isCrossoverAt } from '@/lib/contact-crossovers'
+import { radarReadsFor } from '@/lib/membership/reads/index'
+import { SOURCE_UNREADABLE } from '@/lib/radar-copy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// PAYLINK — this route awaits a Glofox pay-link fetch (8s abortable budget) inline; the platform default would cut a slow PAST_DUE event off mid-enrolment.
+export const maxDuration = 30
 
 const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'payment_reminder', 'snoozed', 'dismissed']
 
@@ -81,6 +88,22 @@ const TASK_DUE_DAYS = 2
 
 function isoDatePlus(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+// UN1TRADAR.3 — the payment_reminder refusals (a un1t.online studio; a crossover).
+const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
+const PAYMENT_REMINDER_NOT_HOME = "Payment reminders go from the member's home studio."
+
+// WAORGNUMBER.4 (R8) — the 409 for a radar studio with no WhatsApp number
+// switched on, naming it: "No WhatsApp number is switched on at {studio}." A
+// failed name read still refuses, without the name.
+
+async function noNumberRefusal(db, locationId) {
+  // UN1TRADAR.3 — one structured line per refusal (no Meta call was made, no row written)
+  logInfo('churn-radar', 'outreach refused: studio has no WhatsApp number', { locationId })
+  const { data: loc, error } = await db.from('locations').select('name').eq('id', locationId).maybeSingle()
+  if (error) logWarn('churn-radar', 'studio name read failed for the no-number refusal', { locationId, code: error.code || null })
+  return NextResponse.json({ success: false, error: noNumberSwitchedOnMessage(error ? null : loc?.name) }, { status: 409 })
 }
 
 export async function POST(request) {
@@ -117,7 +140,9 @@ export async function POST(request) {
     .select('id, name, first_name, location_id, wa_phone, phone')
     .eq('id', contactId)
     .maybeSingle()
-  if (!contact || contact.location_id !== locationId) {
+  // UN1TRADAR.3 — or a crossover AT the active studio (an active membership
+  // or a un1t client there); never the caller's other studios. Fails closed.
+  if (!contact || (contact.location_id !== locationId && !(await isCrossoverAt(db, contact.id, locationId)))) {
     return NextResponse.json({ success: false, error: 'Contact not in your active location' }, { status: 404 })
   }
 
@@ -155,6 +180,10 @@ export async function POST(request) {
       await sendTextMessage(to, message, { locationId })
     } catch (e) {
       logWarn('churn-radar', 'winback whatsapp failed', { err: e, contactId })
+      // WACONFIGFALLBACK.1 — no WhatsApp number at this location: say so (409).
+      // The copy below would blame the member's message window, and the send
+      // used to go out on the env number. WAORGNUMBER.4 — naming the studio.
+      if (isWhatsAppNumberMissing(e)) return noNumberRefusal(db, locationId)
       return NextResponse.json({
         success: false,
         error: 'Couldn\'t send the WhatsApp — the member has no open message window. Reach out manually.',
@@ -172,6 +201,9 @@ export async function POST(request) {
       await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('churn-radar', 'outreach send failed', { err: e, contactId })
+      // WACONFIGFALLBACK.1 — no WhatsApp number at this location → 409
+      // (WAORGNUMBER.4: naming the studio).
+      if (isWhatsAppNumberMissing(e)) return noNumberRefusal(db, locationId)
       return NextResponse.json({
         success: false,
         error: e.message || 'Could not send the WhatsApp template.',
@@ -188,6 +220,23 @@ export async function POST(request) {
   // them. enrolContacts is idempotent — a re-click on a member already
   // mid-sequence is a no-op, not a double-send.
   if (action === 'payment_reminder') {
+    // UN1TRADAR.3 — the reminder reads glofox_invoices and mints a Glofox pay
+    // link: refused at a un1t.online studio (the button is hidden there too).
+    let source
+    try {
+      ({ source } = await radarReadsFor(db, locationId))
+    } catch (err) {
+      logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
+      return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
+    }
+    if (source === 'un1t_online') {
+      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_UN1T }, { status: 409 })
+    }
+    // A crossover's billing columns and invoices are its home studio's: never
+    // drive this studio's dunning from them.
+    if (contact.location_id !== locationId) {
+      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_NOT_HOME }, { status: 409 })
+    }
     const { data: loc } = await db
       .from('locations')
       .select('dunning_sequence_id')
@@ -214,13 +263,25 @@ export async function POST(request) {
     // MEMBERSHIP invoice (the radar's Overdue category), not any past-due
     // row: a failed €5 fee is an unpaid charge, and the reminder copy says
     // "membership payment". Same classifier as fetchPastDue.
-    const { data: pastDueInv } = await db
+    const { data: pastDueInv, error: invErr } = await db
       .from('glofox_invoices')
-      .select('id, line_item_subtypes, glofox_event:raw_payload->candidate->>glofoxEvent')
+      .select('id, line_item_subtypes, invoice_date, glofox_user_id, glofox_event:raw_payload->candidate->>glofoxEvent')
       .eq('contact_id', contactId)
       .eq('status', 'PAST_DUE')
+      .order('invoice_date', { ascending: false, nullsFirst: false })
       .limit(50)
-    const hasMembershipDebt = (pastDueInv || []).some(isMembershipInvoice)
+    if (invErr) {
+      return NextResponse.json({
+        success: false,
+        error: `Could not read the member's invoices: ${invErr.message}`,
+      }, { status: 502 })
+    }
+    const membershipDebts = (pastDueInv || []).filter(isMembershipInvoice)
+    const hasMembershipDebt = membershipDebts.length > 0
+    // PAYLINK.5 — the newest PAST_DUE membership invoice is the one the pay
+    // link is minted for; source_ref stays payment_<kind> (DUNNING.2 re-run
+    // semantics), the invoice id rides on metadata.payment.
+    const newestDebt = membershipDebts[0] || null
     const pastDueIds = hasMembershipDebt ? new Set([contactId]) : new Set()
     const kind = paymentTroubleKind({ ...(full || {}), id: contactId }, Date.now(), { pastDueIds })
     if (!kind) {
@@ -250,6 +311,10 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
+    const { payment } = await capturePaymentForRun(db, {
+      locationId, contactId, invoiceId: newestDebt?.id || null, glofoxUserId: newestDebt?.glofox_user_id || null,
+    })
+
     let enrolled
     try {
       const res = await enrolContacts({
@@ -260,6 +325,7 @@ export async function POST(request) {
         // DUNNING.2 — an operator re-sending to a member who completed an
         // earlier run (outside the cooldown) re-activates it.
         allowReenrol: true,
+        metadata: { payment },
       })
       enrolled = res?.enrolled || 0
     } catch (e) {
@@ -272,8 +338,23 @@ export async function POST(request) {
 
     // Already mid-sequence — idempotent no-op, no new audit row.
     if (enrolled === 0) {
+      // PAYLINK.5 — the member is already mid-run (or the same source was
+      // refused a re-run): point that run at the newest invoice's link rather
+      // than letting it chase a stale one.
+      // PAYLINK.5b — a slipping click with no PAST_DUE membership invoice
+      // (newestDebt null) has nothing to point the run at, so skip the
+      // library call entirely rather than pushing a no-invoice payment at
+      // it (refreshActiveRunPayment's own downgrade guard covers the same
+      // case for every other caller, but there is simply no refresh to do
+      // here).
+      const { refreshed, reason } = newestDebt
+        ? await refreshActiveRunPayment(db, { sequenceId: seqId, contactId, payment })
+        : { refreshed: 0 }
       invalidateRadar('churn', locationId)
-      return NextResponse.json({ success: true, data: { action, already_enrolled: true } })
+      return NextResponse.json({
+        success: true,
+        data: { action, already_enrolled: true, refreshed, ...(reason ? { reason } : {}) },
+      })
     }
     logRow.note = note || `Dunning (${kind}) → ${seq.name}`
   }

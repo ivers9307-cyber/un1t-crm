@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
@@ -18,7 +18,7 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
@@ -33,6 +33,10 @@ export async function GET(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the car's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) {
+    return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
+  }
 
   if (!car.xero_invoice_pdf_path) {
     return NextResponse.json({ success: false, error: 'No invoice PDF saved for this car.' }, { status: 404 })

@@ -11,8 +11,11 @@ import PersonHeader from '@/components/PersonHeader'
 import PersonActionBar from '@/components/PersonActionBar'
 // HOST-MASTER.6 — "No auto-enrol" chip + Manager+ toggle (client component).
 import AutomationsExemptToggle from '@/components/AutomationsExemptToggle'
+// MIAHATCH.6 — "Payment link sent" chip (client component, one small fetch).
+import MiaPaymentLinkChip from './MiaPaymentLinkChip'
 import { formatLastSeen } from '@/lib/person-view'
-import { formatMoney, formatDate } from './format'
+import { formatMoney, formatDate, nextClassLabel } from './format'
+import { arrearsTile } from '@/components/command-centre-arrears'
 
 // PULSE-90.4 — first-90-days journey status chips. Light-theme contrast
 // recipe (bg-<c>-500/10 text-<c>-700 — never the -300/-400 ramp).
@@ -55,6 +58,30 @@ const ATTENTION_CHIP = {
 // DealCard BADGE_SLUGS set).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
+// WAITLIST.6 — Cold is a DERIVED-board affordance. It stamps
+// contacts.pipeline_dismissed_at and nothing but the classifier reads that
+// stamp; mig 594's `pipelines.mode` keeps the classifier off a manual board, so
+// on a Hatch Street waitlist contact the item looked like a decision and
+// produced nothing. The board's own "Not interested" column is the decision.
+//
+// `manual` is resolved server-side by the page (the contact's location's
+// primary pipeline), so this component adds NO fetch of its own.
+const HEADER_ACTIONS = {
+  derived: ['message', 'task', 'sequence', 'cancel_form', 'cold'],
+  manual: ['message', 'task', 'sequence', 'cancel_form'],
+}
+
+// ROLEUI.2 — which flag (contactWorkGates in src/lib/contact-page-gates.js,
+// judged at the contact's location) lets each kebab item through. Message
+// has none: it deep-links to the composer, which gates its own channels.
+// Missing flags hide the item: the menu fails closed.
+const ACTION_GATE = { task: 'canTask', sequence: 'canSequence', cancel_form: 'canCancelForm', cold: 'canCold' }
+
+export function headerActions(manual, actionGates) {
+  return HEADER_ACTIONS[manual ? 'manual' : 'derived']
+    .filter((a) => !ACTION_GATE[a] || Boolean(actionGates?.[ACTION_GATE[a]]))
+}
+
 function StatTile({ label, value, tone = 'default' }) {
   const valueCls = tone === 'danger' ? 'text-red-700' : 'text-un1t-text'
   return (
@@ -65,11 +92,37 @@ function StatTile({ label, value, tone = 'default' }) {
   )
 }
 
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false, cancellationLink = null }) {
+// `manual` defaults FALSE — Cold shown — so a caller that cannot resolve the
+// contact's board keeps exactly today's behaviour. A failed lookup must never
+// remove an operator action; an inert button beats a missing one.
+// TZ.16 (D3 = A) — `timezone` is the contact's studio zone and `viewerZone` the
+// viewer's active studio (a server render cannot see the browser): the
+// next-class chip names the zone only when the two differ.
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, timezone = null, viewerZone = null, canToggleExempt = false, cancellationLink = null, manual = false, actionGates = null }) {
   // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const lastAttended = person?.lastAttendedAt || contact.last_attended_at
+  // HATCHINV.1 — `metrics.arrearsCents` is already Glofox + un1t.online EUR. When
+  // un1t.online has the member overdue the tile follows the command centre's one
+  // rule (never "€0" for an overdue with no amount); otherwise it is the old tile.
+  const un1t = metrics.un1t?.overdue ? metrics.un1t : null
+  const arrearsStat = un1t ? (
+    <StatTile
+      label="Arrears"
+      value={arrearsTile(
+        { arrearsCents: metrics.arrearsCents },
+        { overdue: true, arrears_cents: 0, amount_unreported: un1t.amountUnreported, amount_not_eur: un1t.amountNotEur },
+      ).text}
+      tone="danger"
+    />
+  ) : (
+    <StatTile
+      label="Arrears"
+      value={metrics.arrearsCents != null ? (formatMoney(metrics.arrearsCents, metrics.currency) || '—') : '—'}
+      tone={metrics.arrearsCents > 0 ? 'danger' : 'default'}
+    />
+  )
   // GLOFOX-REACTIVE (mig 428) — membership pause, surfaced prominently
   // beside the name but framed NEUTRAL (amber, not the red "needs
   // attention" band): a paused member is on a planned freeze, not a
@@ -116,11 +169,12 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
                 Paused{pauseResumeLabel ? ` · resumes ${pauseResumeLabel}` : ''}
               </span>
             )}
-            {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle. */}
+            {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle
+                (WAITLIST.6: Cold only on a derived board). */}
             <PersonActionBar
               contactId={contact.id}
               locationId={contact.location_id}
-              actions={['message', 'task', 'sequence', 'cancel_form', 'cold']}
+              actions={headerActions(manual, actionGates)}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />
           </PersonHeader>
@@ -156,7 +210,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             ))}
             {funnel && nextClassAt && (
               <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700">
-                Next: {new Date(nextClassAt).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+                Next: {nextClassLabel(nextClassAt, timezone, viewerZone)}
               </span>
             )}
             {funnel && contact.trial_credits_remaining != null && (
@@ -174,6 +228,8 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
                 {cancelChip.label}
               </span>
             )}
+            {/* MIAHATCH.6 — Mia's open payment link; fetches after render, hides on failure. */}
+            <MiaPaymentLinkChip contactId={contact.id} />
             {/* HOST-MASTER.6 — mig 464 flag on host-sourced contacts. Chip
                 for everyone while the flag is on; toggle for Manager+. Not
                 rendered at all when the flag is off (non-managers never see
@@ -194,11 +250,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
           Overview metric grid). */}
       <div className="flex flex-wrap gap-2 mt-4">
         <StatTile label="Lifetime value" value={formatMoney(metrics.ltvCents, metrics.currency) || '—'} />
-        <StatTile
-          label="Arrears"
-          value={metrics.arrearsCents != null ? (formatMoney(metrics.arrearsCents, metrics.currency) || '—') : '—'}
-          tone={metrics.arrearsCents > 0 ? 'danger' : 'default'}
-        />
+        {arrearsStat}
         <StatTile label="Attended (30d)" value={metrics.attended} />
         <StatTile label="Deals" value={metrics.deals} />
         {journey?.inWindow && (

@@ -1,24 +1,34 @@
 import { describe, it, expect } from 'vitest'
-import { findOrCreateRaceContact } from './race-contact-linking'
+import { findOrCreateRaceContact, pickEmailHolder } from './race-contact-linking'
 import { ilikeMatches } from './like-escape.test-helpers'
 
-// Minimal chainable db mock. The helper issues two distinct contacts SELECTs:
-//   location-scoped: .eq('location_id', X).ilike('email', Y).maybeSingle()
-//   global:          .ilike('email', Y).maybeSingle()   (no location filter)
-// We tell them apart by whether .eq('location_id', ...) was called on the chain.
+// Minimal chainable db mock for the restrictToLocation path only (it never
+// reaches the org lookup, so no `locations` rows are modelled). A contacts
+// SELECT is location-scoped when .eq('location_id', …) or .in('location_id', …)
+// was called on the chain; any other contacts read (awaited list, or
+// .maybeSingle()) is an estate-wide lookup, which W0.6 removed —
+// `globalQueried` records one. W0.6b: the lookups are `.limit(2)` lists now,
+// so the awaited chain answers an array; `.maybeSingle()` stays modelled.
 function makeDb({ atLocation = null, anywhere = null, insertedId = 'new-id' }) {
   const calls = { globalQueried: false, inserted: null }
   const db = {
     from() {
       let locationFiltered = false
+      const answer = () => {
+        if (locationFiltered) return atLocation
+        calls.globalQueried = true
+        return anywhere
+      }
       return {
         select() { return this },
         eq(col) { if (col === 'location_id') locationFiltered = true; return this },
+        in(col) { if (col === 'location_id') locationFiltered = true; return this },
         ilike() { return this },
-        maybeSingle: async () => {
-          if (locationFiltered) return { data: atLocation }
-          calls.globalQueried = true
-          return { data: anywhere }
+        limit() { return this },
+        maybeSingle: async () => ({ data: answer() }),
+        then(resolve, reject) {
+          const row = answer()
+          return Promise.resolve({ data: row ? [row] : [], error: null }).then(resolve, reject)
         },
         insert(row) { calls.inserted = row; return { select: () => ({ single: async () => ({ data: { id: insertedId }, error: null }) }) } },
       }
@@ -30,19 +40,11 @@ function makeDb({ atLocation = null, anywhere = null, insertedId = 'new-id' }) {
 const base = { locationId: 'loc-1', email: 'Sam@Example.com', name: 'Sam Lee', phone: '0871234567' }
 
 describe('findOrCreateRaceContact — restrictToLocation', () => {
-  it('default: falls back to a global email match across locations', async () => {
-    const { db, calls } = makeDb({ atLocation: null, anywhere: { id: 'other-loc-contact' } })
-    const id = await findOrCreateRaceContact({ db, ...base })
-    expect(id).toBe('other-loc-contact')
-    expect(calls.globalQueried).toBe(true)
-    expect(calls.inserted).toBeNull()
-  })
-
-  it('restrictToLocation: skips the global match and creates within the location', async () => {
+  it('restrictToLocation: skips the sibling-location match and creates within the location', async () => {
     const { db, calls } = makeDb({ atLocation: null, anywhere: { id: 'other-loc-contact' }, insertedId: 'fresh-id' })
     const id = await findOrCreateRaceContact({ db, ...base, restrictToLocation: true })
     expect(id).toBe('fresh-id')
-    expect(calls.globalQueried).toBe(false) // never reaches the cross-location query
+    expect(calls.globalQueried).toBe(false) // never reaches any cross-location query
     expect(calls.inserted).toMatchObject({ location_id: 'loc-1', email: 'sam@example.com' })
   })
 
@@ -52,20 +54,27 @@ describe('findOrCreateRaceContact — restrictToLocation', () => {
   })
 })
 
-// LEADCAP.1 — a mock that models the REAL schema, unlike makeDb above: the
-// `contacts_email_unique` index (mig 008) is GLOBAL — UNIQUE (email) WHERE
-// email IS NOT NULL, with no location_id — so an email that exists ANYWHERE
-// makes the INSERT fail 23505. makeDb's insert always succeeded, which is
-// exactly why the prod break below sailed through CI for 38 days.
+// LEADCAP.1 / W0.6 — a mock that models the REAL schema, unlike makeDb above:
+// `contacts_email_org_unique` (mig 712) is UNIQUE (organization_id, email)
+// WHERE email IS NOT NULL — the row's organisation is its location's — so an
+// email that exists anywhere in the SAME organisation makes the INSERT fail
+// 23505, while another tenant's identical email does not. (Mig 008's index
+// was global, which is why a known email once 500'd a sibling studio's form
+// for 38 days under makeDb's always-succeeding insert.) It also counts every
+// contacts lookup issued with NO location filter — the estate-wide fallback
+// W0.6 removed, since a match outside the org is another tenant's person.
 function makeConstrainedDb({ contacts = [], locations = [] }) {
-  const state = { contacts: contacts.map((c) => ({ ...c })), insertAttempts: [] }
+  const state = { contacts: contacts.map((c) => ({ ...c })), insertAttempts: [], unscopedContactLookups: 0 }
+  const orgOf = (row) => locations.find((l) => l.id === row.location_id)?.organization_id ?? null
 
-  const query = (rows) => {
+  const query = (rows, { trackScope = false } = {}) => {
+    let scoped = false
+    let limit = null
     const q = {
       _rows: rows,
       select() { return q },
-      eq(col, val) { q._rows = q._rows.filter((r) => r[col] === val); return q },
-      in(col, vals) { q._rows = q._rows.filter((r) => vals.includes(r[col])); return q },
+      eq(col, val) { if (col === 'location_id') scoped = true; q._rows = q._rows.filter((r) => r[col] === val); return q },
+      in(col, vals) { if (col === 'location_id') scoped = true; q._rows = q._rows.filter((r) => vals.includes(r[col])); return q },
       // Real LIKE semantics, not lower(a) === lower(b): the equality form is
       // what the call site MEANS but not what Postgres does, and modelling it
       // as equality is what let the 2026-08-07 wildcard bug through a green
@@ -74,11 +83,18 @@ function makeConstrainedDb({ contacts = [], locations = [] }) {
         q._rows = q._rows.filter((r) => ilikeMatches(val, r[col]))
         return q
       },
-      maybeSingle: async () =>
-        q._rows.length > 1
+      limit(n) { limit = n; return q },
+      maybeSingle: async () => {
+        if (trackScope && !scoped) state.unscopedContactLookups += 1
+        return q._rows.length > 1
           ? { data: null, error: { code: 'PGRST116' } }
-          : { data: q._rows[0] || null, error: null },
-      then(resolve, reject) { return Promise.resolve({ data: q._rows, error: null }).then(resolve, reject) },
+          : { data: q._rows[0] || null, error: null }
+      },
+      then(resolve, reject) {
+        if (trackScope && !scoped) state.unscopedContactLookups += 1
+        const page = typeof limit === 'number' ? q._rows.slice(0, limit) : q._rows
+        return Promise.resolve({ data: page, error: null }).then(resolve, reject)
+      },
     }
     return q
   }
@@ -86,17 +102,19 @@ function makeConstrainedDb({ contacts = [], locations = [] }) {
   const db = {
     from(table) {
       if (table === 'locations') return query(locations)
-      const q = query(state.contacts)
+      const q = query(state.contacts, { trackScope: true })
       q.insert = (row) => ({
         select: () => ({
           single: async () => {
             state.insertAttempts.push(row)
             const email = String(row.email ?? '').toLowerCase()
-            // The global unique index — location_id is NOT part of it.
-            if (email && state.contacts.some((c) => String(c.email ?? '').toLowerCase() === email)) {
+            const org = orgOf(row)
+            // The per-organisation unique index: same org AND same email
+            // (a NULL organisation never collides, as in Postgres).
+            if (email && org && state.contacts.some((c) => orgOf(c) === org && String(c.email ?? '').toLowerCase() === email)) {
               return {
                 data: null,
-                error: { code: '23505', message: 'duplicate key value violates unique constraint "contacts_email_unique"' },
+                error: { code: '23505', message: 'duplicate key value violates unique constraint "contacts_email_org_unique"' },
               }
             }
             const created = { id: `new-${state.contacts.length + 1}`, ...row }
@@ -140,10 +158,12 @@ describe('findOrCreateRaceContact — restrictToOrg (LEADCAP.1)', () => {
     expect(state.insertAttempts).toHaveLength(0) // never attempt an insert we know will fail
   })
 
-  it('never links across organisations (the IDOR the location restriction closed)', async () => {
+  it('never links across organisations; the same email gets its OWN contact in this org (W0.6)', async () => {
     // Same email, but the only holder belongs to a DIFFERENT tenant. We must
-    // not resolve it — no consent/deal may be written against another org.
-    const { db } = makeConstrainedDb({
+    // not resolve it — no consent/deal may be written against another org —
+    // and under the per-org index (mig 712) nothing stops this org holding
+    // its own row for that person, where mig 008's global index 500'd.
+    const { db, state } = makeConstrainedDb({
       contacts: [{ id: 'ccf-contact', location_id: CCF, email: 'shared@example.com' }],
       locations: LOCATIONS,
     })
@@ -153,7 +173,9 @@ describe('findOrCreateRaceContact — restrictToOrg (LEADCAP.1)', () => {
     })
 
     expect(id).not.toBe('ccf-contact')
-    expect(id).toBeNull() // the global index still blocks the insert; fail closed, never cross tenants
+    expect(id).toBe('new-2') // the fixture's second row
+    expect(state.insertAttempts).toHaveLength(1)
+    expect(state.insertAttempts[0]).toMatchObject({ location_id: HATCH, email: 'shared@example.com' })
   })
 
   it('still creates a fresh contact for a brand-new email', async () => {
@@ -190,12 +212,14 @@ describe('findOrCreateRaceContact — restrictToOrg (LEADCAP.1)', () => {
     db.from = (table) => {
       const q = original(table)
       if (table === 'contacts' && firstLook) {
-        const realMaybe = q.maybeSingle
-        q.maybeSingle = async () => {
+        // W0.6b: the lookups are awaited `.limit(2)` lists, so the race is
+        // staged on the chain's settlement, not on `.maybeSingle()`.
+        const realThen = q.then
+        q.then = (resolve, reject) => {
           firstLook = false
           // Simulate the racing request landing between our lookup and insert.
           state.contacts.push({ id: 'race-winner', location_id: HATCH, email: 'race@example.com' })
-          return realMaybe.call(q)
+          return realThen.call(q, resolve, reject)
         }
       }
       return q
@@ -206,6 +230,104 @@ describe('findOrCreateRaceContact — restrictToOrg (LEADCAP.1)', () => {
     })
 
     expect(id).toBe('race-winner')
+  })
+})
+
+// W0.6 — org-wide is now the DEFAULT and the widest any caller resolves.
+// Before, a caller passing neither flag (team rosters, event registration)
+// fell through to an estate-wide lookup: a match at another tenant was
+// linked as if it were this person.
+describe('findOrCreateRaceContact — default scope is the organisation (W0.6)', () => {
+  it('links a sibling-location contact through an org-scoped lookup, never an estate-wide one', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'stillorgan-contact', location_id: STILLORGAN, email: 'x@example.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'x@example.com', name: 'X' })
+
+    expect(id).toBe('stillorgan-contact')
+    expect(state.unscopedContactLookups).toBe(0)
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('never links another organisation\'s contact: it creates this org\'s own row', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'ccf-contact', location_id: CCF, email: 'x@example.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'x@example.com', name: 'X' })
+
+    expect(id).toBe('new-2') // the fixture's second row
+    expect(state.unscopedContactLookups).toBe(0)
+    expect(state.insertAttempts[0]).toMatchObject({ location_id: HATCH, email: 'x@example.com' })
+  })
+
+  it('a 23505 on insert re-checks in-org and adopts the concurrent winner (no flag needed)', async () => {
+    const { db, state } = makeConstrainedDb({ contacts: [], locations: LOCATIONS })
+    const original = db.from
+    let firstLook = true
+    db.from = (table) => {
+      const q = original(table)
+      if (table === 'contacts' && firstLook) {
+        // W0.6b: the lookups are awaited `.limit(2)` lists, so the race is
+        // staged on the chain's settlement, not on `.maybeSingle()`.
+        const realThen = q.then
+        q.then = (resolve, reject) => {
+          firstLook = false
+          state.contacts.push({ id: 'race-winner', location_id: STILLORGAN, email: 'race@example.com' })
+          return realThen.call(q, resolve, reject)
+        }
+      }
+      return q
+    }
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'race@example.com', name: 'Racer' })
+
+    expect(id).toBe('race-winner')
+  })
+
+  it('restrictToLocation: a sibling-location holder is adopted when the INSERT collides in-org', async () => {
+    // Host-list subscribe: match is scoped to the master location, so the
+    // lookup misses a Stillorgan-held email, the INSERT hits the per-org
+    // index, and the re-check adopts that sibling row rather than 500ing.
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'stillorgan-contact', location_id: STILLORGAN, email: 'x@example.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'x@example.com', name: 'X', restrictToLocation: true })
+
+    expect(id).toBe('stillorgan-contact')
+    expect(state.insertAttempts).toHaveLength(1)
+  })
+
+  it('a 23505 with no in-org holder returns null rather than linking anywhere else', async () => {
+    // The index refused the row but nothing in this org holds the email: the
+    // only explanation is a row outside the organisation (or a half-applied
+    // schema). Fail closed; never resolve it to another tenant's person.
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'ccf-contact', location_id: CCF, email: 'x@example.com' }],
+      locations: LOCATIONS,
+    })
+    const original = db.from
+    db.from = (table) => {
+      const q = original(table)
+      if (table === 'contacts') {
+        q.insert = (row) => ({ select: () => ({ single: async () => {
+          state.insertAttempts.push(row)
+          return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "contacts_email_org_unique"' } }
+        } }) })
+      }
+      return q
+    }
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'x@example.com', name: 'X' })
+
+    expect(id).toBeNull()
+    expect(state.insertAttempts).toHaveLength(1)
+    expect(state.unscopedContactLookups).toBe(0)
   })
 })
 
@@ -276,10 +398,11 @@ describe('findOrCreateRaceContact — LIKE wildcards cannot select a contact', (
     expect(state.insertAttempts[0]).toMatchObject({ email: '%@example.com' })
   })
 
-  it('"%@%.%" does not reach across locations on the global fallback', async () => {
-    // The unrestricted path queries contacts with NO location filter, so an
-    // unescaped wildcard there could link any contact in the estate.
-    const { db } = makeConstrainedDb({
+  it('"%@%.%" does not reach across organisations on the default (org) path', async () => {
+    // The unrestricted path used to query contacts with NO location filter, so
+    // an unescaped wildcard there could link any contact in the estate; the
+    // org-scoped lookup must not either.
+    const { db, state } = makeConstrainedDb({
       contacts: [{ id: 'ccf-contact', location_id: CCF, email: 'buyer@ccfautos.com' }],
       locations: LOCATIONS,
     })
@@ -289,6 +412,7 @@ describe('findOrCreateRaceContact — LIKE wildcards cannot select a contact', (
     })
 
     expect(id).not.toBe('ccf-contact')
+    expect(state.unscopedContactLookups).toBe(0)
   })
 
   it('still links a genuine mixed-case match (escaping is behaviour-preserving)', async () => {
@@ -317,5 +441,158 @@ describe('findOrCreateRaceContact — LIKE wildcards cannot select a contact', (
 
     expect(id).toBe('underscored')
     expect(state.insertAttempts).toHaveLength(0)
+  })
+})
+
+// W0.6b — contacts_email_org_unique (mig 712) is case-SENSITIVE, so one
+// organisation can hold `Sam@Example.com` and `sam@example.com` as two rows.
+// Every lookup here is a case-INSENSITIVE ilike, which then matches both;
+// `.maybeSingle()` turned that into PGRST116 → "no match" → an INSERT that
+// 23505'd → a second PGRST116 → null. A known member at a studio with a
+// case-duplicate was refused on every race signup. The lookups are `.limit(2)`
+// lists now and the pick is deterministic.
+describe('findOrCreateRaceContact — two in-org holders differing only by case (W0.6b)', () => {
+  const UPPER = { id: 'c-upper', location_id: STILLORGAN, email: 'Sam@Example.com', created_at: '2026-02-01T00:00:00Z' }
+  const LOWER = { id: 'c-lower', location_id: STILLORGAN, email: 'sam@example.com', created_at: '2026-03-01T00:00:00Z' }
+
+  it('links the exact-case holder at this location rather than refusing', async () => {
+    const { db, state } = makeConstrainedDb({ contacts: [UPPER, LOWER], locations: LOCATIONS })
+
+    const id = await findOrCreateRaceContact({ db, locationId: STILLORGAN, email: 'Sam@Example.com', name: 'Sam' })
+
+    // The input is normalised to lower case, so the exact-case row is LOWER.
+    expect(id).toBe('c-lower')
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('with no exact-case holder, picks the oldest row, then the lowest id', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [
+        { id: 'c-b', location_id: STILLORGAN, email: 'SAM@example.com', created_at: '2026-02-01T00:00:00Z' },
+        { id: 'c-a', location_id: STILLORGAN, email: 'Sam@Example.com', created_at: '2026-02-01T00:00:00Z' },
+      ],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: STILLORGAN, email: 'sam@example.com', name: 'Sam' })
+
+    expect(id).toBe('c-a')
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('resolves two sibling-location holders through the org lookup deterministically', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [
+        { id: 'h-upper', location_id: STILLORGAN, email: 'Pat@Example.com', created_at: '2026-01-05T00:00:00Z' },
+        { id: 'h-lower', location_id: STILLORGAN, email: 'pat@example.com', created_at: '2026-01-01T00:00:00Z' },
+      ],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'PAT@example.com', name: 'Pat' })
+
+    expect(id).toBe('h-lower') // exact-case match on the normalised input wins over age
+    expect(state.unscopedContactLookups).toBe(0)
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('a 23505 with two in-org holders adopts one instead of returning null', async () => {
+    const { db, state } = makeConstrainedDb({ contacts: [], locations: LOCATIONS })
+    const original = db.from
+    let firstLook = true
+    db.from = (table) => {
+      const q = original(table)
+      if (table === 'contacts' && firstLook) {
+        const realThen = q.then
+        q.then = (resolve, reject) => {
+          firstLook = false
+          state.contacts.push(
+            { id: 'w-upper', location_id: STILLORGAN, email: 'Race@Example.com', created_at: '2026-01-02T00:00:00Z' },
+            { id: 'w-lower', location_id: STILLORGAN, email: 'race@example.com', created_at: '2026-01-03T00:00:00Z' },
+          )
+          return realThen.call(q, resolve, reject)
+        }
+      }
+      return q
+    }
+
+    const id = await findOrCreateRaceContact({ db, locationId: HATCH, email: 'race@example.com', name: 'Racer' })
+
+    expect(id).toBe('w-lower')
+  })
+})
+
+describe('pickEmailHolder (W0.6b)', () => {
+  it('returns null for no rows', () => {
+    expect(pickEmailHolder([], 'a@x.ie')).toBeNull()
+    expect(pickEmailHolder(null, 'a@x.ie')).toBeNull()
+  })
+  it('prefers the row whose stored email equals the normalised input exactly', () => {
+    const rows = [
+      { id: 'z', email: 'A@X.ie', created_at: '2020-01-01T00:00:00Z' },
+      { id: 'y', email: 'a@x.ie', created_at: '2026-01-01T00:00:00Z' },
+    ]
+    expect(pickEmailHolder(rows, 'a@x.ie')?.id).toBe('y')
+  })
+  it('otherwise the oldest created_at, then the lowest id', () => {
+    const rows = [
+      { id: 'b', email: 'A@X.ie', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'a', email: 'a@X.ie', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'c', email: 'A@x.ie', created_at: '2025-01-01T00:00:00Z' },
+    ]
+    expect(pickEmailHolder(rows, 'a@x.ie')?.id).toBe('c')
+    expect(pickEmailHolder(rows.slice(0, 2), 'a@x.ie')?.id).toBe('a')
+  })
+})
+
+// ORGCONTACTS.1 (plan Task 10) — a sibling-studio contact registering at this
+// studio's event has joined this studio: a contact_studios lead row here
+// (mig 764; src/lib/contact-studios.js). A contact AT this studio needs none
+// (its primary row is the contacts trigger's).
+describe('findOrCreateRaceContact — contact_studios lead row (ORGCONTACTS.1)', () => {
+  function makeOrgDb({ atLocation = null, sibling = null } = {}) {
+    const upserts = []
+    const db = {
+      from(table) {
+        let scope = null   // 'here' (.eq location_id) | 'org' (.in location_id)
+        let single = false
+        let write = null
+        const b = {
+          select() { return b },
+          eq(col) { if (col === 'location_id') scope = 'here'; return b },
+          in(col) { if (col === 'location_id') scope = 'org'; return b },
+          ilike() { return b }, limit() { return b }, gt() { return b }, order() { return b },
+          maybeSingle() { single = true; return b },
+          upsert(p, o) { write = { table, payload: p, onConflict: o?.onConflict }; upserts.push(write); return b },
+          update() { write = { table, op: 'update' }; return b },
+          insert() { return { select: () => ({ single: async () => ({ data: { id: 'new-id' }, error: null }) }) } },
+          then(res, rej) {
+            let out
+            if (write) out = { data: write.payload ? [write.payload] : [], error: null }
+            else if (table === 'locations') out = single ? { data: { organization_id: 'org-1' }, error: null } : { data: [{ id: 'loc-1' }, { id: 'loc-2' }], error: null }
+            else if (table === 'contacts') { const row = scope === 'here' ? atLocation : scope === 'org' ? sibling : null; out = { data: row ? [row] : [], error: null } }
+            else out = { data: [], error: null }
+            return Promise.resolve(out).then(res, rej)
+          },
+        }
+        return b
+      },
+    }
+    return { db, upserts }
+  }
+
+  it("a sibling-studio contact gets a lead row at this studio (source lead_form)", async () => {
+    const { db, upserts } = makeOrgDb({ sibling: { id: 'c-sib', email: 'sam@example.com', created_at: '2026-01-01' } })
+    const id = await findOrCreateRaceContact({ db, ...base })
+    expect(id).toBe('c-sib')
+    const row = upserts.find((u) => u.table === 'contact_studios')
+    expect(row.payload).toMatchObject({ contact_id: 'c-sib', location_id: 'loc-1', kind: 'lead', status: 'active', source: 'lead_form' })
+    expect(row.onConflict).toBe('contact_id,location_id')
+  })
+
+  it('a contact at this studio gets no upsert (the contacts trigger made its row)', async () => {
+    const { db, upserts } = makeOrgDb({ atLocation: { id: 'c-here', email: 'sam@example.com', created_at: '2026-01-01' } })
+    expect(await findOrCreateRaceContact({ db, ...base })).toBe('c-here')
+    expect(upserts).toEqual([])
   })
 })

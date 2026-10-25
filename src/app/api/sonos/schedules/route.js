@@ -12,6 +12,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
 import { WindowBase, NOT_SAME_BOUNDARY, windowsOverlapIssue } from '@/lib/schedule/windows'
 
 export const runtime = 'nodejs'
@@ -63,7 +64,11 @@ export async function GET() {
       cap: MAX_SCHEDULES_PER_LOCATION,
     })
   }
-  return NextResponse.json({ success: true, schedules: data || [] })
+  // TZ.10 — the zone these schedules' windows are wall clock in, so the page's
+  // health check and "off until midnight" use the studio's clock, as the cron
+  // does. It travels WITH the schedules, so the two can never be for
+  // different locations.
+  return NextResponse.json({ success: true, schedules: data || [], timezone: zoneOfLocation(user.activeLocation) })
 }
 
 export async function POST(request) {

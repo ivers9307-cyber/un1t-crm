@@ -1,35 +1,35 @@
 // /api/cars/[id]/documents — multipart upload of an invoice or
-// supporting image. Stored in the private 'car-documents' Supabase
+// supporting image. CARDOCUPLOAD.1 (C124): the web picker no longer posts
+// here (Vercel refuses a body over ~4.5 MB before this runs); it uploads
+// through …/documents/sign + …/documents/finalise. This stays for other
+// callers and keeps the same rules. Stored in the private 'car-documents' Supabase
 // bucket; access goes only through this API which uses the service
 // role client (RLS doesn't apply to that path, but we re-check
 // location ownership manually before returning anything).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser } from '@/lib/auth'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
-import { enqueueFromCarDocument } from '@/lib/invoices-queue/enqueue'
-import { logWarn } from '@/lib/log'
+import { carDocumentsGate } from '@/lib/car-documents-gate'
+import { recordCarDocument } from '@/lib/car-document-record'
+import { sniffMimeFromBytes } from '@/lib/invoice-extraction'
+import {
+  CAR_DOCUMENT_MAX_BYTES, CAR_DOCUMENT_TYPES_LABEL, resolveCarDocumentType, sniffCarDocumentHeif,
+} from '@/lib/car-document-media'
 
 export const runtime = 'nodejs'
 
 const VALID_TYPES = new Set(ALL_DOCUMENT_TYPES.map(t => t.key))
-const MAX_BYTES = 25 * 1024 * 1024  // 25 MB
 
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'car_processing')) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
   const db = createServerClient()
-  const { data: car } = await db.from('cars').select('id, location_id').eq('id', params.id).single()
-  if (!car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const guard = assertLocationAccessOr404(user, car.location_id)
-  if (guard) return guard
+  // CARDOCUPLOAD.1 — the gate is shared with …/documents/sign and …/finalise.
+  const gate = await carDocumentsGate(user, db, params.id)
+  if (gate.response) return gate.response
+  const { car } = gate
 
   const formData = await request.formData()
   const file = formData.get('file')
@@ -42,8 +42,20 @@ export async function POST(request, props) {
   if (!VALID_TYPES.has(docType)) {
     return NextResponse.json({ success: false, error: 'Invalid doc_type' }, { status: 400 })
   }
-  if (file.size > MAX_BYTES) {
-    return NextResponse.json({ success: false, error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB)` }, { status: 400 })
+  if (file.size > CAR_DOCUMENT_MAX_BYTES) {
+    return NextResponse.json({ success: false, error: `File too large (max ${CAR_DOCUMENT_MAX_BYTES / 1024 / 1024} MB)` }, { status: 400 })
+  }
+
+  // CARDOCBUCKET.1 — the same seven types the bucket accepts (mig 687), so a
+  // refused file is a clear 400 here, not a Storage error. An unlabelled
+  // file (no type, or application/octet-stream) is judged by its first bytes
+  // (a .heic from Chrome/Firefox on Windows arrives with no type). A legacy
+  // alias (image/jpg, application/x-pdf) is stored, and sent to Storage, as
+  // its canonical type, which is what the bucket's allowed_mime_types checks.
+  const buffer = Buffer.from(await file.arrayBuffer())
+  const contentType = resolveCarDocumentType(file.type, sniffMimeFromBytes(buffer) || sniffCarDocumentHeif(buffer))
+  if (!contentType) {
+    return NextResponse.json({ success: false, error: `Unsupported file type (${CAR_DOCUMENT_TYPES_LABEL})` }, { status: 400 })
   }
 
   // Upload to storage. Path includes car_id so files are grouped.
@@ -53,43 +65,22 @@ export async function POST(request, props) {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
   const storagePath = `${car.id}/${docType}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}${ext.startsWith('.' + safeName.split('.').pop()) ? '' : ext}`
 
-  const buffer = Buffer.from(await file.arrayBuffer())
   const { error: uploadErr } = await db.storage
     .from('car-documents')
     .upload(storagePath, buffer, {
-      contentType: file.type || 'application/octet-stream',
+      contentType,
       upsert: false,
     })
   if (uploadErr) {
     return NextResponse.json({ success: false, error: `Upload failed: ${uploadErr.message}` }, { status: 500 })
   }
 
-  const { data: doc, error: insertErr } = await db.from('car_documents').insert({
-    car_id: car.id,
-    doc_type: docType,
-    storage_path: storagePath,
-    filename: file.name,
-    mime_type: file.type || null,
-    size_bytes: file.size,
-    uploaded_by: user.id,
-    notes,
-  }).select().single()
+  // CARDOCUPLOAD.1 — the row, the orphan rollback and the bookkeeper queue
+  // (INVOICES-QUEUE.1) are shared with …/documents/finalise.
+  const rec = await recordCarDocument(db, {
+    car, docType, storagePath, filename: file.name, mimeType: contentType, sizeBytes: file.size, userId: user.id, notes,
+  })
+  if (!rec.ok) return NextResponse.json({ success: false, error: rec.error }, { status: rec.conflict ? 409 : 500 })
 
-  if (insertErr) {
-    // Roll back the storage upload so we don't leak orphan files.
-    await db.storage.from('car-documents').remove([storagePath]).catch(() => {})
-    return NextResponse.json({ success: false, error: insertErr.message }, { status: 500 })
-  }
-
-  // INVOICES-QUEUE.1 — car documents auto-queue on upload (no
-  // explicit approval step; same shape as supplier emails).
-  // Bookkeeper reviews in /invoices before Xero forward. Best-
-  // effort — upload succeeded, queue insert failure shouldn't
-  // un-do that; ops can retry from PR 2's queue UI.
-  const enq = await enqueueFromCarDocument(doc.id)
-  if (!enq.ok) {
-    logWarn('car-documents-upload', 'enqueue failed', { err: enq.error, documentId: doc.id })
-  }
-
-  return NextResponse.json({ success: true, data: doc, queue_warning: enq.ok ? undefined : enq.error }, { status: 201 })
+  return NextResponse.json({ success: true, data: rec.doc, queue_warning: rec.queueWarning }, { status: 201 })
 }

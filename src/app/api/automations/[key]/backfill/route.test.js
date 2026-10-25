@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null) }))
+// ROLESWEEP.1a — the route judges MANAGER_ROLES at the location with the real
+// per-location helpers, so the fixtures carry rolesByLocation.
+vi.mock('@/lib/auth', async () => {
+  const { hasRoleAtLocation, hasRoleAtAnyLocation } = await import('@/lib/role-at-location')
+  return { getCurrentUser: vi.fn(), assertLocationAccess: vi.fn(() => null), hasRoleAtLocation, hasRoleAtAnyLocation }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/automations/glofox-backfill', () => ({ runGlofoxBackfillBatch: vi.fn() }))
 
@@ -13,12 +18,12 @@ const params = (key = 'glofox_lead_provisioning') => ({ params: Promise.resolve(
 
 describe('GET /api/automations/[key]/backfill (count)', () => {
   it('403 for non-manager', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'staff' })
+    getCurrentUser.mockResolvedValue({ role: 'staff', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'staff' } })
     const res = await GET(new Request('http://x/api/automations/glofox_lead_provisioning/backfill?location_id=a0000000-0000-0000-0000-000000000001'), params())
     expect(res.status).toBe(403)
   })
   it('returns the eligible count', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1', locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
+    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1', locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }], rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'owner' } })
     createServerClient.mockReturnValue({ rpc: vi.fn(async () => ({ data: 7, error: null })) })
     const res = await GET(new Request('http://x/api/automations/glofox_lead_provisioning/backfill?location_id=a0000000-0000-0000-0000-000000000001'), params())
     const body = await res.json()
@@ -28,17 +33,17 @@ describe('GET /api/automations/[key]/backfill (count)', () => {
 
 describe('POST /api/automations/[key]/backfill (run batch)', () => {
   it('403 for non-manager', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'staff' })
+    getCurrentUser.mockResolvedValue({ role: 'staff', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'staff' } })
     const res = await POST(new Request('http://x', { method: 'POST', body: JSON.stringify({ location_id: 'a0000000-0000-0000-0000-000000000001' }) }), params())
     expect(res.status).toBe(403)
   })
   it('400 on unknown key', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1' })
+    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'owner' } })
     const res = await POST(new Request('http://x', { method: 'POST', body: JSON.stringify({ location_id: 'a0000000-0000-0000-0000-000000000001' }) }), params('nope'))
     expect(res.status).toBe(400)
   })
   it('runs a batch and returns the summary', async () => {
-    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1' })
+    getCurrentUser.mockResolvedValue({ role: 'owner', id: 'u1', rolesByLocation: { 'a0000000-0000-0000-0000-000000000001': 'owner' } })
     createServerClient.mockReturnValue({})
     runGlofoxBackfillBatch.mockResolvedValue({ processed: 2, created: 2, linked: 0, needs_review: 0, failed: 0, skipped: 0, remaining: 5 })
     const res = await POST(new Request('http://x', { method: 'POST', body: JSON.stringify({ location_id: 'a0000000-0000-0000-0000-000000000001' }) }), params())

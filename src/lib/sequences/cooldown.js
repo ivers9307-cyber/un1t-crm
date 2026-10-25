@@ -53,7 +53,9 @@ export function findBlockedByCooldown(history, cooldownDays, nowMs = Date.now())
   const lastEndByContact = new Map()
   for (const h of history) {
     if (!h?.contact_id) continue
-    const end = h.last_processed_at || h.created_at
+    // ENROLFIX.1 — the real row carries enrolled_at (there is no created_at
+    // on sequence_enrollments); created_at is kept only for older callers.
+    const end = h.last_processed_at || h.enrolled_at || h.created_at
     if (!end) continue
     const prior = lastEndByContact.get(h.contact_id)
     if (!prior || end > prior) lastEndByContact.set(h.contact_id, end)
@@ -96,9 +98,9 @@ export function planReenrolments(history, cooldownDays, sourceRef, nowMs = Date.
   const latest = new Map()
   for (const h of history) {
     if (!h?.contact_id) continue
-    const end = h.last_processed_at || h.created_at || ''
+    const end = h.last_processed_at || h.enrolled_at || h.created_at || ''
     const prior = latest.get(h.contact_id)
-    if (!prior || end > (prior.last_processed_at || prior.created_at || '')) latest.set(h.contact_id, h)
+    if (!prior || end > (prior.last_processed_at || prior.enrolled_at || prior.created_at || '')) latest.set(h.contact_id, h)
   }
   const blocked = findBlockedByCooldown(history, cooldownDays, nowMs)
   for (const [cid, row] of latest) {

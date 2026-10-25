@@ -23,6 +23,8 @@ import {
   listMyIssues,
   buildAttachmentPath,
   validateSubmission,
+  verifyIssuePhotoPaths,
+  MAX_PHOTOS_PER_ISSUE,
 } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
 // REPORT-ISSUE.2 — handler notification on submit. Best-effort.
@@ -49,34 +51,77 @@ export const POST = withAuth(
       )
     }
 
-    let form
-    try { form = await request.formData() }
-    catch {
-      return NextResponse.json(
-        { success: false, error: 'Expected multipart/form-data.' },
-        { status: 400 }
-      )
-    }
+    // REPORT-ISSUE.3 — two body shapes reach this route:
+    //   JSON       the current app. The photos are already in the bucket:
+    //              /api/issues/upload-sign minted a slot per photo and the
+    //              device uploaded the bytes straight to Storage, so the
+    //              body carries paths, not files.
+    //   multipart  the bundle shipped before that OTA, which posts the
+    //              photo bytes inline. Kept working on purpose — a phone
+    //              that has not taken the update must still be able to
+    //              report a problem.
+    // Photo submits on the multipart path have not reached this route from
+    // a device since the SDK 57 upgrade (the request dies on the phone), so
+    // treat that branch as legacy: text-only is what still flows through it.
+    const isJsonMode = (request.headers.get('content-type') || '').includes('application/json')
 
-    const description = String(form.get('description') || '')
-    // Photos come in as numbered keys: photo_0, photo_1, photo_2.
-    // Keeps ordering deterministic across the network and means we
-    // don't depend on FormData.getAll() ordering across runtimes.
-    const photoFiles = []
-    for (let i = 0; i < 3; i++) {
-      const f = form.get(`photo_${i}`)
-      if (f && typeof f === 'object' && 'size' in f && f.size > 0) {
-        photoFiles.push(f)
+    let description = ''
+    let photoMeta = []      // { filename, size, type } — what gets validated
+    let jsonPhotos = []     // JSON mode: { path, name, size, mime }
+    let photoFiles = []     // multipart mode: the inline File objects
+
+    if (isJsonMode) {
+      let body
+      try { body = await request.json() }
+      catch {
+        return NextResponse.json(
+          { success: false, error: 'Expected a JSON body.' },
+          { status: 400 }
+        )
       }
+      description = String(body?.description || '')
+      // One past the cap, so four photos are REFUSED rather than quietly
+      // truncated to three.
+      const raw = Array.isArray(body?.photos)
+        ? body.photos.slice(0, MAX_PHOTOS_PER_ISSUE + 1)
+        : []
+      jsonPhotos = raw.map((p) => ({
+        path: String(p?.path || ''),
+        name: String(p?.file_name || 'photo.jpg'),
+        size: Number(p?.size),
+        mime: String(p?.mime || '').toLowerCase(),
+      }))
+      photoMeta = jsonPhotos.map((p) => ({ filename: p.name, size: p.size, type: p.mime }))
+    } else {
+      let form
+      try { form = await request.formData() }
+      catch {
+        return NextResponse.json(
+          { success: false, error: 'Expected multipart/form-data.' },
+          { status: 400 }
+        )
+      }
+
+      description = String(form.get('description') || '')
+      // Photos come in as numbered keys: photo_0, photo_1, photo_2.
+      // Keeps ordering deterministic across the network and means we
+      // don't depend on FormData.getAll() ordering across runtimes.
+      for (let i = 0; i < 3; i++) {
+        const f = form.get(`photo_${i}`)
+        if (f && typeof f === 'object' && 'size' in f && f.size > 0) {
+          photoFiles.push(f)
+        }
+      }
+
+      // Pure validation — description + file metadata only. The bytes
+      // get sniffed by Supabase storage on upload.
+      photoMeta = photoFiles.map((f) => ({
+        filename: f.name || 'photo',
+        size: f.size,
+        type: (f.type || '').toLowerCase(),
+      }))
     }
 
-    // Pure validation — description + file metadata only. The bytes
-    // get sniffed by Supabase storage on upload.
-    const photoMeta = photoFiles.map((f) => ({
-      filename: f.name || 'photo',
-      size: f.size,
-      type: (f.type || '').toLowerCase(),
-    }))
     const v = validateSubmission({ description, photos: photoMeta })
     if (!v.ok) {
       return NextResponse.json(
@@ -85,53 +130,72 @@ export const POST = withAuth(
       )
     }
 
-    // Mint the issue id upfront so we can namespace the storage
-    // path by issue_id without a round-trip. Same trick the FTE
-    // expense route uses (it round-trips because that pattern
-    // pre-dates this one — we improve here).
-    const issueId = crypto.randomUUID()
-    const uploadedPaths = []  // for rollback if any upload fails
+    // Storage objects this request is responsible for — uploaded inline
+    // (multipart) or uploaded by the device against a slot we minted
+    // (JSON). Either way they get removed if the row never lands.
+    const uploadedPaths = []
+    let attachmentRows = []
 
-    const attachmentRows = []
-    for (let i = 0; i < photoFiles.length; i++) {
-      const file = photoFiles[i]
-      const attachmentId = crypto.randomUUID()
-      const path = buildAttachmentPath({
-        locationId,
-        issueId,
-        attachmentId,
-        filename: file.name || `photo-${i}`,
-      })
-      const ab = await file.arrayBuffer()
-      const { error: upErr } = await db.storage
-        .from(STORAGE_BUCKET)
-        .upload(path, Buffer.from(ab), {
-          contentType: file.type || 'image/jpeg',
-          upsert: false,
-        })
-      if (upErr) {
-        // Roll back any prior successful uploads so we don't leave
-        // orphan bytes in the bucket. Best-effort; storage delete
-        // failures get logged but don't change the response.
-        for (const p of uploadedPaths) {
-          await db.storage.from(STORAGE_BUCKET).remove([p]).catch(() => {})
-        }
+    if (isJsonMode) {
+      // One gate, shared with the equipment-inspection submit: paths must
+      // be slots minted for this location, unclaimed, unique within the
+      // submission and actually present, with size + mime taken from
+      // Storage rather than the client's claim.
+      const verified = await verifyIssuePhotoPaths(db, { locationId, photos: jsonPhotos })
+      if (!verified.ok) {
         return NextResponse.json(
-          { success: false, error: `Photo ${i + 1} upload failed: ${upErr.message}`, code: 'photo_upload_failed' },
-          { status: 500 }
+          { success: false, error: verified.error, ...(verified.code ? { code: verified.code } : {}) },
+          { status: verified.status }
         )
       }
-      uploadedPaths.push(path)
-      attachmentRows.push({
-        // Note: we don't pass the pre-minted id — the DB will
-        // generate one. The path already contains a unique segment
-        // (the attachmentId we used) so the bucket browseability
-        // story still works.
-        storage_path: path,
-        bucket:       STORAGE_BUCKET,
-        size_bytes:   file.size,
-        mime_type:    (file.type || 'image/jpeg').toLowerCase(),
-      })
+      attachmentRows = verified.attachments
+      uploadedPaths.push(...attachmentRows.map((a) => a.storage_path))
+    } else {
+      // Mint the issue id upfront so we can namespace the storage
+      // path by issue_id without a round-trip. Same trick the FTE
+      // expense route uses (it round-trips because that pattern
+      // pre-dates this one — we improve here).
+      const issueId = crypto.randomUUID()
+      for (let i = 0; i < photoFiles.length; i++) {
+        const file = photoFiles[i]
+        const attachmentId = crypto.randomUUID()
+        const path = buildAttachmentPath({
+          locationId,
+          issueId,
+          attachmentId,
+          filename: file.name || `photo-${i}`,
+        })
+        const ab = await file.arrayBuffer()
+        const { error: upErr } = await db.storage
+          .from(STORAGE_BUCKET)
+          .upload(path, Buffer.from(ab), {
+            contentType: file.type || 'image/jpeg',
+            upsert: false,
+          })
+        if (upErr) {
+          // Roll back any prior successful uploads so we don't leave
+          // orphan bytes in the bucket. Best-effort; storage delete
+          // failures get logged but don't change the response.
+          for (const p of uploadedPaths) {
+            await db.storage.from(STORAGE_BUCKET).remove([p]).catch(() => {})
+          }
+          return NextResponse.json(
+            { success: false, error: `Photo ${i + 1} upload failed: ${upErr.message}`, code: 'photo_upload_failed' },
+            { status: 500 }
+          )
+        }
+        uploadedPaths.push(path)
+        attachmentRows.push({
+          // Note: we don't pass the pre-minted id — the DB will
+          // generate one. The path already contains a unique segment
+          // (the attachmentId we used) so the bucket browseability
+          // story still works.
+          storage_path: path,
+          bucket:       STORAGE_BUCKET,
+          size_bytes:   file.size,
+          mime_type:    (file.type || 'image/jpeg').toLowerCase(),
+        })
+      }
     }
 
     const out = await insertIssueWithAttachments(db, {

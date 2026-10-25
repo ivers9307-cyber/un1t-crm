@@ -83,6 +83,8 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   booking_form:                   VOLUNTARY,
   waitlist_form:                  VOLUNTARY,
   start_class:                    VOLUNTARY,
+  paid_trial:                     VOLUNTARY, // PAIDTRIAL.1 — the /trial purchase form's consent tick
+  donation:                       VOLUNTARY, // CHARITY.5 — the Donate card's marketing opt-in tick
   host_mailing_list:              VOLUNTARY,
   mailing_list:                   VOLUNTARY,
   whatsapp_flow:                  VOLUNTARY,
@@ -114,6 +116,13 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   // decision, and counting it once per duplicate record would inflate the
   // NET LIST CHANGE headline by however many duplicates we happen to hold.
   duplicate_propagation:          POLICY,
+  // UN1TDUAL.3 — the un1t.online sync gave a contact linked from another
+  // studio its marketing-preferences row here. A sync rule created it, not the
+  // person's choice, so it must not move the NET LIST CHANGE headline.
+  un1t_online_sync:               POLICY,
+  // GLOFOXSIBLING.1 — the same, from the Glofox sync: a Glofox member whose
+  // contact lives at another studio gets the Glofox studio's row.
+  glofox_sync:                    POLICY,
 
   // ── bulk: one-off migrations and corrections ──────────────────────
   bulk_import:                    BULK,

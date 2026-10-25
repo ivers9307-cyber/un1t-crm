@@ -14,6 +14,30 @@
 // attribution must never break a webhook or a booking.
 
 import { createHash } from 'crypto'
+import { websiteEventToken } from './meta-conversions-settings.js'
+import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
+
+// WAORGNUMBER.1 — the token + WABA of the number switched on at this studio
+// (link default first, else the newest switch-on), whatever its home studio:
+// an organisation number sends a studio's events with the one token. A failed
+// lookup is "no number", logged, as the old unchecked whatsapp_numbers read
+// was: attribution must never break a webhook or a booking.
+// CAPILOG.1 — every reason a website event was NOT sent is one warn line;
+// before this the gates returned in silence and a dataset with no server
+// events could not be explained from the logs.
+function notSent(reason, ctx) {
+  console.warn('[meta-capi] website event not sent:', reason, ctx)
+  return { sent: false, reason }
+}
+
+async function studioNumber(locationId) {
+  try {
+    return await getLocationWhatsAppNumberConfig(locationId)
+  } catch (e) {
+    console.error('[meta-capi] WhatsApp number lookup failed:', e?.message)
+    return null
+  }
+}
 
 export function buildBusinessMessagingEvent({ eventName, ctwaClid, wabaId, eventTime, contentName }) {
   const event = {
@@ -56,25 +80,20 @@ export async function sendCtwaConversion(db, { locationId, contactId, eventName,
     const datasetId = loc?.settings?.meta_ads?.dataset_id
     if (!datasetId) return { sent: false, reason: 'no_dataset' }
 
-    const { data: num } = await db.from('whatsapp_numbers')
-      .select('access_token, business_account_id')
-      .eq('location_id', locationId)
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle()
-    if (!num?.access_token) return { sent: false, reason: 'no_token' }
+    const num = await studioNumber(locationId)
+    if (!num?.token) return { sent: false, reason: 'no_token' }
 
     const event = buildBusinessMessagingEvent({
       eventName,
       ctwaClid,
-      wabaId: num.business_account_id,
+      wabaId: num.businessAccountId,
       eventTime: Math.floor(Date.now() / 1000),
       contentName,
     })
     const res = await fetch(`https://graph.facebook.com/v21.0/${datasetId}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: [event], access_token: num.access_token }),
+      body: JSON.stringify({ data: [event], access_token: num.token }),
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {
@@ -91,25 +110,37 @@ export async function sendCtwaConversion(db, { locationId, contactId, eventName,
 // ——— Website events (the /start + /free-class funnels) ———
 
 /** Meta match normalization: trimmed + lowercased; null when not an email. */
-export function normalizeEmailForMeta(email) {
-  const e = String(email || '').trim().toLowerCase()
-  return e.includes('@') ? e : null
-}
-
-/**
- * Meta match normalization: digits only with country code — Irish national
- * format (08x…) becomes 3538x…, international 00-prefixes are stripped.
- * Null when too short to be a real number.
- */
-export function normalizePhoneForMeta(phone) {
-  let d = String(phone || '').replace(/\D/g, '')
-  if (d.startsWith('00')) d = d.slice(2)
-  else if (d.startsWith('0')) d = `353${d.slice(1)}`
-  return d.length >= 8 ? d : null
-}
+// Match-key normalisation lives in meta-match-normalize.js (client-safe, the
+// Pixel's manual advanced matching uses the same rules); re-exported here so
+// every existing importer keeps working.
+export { normalizeEmailForMeta, normalizePhoneForMeta, normalizeNameForMeta } from '@/lib/meta-match-normalize'
+import { normalizeEmailForMeta, normalizePhoneForMeta, normalizeNameForMeta } from '@/lib/meta-match-normalize'
 
 export function sha256Hex(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+/**
+ * MATCHQUALITY.1 — Meta's browser id cookie value (`_fbp`), read by the form
+ * from document.cookie once the Pixel has loaded (consent-gated, so often
+ * absent). Sent unhashed. Null for anything but the documented shape.
+ */
+export function fbpIfValid(fbp) {
+  const v = typeof fbp === 'string' ? fbp.trim() : ''
+  return /^fb\.1\.\d{6,}\.\d{1,}$/.test(v) && v.length <= 100 ? v : null
+}
+
+/**
+ * METADATASET.1 — Meta's click id cookie value for an ad click, built from the
+ * `fbclid` the landing URL carried: `fb.1.<ms>.<fbclid>`. It is what lets
+ * Meta credit a server-side event to the ad that was clicked, and the funnel
+ * needs no pixel cookie (and so no cookie consent) to have it. Null for
+ * anything that is not a plausible fbclid.
+ */
+export function fbcFromFbclid(fbclid, nowMs = Date.now()) {
+  const v = typeof fbclid === 'string' ? fbclid.trim() : ''
+  if (!v || v.length > 500 || !/^[A-Za-z0-9_-]+$/.test(v)) return null
+  return `fb.1.${nowMs}.${v}`
 }
 
 /**
@@ -117,13 +148,32 @@ export function sha256Hex(value) {
  * Returns null when neither email nor phone normalizes — an event Meta
  * can't match is not worth sending.
  */
-export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName }) {
+export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp, value, currency, orderId, contentType }) {
   const em = normalizeEmailForMeta(email)
   const ph = normalizePhoneForMeta(phone)
   if (!em && !ph) return null
   const user_data = {}
   if (em) user_data.em = [sha256Hex(em)]
   if (ph) user_data.ph = [sha256Hex(ph)]
+  // MATCHQUALITY.1 — more hashed identifiers raise Meta's event match
+  // quality, which is what decides how well it can find more people like
+  // the ones who convert. Name as given on the form; country inferred only
+  // from an Irish-prefixed phone (never guessed otherwise); our contact id
+  // as external_id so every later event about the same person joins up.
+  const fn = normalizeNameForMeta(firstName)
+  const ln = normalizeNameForMeta(lastName)
+  if (fn) user_data.fn = [sha256Hex(fn)]
+  if (ln) user_data.ln = [sha256Hex(ln)]
+  if (ph && ph.startsWith('353')) user_data.country = [sha256Hex('ie')]
+  if (typeof externalId === 'string' && externalId.trim()) user_data.external_id = [sha256Hex(externalId.trim())]
+  const fbpValue = fbpIfValid(fbp)
+  if (fbpValue) user_data.fbp = fbpValue
+  // METADATASET.1 — the three things that tie a server event back to the ad
+  // click and the browser it came from. All optional and sent as given (Meta
+  // does not want these hashed); an event without them is still sent.
+  if (typeof fbc === 'string' && fbc) user_data.fbc = fbc
+  if (typeof clientIp === 'string' && clientIp && clientIp !== 'unknown') user_data.client_ip_address = clientIp
+  if (typeof userAgent === 'string' && userAgent) user_data.client_user_agent = userAgent.slice(0, 512)
   const event = {
     event_name: eventName,
     event_time: eventTime,
@@ -132,7 +182,20 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
   }
   if (eventSourceUrl) event.event_source_url = eventSourceUrl
   if (eventId) event.event_id = eventId
-  if (contentName) event.custom_data = { content_name: contentName }
+  // PURCHASEVALUE.1 — the money on a server Purchase: Meta's Sales
+  // optimisation and its ROAS column read value + currency off the event,
+  // and the browser copy (which carries them) only exists when the visitor
+  // accepted cookies. order_id is our purchase id, so a replayed send is one
+  // order to Meta, and content_type says the content_name is a product.
+  const custom = {}
+  if (contentName) custom.content_name = contentName
+  if (Number.isFinite(value) && value >= 0) {
+    custom.value = Math.round(value * 100) / 100
+    custom.currency = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'EUR'
+  }
+  if (typeof orderId === 'string' && orderId.trim()) custom.order_id = orderId.trim()
+  if (typeof contentType === 'string' && contentType.trim()) custom.content_type = contentType.trim()
+  if (Object.keys(custom).length) event.custom_data = custom
   return event
 }
 
@@ -140,39 +203,51 @@ export function buildWebsiteEvent({ eventName, eventTime, email, phone, eventSou
  * Fire a website conversion event for a lead/booking. Same gates as the CTWA
  * path: no dataset_id or no number token → clean no-op. Never throws.
  */
-export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName }) {
+export async function sendWebsiteConversion(db, { locationId, eventName, email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent, firstName, lastName, externalId, fbp, value, currency, orderId, contentType }) {
   try {
     if (!locationId) return { sent: false, reason: 'no_location' }
     const event = buildWebsiteEvent({
       eventName,
       eventTime: Math.floor(Date.now() / 1000),
-      email, phone, eventSourceUrl, eventId, contentName,
+      email, phone, eventSourceUrl, eventId, contentName, fbc, clientIp, userAgent,
+      firstName, lastName, externalId, fbp, value, currency, orderId, contentType,
     })
-    if (!event) return { sent: false, reason: 'no_identifiers' }
+    if (!event) return notSent('no_identifiers', { eventName, locationId, eventId })
 
-    const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    const { data: loc, error: locErr } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    if (locErr) return notSent('settings_unreadable', { eventName, locationId, eventId, err: locErr.message })
     const datasetId = loc?.settings?.meta_ads?.dataset_id
-    if (!datasetId) return { sent: false, reason: 'no_dataset' }
+    if (!datasetId) return notSent('no_dataset', { eventName, locationId, eventId })
 
-    const { data: num } = await db.from('whatsapp_numbers')
-      .select('access_token, business_account_id')
-      .eq('location_id', locationId)
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle()
-    if (!num?.access_token) return { sent: false, reason: 'no_token' }
+    // METADATASET.1 — the dataset's own token when the location stores one
+    // (a studio whose dataset sits in a different Meta business from any
+    // WhatsApp account, or that has no WhatsApp number at all). Otherwise
+    // the WhatsApp number token, as before.
+    let accessToken = websiteEventToken(loc?.settings, null)
+    let tokenSource = accessToken ? 'dataset' : null
+    if (!accessToken) {
+      const num = await studioNumber(locationId)
+      accessToken = websiteEventToken(null, num?.token)
+      if (accessToken) tokenSource = 'whatsapp_number'
+    }
+    if (!accessToken) return notSent('no_token', { eventName, locationId, datasetId, eventId })
 
     const res = await fetch(`https://graph.facebook.com/v21.0/${datasetId}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: [event], access_token: num.access_token }),
+      body: JSON.stringify({ data: [event], access_token: accessToken }),
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {
-      console.error('[meta-capi] website event send failed:', json.error?.message || `HTTP ${res.status}`)
+      console.error('[meta-capi] website event send failed:', json.error?.message || `HTTP ${res.status}`, { eventName, datasetId, eventId })
       return { sent: false, reason: 'api_error' }
     }
-    return { sent: true }
+    // CAPILOG.1 — one line per accepted send, so "did Meta get it" is
+    // answerable from the runtime log rather than from Events Manager alone
+    // (the Stillorgan dataset showed no server event after a live Lead on
+    // 21 Oct 2026 and nothing here said why).
+    console.log('[meta-capi] website event sent', { eventName, datasetId, eventId, tokenSource, events_received: json.events_received ?? null })
+    return { sent: true, events_received: json.events_received ?? null }
   } catch (e) {
     console.error('[meta-capi] website conversion failed:', e?.message)
     return { sent: false, reason: 'exception' }

@@ -92,7 +92,7 @@ Live after merge: open the 4 Sep report as Colm and check the Links section; pre
 
 ## Rollout
 
-1. Apply mig 594 via Supabase MCP.
+1. Apply mig 594 via Supabase MCP. (Done 7 Sep 2026; the file is 772 since the October merge, because 594 is main's pipelines table.)
 2. Merge the PR.
 3. Run the click backfill by hand for the three historic campaigns.
 4. If section 10 is in: restore the three contacts.

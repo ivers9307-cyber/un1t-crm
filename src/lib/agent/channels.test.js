@@ -1,7 +1,8 @@
 // RADAR-AGENT.0b — unit tests for channel connection pure helpers.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   maskSecret,
+  resolveLocationByExternalAccount,
   isFreshSecret,
   maskConnectionRow,
   buildConnectionPatch,
@@ -11,8 +12,10 @@ import {
 } from './channels'
 
 describe('maskSecret', () => {
-  it('masks long secrets keeping the tail', () => {
-    expect(maskSecret('EAAB1234567890abcdef')).toBe('••••••abcdef')
+  // SECFIX.3a (review S1) — it used to keep the last 6 characters as a hint;
+  // a mask now carries presence only, never a character of the value.
+  it('masks a long secret fully: no tail hint', () => {
+    expect(maskSecret('EAAB1234567890abcdef')).toBe('••••••')
   })
   it('fully masks short secrets', () => {
     expect(maskSecret('abc')).toBe('••••••')
@@ -41,11 +44,47 @@ describe('maskConnectionRow', () => {
       id: '1', platform: 'instagram', access_token: 'tok-1234567890', app_secret: null, page_id: 'P1',
     }
     const out = maskConnectionRow(row)
-    expect(out.access_token).toBe('••••••567890')
+    expect(out.access_token).toBe('••••••')
     expect(out.has_access_token).toBe(true)
     expect(out.app_secret).toBeNull()
     expect(out.has_app_secret).toBe(false)
     expect(out.page_id).toBe('P1') // non-secret untouched
+  })
+
+  // SECFIX.3a (review S1) — the registry keeps a Glofox connection's
+  // api_token (and anything else not mapped to a column) in `config`, and the
+  // mask used to look only at the two top-level columns, so GET …/channels
+  // returned it in clear.
+  it('masks every secret-named key inside config, at any depth (the mig 647 rule)', () => {
+    const row = {
+      id: 'g1', platform: 'glofox', external_account_id: 'branch-1',
+      access_token: 'SYNTH-GLOFOX-KEY-123456', app_secret: 'SYNTH-GLOFOX-WEBHOOK-654321',
+      config: {
+        api_token: 'SYNTH-GLOFOX-TOKEN-abcdef', namespace: 'ns-1', trial_plan_code: 'T1',
+        nested: { client_secret: 'SYNTH-NESTED', label: 'kept' },
+        list: [{ api_key: 'SYNTH-LIST' }],
+        blank: '',
+      },
+    }
+    const out = maskConnectionRow(row)
+    expect(JSON.stringify(out)).not.toMatch(/SYNTH|123456|654321|abcdef/)
+    expect(out.access_token).toBe('••••••')
+    expect(out.app_secret).toBe('••••••')
+    expect(out.has_access_token).toBe(true)
+    expect(out.has_app_secret).toBe(true)
+    expect(out.config).toEqual({
+      api_token: '••••••', namespace: 'ns-1', trial_plan_code: 'T1',
+      nested: { client_secret: '••••••', label: 'kept' },
+      list: [{ api_key: '••••••' }],
+      blank: '',
+    })
+    expect(row.config.api_token).toBe('SYNTH-GLOFOX-TOKEN-abcdef') // input untouched
+  })
+
+  it('leaves a config with no secret alone, and passes null through', () => {
+    const row = { id: 'b1', platform: 'bca', access_token: null, config: { send_from: 'a@example.com' } }
+    expect(maskConnectionRow(row).config).toBe(row.config)
+    expect(maskConnectionRow(null)).toBeNull()
   })
 })
 
@@ -77,6 +116,16 @@ describe('buildConnectionPatch', () => {
     expect(p.access_token).toBe('IGAA-fresh')
     expect(p.token_expires_at).toBe(null)
     expect(p.token_refreshed_at).toBe(null)
+  })
+  it('fresh access token clears a stale auth error (the old error described the old token)', () => {
+    const p = buildConnectionPatch({ access_token: 'IGAA-fresh' })
+    expect(p.status).toBe('connected')
+    expect(p.last_error).toBe(null)
+  })
+  it('a save without a fresh token leaves status/last_error alone', () => {
+    const p = buildConnectionPatch({ label: 'x', access_token: '••••••567890' })
+    expect('status' in p).toBe(false)
+    expect('last_error' in p).toBe(false)
   })
   it('no fresh token → lifecycle stamps untouched', () => {
     const p = buildConnectionPatch({ label: 'x', access_token: '••••••567890' })
@@ -124,5 +173,47 @@ describe('buildTokenRefreshPatch', () => {
     const p = buildTokenRefreshPatch({ access_token: 'IGAAX-new', expires_in: 'soon' }, NOW)
     expect(p.access_token).toBe('IGAAX-new')
     expect(p.token_expires_at).toBe(null)
+  })
+})
+
+// W0.14 — a failed channel_connections read must THROW, not read as
+// "unmatched account". The Instagram webhook has already claimed the
+// per-message dedup row by the time this runs, so a swallowed error
+// turned a DB blip into permanent message loss (Meta's retry was a no-op).
+describe('resolveLocationByExternalAccount', () => {
+  function fakeDb(result) {
+    const b = {}
+    for (const m of ['select', 'eq', 'limit']) b[m] = vi.fn(() => b)
+    b.maybeSingle = vi.fn(async () => result)
+    return { from: vi.fn(() => b), builder: b }
+  }
+
+  it('throws on a query error (never "unmatched")', async () => {
+    const db = fakeDb({ data: null, error: { message: 'boom' } })
+    await expect(resolveLocationByExternalAccount('instagram', 'acct-1', db))
+      .rejects.toThrow(/lookup failed/)
+  })
+
+  it('resolves null when no active row matches', async () => {
+    const db = fakeDb({ data: null, error: null })
+    await expect(resolveLocationByExternalAccount('instagram', 'acct-1', db)).resolves.toBeNull()
+    expect(db.from).toHaveBeenCalledWith('channel_connections')
+    expect(db.builder.eq).toHaveBeenCalledWith('platform', 'instagram')
+    expect(db.builder.eq).toHaveBeenCalledWith('external_account_id', 'acct-1')
+    expect(db.builder.eq).toHaveBeenCalledWith('is_active', true)
+  })
+
+  it('resolves { locationId, connection } for a matching row', async () => {
+    const row = { id: 'conn-1', location_id: 'loc-1', platform: 'instagram', external_account_id: 'acct-1' }
+    const db = fakeDb({ data: row, error: null })
+    await expect(resolveLocationByExternalAccount('instagram', 'acct-1', db))
+      .resolves.toEqual({ locationId: 'loc-1', connection: row })
+  })
+
+  it('short-circuits to null on missing inputs without touching the DB', async () => {
+    const db = fakeDb({ data: null, error: null })
+    await expect(resolveLocationByExternalAccount('instagram', '', db)).resolves.toBeNull()
+    await expect(resolveLocationByExternalAccount('', 'acct-1', db)).resolves.toBeNull()
+    expect(db.from).not.toHaveBeenCalled()
   })
 })

@@ -26,9 +26,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
-  nextQuarterHour, isoToDublinInputs, dublinLocalToIso, dublinScheduleLabel, scheduleErrorCopy, TIME_OPTIONS,
+  nextQuarterHour, isoToZonedInputs, zonedLocalToIso, scheduleLabelIn, scheduleZoneLabel, scheduleErrorCopy, TIME_OPTIONS,
 } from '@/lib/host-schedule-time'
 import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
+import { DEFAULT_TZ } from '@shared/zoned-time'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 /**
  * Request body for a test send. A blank or cancelled prompt yields {} so the
@@ -55,18 +57,21 @@ export function statsLine(stats) {
 
 /**
  * The list row's one-line status, per campaign state (HOST-SCHEDULE.1):
- * a scheduled row shows its Dublin fire time; a draft the sweeper refused
- * shows the reason in plain words; anything sent keeps the stats line.
+ * a scheduled row shows its fire time on the host's clock (TZ.9: the anchor
+ * studio's zone); a draft the sweeper refused shows the reason in plain
+ * words; anything sent keeps the stats line.
  * @param {object} c  campaign row from GET /api/host/emails
+ * @param {string} [zone=DEFAULT_TZ]  the host's zone
+ * @param {string} [brandName=PLATFORM_NAME]  the host's organisation (W1.S1c)
  */
-export function rowSubline(c) {
-  if (c.status === 'scheduled') return `Scheduled for ${dublinScheduleLabel(c.scheduled_for)}`
+export function rowSubline(c, zone = DEFAULT_TZ, brandName = PLATFORM_NAME) {
+  if (c.status === 'scheduled') return `Scheduled for ${scheduleLabelIn(c.scheduled_for, zone)}`
   if (c.status === 'draft') {
     return c.schedule_error
       ? `Not sent. ${scheduleErrorCopy(c.schedule_error)}. Schedule it again or send it now.`
       : 'Not sent yet'
   }
-  if (c.status === 'sending' && c.paused_reason) return `Paused. ${scheduleErrorCopy(c.paused_reason)}. Ask UN1T.`
+  if (c.status === 'sending' && c.paused_reason) return `Paused. ${scheduleErrorCopy(c.paused_reason)}. Ask ${brandName}.`
   return statsLine(c.stats) || `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`
 }
 
@@ -89,9 +94,10 @@ export function sendConfirmCopy(c, audienceLabelText, campaignsById) {
  * else the next quarter hour at least 15 minutes out.
  * @param {object} c
  * @param {number} [nowMs=Date.now()]
+ * @param {string} [zone=DEFAULT_TZ]  the host's zone
  */
-export function schedulePanelDefaults(c, nowMs = Date.now()) {
-  return (c?.scheduled_for && isoToDublinInputs(c.scheduled_for)) || nextQuarterHour(nowMs)
+export function schedulePanelDefaults(c, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  return (c?.scheduled_for && isoToZonedInputs(c.scheduled_for, zone)) || nextQuarterHour(nowMs, zone)
 }
 
 /**
@@ -164,7 +170,11 @@ const EDITOR_DIV_ID = 'host-email-designer'
 // How long to wait for the embed script before telling the host it failed.
 const UNLAYER_LOAD_TIMEOUT_MS = 15000
 
-export default function HostEmails() {
+/**
+ * @param {{ zone?: string }} props  zone: the host's anchor studio zone, resolved
+ *   by the page (TZ.9); the composer shows and picks times on that clock.
+ */
+export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAME } = {}) {
   const [campaigns, setCampaigns] = useState(null) // null = loading
   const [audiences, setAudiences] = useState({ all_count: null, mailing_list_count: null, events: [] })
   const [subject, setSubject] = useState('')
@@ -586,7 +596,7 @@ export default function HostEmails() {
   function openSchedule(c) {
     setError('')
     setNotice('')
-    const d = schedulePanelDefaults(c)
+    const d = schedulePanelDefaults(c, Date.now(), zone)
     setScheduleDate(d.date)
     setScheduleTime(d.time)
     setSchedulingId(c.id)
@@ -595,7 +605,7 @@ export default function HostEmails() {
   async function confirmSchedule(id) {
     setError('')
     setNotice('')
-    const iso = dublinLocalToIso(scheduleDate, scheduleTime)
+    const iso = zonedLocalToIso(scheduleDate, scheduleTime, zone)
     if (!iso) { setError('Pick a valid date and time.'); return }
     setScheduleBusy(true)
     try {
@@ -610,7 +620,7 @@ export default function HostEmails() {
         return
       }
       setSchedulingId(null)
-      setNotice(`Scheduled for ${dublinScheduleLabel(json.data?.scheduled_for || iso)}.`)
+      setNotice(`Scheduled for ${scheduleLabelIn(json.data?.scheduled_for || iso, zone)}.`)
       await load()
     } catch {
       setError('Could not schedule the email.')
@@ -885,7 +895,7 @@ export default function HostEmails() {
                         )}
                       </p>
                       <p className="text-xs text-white/45 mt-0.5">
-                        {rowSubline(c)}
+                        {rowSubline(c, zone, brandName)}
                         {c.audience_kind === 'non_openers' && (
                           <span className="text-white/35"> · {audienceSummary(c, campaignsById)}</span>
                         )}
@@ -1002,13 +1012,13 @@ export default function HostEmails() {
                         <input
                           type="date"
                           value={scheduleDate}
-                          min={isoToDublinInputs(Date.now()).date}
+                          min={isoToZonedInputs(Date.now(), zone).date}
                           onChange={(e) => setScheduleDate(e.target.value)}
                           className={`${inputBase} mt-1`}
                         />
                       </label>
                       <label className="block text-xs text-white/60">
-                        Time (Dublin)
+                        Time ({scheduleZoneLabel(zone)})
                         <select
                           value={scheduleTime}
                           onChange={(e) => setScheduleTime(e.target.value)}

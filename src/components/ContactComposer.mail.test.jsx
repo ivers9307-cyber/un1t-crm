@@ -49,7 +49,7 @@ function stubFetch({ mailboxes = 'none', composeOk = true, prefs = null } = {}) 
       if (mailboxes === 'forbidden') return { ok: false, status: 403, json: async () => ({ success: false, error: 'Forbidden' }) }
       return { ok: true, status: 200, json: async () => ({ success: true, data: { mailboxes: mailboxes === 'none' ? [] : mailboxes, conversations: [] } }) }
     }
-    if (u === '/api/email/tickets/compose') {
+    if (u === '/api/email/mail/compose') {
       return composeOk
         ? { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
         : { ok: false, status: 500, json: async () => ({ success: false, error: 'send exploded' }) }
@@ -75,26 +75,32 @@ function renderComposer(props = {}) {
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-// ── MAILFIX-SIGTRUTH.1 — the Mail path appends a signature, so it says so ──
-describe('ContactComposer — signature hint', () => {
-  it('shows the auto-appended signature on the Mail path, resolved for the chosen account’s studio', async () => {
+// ── MAIL-READER.1 — no signature preview in a composer, on EITHER path ──
+//
+// This suite used to pin the opposite on the Mail leg (MAILFIX-SIGTRUTH.1: the
+// /compose route appends the sender's effective signature, so the composer said
+// so). The SEND is unchanged — what moved is the read-only copy of the block,
+// which now lives only on the account page, beside the field that edits it.
+// Reprinting it in four composers was the same unchangeable text in four
+// places. The company-sender leg was already hint-less and stays that way, so
+// the two paths now agree by construction rather than by a branch.
+describe('ContactComposer — no signature preview', () => {
+  it('previews nothing on the Mail path, and never asks for the signature', async () => {
     stubFetch({ mailboxes: LOCATED_MAILBOXES, prefs: RICH_PREFS })
     renderComposer()
     await screen.findByRole('combobox')
-    expect(await screen.findByText(/added automatically/i)).toBeTruthy()
-    const pre = screen.getByText(/UN1T Hatch Street/, { selector: 'pre' })
-    expect(pre.textContent).toContain('Alex Example')
-    expect(pre.textContent).toContain('01 555 0002') // Hatch's card phone over the person's
-    expect(pre.textContent).not.toContain('087 111 2222')
+    await act(async () => {})
+    expect(screen.queryByText(/added automatically/i)).toBeNull()
+    expect(document.querySelector('pre')).toBeNull()
+    expect(calls.some(c => c.url.includes('/api/me/preferences'))).toBe(false)
   })
 
-  it('shows NO hint on the company-sender path — that route appends nothing, so absence is the truth', async () => {
+  it('previews nothing on the company-sender path either — that route appends nothing at all', async () => {
     stubFetch({ mailboxes: 'none', prefs: RICH_PREFS })
     renderComposer()
     await screen.findByText('Sent from the company address')
     await act(async () => {})
     expect(screen.queryByText(/added automatically/i)).toBeNull()
-    // The hint never mounted, so the preferences GET never fired.
     expect(calls.some(c => c.url.includes('/api/me/preferences'))).toBe(false)
   })
 })
@@ -118,7 +124,7 @@ describe('ContactComposer — Email via Mail', () => {
     fireEvent.change(screen.getByPlaceholderText(/Email John/), { target: { value: 'Hi John, attached below.' } })
     fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
     await waitFor(() => {
-      const compose = calls.find(c => c.url === '/api/email/tickets/compose')
+      const compose = calls.find(c => c.url === '/api/email/mail/compose')
       expect(compose?.body).toEqual({
         mailbox_id: 'mb-accounts',
         to: ['john@example.com'],
@@ -132,7 +138,7 @@ describe('ContactComposer — Email via Mail', () => {
     fireEvent.change(screen.getByPlaceholderText(/Email John/), { target: { value: 'Second.' } })
     fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
     await waitFor(() => {
-      const sends = calls.filter(c => c.url === '/api/email/tickets/compose')
+      const sends = calls.filter(c => c.url === '/api/email/mail/compose')
       expect(sends[1]?.body.mailbox_id).toBe('mb-studio')
     })
     // …and never the company route.
@@ -149,7 +155,7 @@ describe('ContactComposer — Email via Mail', () => {
     await waitFor(() => {
       expect(calls.some(c => c.url === '/api/contacts/c-1/email')).toBe(true)
     })
-    expect(calls.some(c => c.url === '/api/email/tickets/compose')).toBe(false)
+    expect(calls.some(c => c.url === '/api/email/mail/compose')).toBe(false)
   })
 
   // MAIL-FOLLOWUPS.1 — a failed list is the company path (never a dead Email
@@ -183,7 +189,7 @@ describe('ContactComposer — Email via Mail', () => {
     await waitFor(() => {
       expect(calls.some(c => c.url === '/api/contacts/c-1/email')).toBe(true)
     })
-    expect(calls.some(c => c.url === '/api/email/tickets/compose')).toBe(false)
+    expect(calls.some(c => c.url === '/api/email/mail/compose')).toBe(false)
   })
 
   it('a THROWN account lookup (network down) settles on the company path and says the list could not load', async () => {
@@ -223,7 +229,7 @@ describe('ContactComposer — Email via Mail', () => {
       const u = String(url)
       calls.push({ url: u, method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null })
       if (u.startsWith('/api/email/mail?')) return listPromise
-      if (u === '/api/email/tickets/compose') return { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
+      if (u === '/api/email/mail/compose') return { ok: true, status: 200, json: async () => ({ success: true, data: { ticket_id: 't-9' } }) }
       return { ok: true, status: 200, json: async () => ({ success: true }) }
     }))
     renderComposer()
@@ -247,7 +253,7 @@ describe('ContactComposer — Email via Mail', () => {
     expect(screen.getByRole('button', { name: /Send email/ }).disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: /Send email/ }))
     await waitFor(() => {
-      const compose = calls.find(c => c.url === '/api/email/tickets/compose')
+      const compose = calls.find(c => c.url === '/api/email/mail/compose')
       expect(compose?.body).toEqual({
         mailbox_id: 'mb-accounts',
         to: ['john@example.com'],

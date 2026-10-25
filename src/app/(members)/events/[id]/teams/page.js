@@ -8,8 +8,11 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import RaceTeamsManager from '@/components/RaceTeamsManager'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { MANAGER_ROLES } from '@/lib/schemas'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import { ArrowLeft } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -18,21 +21,30 @@ export default async function RaceTeamsPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'races')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the event's
+  // location below, the same one every teams route makes.
+  if (!hasPermissionAtAnyLocation(user, 'races')) redirect('/')
 
   const db = createServerClient()
   const { data: race } = await db
     .from('race_events')
     .select(`
-      id, name, slug, location_id, race_date, allowed_team_sizes,
+      id, name, slug, location_id, race_date, allowed_team_sizes, payment_currency,
       waves:race_waves ( id, start_time, capacity, label, display_order )
     `)
     .eq('id', params.id)
     .single()
   if (!race) notFound()
 
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) redirect('/')
+  if (assertLocationAccess(user, race.location_id)) notFound()
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) redirect('/')
+
+  // W1.L3b — the staff-copied payment link is a CUSTOMER link, so it is minted
+  // on the event's own tenant host, not the CRM host the operator is on (same
+  // rule as the /events list's copy link). Origin-only, so a misconfigured env
+  // var can't poison it when the resolver floors; '' lets the client fall back.
+  let customerOrigin = ''
+  try { customerOrigin = new URL(await resolveCustomerBaseUrl(db, race.location_id)).origin } catch { customerOrigin = '' }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -48,7 +60,21 @@ export default async function RaceTeamsPage(props) {
           })}
         </p>
       </header>
-      <RaceTeamsManager race={race} />
+      {/* GATES-2 — Cancel entry calls POST /api/registrations/[id]/cancel,
+          which requires MANAGER_ROLES at the event's studio. EVENT-MOVE.1 —
+          Move to event calls POST /api/event-registrations/[id]/move, same
+          rule at the source studio (and again at the target's). */}
+      <RaceTeamsManager
+        race={race}
+        canCancelEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        canMoveEntries={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        canManageWaitlist={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        // FINDTEAM.6 — Place in team / Pair up call POST /api/registrations/[id]/place
+        // and POST /api/events/[id]/pair-solos: manager+ at the event's studio.
+        canPlaceSolos={hasRoleAtLocation(user, race.location_id, MANAGER_ROLES)}
+        currency={race.payment_currency || 'EUR'}
+        customerOrigin={customerOrigin}
+      />
     </div>
   )
 }

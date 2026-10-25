@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   intervalMonths, computeMrr, summariseCancels, computeEngagement,
-  computeFloor, computeActivation, windowBounds, windowDelta, WINDOW_DAYS,
+  computeFloor, computeActivation, bookingOutcome, windowBounds, windowDelta, WINDOW_DAYS,
 } from './studio-kpi-math.js'
 
 describe('intervalMonths', () => {
@@ -103,6 +103,36 @@ describe('computeEngagement', () => {
   })
 })
 
+describe('bookingOutcome', () => {
+  it('glofox BOOKED attended / not attended, WAITING and CANCELLED excluded', () => {
+    expect(bookingOutcome({ source_platform: 'glofox', status: 'BOOKED', attended: true })).toBe('attended')
+    expect(bookingOutcome({ source_platform: 'glofox', status: 'BOOKED', attended: false })).toBe('no_show')
+    expect(bookingOutcome({ source_platform: 'glofox', status: 'WAITING', attended: false })).toBe('excluded')
+    expect(bookingOutcome({ source_platform: 'glofox', status: 'CANCELLED', attended: false })).toBe('excluded')
+    expect(bookingOutcome({ source_platform: 'glofox', status: null, attended: false })).toBe('excluded')
+    // glofox never reads ATTENDED / NO_SHOW as a verdict
+    expect(bookingOutcome({ source_platform: 'glofox', status: 'ATTENDED', attended: true })).toBe('excluded')
+  })
+
+  it('a row with no source_platform is read as glofox', () => {
+    expect(bookingOutcome({ status: 'BOOKED', attended: true })).toBe('attended')
+    expect(bookingOutcome({ status: 'BOOKED', attended: false })).toBe('no_show')
+    expect(bookingOutcome({ status: 'CANCELLED', attended: false })).toBe('excluded')
+  })
+
+  it('un1t_online ATTENDED, NO_SHOW, BOOKED undecided, CANCELLED excluded', () => {
+    const u = (status, attended = false) => bookingOutcome({ source_platform: 'un1t_online', status, attended })
+    expect(u('ATTENDED', true)).toBe('attended')
+    expect(u('NO_SHOW')).toBe('no_show')
+    // the boolean does not decide a un1t row: BOOKED is undecided either way
+    expect(u('BOOKED', false)).toBe('undecided')
+    expect(u('BOOKED', true)).toBe('undecided')
+    expect(u('CANCELLED')).toBe('excluded')
+    expect(u('WAITING')).toBe('excluded')
+    expect(u(null)).toBe('excluded')
+  })
+})
+
 describe('computeFloor', () => {
   const occurrences = [
     { glofox_event_id: 'e1', instructor: 'Aoife', capacity: 20, booked: 18, starts_at: '2026-08-03T06:00:00Z' },
@@ -150,6 +180,34 @@ describe('computeFloor', () => {
     expect(out.noShowPct).toBe(25)   // unchanged — phantoms excluded
     expect(out.attendedVisits).toBe(3)
   })
+  it('un1t past BOOKED rows leave numerator and denominator; all undecided gives noShowPct null and per-group noShowPct null', () => {
+    const occs = [
+      { glofox_event_id: 'u1', name: 'HYROX', capacity: 10, booked: 6, starts_at: '2026-08-03T06:00:00Z' },
+    ]
+    const un1t = (status, attended = false) => ({ glofox_event_id: 'u1', source_platform: 'un1t_online', status, attended })
+    const allUndecided = computeFloor(occs, [un1t('BOOKED'), un1t('BOOKED'), un1t('CANCELLED')], {})
+    expect(allUndecided.noShowPct).toBe(null)
+    expect(allUndecided.groupTable[0].noShowPct).toBe(null)
+
+    // 1 attended, 1 no-show, 2 undecided: the undecided two are in neither side
+    const mixed = computeFloor(occs, [un1t('ATTENDED', true), un1t('NO_SHOW'), un1t('BOOKED'), un1t('BOOKED')], {})
+    expect(mixed.noShowPct).toBe(50)
+    expect(mixed.attendedVisits).toBe(1)
+    expect(mixed.groupTable[0].noShowPct).toBe(50)
+  })
+  it('counts glofox and un1t rows side by side without moving the glofox rate', () => {
+    const occs = [
+      { glofox_event_id: 'g1', name: 'A', capacity: 10, booked: 4, starts_at: '2026-08-03T06:00:00Z' },
+    ]
+    const rows = [
+      { glofox_event_id: 'g1', source_platform: 'glofox', status: 'BOOKED', attended: true },
+      { glofox_event_id: 'g1', source_platform: 'glofox', status: 'BOOKED', attended: false },
+      { glofox_event_id: 'g1', source_platform: 'un1t_online', status: 'BOOKED', attended: false },
+    ]
+    const out = computeFloor(occs, rows, {})
+    expect(out.noShowPct).toBe(50)
+    expect(out.attendedVisits).toBe(1)
+  })
   it('nulls rates when there is no data', () => {
     const out = computeFloor([], [])
     expect(out.fillPct).toBe(null)
@@ -179,6 +237,19 @@ describe('computeActivation', () => {
     expect(out.cohort).toBe(2)
     expect(out.pending).toBe(1)
     expect(out.activatedPct).toBe(50)
+  })
+  it('counts a un1t ATTENDED as a visit, never a un1t BOOKED', () => {
+    const joiners = [{ id: 'a', joined_at: '2026-07-01T00:00:00Z' }]
+    const row = (status, attended, day) => ({
+      contact_id: 'a', source_platform: 'un1t_online', starts_at: `2026-07-${day}T06:00:00Z`, status, attended,
+    })
+    const three = [row('ATTENDED', true, '02'), row('ATTENDED', true, '05'), row('ATTENDED', true, '09')]
+    expect(computeActivation(joiners, three, now).activatedPct).toBe(100)
+    // a past BOOKED is undecided, however the boolean reads
+    const withBooked = [row('ATTENDED', true, '02'), row('ATTENDED', true, '05'), row('BOOKED', true, '09')]
+    expect(computeActivation(joiners, withBooked, now).activatedPct).toBe(0)
+    const noShow = [row('ATTENDED', true, '02'), row('ATTENDED', true, '05'), row('NO_SHOW', false, '09')]
+    expect(computeActivation(joiners, noShow, now).activatedPct).toBe(0)
   })
   it('nulls on an empty cohort', () => {
     expect(computeActivation([], [], now).activatedPct).toBe(null)

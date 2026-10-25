@@ -149,7 +149,7 @@ describe('POST .../stripe-connect/connect — the legitimate flow is byte-identi
     expect(createOnboardingLink).toHaveBeenCalledWith({
       accountId: 'acct_new123',
       refreshUrl: `https://crm.test/api/locations/${LOC_A}/stripe-connect/refresh`,
-      returnUrl: `https://crm.test/settings/locations/${LOC_A}?section=integrations&tab=payments&stripe=return`,
+      returnUrl: `https://crm.test/settings/integrations-hub?manage=payments&location=${LOC_A}&stripe=return`,
     })
   })
 

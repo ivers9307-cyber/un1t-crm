@@ -1,7 +1,8 @@
 'use client'
 
-// The Xero connection card on the per-location Integrations tab
-// (/settings/locations/[id]?tab=xero). Shows the current
+// The Xero connection card, hosted in the Integrations hub's Manage drawer
+// (/settings/integrations-hub?manage=xero&location=<id>, INTEGONE.1; it was
+// on the retired per-location Integrations tab). Shows the current
 // connection state and offers a Connect / Disconnect / Reconnect
 // action depending on the row's state. Also captures the per-org
 // Xero "Email to Bills" address so the document → draft bill
@@ -32,7 +33,12 @@ function fmtRelative(d) {
   return fmt(d)
 }
 
-export default function XeroLocationCard({ location, connection }) {
+// `returnTo` (optional, INTEGONE.1): an internal path the OAuth callback
+// bounces back to (the Integrations hub's drawer passes its own URL, so the
+// connect lands back on the hub with the Xero drawer open). The connect route
+// and callback validate it against the return-to allowlist
+// (src/lib/xero/return-to.js); omitted, the callback's default applies.
+export default function XeroLocationCard({ location, connection, returnTo = null }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
 
@@ -45,7 +51,9 @@ export default function XeroLocationCard({ location, connection }) {
   const [contactsResult, setContactsResult] = useState(null)
 
   const onConnect = () => {
-    window.location.href = `/api/xero/connect?location_id=${location.id}`
+    const q = new URLSearchParams({ location_id: location.id })
+    if (returnTo) q.set('return_to', returnTo)
+    window.location.href = `/api/xero/connect?${q.toString()}`
   }
 
   const onDisconnect = async () => {

@@ -27,6 +27,20 @@ describe('approvalCardSummary', () => {
   it('never throws on null input', () => {
     expect(() => approvalCardSummary(null)).not.toThrow()
   })
+  // UN1TWRITE.8 — the record-only refund card never reads "Refund request request".
+  it('refund_request → the reason in words and the amount, matching the /approvals subtitle', () => {
+    expect(approvalCardSummary({ kind: 'refund_request', details: { reason: 'double_payment', amount_cents: 1500, currency: 'EUR' } }))
+      .toBe('Double payment · €15')
+    expect(approvalCardSummary({ kind: 'refund_request', details: { reason: 'late_cancel', amount_cents: 1250 } }))
+      .toBe('Late cancel · €12.50')
+    expect(approvalCardSummary({ kind: 'refund_request', details: { reason: 'member_request' } })).toBe('Member request')
+  })
+  it('refund_request with nothing known reads "Refund request", not "Refund request request"', () => {
+    expect(approvalCardSummary({ kind: 'refund_request', details: {} })).toBe('Refund request')
+  })
+  it("labels refund_request 'Refund request'", () => {
+    expect(APPROVAL_KIND_LABELS.refund_request).toBe('Refund request')
+  })
 })
 
 describe('mergeTimeline', () => {

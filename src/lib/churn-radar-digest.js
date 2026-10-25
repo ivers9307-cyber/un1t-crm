@@ -9,6 +9,8 @@
 // so operators see acquisition + retention in one place. The lead block
 // is opt-in via opts.lead — when absent the email is churn-only.
 
+import { totalLabel, UN1T_UNAVAILABLE } from '@/lib/radar-copy'
+
 // Money-valued metrics format as euros; the rest are plain counts.
 const MONEY_METRICS = new Set(['revenueAtRiskCents', 'overdueValueCents'])
 
@@ -78,7 +80,10 @@ function buildChurnSection(summary, history) {
   const hist = Array.isArray(history) ? history : []
 
   const rowsHtml = DIGEST_ROWS.map(([label, key, col]) => {
-    const now = fmtValue(key, s[key])
+    // UN1TRADAR.2 — an overdue total holding an estimate says so
+    const now = key === 'overdueValueCents' && s.overdueValueEstimated === true
+      ? totalLabel(s[key], { estimated: true })
+      : fmtValue(key, s[key])
     const delta = fmtDelta(key, deltas[key])
     // The trail is the snapshot history; "Now" (live) is the column
     // after it — the operator reads left-to-right ending at today.
@@ -93,8 +98,15 @@ function buildChurnSection(summary, history) {
     ? `<p style="margin:16px 0 0;">Outreach effectiveness: <strong>${rec.recovered} of ${rec.contacted}</strong> members contacted in the last 90 days came back training (${Math.round((rec.recoveryRate || 0) * 100)}%).</p>`
     : ''
 
+  // UN1TRADAR.2 — a source that cannot read these charges (null) says so, never 0
+  const unread = [s.unpaidCharges === null && 'Unpaid charges', s.awaitingAuth === null && 'awaiting authorization'].filter(Boolean)
+  const unavailableLine = unread.length
+    ? `<p style="margin:16px 0 0;color:#666;">${unread.length === 2 ? 'Unpaid charges and awaiting authorization' : unread[0].charAt(0).toUpperCase() + unread[0].slice(1)}: ${UN1T_UNAVAILABLE}</p>`
+    : ''
+
   return `<h3 style="margin:24px 0 8px;">Churn radar &mdash; retention</h3>
   ${metricsTable(rowsHtml)}
+  ${unavailableLine}
   ${recLine}`
 }
 

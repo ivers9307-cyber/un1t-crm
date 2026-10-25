@@ -20,7 +20,10 @@
 // here consistent with the Access Verification form and the App Review
 // submissions — reviewers cross-check them.
 //
-// Fully static, no DB reads, no client state. Standalone top-level
+// No client state. One cached server read since W1.S1b: the footer's
+// brand, studios and legal holder come from UN1T Group's org chrome
+// (resolveOrgChrome, held for HOST_BRAND_CACHE_TTL_MS), so the page is
+// rendered per request rather than fully static. Standalone top-level
 // route, so it must be in the public allowlist in THREE places:
 // src/proxy.js publicPaths, src/lib/brands.js allowedPaths
 // (un1t-marketing), and src/components/AppShell.jsx PUBLIC_PATHS.
@@ -36,6 +39,8 @@
 import Link from 'next/link'
 import { poppinsBody as poppins } from '@/fonts/poppins'
 import { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
+import { resolveOrgChrome } from '@/lib/host-brand'
+import { UN1T_GROUP_ORG_ID } from '@/lib/brands'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 
@@ -87,7 +92,11 @@ const DATA_POINTS = [
   'Each gym connects its own WhatsApp Business number and Instagram account, and remains the owner of its number, its account and its customer relationships.',
 ]
 
-export default function TechnicalPage() {
+export default async function TechnicalPage() {
+  // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
+  // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
+  // cached), so the shared footer component carries no gym literal of its own.
+  const chrome = await resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID })
   return (
     <div
       id="lp-shell"
@@ -207,7 +216,7 @@ export default function TechnicalPage() {
         </div>
       </section>
 
-      <SiteFooter ctaHref={CONTACT.href} ctaLabel={CONTACT.label} />
+      <SiteFooter ctaHref={CONTACT.href} ctaLabel={CONTACT.label} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>
   )
 }

@@ -1,5 +1,28 @@
-import { describe, it, expect } from 'vitest'
-import { loadOverdue, loadUnpaidCharges, loadAwaitingAuth, loadRadar, loadContactArrears } from './churn-radar-data'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// UN1TRADAR.1 — the loaders resolve their row reads through the seam
+// (radarReadsFor, by source key). Every test here is a Glofox studio unless it
+// says otherwise; the un1t adapter is spies.
+const fakeReads = vi.hoisted(() => ({
+  radarMembers: vi.fn(async () => []),
+  winbackContacts: vi.fn(async () => []),
+  leadContacts: vi.fn(async () => []),
+  radarPastDue: vi.fn(async () => ({ ids: new Set(), byId: new Map(), membershipById: new Map(), chargesById: new Map(), pendingById: new Map(), unavailable: ['unpaidCharges', 'awaitingAuth'], profileById: new Map() })),
+  pinArrears: true,
+}))
+// Only the resolver is needed here, so the factory builds it outright.
+vi.mock('@/lib/membership/state-for-page', () => ({
+  membershipStateForPage: vi.fn(async () => ({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: { memberships: true } })),
+}))
+// The un1t adapter is replaced by spies.
+vi.mock('@/lib/membership/reads/un1t-online', () => ({ un1tOnlineReads: fakeReads, freshCutoff: vi.fn() }))
+
+import { membershipStateForPage } from '@/lib/membership/state-for-page'
+import { loadOverdue, loadUnpaidCharges, loadAwaitingAuth, loadRadar, loadContactArrears, loadQuarantine, loadWinback } from './churn-radar-data'
+import { loadEngagementChurn } from './engagement-analytics-data'
+import { glofoxFixtureDb, NOW as FIX_NOW, LOC as FIX_LOC } from './radar-glofox-fixture.test-helpers'
+import { buildOverdue } from './churn-radar'
+import EXPECTED from './radar-glofox-fixture.expected.json'
 
 // ARREARS-NETTING.1 (Fix B) — the live Overdue feature must net cross-
 // invoice-id payment retries out of the chase-list + total, the same way the
@@ -465,7 +488,8 @@ describe('Overdue vs Unpaid charges — by charge type (ARREARS-TYPE.1)', () => 
 //   - contacts loaded via .eq('location_id') for member sweep (key: 'contacts')
 //   - contacts loaded via .eq('location_id') + .not('person_group_id', 'is', null)
 //     for the cross-status activity path (key: 'contacts:grouped')
-//   - person_groups loaded via .eq('location_id') (key: 'person_groups:location')
+//   - locations read for the studio's organisation (key: 'locations'), then
+//     person_groups via .eq('organization_id') (key: 'person_groups:organization', mig 769)
 //   - contacts loaded via .in('id', ...) for the overdue path (key: 'contacts:id')
 
 function makeDbPersonAware(tables) {
@@ -493,10 +517,10 @@ function makeDbPersonAware(tables) {
             // .not('person_group_id', ...) on contacts = cross-status grouped load
             key = `${table}:grouped`
           } else {
-            // person_groups with .eq('location_id') goes to 'person_groups:location'
-            // for disambiguation from any other person_groups query
-            if (table === 'person_groups' && state.eqFilters.location_id) {
-              key = 'person_groups:location'
+            // person_groups with .eq('organization_id') goes to 'person_groups:organization'
+            // (mig 769: groups follow the organisation; the studio's org is read from locations)
+            if (table === 'person_groups' && state.eqFilters.organization_id) {
+              key = 'person_groups:organization'
             } else {
               key = table
             }
@@ -590,7 +614,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
       // fetchMembers returns the dormant member (only member-status contacts)
       contacts: [markMember],
       // applyPersonRollup — person_groups location-scoped load
-      'person_groups:location': [{ id: GROUP_ID, primary_contact_id: 'c-mark-member', location_id: LOC }],
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': [{ id: GROUP_ID, primary_contact_id: 'c-mark-member', organization_id: 'org-1' }],
       // applyPersonRollup — cross-status grouped contacts (location-scoped, not null person_group_id)
       'contacts:grouped': [markMember, markClasspass],
       // Other tables used by loadRadar
@@ -618,7 +643,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
 
     const db = makeDbPersonAware({
       contacts: [memberA, memberB],
-      'person_groups:location': [{ id: GROUP_ID, primary_contact_id: 'c-dedup-a', location_id: LOC }],
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': [{ id: GROUP_ID, primary_contact_id: 'c-dedup-a', organization_id: 'org-1' }],
       // Both members in the cross-status fetch; combined = 0+0 = 0 attended 30d,
       // last_attended stays 30 days ago → at-risk as one person, not two.
       'contacts:grouped': [memberA, memberB],
@@ -648,7 +674,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
       contacts: [ungroupedMember],
       // person_groups + cross-status contacts should not be called (fast path: no grouped rows)
       // but we leave them empty just in case to avoid false errors
-      'person_groups:location': [],
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': [],
       'contacts:grouped': [],
       churn_radar_actions: [],
       glofox_invoices: [],
@@ -670,7 +697,8 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
     const db = makeDbPersonAware({
       contacts: [markMember],
       // Simulate person_groups throwing an error
-      'person_groups:location': () => { throw new Error('DB exploded') },
+      locations: [{ id: LOC, organization_id: 'org-1' }],
+      'person_groups:organization': () => { throw new Error('DB exploded') },
       'contacts:grouped': [],
       churn_radar_actions: [],
       glofox_invoices: [],
@@ -684,5 +712,222 @@ describe('loadRadar — person-group-aware (CHURN-RADAR-PERSON-AWARE)', () => {
     expect(summary.activeBase).toBeGreaterThanOrEqual(1)
     expect(typeof summary.atRisk).toBe('number')
     // No exception should be thrown
+  })
+})
+
+// ── UN1TRADAR.1 — loaders read rows through the seam ─────────────────────────
+const asJson = (v) => JSON.parse(JSON.stringify(v))
+
+describe('UN1TRADAR.1 seam dispatch', () => {
+  beforeEach(() => vi.useFakeTimers({ now: FIX_NOW, toFake: ['Date'] }))
+  afterEach(() => vi.useRealTimers())
+
+  it("Glofox: every loader's output deep-equals today's (captured before the seam)", async () => {
+    const db = glofoxFixtureDb()
+    expect(asJson(await loadRadar(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.radar)
+    expect(asJson(await loadQuarantine(db, FIX_LOC))).toEqual(EXPECTED.quarantine)
+    expect(asJson(await loadOverdue(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.overdue)
+    expect(asJson(await loadUnpaidCharges(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.unpaid)
+    expect(asJson(await loadAwaitingAuth(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.awaiting)
+    expect(asJson(await loadWinback(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.winback)
+    expect(asJson(await loadEngagementChurn(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.engagement)
+  })
+
+  for (const state of ['configured', 'unconfigured', 'unknown']) {
+    it(`dispatches by source key while ${state}`, async () => {
+      fakeReads.radarMembers.mockClear(); fakeReads.winbackContacts.mockClear()
+      membershipStateForPage.mockResolvedValueOnce({ source: 'un1t_online', state, label: 'x' })
+      const db = glofoxFixtureDb()
+      await loadQuarantine(db, FIX_LOC)
+      expect(fakeReads.radarMembers).toHaveBeenCalledWith(db, FIX_LOC, { nowMs: FIX_NOW })
+      membershipStateForPage.mockResolvedValueOnce({ source: 'un1t_online', state, label: 'x' })
+      await loadWinback(db, FIX_LOC, FIX_NOW)
+      expect(fakeReads.winbackContacts).toHaveBeenCalledWith(db, FIX_LOC, { nowMs: FIX_NOW })
+    })
+  }
+
+  it('Glofox reads by source key while unknown (a credential glitch keeps the stored radar)', async () => {
+    membershipStateForPage.mockResolvedValueOnce({ source: 'glofox', state: 'unknown', label: 'Glofox', readError: 'GLOFOX_CREDENTIALS_UNREADABLE' })
+    const out = await loadRadar(glofoxFixtureDb(), FIX_LOC, FIX_NOW)
+    expect(asJson(out)).toEqual(EXPECTED.radar)
+  })
+
+  it('an unreadable source throws MEMBERSHIP_SOURCE_UNREADABLE (never an empty radar)', async () => {
+    for (const load of [loadRadar, loadQuarantine, loadOverdue, loadWinback, loadEngagementChurn]) {
+      membershipStateForPage.mockResolvedValueOnce({ source: null, state: 'unknown', label: 'x', readError: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+      await expect(load(glofoxFixtureDb(), FIX_LOC, FIX_NOW)).rejects.toMatchObject({ code: 'MEMBERSHIP_SOURCE_UNREADABLE' })
+    }
+  })
+
+  it('a source with no adapter (none) throws "radar read missing"', async () => {
+    membershipStateForPage.mockResolvedValueOnce({ source: 'none', state: 'none', label: 'x' })
+    await expect(loadQuarantine(glofoxFixtureDb(), FIX_LOC)).rejects.toThrow('radar read missing: radarMembers')
+  })
+})
+
+// ── UN1TRADAR.2 — unreadable arrears are null; estimates flagged ─────────────
+describe('UN1TRADAR.2 arrears at a un1t studio', () => {
+  beforeEach(() => vi.useFakeTimers({ now: FIX_NOW, toFake: ['Date'] }))
+  afterEach(() => vi.useRealTimers())
+
+  const DAYMS = 86_400_000
+  const un1tFold = () => ({
+    ids: new Set(['c-dual', 'c-hatch']),
+    byId: new Map([
+      ['c-dual', { amountCents: 12000, count: 1, oldestDueAt: new Date(FIX_NOW - 9 * DAYMS).toISOString(), amountEstimated: true }],
+      ['c-hatch', { amountCents: 4500, count: 1, oldestDueAt: new Date(FIX_NOW - 3 * DAYMS).toISOString() }],
+    ]),
+    membershipById: new Map([
+      ['c-dual', { amountCents: 12000, count: 1, oldestDueAt: new Date(FIX_NOW - 9 * DAYMS).toISOString(), amountEstimated: true }],
+      ['c-hatch', { amountCents: 4500, count: 1, oldestDueAt: new Date(FIX_NOW - 3 * DAYMS).toISOString() }],
+    ]),
+    chargesById: new Map(),
+    pendingById: new Map(),
+    unavailable: ['unpaidCharges', 'awaitingAuth'],
+    profileById: new Map([
+      ['c-dual', { glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', last_attended_at: '2026-10-12T09:00:00.000Z' }],
+      ['c-hatch', { glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', last_attended_at: null }],
+    ]),
+  })
+  // contacts: the dual-studio member's row is Stillorgan's (Glofox plan, Stillorgan attendance)
+  const un1tDb = () => {
+    const base = glofoxFixtureDb()
+    const extra = [
+      { id: 'c-dual', name: 'Dual', glofox_membership_status: 'credit_member', glofox_membership_type: 'num_classes', glofox_membership_plan: 'Stillorgan Gold', last_attended_at: '2026-10-17T09:00:00.000Z', last_payment_at: null },
+      { id: 'c-hatch', name: 'Hatchling', glofox_membership_status: null, glofox_membership_type: null, glofox_membership_plan: null, last_attended_at: null, last_payment_at: null },
+    ]
+    // the pinned-block tests also past-due c10 (snoozed), c11 (dismissed) and c-free (neither)
+    for (const id of ['c10', 'c11', 'c-free']) extra.push({ id, name: id, glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'x', last_attended_at: null, last_payment_at: null })
+    return { from: (t) => (t === 'contacts' ? rowsById(extra) : base.from(t)) }
+  }
+  // honours .in('id', …) so a filtered-out id can never come back
+  function rowsById(rows) {
+    let ids = null
+    const api = { select: () => api, in: (c, v) => { if (c === 'id') ids = v; return api }, eq: () => api, order: () => api, range: () => api, then: (res, rej) => Promise.resolve({ data: ids ? rows.filter((r) => ids.includes(r.id)) : rows, error: null }).then(res, rej) }
+    return api
+  }
+  const asUn1t = () => membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online' })
+  afterEach(() => membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: { memberships: true } }))
+
+  it("Glofox: loadOverdue/loadUnpaidCharges/loadAwaitingAuth deep-equal today's output", async () => {
+    const db = glofoxFixtureDb()
+    expect(asJson(await loadOverdue(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.overdue)
+    expect(asJson(await loadUnpaidCharges(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.unpaid)
+    expect(asJson(await loadAwaitingAuth(db, FIX_LOC, FIX_NOW))).toEqual(EXPECTED.awaiting)
+    const radar = asJson(await loadRadar(db, FIX_LOC, FIX_NOW))
+    expect(radar).toEqual(EXPECTED.radar)
+    expect(radar.summary).not.toHaveProperty('overdueValueEstimated')
+  })
+
+  it('un1t: summary unpaidCharges and awaitingAuth are null, never 0', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const { summary } = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(summary.unpaidCharges).toBeNull()
+    expect(summary.unpaidChargesValueCents).toBeNull()
+    expect(summary.awaitingAuth).toBeNull()
+    expect(summary.awaitingAuthValueCents).toBeNull()
+    expect(summary.overdue).toBe(2)
+    expect(summary.overdueValueCents).toBe(16500)
+  })
+
+  it('un1t: estimated overdue row carries amountEstimated and the summary overdueValueEstimated', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    expect((await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)).summary.overdueValueEstimated).toBe(true)
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const { overdue, summary } = await loadOverdue(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(overdue.find((r) => r.contactId === 'c-dual').amountEstimated).toBe(true)
+    expect(Object.hasOwn(overdue.find((r) => r.contactId === 'c-hatch'), 'amountEstimated')).toBe(false)
+    expect(summary.totalValueEstimated).toBe(true)
+  })
+
+  it('overdue row at a un1t studio takes plan and last attended from un1t, not contacts', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const { overdue } = await loadOverdue(un1tDb(), FIX_LOC, FIX_NOW)
+    const dual = overdue.find((r) => r.contactId === 'c-dual')
+    expect(dual).toMatchObject({ name: 'Dual', membershipPlan: 'Hatch plan', membershipStatus: 'member', segment: 'member', lastAttendedAt: '2026-10-12T09:00:00.000Z' })
+  })
+
+  it('un1t: unpaid charges and awaiting authorization are unavailable, not empty', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold()).mockResolvedValueOnce(un1tFold())
+    expect(await loadUnpaidCharges(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
+    expect(await loadAwaitingAuth(un1tDb(), FIX_LOC, FIX_NOW)).toEqual({ charges: [], summary: { total: null, totalValueCents: null, unavailable: true } })
+  })
+
+  // UN1TRADAR.3 — the pinned "Payment failed" block
+  const withExtra = (fold, ids) => {
+    for (const id of ids) {
+      const agg = { amountCents: 9000, count: 1, oldestDueAt: new Date(FIX_NOW - 2 * DAYMS).toISOString() }
+      fold.ids.add(id); fold.byId.set(id, { ...agg }); fold.membershipById.set(id, { ...agg })
+      fold.profileById.set(id, { glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', last_attended_at: null })
+    }
+    return fold
+  }
+
+  it('pinned only with pinArrears; Glofox result has no pinned key', async () => {
+    const glofox = await loadRadar(glofoxFixtureDb(), FIX_LOC, FIX_NOW)
+    expect(Object.hasOwn(glofox, 'pinned')).toBe(false)
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const out = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(out.pinned.map((r) => r.contactId).sort()).toEqual(['c-dual', 'c-hatch'])
+    expect(out.pinned.find((r) => r.contactId === 'c-dual')).toMatchObject({ membershipPlan: 'Hatch plan', amountEstimated: true })
+  })
+
+  it('pinned holds a cancelling past-due member once', async () => {
+    asUn1t()
+    fakeReads.radarMembers.mockResolvedValueOnce([
+      { id: 'c-hatch', name: 'Hatchling', glofox_membership_status: 'member', glofox_membership_type: 'time', glofox_membership_plan: 'Hatch plan', glofox_membership_state: 'active', cancel_at_period_end: true, last_attended_at: new Date(FIX_NOW - DAYMS).toISOString() },
+    ])
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const out = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    expect(out.pinned.filter((r) => r.contactId === 'c-hatch')).toHaveLength(1)
+    // past due wins classification: overdue, never on the At-risk list as cancelling
+    expect(out.radar.find((r) => r.contactId === 'c-hatch')).toBeUndefined()
+    expect(out.summary.overdue).toBe(2)
+  })
+
+  it('pinned excludes a dismissed contact and a snoozed one', async () => {
+    asUn1t()
+    // c11 is dismissed and c10 snoozed in the fixture's action log
+    fakeReads.radarPastDue.mockResolvedValueOnce(withExtra(un1tFold(), ['c10', 'c11', 'c-free']))
+    const out = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    const ids = out.pinned.map((r) => r.contactId)
+    expect(ids).not.toContain('c11')
+    expect(ids).not.toContain('c10')
+    // positive control: a past-due member who is neither dismissed nor snoozed is pinned
+    expect(ids).toContain('c-free')
+  })
+
+  it('summary counts are identical with and without pinned', async () => {
+    asUn1t()
+    fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+    const withPin = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    // same studio, an adapter that does not pin
+    fakeReads.pinArrears = false
+    let without
+    try {
+      fakeReads.radarPastDue.mockResolvedValueOnce(un1tFold())
+      without = await loadRadar(un1tDb(), FIX_LOC, FIX_NOW)
+    } finally {
+      fakeReads.pinArrears = true
+    }
+    expect(Object.hasOwn(without, 'pinned')).toBe(false)
+    expect(withPin.summary).toEqual(without.summary)
+  })
+})
+
+describe('buildOverdue amountEstimated', () => {
+  const c = { id: 'c1', name: 'A', glofox_membership_status: 'member', glofox_membership_type: 'time' }
+  it('buildOverdue omits amountEstimated when the agg lacks it', () => {
+    const m = new Map([['c1', { amountCents: 100, count: 1, oldestDueAt: null }]])
+    expect(Object.hasOwn(buildOverdue([c], FIX_NOW, { pastDueById: m })[0], 'amountEstimated')).toBe(false)
+  })
+  it('buildOverdue carries amountEstimated: true when the agg has it', () => {
+    const m = new Map([['c1', { amountCents: 100, count: 1, oldestDueAt: null, amountEstimated: true }]])
+    expect(buildOverdue([c], FIX_NOW, { pastDueById: m })[0].amountEstimated).toBe(true)
   })
 })

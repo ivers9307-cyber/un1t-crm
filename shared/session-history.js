@@ -1,17 +1,19 @@
 // session-history.js — pure helpers for the "history depth" surfaces:
 //   • groupSessionsByMonth — turns the flat sessions-list items (from
-//     buildSessionsList) into SectionList sections, one per Europe/Dublin
+//     buildSessionsList) into SectionList sections, one per local
 //     calendar month, each carrying a per-month stat line.
 //   • lifetimeMilestones — derivable all-time milestones from the member's
 //     heart_rate_sessions (total sessions / points / hours / longest streak),
 //     with a "notable" flag when a total has just crossed a round number.
 //
-// No IO. champ-app-only, like progress-analytics.js. Months are Europe/Dublin
-// calendar months (see dublin-time.js) — NOT UTC — so a session near midnight
-// lands in the same month the member would say it did.
+// No IO. champ-app-only, like progress-analytics.js. Months are calendar
+// months in `zone` — the member's home studio zone (TZ.13, D7; omitted =
+// Europe/Dublin) — NOT UTC, so a session near midnight lands in the same
+// month the member would say it did.
 
-import { dublinMonthKey } from './dublin-time.js'
+import { monthKeyIn, DEFAULT_TZ } from './zoned-time.js'
 import { currentStreak } from './hr-analytics.js'
+import { productName } from './brand-name.js'
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -43,7 +45,7 @@ const startedMs = (s) => {
  * they render inside the month they occurred but are NOT counted in the header
  * stat (mirrors the sessions-list contract).
  *
- * The month key uses the item's own timestamp (sortMs) via the Europe/Dublin
+ * The month key uses the item's own timestamp (sortMs) via the `zone`
  * calendar. Items with no usable timestamp collect into a trailing 'Undated'
  * section so nothing is dropped.
  *
@@ -51,7 +53,7 @@ const startedMs = (s) => {
  * @returns {Array<{ key:string, title:string, monthKey:string|null,
  *   sessionCount:number, points:number, data:Array }>}
  */
-export function groupSessionsByMonth(items = []) {
+export function groupSessionsByMonth(items = [], zone = DEFAULT_TZ) {
   const byMonth = new Map()
   const undated = []
 
@@ -61,7 +63,7 @@ export function groupSessionsByMonth(items = []) {
       undated.push(item)
       continue
     }
-    const monthKey = dublinMonthKey(ms)
+    const monthKey = monthKeyIn(ms, zone)
     let section = byMonth.get(monthKey)
     if (!section) {
       section = { monthKey, sessionCount: 0, points: 0, data: [] }
@@ -128,13 +130,17 @@ function crossed(value, thresholds) {
  *
  * @param {Array<{started_at?:string, ended_at?:string, effort_points?:number}>} sessions
  * @param {number} nowMs
+ * @param {{ brand?: string, shortName?: string }} [brandOpts]  W1.S4 — the tenant's
+ *   brand ("trained N times at {brand}") and short brand ("{shortName} Points");
+ *   with neither in hand the labels read "trained N times" / "N Points earned".
+ *   The phone passes useBrand(); never a gym literal here.
  * @returns {{
  *   totalSessions:number, totalPoints:number, totalMinutes:number,
  *   totalHours:number, longestStreak:number,
  *   milestones:Array<{ id:string, kind:string, value:number, threshold:number, label:string }>
  * }}
  */
-export function lifetimeMilestones(sessions, nowMs = Date.now()) {
+export function lifetimeMilestones(sessions, nowMs = Date.now(), { brand = '', shortName = '' } = {}, zone = DEFAULT_TZ) {
   const list = (sessions || []).filter((s) => startedMs(s) !== null)
   let totalPoints = 0
   let totalMinutes = 0
@@ -150,7 +156,7 @@ export function lifetimeMilestones(sessions, nowMs = Date.now()) {
   totalPoints = Math.round(totalPoints)
   totalMinutes = Math.round(totalMinutes)
   const totalHours = Math.floor(totalMinutes / 60)
-  const longestStreak = currentStreak(list, nowMs).best
+  const longestStreak = currentStreak(list, nowMs, zone).best
 
   const milestones = []
 
@@ -161,7 +167,7 @@ export function lifetimeMilestones(sessions, nowMs = Date.now()) {
       kind: 'sessions',
       value: totalSessions,
       threshold: sessionMs,
-      label: `You've trained ${sessionMs.toLocaleString()} times at UN1T`,
+      label: `You've trained ${sessionMs.toLocaleString()} times${brand ? ` at ${brand}` : ''}`,
     })
   }
 
@@ -172,7 +178,7 @@ export function lifetimeMilestones(sessions, nowMs = Date.now()) {
       kind: 'points',
       value: totalPoints,
       threshold: pointMs,
-      label: `${pointMs.toLocaleString()} UN1T Points earned`,
+      label: `${pointMs.toLocaleString()} ${productName(shortName, 'points')} earned`,
     })
   }
 

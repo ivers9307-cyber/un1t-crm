@@ -1,11 +1,8 @@
 // src/lib/ads/read.js
 // Dashboard read layer: shape per-ad rows (pure) + load the full dashboard payload.
-import { computeCostPerBooking, loadSpendByAd, loadBookingsByAd, resolveAdId } from './attribution'
-
-function dublinDateStr(offsetDays = 0) {
-  const d = new Date(Date.now() + offsetDays * 86400000)
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin' }).format(d) // YYYY-MM-DD
-}
+import { computeCostPerBooking, loadSpendByAd, loadBookingsByAd, resolveAdId, createdAtWindow } from './attribution'
+import { adsDayZoneForDisplay } from './account-day'
+import { todayStrIn, dateKeyIn, DAY_MS } from '@/lib/location-time'
 
 /** Pure: join ad entities to spend/bookings/insight totals, compute cpa, sort
  *  by cost-per-booking ascending with null-cpa (no bookings) rows last. */
@@ -38,10 +35,14 @@ export function shapePerAdTable(entities, spendByAd, bookingsByAd, insightTotals
 }
 
 /** Load the whole dashboard payload for a location over the last `sinceDays`.
- *  Returns { kpis, perAd, trend }. All reads scoped to location_id + level='ad'. */
+ *  Returns { kpis, perAd, trend }. All reads scoped to location_id + level='ad'.
+ *  TZ.11c: the window is in the ad account's zone (ad_insights_daily.date is a
+ *  Meta account-zone day), falling back to the location's; see account-day.js. */
 export async function loadAdsDashboard(db, locationId, sinceDays = 30) {
-  const since = dublinDateStr(-sinceDays)
-  const until = dublinDateStr(0)
+  const zone = await adsDayZoneForDisplay(db, locationId)
+  const nowMs = Date.now()
+  const since = todayStrIn(zone, nowMs - sinceDays * DAY_MS)
+  const until = todayStrIn(zone, nowMs)
 
   const { data: entRows } = await db.from('ad_entities')
     .select('external_id, name, status').eq('location_id', locationId).eq('level', 'ad')
@@ -50,7 +51,7 @@ export async function loadAdsDashboard(db, locationId, sinceDays = 30) {
   for (const e of entities) if (e.name) nameToId[e.name] = e.external_id
 
   const spendByAd = await loadSpendByAd(db, locationId, since, until)
-  const bookingsByAd = await loadBookingsByAd(db, locationId, since, until, nameToId)
+  const bookingsByAd = await loadBookingsByAd(db, locationId, since, until, nameToId, zone)
 
   // Per-ad insight totals + daily spend trend from ad_insights_daily (level='ad').
   const { data: insights } = await db.from('ad_insights_daily')
@@ -74,13 +75,16 @@ export async function loadAdsDashboard(db, locationId, sinceDays = 30) {
   }
 
   // Attributed bookings per date for the trend (class + consult sources).
+  // TZ.17 — bounded by the window's local midnights and bucketed by the local
+  // day, in the same zone as the spend dates (they were the UTC days).
+  const { startIso, endIso } = createdAtWindow(since, until, zone)
   const { data: cbrDates } = await db.from('class_booking_requests')
     .select('created_at, contacts!inner(ad_external_id, utm_content)')
     .eq('location_id', locationId).eq('status', 'booked')
-    .gte('created_at', since).lte('created_at', until + 'T23:59:59')
+    .gte('created_at', startIso).lt('created_at', endIso)
   for (const r of cbrDates || []) {
     if (!resolveAdId(r.contacts, nameToId)) continue
-    const d = String(r.created_at).slice(0, 10)
+    const d = dateKeyIn(r.created_at, zone)
     ;(trendByDate[d] ||= { date: d, spend: 0, bookings: 0 }).bookings += 1
   }
   const { data: bkDates } = await db.from('bookings')

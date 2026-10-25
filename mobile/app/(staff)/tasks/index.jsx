@@ -15,6 +15,8 @@ import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
 import { listMyTasks, statusLabel } from '../../../lib/tasks-api'
+import { tasksAccessState } from '../../../lib/tasks-access'
+import TasksUnavailable, { TasksPending } from '../../../components/TasksUnavailable'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 import TabletConstrained from '../../../components/TabletConstrained'
 
@@ -96,9 +98,13 @@ export default function TasksIndex() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('open') // 'open' | 'all'
+  // C146 — evaluated every render, so a studio switch re-decides.
+  const access = tasksAccessState(profile, activeLocation)
+  const allowed = access === 'allowed'
 
   const load = useCallback(async () => {
     if (!activeLocation || !profile) return
+    if (!allowed) { setTasks([]); return }
     setError(null)
     const res = await listMyTasks({
       locationId: activeLocation.id,
@@ -107,7 +113,7 @@ export default function TasksIndex() {
     })
     if (!res.success) setError(res.error || 'Failed to load tasks')
     setTasks(res.success ? res.data : [])
-  }, [activeLocation, profile, filter])
+  }, [activeLocation, profile, filter, allowed])
 
   // Refetch on focus so a task just created (and self-assigned) shows up
   // on return. Silent on re-focus — the spinner only shows on first load
@@ -128,6 +134,9 @@ export default function TasksIndex() {
     tasks.filter(t => t.status === 'todo' || t.status === 'in_progress').length,
     [tasks]
   )
+
+  if (access === 'pending') return <TasksPending title="Your tasks" />
+  if (!allowed) return <TasksUnavailable title="Your tasks" />
 
   return (
     <TabletConstrained className="flex-1 bg-un1t-bg">

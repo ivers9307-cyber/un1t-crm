@@ -6,8 +6,10 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerHasDeadline, formatEuro, formatSaleDeadline } from '@/lib/sale-offers'
+import { resolveOffersHomeLocationId, offerBelongsToHome } from '@/lib/offers-home'
 import SaleCountdown from '@/components/offers/SaleCountdown'
 import OfferCheckout from '@/components/offers/OfferCheckout'
+import { displayZoneFor } from '@/lib/display-zone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,7 +51,10 @@ export default async function OfferPage(props) {
   const resumePurchaseId = typeof sp?.purchase === 'string' ? sp.purchase : null
   const db = createServerClient()
   const { data: offer } = await db.from('sale_offers').select('*').eq('slug', slug).maybeSingle()
-  if (!offer) notFound()
+  const homeId = await resolveOffersHomeLocationId(db)
+  if (!offer || !offerBelongsToHome(offer, homeId)) notFound()
+  // TZ.16 — the offer's studio clock for the closed-on date (display only).
+  const zone = await displayZoneFor(db, null, offer.location_id, 'offers')
 
   const open = offerIsOpen(offer)
   const isGift = offer.category === 'gift_card'
@@ -97,7 +102,7 @@ export default async function OfferPage(props) {
             </p>
             <p style={{ color: '#9a9a9a', marginTop: 12, fontSize: 14, lineHeight: 1.6 }}>
               {offerHasDeadline(offer)
-                ? `This offer closed on ${formatSaleDeadline(offer.ends_at, { uppercase: false })}. Keep an eye on your inbox for the next one.`
+                ? `This offer closed on ${formatSaleDeadline(offer.ends_at, { uppercase: false, zone })}. Keep an eye on your inbox for the next one.`
                 : 'This one is off sale at the moment. Get in touch and we will sort you out.'}
             </p>
           </div>

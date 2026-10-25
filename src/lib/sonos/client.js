@@ -151,6 +151,14 @@ async function apiCall(token, method, path, body) {
 
 const enc = (s) => encodeURIComponent(String(s))
 
+// Sonos answers 410 Gone (or 404) to a household read once that household has
+// been deleted or re-created under the account (a system reset or re-setup).
+// The OAuth grant is still fine, so this is "re-link needed", not "Sonos is
+// down": 401/403 stay token problems and 0 stays a network failure.
+export function isHouseholdGone(statusCode) {
+  return statusCode === 410 || statusCode === 404
+}
+
 export function sonosGetHouseholds(token) {
   return apiCall(token, 'GET', '/households')
 }

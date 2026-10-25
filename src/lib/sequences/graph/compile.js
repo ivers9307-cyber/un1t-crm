@@ -54,7 +54,11 @@ function channelColumns(node) {
   }
 }
 
-export function compileGraphToSteps(graph) {
+// STEPATTRIB.1 — `withNodeIds` stamps each row's graph_node_id: the publish
+// route matches rows on it so a republish updates them IN PLACE and their ids
+// (and every email_sends.sequence_step_id pointing at them) survive. Off by
+// default: template install, backfill and the agent insert these rows as-is.
+export function compileGraphToSteps(graph, { withNodeIds = false } = {}) {
   const order = orderNodes(graph)
   const stepOrderById = new Map(order.map((id, i) => [id, i + 1]))
   const byId = new Map(graph.nodes.map(n => [n.id, n]))
@@ -62,6 +66,7 @@ export function compileGraphToSteps(graph) {
   return order.map((id) => {
     const node = byId.get(id)
     const row = {
+      ...(withNodeIds ? { graph_node_id: id } : {}),
       step_order: stepOrderById.get(id),
       step_type: node.type,
       delay_days: 0, delay_hours: 0, delay_minutes: 0,

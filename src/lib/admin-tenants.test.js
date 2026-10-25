@@ -216,8 +216,32 @@ describe('summariseHubForLocation', () => {
     expect(summariseHubForLocation(hub, 'loc-2').attention[0].cardKey).toBe('xero')
   })
 
-  it('degrades to empty when hub assembly was skipped/failed (null)', () => {
-    expect(summariseHubForLocation(null, 'loc-1')).toEqual({ connections: [], attention: [] })
+  it('says so when hub assembly failed (null): unreadable, never "none configured" (HUBREAD.1)', () => {
+    expect(summariseHubForLocation(null, 'loc-1')).toEqual({ connections: [], attention: [], unreadable: true })
+  })
+
+  it('shows a card-level unreadable row on every location, not just the one it is pinned to', () => {
+    const withBlip = {
+      ...hub,
+      attention: [...hub.attention, { cardKey: 'xero', locationId: 'loc-1', label: 'Xero', message: 'Could not load Xero just now.', unreadable: true }],
+    }
+    expect(summariseHubForLocation(withBlip, 'loc-2').attention.map((a) => a.cardKey)).toEqual(['xero', 'xero'])
+  })
+
+  // UN1THARD.6 — the hub emits a un1t.online row for every location; only the
+  // studios that connected are listed.
+  it('lists un1t.online for a connected studio and omits it where it was never connected', () => {
+    const withUn1t = {
+      ...hub,
+      un1t_online: [
+        { locationId: 'loc-1', status: 'not_connected' },
+        { locationId: 'loc-2', status: 'connected' },
+        { locationId: 'loc-3', status: 'unknown' },
+      ],
+    }
+    expect(summariseHubForLocation(withUn1t, 'loc-1').connections.map((c) => c.key)).toEqual(['glofox', 'whatsapp'])
+    expect(summariseHubForLocation(withUn1t, 'loc-2').connections).toContainEqual({ key: 'un1t_online', label: 'un1t.online', status: 'connected' })
+    expect(summariseHubForLocation(withUn1t, 'loc-3').connections).toEqual([{ key: 'un1t_online', label: 'un1t.online', status: 'unknown' }])
   })
 })
 

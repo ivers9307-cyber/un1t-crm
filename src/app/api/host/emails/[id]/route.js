@@ -8,7 +8,7 @@
 //       parent campaign (audience_campaign_id), resolved at send time.
 // DELETE /api/host/emails/[id] — HOST-EMAILS.2. Only a draft or scheduled
 //       email may go; a sent one is the record of what went out, and mig
-//       594's trigger refuses it at the database too.
+//       772's trigger refuses it at the database too.
 // Tenancy: every query .eq('host_id', session.host.id) → 404, not 403.
 
 import { NextResponse } from 'next/server'
@@ -122,7 +122,7 @@ export async function PATCH(request, props) {
 
 // DELETE /api/host/emails/[id] — HOST-EMAILS.2. Only a draft or a scheduled
 // email may go (CAS on status); a sent one is the record of what went out,
-// and mig 594's trigger refuses it at the database too.
+// and mig 772's trigger refuses it at the database too.
 export async function DELETE(_request, props) {
   const params = await props.params
   const session = await getCurrentHost()

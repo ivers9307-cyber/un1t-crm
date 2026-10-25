@@ -4,16 +4,16 @@
 // (PAID-INTRO-P3C.4). Writes locations.settings.payments =
 // { provider, stripe_connected_account_id }.
 //
-// Revolut = UN1T is the merchant on the intro-offer charge (works out of
+// Revolut = the platform is the merchant on the intro-offer charge (works out of
 // the box, no extra setup). Stripe = a direct charge on THIS location's
 // own Stripe Connect account — onboarding must finish (charges_enabled)
 // before the location can be switched over. Follows the same
-// read-merge-write-into-locations.settings pattern as GlofoxIntegrationTab
-// and TwilioIntegrationTab.
+// read-merge-write-into-locations.settings pattern as GlofoxIntegrationTab.
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Save, Loader2, Check, AlertCircle, ExternalLink, RefreshCw } from 'lucide-react'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 export default function PaymentsIntegrationTab({ location, canEdit }) {
   const router = useRouter()
@@ -23,6 +23,9 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
   const [provider, setProvider] = useState(initial.provider || 'revolut')
   const [status, setStatus] = useState(null)
   const [statusLoading, setStatusLoading] = useState(false)
+  // REVIEWNITS.1 (D5): the status read failed, so whether onboarding finished
+  // is unknown. Never read that as "not finished".
+  const [statusFailed, setStatusFailed] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -36,9 +39,10 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
       try {
         const r = await fetch(`/api/locations/${location.id}/stripe-connect/status`, { cache: 'no-store' })
         const j = await r.json().catch(() => ({}))
-        if (!cancelled && r.ok && j.success) setStatus(j.data)
+        if (cancelled) return
+        if (r.ok && j.success) { setStatus(j.data); setStatusFailed(false) } else setStatusFailed(true)
       } catch {
-        // Silently ignore — the tab just shows what it has stored.
+        if (!cancelled) setStatusFailed(true)
       } finally {
         if (!cancelled) setStatusLoading(false)
       }
@@ -89,9 +93,9 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
     try {
       const r = await fetch(`/api/locations/${location.id}/stripe-connect/status`, { cache: 'no-store' })
       const j = await r.json().catch(() => ({}))
-      if (j?.success) setStatus(j.data)
+      if (r.ok && j?.success) { setStatus(j.data); setStatusFailed(false) } else setStatusFailed(true)
     } catch {
-      // Silently ignore.
+      setStatusFailed(true)
     } finally {
       setStatusLoading(false)
     }
@@ -109,7 +113,7 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
     <div className="space-y-4">
       <p className="text-xs text-un1t-subtle">
         Which processor takes the class-funnel intro payment for this location. Revolut
-        charges to the UN1T merchant account and needs no extra setup. Stripe charges
+        charges to the {PLATFORM_NAME} merchant account and needs no extra setup. Stripe charges
         directly to this location&apos;s own connected account — onboarding must be finished
         (charges enabled) before it can be selected below.
       </p>
@@ -132,7 +136,7 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
           onChange={(e) => setProvider(e.target.value)}
           className="w-full max-w-xs bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         >
-          <option value="revolut">Revolut (UN1T)</option>
+          <option value="revolut">Revolut ({PLATFORM_NAME})</option>
           <option value="stripe_connect">Stripe (this location)</option>
         </select>
       </div>
@@ -143,9 +147,11 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
           <div className="text-[11px] text-un1t-muted">
             {status?.charges_enabled
               ? 'Ready — charges enabled.'
-              : hasStripeAccount
-                ? 'Onboarding not finished — charges not yet enabled.'
-                : 'Not connected yet.'}
+              : hasStripeAccount && statusFailed && !status
+                ? "Couldn't check the Stripe status just now. Refresh to try again."
+                : hasStripeAccount
+                  ? 'Onboarding not finished — charges not yet enabled.'
+                  : 'Not connected yet.'}
           </div>
           <div className="flex items-center gap-2 pt-1">
             <button

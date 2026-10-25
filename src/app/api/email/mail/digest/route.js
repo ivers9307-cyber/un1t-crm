@@ -38,7 +38,7 @@ import {
   scopeToNeedsReply, scopeToUnmerged, stampMailRow,
   MAIL_VIEWS, applyView,
 } from '../_helpers'
-import { scopeToVisibleMailboxes } from '../../tickets/_helpers'
+import { scopeToVisibleMailboxes } from '../_conversation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

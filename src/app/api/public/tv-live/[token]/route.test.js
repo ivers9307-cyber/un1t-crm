@@ -1,14 +1,22 @@
 // Tests for the P0-3 token-gated live board.
 //
-// The token resolves tv_displays.token → location, then returns the SAME board
-// payload as /api/public/live/[locationId]. A good token returns 200 + data; an
-// invalid or inactive token returns 404 (never confirm existence).
+// The token resolves tv_displays.token → location, then returns the board
+// payload (buildLiveBoardPayload; its contents are covered by route.board.test.js).
+// A good token returns 200 + data; an invalid or inactive token returns 404
+// (never confirm existence).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-// Stub the board builder — the board internals are covered by the live-route
-// test; here we only assert token resolution + status codes.
+// W0.9a — the kiosk render heartbeat (FLEET-CMD.2). Mocked so the tests assert
+// the CALL, not the fleet_devices write; deviceFromRequest is the real parser
+// so `?device=` is exercised end to end from the request url.
+vi.mock('@/lib/fleet-render', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, stampRender: vi.fn(() => Promise.resolve()) }
+})
+// Stub the board builder — the board internals are covered by
+// route.board.test.js; here we only assert token resolution + status codes.
 vi.mock('@/lib/live-board', () => ({
   buildLiveBoardPayload: vi.fn(() => Promise.resolve({
     ok: true, server_time: 'T', location: { id: 'loc-1', name: 'Stillorgan' },
@@ -16,8 +24,17 @@ vi.mock('@/lib/live-board', () => ({
   })),
 }))
 
+// W1.S1b — the studio's brand rides the payload; resolved through the
+// per-location cache, mocked here so the assertion is the CALL + the shape.
+vi.mock('@/lib/host-brand', () => ({
+  resolveLocationBrand: vi.fn(async () => ({ companyName: 'Gym A North', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
+
 import { GET } from './route.js'
+import { buildLiveBoardPayload } from '@/lib/live-board'
+import { resolveLocationBrand } from '@/lib/host-brand'
 import { createServerClient } from '@/lib/supabase'
+import { stampRender } from '@/lib/fleet-render'
 
 function makeDb({ display, location }) {
   return {
@@ -34,9 +51,9 @@ function makeDb({ display, location }) {
   }
 }
 
-async function callRoute(db, token) {
+async function callRoute(db, token, { url } = {}) {
   createServerClient.mockReturnValue(db)
-  const request = { headers: { get: () => null } }
+  const request = { headers: { get: () => null }, url: url ?? `https://crm.test/api/public/tv-live/${token}` }
   return GET(request, { params: Promise.resolve({ token }) })
 }
 
@@ -51,6 +68,18 @@ describe('GET /api/public/tv-live/[token]', () => {
     expect(body.ok).toBe(true)
     expect(body.location).toEqual({ id: 'loc-1', name: 'Stillorgan' })
     expect(res.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  // TVSCENE.1 — the operator idle scene is scoped to the display the TOKEN
+  // resolved to, never to anything the caller supplies.
+  it('hands the token-resolved display id to the board builder', async () => {
+    const db = makeDb({ display: { id: 'disp-7', location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    expect(res.status).toBe(200)
+    expect(buildLiveBoardPayload).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ displayId: 'disp-7', location: { id: 'loc-1', name: 'Stillorgan' } }),
+    )
   })
 
   it('returns 404 for an unknown token (no row)', async () => {
@@ -70,5 +99,47 @@ describe('GET /api/public/tv-live/[token]', () => {
     db.rpc = vi.fn(() => Promise.resolve({ data: 100000, error: null }))
     const res = await callRoute(db, 'good-token')
     expect(res.status).toBe(429)
+  })
+
+  // W0.9a — kiosks poll the token URL with ?device= (W0.9b), so the token
+  // route must stamp the FLEET-CMD.2 render heartbeat: with the device name
+  // from ?device= and the location the TOKEN resolved to (never a
+  // caller-supplied id).
+  it('stamps the render heartbeat for ?device= against the token-resolved location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token', { url: 'https://crm.test/api/public/tv-live/good-token?device=kiosk-1' })
+    expect(res.status).toBe(200)
+    expect(stampRender).toHaveBeenCalledTimes(1)
+    expect(stampRender).toHaveBeenCalledWith(db, 'kiosk-1', 'loc-1')
+  })
+
+  it('does not stamp when there is no device param', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    expect(res.status).toBe(200)
+    expect(stampRender).not.toHaveBeenCalled()
+  })
+
+  it('does not stamp for an unknown token (device names cannot be probed)', async () => {
+    const db = makeDb({ display: null, location: null })
+    const res = await callRoute(db, 'bad-token', { url: 'https://crm.test/api/public/tv-live/bad-token?device=kiosk-1' })
+    expect(res.status).toBe(404)
+    expect(stampRender).not.toHaveBeenCalled()
+  })
+
+  it('W1.S1b: carries the studio\'s brand from the per-location cache, keyed by the TOKEN\'s location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.brand).toEqual({ name: 'Gym A North', short_name: 'Gym A' })
+    expect(resolveLocationBrand).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-1' }))
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+
+  it('W1.S1b: an unknown token never resolves a brand', async () => {
+    const db = makeDb({ display: null, location: null })
+    await callRoute(db, 'bad-token')
+    expect(resolveLocationBrand).not.toHaveBeenCalled()
   })
 })

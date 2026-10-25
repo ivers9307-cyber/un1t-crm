@@ -20,6 +20,8 @@ import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
 import { getContractingEntity } from './contracting-entity.js'
 import { getAppUrl } from './app-url.js'
+import { getLocationZone, DEFAULT_TZ } from './location-time.js'
+import { logWarn } from './log.js'
 
 // URLSEAM.1 — every link in these emails (/account/contracts/<id>,
 // /contracts/<id>, /privacy) is served by THIS deployment, so the base is
@@ -39,9 +41,18 @@ const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
  * ({ companyName, logoUrl }) from company_settings, via the shared
  * getLocationBranding helper, plus the contracting entity for the
  * footer (LEGALENT.1). Never throws — a branding miss must not break a
- * contract notification; the email template degrades to the plain
- * "UN1T" wordmark.
+ * contract notification; the email template degrades to no wordmark
+ * (W1.S1a: never a fixed gym's name).
  */
+async function contractZone(contract) {
+  try {
+    return await getLocationZone(createServerClient(), contract?.location_id || null)
+  } catch (err) {
+    logWarn('contracts', 'locations.timezone unreadable; the signed-on time prints in DEFAULT_TZ', { contractId: contract?.id, err: err?.message || String(err) })
+    return DEFAULT_TZ
+  }
+}
+
 async function getBranding(contract) {
   const locationId = contract?.location_id || null
   let db = null
@@ -65,14 +76,27 @@ async function getBranding(contract) {
   return { ...branding, entityLabel }
 }
 
+// W1.S1a — the configured brand of the contract's location, '' when the
+// chain resolved nothing. Every recipient-facing line below reads this.
+function brandOf(branding) {
+  return String(branding?.companyName || '').trim()
+}
+
 function brandedHeader(branding) {
-  const companyName = branding?.companyName || 'UN1T'
+  const companyName = brandOf(branding)
   if (branding?.logoUrl) {
     return `<div style="text-align:center;padding:24px 0;">
       <img src="${branding.logoUrl}" alt="${escapeHtml(companyName)}" style="max-height:60px;max-width:200px;" />
     </div>`
   }
   return `<div style="text-align:center;padding:24px 0;font-size:24px;font-weight:bold;letter-spacing:0.05em;">${escapeHtml(companyName)}</div>`
+}
+
+// The footer names the contracting entity (LEGALENT.1), else the brand; with
+// neither it is just the Privacy link (W1.S1a: no fixed gym name stands in).
+function footerEntity(branding) {
+  const label = String(branding?.entityLabel || '').trim() || brandOf(branding)
+  return label ? `${escapeHtml(label)} · ` : ''
 }
 
 function emailShell(innerHtml, branding) {
@@ -86,7 +110,7 @@ function emailShell(innerHtml, branding) {
       ${innerHtml}
     </div>
     <div style="padding:24px 32px;border-top:1px solid #e5e7eb;font-size:11px;color:#6b7280;text-align:center;">
-      ${escapeHtml(branding?.entityLabel || branding?.companyName || 'UN1T')} · <a href="${getAppUrl()}/privacy" style="color:#6b7280;">Privacy</a>
+      ${footerEntity(branding)}<a href="${getAppUrl()}/privacy" style="color:#6b7280;">Privacy</a>
     </div>
   </div>
 </body>
@@ -106,11 +130,14 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
   if (!recipient?.email) return { ok: false, error: 'No recipient email' }
   const branding = await getBranding(contract)
   const reviewUrl = `${getAppUrl()}/account/contracts/${contract.id}`
-  const subject = `Action required: ${templateName || 'Your contract'} from UN1T`
+  const brand = brandOf(branding)
+  const subject = brand
+    ? `Action required: ${templateName || 'Your contract'} from ${brand}`
+    : `Action required: ${templateName || 'Your contract'}`
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">A contract is ready for your review</h2>
     <p>Hi ${escapeHtml(recipient.full_name || 'there')},</p>
-    <p>${escapeHtml(issuer?.full_name || 'A UN1T administrator')} has issued you the
+    <p>${escapeHtml(issuer?.full_name || (brand ? `An administrator at ${brand}` : 'An administrator'))} has issued you the
     following contract for review and signature:</p>
     <p style="background:#f9fafb;border-left:3px solid #111827;padding:12px 16px;margin:16px 0;font-weight:600;">
       ${escapeHtml(templateName || 'Contract')}
@@ -129,6 +156,10 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
       to: recipient.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-issued',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -153,8 +184,18 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
  * @param {object} args.recipient    — { full_name, email }
  * @param {string} args.templateName — for the subject line
  */
+// PUSHDONE.1a — Postmark rejections no retry can fix: 300 (invalid email
+// request, e.g. a malformed To) and 406 (inactive recipient: the address
+// hard-bounced or complained before). sendEmail carries Postmark's ErrorCode
+// on the thrown error as `errorCode`. Deliberately narrow: 400/401 (sender
+// signature) and every other code are operator-fixable or transient, so they
+// stay retryable — marking one permanent would record a reminder nobody got.
+const PERMANENT_REMINDER_ERROR_CODES = new Set([300, 406])
+
 export async function sendContractReminderEmail({ contract, recipient, templateName }) {
-  if (!recipient?.email) return { ok: false, error: 'No recipient email' }
+  // C21 PUSHDONE.1 — `permanent`: retrying tomorrow cannot fix this one, so
+  // the reminder cron does not hold its stamp back for it.
+  if (!recipient?.email) return { ok: false, error: 'No recipient email', permanent: true }
   const branding = await getBranding(contract)
   const reviewUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const subject = `Reminder: ${templateName || 'Your contract'} is awaiting your signature`
@@ -178,13 +219,19 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
       to: recipient.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-reminder',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
     })
     return { ok: true }
   } catch (e) {
-    return { ok: false, error: e?.message || 'Postmark send failed' }
+    const error = e?.message || 'Postmark send failed'
+    if (PERMANENT_REMINDER_ERROR_CODES.has(e?.errorCode)) return { ok: false, error, permanent: true }
+    return { ok: false, error }
   }
 }
 
@@ -202,8 +249,12 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
  *
  * @param {Buffer|Uint8Array|null} [args.pdfBuffer] optional signed PDF
  */
-export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null }) {
+export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null, zone = null }) {
   const branding = await getBranding(contract)
+  // TZ.8b — "signed on …" is the contract's studio wall clock. The sign route
+  // passes the zone it already resolved; otherwise read it (display only: an
+  // unreadable zone prints DEFAULT_TZ rather than losing the confirmation).
+  const signedZone = zone || await contractZone(contract)
   const recipientUrl = `${getAppUrl()}/account/contracts/${contract.id}`
   const issuerUrl = `${getAppUrl()}/contracts/${contract.id}`
   const results = { recipient: null, issuer: null }
@@ -233,18 +284,22 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
       <h2 style="font-size:20px;margin:0 0 16px 0;">Your signed contract</h2>
       <p>Hi ${escapeHtml(recipient.full_name || 'there')},</p>
       <p>Thanks for signing <strong>${escapeHtml(templateName || 'your contract')}</strong>.
-      A copy is stored in your UN1T account and a copy stays with us. You
+      A copy is stored in your ${escapeHtml(brandOf(branding) ? `${brandOf(branding)} account` : 'account')} and a copy stays with us. You
       can re-open and print it any time:</p>
       <p style="text-align:center;margin:28px 0;">
         <a href="${recipientUrl}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">View signed contract</a>
       </p>
       <p style="font-size:12px;color:#6b7280;">For your records, the contract was signed
-      on ${formatFullDateTimeInTZ(contract.signed_at || new Date())}.</p>`
+      on ${formatFullDateTimeInTZ(contract.signed_at || new Date(), signedZone)}.</p>`
     try {
       await sendEmail({
         to: recipient.email,
         subject,
         htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
         stream: 'outbound',
         tag: 'contract-signed',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -275,6 +330,10 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         to: issuer.email,
         subject,
         htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
         stream: 'outbound',
         tag: 'contract-signed-issuer',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -313,6 +372,10 @@ export async function sendContractDeclinedEmail({ contract, recipient, issuer, t
       to: issuer.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-declined',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -346,6 +409,10 @@ export async function sendContractRevokedEmail({ contract, recipient, templateNa
       to: recipient.email,
       subject,
       htmlBody: emailShell(innerHtml, branding),
+      // W1.E2 — the org/location brand as display name on the platform address.
+      // fromName only, never locationId: staff mail must not pick up the
+      // studio's customer mailbox as its Reply-To.
+      fromName: branding?.companyName || undefined,
       stream: 'outbound',
       tag: 'contract-revoked',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },

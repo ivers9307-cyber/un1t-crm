@@ -62,7 +62,7 @@
 //     so in the UI; a plug silently left on all night is a support ticket.
 
 import { resolveServeWindows } from '@/lib/schedule/desired-state'
-import { DEFAULT_TZ } from '@/lib/tz-time'
+import { DEFAULT_TZ } from '@shared/zoned-time'
 
 export const overrideKey = (ov) => 'ov:' + (ov?.set_at || `${ov?.until}:${ov?.state}`)
 export const windowKey = (w) => 'w:' + w.on_at

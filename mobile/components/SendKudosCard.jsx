@@ -4,10 +4,9 @@
 // confirmation and clears the form; there is no staff-side kudos list.
 //
 // POSTs /api/contacts/[id]/kudos via api() (sendContactKudos). The route
-// is gated on the web `consultations` permission server-side; the screen
-// gates visibility with canDashboard(profile, 'consultations',
-// activeLocation), which resolves the same top-level key against the same
-// web defaults, so mobile mirrors the web card's gating exactly.
+// is gated on `consultations` at the contact's location server-side; the
+// contact screen shows this card only when the drawer bundle's per-contact
+// `permissions.kudos` flag is true (ROLEUI.1b), the same decision.
 import { useState } from 'react'
 import { View, Text, TextInput, Pressable } from 'react-native'
 import { Button } from './ui'

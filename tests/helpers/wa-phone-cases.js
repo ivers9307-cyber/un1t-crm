@@ -1,0 +1,87 @@
+// WAPHONE.1 — one fixture table for the phone → WhatsApp-number rule.
+//
+// Read by src/lib/phone-validate.test.js (the JS rule, waPhoneFromPhone) and
+// tests/wa-phone-normaliser-parity.test.js (the SQL rule, public.normalize_wa_phone
+// from mig 753, run in PGlite), so the two can never disagree on a shape
+// without a test failing. Every shape the 19 Oct 2026 census found on a contact
+// with no wa_phone has a row here. Fictional numbers only: the repo is public
+// (UK 07700 900xxx is Ofcom's drama range; +1 555 01xx is the NANP fiction range).
+//
+// [input, expected wa_phone (E.164 digits, no '+') or null, shape]
+export const WA_PHONE_CASES = [
+  // Irish mobiles, every spelling
+  ['0871234567', '353871234567', 'IE national'],
+  ['087 123 4567', '353871234567', 'IE national, spaces'],
+  ['(087) 123-4567', '353871234567', 'IE national, brackets + dash'],
+  ['083-123-4567', '353831234567', 'IE national 083'],
+  ['0891234567', '353891234567', 'IE national 089'],
+  ['871234567', '353871234567', 'IE bare, no trunk zero'],
+  ['85 123 4567', '353851234567', 'IE bare, spaces'],
+  ['353871234567', '353871234567', 'IE with country code, no +'],
+  ['+353871234567', '353871234567', 'IE E.164'],
+  ['+353 87 123 4567', '353871234567', 'IE E.164, spaces'],
+  ['00353871234567', '353871234567', 'IE 00 prefix'],
+  ['0035387 123 4567', '353871234567', 'IE 00 prefix, spaces'],
+  ['  +353 (0)87 123 4567', '353871234567', 'IE +353 (0) trunk, leading space'],
+  ['3530871234567', '353871234567', 'IE country code + trunk zero, no + (95 live rows)'],
+  ['+3530871234567', '353871234567', 'IE +353 + trunk zero'],
+  ['003530871234567', '353871234567', 'IE 00353 + trunk zero'],
+  ['+353870234567', '353870234567', 'IE with a 0 mid-number'],
+  // UK mobiles
+  ['07700900123', '447700900123', 'UK national 07'],
+  ['07700 900123', '447700900123', 'UK national, space'],
+  ['+447700900123', '447700900123', 'UK E.164'],
+  ['+44 7700 900123', '447700900123', 'UK E.164, spaces'],
+  ['00447700900123', '447700900123', 'UK 00 prefix'],
+  ['447700900123', '447700900123', 'UK with country code, no +'],
+  ['+4407700900123', '447700900123', 'UK +44 + trunk zero'],
+  ['4407700900123', '447700900123', 'UK 44 + trunk zero, no +'],
+  // Other countries, only with an explicit + or 00
+  ['+380 50 123 4567', '380501234567', 'Ukraine'],
+  ['+356 7912 3456', '35679123456', 'Malta'],
+  ['+34 612 345 678', '34612345678', 'Spain'],
+  ['+33 6 12 34 56 78', '33612345678', 'France'],
+  ['0049 151 23456789', '4915123456789', 'Germany 00 prefix'],
+  ['+61 412 345 678', '61412345678', 'Australia'],
+  ['+1 (212) 555-0123', '12125550123', 'US NANP'],
+  ['+91 98765 43210', '919876543210', 'India'],
+  ['+86 138 0013 8000', '8613800138000', 'China, 13 digits'],
+  // Never mapped
+  [null, null, 'null'],
+  [undefined, null, 'undefined'],
+  ['', null, 'empty'],
+  ['   ', null, 'blank'],
+  ['+', null, 'plus only'],
+  ['---', null, 'punctuation only'],
+  ['01 555 1234', null, 'IE landline, Dublin'],
+  ['045 123456', null, 'IE landline, regional'],
+  ['0818 123 456', null, 'IE lo-call'],
+  ['+35315551234', null, 'IE landline in E.164'],
+  ['+353 42 123 4567', null, 'IE landline +353 42'],
+  ['086123456', null, 'IE mobile one digit short'],
+  ['08712345678', null, 'IE mobile one digit long'],
+  ['+3538712345678', null, 'IE +353 mobile one digit long'],
+  ['+35387123456', null, 'IE +353 mobile one digit short'],
+  ['35308712345678', null, 'IE 3530 + one digit long'],
+  ['+353821234567', null, 'IE 082 (not a mobile prefix)'],
+  ['+44 20 7946 0123', null, 'UK landline'],
+  ['02079460123', null, 'UK landline national'],
+  ['442079460123', null, 'UK landline, no +'],
+  ['+10000000000', null, 'ClassPass placeholder'],
+  ['+1 012 555 0123', null, 'NANP area code starting 0'],
+  ['+1 212 155 0123', null, 'NANP exchange starting 1'],
+  ['+0000000', null, 'zeros'],
+  ['+1111111111', null, 'repeated digit'],
+  ['0000000000', null, 'national zeros'],
+  ['+987654', null, 'international too short'],
+  ['+1234567890123456', null, 'international too long'],
+  ['+0123456789', null, 'country code 0'],
+  ['3174278753', null, 'bare US national (would read as Dutch +31)'],
+  ['34612345678', null, 'bare foreign, no +'],
+  ['919876543210', null, 'bare foreign, no +'],
+  ['123456', null, 'too short'],
+  ['someone@example.com', null, 'email in the phone field'],
+  ['087 123 4567 (mum)', null, 'letters: not their own number'],
+  ['n/a', null, 'letters'],
+  ['tel +353871234567', null, 'letters around a number'],
+]

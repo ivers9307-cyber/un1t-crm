@@ -11,7 +11,7 @@
 // `src/lib/pipeline-reclassify.js`; this is that loop, extracted so the simple
 // callers don't each re-roll (and mis-roll) it. Sites with an awkward shape
 // (chunked IN-lists, per-page virtual-field resolution) still inline their own
-// loop — see `fetchAllSmsAudience` in `src/lib/sms.js`.
+// loop — see `fetchAllWhatsAppAudience` in `src/lib/whatsapp.js`.
 //
 // CONTRACT
 //   buildQuery(from, to) MUST return a PostgREST query that already carries
@@ -24,7 +24,7 @@
 //   - Loops, accumulating pages, until a page comes back shorter than pageSize
 //     (the end of the data) or the hardCap is reached.
 //   - Throws on the first page error (mirrors fetchInvoicesByStatus /
-//     fetchAllSmsAudience — callers that want best-effort wrap in try/catch).
+//     fetchAllWhatsAppAudience — callers that want best-effort wrap in try/catch).
 //   - hardCap is a safety ceiling, not a target: crossing it should prompt a
 //     redesign (streaming, server-side aggregation), not a bigger number.
 

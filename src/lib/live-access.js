@@ -52,22 +52,21 @@
 //    replayed through the same tier order, applied per-command — never a
 //    single RESTRICTIVE FOR ALL, which silently folds SELECT away). Out of
 //    scope here; the audit item stays OPEN until it lands.
-// 2. The public board. `/api/public/live/[locationId]` takes no auth at all —
-//    only an IP+location rate limit — and returns a live HR board with
-//    `First L.` names, current BPM and zone. Its own header records this as
-//    the unfinished half of P0-3. Any location member can also read
-//    `tv_displays.token` (its policy is membership-scoped too) and use the
-//    token-gated twin. So "live HR + member identity" is masked after this
-//    change, not confidential. Deliberate for the lobby TV; not a regression;
-//    closed only by migrating every TV onto /tv/live/[token] and retiring the
-//    location-keyed entrypoint.
+// 2. The public board. `/api/public/tv-live/[token]` takes no auth at all —
+//    the opaque tv_displays.token is the auth, plus an IP+token rate limit —
+//    and returns a live HR board with `First L.` names, current BPM and zone.
+//    Any location member can read `tv_displays.token` (its policy is
+//    membership-scoped too) and open the board. So "live HR + member
+//    identity" is masked after this change, not confidential. Deliberate for
+//    the lobby TV; not a regression. (The location-keyed
+//    /api/public/live/[locationId] twin, readable by anyone who could guess a
+//    location id, was retired in W0.9c.)
 //
 // WHY IT CANNOT BLANK A STUDIO DISPLAY
 // ------------------------------------
-// The in-studio TV / kiosk surfaces do NOT call this family. `/tv/[locationId]`
-// polls `/api/public/live/[locationId]` and `/tv/live/[token]` polls
-// `/api/public/tv-live/[token]` — both unauthenticated by design (the token is
-// the auth), both untouched here. The only callers of /api/live/** in the
+// The in-studio TV / kiosk surfaces do NOT call this family. `/tv/live/[token]`
+// polls `/api/public/tv-live/[token]` — unauthenticated by design (the token is
+// the auth), untouched here. The only callers of /api/live/** in the
 // estate are LiveClassClient.jsx and DetectedTab.jsx, which render *inside*
 // the already-gated /live page, plus a master. Mobile calls no /api/live route
 // at all — its staff surfaces reach /api/studio-management/* and /api/timer/*
@@ -140,6 +139,27 @@ export function roleAtLocation(user, locationId) {
 }
 
 /**
+ * C116 GATES-2 — may the caller MUTATE live state at `locationId` (end a
+ * session, pair a strap, switch test mode, claim a strap)? The role half of
+ * the mutation guards: master, or a LIVE_MUTATION_ROLES role AT the location.
+ * The /live page passes it to the client so a button shows only when its
+ * route would act. It is the test both guards below make when a route passes
+ * `roles: LIVE_MUTATION_ROLES` (every mutation route does);
+ * src/lib/live-access.test.js pins the two to the same cases.
+ * (Membership and the studio_management permission are the guards' other
+ * checks, and the page already requires both.)
+ *
+ * @param {object|null} user
+ * @param {string|null} locationId
+ * @returns {boolean}
+ */
+export function canMutateLiveAt(user, locationId) {
+  if (!user || !locationId) return false
+  if (user.isMaster || user.role === 'master') return true
+  return LIVE_MUTATION_ROLES.includes(roleAtLocation(user, locationId))
+}
+
+/**
  * Guard for every /api/live/[locationId]/** route.
  *
  * Order is deliberate: 401 → location scope → role → permission. The first
@@ -148,13 +168,16 @@ export function roleAtLocation(user, locationId) {
  *
  * @param {object|null} user            getCurrentUser() result
  * @param {string} locationId           the route's [locationId]
- * @param {{ roles?: readonly string[] }} [opts]
+ * @param {{ roles?: readonly string[], permission?: string }} [opts]
  *   `roles` — when present, the caller must ALSO hold one of these roles at
  *   the location (the mutation routes). Omit for read routes.
+ *   `permission` — the permission to resolve AT the location; defaults to
+ *   `studio_management`. Only `/roster` passes `class_roster` (UN1TBOOK.12):
+ *   the who's-coming list without HR data, straps or door control.
  * @returns {import('next/server').NextResponse|null} a response to return, or
  *   null when the caller is allowed through.
  */
-export function guardLiveLocation(user, locationId, { roles = null } = {}) {
+export function guardLiveLocation(user, locationId, { roles = null, permission = LIVE_PERMISSION } = {}) {
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
@@ -165,9 +188,14 @@ export function guardLiveLocation(user, locationId, { roles = null } = {}) {
   if (roles && !isMaster && !roles.includes(roleAtLocation(user, locationId))) {
     return NextResponse.json({ ok: false, error: 'Coach only' }, { status: 403 })
   }
-  if (!hasPermissionForLocation(user, locationId, LIVE_PERMISSION)) {
+  if (!hasPermissionForLocation(user, locationId, permission)) {
     return NextResponse.json(
-      { ok: false, error: 'Studio management permission required' },
+      {
+        ok: false,
+        error: permission === 'class_roster'
+          ? 'Class roster permission required'
+          : 'Studio management permission required',
+      },
       { status: 403 },
     )
   }

@@ -8,7 +8,8 @@
 //
 // The single rule: every team_member with an email has a
 // contact_id pointing at someone in the contacts table. Match by
-// case-insensitive email at the team's location; create otherwise.
+// case-insensitive email at the team's location, else anywhere in its
+// organisation (W0.6: never beyond it); create otherwise.
 //
 // CLASSIFY.2: lead_status is decommissioned. New contacts get their
 // pipeline_stage_slug derived from the deal trigger when a deal is
@@ -24,6 +25,50 @@
 import { logWarn } from './log'
 import { splitName } from './name-utils'
 import { escapeLikePattern } from './like-escape'
+import { upsertContactStudio } from './contact-studios.js'
+
+// W0.6b — contacts_email_org_unique (mig 712) is case-SENSITIVE on `email`,
+// so one organisation can legitimately hold `Sam@Example.com` and
+// `sam@example.com` as two rows, while every lookup here is a
+// case-INSENSITIVE ilike that matches both. `.maybeSingle()` turned that
+// pair into PGRST116, which the discarded error read as "no match": the
+// INSERT then 23505'd, the in-org re-check PGRST116'd again, and a known
+// member was refused on every signup. Each lookup reads `.limit(2)` and
+// picks deterministically instead; two is enough to tell "one" from "more".
+const HOLDER_LIMIT = 2
+
+/**
+ * Deterministic choice among contacts matched by a case-insensitive email
+ * lookup: the row whose stored email equals the normalised input EXACTLY
+ * first (it is the row the index would have collided on), then the oldest
+ * `created_at` (the original record, not a later import dupe), then the
+ * lowest id as a total-order tiebreak. Null for no rows.
+ *
+ * @param {Array<{id: string, email?: string|null, created_at?: string|null}>|null} rows
+ * @param {string} normalisedEmail lower-cased, trimmed
+ */
+export function pickEmailHolder(rows, normalisedEmail) {
+  if (!Array.isArray(rows) || rows.length === 0) return null
+  const exact = rows.filter((r) => r?.email === normalisedEmail)
+  const pool = exact.length ? exact : rows
+  return [...pool].sort((a, b) => {
+    const at = new Date(a?.created_at || 0).getTime()
+    const bt = new Date(b?.created_at || 0).getTime()
+    if (at !== bt) return at - bt
+    return String(a?.id).localeCompare(String(b?.id))
+  })[0] || null
+}
+
+/** Pick from a `.limit(HOLDER_LIMIT)` page, saying so when it held two. */
+function holderFrom(rows, normalisedEmail, where) {
+  const picked = pickEmailHolder(rows, normalisedEmail)
+  if (picked && rows.length > 1) {
+    logWarn('race-contact-linking', `several contacts hold ${normalisedEmail} ${where} (case variants); linking one deterministically`, {
+      picked: picked.id, candidates: rows.map((r) => r.id),
+    })
+  }
+  return picked?.id || null
+}
 
 /**
  * Find an existing contact at the location with the given email,
@@ -41,19 +86,19 @@ import { escapeLikePattern } from './like-escape'
  * @param {string|null} [args.name]
  * @param {string|null} [args.phone]
  * @param {boolean} [args.restrictToLocation=false]  when true, skip the
- *        cross-location email fallback. Public, unauthenticated lead/booking
- *        forms set this so a known email can't resolve an existing person at
- *        another location (and then have attribution/consent/a deal written
- *        against them) — an IDOR on a public write path.
+ *        sibling-location email fallback and match at this location only.
+ *        The INSERT is still judged by contacts_email_org_unique (per
+ *        organisation), so on a 23505 the in-org holder is adopted even
+ *        under this flag: a sibling-location contact is the same person,
+ *        and the alternative is a 500 for a known member.
  * @param {boolean} [args.restrictToOrg=false]  LEADCAP.1 — match at this
  *        location first, then fall back to sibling locations in the SAME
- *        organisation, never globally. Public forms want this rather than
- *        restrictToLocation: `contacts_email_unique` (mig 008) is a GLOBAL
- *        unique index on email, so restricting to the location left a known
- *        email with nowhere to go — the lookup missed, the INSERT hit 23505,
- *        and the form 500'd. Org scope keeps the cross-TENANT IDOR closed
- *        (that was the real exposure) while letting a Stillorgan member join
- *        a Hatch Street list. Takes precedence over restrictToLocation.
+ *        organisation, never globally. Since W0.6 this is the DEFAULT for
+ *        every caller (`contacts_email_org_unique`, mig 712, is unique per
+ *        organisation, so a match outside the org is another tenant's person,
+ *        never this one); the flag is kept only so a public-form call site
+ *        reads as the org-scoped lookup it is. It never widens anything.
+ *        restrictToLocation still narrows to the one location.
  * @param {object} [args.insertFields={}]  extra columns stamped onto the
  *        contact INSERT only (HOST-MASTER.4: e.g. { automations_exempt: true }
  *        for host-sourced signups). NEVER applied to a matched existing
@@ -80,16 +125,32 @@ async function findContactInOrg(db, locationId, normalisedEmail) {
   const ids = (siblings || []).map((l) => l.id).filter(Boolean)
   if (!ids.length) return null
 
-  const { data: match } = await db
+  const { data: matches, error } = await db
     .from('contacts')
-    .select('id')
+    .select('id, email, created_at')
     .ilike('email', escapeLikePattern(normalisedEmail))
     .in('location_id', ids)
-    .maybeSingle()
-  return match?.id || null
+    .limit(HOLDER_LIMIT)
+  if (error) {
+    logWarn('race-contact-linking', `org-scoped lookup failed for ${normalisedEmail}`, { locationId, err: error })
+    return null
+  }
+  return holderFrom(matches || [], normalisedEmail, 'in this organisation')
 }
 
-export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, restrictToOrg = false, insertFields = {} }) {
+// `restrictToOrg` is accepted and deliberately not read: the org-scoped lookup
+// is the default (W0.6). Call sites keep passing it so they read as the
+// public-form rule they implement.
+// ORGCONTACTS.1 — a sibling studio's contact registering here has joined
+// this studio: its contact_studios lead row (mig 764). A contact created or
+// found AT this studio needs none (the contacts trigger made its primary row).
+// Best-effort bookkeeping: logged, never the signup's failure.
+async function recordJoinedHere(db, contactId, locationId) {
+  const rel = await upsertContactStudio(db, { contactId, locationId, kind: 'lead', source: 'lead_form', status: 'active' })
+  if (!rel.ok) logWarn('race-contact-linking', 'contact_studios lead row not written', { locationId, contactId, error: rel.error })
+}
+
+export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, insertFields = {} }) {
   if (!email || typeof email !== 'string') return null
   const normalised = email.toLowerCase().trim()
   if (!normalised || !normalised.includes('@')) return null
@@ -104,33 +165,30 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
     // caller then links a team_member / lead / booking to that stranger — the
     // same IDOR the restrictToLocation flag below exists to prevent, reached by
     // a different route. See src/lib/like-escape.js.
-    const { data: existing } = await db
+    const { data: existing, error: existingErr } = await db
       .from('contacts')
-      .select('id')
+      .select('id, email, created_at')
       .eq('location_id', locationId)
       .ilike('email', escapeLikePattern(normalised))
-      .maybeSingle()
-    if (existing?.id) return existing.id
+      .limit(HOLDER_LIMIT)
+    if (existingErr) {
+      logWarn('race-contact-linking', `location lookup failed for ${normalised}`, { locationId, err: existingErr })
+    }
+    const here = holderFrom(existing || [], normalised, 'at this location')
+    if (here) return here
 
-    // No match here. Unless the caller restricts to this location, try a
-    // global match (the contact may live at a sibling location in the same
-    // org). Don't change location_id — the contact stays where it is, the
-    // team_members row just points across. Public lead/booking forms set
-    // restrictToLocation so they never resolve a cross-location contact from a
-    // bare email (IDOR).
-    if (restrictToOrg) {
-      // LEADCAP.1: sibling locations in the same org only. Mutually exclusive
-      // with the global fallback below — an org match is the widest a public
-      // form may ever resolve.
+    // No match here. Unless the caller restricts to this location, try the
+    // sibling locations in the same organisation. Don't change location_id —
+    // the contact stays where it is, the team_members row just points across.
+    if (!restrictToLocation) {
+      // W0.6 — org-wide is the WIDEST any caller may resolve, public or
+      // staff: contacts_email_org_unique (mig 712) is per organisation, so
+      // a match outside it is another tenant's person, never this one.
       const sibling = await findContactInOrg(db, locationId, normalised)
-      if (sibling) return sibling
-    } else if (!restrictToLocation) {
-      const { data: anywhere } = await db
-        .from('contacts')
-        .select('id')
-        .ilike('email', escapeLikePattern(normalised))
-        .maybeSingle()
-      if (anywhere?.id) return anywhere.id
+      if (sibling) {
+        await recordJoinedHere(db, sibling, locationId)
+        return sibling
+      }
     }
 
     // Create. CLASSIFY.2: no lead_status / pipeline_stage_slug set
@@ -159,14 +217,17 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       .select('id')
       .single()
     if (error) {
-      // 23505 = the GLOBAL contacts_email_unique index (mig 008): this email
-      // already exists somewhere. Under restrictToOrg that can only be a
-      // concurrent insert racing us in-org (two rapid submits), or another
-      // TENANT's contact. Re-check in-org and adopt the winner; otherwise
-      // fail closed rather than link across organisations.
-      if (error.code === '23505' && restrictToOrg) {
+      // 23505 = contacts_email_org_unique (mig 712): this email already
+      // exists in this ORGANISATION. That can only be a concurrent insert
+      // racing us in-org (two rapid submits), or a row outside the org
+      // under a half-applied schema. Re-check in-org and adopt the winner;
+      // otherwise fail closed rather than link across organisations.
+      if (error.code === '23505') {
         const raced = await findContactInOrg(db, locationId, normalised)
-        if (raced) return raced
+        if (raced) {
+          await recordJoinedHere(db, raced, locationId)
+          return raced
+        }
         logWarn('race-contact-linking', `email exists outside this org, refusing to link: ${normalised}`, { locationId })
         return null
       }

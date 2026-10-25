@@ -39,7 +39,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import {
   ESCALATION_TABLE,
@@ -57,7 +57,7 @@ const EVIDENCE = 'bounced_campaign_count, bounced_campaign_ids, bounce_types, bo
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -78,6 +78,10 @@ export async function POST(request, { params }) {
 
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
+  // ROLESWEEP.1a — the permission is judged at the escalation's location.
+  if (!hasPermissionForLocation(user, row.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   // Only the review cohort. A suppression is already suppressed, and offering
   // this on one would mean a second active row for the same contact, which

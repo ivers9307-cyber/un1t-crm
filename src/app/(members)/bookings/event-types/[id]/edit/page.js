@@ -6,6 +6,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import EventForm from '@/components/EventForm'
 import Link from 'next/link'
+import { canManageEventType } from '@/lib/event-type-gates'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +20,12 @@ export default async function EditBookingTypePage(props) {
   // IDOR guard — a foreign-location row renders the SAME panel as a
   // missing one, so foreign ids aren't enumerable. Sibling of the detail
   // page's guard (found by the PAGE-SCOPE.1 scan).
-  if (!event || assertLocationAccess(user, event.location_id)) {
+  //
+  // ROLEUI.1 — and a caller who may not manage this booking type (not a
+  // master, not MANAGER_ROLES at its location) gets the same panel: the form
+  // saves through PUT /api/bookings/event-types/[id] and syncs reminders
+  // through /reminders (EVENTTYPERLS.1), and both judge exactly this.
+  if (!event || assertLocationAccess(user, event.location_id) || !canManageEventType(user, event.location_id)) {
     return (
       <div className="p-8">
         <p className="text-un1t-subtle">Booking type not found.</p>

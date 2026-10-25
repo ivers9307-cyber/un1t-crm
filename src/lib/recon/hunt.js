@@ -43,10 +43,11 @@ import { withMailbox, searchRaw, fetchCandidate, downloadPart } from './imap-cli
 import { buildHuntQueries } from './hunt-queries'
 import { scoreHuntCandidate, isHuntMatch } from './hunt-scoring'
 import { enqueueFromHuntFind } from '@/lib/invoices-queue/enqueue'
+import { HUNT_WEEKLY_BUDGET_USD } from './budget'
 
 export const MAX_CANDIDATES_SCORED = 4
 export const PER_MAILBOX_UID_CAP = 8
-export const HUNT_WEEKLY_BUDGET_USD = 15
+export { HUNT_WEEKLY_BUDGET_USD }
 
 const HUNTED_INVOICES_BUCKET = 'hunted-invoices'
 const AUTH_ERROR_RE = /auth|login|credentials/i

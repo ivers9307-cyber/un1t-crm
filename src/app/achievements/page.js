@@ -37,6 +37,8 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import AchievementsAdminTable from '@/components/AchievementsAdminTable'
+import { getLocationBranding } from '@/lib/location-branding'
+import { productName } from '@/lib/brand-name'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,6 +68,10 @@ export default async function AdminAchievementsPage() {
     db.from('contact_achievements').select('rule_id'),
   ])
 
+  // W1.S2 — the points field reads "{Brand} Points" for the active studio.
+  const { shortName } = await getLocationBranding(db, user.activeLocation?.id)
+  const pointsLabel = productName(shortName, 'points')
+
   const earnedCounts = {}
   for (const r of earnedRes.data || []) {
     earnedCounts[r.rule_id] = (earnedCounts[r.rule_id] || 0) + 1
@@ -90,6 +96,7 @@ export default async function AdminAchievementsPage() {
         initialRules={rules}
         eventTypes={eventTypesRes.data || []}
         locations={locationsRes.data || []}
+        pointsLabel={pointsLabel}
       />
     </div>
   )

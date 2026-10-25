@@ -42,7 +42,7 @@
 // provider that half-works is worse than one that says why it cannot: an
 // operator who clicks *Sign in with Google*, completes consent, and watches the
 // mailbox die seven days later has been given a broken feature and a support
-// ticket, where an operator who is told "this needs Google verification and a
+// conversation, where an operator who is told "this needs Google verification and a
 // CASA assessment we have not bought" has been given a decision to escalate.
 // The registry therefore carries Google as a first-class entry whose status is
 // `unavailable` and whose reason names the actual blocker. When the business
@@ -310,7 +310,7 @@ export function resolveOAuthProvider(providerKey, { env = process.env } = {}) {
   const clientSecret = String(env[provider.clientSecretEnv] ?? '').trim()
   if (!clientId || !clientSecret) {
     // The env var NAMES are safe to state and are the single most useful thing
-    // to say — they turn "it does not work" into a ticket somebody can close.
+    // to say — they turn "it does not work" into a conversation somebody can close.
     // The VALUES are never touched here.
     return {
       ok: false,

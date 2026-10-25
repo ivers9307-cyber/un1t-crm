@@ -4,7 +4,10 @@ import { useState } from 'react'
 import { ExternalLink, Copy, Check, Trash2, Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
-export default function EventActions({ slug, eventId, eventName }) {
+// ROLEUI.1 — canDelete is the page's decision (canManageEventType in
+// src/lib/event-type-gates.js: the route's own rule, at the booking type's
+// location). Default false: a page that does not decide shows no Delete.
+export default function EventActions({ slug, eventId, eventName, canDelete = false }) {
   const router = useRouter()
   const [copied, setCopied] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -64,7 +67,7 @@ export default function EventActions({ slug, eventId, eventName }) {
           {copied ? <Check size={12} /> : <Copy size={12} />}
           {copied ? 'Copied!' : 'Embed'}
         </button>
-        {eventId && (
+        {eventId && canDelete && (
           <button
             onClick={() => setConfirmOpen(true)}
             className="text-xs px-3 py-1.5 rounded border border-un1t-border text-un1t-subtle hover:text-red-500 hover:border-red-500/40 transition-colors flex items-center gap-1.5"

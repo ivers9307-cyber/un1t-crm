@@ -9,12 +9,18 @@ export const HOST_COLS =
   'charges_enabled, payouts_enabled, details_submitted, ' +
   'onboarding_completed_at, requirements_currently_due, platform_fee_cents, ' +
   'organization_id, created_at, ' +
+  // W1.L3b — the host's anchor location decides the tenant host its links
+  // (onboarding, review emails) are minted on; NULL floors to the CRM host.
+  'anchor_location_id, ' +
   // Sender identity (HOST-EMAIL.2, mig 400) — the HostDetail "Email sending"
   // card + /api/hosts/[id]/email-domain routes read these off loadHostForOrg.
   'sender_domain, sender_email, sender_name, sender_domain_verified, ' +
   'postmark_domain_id, email_daily_send_cap, reply_to_email, slug, ' +
   // HOST-CONSENT.1 — the host's own Postmark Broadcasts stream (per-host suppression list).
-  'postmark_stream_id'
+  'postmark_stream_id, ' +
+  // W1.L3c — the host's anchor location (mig 388): the host invite mints its
+  // set-password link on this location's tenant host.
+  'anchor_location_id'
 
 /**
  * Load a host scoped to the caller's org. Returns null when the id is unknown

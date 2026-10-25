@@ -5,6 +5,8 @@
 // start_time HH:MM, end_time HH:MM) so there's no timezone arithmetic
 // to worry about — we just format and compare ISO date strings.
 
+import { DEFAULT_TZ, resolveZone } from 'shared/zoned-time'
+
 export function isoDate(d) {
   // YYYY-MM-DD in local time (matches what shifts.shift_date stores).
   const y = d.getFullYear()
@@ -69,4 +71,64 @@ export function hoursBetween(start, end) {
   let mins = eh * 60 + em - (sh * 60 + sm)
   if (mins < 0) mins += 24 * 60
   return Math.round((mins / 60) * 10) / 10
+}
+
+// ROSTER-FIX.7 — "today" for a roster is the STUDIO's day, not the phone's.
+// shift_date / time_off_requests dates are wall-clock dates on the studio's
+// calendar. isoDate(new Date()) asks the device instead, so a phone left on a
+// US timezone — travelling, a handset whose clock never picked the region up,
+// an emulator — put the "today" highlight on the wrong column of the week grid
+// and let the time-off calendar's minDate refuse a day that is still bookable
+// at the studio.
+//
+// TZ.14 — the studio's zone is its `locations.timezone` (on every location of
+// /api/mobile/me; useStudioZone() in mobile/lib/use-studio-zone.js), no longer
+// a hard-coded Dublin. Europe/Dublin answers exactly as before.
+//
+// formatToParts, not format(): en-IE renders dd/mm/yyyy, so the pieces are
+// reassembled by NAME rather than sliced out of a locale-shaped string.
+//
+// ROSTER-FIX.7f — built LAZILY, not at module scope. A Hermes build without
+// full ICU throws on `new Intl.DateTimeFormat(…, { timeZone })`, and a throw at
+// module scope fails evaluation of dates.js itself, so every screen that
+// imports a date helper white-screens rather than just losing the zone pin.
+// Same shape as carMoney() in mobile/lib/cars-api.js: try the Intl path, fall
+// back to the device date. Memoised per zone on first success so each
+// formatter is still built once, not once per render.
+const studioDayFmts = new Map()
+let studioFmtWarned = false
+
+function getStudioDayFmt(zone) {
+  let fmt = studioDayFmts.get(zone)
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-IE', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+    studioDayFmts.set(zone, fmt)
+  }
+  return fmt
+}
+
+/**
+ * Today 'YYYY-MM-DD' on the studio's calendar.
+ * @param {string} [zone]  the studio's IANA zone (Europe/Dublin when absent or invalid)
+ * @param {Date} [now]
+ */
+export function studioTodayIso(zone = DEFAULT_TZ, now = new Date()) {
+  try {
+    const parts = {}
+    for (const p of getStudioDayFmt(resolveZone(zone)).formatToParts(now)) parts[p.type] = p.value
+    return `${parts.year}-${parts.month}-${parts.day}`
+  } catch (err) {
+    // Once per session: a phone on the studio's time (almost all of them) is
+    // unaffected, so this is a degradation to log, not an error to shout.
+    if (!studioFmtWarned) {
+      studioFmtWarned = true
+      console.warn('studioTodayIso: Intl unavailable, falling back to the device date', err)
+    }
+    return isoDate(now)
+  }
 }

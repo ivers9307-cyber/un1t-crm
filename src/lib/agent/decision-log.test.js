@@ -83,6 +83,34 @@ describe('compactDecisionMeta', () => {
     expect(meta.tools[0].input).toBe('{}')
   })
 
+  // MIAHATCH.1 — which studios the turn resolved the person at.
+  it('records member_studios as ids and flags only (no names, no contact or member ids)', () => {
+    const meta = compactDecisionMeta({
+      iterations: 1,
+      memberStudios: [
+        { locationId: 'loc-a', name: 'UN1T Stillorgan', providerKey: 'glofox', active: false, answerable: true, contactIds: ['c-1'], glofoxMemberId: 'gm-1' },
+        { locationId: 'loc-b', name: 'UN1T Hatch Street', providerKey: 'un1t_online', active: true, answerable: false, contactIds: ['c-2'], un1tUserId: 'u-1' },
+      ],
+    })
+    expect(meta.member_studios).toEqual([
+      { location_id: 'loc-a', provider: 'glofox', active: false, answerable: true },
+      { location_id: 'loc-b', provider: 'un1t_online', active: true, answerable: false },
+    ])
+    const raw = JSON.stringify(meta)
+    for (const leak of ['Stillorgan', 'Hatch', 'c-1', 'c-2', 'gm-1', 'u-1']) expect(raw).not.toContain(leak)
+  })
+
+  it('omits member_studios when the turn did not resolve (absent or empty)', () => {
+    expect(compactDecisionMeta({ iterations: 1 })).toEqual({ iterations: 1 })
+    expect(compactDecisionMeta({ iterations: 1, memberStudios: [] })).toEqual({ iterations: 1 })
+    expect(compactDecisionMeta({ memberStudios: null })).toBeNull()
+  })
+
+  it('caps member_studios', () => {
+    const memberStudios = Array.from({ length: 20 }, (_, i) => ({ locationId: `l${i}`, providerKey: 'glofox', active: true, answerable: true }))
+    expect(compactDecisionMeta({ memberStudios }).member_studios).toHaveLength(8)
+  })
+
   // MIA-HYGIENE.4 — a model_error row used to carry meta: null, so the trace
   // said a turn failed but not how. Live example: the 2026-08-12 model_error
   // on WhatsApp, undiagnosable after the fact because the status code and
@@ -114,5 +142,36 @@ describe('compactDecisionMeta', () => {
   it('records an error even when nothing else in the trace is worth keeping', () => {
     expect(compactDecisionMeta({ error: { kind: 'exception', message: 'boom' } }))
       .toEqual({ error: { kind: 'exception', message: 'boom' } })
+  })
+})
+
+describe('compactDecisionMeta tool_block (MIAHATCH.2)', () => {
+  it('records the block name the turn sent', () => {
+    expect(compactDecisionMeta({ iterations: 1, toolBlock: 'un1t_read' })).toEqual({ iterations: 1, tool_block: 'un1t_read' })
+    expect(compactDecisionMeta({ toolBlock: 'glofox' })).toEqual({ tool_block: 'glofox' })
+  })
+  it('omits it when the turn sent nothing', () => {
+    expect(compactDecisionMeta({ iterations: 0 })).toBeNull()
+    expect(compactDecisionMeta({ toolBlock: '' })).toBeNull()
+    expect(compactDecisionMeta({ toolBlock: 7 })).toBeNull()
+  })
+})
+
+describe('compactDecisionMeta intent_id (MIAHATCH.6)', () => {
+  it('records a purchase tool\'s intent id on its own entry, and nothing on the others', () => {
+    const meta = compactDecisionMeta({
+      tools: [
+        { name: 'list_purchase_options', input: {} },
+        { name: 'send_purchase_link', input: { offer_id: 'o-1' }, intentId: '90000000-0000-4000-8000-000000000001' },
+      ],
+    })
+    expect(meta.tools).toEqual([
+      { name: 'list_purchase_options', input: '{}' },
+      { name: 'send_purchase_link', input: '{"offer_id":"o-1"}', intent_id: '90000000-0000-4000-8000-000000000001' },
+    ])
+  })
+  it('ignores a non-string or empty intent id', () => {
+    const meta = compactDecisionMeta({ tools: [{ name: 'send_purchase_link', input: {}, intentId: 7 }, { name: 'x', input: {}, intentId: '' }] })
+    expect(meta.tools.every((t) => !('intent_id' in t))).toBe(true)
   })
 })

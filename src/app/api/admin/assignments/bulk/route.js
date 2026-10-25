@@ -27,6 +27,7 @@ import {
   logAssignmentChange,
   canRemoveSelfFromLastOwnerLocation,
 } from '@/lib/assignment-changes'
+import { isTombstone } from '@/lib/staff-tombstone'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,8 +67,28 @@ export async function POST(request) {
   const db = createServerClient()
   const results = []
 
+  // STAFFDELETE.1 — a permanently deleted staff member keeps a profiles row (a
+  // tombstone) and must never be given a studio role again. One read for the
+  // batch (≤ 500 pairs, under the select cap); 'delete' is not guarded —
+  // removing access is always safe. Fails CLOSED before any write.
+  const tombstoneIds = new Set()
+  if (body.action === 'upsert') {
+    const { data: targets, error: targetsErr } = await db
+      .from('profiles')
+      .select('id, deleted_at')
+      .in('id', [...new Set(body.pairs.map((p) => p.profile_id))])
+    if (targetsErr) {
+      return NextResponse.json({ success: false, error: 'Could not verify the profiles' }, { status: 500 })
+    }
+    for (const t of targets || []) if (isTombstone(t)) tombstoneIds.add(t.id)
+  }
+
   for (const pair of body.pairs) {
     const pairKey = `${pair.profile_id}::${pair.location_id}`
+    if (tombstoneIds.has(pair.profile_id)) {
+      results.push({ pair: pairKey, outcome: 'failed', reason: 'profile_not_found' })
+      continue
+    }
     try {
       const { data: existing } = await db
         .from('profile_locations')

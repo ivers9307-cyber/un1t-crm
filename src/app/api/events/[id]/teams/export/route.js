@@ -8,7 +8,7 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees, attendeeCsvResponse } from '@/lib/attendee-export'
 
@@ -19,7 +19,7 @@ export async function GET(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -32,6 +32,10 @@ export async function GET(_request, props) {
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   try {
     const regs = await fetchEventAttendees(db, params.id)

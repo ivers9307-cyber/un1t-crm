@@ -4,18 +4,18 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
+import { canManageContractsInOrg } from '@/lib/contract-gates'
 import ContractTemplateForm from '@/components/ContractTemplateForm'
+import { templatePreviewZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 export default async function NewTemplatePage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  // GATES-2 — POST /api/contract-templates creates in the ACTIVE org and asks
+  // exactly this.
+  if (!canManageContractsInOrg(user, user.activeOrganization?.id || null)) redirect('/')
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
@@ -23,7 +23,9 @@ export default async function NewTemplatePage() {
         ← Templates
       </Link>
       <h2 className="text-2xl font-bold mt-1 mb-6">New template</h2>
-      <ContractTemplateForm />
+      {/* TZ follow-up — the new template is created in the active org, so its
+          preview's {{today}} is a studio of that org's day. */}
+      <ContractTemplateForm previewZone={templatePreviewZoneOf(user, user.activeOrganization?.id || null)} />
     </div>
   )
 }

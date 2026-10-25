@@ -4,6 +4,7 @@
 // failing block renders a compact error cell instead of blanking the
 // page (the old all-or-nothing fetch is gone). All-live by design
 // (Richard, 2026-07-04) — streaming is the perf counterweight.
+import { ESTIMATE_NOTE, amountOrUnavailable } from '@/lib/radar-copy'
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -12,13 +13,18 @@ import { createServerClient } from '@/lib/supabase'
 import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
-import { computeMembershipCounts } from '@/lib/membership-snapshot'
-import { fetchMembershipFlows } from '@/lib/membership-flows'
+import { adsDayZoneForDisplay } from '@/lib/ads/account-day'
+import { membershipReadsFor, supportsRead } from '@/lib/membership/reads'
 import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
 import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
 import {
   BriefingLine, FunnelMini, AdsSummaryPanel, TodayStrip, NeedsYouRail, BlockSkeleton, BlockError,
 } from '@/components/dashboard/BusinessBlocks'
+import { LabourBlock } from '@/components/dashboard/LabourBlock'
+import { canSeeLabour, labourStudiosFor } from '@/lib/labour-month-model'
+import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,10 +38,51 @@ async function KpiBriefingBlock({ user, locationId }) {
   // src/lib/dashboard/business-kpis.js so /api/dashboard/business (the
   // mobile Business dashboard's data route) computes the SAME numbers.
   // Returns null on failure (its internal try/catch), per the header.
-  const vm = await buildBusinessKpis(db, user, locationId)
+  // W1.M3a — every tile in the row is Glofox-derived (Revenue MTD and
+  // In arrears read glofox_invoices, Members the membership counts, Churn
+  // risk the radar), so at a studio with no membership source the row is
+  // four honest-looking zeros. The briefing line stays (pending approvals
+  // are source-independent); the row renders only behind the gate. The
+  // state is read alongside the numbers (cached 60 s per location).
+  // UN1TREAD.3 — numbers or gate is decided by the view-model itself
+  // (vm.gate, computed from the same membershipReadsFor result the numbers
+  // came from), so the state this page reads for the gate COPY can never
+  // disagree with the numbers it shows. The row renders when the source's
+  // adapter reads member counts and revenue (Glofox, un1t.online), not when its
+  // Glofox-shaped capability flag is true: un1t.online keeps memberships:false
+  // (its radars still read Glofox tables) yet supplies these two numbers.
+  // Churn risk and In arrears come back null there and draw '—'. A vm with no
+  // gate fails closed to the gate copy.
+  const [vm, membership] = await Promise.all([
+    buildBusinessKpis(db, user, locationId),
+    membershipStateForPage(db, locationId),
+  ])
   if (!vm) return <BlockError label="Headline numbers" />
 
   const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm
+  if (!vm.gate?.showNumbers || !revenue) {
+    // The gate copy is drawn from the vm's own state; capability forced false
+    // so a state that reads as configured-and-providing elsewhere still draws
+    // the "does not provide" copy rather than rendering nothing.
+    const gateState = {
+      ...membership,
+      state: vm.gate?.state ?? membership.state,
+      capabilities: { ...(membership.capabilities || {}), memberships: false },
+    }
+    return (
+      <>
+        <BriefingLine text={briefing} />
+        <MembershipSourceGate
+          state={gateState}
+          capability="memberships"
+          settingsHref={membershipSettingsHref(locationId)}
+          canManage={canManageMembershipSource(user, locationId)}
+          padding="md"
+          className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3"
+        />
+      </>
+    )
+  }
   return (
     <>
       <BriefingLine text={briefing} />
@@ -47,21 +94,25 @@ async function KpiBriefingBlock({ user, locationId }) {
         <KpiCard label="Churn risk" value={churnCount ?? '—'}
           sublabel={churnCount == null ? 'radar unavailable' : (churnDelta > 0 ? `+${churnDelta} this week` : 'high-risk members')}
           accent={churnCount ? 'text-amber-700' : undefined} href="/dashboard/churn-radar" />
-        <KpiCard label="In arrears" value={arrearsData ? formatCurrency(arrearsData.totalCents / 100) : '—'}
-          sublabel={arrearsData ? `${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}` : 'arrears unavailable'}
+        <KpiCard label="In arrears" value={arrearsData ? amountOrUnavailable(arrearsData.totalCents, { estimated: arrearsData.estimated === true }, (c) => formatCurrency(c / 100)) : '—'}
+          sublabel={arrearsData
+            ? `${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}${arrearsData.estimated ? `, ${ESTIMATE_NOTE}` : ''}`
+            : 'arrears unavailable'}
           accent={arrearsData?.memberCount > 0 ? 'text-red-700' : undefined} href="/dashboard/churn-radar" />
       </KpiRow>
     </>
   )
 }
 
-async function FunnelAdsBlock({ locationId }) {
+async function FunnelAdsBlock({ locationId, zone }) {
   const db = createServerClient()
   let data = null
   try {
     const [funnel, ads] = await Promise.all([
-      fetchFunnelCounts(db, locationId),
-      fetchAdsSummary(db, locationId),
+      fetchFunnelCounts(db, locationId, undefined, zone),
+      // TZ.11c: the 7-day window is in the ad account's zone (account-day.js),
+      // NOT the studio's.
+      adsDayZoneForDisplay(db, locationId).then((adsZone) => fetchAdsSummary(db, locationId, new Date(), adsZone)),
     ])
     data = { funnel, ads }
   } catch {
@@ -87,13 +138,38 @@ async function FunnelAdsBlock({ locationId }) {
   )
 }
 
-async function MembershipBlock({ locationId }) {
+async function MembershipBlock({ user, locationId, zone }) {
   const db = createServerClient()
+  // W1.M3a — the trend is a count of MEMBERSHIPS, so without a membership
+  // source it is a flat zero. Gated like the KPI row above; the funnel,
+  // today and rail blocks are source-independent and stay ungated. The
+  // trend queries do not run for a studio that has nothing to count.
+  // UN1TREAD.7 — asked ONCE through the seam: the gate copy is drawn from the
+  // same answer the numbers would come from (capability forced off, as the
+  // studio column does), so a second, separately cached state read can never
+  // disagree with it and leave a blank section.
+  const reads = await membershipReadsFor(db, locationId)
+  if (!(supportsRead(reads, 'membershipCounts') && supportsRead(reads, 'membershipFlows'))) { // UN1TREAD.3: the adapter reads counts + flows, not a capability flag
+    const gateState = {
+      source: reads.source, state: reads.state, label: reads.label, readError: reads.error,
+      missing: reads.missing, capabilities: { ...(reads.capabilities || {}), memberships: false },
+    }
+    return (
+      <MembershipSourceGate
+        state={gateState}
+        capability="memberships"
+        settingsHref={membershipSettingsHref(locationId)}
+        canManage={canManageMembershipSource(user, locationId)}
+        padding="md"
+        className="bg-un1t-surface border border-un1t-border rounded-lg"
+      />
+    )
+  }
   let data = null
   try {
     const [live, flows] = await Promise.all([
-      computeMembershipCounts(db, locationId),
-      fetchMembershipFlows(db, locationId, 12),
+      reads.reads.membershipCounts(db, locationId),
+      reads.reads.membershipFlows(db, locationId, 12, undefined, { zone }),
     ])
     // Falsy counts are a failure too — fall through to the error cell
     // rather than rendering nothing (JSX built after the try per the
@@ -106,11 +182,11 @@ async function MembershipBlock({ locationId }) {
   return <MembershipPanel live={data.live} flows={data.flows} />
 }
 
-async function TodayBlock({ locationId, locationName }) {
+async function TodayBlock({ locationId, locationName, zone }) {
   const db = createServerClient()
   let ops = null
   try {
-    const res = await fetchTodayOps(db, locationId)
+    const res = await fetchTodayOps(db, locationId, undefined, zone)
     if (!res.success) throw new Error(res.error)
     ops = res.data
   } catch {
@@ -137,6 +213,13 @@ export default async function BusinessDashboardPage() {
   if (!hasPermission(user, 'dashboard_business')) redirect('/dashboard')
   const locationId = user.activeLocation?.id
   const locationName = user.activeLocation?.name
+  // LABOUR.1 — owners only, by ROLE at the active studio (a master too).
+  // dashboard_business alone is not enough: an owner can grant it to a
+  // manager, and a studio's labour total can be one person's pay.
+  const showLabour = canSeeLabour(user)
+  const labourStudios = showLabour ? labourStudiosFor(user) : []
+  // TZ.11a — every block counts on the active studio's calendar.
+  const zone = zoneOfLocation(user.activeLocation)
 
   return (
     <>
@@ -146,13 +229,18 @@ export default async function BusinessDashboardPage() {
       <div className="grid xl:grid-cols-3 gap-4 mt-4">
         <div className="xl:col-span-2 space-y-4">
           <Suspense fallback={<BlockSkeleton lines={4} />}>
-            <FunnelAdsBlock locationId={locationId} />
+            <FunnelAdsBlock locationId={locationId} zone={zone} />
           </Suspense>
           <Suspense fallback={<BlockSkeleton lines={5} />}>
-            <MembershipBlock locationId={locationId} />
+            <MembershipBlock user={user} locationId={locationId} zone={zone} />
           </Suspense>
+          {showLabour ? (
+            <Suspense fallback={<BlockSkeleton lines={5} />}>
+              <LabourBlock activeLocationId={locationId} studios={labourStudios} zone={zone} />
+            </Suspense>
+          ) : null}
           <Suspense fallback={<BlockSkeleton lines={2} />}>
-            <TodayBlock locationId={locationId} locationName={locationName} />
+            <TodayBlock locationId={locationId} locationName={locationName} zone={zone} />
           </Suspense>
         </div>
         <div className="xl:order-none order-first">

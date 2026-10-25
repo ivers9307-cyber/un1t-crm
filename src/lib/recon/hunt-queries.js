@@ -4,7 +4,7 @@
 // (X-GM-RAW syntax). Demand-driven + precision-over-recall (Richard's
 // call): tight amount+window first, then counterparty tokens; never a
 // broad sweep. Dates use Gmail's YYYY/MM/DD.
-import { addDaysISO } from '@/lib/dublin-time'
+import { addDaysISO } from '@shared/zoned-time'
 
 // Bank-feed noise that never identifies a supplier.
 const NOISE = new Set([

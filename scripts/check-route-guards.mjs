@@ -33,10 +33,10 @@ const API_ROOT = 'src/app/api'
 
 // Direct resolvers + verified delegated-auth helpers. Each delegated
 // entry names the file where it was verified to enforce auth:
-//   authenticateApiKey   src/lib/api-auth.js (per-org API key, n8n surface)
-//   requireApiKeyOrManager src/lib/api-auth.js (constant-time API key OR
+//   authenticateApiKey   src/lib/api-auth.js (per-org API key surface)
+//   requireApiKeyOrManager src/lib/api-auth.js (per-org API key OR
 //                        getCurrentUser + MANAGER_ROLES — the dual-auth
-//                        n8n/operator surface, e.g. /api/stages)
+//                        integration/operator surface, e.g. /api/stages)
 //   loadInvoiceForUser   src/app/api/invoices-inbox/_helpers.js
 //                        (getCurrentUser + master/owner-at-location, 401/403/404)
 //   loadBookkeeper       src/app/api/invoices-inbox/_bulk-helpers.js
@@ -47,7 +47,6 @@ const API_ROOT = 'src/app/api'
 const SESSION_GUARDS = [
   'getCurrentUser(',
   'withAuth(',
-  'requireApiKey(',
   'authenticateApiKey(',
   'requireApiKeyOrManager(',
   'loadInvoiceForUser(',
@@ -76,9 +75,37 @@ const SESSION_GUARDS = [
   'getCurrentHost(',
 ]
 
+// MAIL-RENAME.1 — a pure re-export shim (`export { POST } from '@/app/api/…'`,
+// plus at most segment-config literals) has no guard of its own: it is exactly
+// as guarded as the handler it re-exports, so it is classified BY FOLLOWING the
+// re-export to that file. Recognised STRUCTURALLY — every statement must be a
+// re-export or a segment-config literal — never by the import path text, so an
+// unrelated file that happens to import something from the mail tree proves
+// nothing. Deleted with the shims in the shim sweep.
+const REEXPORT_LINE = /^export\s+(\{[^}]*\}|\*)\s+from\s+'([^']+)'\s*;?$/
+const SEGMENT_CONFIG_LINE = /^export const (runtime|dynamic|maxDuration|revalidate|preferredRegion)\s*=\s*['"][^'"]*['"]\s*;?$/
+function reExportTarget(src) {
+  let target = null
+  for (const raw of src.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const m = line.match(REEXPORT_LINE)
+    if (m) {
+      if (target && target !== m[2]) return null
+      target = m[2]
+      continue
+    }
+    if (SEGMENT_CONFIG_LINE.test(line)) continue
+    return null
+  }
+  if (!target || !target.startsWith('@/')) return null
+  const file = path.join(process.cwd(), 'src', `${target.slice(2)}.js`)
+  return fs.existsSync(file) ? file : null
+}
+
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
 // signature). Matches verifyMetaSignature, verifySharedSecret,
-// verifyTwilioSignature, verifyPostmarkRequest, verifyWebhookSignature,
+// verifyPostmarkRequest, verifyWebhookSignature,
 // verifyXeroSignature, verifyGlofoxSignature, verifyUnifi*Request, etc.
 const WEBHOOK_GUARD = /verify[A-Z][A-Za-z]*\(/
 
@@ -96,12 +123,14 @@ const EXEMPT = {
     'Capability-token URL (HMAC per-host, per-contact token, host-unsubscribe.js) + per-IP budget on invalid tokens — public by design, RFC 8058 one-click target for host emails (HOST-CONSENT.1).',
   'src/app/api/preferences/[token]/route.js':
     'Capability-token URL (per-contact preference token) + rate-limited — public by design.',
+  'src/app/api/calendar-feed/[file]/route.js':
+    'Capability-token URL (ICSFEED.1, mig 632): a calendar app polls it and can hold no session. The rcf_ token (256 random bits, only its sha256 stored) resolves to ONE profile and the route reads only that profile\'s own published shifts; refuses (404) an inactive or deleted profile; per-TOKEN rate limit (never per IP: Google fetches from shared egress). Public via the proxy\'s publicExactPaths only — not on brand or tenant hosts.',
   'src/app/api/preferences/hr-emails/route.js':
     'Capability-token URL (per-contact unsubscribe token, or the legacy contact+session PAIR whose session must belong to the contact) + tiered rate limit and refusal logging — public by design, same guard as the sibling consent endpoints (HRPREF-AUTH.1).',
   'src/app/api/webhooks/sequence/[token]/route.js':
     'URL token (32-hex, unguessable, per-sequence) + optional constant-time X-Webhook-Secret + 100/min rate limit — the token IS the credential.',
-  'src/app/api/webhooks/strava/route.js':
-    'Strava does not sign webhook POSTs; GET handshake verifies via STRAVA_WEBHOOK_VERIFY_TOKEN, POST acts only on known owner_ids + fetches with our own token',
+  'src/app/api/webhooks/strava/[token]/route.js':
+    'Strava does not sign webhook POSTs, so the URL token IS the credential (STRAVA_WEBHOOK_URL_TOKEN, constant-time compare, 404 on POST / 403 on GET when wrong, closed when unset — W0.10) + 120/min per-IP limit on POST; GET handshake additionally verifies STRAVA_WEBHOOK_VERIFY_TOKEN; POST acts only on known owner_ids + fetches with our own token.',
   'src/app/api/whatsapp/flow/route.js':
     'WhatsApp Flow data-exchange endpoint — RSA/AES encryption is the credential (only Meta, holding our registered public key, can produce a request we can decrypt; 421 on failure). No tenant data is read before decrypt.',
   'src/app/api/mobile/review-login/route.js':
@@ -127,6 +156,9 @@ const INBOX_ROUTE_PREFIXES = [
   // RLS, so the `email_inbox` check IS the channel gate (the per-account
   // email_mailbox_access gate sits behind it).
   'src/app/api/email/tickets',
+  // MAIL-RENAME.1 — the ticket routes moved here (mail is the same surface,
+  // same gate); the tickets prefix above stays for the deprecated shims.
+  'src/app/api/email/mail',
 ]
 
 // EMAIL-TICKET-CLEANUP.1 — the last two entries are location-scoped forms of
@@ -181,10 +213,42 @@ const INBOX_ROUTE_PREFIXES = [
 //                              — the exact #1266 failure mode, live again.
 const INBOX_PERMISSION_GUARDS = [
   'requireInboxPermission(',
+  // INBOXLOC.1 (C37) —
+  //   requireWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no user,
+  //                            403 with no location, otherwise 403 unless
+  //                            hasPermissionForLocation OR
+  //                            hasMobilePermissionForLocation grants
+  //                            `whatsapp` AT the location passed. The
+  //                            /api/whatsapp/conversations/[id]* handlers the
+  //                            phone calls (all but /add-contact and /agent,
+  //                            which use the web-only pair below, as does
+  //                            /start) call it with the conversation's
+  //                            location after the row is read, and
+  //                            requireWhatsAppInboxAnywhere before it.
+  'requireWhatsAppInboxAt(',
+  // INBOXWEBONLY3.1 (C119) —
+  //   requireWebWhatsAppInboxAt(  src/lib/auth.js. VERIFIED: 401 with no
+  //                               user, 403 with no location, otherwise 403
+  //                               unless hasPermissionForLocation grants the
+  //                               WEB `whatsapp` key AT the location passed.
+  //                               The web-only thread actions
+  //                               (/conversations/[id]/add-contact, /agent,
+  //                               /conversations/start) call it after the row
+  //                               is read, and requireWebWhatsAppInboxAnywhere
+  //                               before it.
+  'requireWebWhatsAppInboxAt(',
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',
+  // MAIL-RENAME.1 — loadTicketForUser was renamed to loadConversationForUser
+  // in src/app/api/email/mail/_conversation.js; the old name stays above
+  // until the identifier sweep (Task 9) removes every caller of it.
+  'loadConversationForUser(',
   'loadAttachmentForTicket(',
+  // MAIL-RENAME.1 (Task 9) — loadAttachmentForTicket was renamed to
+  // loadAttachmentForConversation in the mail/[id]/attachments _helpers.js;
+  // the old name stays above until nothing calls it any more.
+  'loadAttachmentForConversation(',
   'loadSendingMailbox(',
 ]
 
@@ -192,6 +256,8 @@ function checkInboxPermission(file) {
   const rel = file.split(path.sep).join('/')
   if (!INBOX_ROUTE_PREFIXES.some((p) => rel.startsWith(p))) return true
   const src = stripComments(fs.readFileSync(file, 'utf8'))
+  const target = reExportTarget(src)
+  if (target) return checkInboxPermission(target)
   return INBOX_PERMISSION_GUARDS.some((t) => src.includes(t))
 }
 
@@ -209,6 +275,8 @@ function classify(file) {
   if (rel.includes('/api/public/')) return { ok: true, kind: 'public' }
   if (EXEMPT[rel]) return { ok: true, kind: 'exempt' }
   const src = stripComments(fs.readFileSync(file, 'utf8'))
+  const target = reExportTarget(src)
+  if (target) return classify(target)
   if (rel.includes('/api/webhooks/')) {
     return { ok: WEBHOOK_GUARD.test(src), kind: 'webhook' }
   }

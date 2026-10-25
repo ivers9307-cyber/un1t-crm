@@ -5,7 +5,7 @@
 // master can mutate (commit + rollback live elsewhere).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -15,7 +15,8 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1c — coarse pre-check; the role is judged at the listed location below.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -29,6 +30,10 @@ export async function GET(request) {
     if (!userLocIds.includes(locationId)) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
+  }
+  // ROLESWEEP.1c — MANAGER_ROLES at the listed location.
+  if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
   const db = createServerClient()

@@ -4,12 +4,12 @@
 // enforced in app code. These tests pin the access matrix and, critically,
 // that an owner of org A CANNOT read org B (the cross-tenant leak guard):
 //   master             → any org (via ?organization_id, else active)
-//   owner of org A      → org A only; org B answers 404 (not 403) with NO
+//   org admin of org A  → org A only; org B answers 404 (not 403) with NO
 //                         database access at all
-//   manager / staff     → 403
+//   owner without an org_admin grant, manager / staff → 403 (C141 ORGROLE.2)
 //   no user             → 401
 //
-// We use the REAL resolveAccountScope + getOwnerOrganizationIds — only
+// We use the REAL resolveAccountScope + resolveAdminOrgId — only
 // getCurrentUser and the Supabase client are stubbed.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -36,7 +36,11 @@ function ownerOfA() {
     activeOrganization: { id: ORG_A },
     rolesByLocation: { [LOC_A]: 'owner' },
     locations: [{ id: LOC_A, organization_id: ORG_A }],
+    orgAdminOrgIds: [],
   }
+}
+function orgAdminOfA() {
+  return { ...ownerOfA(), orgAdminOrgIds: [ORG_A] }
 }
 function master() {
   return { isMaster: true, profileRole: 'master', role: 'master', activeOrganization: { id: ORG_A } }
@@ -120,8 +124,15 @@ describe('GET /api/account/overview — access matrix', () => {
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('owner sees their own org', async () => {
+  it('C141 — 403 for an owner at a studio without an org_admin grant — no DB access', async () => {
     getCurrentUser.mockResolvedValue(ownerOfA())
+    const res = await GET(req())
+    expect(res.status).toBe(403)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('org admin sees their own org', async () => {
+    getCurrentUser.mockResolvedValue(orgAdminOfA())
     const { db, seen } = mockDb({
       orgRow: { id: ORG_A, name: 'Org A', slug: 'a' },
       locationsByOrg: { [ORG_A]: [{ id: LOC_A, name: 'Studio A', slug: 'a', settings: {} }] },
@@ -135,8 +146,8 @@ describe('GET /api/account/overview — access matrix', () => {
   })
 
   // THE cross-tenant leak guard.
-  it('owner of A requesting org B gets 404 and NEVER touches the database', async () => {
-    getCurrentUser.mockResolvedValue(ownerOfA())
+  it('org admin of A requesting org B gets 404 and NEVER touches the database', async () => {
+    getCurrentUser.mockResolvedValue(orgAdminOfA())
     const res = await GET(req(ORG_B))
     expect(res.status).toBe(404)
     // resolveAccountScope short-circuits BEFORE createServerClient — so no

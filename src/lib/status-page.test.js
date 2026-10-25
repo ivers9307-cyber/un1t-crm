@@ -59,6 +59,13 @@ describe('buildStatusView', () => {
     expect(json).not.toContain('internal note')
   })
 
+  it('W1.S1a: the wordmark is the resolved location brand unless the operator overrides it', () => {
+    expect(DEFAULT_COPY.brand).toBe('')
+    expect(buildStatusView(allOk).brand).toBe('')
+    expect(buildStatusView(allOk, {}, { defaultBrand: 'UN1T Stillorgan' }).brand).toBe('UN1T Stillorgan')
+    expect(buildStatusView(allOk, { brand: 'CHAMP' }, { defaultBrand: 'UN1T Stillorgan' }).brand).toBe('CHAMP')
+  })
+
   it('applies operator copy overrides, keeping other defaults', () => {
     const v = buildStatusView(allOk, { brand: 'CHAMP', services: { payments: { label: 'Billing' } } })
     expect(v.brand).toBe('CHAMP')

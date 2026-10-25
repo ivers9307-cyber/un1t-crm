@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import * as capsModule from './usage-caps.js'
-import { dublinMonthStartStr, getAiCapStatus, getEmailCapStatus } from './usage-caps.js'
+import { platformMonthStartStr, getAiCapStatus, getEmailCapStatus } from './usage-caps.js'
 
 function stubDb({ orgId = 'org-1', aiCap = 5000, emailCap = 10000, spend = 0, sends = 0 } = {}) {
   const rpcCalls = []
@@ -36,10 +36,10 @@ function stubDb({ orgId = 'org-1', aiCap = 5000, emailCap = 10000, spend = 0, se
   return { db, rpcCalls }
 }
 
-describe('dublinMonthStartStr', () => {
+describe('platformMonthStartStr', () => {
   it('returns the first of the current Dublin month as YYYY-MM-01', () => {
-    expect(dublinMonthStartStr('2026-07-19')).toBe('2026-07-01')
-    expect(dublinMonthStartStr('2026-01-01')).toBe('2026-01-01')
+    expect(platformMonthStartStr('2026-07-19')).toBe('2026-07-01')
+    expect(platformMonthStartStr('2026-01-01')).toBe('2026-01-01')
   })
 })
 

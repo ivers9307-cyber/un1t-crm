@@ -5,17 +5,20 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui'
+import { formatRecordTime } from '@/lib/record-time'
+import { useViewerZone } from '@/lib/use-viewer-zone'
 
-function fmtSynced(ts) {
+// TZ.16 (D3 = A) — the studio's zone (`timezone`, the dashboard's location),
+// abbreviation only when the browser is elsewhere.
+export function fmtSynced(ts, zone, viewerZone = null) {
   if (!ts) return 'never'
-  try {
-    return new Intl.DateTimeFormat('en-IE', {
-      timeZone: 'Europe/Dublin', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-    }).format(new Date(ts))
-  } catch { return 'unknown' }
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return 'unknown'
+  return formatRecordTime(d, zone, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }, 'en-IE', viewerZone)
 }
 
-export default function AdsRefreshButton({ locationId, lastSyncedAt }) {
+export default function AdsRefreshButton({ locationId, timezone = null, lastSyncedAt }) {
+  const viewerZone = useViewerZone()
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -49,7 +52,7 @@ export default function AdsRefreshButton({ locationId, lastSyncedAt }) {
       <span className="text-xs whitespace-nowrap">
         {error
           ? <span className="text-red-700">{error}</span>
-          : <span className="text-un1t-subtle">Last refreshed: {fmtSynced(syncedAt)}</span>}
+          : <span className="text-un1t-subtle">Last refreshed: {fmtSynced(syncedAt, timezone, viewerZone)}</span>}
       </span>
       <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={busy} onClick={refresh}>
         {busy ? 'Refreshing…' : 'Refresh'}

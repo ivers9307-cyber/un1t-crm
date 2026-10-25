@@ -94,7 +94,8 @@ module.exports = [
   { source: '/communications/sequences/:id', destination: '/automations/:id', permanent: false },
   { source: '/communications/sequences', destination: '/automations', permanent: false },
   { source: '/communications/sms/broadcasts/new', destination: '/communications/send', permanent: false },
-  { source: '/communications/sms/broadcasts/:id', destination: '/communications/sent/sms/:id', permanent: false },
+  // TWILIO-RETIRE.1 — SMS detail pages are gone; land on the Sent list.
+  { source: '/communications/sms/broadcasts/:id', destination: '/communications/sent', permanent: false },
   { source: '/communications/sms/broadcasts', destination: '/communications/sent', permanent: false },
   // catch-alls for anything unenumerated under the retired trees — LAST
   { source: '/email/:path*', destination: '/communications', permanent: false },

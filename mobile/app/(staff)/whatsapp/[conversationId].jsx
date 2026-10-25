@@ -41,9 +41,15 @@ import {
   reactToInboundMessage, listCardSets, sendCardSet, sendBookingFlow,
 } from '../../../lib/whatsapp-api'
 import { listConversationApprovals } from '../../../lib/inbox-approvals-api'
+import { sendWarningsNotice } from '../../../lib/wa-send-warnings'
 import { needsReply, isAgentHandoff } from '../../../lib/inbox'
+import { threadLocationId } from '../../../lib/wa-thread-location'
 import { mergeTimeline } from 'shared/approval-cards'
-import { groupWaTemplates, UNGROUPED_LABEL } from 'shared/wa-template-groups'
+import { groupWaTemplates, UNGROUPED_LABEL, templateBodyText } from 'shared/wa-template-groups'
+import {
+  bodyVariableSlots, templateSendBlock, SEND_BLOCK_TEXT,
+  initialTemplateValues, renderTemplatePreview, buildTemplateSend, templateHeaderMedia,
+} from 'shared/wa-template-send'
 import MessageBubble from '../../../components/MessageBubble'
 import ThreadApprovalCard from '../../../components/ThreadApprovalCard'
 
@@ -61,6 +67,11 @@ export default function Conversation() {
   const [sending, setSending] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
   const [templates, setTemplates] = useState([])
+  // WATPLPICKER.1 — the picked template and its {{n}} values. Picking no
+  // longer sends: the sheet shows the message as the customer will read it,
+  // asks for every variable, and sends on an explicit Send.
+  const [chosenTemplate, setChosenTemplate] = useState(null)
+  const [templateValues, setTemplateValues] = useState({})
   const [resolving, setResolving] = useState(false)
   const [feedback, setFeedback] = useState({})
   // FLOW-SEND — whether this location has the booking Flow configured
@@ -77,12 +88,23 @@ export default function Conversation() {
   const [blocking, setBlocking] = useState(false)
   const [reactingId, setReactingId] = useState(null)
   const scrollRef = useRef(null)
+  const sendingTplRef = useRef(false)
+
+  // INBOXLOC.1 (C37) — every call acts at the CONVERSATION's studio, not the
+  // active one: a thread opened from a contact at another studio is that
+  // studio's thread (its templates, card sets, Flow and number). Until the
+  // thread has loaded only the active studio is known; the thread GET judges
+  // the conversation's studio server-side either way. The ref lets refresh()
+  // read the latest without re-creating itself (and re-fetching) per load.
+  const locationId = threadLocationId(conv, activeLocation)
+  const locationRef = useRef(locationId)
+  locationRef.current = locationId
 
   // One call for conversation + messages + flow availability; the GET
   // also resets unread_count server-side (no separate mark-read).
   const refresh = useCallback(async () => {
     const [threadRes, approvalsRes] = await Promise.all([
-      getThread(conversationId, activeLocation?.id),
+      getThread(conversationId, locationRef.current),
       listConversationApprovals(conversationId),
     ])
     if (threadRes.success) {
@@ -91,7 +113,7 @@ export default function Conversation() {
       setFlowAvailable(threadRes.flowAvailable)
     }
     if (approvalsRes.success) setApprovals(approvalsRes.requests || [])
-  }, [conversationId, activeLocation])
+  }, [conversationId])
 
   useEffect(() => {
     setLoading(true)
@@ -112,48 +134,79 @@ export default function Conversation() {
   // open 24h window, load the location's card sets once and cache them
   // for the screen. [] (loaded-but-empty or failure) hides the control.
   useEffect(() => {
-    if (cardSets !== null || !activeLocation?.id || !windowOpen) return
+    if (cardSets !== null || !locationId || !windowOpen) return
     let cancelled = false
-    listCardSets(activeLocation.id).then(res => {
+    listCardSets(locationId).then(res => {
       if (!cancelled) setCardSets(res.success ? res.data : [])
     })
     return () => { cancelled = true }
-  }, [cardSets, activeLocation, windowOpen])
+  }, [cardSets, locationId, windowOpen])
 
   async function send() {
     if (!text.trim() || !windowOpen) return
     setSending(true)
-    const res = await sendText(conversationId, text.trim(), activeLocation?.id)
+    const res = await sendText(conversationId, text.trim(), locationId)
     setSending(false)
     if (!res.success) {
       Alert.alert('Couldn’t send', res.error || 'Unknown error')
       return
     }
     setText('')
+    // Sent, but the thread row or the conversation update failed: say so,
+    // or a message missing from the thread gets sent twice.
+    const notice = sendWarningsNotice(res)
+    if (notice) Alert.alert(notice.title, notice.message)
     refresh()
   }
 
   async function pickTemplate() {
     if (!templates.length) {
-      const res = await listTemplates(activeLocation?.id)
+      const res = await listTemplates(locationId)
       if (!res.success) {
         Alert.alert('Couldn’t load templates', res.error)
         return
       }
       setTemplates(res.data || [])
     }
+    setChosenTemplate(null)
+    setTemplateValues({})
     setShowTemplates(true)
   }
 
-  async function sendChosenTemplate(tpl) {
+  function closeTemplates() {
     setShowTemplates(false)
+    setChosenTemplate(null)
+    setTemplateValues({})
+  }
+
+  function chooseTemplate(tpl) {
+    if (templateSendBlock(tpl)) return
+    setChosenTemplate(tpl)
+    setTemplateValues(initialTemplateValues(tpl, contactFirstName))
+  }
+
+  async function sendChosenTemplate() {
+    // A ref, not state: a second tap can land before the re-render that
+    // disables the button, and a template to a customer can't be unsent.
+    if (sendingTplRef.current) return
+    const built = buildTemplateSend(chosenTemplate, templateValues)
+    if (!built.ok || sending) return
+    sendingTplRef.current = true
+    closeTemplates()
     setSending(true)
-    const res = await sendTemplate(conversationId, tpl.name, [], activeLocation?.id)
-    setSending(false)
+    let res
+    try {
+      res = await sendTemplate(conversationId, built.payload, locationId)
+    } finally {
+      sendingTplRef.current = false
+      setSending(false)
+    }
     if (!res.success) {
       Alert.alert('Couldn’t send template', res.error || 'Unknown error')
       return
     }
+    const notice = sendWarningsNotice(res)
+    if (notice) Alert.alert(notice.title, notice.message)
     refresh()
   }
 
@@ -162,7 +215,7 @@ export default function Conversation() {
   async function resolve() {
     if (resolving) return
     setResolving(true)
-    const res = await resolveConversation(conversationId, true, activeLocation?.id)
+    const res = await resolveConversation(conversationId, true, locationId)
     setResolving(false)
     if (!res.success) {
       Alert.alert('Couldn’t resolve', res.error || 'Unknown error')
@@ -188,7 +241,7 @@ export default function Conversation() {
           style: next ? 'destructive' : 'default',
           onPress: async () => {
             setBlocking(true)
-            const res = await setBlocked(conversationId, next, activeLocation?.id)
+            const res = await setBlocked(conversationId, next, locationId)
             setBlocking(false)
             if (!res.success) {
               Alert.alert('Couldn’t update block state', res.error || 'Unknown error')
@@ -206,7 +259,7 @@ export default function Conversation() {
   async function react(msg, emoji) {
     if (!msg.wa_message_id || reactingId) return
     setReactingId(msg.id)
-    const res = await reactToInboundMessage(conversationId, msg.wa_message_id, emoji, activeLocation?.id)
+    const res = await reactToInboundMessage(conversationId, msg.wa_message_id, emoji, locationId)
     setReactingId(null)
     if (!res.success) {
       Alert.alert('Couldn’t react', res.error || 'Unknown error')
@@ -219,7 +272,7 @@ export default function Conversation() {
   async function sendChosenCardSet(set) {
     setShowCardSets(false)
     setSendingCardSet(true)
-    const res = await sendCardSet(conversationId, set.id, activeLocation?.id)
+    const res = await sendCardSet(conversationId, set.id, locationId)
     setSendingCardSet(false)
     if (!res.success) {
       Alert.alert('Couldn’t send card set', res.error || 'Unknown error')
@@ -233,7 +286,7 @@ export default function Conversation() {
   async function sendFlow() {
     if (sendingFlow) return
     setSendingFlow(true)
-    const res = await sendBookingFlow(conversationId, activeLocation?.id)
+    const res = await sendBookingFlow(conversationId, locationId)
     setSendingFlow(false)
     if (!res.success) {
       Alert.alert('Couldn’t send booking Flow', res.error || 'Unknown error')
@@ -248,7 +301,7 @@ export default function Conversation() {
     const submit = async (note) => {
       setFeedback(f => ({ ...f, [msg.id]: rating }))
       const res = await rateAgentMessage({
-        messageId: msg.id, rating, note, locationId: activeLocation?.id,
+        messageId: msg.id, rating, note, locationId,
       })
       if (!res.success) {
         setFeedback(f => ({ ...f, [msg.id]: prev }))
@@ -278,7 +331,8 @@ export default function Conversation() {
     || conv?.wa_profile_name
     || conv?.wa_phone
     || 'Conversation'
-  const contactFirstName = conv?.contacts?.first_name || conv?.wa_profile_name?.split(' ')[0] || null
+  // {{1}}'s guess is the contact's first name only, as the web inbox makes it.
+  const contactFirstName = conv?.contacts?.first_name || null
 
   return (
     <KeyboardAvoidingView
@@ -474,18 +528,64 @@ export default function Conversation() {
           {showTemplates && (
             <Pressable
               className="absolute inset-0 bg-black/40 items-end"
-              onPress={() => setShowTemplates(false)}
+              onPress={closeTemplates}
             >
               <Pressable
                 className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl mt-auto w-full max-h-[60%] p-4"
                 onPress={() => {}}
               >
                 <View className="flex-row items-center justify-between mb-3">
-                  <Text className="text-base font-semibold text-un1t-text">Send template</Text>
-                  <Pressable onPress={() => setShowTemplates(false)} hitSlop={10}>
+                  {chosenTemplate ? (
+                    <Pressable onPress={() => setChosenTemplate(null)} hitSlop={10} className="flex-row items-center">
+                      <Ionicons name="chevron-back" size={20} color="#111827" />
+                      <Text className="text-base font-semibold text-un1t-text">Templates</Text>
+                    </Pressable>
+                  ) : (
+                    <Text className="text-base font-semibold text-un1t-text">Send template</Text>
+                  )}
+                  <Pressable onPress={closeTemplates} hitSlop={10}>
                     <Ionicons name="close" size={22} color="#111827" />
                   </Pressable>
                 </View>
+                {chosenTemplate ? (
+                  <ScrollView keyboardShouldPersistTaps="handled">
+                    <Text className="text-sm font-semibold text-un1t-text mb-2">{chosenTemplate.name}</Text>
+                    {/* The body the customer will read; a blank {{n}} stays visible. */}
+                    {templateHeaderMedia(chosenTemplate) && (
+                      <Text className="text-xs text-un1t-subtle mb-1">{`Includes a ${templateHeaderMedia(chosenTemplate)}`}</Text>
+                    )}
+                    <View className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-3">
+                      <Text className="text-sm text-un1t-text">
+                        {renderTemplatePreview(chosenTemplate, templateValues)}
+                      </Text>
+                    </View>
+                    {bodyVariableSlots(chosenTemplate).map(n => (
+                      <View key={n} className="flex-row items-center mb-2">
+                        <Text className="text-xs text-un1t-subtle w-10">{`{{${n}}}`}</Text>
+                        <TextInput
+                          value={templateValues[n] || ''}
+                          onChangeText={v => setTemplateValues(prev => ({ ...prev, [n]: v }))}
+                          placeholder={n === 1 ? 'First name' : `Value ${n}`}
+                          placeholderTextColor="#94A3B8"
+                          className="flex-1 bg-un1t-surface border border-un1t-border rounded-lg px-3 py-2 text-sm text-un1t-text"
+                        />
+                      </View>
+                    ))}
+                    <Pressable
+                      onPress={sendChosenTemplate}
+                      accessibilityRole="button"
+                      accessibilityLabel="Send template"
+                      disabled={!buildTemplateSend(chosenTemplate, templateValues).ok || sending}
+                      className={`mt-2 py-3 rounded-xl items-center ${
+                        buildTemplateSend(chosenTemplate, templateValues).ok && !sending ? 'bg-blue-500' : 'bg-un1t-border'
+                      }`}
+                    >
+                      <Text className={`font-semibold text-sm ${
+                        buildTemplateSend(chosenTemplate, templateValues).ok && !sending ? 'text-white' : 'text-un1t-subtle'
+                      }`}>Send template</Text>
+                    </Pressable>
+                  </ScrollView>
+                ) : (
                 <ScrollView>
                   {templates.length === 0 && (
                     <Text className="text-sm text-un1t-subtle text-center py-6">
@@ -502,23 +602,37 @@ export default function Conversation() {
                           {group.label}
                         </Text>
                       )}
-                      {group.templates.map(t => (
-                        <Pressable
-                          key={t.id}
-                          onPress={() => sendChosenTemplate(t)}
-                          className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
-                        >
-                          <Text className="text-sm font-semibold text-un1t-text">{t.name}</Text>
-                          {t.body_text && (
-                            <Text className="text-xs text-un1t-subtle mt-1" numberOfLines={2}>
-                              {t.body_text}
-                            </Text>
-                          )}
-                        </Pressable>
-                      ))}
+                      {group.templates.map(t => {
+                        // WATPLPICKER.1 — a template the send route cannot
+                        // complete (a Flow or per-message button, a media
+                        // header with no file) is shown, greyed, with why.
+                        const block = templateSendBlock(t)
+                        const preview = templateBodyText(t)
+                        return (
+                          <Pressable
+                            key={t.id}
+                            onPress={() => chooseTemplate(t)}
+                            disabled={!!block}
+                            className={`bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2 ${
+                              block ? 'opacity-50' : 'active:opacity-70'
+                            }`}
+                          >
+                            <Text className="text-sm font-semibold text-un1t-text">{t.name}</Text>
+                            {!!preview && (
+                              <Text className="text-xs text-un1t-subtle mt-1" numberOfLines={2}>
+                                {preview}
+                              </Text>
+                            )}
+                            {!!block && (
+                              <Text className="text-xs text-amber-700 mt-1">{SEND_BLOCK_TEXT[block]}</Text>
+                            )}
+                          </Pressable>
+                        )
+                      })}
                     </View>
                   ))}
                 </ScrollView>
+                )}
               </Pressable>
             </Pressable>
           )}

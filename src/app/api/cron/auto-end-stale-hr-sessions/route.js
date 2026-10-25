@@ -18,6 +18,8 @@ import { createServerClient } from '@/lib/supabase'
 import { endSession } from '@/lib/live-class'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
+import { buildSessionPush } from '@/lib/customer-notifications'
+import { getLocationBranding } from '@/lib/location-branding'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { shouldCloseStaleSession, STALE_AFTER_MS, MAX_SESSION_LENGTH_MS } from '@/lib/hr-session-lifecycle'
@@ -131,7 +133,7 @@ export async function GET(request) {
   // explicit OR so null passes.
   const { data: pendingEmails } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, effort_points, class_name')
+    .select('id, contact_id, location_id, effort_points, class_name')
     .not('ended_at', 'is', null)
     .is('email_sent_at', null)
     .gte('ended_at', recencyCutoff)
@@ -164,6 +166,17 @@ export async function GET(request) {
   let emailsSent = 0
   let emailsSkipped = 0
   let emailsFailed = 0
+  // W1.S1a — the push names the session studio's product ("UN1T Points",
+  // productName on the SHORT brand). One lookup per location per tick; the
+  // resolver never throws and answers '' (bare "Points") when unresolved.
+  const shortNames = new Map()
+  const shortNameFor = async (locationId) => {
+    if (!locationId) return ''
+    if (!shortNames.has(locationId)) {
+      shortNames.set(locationId, (await getLocationBranding(db, locationId)).shortName || '')
+    }
+    return shortNames.get(locationId)
+  }
   for (const row of pendingEmails || []) {
     const out = await sendPostClassEmail(db, row.id, { nowMs })
     if (out.ok && out.sent) emailsSent++
@@ -178,11 +191,15 @@ export async function GET(request) {
     // row leaves this sweep after one tick → the push fires at most once.
     const pushWorthy = out.ok && (out.sent || out.skipped === 'no-email' || out.skipped === 'opted-out')
     if (row.contact_id && pushWorthy) {
-      sendCustomerPush(db, row.contact_id, {
-        title: 'Your session is ready',
-        body: `${Number.isFinite(row.effort_points) ? row.effort_points + ' UN1T Points' : 'Tap to see your stats'}${row.class_name ? ' · ' + row.class_name : ''}`,
-        data: { type: 'session_report', session_id: row.id },
-      }).catch((err) => logWarn('cron-auto-end-hr', 'customer push threw', { err, sessionId: row.id }))
+      const push = buildSessionPush({
+        effortPoints: row.effort_points,
+        className: row.class_name,
+        sessionId: row.id,
+        unlocked: [],
+        shortName: await shortNameFor(row.location_id),
+      })
+      sendCustomerPush(db, row.contact_id, push)
+        .catch((err) => logWarn('cron-auto-end-hr', 'customer push threw', { err, sessionId: row.id }))
     }
   }
 

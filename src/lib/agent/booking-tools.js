@@ -31,7 +31,45 @@ import {
 } from '@/lib/person-accounts'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { notifyAgentApprovalRequest } from './approval-notify'
-import { formatDublinClassTime } from './dublin-format'
+import { formatClassTime } from './dublin-format'
+import { DEFAULT_TZ, zonedWallClockToInstant } from '@/lib/location-time'
+import { logError, logWarn } from '@/lib/log'
+import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
+import { refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
+import { UN1T_ID_PREFIX, parseAgentId } from './studio-ids'
+import { renderMiaCopy } from './mia-copy'
+
+// REGISTRYREAD.1b — what Mia is told when the auto lane has no usable Glofox
+// credentials. A failed settings READ (creds.readError) is a blip, not "this
+// studio has no booking system": tell the model the difference so it never
+// says booking isn't offered here. Both answers still hand off to the team;
+// only the reason the model is given changes.
+//
+// W1.M3b — source-aware. `sourceState` is membershipSourceState() for the
+// conversation's studio: 'none' means the studio has chosen NO booking system
+// (a lead-only gym), which is a fact the model may state; 'unconfigured' and
+// 'unknown' are a chosen system that cannot answer right now, which is the
+// unavailable copy. Without a state (legacy callers) the old answers stand.
+const BOOKING_SYSTEM_UNAVAILABLE = Object.freeze({
+  error: 'booking_system_unavailable',
+  message: 'The booking system could not be reached just now. Offer to hand off to the team. Do not say the studio does not take bookings.',
+})
+export function noBookingSystemAnswer(creds, sourceState = null) {
+  if (creds?.readError) return { ...BOOKING_SYSTEM_UNAVAILABLE }
+  const state = sourceState?.state
+  if (state === 'none') {
+    return { error: 'no_booking_system', message: 'This studio has no class booking system connected — hand off to the team.' }
+  }
+  if (state === 'unconfigured' || state === 'unknown') return { ...BOOKING_SYSTEM_UNAVAILABLE }
+  return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+}
+
+// The studio's membership-source state, read only on the no-credentials path
+// (lazy import: the seam pulls @/lib/glofox and the connection registry).
+async function bookingSourceState(db, locationId) {
+  const { membershipSourceState } = await import('@/lib/membership/source')
+  return membershipSourceState(db, locationId)
+}
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const BOOKING_TOOLS = [
@@ -82,7 +120,10 @@ export const BOOKING_TOOLS = [
       'List available consultation (intro session) slots for a given date — for NEW or ' +
       'prospective customers; no identity verification needed. Use when someone asks to come ' +
       'in, try a class, book a consultation or intro. Returns the bookable times for that ' +
-      'date; if none, try the next day. Dates are YYYY-MM-DD.',
+      'date; if none, try the next day. Dates are YYYY-MM-DD. Work the date out from Today in ' +
+      'Context, then check the returned day_label is the day the customer asked for. Each slot ' +
+      'has a label (weekday, date and time, e.g. "Fri 23 Oct, 11:00") and a slot_id: offer ' +
+      'times with the day exactly as the label gives it, and book with that slot_id.',
     input_schema: {
       type: 'object',
       properties: {
@@ -99,18 +140,25 @@ export const BOOKING_TOOLS = [
       'know it from earlier in the chat), do NOT ask again — leave name/email out and the ' +
       'booking uses the details on file. Only ask a brand-new person we know nothing about for ' +
       'their name and email (a phone number too if it flows naturally). CRITICAL either way: ' +
-      'restate the slot (date + time) and get a clear yes before calling. They will receive a ' +
-      'confirmation automatically.',
+      'restate the slot by its label (day, date and time) and get a clear yes before calling. ' +
+      'Pass the slot_id from list_consultation_slots and the label you confirmed. Only a slot ' +
+      'on a day list_consultation_slots returned in this conversation can be booked; if the ' +
+      'listing was in an earlier message, list that same date again for its slot_id. Never ' +
+      'work a date out from a weekday name. If the booking is refused, relay the reason the ' +
+      'result gives and nothing else. They will receive a confirmation automatically.',
     input_schema: {
       type: 'object',
       properties: {
-        date: { type: 'string', description: 'YYYY-MM-DD, from list_consultation_slots.' },
-        start_time: { type: 'string', description: 'HH:MM start of the chosen slot.' },
+        slot_id: { type: 'string', description: 'The slot_id of the chosen slot, copied exactly from list_consultation_slots.' },
+        confirmed_label: { type: 'string', description: 'The slot as you confirmed it with the customer, e.g. "Fri 23 Oct, 11:00".' },
         name: { type: 'string', description: "The customer's full name. Omit if already on file — do not re-ask a known person." },
         email: { type: 'string', description: "The customer's email address. Omit if already on file — do not re-ask a known person." },
         phone: { type: 'string', description: 'Phone number if given.' },
       },
-      required: ['date', 'start_time'],
+      // MIACONSULT.1 — the slot_id replaced date + start_time (the executor
+      // still accepts that pair, judged the same way); both required, so the
+      // optional-parameter count is unchanged (tool-schemas.test.js ceiling).
+      required: ['slot_id', 'confirmed_label'],
     },
   },
   {
@@ -192,9 +240,9 @@ const MAX_CLASS_LIST = 60
 
 // MIA-REVIEW.3 — the formatter moved to ./dublin-format so account-tools
 // (which can't import this module: it statically pulls @/lib/glofox) shares
-// the exact same Dublin labelling. Re-exported so the public surface of
-// booking-tools is unchanged.
-export { formatDublinClassTime }
+// the exact same labelling (the studio's wall clock since TZ.5). Re-exported
+// so booking-tools keeps exposing the one formatter.
+export { formatClassTime }
 
 // CAPACITY-SECRECY.1 — a class with this many spaces or fewer is "limited".
 // Coarse on purpose: it lets Mia create honest urgency without ever handing
@@ -211,7 +259,9 @@ const LIMITED_SPOTS_THRESHOLD = 3
  * context (the prompt rule is the second line of defence). Operator surfaces
  * that legitimately need counts read Glofox directly, not through here.
  */
-export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
+// TZ.5 — `zone` is the conversation location's (ctx.zone): the `time` label is
+// that studio's wall clock.
+export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST, zone = DEFAULT_TZ) {
   const nowSec = Math.floor(nowMs / 1000)
   const out = []
   for (const e of Array.isArray(events) ? events : []) {
@@ -227,7 +277,7 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
       event_id: e._id || e.id || null,
       name: e.name || 'Class',
       start_sec: startSec,
-      time: formatDublinClassTime(startSec),
+      time: formatClassTime(startSec, zone),
       // MIA-BOARD.2 — machine-readable instant, relayed back via book_class so
       // the approval row is guardable against past-start execution. The
       // display `time` stays what the customer sees.
@@ -236,19 +286,100 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
       ...(!full && size > 0 && spotsLeft <= LIMITED_SPOTS_THRESHOLD ? { limited: true } : {}),
     })
   }
-  // Sort on the numeric instant — the Dublin label doesn't sort lexically.
+  // Sort on the numeric instant — the wall-clock label doesn't sort lexically.
   out.sort((a, b) => a.start_sec - b.start_sec)
   return out.slice(0, limit).map(({ start_sec: _omitted, ...rest }) => rest)
+}
+
+// MIAORG.1 Task 5 — the timetable at an un1t.online studio (Hatch Street),
+// from the rows the un1t-online-sync cron upserts (mig 726). Classes in the
+// next UN1T_TIMETABLE_DAYS, earliest first, capped.
+//
+// Status filter: ONLY `status = 'scheduled'`. The sync stores the API's event
+// status verbatim (un1t-online-map.js mapEvent, text(row.status)); the live
+// table holds 'scheduled' (every upcoming row) and 'completed' (past), and the
+// API spec names no other value. An allow-list keeps out cancelled, draft and
+// hidden events, a null status, and any value un1t.online adds later, until
+// someone decides it is a class customers may be told about.
+//
+// CAPACITY-SECRECY.1 — the payload is the class name and start time, nothing
+// else: capacity, bookings_count, access_mode and raw are never selected, so
+// they cannot reach the model.
+//
+// Cap (final review): Hatch Street runs ~59 classes in 14 days, so the old 40
+// cut the end of the window and Mia could say a later day had nothing on. The
+// cap is 100, and a list that reaches it says `truncated: true` (the tool
+// description tells Mia the list then stops before the end of the window).
+export const UN1T_TIMETABLE_DAYS = 14
+export const UN1T_TIMETABLE_LIMIT = 100
+export const UN1T_SCHEDULED_STATUS = 'scheduled'
+
+/**
+ * Shape un1t_events rows for the agent: `{ name, starts_at }` with starts_at
+ * the studio's wall-clock label (formatClassTime, as the Glofox list's
+ * `time`). Rows without a parseable start are dropped. Pure.
+ */
+export function shapeUn1tClassesForAgent(rows, zone = DEFAULT_TZ) {
+  const out = []
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const ms = Date.parse(r?.starts_at || '')
+    if (!Number.isFinite(ms)) continue
+    out.push({ name: String(r?.title || '').trim() || 'Class', starts_at: formatClassTime(Math.floor(ms / 1000), zone) })
+  }
+  return out
+}
+
+/**
+ * The timetable at one un1t.online studio. The no-booking block calls it with
+ * defaults and gets `{ name, starts_at }` per class (two columns selected).
+ * A `un1t_*` block passes `withEventIds` and gets `{ event_id, name, starts_at,
+ * full }`: capacity and bookings_count are selected for that one case, only to
+ * compute `full` inside the shaper, and are in no returned object, log or error.
+ */
+export async function listUn1tOnlineClasses(db, locationId, zone, nowMs = Date.now(), { withEventIds = false } = {}) {
+  const fromIso = new Date(nowMs).toISOString()
+  const toIso = new Date(nowMs + UN1T_TIMETABLE_DAYS * 86400_000).toISOString()
+  try {
+    // UN1TBOOK.19 — only classes the latest sync saw (freshCutoff; a stalled
+    // sync keeps every row). An unreadable cutoff throws into the catch below:
+    // the same hand-off as an unreadable timetable.
+    const cutoffIso = await freshCutoff(db, 'un1t_events', locationId)
+    const { data, error } = await onlyFreshEvents(db.from('un1t_events')
+      .select(withEventIds ? 'un1t_id, title, starts_at, capacity, bookings_count' : 'title, starts_at')
+      .eq('location_id', locationId)
+      .eq('status', UN1T_SCHEDULED_STATUS)
+      .gte('starts_at', fromIso)
+      .lte('starts_at', toIso), cutoffIso)
+      .order('starts_at', { ascending: true })
+      .limit(UN1T_TIMETABLE_LIMIT)
+    if (error) {
+      logError('agent-timetable', 'un1t_events unreadable; Mia hands off for the timetable', { locationId, err: error })
+      return noBookingSystemAnswer(null, { state: 'none' })
+    }
+    const rows = Array.isArray(data) ? data : []
+    let classes
+    if (withEventIds) {
+      const { shapeUn1tTimetableForAgent } = await import('./un1t-tools')
+      classes = shapeUn1tTimetableForAgent(rows, zone)
+    } else {
+      classes = shapeUn1tClassesForAgent(rows, zone)
+    }
+    // A full page means there may be more after the last class shown.
+    return rows.length >= UN1T_TIMETABLE_LIMIT ? { classes, truncated: true } : { classes }
+  } catch (err) {
+    logError('agent-timetable', 'un1t_events read threw; Mia hands off for the timetable', { locationId, err })
+    return noBookingSystemAnswer(null, { state: 'none' })
+  }
 }
 
 const MAX_MEMBER_BOOKINGS = 10
 
 /**
  * Shape a member's Glofox /2.0/bookings rows for the agent: future,
- * still-BOOKED rows with the booking id the cancel call needs, Dublin
- * labels, time-sorted, capped. Pure.
+ * still-BOOKED rows with the booking id the cancel call needs, wall-clock
+ * labels in the studio's zone (TZ.5), time-sorted, capped. Pure.
  */
-export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_BOOKINGS) {
+export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_BOOKINGS, zone = DEFAULT_TZ) {
   const nowSec = Math.floor(nowMs / 1000)
   const out = []
   for (const b of Array.isArray(bookings) ? bookings : []) {
@@ -261,7 +392,7 @@ export function shapeMemberBookingsForAgent(bookings, nowMs, limit = MAX_MEMBER_
       booking_id: b._id || null,
       class_name: b.event_name || b.model_name || 'Class',
       start_sec: startSec,
-      time: formatDublinClassTime(startSec),
+      time: formatClassTime(startSec, zone),
     })
   }
   out.sort((a, b) => a.start_sec - b.start_sec)
@@ -334,7 +465,7 @@ export function consultationInputGuard({ name, email, date, start_time } = {}) {
     return { error: 'need_email', message: 'Ask for a valid email address — the confirmation goes there.' }
   }
   if (!DATE_RE.test(String(date || ''))) {
-    return { error: 'bad_date', message: 'date must be YYYY-MM-DD.' }
+    return { error: 'bad_date', message: 'Pass the slot_id from list_consultation_slots (or date as YYYY-MM-DD).' }
   }
   if (!TIME_RE.test(String(start_time || ''))) {
     return { error: 'bad_time', message: 'start_time must be HH:MM from list_consultation_slots.' }
@@ -347,12 +478,148 @@ export function findSlot(slots, startTime) {
   return (slots || []).find((s) => s.start === startTime) || null
 }
 
+// ── MIACONSULT.1: a consultation slot carries its own date ──────────
+//
+// Live 19 Oct 2026 (Hatch Street): Mia listed Fri 23 Oct, offered "Friday at
+// 11am", and on the next turn booked 2026-10-24 (a Saturday) because she had
+// worked the date out again from the word "Friday". A tool result does not
+// survive into the next turn's history, so the date only lived in the model's
+// head. Every slot now carries a studio-zoned label (weekday + day + month +
+// time) and a slot_id, and book_consultation books only a slot on a date that
+// list_consultation_slots returned in this conversation.
+
+const SLOT_ID_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/
+
+/** The slot_id of a consultation slot: its exact date + start pair. Pure. */
+export function consultationSlotId(date, start) {
+  return `${date}T${start}`
+}
+
+/** Parse a slot_id back to { date, start_time }, or null when malformed. Pure. */
+export function parseConsultationSlotId(slotId) {
+  const m = String(slotId || '').trim().match(SLOT_ID_RE)
+  return m ? { date: m[1], start_time: m[2] } : null
+}
+
+/**
+ * The label the model relays for a consultation slot, e.g. "Fri 23 Oct, 11:00":
+ * the studio's wall clock rendered by the agent's one class-time formatter, so
+ * a consultation and a class read the same way. The weekday comes from the
+ * date itself; the zone round trip keeps the wall clock on both sides of a
+ * DST change. Pure.
+ */
+export function consultationSlotLabel(date, start, zone = DEFAULT_TZ) {
+  const ms = zonedWallClockToInstant(date, start, zone)
+  if (ms == null) return null
+  return formatClassTime(Math.floor(ms / 1000), zone)
+}
+
+/** The day part of a slot label, e.g. "Fri 23 Oct". Pure. */
+export function consultationDayLabel(date, zone = DEFAULT_TZ) {
+  const label = consultationSlotLabel(date, '12:00', zone)
+  return label ? label.split(',')[0] : null
+}
+
+const WEEKDAY_RE = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i
+// A day of the month: 1-2 digits, an optional ordinal suffix, and not part of
+// a time ("11:00", "11am", "11.30").
+const DAY_OF_MONTH_RE = /(?<![\d:.])(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*(?:[:.]\d|am\b|pm\b))/i
+
+/**
+ * Does the label the model confirmed with the customer name a different day
+ * than the slot it is booking? Compares the weekday and the day of the month
+ * when the confirmed label carries them; a label with neither cannot
+ * disagree. Pure.
+ */
+export function confirmedLabelMismatch(confirmedLabel, slotLabel) {
+  const said = String(confirmedLabel || '')
+  const truth = String(slotLabel || '')
+  if (!said.trim() || !truth) return false
+  const saidDay = said.match(WEEKDAY_RE)
+  const truthDay = truth.match(WEEKDAY_RE)
+  if (saidDay && truthDay && saidDay[1].toLowerCase() !== truthDay[1].toLowerCase()) return true
+  const saidDate = said.match(DAY_OF_MONTH_RE)
+  const truthDate = truth.match(DAY_OF_MONTH_RE)
+  if (saidDate && truthDate && Number(saidDate[1]) !== Number(truthDate[1])) return true
+  return false
+}
+
+// How far back an earlier turn's listing still counts.
+const LISTED_LOOKBACK_DAYS = 14
+const LISTED_LOOKBACK_ROWS = 50
+const LISTED_DATE_IN_INPUT_RE = /"date"\s*:\s*"(\d{4}-\d{2}-\d{2})"/
+
+/**
+ * The dates list_consultation_slots returned in this conversation: this
+ * turn's (ctx.consultationDatesListed, filled by the list tool) plus earlier
+ * turns', read from the agent_decisions trace (each row's meta.tools records
+ * the call and its input). An unreadable trace leaves only this turn's dates,
+ * so the book tool refuses and Mia lists the day again: never a booking on an
+ * unoffered date. `known` is false when the caller gave no way to know
+ * (no conversation and no turn set): nothing to check against.
+ */
+async function consultationDatesListed(db, ctx, nowMs = Date.now()) {
+  const dates = new Set(ctx.consultationDatesListed || [])
+  if (!ctx.conversationId) return { dates, known: !!ctx.consultationDatesListed }
+  try {
+    let q = db.from('agent_decisions')
+      .select('meta')
+      .eq('conversation_id', ctx.conversationId)
+    if (ctx.channel) q = q.eq('channel', ctx.channel)
+    const { data, error } = await q
+      .gte('created_at', new Date(nowMs - LISTED_LOOKBACK_DAYS * 86400_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(LISTED_LOOKBACK_ROWS)
+    if (error) {
+      logWarn('agent-consultation', 'earlier slot listings unreadable; only this turn counts', { conversationId: ctx.conversationId, err: error })
+      return { dates, known: true }
+    }
+    for (const row of Array.isArray(data) ? data : []) {
+      for (const t of Array.isArray(row?.meta?.tools) ? row.meta.tools : []) {
+        if (t?.name !== 'list_consultation_slots') continue
+        const m = String(t.input || '').match(LISTED_DATE_IN_INPUT_RE)
+        if (m) dates.add(m[1])
+      }
+    }
+  } catch (err) {
+    logWarn('agent-consultation', 'earlier slot listings read threw; only this turn counts', { conversationId: ctx.conversationId, err })
+  }
+  return { dates, known: true }
+}
+
+// A refused consultation booking: the precise reason, the slot as it really
+// is, and what Mia may say. booked:false so nothing reads it as a success.
+function consultationRefusal(reason, message, extra = {}) {
+  return { booked: false, error: reason, reason, ...extra, message }
+}
+
+// The zone a consultation type's slots are written in (its studio's). A failed
+// zone read is a refusal to the model, never a guessed clock.
+const CONSULTATION_ZONE_UNREADABLE = Object.freeze({
+  error: 'availability_unreadable',
+  message: 'Consultation times could not be checked just now. Do not offer or confirm a time. Offer to hand off to the team.',
+})
+async function consultationZone(db, eventType) {
+  const { eventTypeZone } = await import('@/lib/booking-slots')
+  try {
+    return await eventTypeZone(db, eventType)
+  } catch (err) {
+    logWarn('agent-consultation', 'consultation studio zone unreadable', { locationId: eventType?.location_id, errClass: err?.name })
+    return null
+  }
+}
+
 // ── IO helpers ──────────────────────────────────────────────────────
 
 // Resolve the location's consultation booking type: the explicit
 // settings.customer_agent.consultation_event_type_id wins; otherwise
 // the first active event type whose name mentions consult/intro/taster.
-async function resolveConsultationEventType(db, locationId, settings) {
+//
+// MIAORG.1 Task 5 — the pinned type must be THIS studio's. A pinned id whose
+// event type belongs to another studio (a Stillorgan id pinned at Hatch, say)
+// is ignored and discovery runs, so Mia never offers or books another
+// studio's consultation slots.
+export async function resolveConsultationEventType(db, locationId, settings) {
   const cols = 'id, name, slug, duration_minutes, buffer_minutes, availability, max_advance_days, location_id'
   if (settings?.consultation_event_type_id) {
     const { data } = await db.from('event_types')
@@ -360,7 +627,7 @@ async function resolveConsultationEventType(db, locationId, settings) {
       .eq('id', settings.consultation_event_type_id)
       .eq('active', true)
       .maybeSingle()
-    if (data) return data
+    if (data && data.location_id === locationId) return data
   }
   const { data: candidates } = await db.from('event_types')
     .select(cols)
@@ -548,11 +815,108 @@ async function reelectSiblingWithCredits({
   return probes.find((p) => p.entitled)?.account || null
 }
 
+// MIAHATCH.2 — book_class / cancel_class_booking named a `un1t:` id. Only
+// the dual block offers those tools beside un1t.online reads; there the
+// member's un1t.online studio answers with its chat_booking_unavailable_text
+// ({studio}, {link} = that studio's booking_url, from its own resolved
+// settings). No answerable un1t.online studio: the not-at-this-studio refusal.
+// MIAHATCH.5 — block 3b never reaches this: it books and cancels through
+// un1t-booking.js (Tasks 16 and 17).
+async function un1tChatBookingAnswer(toolName, ctx) {
+  const studio = ctx?.turn?.block === 'un1t_read_dual'
+    ? (ctx.turn.answerable || []).find((s) => s?.providerKey === 'un1t_online')
+    : null
+  if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
+  let settings = null
+  try {
+    settings = typeof ctx.actionStudio === 'function' ? await ctx.actionStudio(studio.locationId) : null
+  } catch { settings = null }
+  if (!settings && studio.locationId === ctx.locationId) settings = ctx.settings || null
+  const text = renderMiaCopy('chat_booking_unavailable_text', settings, { studio: studio.name, link: settings?.booking_url || null })
+  // MIAFLOW.1 — where this turn offers the thread studio's booking form
+  // (booking-flow.js), a booking there points to it before the link.
+  const bookingForm = toolName === 'book_class' && ctx?.bookingFlow?.offered === true && studio.locationId === ctx.locationId
+    ? { booking_form: 'Call send_booking_flow to send the booking form into the chat instead of sending this text.' }
+    : {}
+  return toolName === 'book_class'
+    ? { booked: false, chat_booking_unavailable: true, text, ...bookingForm }
+    : { cancelled: false, chat_booking_unavailable: true, text }
+}
+
+// MIAHATCH.5 — the answerable un1t.online studio a block 3b write acts at:
+// the one whose mirror holds the `un1t:` id (`studioFor`), else the first.
+// null when the turn has none.
+async function un1tActionStudio(db, ctx, rawId, studioFor) {
+  const un1tStudios = (ctx?.turn?.answerable || []).filter((s) => s?.providerKey === 'un1t_online')
+  if (!un1tStudios.length) return null
+  const parsed = parseAgentId(rawId)
+  const held = parsed?.provider === 'un1t_online' ? await studioFor(db, un1tStudios, parsed.id) : null
+  return held || un1tStudios[0]
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId,
 //        verifiedContactId, locationId, channel, nameHint, settings }
 export async function executeBookingTool(toolName, input, ctx) {
   const { db, locationId, verifiedContactId, settings } = ctx
+
+  // MIAORG.1 Task 5 — defence in depth: a booking-system tool at a studio
+  // whose source takes no bookings is refused before any read or Glofox call.
+  const refused = refuseToolForTurn(toolName, ctx)
+  if (refused) return refused
+
+  // MIAHATCH.5 Task 17 — request_refund is offered in block 3b only (refused
+  // above everywhere else): a record-only refund card at the un1t.online
+  // studio (un1t-booking.js, loaded lazily). Nothing is refunded and
+  // un1t.online is not called.
+  if (toolName === 'request_refund') {
+    if (ctx?.turn?.block !== 'un1t_full') return { ...TOOL_NOT_AT_THIS_STUDIO }
+    const { requestRefund, un1tStudioForBooking } = await import('./un1t-booking')
+    const studio = await un1tActionStudio(db, ctx, input?.booking_id, un1tStudioForBooking)
+    return studio ? requestRefund(ctx, input, studio) : { ...TOOL_NOT_AT_THIS_STUDIO }
+  }
+
+  // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Outside
+  // block 3b chat booking there is not live (slice 1): in the dual block the answer is
+  // the studio's operator-editable "not from chat yet" line with its booking
+  // link; anywhere else (no un1t.online studio answerable for this sender, or
+  // a block without one) it is no studio Mia answers for. Decided before any
+  // read: a `un1t:` id never reaches Glofox.
+  if (toolName === 'book_class' || toolName === 'cancel_class_booking') {
+    // The prefix itself: a bare `un1t:` (no id after it) is still never a
+    // Glofox id.
+    const raw = toolName === 'book_class' ? input?.event_id : input?.booking_id
+    if (typeof raw === 'string' && raw.startsWith(UN1T_ID_PREFIX)) {
+      // MIAHATCH.5 Tasks 16 and 17 — block 3b books and cancels at the
+      // un1t.online studio through D's book and cancel (un1t-booking.js,
+      // loaded lazily so no other turn imports the write side). Every other
+      // block keeps the slice 1 answer.
+      if (ctx?.turn?.block === 'un1t_full') {
+        const { un1tBookClass, un1tCancelBooking, un1tStudioForEvent, un1tStudioForBooking } = await import('./un1t-booking')
+        const isBook = toolName === 'book_class'
+        const studio = await un1tActionStudio(db, ctx, raw, isBook ? un1tStudioForEvent : un1tStudioForBooking)
+        if (!studio) return { ...TOOL_NOT_AT_THIS_STUDIO }
+        return isBook ? un1tBookClass(ctx, input, studio) : un1tCancelBooking(ctx, input, studio)
+      }
+      return un1tChatBookingAnswer(toolName, ctx)
+    }
+  }
+
+  // MIAHATCH.2 Task 6 — on a turn whose tool block reads un1t.online the
+  // timetable comes from the answerable studios (event ids and `full`), not the
+  // thread studio. A turn without one is untouched; the module loads lazily so
+  // a Glofox turn never imports it. No verification: the timetable is public.
+  if (toolName === 'list_upcoming_classes' && String(ctx.turn?.block || '').startsWith('un1t_')) {
+    const { executeUn1tTimetable } = await import('./un1t-tools')
+    return executeUn1tTimetable(input, ctx, ctx.turn.answerable)
+  }
+
+  if (toolName === 'list_upcoming_classes' && ctx.canBook === false) {
+    // MIAORG.1 Task 5 — no Glofox here. un1t.online studios answer from their
+    // synced un1t_events; any other no-booking studio has no timetable.
+    if (ctx.membershipSourceKey !== 'un1t_online') return noBookingSystemAnswer(null, { state: 'none' })
+    return listUn1tOnlineClasses(db, locationId, ctx.zone || DEFAULT_TZ)
+  }
 
   if (toolName === 'list_upcoming_classes') {
     if (!verifiedContactId) {
@@ -562,13 +926,13 @@ export async function executeBookingTool(toolName, input, ctx) {
       await import('@/lib/glofox')
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
     const days = Math.min(7, Math.max(1, Number(input?.days) || 7))
     const start = Math.floor(Date.now() / 1000)
     const { ok, events } = await fetchUpcomingEvents(creds, { start, end: start + days * 86400, limit: 100 })
     if (!ok) return { error: 'list_failed', message: 'Could not load the timetable just now — offer to hand off.' }
-    return { classes: shapeClassListForAgent(events, Date.now()) }
+    return { classes: shapeClassListForAgent(events, Date.now(), MAX_CLASS_LIST, ctx.zone || DEFAULT_TZ) }
   }
 
   if (toolName === 'book_class') {
@@ -602,7 +966,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     const creds = await glofoxCredentialsForLocation(db, locationId)
     // Resolved here rather than returned on: draft mode has never needed
     // Glofox credentials and must keep drafting without them (the auto lane
-    // below still answers no_booking_system).
+    // below still answers noBookingSystemAnswer(creds)).
     const credsUsable = !!creds && missingGlofoxCredentialsForLocation(creds).length === 0
 
     // PERSON-ACCT.7 — one person routinely holds 2-3 contacts rows, each
@@ -757,7 +1121,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       let credits = null
       let readFailed = false
       if (!credsUsable) {
-        readFailed = true // no Glofox here — the execute path answers no_booking_system
+        readFailed = true // no usable Glofox here — the execute path answers noBookingSystemAnswer(creds)
       } else {
         try {
           // ok-aware read: a Glofox blip must NOT escalate every booking to
@@ -829,7 +1193,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (!credsUsable) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
     // Intent BEFORE the side effect (see logBookingRequest).
     const auditId = await logBookingRequest(db, ctx, {
@@ -899,6 +1263,14 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!verifiedContactId) {
       return { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' }
     }
+    // MIAHATCH.2 — on a turn whose tool block reads un1t.online (ctx.turn.block
+    // starts with `un1t_`) the list comes from the answerable studios. A turn
+    // without one is untouched; the module loads lazily so a Glofox turn never
+    // imports it.
+    if (String(ctx.turn?.block || '').startsWith('un1t_')) {
+      const { executeUn1tRead } = await import('./un1t-tools')
+      return executeUn1tRead(toolName, input, ctx, ctx.turn.answerable)
+    }
     // PERSON-ACCT.2 — one person routinely holds 2-3 `contacts` rows, each
     // linked to a DIFFERENT Glofox account, and the conversation is attached
     // to whichever one the inbound number matched. Reading that one account
@@ -937,7 +1309,7 @@ export async function executeBookingTool(toolName, input, ctx) {
 
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
     // PERSON-ACCT.7 — the shared fan-out (windowDays:0 → upcoming only;
     // allSettled, so one dead account never loses the others' rows). book_class
@@ -947,9 +1319,9 @@ export async function executeBookingTool(toolName, input, ctx) {
 
     const nowMs = Date.now()
     // Shape ONE raw row at a time: same helper, same filtering (still-BOOKED,
-    // still in the future, same Dublin labels), but each shaped row keeps the
-    // numeric start it came from — the shaper drops it, since it is not part
-    // of the model's view, and the Dublin label does not sort.
+    // still in the future, same studio-clock labels), but each shaped row keeps
+    // the numeric start it came from — the shaper drops it, since it is not
+    // part of the model's view, and the wall-clock label does not sort.
     //
     // The rows handed back carry NOTHING about which account they came from.
     // The whole tool result is JSON-stringified into the model's context, so
@@ -965,7 +1337,7 @@ export async function executeBookingTool(toolName, input, ctx) {
         return
       }
       for (const raw of res.bookings) {
-        const [shaped] = shapeMemberBookingsForAgent([raw], nowMs)
+        const [shaped] = shapeMemberBookingsForAgent([raw], nowMs, MAX_MEMBER_BOOKINGS, ctx.zone || DEFAULT_TZ)
         if (!shaped) continue
         // No `|| 0` fallback: the shaper only emits a row whose time_start is
         // finite and in the future, so an unparseable start cannot reach here
@@ -1112,7 +1484,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (!credsUsable) {
-      return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
+      return noBookingSystemAnswer(creds, await bookingSourceState(db, locationId))
     }
 
     const details = { ...baseDetails, ...ownerDetails }
@@ -1169,11 +1541,22 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!DATE_RE.test(String(input?.date || ''))) {
       return { error: 'bad_date', message: 'date must be YYYY-MM-DD.' }
     }
-    const slots = await computeAvailableSlots(db, eventType, input.date)
+    const zone = await consultationZone(db, eventType)
+    if (!zone) return CONSULTATION_ZONE_UNREADABLE
+    const slots = await computeAvailableSlots(db, eventType, input.date, { zone })
+    // MIACONSULT.1 — remember the date for book_consultation (this turn; later
+    // turns read it back from the agent_decisions trace).
+    ctx.consultationDatesListed?.add(input.date)
     return {
       date: input.date,
+      day_label: consultationDayLabel(input.date, zone),
       booking_type: eventType.name,
-      slots: slots.map((s) => ({ start: s.start, end: s.end })),
+      slots: slots.map((s) => ({
+        slot_id: consultationSlotId(input.date, s.start),
+        label: consultationSlotLabel(input.date, s.start, zone),
+        start: s.start,
+        end: s.end,
+      })),
     }
   }
 
@@ -1191,19 +1574,73 @@ export async function executeBookingTool(toolName, input, ctx) {
         .maybeSingle()
       consultContact = data || {}
     }
-    const identity = resolveConsultationIdentity({ input: input || {}, contact: consultContact, nameHint: ctx.nameHint })
-    const guard = consultationInputGuard({ ...(input || {}), name: identity.name, email: identity.email })
+    // MIACONSULT.1 — the slot comes from its slot_id (the exact date + time
+    // pair list_consultation_slots returned); a bare date + start_time is
+    // still accepted and judged the same way. Both given and disagreeing is the
+    // live-incident shape (a date recomputed from a weekday): refused.
+    const raw = input || {}
+    let want = { date: raw.date, start_time: raw.start_time }
+    if (raw.slot_id != null && String(raw.slot_id).trim()) {
+      const parsed = parseConsultationSlotId(raw.slot_id)
+      if (!parsed) {
+        return consultationRefusal('not_a_listed_slot',
+          'That slot_id is not one list_consultation_slots returned. Copy the slot_id exactly from the list (list the day again if it was in an earlier message). Do not tell the customer the slot was taken.')
+      }
+      if ((raw.date && raw.date !== parsed.date) || (raw.start_time && raw.start_time !== parsed.start_time)) {
+        return consultationRefusal('wrong_date',
+          `The slot_id is for ${parsed.date} at ${parsed.start_time}, but you also passed ${raw.date || parsed.date} at ${raw.start_time || parsed.start_time}. Book with the slot_id alone, for the slot whose label you confirmed with the customer. Do not tell the customer the slot was taken.`)
+      }
+      want = parsed
+    }
+    const identity = resolveConsultationIdentity({ input: raw, contact: consultContact, nameHint: ctx.nameHint })
+    const guard = consultationInputGuard({ ...raw, ...want, name: identity.name, email: identity.email })
     if (!guard.ok) return guard
 
-    const { computeAvailableSlots } = await import('@/lib/booking-slots')
+    const { findBookableSlot, daySlotGrid } = await import('@/lib/booking-slots')
     const eventType = await resolveConsultationEventType(db, locationId, settings)
     if (!eventType) {
       return { error: 'no_consultation_type', message: 'No consultation booking type is configured — hand off to the team.' }
     }
-    const slots = await computeAvailableSlots(db, eventType, input.date)
-    const slot = findSlot(slots, input.start_time)
+    const zone = await consultationZone(db, eventType)
+    if (!zone) return CONSULTATION_ZONE_UNREADABLE
+    const requested = consultationSlotLabel(want.date, want.start_time, zone) || `${want.date} ${want.start_time}`
+
+    // The day the customer agreed to must be the day being booked.
+    if (confirmedLabelMismatch(raw.confirmed_label, requested)) {
+      return consultationRefusal('wrong_date',
+        `You confirmed "${raw.confirmed_label}" with the customer, but ${want.date} at ${want.start_time} is ${requested}. Nothing was booked. Check which day the customer agreed to, using the labels from list_consultation_slots, and confirm again. Do not tell the customer the slot was taken.`,
+        { requested })
+    }
+
+    // Only a slot on a day list_consultation_slots returned in this
+    // conversation (the live incident booked a Saturday nobody offered).
+    const listed = await consultationDatesListed(db, ctx)
+    if (listed.known && !listed.dates.has(want.date)) {
+      const offeredDays = [...listed.dates].sort().map((d) => consultationDayLabel(d, zone))
+      return consultationRefusal('not_a_listed_slot',
+        `${requested} was never offered: list_consultation_slots has not returned ${want.date} in this conversation${offeredDays.length ? ` (it returned ${offeredDays.join(', ')})` : ''}. Nothing was booked. Do not say the slot was taken. Use the slot_id for the slot you actually offered (list that day again if it was in an earlier message), or check the day with the customer.`,
+        { requested, offered_days: offeredDays })
+    }
+
+    // The write path's check (BOOKINGSELF.1): fails closed on an unreadable
+    // bookings/blocked read, never "free".
+    const { slot, error: slotErr } = await findBookableSlot(db, eventType, want.date, want.start_time, { zone })
+    if (slotErr) {
+      logWarn('agent-consultation', 'slot availability unreadable; consultation not booked', { locationId, err: slotErr })
+      return consultationRefusal('availability_unreadable',
+        'Availability could not be checked just now, so nothing was booked. Do not say the slot was taken. Offer to hand off to the team.',
+        { requested })
+    }
     if (!slot) {
-      return { error: 'slot_taken', message: 'That slot is no longer available — re-run list_consultation_slots and offer the fresh times.' }
+      const onGrid = daySlotGrid(eventType, want.date).some((s) => s.start === want.start_time)
+      if (!onGrid) {
+        return consultationRefusal('not_a_listed_slot',
+          `${requested} is not one of the consultation times on that day, so nothing was booked. Do not say the slot was taken. Offer the times list_consultation_slots returned, by their labels.`,
+          { requested })
+      }
+      return consultationRefusal('slot_taken',
+        `${requested} was booked by someone else since it was offered. Nothing was booked. Say exactly that, re-run list_consultation_slots for that day and offer the fresh times by their labels.`,
+        { requested })
     }
 
     // Same insert shape as /api/public/book — the handle_new_booking
@@ -1212,7 +1649,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     const { data: booking, error } = await db.from('bookings').insert({
       event_type_id: eventType.id,
       location_id: eventType.location_id || locationId || null,
-      booking_date: input.date,
+      booking_date: want.date,
       start_time: slot.start,
       end_time: slot.end,
       customer_name: identity.name,
@@ -1247,7 +1684,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       details: {
         booking_id: booking.id,
         booking_type: eventType.name,
-        date: input.date,
+        date: want.date,
         start_time: slot.start,
         customer_name: identity.name,
         mode: 'auto',
@@ -1256,8 +1693,10 @@ export async function executeBookingTool(toolName, input, ctx) {
     return {
       booked: true,
       booking_type: eventType.name,
-      date: input.date,
+      date: want.date,
       start_time: slot.start,
+      slot_id: consultationSlotId(want.date, slot.start),
+      label: requested,
       note: 'A confirmation is being sent to their email/phone automatically.',
     }
   }

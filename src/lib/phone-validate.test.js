@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { toMobileE164, isValidMobileNumber } from './phone-validate'
+import { toMobileE164, isValidMobileNumber, toE164Ireland, waPhoneFromPhone, toWhatsAppE164, contactWhatsAppNumber } from './phone-validate'
+import { WA_PHONE_CASES } from '../../tests/helpers/wa-phone-cases.js'
 
 describe('toMobileE164 — Irish mobiles', () => {
   it('accepts national 08X forms (spaces/dashes ignored)', () => {
@@ -16,7 +17,7 @@ describe('toMobileE164 — Irish mobiles', () => {
 
   // The trunk zero is dropped when a number is written for a +353 prefix, so
   // the bare 9-digit NSN is a normal way to hold (and type) an Irish mobile —
-  // 431 contacts are stored in exactly this shape. toE164Ireland() in twilio.js
+  // 431 contacts are stored in exactly this shape. toE164Ireland()
   // has always accepted it; this gate used to reject it outright.
   it('accepts the bare 9-digit form with no trunk zero and no country code', () => {
     expect(toMobileE164('871234567')).toBe('+353871234567')
@@ -110,5 +111,63 @@ describe('toMobileE164 — +353 landline in E.164 form', () => {
   // cost more than it saved. Pinned so it reads as a decision, not an oversight.
   it('lets an Irish landline through — measured, deliberately not narrowed', () => {
     expect(toMobileE164('+35315551234')).toBe('+35315551234')
+  })
+})
+
+describe('toE164Ireland', () => {
+  it('normalises common Irish phone shapes to E.164', () => {
+    expect(toE164Ireland('0871234567')).toBe('+353871234567')
+    expect(toE164Ireland('+353871234567')).toBe('+353871234567')
+    expect(toE164Ireland('353871234567')).toBe('+353871234567')
+    expect(toE164Ireland('00353871234567')).toBe('+353871234567')
+    expect(toE164Ireland('871234567')).toBe('+353871234567')
+  })
+})
+
+// WAPHONE.1 — the one phone → WhatsApp-number rule. The same table runs
+// against the SQL twin (mig 753) in tests/wa-phone-normaliser-parity.test.js.
+describe('waPhoneFromPhone — every shape in the fixture table', () => {
+  it.each(WA_PHONE_CASES)('%j → %j (%s)', (input, expected) => {
+    expect(waPhoneFromPhone(input)).toBe(expected)
+  })
+})
+
+describe('waPhoneFromPhone — the output is always a stored-form wa_phone', () => {
+  it('is digits only, 8-15 long, never starting 0', () => {
+    for (const [input] of WA_PHONE_CASES) {
+      const out = waPhoneFromPhone(input)
+      if (out != null) expect(out).toMatch(/^[1-9][0-9]{7,14}$/)
+    }
+  })
+  it('is idempotent: a wa_phone maps to itself (with or without the +)', () => {
+    for (const [input] of WA_PHONE_CASES) {
+      const out = waPhoneFromPhone(input)
+      if (out == null) continue
+      expect(waPhoneFromPhone(`+${out}`)).toBe(out)
+    }
+  })
+  it('accepts a number type (a phone synced as a number)', () => {
+    expect(waPhoneFromPhone(871234567)).toBe('353871234567')
+  })
+})
+
+describe('toWhatsAppE164', () => {
+  it('adds the + to a mapped number and passes null through', () => {
+    expect(toWhatsAppE164('087 123 4567')).toBe('+353871234567')
+    expect(toWhatsAppE164('01 555 1234')).toBeNull()
+  })
+})
+
+describe('contactWhatsAppNumber', () => {
+  it('prefers the stored wa_phone (it may have been learned from an inbound message)', () => {
+    expect(contactWhatsAppNumber({ wa_phone: '447700900123', phone: '0871234567' })).toBe('447700900123')
+  })
+  it('strips a legacy + from a stored wa_phone', () => {
+    expect(contactWhatsAppNumber({ wa_phone: '+353871234567', phone: null })).toBe('353871234567')
+  })
+  it('falls back to the phone through the rule', () => {
+    expect(contactWhatsAppNumber({ wa_phone: null, phone: '+44 7700 900123' })).toBe('447700900123')
+    expect(contactWhatsAppNumber({ wa_phone: '', phone: '01 555 1234' })).toBeNull()
+    expect(contactWhatsAppNumber(null)).toBeNull()
   })
 })

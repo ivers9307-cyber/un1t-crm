@@ -17,7 +17,7 @@
 // per-row resolver below still covers the window before that runs.
 //
 // This file lives beside the routes (the `_helpers.js` convention — see
-// src/app/api/email/tickets/_helpers.js) and is registered in
+// src/app/api/email/mail/_helpers.js) and is registered in
 // check-location-scoping's SCOPING_HELPERS: canReplayDeadLetter is a
 // fetch-by-pk-then-judge-its-location guard, deadLetterOwnerLocationIds feeds
 // an `.in('location_id', …)` bound.

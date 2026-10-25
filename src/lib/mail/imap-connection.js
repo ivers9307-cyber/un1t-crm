@@ -76,7 +76,7 @@ const SOCKET_TIMEOUT_MS = 60_000
  * newest→oldest to find one of our sends. Without it, a reply three messages
  * deep into a chain — where the mail client has rewritten In-Reply-To to point
  * at the member's own last message rather than at ours — threads onto nothing
- * and opens a duplicate ticket. So the headers are fetched by name.
+ * and opens a duplicate conversation. So the headers are fetched by name.
  *
  * Message-ID and In-Reply-To are fetched too even though the envelope has
  * them: the raw header is the ground truth, and having all three arrive by the
@@ -273,7 +273,7 @@ export async function verifyConnection({ host, port, secure, auth }, folderPath 
  *
  * 3. AN UNREADABLE CURSOR FAILS CLOSED, LOUDLY. A missing/NaN `sinceUid`
  *    coerced to 0 would fetch `1:*` — the entire mailbox — and file years of
- *    correspondence as fresh tickets, with push notifications, on a mailbox
+ *    correspondence as fresh conversations, with push notifications, on a mailbox
  *    someone just connected. That is the one shape of failure the design
  *    forbids outright ("no backfill, ever", §3.5). This is the narrow case the
  *    CLAUDE.md invariant allows failing closed for: proceeding is actively
@@ -286,7 +286,7 @@ export async function fetchSince(client, { sinceUid, cap } = {}) {
   if (!Number.isInteger(sinceUid) || sinceUid < 0) {
     throw new Error(
       `fetchSince: refusing to fetch with an unusable cursor (sinceUid=${String(sinceUid)}). ` +
-      'A missing cursor would fetch the whole mailbox and backfill it as tickets.'
+      'A missing cursor would fetch the whole mailbox and backfill it as conversations.'
     )
   }
   // A bad cap only costs a smaller/larger batch, so it defaults quietly —

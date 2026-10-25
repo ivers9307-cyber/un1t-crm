@@ -9,7 +9,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { broadcastTimerPing } from '@/lib/timer-broadcast'
@@ -24,7 +24,7 @@ const StartSchema = z.object({
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !hasPermission(user, 'class_timer')) {
+  if (!user || !hasPermissionAtAnyLocation(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const validation = await validateBody(request, StartSchema)
@@ -33,6 +33,9 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return guard
+  if (!hasPermissionForLocation(user, body.location_id, 'class_timer')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data: template } = await db

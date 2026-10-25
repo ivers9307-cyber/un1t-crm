@@ -17,114 +17,30 @@
 // stays the same — non-race kinds always submit exactly one synthetic wave.
 
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
-import { toSlug } from '@/lib/slug'
+import { ADMIN_ROLES } from '@/lib/schemas'
+import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
-import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
+import { isRaceKind, orderEventsForBrowse } from '@shared/events'
+import { eventToday } from '@/lib/event-day'
+import { sharedEventsOrFilterFor } from '@/lib/event-visibility'
+import { EventCreateSchema } from '@/lib/event-save-schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 
-// Wave shape used in both create + update. capacity null = unlimited.
-const WaveInputSchema = z.object({
-  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Use HH:MM'),
-  capacity: z.number().int().positive().max(10000).nullable().optional(),
-  label: z.string().max(60).nullable().optional(),
-  display_order: z.number().int().nonnegative().optional(),
-})
-
-export const CreateSchema = z.object({
-  location_id: uuidLike,
-  // Mig 122: discriminator. Defaults to 'race' so existing operator
-  // muscle memory (where every event is a race) keeps working without
-  // the form having to send the field.
-  kind: z.enum(['race', 'workshop', 'seminar', 'open_day', 'masterclass', 'lead_gen']).optional(),
-  // EVENTS-CAPACITY-MODE.1 (mig 280): does per-wave capacity count teams
-  // (registrations, legacy default) or people (sum of team sizes)?
-  capacity_mode: z.enum(['teams', 'people']).optional(),
-  // Mig 125: staffing requirement for the studio overview demand
-  // classifier. 0-50 (matches DB CHECK). Default 1 (matches DB DEFAULT).
-  // Form pre-fills per kind (race=4, workshop=1, etc.) but operator
-  // can override.
-  staff_required: z.number().int().min(0).max(50).optional(),
-  name: z.string().trim().min(1).max(200),
-  slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'lowercase kebab-case').optional(),
-  description: z.string().max(4000).nullable().optional(),
-  // race_date is required for every kind EXCEPT lead_gen (a no-date
-  // data-capture form). Enforced per-kind in the superRefine below.
-  race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').nullable().optional(),
-  registration_opens_at: z.string().datetime().nullable().optional(),
-  registration_closes_at: z.string().datetime().nullable().optional(),
-  allowed_team_sizes: z.array(z.number().int().positive().max(50)).min(1).max(20).optional(),
-  active: z.boolean().optional(),
-  // Member pricing (mig 084).
-  member_pricing_enabled: z.boolean().optional(),
-  members_only: z.boolean().optional(),
-  // EVENTS-LOC.2: when true, this event shows in every location's list.
-  shared: z.boolean().optional(),
-  // EVENTS-HOST.4: nullable FK -> event_hosts. NULL = internal UN1T event
-  // (settled via Revolut, the default); set = that host is paid directly
-  // via Stripe Connect with UN1T's per-ticket booking fee. Org-validated
-  // against the event's location below before it's persisted.
-  host_id: uuidLike.nullable().optional(),
-  member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
-  payment_currency: z.string().length(3).optional(),
-  // Mig 092: up to 3 sponsor/branding logo URLs for the TV display.
-  // Schema CHECK caps the array at 6 to leave headroom; UI caps at 3.
-  // Each entry must be an http(s) URL (no data: blobs).
-  tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
-  // Public-page hero image + accent colour. Hero is normally uploaded
-  // after the event is saved (needs an id to namespace the storage
-  // path), so these are typically set on the follow-up PUT — but the
-  // create schema accepts them too. accent_hex is a 6-digit hex.
-  hero_image_url: z.string().url().max(2000).nullable().optional(),
-  accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
-  // EVENTS-EMAILCFG.1 (mig 385) — per-event styling of the signup
-  // confirmation + pre-event reminder emails. subject/intro drop into the
-  // shared branded shell (merge-tagged); *_template_id overrides the shell
-  // with a full email_templates row. All nullable → NULL = default copy/look
-  // (behaviour-preserving). template_ids are org/location-validated below.
-  confirmation_email_subject: z.string().max(4000).nullable().optional(),
-  confirmation_email_intro: z.string().max(4000).nullable().optional(),
-  reminder_email_subject: z.string().max(4000).nullable().optional(),
-  reminder_email_intro: z.string().max(4000).nullable().optional(),
-  confirmation_email_template_id: uuidLike.nullable().optional(),
-  reminder_email_template_id: uuidLike.nullable().optional(),
-  // EVENT-COMMS-LOC (mig 553) — the real UN1T location this event's SMS + email
-  // send from. In-org non-anchor validated below.
-  sending_location_id: uuidLike.nullable().optional(),
-  // EVENTS-SMS-TOGGLE (mig 552) — per-event opt-in for the registration SMS
-  // confirmation. Optional here; the POST route defaults it to false, so a
-  // legacy/default event never texts. The email receipt is separate.
-  confirmation_sms_enabled: z.boolean().optional(),
-  // Waves (mig 083) — at least one required for a usable race.
-  // Server normalises by start_time ascending; UNIQUE on
-  // (race_event_id, start_time) catches duplicates from the DB side.
-  waves: z.array(WaveInputSchema).max(50).optional(),
-}).superRefine((val, ctx) => {
-  // Every kind except lead_gen needs a date AND at least one wave.
-  // lead_gen is a pure data-capture form: no date, no waves.
-  const kind = val.kind ?? 'race'
-  if (kind === 'lead_gen') return
-  if (!val.race_date) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['race_date'], message: 'Date is required.' })
-  }
-  if (!val.waves || val.waves.length < 1) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['waves'], message: 'Add at least one wave.' })
-  }
-})
+// The body schema lives in src/lib/event-save-schemas.js (OPENAPI-EVENTS.1),
+// where the OpenAPI spec reads the same object; re-exported under its old name.
+export const CreateSchema = EventCreateSchema
 
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -136,34 +52,49 @@ export async function GET(request) {
   }
   const activeLocationId = filterLocation || user.activeLocation?.id || null
   if (!activeLocationId) return NextResponse.json({ success: true, data: [] })
+  // ROLESWEEP.1b — `races` judged at the location being listed (?location_id,
+  // else the active studio), not always at the active studio.
+  if (!hasPermissionForLocation(user, activeLocationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const db = createServerClient()
-  // Scope to the active location PLUS any event flagged `shared` (owned by
-  // one location, surfaced everywhere) — same rule as the web /events list.
+  // Scope to the active location PLUS any event flagged `shared` (owned by a
+  // sibling location of the same organisation, W0.3) — same rule as the web
+  // /events list.
+  const orFilter = await sharedEventsOrFilterFor(db, activeLocationId)
   const { data, error } = await db
     .from('race_events')
     .select(`
       id, name, slug, race_date, start_time, capacity, capacity_mode,
       active, kind, shared, location_id,
+      locations:location_id ( id, timezone ),
       host:event_hosts!host_id ( id, name, organization_id ),
       waves:race_waves ( capacity ),
       registrations:race_registrations ( id, status, team:teams ( size ) )
     `)
-    .or(`location_id.eq.${activeLocationId},shared.eq.true`)
+    .or(orFilter)
     .order('race_date', { ascending: false })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   // HOST-EDIT.1 — org admins also see their org's HOST events (which live on
   // the host's own anchor location, not the active studio) so hosted events
   // can be found and edited from /events. Org-scoped, additive, deduped.
+  // ROLESWEEP.1b — those events sit on a per-host anchor location no staff
+  // belongs to, so the ACTIVE studio is the only judgement for them (as in
+  // events/[id]'s hostEventOrgAccess): ADMIN_ROLES and `races` there, whatever
+  // ?location_id lists. Without the `races` half, an admin with races off at
+  // the active studio would get them by listing another studio.
   let rows = data || []
   const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
-  if (orgId && ADMIN_ROLES.includes(user.role)) {
+  if (orgId && ADMIN_ROLES.includes(user.role)
+      && hasPermissionForLocation(user, user.activeLocation?.id, 'races')) {
     const { data: hosted } = await db
       .from('race_events')
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode,
         active, kind, shared, location_id,
+        locations:location_id ( id, timezone ),
         host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
@@ -177,6 +108,9 @@ export async function GET(request) {
     }
   }
 
+  // TZ.9: each event is upcoming by its OWN studio's day (the list mixes the
+  // active studio, shared siblings and host anchors); the zone rides the read.
+  const todayById = new Map(rows.map((r) => [r.id, eventToday(r)]))
   const shaped = rows.map((r) => {
     const isRace = isRaceKind(r.kind)
     return {
@@ -200,7 +134,7 @@ export async function GET(request) {
   // Upcoming first (nearest date asc), then past (most recent desc). Stamp
   // is_upcoming so the client can render a "Past" divider without doing its
   // own timezone-sensitive date math.
-  const { upcoming, past } = orderEventsForBrowse(shaped, todayIsoDublin())
+  const { upcoming, past } = orderEventsForBrowse(shaped, (e) => todayById.get(e.id))
   const ordered = [
     ...upcoming.map((e) => ({ ...e, is_upcoming: true })),
     ...past.map((e) => ({ ...e, is_upcoming: false })),
@@ -211,7 +145,7 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -221,34 +155,21 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-
-  const slug = body.slug || toSlug(body.name)
-  if (!slug) {
-    return NextResponse.json({
-      success: false,
-      error: 'Could not derive a valid slug from the name. Provide one explicitly.',
-    }, { status: 400 })
+  // ROLESWEEP.1b — judged at body.location_id, not the caller's active studio.
+  if (!hasPermissionForLocation(user, body.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
   const db = createServerClient()
-
-  // HOST-APPROVALS.1 — slugs are globally unique (public /event/[slug] has
-  // no location filter; mig 451 enforces it). Pre-check for a clean 409
-  // instead of a raw constraint error.
-  const { data: slugClash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
-  if (slugClash) {
-    return NextResponse.json({
-      success: false,
-      error: `The URL slug "${slug}" is already used by another event. Pick a different name or slug.`,
-    }, { status: 409 })
-  }
 
   // EVENTS-HOST.4 — assigning a payee routes ticket money DIRECTLY to that
   // host's Stripe, so it's gated to the host-management bar (ADMIN_ROLES) —
   // the same level that can create/delete the host itself — not the
   // staff-level 'races' permission that guards ordinary event edits.
   // Internal events (host_id null) stay staff-creatable.
-  if (body.host_id && !ADMIN_ROLES.includes(user.role)) {
+  // ROLESWEEP.1b — ADMIN_ROLES judged at body.location_id (the event's own
+  // location), not the caller's active studio.
+  if (body.host_id && !hasRoleAtLocation(user, body.location_id, ADMIN_ROLES)) {
     return NextResponse.json({ success: false, error: 'Assigning a payment host requires manager access.' }, { status: 403 })
   }
 
@@ -313,6 +234,40 @@ export async function POST(request) {
     }
   }
 
+  // EVENT-SLUG.1 — the public URL reads as place-date-time
+  // (after every authorisation check above: a refused caller costs no
+  // database read; the role sweep pins that).
+  // (/event/stillorgan-oct17-1030): studio name + race_date + the earliest
+  // wave. An explicit body.slug still wins (and clashes 409 as before);
+  // the derived one takes a -2/-3 suffix instead. lead_gen (no date, no
+  // waves) falls back to the name-based slug exactly as before.
+  let slug = body.slug || null
+  if (!slug) {
+    const { data: studio } = await db
+      .from('locations')
+      .select('name')
+      .eq('id', body.location_id)
+      .maybeSingle()
+    const base = eventSlug({
+      place: studio?.name,
+      date: body.kind === 'lead_gen' ? null : body.race_date,
+      times: (body.waves || []).map((w) => w.start_time),
+      name: body.name,
+    })
+    slug = await uniqueEventSlug(db, base)
+  } else {
+    // HOST-APPROVALS.1 — slugs are globally unique (public /event/[slug] has
+    // no location filter; mig 451 enforces it). Pre-check for a clean 409
+    // instead of a raw constraint error.
+    const { data: slugClash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
+    if (slugClash) {
+      return NextResponse.json({
+        success: false,
+        error: `The URL slug "${slug}" is already used by another event. Pick a different name or slug.`,
+      }, { status: 409 })
+    }
+  }
+
   const { data, error } = await db
     .from('race_events')
     .insert({
@@ -348,11 +303,19 @@ export async function POST(request) {
       confirmation_email_intro: body.confirmation_email_intro ?? null,
       reminder_email_subject: body.reminder_email_subject ?? null,
       reminder_email_intro: body.reminder_email_intro ?? null,
+      moved_email_subject: body.moved_email_subject ?? null,
+      moved_email_intro: body.moved_email_intro ?? null,
+      gap_email_subject: body.gap_email_subject ?? null,
+      gap_email_intro: body.gap_email_intro ?? null,
+      waitlist_email_subject: body.waitlist_email_subject ?? null,
+      waitlist_email_intro: body.waitlist_email_intro ?? null,
       confirmation_email_template_id: body.confirmation_email_template_id ?? null,
       reminder_email_template_id: body.reminder_email_template_id ?? null,
-      // EVENTS-SMS-TOGGLE (mig 552) — default OFF; the email receipt is separate.
-      confirmation_sms_enabled: body.confirmation_sms_enabled ?? false,
       sending_location_id: body.sending_location_id ?? null,
+      charity_enabled: body.charity_enabled ?? false,
+      charity: body.charity ?? null,
+      find_team: body.find_team ?? null,
+      entry_policy: body.entry_policy ?? null,
     })
     .select()
     .single()

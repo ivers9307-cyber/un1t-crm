@@ -7,6 +7,8 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
+import { createServerClient } from '@/lib/supabase'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEmailReport from '@/components/host/HostEmailReport'
 
 export const dynamic = 'force-dynamic'
@@ -15,6 +17,7 @@ export default async function HostEmailReportPage(props) {
   const params = await props.params
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
+  const brand = await resolveHostOrgBrand(createServerClient(), session.host)
 
   return (
     <div>
@@ -24,7 +27,7 @@ export default async function HostEmailReportPage(props) {
           <a href="/host/emails"> errors. See CLAUDE.md. */}
       <Link href="/host/emails" className="text-xs text-white/45 hover:text-white">← Back to emails</Link>
 
-      <HostEmailReport campaignId={params.id} />
+      <HostEmailReport campaignId={params.id} brandName={brand.name} />
     </div>
   )
 }

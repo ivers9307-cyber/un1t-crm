@@ -19,8 +19,11 @@
 // directly from the draft bill if needed (Xero exposes the from
 // address on the resulting draft).
 
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import { createServerClient } from '@/lib/supabase'
 import { resolvePostmarkToken } from '@/lib/postmark-token'
+import { platformFromHeader } from '@/lib/platform-sender'
+import { getLocationBranding } from '@/lib/location-branding'
 import { XeroError } from './client'
 
 const STORAGE_BUCKET = 'car-documents'
@@ -43,14 +46,22 @@ function getPostmarkToken() {
   return t
 }
 
-function getFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+// W1.E2 — supplier-facing mail leaves as the location's BRAND (W1.B1 chain:
+// company_settings → org_settings → locations.name) on the platform address
+// (POSTMARK_FROM_EMAIL, never spelled); PLATFORM_NAME when the brand cannot
+// be resolved. With the env unset this is undefined: the request carries no
+// From and Postmark refuses with its own message (platformFromHeader has
+// already logged the missing env), rather than a silently invented address.
+// getPostmarkToken() has already thrown before this point when the server
+// itself is unconfigured.
+function getFromAddress(brand) {
+  return platformFromHeader(brand) || undefined
 }
 
 // POST /email — single send, with attachment.
-async function postmarkSendWithAttachment({ to, subject, htmlBody, attachment, replyTo, metadata }) {
+async function postmarkSendWithAttachment({ to, subject, htmlBody, attachment, replyTo, metadata, fromName }) {
   const body = {
-    From: getFromAddress(),
+    From: getFromAddress(fromName),
     To: to,
     Subject: subject,
     HtmlBody: htmlBody,
@@ -91,7 +102,7 @@ export async function sendCarDocumentBillEmail(documentId) {
   const { data: doc, error: loadErr } = await db
     .from('car_documents')
     .select(`
-      id, car_id, doc_type, file_name, mime_type, storage_path,
+      id, car_id, doc_type, filename, mime_type, storage_path,
       cars!inner ( id, location_id, uk_reg, irish_reg, vin, make, model )
     `)
     .eq('id', documentId)
@@ -121,7 +132,7 @@ export async function sendCarDocumentBillEmail(documentId) {
     .from(STORAGE_BUCKET)
     .download(doc.storage_path)
   if (dlErr || !blob) {
-    throw new XeroError(`Could not download "${doc.file_name}" from storage: ${dlErr?.message || 'unknown error'}`)
+    throw new XeroError(`Could not download "${doc.filename}" from storage: ${dlErr?.message || 'unknown error'}`)
   }
   const ab = await blob.arrayBuffer()
   const base64 = Buffer.from(ab).toString('base64')
@@ -131,13 +142,13 @@ export async function sendCarDocumentBillEmail(documentId) {
   const reg = car.uk_reg || car.irish_reg || car.vin || car.id
   const safeReg = String(reg).replace(/[^A-Za-z0-9_-]/g, '_')
   const docLabel = DOC_TYPE_LABELS[doc.doc_type] || doc.doc_type
-  const filename = `${doc.doc_type}-${safeReg}-${doc.file_name || 'file'}`
+  const filename = `${doc.doc_type}-${safeReg}-${doc.filename || 'file'}`
 
   const subject = `${docLabel} — ${reg}`
   const htmlBody = `
-    <p>Forwarded from UN1T CRM for car <strong>${reg}</strong> (${[car.make, car.model].filter(Boolean).join(' ') || 'vehicle'}).</p>
+    <p>Forwarded from ${PLATFORM_NAME} for car <strong>${reg}</strong> (${[car.make, car.model].filter(Boolean).join(' ') || 'vehicle'}).</p>
     <p>Document type: <strong>${docLabel}</strong></p>
-    <p>Original filename: ${doc.file_name || 'n/a'}</p>
+    <p>Original filename: ${doc.filename || 'n/a'}</p>
     <p>Xero will OCR this attachment and create a draft bill in Bills to pay → Draft.</p>
   `.trim()
 
@@ -145,6 +156,7 @@ export async function sendCarDocumentBillEmail(documentId) {
     to: conn.bills_email_address,
     subject,
     htmlBody,
+    fromName: (await getLocationBranding(db, car.location_id)).companyName,
     attachment: {
       Name: filename,
       Content: base64,

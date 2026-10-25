@@ -11,6 +11,7 @@ import {
   slugifyFilename,
   buildAttachmentPath,
   validateSubmission,
+  isIssuePhotoPath,
   insertIssueWithAttachments,
   listMyIssues,
   getMyIssue,
@@ -88,6 +89,42 @@ describe('buildAttachmentPath', () => {
 // ----------------------------------------------------------------
 
 const goodPhoto = { filename: 'a.jpg', size: 1024, type: 'image/jpeg' }
+
+describe('isIssuePhotoPath', () => {
+  const LOC = 'a0000000-0000-0000-0000-000000000001'
+  const OK = `${LOC}/11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222-img_0001.jpg`
+
+  it('accepts a path this location minted', () => {
+    expect(isIssuePhotoPath(OK, LOC)).toBe(true)
+  })
+
+  it('accepts what buildAttachmentPath actually produces — the two must agree', () => {
+    const path = buildAttachmentPath({
+      locationId: LOC,
+      issueId: '11111111-1111-1111-1111-111111111111',
+      attachmentId: '22222222-2222-2222-2222-222222222222',
+      filename: 'Bröken kit! (1).JPEG',
+    })
+    expect(isIssuePhotoPath(path, LOC)).toBe(true)
+  })
+
+  it("refuses another studio's path", () => {
+    expect(isIssuePhotoPath(OK, 'b0000000-0000-0000-0000-000000000002')).toBe(false)
+  })
+
+  it('refuses traversal, bare folders and junk', () => {
+    expect(isIssuePhotoPath(`${LOC}/../../etc/passwd`, LOC)).toBe(false)
+    expect(isIssuePhotoPath(`${LOC}/11111111-1111-1111-1111-111111111111`, LOC)).toBe(false)
+    expect(isIssuePhotoPath('', LOC)).toBe(false)
+    expect(isIssuePhotoPath(null, LOC)).toBe(false)
+    expect(isIssuePhotoPath(OK, null)).toBe(false)
+  })
+
+  it('refuses a location prefix that only looks right', () => {
+    // Same 36 chars up to the last digit — a near-miss must not pass.
+    expect(isIssuePhotoPath(OK, 'a0000000-0000-0000-0000-000000000002')).toBe(false)
+  })
+})
 
 describe('validateSubmission', () => {
   it('rejects an empty / whitespace description', () => {

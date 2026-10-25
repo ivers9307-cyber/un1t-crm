@@ -16,7 +16,7 @@ export default async function InvoicesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   return (
-    <div className="p-8">
+    <div className="px-4 py-6 sm:p-8">
       {/* SCHED.9 — the Schedule tab strip now follows onto every sibling
           page, not just the root. */}
       <ScheduleTabs user={user} />

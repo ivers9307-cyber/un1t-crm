@@ -4,6 +4,8 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
+import { createServerClient } from '@/lib/supabase'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEventForm from '@/components/host/HostEventForm'
 
 export const dynamic = 'force-dynamic'
@@ -11,17 +13,18 @@ export const dynamic = 'force-dynamic'
 export default async function HostNewEventPage() {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
+  const brand = await resolveHostOrgBrand(createServerClient(), session.host)
 
   return (
     <div>
       <a href="/host" className="text-xs text-white/45 hover:text-white">← Back</a>
       <h1 className="mt-3 text-2xl font-bold">Create an event</h1>
       <p className="text-white/60 mt-1 text-sm">
-        Draft your event, then submit it to UN1T for review before it goes live.
+        Draft your event, then submit it to {brand.name} for review before it goes live.
       </p>
 
       <div className="mt-8">
-        <HostEventForm mode="create" />
+        <HostEventForm mode="create" brandName={brand.name} />
       </div>
     </div>
   )

@@ -1,8 +1,11 @@
 'use client'
 
 // Glofox integration tab. Extracted from the monolithic LocationForm
-// as part of SETTINGS.1 — now writes its own slice of locations.settings
-// JSONB independently of the location-details form. Existing helper
+// as part of SETTINGS.1. SECFIX.3b — saves through the masked,
+// service-role PUT /api/locations/[id]/integrations/glofox (write-only
+// secrets: a blank field keeps the stored value; the registry re-syncs
+// in-handler). It never reads or writes locations from the browser.
+// Existing helper
 // /api/locations/[id]/glofox-memberships keeps powering the trial-
 // membership dropdown.
 //
@@ -11,7 +14,6 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { parseTrainerNames, formatTrainerNames } from '@/lib/glofox-trainer-names'
 import { Save, Loader2, Check, AlertCircle } from 'lucide-react'
@@ -21,9 +23,16 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
   const initial = location.settings?.glofox || {}
 
   const [branchId, setBranchId] = useState(initial.branch_id || '')
-  const [apiKey, setApiKey] = useState(initial.api_key || '')
-  const [apiToken, setApiToken] = useState(initial.api_token || '')
-  const [webhookSecret, setWebhookSecret] = useState(initial.webhook_secret || '')
+  // SECFIX.3b — the page hands this tab masked credentials (toClientLocation):
+  // presence survives, the value does not. Inputs start blank and carry only
+  // what the operator types.
+  const [saved, setSaved] = useState({
+    api_key: !!initial.api_key, api_token: !!initial.api_token, webhook_secret: !!initial.webhook_secret,
+  })
+  const [apiKey, setApiKey] = useState('')
+  const [apiToken, setApiToken] = useState('')
+  const [webhookSecret, setWebhookSecret] = useState('')
+  const hasKey = !!apiKey.trim() || saved.api_key
   const [namespace, setNamespace] = useState(initial.namespace || '')
   const [trialKey, setTrialKey] = useState(
     initial.trial_membership_id && initial.trial_plan_code
@@ -49,7 +58,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
 
   // Load trial-membership options when credentials are present.
   useEffect(() => {
-    if (!branchId || !apiKey) { setMemberships([]); return }
+    if (!branchId || !hasKey) { setMemberships([]); return }
     let cancelled = false
     async function load() {
       setMembershipsLoading(true)
@@ -69,13 +78,13 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
     }
     load()
     return () => { cancelled = true }
-  }, [location.id, branchId, apiKey])
+  }, [location.id, branchId, hasKey])
 
   // Reference list: the trainer ids Glofox actually sent in the last 28
   // days + how each currently resolves. Without it the override field
   // is un-fillable — the opaque ids appear nowhere else in the UI.
   useEffect(() => {
-    if (!branchId || !apiKey) { setSeenTrainers([]); return }
+    if (!branchId || !hasKey) { setSeenTrainers([]); return }
     let cancelled = false
     async function loadTrainers() {
       try {
@@ -88,47 +97,46 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
     }
     loadTrainers()
     return () => { cancelled = true }
-  }, [location.id, branchId, apiKey])
+  }, [location.id, branchId, hasKey])
 
   async function save() {
     setSaving(true); setError(null); setSavedAt(null)
     const [trialMembershipId, trialPlanCode] = trialKey ? trialKey.split(':') : ['', '']
     const hiddenList = hiddenClasses.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
-    const trainerMap = parseTrainerNames(trainerNames)
-    const db = createBrowserClient()
-    // Re-read current settings so we merge rather than clobber any
-    // other tab's slice. Tiny race window if two tabs save at the
-    // same moment; acceptable for per-location config writes.
-    const { data: row, error: readErr } = await db
-      .from('locations').select('settings').eq('id', location.id).single()
-    if (readErr) { setError(readErr.message); setSaving(false); return }
-    const nextSettings = {
-      ...(row?.settings || {}),
-      glofox: (branchId || apiKey || apiToken || webhookSecret || namespace || trialMembershipId || hiddenList.length || trainerMap)
-        ? {
-            branch_id: branchId || null,
-            api_key: apiKey || null,
-            api_token: apiToken || null,
-            webhook_secret: webhookSecret || null,
-            namespace: namespace || null,
-            trial_membership_id: trialMembershipId || null,
-            trial_plan_code: trialPlanCode || null,
-            hidden_class_keywords: hiddenList.length ? hiddenList : null,
-            trainer_names: trainerMap,
-          }
-        : null,
+    const body = {
+      branch_id: branchId,
+      namespace,
+      trial_membership_id: trialMembershipId || '',
+      trial_plan_code: trialPlanCode || '',
+      hidden_class_keywords: hiddenList.length ? hiddenList : null,
+      trainer_names: parseTrainerNames(trainerNames),
+      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+      ...(apiToken.trim() ? { api_token: apiToken.trim() } : {}),
+      ...(webhookSecret.trim() ? { webhook_secret: webhookSecret.trim() } : {}),
     }
-    const { error: upErr } = await db
-      .from('locations')
-      .update({ settings: nextSettings, updated_at: new Date().toISOString() })
-      .eq('id', location.id)
+    let res
+    let json = null
+    try {
+      res = await fetch(`/api/locations/${location.id}/integrations/glofox`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      json = await res.json().catch(() => null)
+    } catch (e) {
+      setSaving(false)
+      setError(`Could not save: ${e?.message || 'network error'}`)
+      return
+    }
     setSaving(false)
-    if (upErr) { setError(upErr.message); return }
+    if (!res.ok || !json?.success) { setError(json?.error || `Save failed (${res.status})`); return }
+    setSaved({
+      api_key: !!json.data?.has_api_key,
+      api_token: !!json.data?.has_api_token,
+      webhook_secret: !!json.data?.has_webhook_secret,
+    })
+    setApiKey(''); setApiToken(''); setWebhookSecret('')
     setSavedAt(new Date())
-    // INTEG-A2: re-sync this location's channel_connections registry
-    // rows from the legacy fields just saved (fire-and-forget — the
-    // registry write needs the service role, which lives server-side).
-    fetch(`/api/locations/${location.id}/connections/refresh`, { method: 'POST' }).catch(() => {})
     router.refresh()
   }
 
@@ -161,24 +169,33 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
         </div>
       )}
 
-      <Field label="Branch ID">
-        <input type="text" value={branchId} onChange={e => setBranchId(e.target.value)}
+      <Field label="Branch ID" htmlFor="glofox-branch">
+        <input id="glofox-branch" type="text" value={branchId} onChange={e => setBranchId(e.target.value)}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
-      <Field label="API Key">
-        <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)}
+      <Field label="API Key" htmlFor="glofox-api-key">
+        <input id="glofox-api-key" type="password" autoComplete="new-password" aria-describedby="glofox-api-key-status" value={apiKey} onChange={e => setApiKey(e.target.value)}
+          placeholder={saved.api_key ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <SecretStatus id="glofox-api-key-status" isSet={saved.api_key} />
       </Field>
-      <Field label="API Token">
-        <input type="text" value={apiToken} onChange={e => setApiToken(e.target.value)}
+      <Field label="API Token" htmlFor="glofox-api-token">
+        <input id="glofox-api-token" type="password" autoComplete="new-password" aria-describedby="glofox-api-token-status" value={apiToken} onChange={e => setApiToken(e.target.value)}
+          placeholder={saved.api_token ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <SecretStatus id="glofox-api-token-status" isSet={saved.api_token} />
       </Field>
-      <Field label="Webhook Secret">
-        <input type="text" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
+      <Field label="Webhook Secret" htmlFor="glofox-webhook-secret">
+        <input id="glofox-webhook-secret" type="password" autoComplete="new-password" aria-describedby="glofox-webhook-secret-status" value={webhookSecret} onChange={e => setWebhookSecret(e.target.value)}
+          placeholder={saved.webhook_secret ? 'Saved (hidden). Type to replace.' : ''}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
+        <SecretStatus id="glofox-webhook-secret-status" isSet={saved.webhook_secret} />
       </Field>
-      <Field label="Namespace" hint="Required for /Analytics/report queries. Glofox provides this on request.">
-        <input type="text" value={namespace} onChange={e => setNamespace(e.target.value)}
+      <p className="text-[11px] text-un1t-muted">
+        Saved credentials are never shown. To disconnect Glofox, use Disconnect in the Integrations hub.
+      </p>
+      <Field label="Namespace" htmlFor="glofox-namespace" hint="Required for /Analytics/report queries. Glofox provides this on request.">
+        <input id="glofox-namespace" type="text" value={namespace} onChange={e => setNamespace(e.target.value)}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text" />
       </Field>
 
@@ -220,7 +237,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           value={trainerNames}
           onChange={e => setTrainerNames(e.target.value)}
           rows={3}
-          placeholder="61a38e7d0cf1970aae0fb3a9 = Jess Murphy"
+          placeholder="<24-character trainer id> = Coach name"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
         />
         {seenTrainers.length > 0 && (
@@ -254,10 +271,21 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
   )
 }
 
-function Field({ label, hint, children }) {
+// N3 — says whether a write-only credential is stored (the input is always
+// blank), wired to the input by aria-describedby. Same words as the
+// Integrations hub drawer.
+function SecretStatus({ id, isSet }) {
+  return (
+    <p id={id} className="text-[11px] text-un1t-muted mt-1">
+      {isSet ? 'Currently set. Leave blank to keep it, or enter a new value to replace it.' : 'Not set yet.'}
+    </p>
+  )
+}
+
+function Field({ label, hint, htmlFor, children }) {
   return (
     <div>
-      <label className="block text-xs text-un1t-subtle mb-1">{label}</label>
+      <label htmlFor={htmlFor} className="block text-xs text-un1t-subtle mb-1">{label}</label>
       {children}
       {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
     </div>

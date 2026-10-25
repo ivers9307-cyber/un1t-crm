@@ -49,10 +49,24 @@ describe('LeadSchema', () => {
   })
 })
 
+describe('LeadSchema visit (VISIT-ORIGIN.1)', () => {
+  it('accepts an optional visit object and passes it through normaliseLead', () => {
+    const body = { first_name: 'Sam', email: 'sam@example.com', phone: '0871234567', consent: true, public_path: 'hatch-street', visit: { referrer: 'https://l.instagram.com/', landing_path: '/hatch-street' } }
+    const parsed = LeadSchema.safeParse(body)
+    expect(parsed.success).toBe(true)
+    expect(normaliseLead(parsed.data).visit).toEqual({ referrer: 'https://l.instagram.com/', landing_path: '/hatch-street' })
+  })
+  it('is null when the form sent none', () => {
+    const body = { first_name: 'Sam', email: 'sam@example.com', phone: '0871234567', consent: true, public_path: 'hatch-street' }
+    expect(normaliseLead(LeadSchema.parse(body)).visit).toBeNull()
+  })
+})
+
 describe('normaliseLead', () => {
   it('trims name/phone and lowercases email, campaign null when absent', () => {
     expect(normaliseLead(valid)).toEqual({
       firstName: 'Sarah', email: 'sarah@example.com', phone: '087 123 4567', publicPath: 'hatch-street', campaign: null,
+      visit: null,
     })
   })
   it('trims and passes through a campaign key', () => {

@@ -11,7 +11,10 @@
 import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
-import { approvalCardSummary, APPROVAL_KIND_LABELS } from '@shared/approval-cards'
+// EVENT-MOVE.7 — event_move reads from the web-only module; every other kind
+// falls through to the shared helpers (the phone shows a generic card for it
+// until a later OTA).
+import { approvalSummary, approvalKindLabel, explainFailure } from '@/lib/approvals/event-move-card'
 import SequencePicker from '@/components/SequencePicker'
 
 const STATUS_CHIP = {
@@ -91,7 +94,10 @@ export default function ApprovalActionCard({
       if (data.customer_notified) setNotified(data.customer_notified)
       fetchSuggestion() // fire-and-forget — never blocks the decision UX
       if (status === 'declined') {
-        onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
+        // An empty draft (a refund_request: Mia already answered) must not
+        // overwrite what staff are typing.
+        const draft = buildDeclineDraft(request.kind, reason, ctx)
+        if (draft) onPrefillComposer?.(draft)
       }
     } catch {
       setError('Network error — try again')
@@ -109,7 +115,12 @@ export default function ApprovalActionCard({
   const status = request.status
   const decided = status !== 'pending'
   const steps = decided ? getNextSteps(request.kind, status, ctx) : []
-  const kindLabel = APPROVAL_KIND_LABELS[request.kind] || 'Agent request'
+  const kindLabel = approvalKindLabel(request.kind) || 'Agent request'
+  // C117 APPROVALCODEWEB.1 — a failed card explains its code in the
+  // operator's words (it printed the raw code, e.g. TRIAL_GRANT_FAILED).
+  // Same rule as the phone's failedCardExplanation (mobile/lib/approval-outcome.js):
+  // only a FAILED card whose execution recorded a result gets a line.
+  const failedLine = status === 'failed' && request.details?.result ? explainFailure(request) : null
   // class_full / already_booked only make sense for booking-shaped requests.
   const reasonOptions = BOOKING_KINDS.has(request.kind)
     ? DECLINE_REASONS
@@ -131,7 +142,7 @@ export default function ApprovalActionCard({
             {STATUS_LABELS[status] || status}
           </span>
         </div>
-        <p className="text-un1t-text mt-1">{approvalCardSummary(request)}</p>
+        <p className="text-un1t-text mt-1">{approvalSummary(request)}</p>
         {request.customer_note && (
           <p className="text-xs text-un1t-muted mt-1 border-l-2 border-un1t-border pl-2">“{request.customer_note}”</p>
         )}
@@ -179,9 +190,7 @@ export default function ApprovalActionCard({
         {decided && (
           <div className="mt-1.5 text-xs text-un1t-muted">
             {request.decision_note && <span>{request.decision_note}</span>}
-            {request.details?.result?.message_code && status === 'failed' && (
-              <span className="text-red-700"> ({request.details.result.message_code})</span>
-            )}
+            {failedLine && <span className="text-red-700"> {failedLine}</span>}
             {notified && (
               <span className={notified.sent ? ' text-green-700' : ' text-amber-700'}>
                 {notified.sent
@@ -195,7 +204,10 @@ export default function ApprovalActionCard({
         {(steps.length > 0 || suggestion || suggestLoading) && (
           <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-2 border-t border-un1t-border/50">
             <span className="text-[10px] uppercase tracking-wide text-un1t-subtle w-full">Next steps</span>
-            {steps.map(step => (
+            {steps.map(step => step.type === 'note' ? (
+              // UN1TWRITE.8 — plain guidance for staff (a refund done by hand), not an action.
+              <span key={step.id} className="text-xs text-un1t-muted">{step.label}</span>
+            ) : (
               <button key={step.id} type="button" onClick={() => runStep(step)}
                 className={`px-2.5 py-1 rounded-full text-xs font-medium bg-un1t-bg border border-un1t-border text-un1t-text hover:bg-un1t-border/30 ${step.type === 'book' ? 'hidden xl:inline-flex' : ''}`}>
                 {step.label}

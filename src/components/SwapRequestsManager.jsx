@@ -5,6 +5,15 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowLeftRight, Check, X, AlertCircle } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
+// ROSTER-FIX.6a — one failure shape and one banner across the schedule
+// screens, so no call site can quietly forget to check the response.
+import ScheduleErrorBanner from './schedule/ScheduleErrorBanner'
+import { readJson } from './schedule/useScheduleData'
+// ROSTER-FIX.6c — the 12-hour shift label was a byte-identical local copy in
+// three schedule screens. One definition now, in the lib that already owns
+// schedule time formatting.
+import { formatTime12h as formatTime } from '@/lib/schedule-overlap'
+import { SWAP_CONFLICTS_CODE } from '@/lib/swap-lifecycle'
 
 const canManage = (role) => MANAGER_ROLES.includes(role)
 
@@ -40,19 +49,20 @@ const statusColors = {
   cancelled: 'bg-gray-500/15 text-gray-600',
 }
 
-function formatTime(time) {
-  if (!time) return ''
-  const [h, m] = time.split(':')
-  const hour = parseInt(h)
-  const suffix = hour >= 12 ? 'pm' : 'am'
-  const display = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour
-  return m === '00' ? `${display}${suffix}` : `${display}:${m}${suffix}`
-}
-
 function formatDate(dateStr) {
   return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-IE', {
     weekday: 'short', day: 'numeric', month: 'short'
   })
+}
+
+// ROSTER-FIX.8e — created_at is a full timestamp, not the 'YYYY-MM-DD' string
+// formatDate() takes, so a detached swap needs its own formatter. Returns ''
+// rather than 'Invalid Date' so the caller can drop the clause entirely.
+function formatPostedOn(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 export default function SwapRequestsManager({ user }) {
@@ -60,6 +70,21 @@ export default function SwapRequestsManager({ user }) {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('review')
   const [actingId, setActingId] = useState(null)
+  // ROSTER-FIX.6a — the load cleared `loading` on the happy path only, so a
+  // refused or dropped request left this screen on "Loading requests..."
+  // forever with nothing said.
+  //
+  // ROSTER-FIX.6a-8 — one state serves load failures AND approve/reject
+  // failures, so the banner's hard-coded "Could not load swap requests" title
+  // sat over a refused approve and its Retry re-ran the LOAD, which succeeds
+  // and hides the fact the swap was never approved. Each failure now carries
+  // its own title and whether a retry means anything: { title, message, retry }.
+  const [error, setError] = useState(null)
+  // SWAPS.2 — an approval the server refused because a coach is on leave or
+  // already on an overlapping shift that day: { id, messages }. The card shows
+  // the sentences with "Approve anyway", which re-sends with
+  // confirm_conflicts. Nothing is approved until the manager says so.
+  const [confirmFor, setConfirmFor] = useState(null)
   const searchParams = useSearchParams()
   const focusId = searchParams.get('focus')
   const locationId = user.activeLocation?.id
@@ -70,12 +95,20 @@ export default function SwapRequestsManager({ user }) {
   // ?status=pending filter silently hid awaiting_approval rows — the reason a
   // claimed swap drilled in from /approvals showed an empty list.
   const fetchRequests = useCallback(async () => {
-    if (!locationId) return
+    if (!locationId) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
-    const res = await fetch(`/api/schedule/swaps?location_id=${locationId}`)
-    const data = await res.json()
-    setRequests(data.data || [])
-    setLoading(false)
+    setError(null)
+    try {
+      const data = await readJson(`/api/schedule/swaps?location_id=${locationId}`)
+      setRequests(data.data || [])
+    } catch (e) {
+      setError({ title: 'Could not load swap requests', message: e?.message || 'The request failed.', retry: true })
+    } finally {
+      setLoading(false)
+    }
   }, [locationId])
 
   useEffect(() => { fetchRequests() }, [fetchRequests])
@@ -88,20 +121,45 @@ export default function SwapRequestsManager({ user }) {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [focusId, loading, filter])
 
-  async function handleAction(id, status, note) {
+  async function handleAction(id, status, note, { confirmConflicts = false } = {}) {
+    if (actingId) return
     setActingId(id)
-    const res = await fetch(`/api/schedule/swaps/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, review_note: note }),
-    })
-    const data = await res.json().catch(() => ({}))
-    setActingId(null)
-    if (!data.success) {
-      alert(`Could not ${status === 'approved' ? 'approve' : status === 'rejected' ? 'reject' : 'update'}: ${data.error || 'Unknown error'}`)
-      return
+    setError(null)
+    setConfirmFor(null)
+    const verb = status === 'approved' ? 'approve' : status === 'rejected' ? 'reject' : 'update'
+    // retry:false — re-running the LOAD would report success while the swap
+    // sits exactly where it was.
+    const title = `Could not ${verb}`
+    try {
+      const res = await fetch(`/api/schedule/swaps/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(confirmConflicts
+          ? { status, review_note: note, confirm_conflicts: true }
+          : { status, review_note: note }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.code === SWAP_CONFLICTS_CODE) {
+        const messages = (data.conflicts || []).map((c) => c.message).filter(Boolean)
+        setConfirmFor({ id, messages: messages.length ? messages : [data.error || 'This swap has a conflict.'] })
+        return
+      }
+      if (!res.ok || !data.success) {
+        setError({ title, message: data.error || 'Unknown error', retry: false })
+        return
+      }
+      await fetchRequests()
+    } catch {
+      // ROSTER-FIX.6a — a thrown fetch used to reject into a discarded
+      // promise: the row un-busied and the swap looked handled.
+      setError({
+        title,
+        message: `Network error, the swap was not ${status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : 'updated'}. Please try again.`,
+        retry: false,
+      })
+    } finally {
+      setActingId(null)
     }
-    fetchRequests()
   }
 
   const activeFilter = FILTERS.find(f => f.key === filter) || FILTERS[0]
@@ -131,6 +189,16 @@ export default function SwapRequestsManager({ user }) {
         </div>
       </div>
 
+      {error && (
+        <ScheduleErrorBanner
+          title={error.title}
+          message={error.message}
+          onRetry={error.retry ? fetchRequests : undefined}
+          busy={loading}
+          onDismiss={() => setError(null)}
+        />
+      )}
+
       {loading ? (
         <div className="text-center py-12 text-un1t-subtle">Loading requests...</div>
       ) : visible.length === 0 ? (
@@ -151,7 +219,10 @@ export default function SwapRequestsManager({ user }) {
             const canReview = isManager && REVIEW_STATES.includes(req.status)
             const canCancelOwn = !isManager && req.requester_id === user.id && REVIEW_STATES.includes(req.status)
             const focused = focusId && req.id === focusId
+            // ROSTER-FIX.8e — the only date a detached swap still has.
+            const postedOn = formatPostedOn(req.created_at)
             const busy = actingId === req.id
+            const confirming = confirmFor?.id === req.id ? confirmFor : null
 
             return (
               <div
@@ -173,17 +244,35 @@ export default function SwapRequestsManager({ user }) {
                     </div>
 
                     {/* Their shift */}
-                    <div className="text-sm">
-                      <span className="text-un1t-subtle">Wants to swap: </span>
-                      <span className="font-medium" style={{ color: reqTmpl.color }}>
-                        {reqTmpl.name}
-                      </span>
-                      {reqShift && (
+                    {/* ROSTER-FIX.8e — a swap row now OUTLIVES the assignment it
+                        was about: mig 603 made requester_shift_id ON DELETE SET
+                        NULL so an approved drop keeps its history instead of
+                        cascading it away. Every such row reaches this card with
+                        requester_shift null, and the old markup rendered
+                        "Wants to swap:" followed by nothing at all — a blank
+                        line where the shift used to be, with no hint that this
+                        is history rather than a broken card. Say what happened
+                        and date it from the request itself, which is the one
+                        fact that survives. */}
+                    {reqShift ? (
+                      <div className="text-sm">
+                        <span className="text-un1t-subtle">Wants to swap: </span>
+                        <span className="font-medium" style={{ color: reqTmpl.color }}>
+                          {reqTmpl.name}
+                        </span>
                         <span className="text-un1t-subtle">
                           {' '} on {formatDate(reqShift.shift_date)} ({formatTime(reqShift.start_time_override || reqTmpl.start_time)}–{formatTime(reqShift.end_time_override || reqTmpl.end_time)})
                         </span>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-un1t-subtle flex items-center gap-1">
+                        <AlertCircle size={12} />
+                        <span>
+                          Shift no longer on the roster
+                          {postedOn && <span> (requested {postedOn})</span>}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Target shift if specified */}
                     {tgtShift && (
@@ -197,7 +286,29 @@ export default function SwapRequestsManager({ user }) {
                       </div>
                     )}
 
-                    {!tgtShift && (
+                    {/* ROSTER-FIX.8e — the other side of the same hole. The FK on
+                        target_shift_id has been ON DELETE SET NULL since mig 237,
+                        so a detached target usually nulls the id too and is
+                        indistinguishable from "no reciprocal shift was named".
+                        What IS detectable is an id that is still set while the
+                        embed resolved to nothing, and that used to render as
+                        silence. */}
+                    {req.target_shift_id && !tgtShift && (
+                      <div className="text-sm mt-1 text-un1t-subtle flex items-center gap-1">
+                        <AlertCircle size={12} />
+                        <span>
+                          Their shift is no longer on the roster
+                          {postedOn && <span> (requested {postedOn})</span>}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* ROSTER-FIX.8e — only when no reciprocal shift was ever
+                        named. A row whose target_shift_id is still set but did
+                        not resolve is covered above, and calling that a drop
+                        request would be a plain misstatement of what the coach
+                        asked for. */}
+                    {!tgtShift && !req.target_shift_id && (
                       <div className="text-sm mt-1 text-un1t-subtle flex items-center gap-1">
                         <AlertCircle size={12} /> Requesting to drop this shift (no swap)
                       </div>
@@ -209,6 +320,36 @@ export default function SwapRequestsManager({ user }) {
 
                     {req.review_note && (
                       <div className="text-xs text-un1t-subtle mt-1">Manager note: {req.review_note}</div>
+                    )}
+
+                    {/* SWAPS.2 — the confirm step for a conflicting approval. */}
+                    {canReview && confirming && (
+                      <div role="alert" className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800">
+                        <div className="flex items-center gap-1 font-medium">
+                          <AlertCircle size={14} /> Check before approving
+                        </div>
+                        <ul className="mt-1 list-disc pl-5 space-y-0.5">
+                          {confirming.messages.map((m, i) => <li key={i}>{m}</li>)}
+                        </ul>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleAction(req.id, 'approved', undefined, { confirmConflicts: true })}
+                            className="px-3 py-1.5 rounded-md bg-amber-500/20 text-amber-800 hover:bg-amber-500/30 text-xs font-medium transition-colors disabled:opacity-50"
+                          >
+                            Approve anyway
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirmFor(null)}
+                            className="px-3 py-1.5 rounded-md text-un1t-subtle hover:text-un1t-text text-xs transition-colors disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
 

@@ -13,6 +13,11 @@ import { fetchRevenueMTD, fetchArrearsSummary } from '@shared/dashboard-data'
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { computeMembershipCounts } from '@/lib/membership-snapshot'
 import { loadRadar } from '@/lib/churn-radar-data'
+import { membershipStateForPage } from '@/lib/membership/state-for-page'
+import { un1tOnlineReads as un1t } from '@/lib/membership/reads/un1t-online'
+
+const GLOFOX_STATE = { source: 'glofox', state: 'configured', label: 'Glofox', capabilities: { memberships: true, bookings: true, credits: true, invoices: true, schedule: true } }
+const UN1T_STATE = { source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: { memberships: false, bookings: false, credits: false, invoices: false, schedule: false } }
 
 vi.mock('@shared/dashboard-data', () => ({
   fetchRevenueMTD: vi.fn(),
@@ -26,6 +31,16 @@ vi.mock('@/lib/membership-snapshot', () => ({
 }))
 vi.mock('@/lib/churn-radar-data', () => ({
   loadRadar: vi.fn(),
+}))
+// UN1TREAD.3 — the source state is stubbed; the seam, the Glofox adapter and
+// providesCapability are the real ones, wrapping the mocked Glofox functions.
+// The un1t adapter's own reads are tested in reads/un1t-online.test.js; here it is two stubs.
+vi.mock('@/lib/membership/reads/un1t-online', () => ({
+  un1tOnlineReads: Object.freeze({ revenueMtd: vi.fn(), membershipCounts: vi.fn() }),
+}))
+vi.mock('@/lib/membership/state-for-page', async (importOriginal) => ({
+  ...(await importOriginal()),
+  membershipStateForPage: vi.fn(),
 }))
 
 // The churn comparator is a direct thenable query chain
@@ -53,6 +68,7 @@ function happyPathMocks() {
   computeMembershipCounts.mockResolvedValue({ active_recurring: 210, monthly_recurring: 250 })
   loadRadar.mockResolvedValue({ summary: { highRisk: 5 } })
   getPendingApprovalsCount.mockResolvedValue(2)
+  membershipStateForPage.mockResolvedValue(GLOFOX_STATE)
 }
 
 beforeEach(() => {
@@ -134,5 +150,89 @@ describe('buildBusinessKpis', () => {
     getPendingApprovalsCount.mockResolvedValue(0)
     const vm = await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)
     expect(vm.briefing).toContain('Nothing urgent.')
+  })
+})
+
+// UN1TREAD.3 — the numbers come through the membership read seam.
+describe('buildBusinessKpis: through the read seam (UN1TREAD.3)', () => {
+  it('glofox: the view-model is deep-equal to what the direct calls produced, with the same read arguments', async () => {
+    const db = mockDb({ data: [{ high_risk: 3, captured_at: '2026-07-01' }] })
+    const now = Date.parse('2026-09-15T10:00:00Z')
+    const vm = await buildBusinessKpis(db, USER, LOC, now)
+    expect(vm).toEqual({
+      revenue: { totalCents: 1234500, paidCount: 42, deltaPct: 12.4 },
+      arrearsData: { totalCents: 45000, memberCount: 3 },
+      memberCount: 210,
+      churnCount: 5,
+      churnDelta: 2,
+      briefing:
+        'Solid month so far: €12,345 MTD (+12%), 210 members. ' +
+        'Watch: 2 pending approvals, 3 in arrears (€450), 5 at churn risk.',
+      gate: { state: 'configured', showNumbers: true },
+    })
+    expect(fetchRevenueMTD).toHaveBeenCalledWith(db, LOC, new Date(now), expect.any(String))
+    expect(fetchArrearsSummary).toHaveBeenCalledWith(db, LOC)
+    expect(computeMembershipCounts).toHaveBeenCalledWith(db, LOC)
+    expect(loadRadar).toHaveBeenCalledWith(db, LOC)
+  })
+
+  it('un1t.online: revenue + members from the un1t reads; arrears and churn are null and the radar never runs', async () => {
+    membershipStateForPage.mockResolvedValue(UN1T_STATE)
+    un1t.revenueMtd.mockResolvedValue({ success: true, data: { totalCents: 500000, paidCount: 20, deltaPct: null } })
+    un1t.membershipCounts.mockResolvedValue({ active_recurring: 40, monthly_recurring: 45 })
+    {
+      const db = mockDb({ data: [{ high_risk: 3 }] })
+      const vm = await buildBusinessKpis(db, USER, LOC)
+      expect(vm).toMatchObject({ revenue: { totalCents: 500000 }, arrearsData: null, memberCount: 40, churnCount: null, churnDelta: null, gate: { state: 'configured', showNumbers: true } })
+      expect(vm.briefing).toBe('Solid month so far: €5,000 MTD, 40 members. Watch: 2 pending approvals.')
+      expect(un1t.revenueMtd).toHaveBeenCalledOnce()
+      expect(fetchArrearsSummary).not.toHaveBeenCalled()
+      expect(loadRadar).not.toHaveBeenCalled()
+      expect(db.from).not.toHaveBeenCalledWith('churn_radar_snapshots') // not even the comparator
+    }
+  })
+
+  // UN1TREAD.7 — radarOk comes from the reads result's own capabilities; a second
+  // state read (cache expiry between the two) can no longer flip it.
+  it('asks the membership state once, and decides the radar from that answer', async () => {
+    let calls = 0
+    membershipStateForPage.mockImplementation(async () => (++calls === 1 ? GLOFOX_STATE : UN1T_STATE))
+    const vm = await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)
+    expect(calls).toBe(1)
+    expect(loadRadar).toHaveBeenCalledWith(expect.anything(), LOC)
+    expect(vm.churnCount).toBe(5)
+  })
+
+  it('un1t.online: a failed revenue read is the whole-block failure (null), a failed count read just a null count', async () => {
+    membershipStateForPage.mockResolvedValue(UN1T_STATE)
+    const base = un1t
+    {
+      base.revenueMtd.mockResolvedValue({ success: false, error: 'un1t down' })
+      base.membershipCounts.mockResolvedValue({ active_recurring: 1 })
+      expect(await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)).toBeNull()
+      base.revenueMtd.mockResolvedValue({ success: true, data: { totalCents: 100, paidCount: 1, deltaPct: null } })
+      base.membershipCounts.mockRejectedValue(new Error('un1t down'))
+      const vm = await buildBusinessKpis(mockDb({ data: [] }), USER, LOC)
+      expect(vm.memberCount).toBeNull()
+    }
+  })
+
+  it.each([
+    ['none', { source: 'none', state: 'none', label: 'No membership source', capabilities: { memberships: false } }],
+    ['unknown', { source: null, state: 'unknown', readError: 'MEMBERSHIP_SOURCE_UNREADABLE', label: 'No membership source', capabilities: {} }],
+    ['unconfigured', { source: 'glofox', state: 'unconfigured', missing: ['API Key'], label: 'Glofox', capabilities: { memberships: true } }],
+  ])('%s: no membership read runs; a numberless view-model keeps the briefing for the gate', async (_n, state) => {
+    membershipStateForPage.mockResolvedValue(state)
+    const db = mockDb({ data: [] })
+    const vm = await buildBusinessKpis(db, USER, LOC)
+    // Never revenue: null (pre-M3c phones read kpis.revenue.totalCents unguarded).
+    expect(vm).toEqual({
+      revenue: { totalCents: 0, paidCount: 0, deltaPct: null },
+      arrearsData: null, memberCount: null, churnCount: null, churnDelta: null,
+      briefing: 'Watch: 2 pending approvals.',
+      gate: { state: state.state, showNumbers: false },
+    })
+    for (const fn of [fetchRevenueMTD, fetchArrearsSummary, computeMembershipCounts, loadRadar]) expect(fn).not.toHaveBeenCalled()
+    expect(db.from).not.toHaveBeenCalled()
   })
 })

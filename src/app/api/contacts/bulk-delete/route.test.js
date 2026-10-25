@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({ ...(await vi.importActual('@/lib/role-at-location')), getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/contact-merge', () => ({
   redactWhatsAppForContact: vi.fn(async () => {}),
@@ -45,7 +46,7 @@ const req = (ids) => new Request('http://localhost/api/contacts/bulk-delete', {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+  getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }], rolesByLocation: { 'loc-1': 'manager' } })
 })
 
 describe('POST /api/contacts/bulk-delete — mail scrub per contact', () => {

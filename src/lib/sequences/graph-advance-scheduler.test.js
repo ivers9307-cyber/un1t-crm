@@ -15,7 +15,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('./steps.js', () => ({
   sendEmailStep: vi.fn(),
   sendWhatsappStep: vi.fn(),
-  sendSmsStep: vi.fn(),
+  retiredSmsStep: vi.fn(),
   applyTagStep: vi.fn(),
   updateFieldStep: vi.fn(),
   webhookStep: vi.fn(),
@@ -130,9 +130,9 @@ describe("runSequences — config.next_step_order = 'end' (terminal arm)", () =>
     // must not land on the no-arm row.
     expect(payload.current_step_order).toBe(2)
 
-    // Completion is counted on the sequence.
-    const rpc = statements.find(s => s.table === '__rpc__')
-    expect(rpc.ops[0].args[0]).toBe('increment_sequence_completed')
+    // SEQCOUNTERS.1 — completion is read from sequence_enrollments.status;
+    // the increment_sequence_completed rpc never existed.
+    expect(statements.find(s => s.table === '__rpc__')).toBeUndefined()
   })
 })
 
@@ -234,5 +234,38 @@ describe('runSequences — branch steps', () => {
     const payload = advanceUpdate(statements).ops[0].args[0]
     expect(payload.current_step_order).toBe(4)
     expect(payload.status).toBe('active')
+  })
+
+  it('passes the sequence studio to the branch, so a studio-scoped predicate reads the right studio', async () => {
+    const steps = [
+      { id: 'st-2', step_order: 2, step_type: 'branch', config: { predicate: { type: 'booked_class_at_studio' }, then_step_order: 5, else_step_order: 3 }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+      { id: 'st-5', step_order: 5, step_type: 'sms', sms_body: 'yes arm', config: { next_step_order: 'end' }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+    ]
+    const { db } = makeDb(routeFor({ steps, enrollment }))
+    createServerClient.mockReturnValue(db)
+    processBranchStep.mockClear()
+    processBranchStep.mockResolvedValue(5)
+
+    await runSequences()
+
+    expect(processBranchStep).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-1' }))
+  })
+
+  it('passes the enrolment time to the branch, so a "since enrolment" predicate can compare against it (TDSEQ.1)', async () => {
+    const steps = [
+      { id: 'st-2', step_order: 2, step_type: 'branch', config: { predicate: { type: 'whatsapp_reply_since_enrolment' }, then_step_order: 5, else_step_order: 3 }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+      { id: 'st-5', step_order: 5, step_type: 'apply_tag', config: { tag: 'replied', next_step_order: 'end' }, delay_days: 0, delay_hours: 0, delay_minutes: 0 },
+    ]
+    const enrolled = { ...enrollment, enrolled_at: '2026-10-20T09:00:00.000Z' }
+    const { db } = makeDb(routeFor({ steps, enrollment: enrolled }))
+    createServerClient.mockReturnValue(db)
+    processBranchStep.mockClear()
+    processBranchStep.mockResolvedValue(5)
+
+    await runSequences()
+
+    expect(processBranchStep).toHaveBeenCalledWith(db, expect.objectContaining({
+      locationId: 'loc-1', enrolledAt: '2026-10-20T09:00:00.000Z',
+    }))
   })
 })

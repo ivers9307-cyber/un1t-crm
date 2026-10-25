@@ -7,7 +7,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   isFreshSecret,
-  maskSecret,
   mergeSecretSlice,
   sliceHasValue,
 } from './integration-secret-merge.js'
@@ -41,20 +40,6 @@ describe('isFreshSecret', () => {
   })
   it('is true for a real value', () => {
     expect(isFreshSecret('sk_live_123')).toBe(true)
-  })
-})
-
-describe('maskSecret', () => {
-  it('returns null for empty input', () => {
-    expect(maskSecret('')).toBeNull()
-    expect(maskSecret(null)).toBeNull()
-  })
-  it('keeps the last few chars and never returns the raw secret', () => {
-    expect(maskSecret('abcdef1234')).toBe('••••••1234')
-    expect(maskSecret('abcdef1234')).not.toContain('abcdef')
-  })
-  it('fully masks short secrets', () => {
-    expect(maskSecret('abc')).toBe('••••••')
   })
 })
 

@@ -8,6 +8,29 @@
 // its context (inbox chat vs profile WhatsApp).
 import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { classBookResultView } from '@/lib/glofox-class-book-result'
+import { un1tClassBookResultView } from '@/lib/un1t-class-book-result'
+
+// UN1TWRITE.15 — where the class half of the panel lists, books and cancels.
+// 'glofox' is the default and byte-identical to before; 'un1t_online' is a
+// un1t.online studio (the staff routes need location_id too).
+export const CLASS_PROVIDER_ENDPOINTS = Object.freeze({
+  glofox: Object.freeze({ list: '/api/glofox/classes', book: '/api/glofox/classes/book', cancel: '/api/glofox/classes/cancel' }),
+  un1t_online: Object.freeze({ list: '/api/un1t-online/classes', book: '/api/un1t-online/classes/book', cancel: '/api/un1t-online/classes/cancel' }),
+})
+
+// The un1t.online list's class → the panel's class shape. size stays null:
+// spots_left is "as of last sync", so no "N of M" is shown.
+function un1tPanelClass(c) {
+  const ms = Date.parse(c?.starts_at)
+  return {
+    id: c.id, name: c.name, time_start_ms: Number.isFinite(ms) ? ms : null, duration: null,
+    size: null, booked: null, spots_left: Number.isFinite(c.spots_left) ? c.spots_left : null,
+    waiting: 0, trainers: [], booking_status: null, community: c.community === true,
+  }
+}
+import { bookChatConfirmationText } from '@/lib/book-chat-copy'
+import { dayHasWindows } from '@/lib/booking-windows'
 
 function fmtDay(d) {
   return d.toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -20,14 +43,16 @@ function fmtSlot(time) {
   return `${h12}:${String(m).padStart(2, '0')}${ampm}`
 }
 
-// Format a YYYY-MM-DD + HH:MM as Dublin wall-clock copy — no Date
-// composition with Z suffixes (the BOOKING.2 lesson).
-function fmtBookingLine(eventName, dateStr, time) {
+// What a consultation booking was, for the chat confirmation's {class}:
+// "Consultation, Friday 6 October at 10:00am". A YYYY-MM-DD + HH:MM as Dublin
+// wall-clock copy, no Date composition with Z suffixes (the BOOKING.2 lesson).
+// BOOKCHATCOPY.1 — the sentence around it is the studio's editable text.
+function bookingWhat(eventName, dateStr, time) {
   const [y, mo, d] = dateStr.split('-').map(Number)
   const label = new Date(Date.UTC(y, mo - 1, d, 12)).toLocaleDateString('en-IE', {
     weekday: 'long', day: 'numeric', month: 'long',
   })
-  return `✅ Booked: ${eventName} — ${label} at ${fmtSlot(time)}`
+  return `${eventName}, ${label} at ${fmtSlot(time)}`
 }
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
@@ -68,7 +93,11 @@ function groupClassesByDay(classes) {
   return groups
 }
 
-function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel, conversationId, onBooked, notifyLabel = 'Send confirmation in the chat' }) {
+function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel, conversationId, onBooked, notifyLabel = 'Send confirmation in the chat', classProvider = 'glofox', onClassesLoaded }) {
+  const isUn1t = classProvider === 'un1t_online'
+  const endpoints = isUn1t ? CLASS_PROVIDER_ENDPOINTS.un1t_online : CLASS_PROVIDER_ENDPOINTS.glofox
+  // un1t.online: the card is only mounted for a contact with an account there.
+  const canBookClasses = isUn1t ? true : !!glofoxMemberId
   const [eventId, setEventId] = useState('')
   const [dateStr, setDateStr] = useState(null)
   const [slots, setSlots] = useState(null)
@@ -87,6 +116,18 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
 
   useEffect(() => {
     let cancelled = false
+    if (isUn1t) {
+      fetch(`${endpoints.list}?location_id=${encodeURIComponent(locationId || '')}&contact_id=${encodeURIComponent(contactId || '')}`)
+        .then(r => r.json())
+        .then(d => {
+          if (cancelled) return
+          if (d.success) {
+            setClasses((d.data?.classes || []).map(un1tPanelClass))
+            onClassesLoaded?.(d.data)
+          } else { setClasses([]); setClassesError(d.error || 'Could not load classes') }
+        }, () => { if (!cancelled) { setClasses([]); setClassesError('Could not load classes') } })
+      return () => { cancelled = true }
+    }
     const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
     fetch(`/api/glofox/classes${qs}`)
       .then(r => r.json())
@@ -96,7 +137,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         else { setClasses([]); setClassesError(d.error || 'Could not load classes') }
       }, () => { if (!cancelled) { setClasses([]); setClassesError('Could not load classes') } })
     return () => { cancelled = true }
-  }, [locationId])
+  }, [locationId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const event = eventTypes.find(e => e.id === eventId) || null
 
@@ -106,7 +147,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
     for (let i = 0; i < 14; i++) {
       const d = new Date()
       d.setDate(d.getDate() + i)
-      if (event.availability?.[DAY_KEYS[d.getDay()]]) {
+      if (dayHasWindows(event.availability, DAY_KEYS[d.getDay()])) {
         const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
         days.push({ d, ds })
       }
@@ -175,7 +216,12 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
         return
       }
 
-      const threadNote = await sendThreadText(fmtBookingLine(event.name, dateStr, time))
+      // BOOKCHATCOPY.1 — the studio's editable booking confirmation (the route
+      // hands it back as chat_template), or the plain default.
+      const threadNote = await sendThreadText(bookChatConfirmationText({
+        what: bookingWhat(event.name, dateStr, time),
+        template: data.chat_template,
+      }))
       const channels = data.confirmation?.channels_sent?.length
         ? ` Confirmation ${data.confirmation.channels_sent.join(' + ')} sent.`
         : ''
@@ -197,23 +243,31 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
     setBooking(true)
     setClassResult(null)
     try {
-      const res = await fetch('/api/glofox/classes/book', {
+      const res = await fetch(endpoints.book, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact_id: contactId, event_id: cls.id }),
+        body: JSON.stringify(isUn1t
+          ? { contact_id: contactId, location_id: locationId, event_id: cls.id }
+          : { contact_id: contactId, event_id: cls.id }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!data.success) {
-        setClassResult({ ok: false, message: data.error || 'Glofox booking failed' })
+      // GLOFOXWRITEJUDGE.1 — already booked is shown as done, not as an error.
+      const view = isUn1t ? un1tClassBookResultView(data, cls.name) : classBookResultView(data, cls.name)
+      if (!view.ok) {
+        setClassResult({ ok: false, message: view.message })
         return
       }
-      const threadNote = await sendThreadText(
-        `✅ Booked into ${cls.name}${cls.time_start_ms ? ` — ${fmtClassTime(cls.time_start_ms)}` : ''}`
-      )
+      // BOOKCHATCOPY.1 — as for a consultation above.
+      const threadNote = view.sendChat
+        ? await sendThreadText(bookChatConfirmationText({
+          what: [cls.name, fmtClassTime(cls.time_start_ms)].filter(Boolean).join(', '),
+          template: isUn1t ? data.data?.chat_template : data.chat_template,
+        }))
+        : ''
       setClassResult({
         ok: true,
-        message: `Booked into ${cls.name}.${threadNote ? ` ${threadNote}` : ''}`,
-        bookingId: data.glofox_booking_id || null,
+        message: `${view.message}${threadNote ? ` ${threadNote}` : ''}`,
+        bookingId: view.bookingId,
       })
       onBooked?.()
     } finally {
@@ -225,21 +279,24 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
     if (booking || !bookingId) return
     setBooking(true)
     try {
-      const res = await fetch('/api/glofox/classes/cancel', {
+      const res = await fetch(endpoints.cancel, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact_id: contactId, booking_id: bookingId }),
+        body: JSON.stringify(isUn1t
+          ? { contact_id: contactId, location_id: locationId, booking_id: bookingId }
+          : { contact_id: contactId, booking_id: bookingId }),
       })
       const data = await res.json().catch(() => ({}))
       setClassResult(data.success
-        ? { ok: true, message: 'Booking cancelled in Glofox.' }
+        ? { ok: true, message: isUn1t ? 'Booking cancelled in un1t.online.' : 'Booking cancelled in Glofox.' }
         : { ok: false, message: data.error || 'Cancel failed' })
+      if (data.success && isUn1t) onBooked?.()
     } finally {
       setBooking(false)
     }
   }
 
-  if (eventTypes.length === 0) {
+  if (eventTypes.length === 0 && !isUn1t) {
     return (
       <p className="text-xs text-un1t-subtle text-center py-6">
         No active bookable events at this studio yet.
@@ -249,6 +306,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
 
   return (
     <div className="space-y-3">
+      {eventTypes.length > 0 && (<>
       <select
         value={eventId}
         onChange={e => { setEventId(e.target.value); setDateStr(null); setResult(null) }}
@@ -307,10 +365,11 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
           {result.message}
         </p>
       )}
+      </>)}
 
       {/* ── Glofox classes (UIX-P3b) — grouped by day ── */}
-      <div className="pt-3 border-t border-un1t-border">
-        <p className="text-[11px] font-semibold text-un1t-subtle mb-2">Glofox classes — next 7 days</p>
+      <div className={eventTypes.length > 0 ? 'pt-3 border-t border-un1t-border' : ''}>
+        <p className="text-[11px] font-semibold text-un1t-subtle mb-2">{isUn1t ? 'un1t.online classes, next 14 days' : 'Glofox classes — next 7 days'}</p>
 
         {classes === null && <p className="text-xs text-un1t-subtle">Loading classes…</p>}
         {classesError && <p className="text-xs text-red-700">{classesError}</p>}
@@ -318,7 +377,7 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
           <p className="text-xs text-un1t-subtle">No upcoming classes found.</p>
         )}
 
-        {!glofoxMemberId && classes && classes.length > 0 && (
+        {!canBookClasses && classes && classes.length > 0 && (
           <p className="text-xs text-amber-700 mb-2">
             Not linked to a Glofox member — booking is disabled for this contact.
           </p>
@@ -364,12 +423,13 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
                                 {fmtClockTime(cls.time_start_ms)}
                                 {cls.trainers?.length ? ` · ${cls.trainers[0]}` : ''}
                                 {cls.spots_left != null
-                                  ? ` · ${full ? 'Full' : `${cls.spots_left} of ${cls.size} spots`}`
+                                  ? ` · ${full ? 'Full' : cls.size == null ? `${cls.spots_left} spots left` : `${cls.spots_left} of ${cls.size} spots`}`
                                   : ''}
+                                {cls.community ? ' · Members only' : ''}
                               </p>
                             </div>
                             <button
-                              disabled={booking || !glofoxMemberId || full}
+                              disabled={booking || !canBookClasses || full}
                               onClick={() => bookClass(cls)}
                               className={`shrink-0 text-[11px] px-2.5 py-1 rounded-md transition-colors ${
                                 full

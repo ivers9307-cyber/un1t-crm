@@ -1,0 +1,116 @@
+// GET /api/public/tv-challenges/[token]
+//
+// W0.9a — THE entrypoint for the in-studio challenge TV board. The caller
+// presents an opaque tv_displays.token instead of a location UUID — exactly the
+// model /api/public/tv-live/[token] uses for the live HR board (P0-3, mig 160).
+// The location-keyed twin (/api/public/challenges/[locationId], same payload)
+// was removed in W0.9c once every kiosk had moved (W0.9b).
+//
+// No auth header — the token IS the auth (kiosk browsers can't supply
+// cookies). Invalid / inactive tokens return 404 (never reveal whether a token
+// or location exists). Rate-limited per token + IP and no-store.
+
+import { NextResponse } from 'next/server'
+import { createServerClient } from '@/lib/supabase'
+import { computeStandings, computeCollective } from '@/lib/challenges-io'
+import { challengePhase, windowIso } from '@/lib/challenges'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { resolveLocationBrand } from '@/lib/host-brand'
+import { zoneOfLocation, monthStartMsIn } from '@/lib/location-time'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const NO_STORE = { 'Cache-Control': 'no-store' }
+const TOP = 25
+const project = (standings) => standings.slice(0, TOP).map((r) => ({ name: r.name, value: r.value, rank: r.rank }))
+
+export async function GET(request, props) {
+  const params = await props.params
+  const db = createServerClient()
+  const token = params.token
+  const nowMs = Date.now()
+
+  if (!token) {
+    return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404, headers: NO_STORE })
+  }
+
+  // Abuse limiter (fail-open) — the challenge TV board polls every 45s
+  // (ChallengeTvClient POLL_MS), ≈7 requests per 5 min, so 60-per-5-min gives a
+  // legit board ~8x headroom while capping scripted hammering of a
+  // standings-computation-heavy endpoint. Keyed on the token so one display
+  // can't starve another's bucket. Runs BEFORE the token lookup so an
+  // enumeration attempt is still capped.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `tv-challenges:${token}:${ip}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
+  // Resolve the opaque token → display → location. Only active displays. Invalid
+  // token or inactive display → 404 (don't confirm existence of either).
+  const { data: display } = await db
+    .from('tv_displays')
+    .select('location_id, active')
+    .eq('token', token)
+    .maybeSingle()
+  if (!display || !display.active) {
+    return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404, headers: NO_STORE })
+  }
+
+  // TZ.12 — `timezone` rides the same read, for the board's header clock.
+  const { data: location } = await db
+    .from('locations')
+    .select('id, name, timezone')
+    .eq('id', display.location_id)
+    .single()
+  if (!location) {
+    return NextResponse.json({ ok: false, error: 'Not found' }, { status: 404, headers: NO_STORE })
+  }
+
+  // The board itself, scoped to the location the TOKEN resolved to (never a
+  // caller-supplied id).
+  const locationId = location.id
+
+  const { data: defs } = await db.from('challenges')
+    .select('id, name, mode, metric, starts_on, ends_on, target')
+    .eq('location_id', locationId).order('ends_on', { ascending: true })
+
+  // TZ.13 — every challenge here is this location's, so its window is this
+  // location's local days.
+  const zone = zoneOfLocation(location)
+  const challenges = []
+  for (const ch of defs || []) {
+    if (challengePhase(ch, nowMs, zone) !== 'active') continue
+    const { fromIso, toIso } = windowIso(ch, zone)
+    // DECISION #1 (mig 348) — this is a PUBLIC render surface, so exclude
+    // members who opted out of the leaderboard. They still score for
+    // themselves and can still win (the run-challenge-events cron computes
+    // winners WITHOUT this flag); they're just not shown on the TV board.
+    if (ch.mode === 'collective') {
+      const collective = await computeCollective(db, { locationId, metric: ch.metric, fromIso, toIso, target: ch.target, excludeOptedOut: true })
+      challenges.push({ id: ch.id, name: ch.name, mode: 'collective', metric: ch.metric, endsOn: ch.ends_on, collective })
+    } else {
+      const standings = await computeStandings(db, { locationId, metric: ch.metric, fromIso, toIso, excludeOptedOut: true })
+      challenges.push({ id: ch.id, name: ch.name, mode: 'individual', metric: ch.metric, endsOn: ch.ends_on, standings: project(standings) })
+    }
+  }
+
+  // TZ.17 — the monthly gym board starts on the studio's 1st at local midnight
+  // (it started at 00:00 UTC, so from 00:00 to 01:00 Irish summer time on the
+  // 1st the board still showed last month, and 00:xx sessions on the 1st were
+  // never counted).
+  const monthFrom = new Date(monthStartMsIn(nowMs, zone)).toISOString()
+  const gym = await computeStandings(db, { locationId, metric: 'points', fromIso: monthFrom, toIso: new Date(nowMs).toISOString(), excludeOptedOut: true })
+
+  // W1.S1b — the studio's brand for "{Brand} Points" and the tab title
+  // (per-location cache, host-brand.js; this board polls).
+  const brand = await resolveLocationBrand({ locationId, db, nowMs })
+
+  return NextResponse.json({
+    ok: true, server_time: new Date().toISOString(),
+    // TZ.12 — the studio's zone (missing/invalid → Europe/Dublin, warned once).
+    timezone: zone,
+    location: { id: location.id, name: location.name },
+    brand: { name: brand.companyName, short_name: brand.shortName },
+    challenges, gymBoard: project(gym),
+  }, { headers: NO_STORE })
+}

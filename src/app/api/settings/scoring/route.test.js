@@ -9,6 +9,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 import { PUT, GET, ScoringSchema } from './route'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { fakeLocationsDb, BOOM } from '@/lib/location-settings.test-helpers'
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -232,5 +233,35 @@ describe('GET /api/settings/scoring', () => {
     expect(json.scoring.zone_points[5]).toBe(9)
     expect(json.scoring.zone_points[1]).toBe(1) // default
     expect(json.scoring.participation_points).toBe(50) // default
+  })
+})
+
+// SETTINGSWIPE.1 — GET answered a failed read with SCORING_DEFAULTS as the
+// saved figures; PUT discarded its read error and wrote the WHOLE settings
+// column (a blip wiped every other key, and Save wrote the defaults back).
+describe('SETTINGSWIPE.1 — scoring never shows defaults for a failed read, never wipes', () => {
+  it('GET: failed read → 500 settings_unreadable, no scoring', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: { data: null, error: BOOM } }))
+    const res = await GET()
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.code).toBe('settings_unreadable')
+    expect(body.scoring).toBeUndefined()
+  })
+
+  it('PUT: failed read → 500, NOTHING written', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const db = fakeLocationsDb({ reads: { data: null, error: BOOM } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(putReq(validBody))
+    expect(res.status).toBe(500)
+    expect(db.writes).toEqual([])
+  })
+
+  it('PUT: failed write → 500', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: { data: { settings: {} }, error: null }, write: { data: null, error: BOOM } }))
+    expect((await PUT(putReq(validBody))).status).toBe(500)
   })
 })

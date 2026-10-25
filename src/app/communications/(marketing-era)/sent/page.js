@@ -1,7 +1,9 @@
-// PILLAR2 — the unified "Sent" history. One list across SMS, WhatsApp and
-// email sends for the active location (replaces the three per-channel list
-// pages, which now redirect here). Email campaigns joined in Phase 2 and this
-// is the parent every channel detail view links back to (COMMSLAYOUT.4).
+// PILLAR2 — the unified "Sent" history. One list across WhatsApp and email
+// sends for the active location (replaces the per-channel list pages, which
+// now redirect here). SMS broadcasts left the list when SMS was retired with
+// Twilio (TWILIO-RETIRE.1); their rows stay on disk as history. Email
+// campaigns joined in Phase 2 and this is the parent every channel detail view
+// links back to (COMMSLAYOUT.4).
 //
 // COMMS-IA.1 — every row now opens a child of THIS route
 // (/communications/sent/[channel]/[id]) instead of one of three unrelated URL
@@ -12,7 +14,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { MessageSquare, MessageCircle, Mail, Send } from 'lucide-react'
+import { MessageCircle, Mail, Send } from 'lucide-react'
 import { sendStatusChip } from './send-status.js'
 // REPORT-SOT.2 — the email rows on this list are counted from
 // campaign_recipients, not from campaigns.total_*.
@@ -30,20 +32,14 @@ const SELECT = 'id, name, status, total_recipients, total_sent, total_failed, cr
 export default async function SendsHistoryPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  const canSms = hasPermission(user, 'sms')
   const canWa = hasPermission(user, 'whatsapp')
   const canEmail = hasPermission(user, 'email')
-  if (!canSms && !canWa && !canEmail) redirect('/communications')
+  if (!canWa && !canEmail) redirect('/communications')
 
   const locationId = user.activeLocation?.id
   const db = createServerClient()
   const rows = []
 
-  if (canSms && locationId) {
-    const { data } = await db.from('sms_broadcasts').select(SELECT)
-      .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
-    for (const b of data || []) rows.push({ ...b, channel: 'sms', detail: `/communications/sent/sms/${b.id}` })
-  }
   if (canWa && locationId) {
     const { data } = await db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary, delivery_mode`)
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
@@ -94,9 +90,7 @@ export default async function SendsHistoryPage() {
         <div>
           <Link href="/communications" className="text-xs text-un1t-subtle hover:text-un1t-text">← Communications</Link>
           <h1 className="text-xl font-semibold text-un1t-text mt-1">Sent</h1>
-          {/* COMMSLAYOUT.1 — email campaigns have been in this list since
-              PILLAR2 Phase 2; the subtitle still said SMS + WhatsApp only. */}
-          <p className="text-sm text-un1t-subtle">One-off SMS, WhatsApp and email sends at this location.</p>
+          <p className="text-sm text-un1t-subtle">One-off WhatsApp and email sends at this location.</p>
         </div>
         <Link href="/communications/send"
           className="inline-flex items-center gap-1.5 rounded-lg bg-un1t-text text-un1t-bg px-3 py-2 text-sm font-medium hover:bg-un1t-accent shrink-0">
@@ -121,7 +115,7 @@ export default async function SendsHistoryPage() {
             </thead>
             <tbody>
               {rows.map(r => {
-                const Icon = r.channel === 'sms' ? MessageSquare : r.channel === 'email' ? Mail : MessageCircle
+                const Icon = r.channel === 'email' ? Mail : MessageCircle
                 return (
                   <tr key={`${r.channel}-${r.id}`} className="border-t border-un1t-border hover:bg-un1t-bg/30">
                     <td className="px-4 py-3">

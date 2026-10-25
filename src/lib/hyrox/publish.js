@@ -2,10 +2,11 @@
 import { weekNoFor, slotFor } from './mapping'
 
 // The approved/published session that a live HYROX occurrence maps to, or null.
-export function pickSessionForOccurrence(block, sessions, occurrenceIso) {
-  const wk = weekNoFor(block.starts_on, occurrenceIso, block.weeks)
+// TZ.9: `zone` is the block's studio zone (default DEFAULT_TZ, as mapping's).
+export function pickSessionForOccurrence(block, sessions, occurrenceIso, zone) {
+  const wk = weekNoFor(block.starts_on, occurrenceIso, block.weeks, zone)
   if (wk == null) return null
-  const slot = slotFor(block.session_weekdays, occurrenceIso)
+  const slot = slotFor(block.session_weekdays, occurrenceIso, zone)
   if (slot == null) return null
   return (sessions || []).find(
     (s) => s.week_no === wk && s.slot === slot && (s.status === 'approved' || s.status === 'published'),

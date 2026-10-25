@@ -113,8 +113,9 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
  * '2026-05-01' -> 'May 2026'.
  *
  * String math on the stored calendar month, never `new Date(...)`: the value
- * is already a Dublin month boundary from Postgres, and parsing it locally
- * then formatting in UTC is how a month silently becomes the previous one.
+ * is already the studio's month boundary from Postgres (TZ.15, mig 721), and
+ * parsing it locally then formatting in UTC is how a month silently becomes
+ * the previous one.
  */
 export function monthLabel(month) {
   if (typeof month !== 'string' || month.length < 7) return month

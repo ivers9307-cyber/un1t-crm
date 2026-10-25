@@ -22,6 +22,8 @@ import { useFocusEffect, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import Svg, { Rect, Polyline } from 'react-native-svg'
 import { supabase } from '../../../lib/member/supabase'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZone } from '../../../lib/member/use-member-zone'
 import Card from '../../../components/member/ui/Card'
 import ErrorRetry from '../../../components/member/ErrorRetry'
 import {
@@ -138,26 +140,30 @@ export function ProgressScreen({ focus = 'trends', showHeader = true } = {}) {
   // wiring as home). Sessions arrive all-time newest-first with zones_seconds,
   // so the set already contains the 7-day window accentFromSessions reads.
   const earned = useMemo(() => accentFromSessions(sessions, Date.now()), [sessions])
+  // W1.S5 — milestone labels carry the studio brand + product name.
+  const { companyName, shortName } = useMemberBrand()
+  // TZ.14 (D7) — streak, heatmap, records and milestones on the member's home studio clock.
+  const tz = useMemberZone()
 
   const data = useMemo(() => {
     const now = Date.now()
     return {
-      weeks: weeklyBuckets(sessions, now, 12),
-      recap: monthlyRecap(sessions, now, 6),
-      records: personalRecords(sessions),
+      weeks: weeklyBuckets(sessions, now, 12, tz), // TZ.17: the member's weeks and months
+      recap: monthlyRecap(sessions, now, 6, tz),
+      records: personalRecords(sessions, tz),
       // Two windows for the activity calendar: 12 weeks (default, reads cleanly
       // on phone) and a full year (52 weeks) behind a toggle — the "look how
       // far I've come" view. Same accent-intensity encoding; year mode scrolls.
-      calendar: activityCalendar(sessions, now, 84),
-      calendarYear: activityCalendar(sessions, now, 364),
-      milestones: lifetimeMilestones(sessions, now),
-      streak: currentStreak(sessions, now),
+      calendar: activityCalendar(sessions, now, 84, tz),
+      calendarYear: activityCalendar(sessions, now, 364, tz),
+      milestones: lifetimeMilestones(sessions, now, { brand: companyName, shortName }, tz),
+      streak: currentStreak(sessions, now, tz),
       pointsTrend: trendDelta(sessions, 'effort_points', now),
       lifetimePoints: (sessions || []).reduce(
         (acc, s) => acc + (Number.isFinite(s.effort_points) ? s.effort_points : 0), 0,
       ),
     }
-  }, [sessions])
+  }, [sessions, companyName, shortName, tz])
 
   if (loading) {
     return (
@@ -259,12 +265,13 @@ function Header() {
 // ── 1. headline strip ────────────────────────────────────────────
 
 function HeadlineStrip({ streak, sessionCount, lifetimePoints, trend, accent = PEARL }) {
+  const { productNames } = useMemberBrand()
   return (
     <Card>
       <View className="flex-row" style={{ gap: 12 }}>
         <HeadlineStat label="Streak" value={String(streak.current)} unit={streak.current === 1 ? 'day' : 'days'} />
         <HeadlineStat label="Sessions" value={sessionCount.toLocaleString()} />
-        <HeadlineStat label="UN1T Points" value={lifetimePoints.toLocaleString()} />
+        <HeadlineStat label={productNames.points} value={lifetimePoints.toLocaleString()} />
       </View>
       {trend.hasEnoughData && <TrendChip trend={trend} accent={accent} />}
     </Card>
@@ -717,6 +724,7 @@ function NativeTrendSparkline({ points, improving, accent = PEARL }) {
 // render only the notable ones, capped so it never becomes a wall of stats.
 // Renders nothing until the member has crossed their first threshold.
 function MilestonesStrip({ milestones, accent = PEARL }) {
+  const { companyName, productNames } = useMemberBrand()
   const items = (milestones?.milestones || []).slice(0, 4)
   if (items.length === 0) return null
 
@@ -726,9 +734,10 @@ function MilestonesStrip({ milestones, accent = PEARL }) {
     hours: 'time',
     streak: 'calendar',
   }
+  // W1.S5 — captions carry the studio brand; bare nouns until it loads.
   const MILESTONE_CAPTIONS = {
-    sessions: 'sessions trained at UN1T',
-    points: 'UN1T Points earned',
+    sessions: companyName ? `sessions trained at ${companyName}` : 'sessions trained',
+    points: `${productNames.points} earned`,
     hours: 'hours of training',
     streak: 'day best streak',
   }

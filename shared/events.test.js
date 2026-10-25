@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { EVENT_KINDS, eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from './events'
+import { EVENT_KINDS, eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoIn } from './events'
 
-describe('todayIsoDublin', () => {
-  it('returns a YYYY-MM-DD string', () => {
-    expect(todayIsoDublin()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+describe('todayIsoIn', () => {
+  it('returns a YYYY-MM-DD string (zone omitted = Europe/Dublin)', () => {
+    expect(todayIsoIn()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(todayIsoIn(undefined, Date.parse('2026-07-01T23:30:00Z'))).toBe('2026-07-02')
+    expect(todayIsoIn('America/New_York', Date.parse('2026-07-01T23:30:00Z'))).toBe('2026-07-01')
   })
 })
 

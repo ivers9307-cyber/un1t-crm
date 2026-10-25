@@ -12,12 +12,13 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { checkinCounts } from '@/lib/event-checkins'
 import { sumWaveCapacity } from '@/lib/event-signups'
+import { followPlacementForCheckin, isPlacedRedirect } from '@/lib/placed-checkin'
 
 export const runtime = 'nodejs'
 
@@ -27,27 +28,45 @@ const Schema = z.object({
 })
 
 // Load the registration, confirm it belongs to THIS event, and locate the
-// member on its team. Returns { error, status } or { member, locationId }.
+// member on its team. Returns { error, status } or
+// { member, locationId, registrationId }.
+//
+// FINDTEAM.8 (I2): a placed solo row is followed to the team entry it joined
+// (placed_into_registration_id) and the person's member row THERE (by
+// contact, else email), so check-in and its undo land on the team, never on
+// the dead solo row. registrationId is the row the check-in belongs to.
 async function resolve(db, eventId, registrationId, memberId) {
-  const { data: reg } = await db
+  const { data: reg, error: regErr } = await db
     .from('race_registrations')
-    .select('id, race_event_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, email, contact_id ) )')
+    .select('id, race_event_id, status, contact_id, placed_into_registration_id, race_events!inner ( id, location_id ), teams ( id, team_members ( id, email, contact_id ) )')
     .eq('id', registrationId)
     .maybeSingle()
+  if (regErr) return { error: 'Could not read the registration', status: 500 }
   if (!reg || reg.race_event_id !== eventId) {
     return { error: 'Registration not found for this event', status: 404 }
   }
   const locationId = reg.race_events?.location_id
   const member = (reg.teams?.team_members || []).find((m) => m.id === memberId)
   if (!member) return { error: 'That person is not on this registration', status: 400 }
-  return { member, locationId }
+  if (!isPlacedRedirect(reg)) return { member, locationId, registrationId }
+  const followed = await followPlacementForCheckin(db, {
+    eventId,
+    placedIntoId: reg.placed_into_registration_id,
+    person: { contact_id: member.contact_id || reg.contact_id || null, email: member.email },
+  })
+  if (!followed.ok) {
+    if (followed.reason === 'load_failed') return { error: 'Could not read the registration', status: 500 }
+    if (followed.reason === 'not_found') return { error: 'Registration not found for this event', status: 404 }
+    return { error: 'That person is not on this registration', status: 400 }
+  }
+  return { member: followed.member, locationId, registrationId: followed.registrationId }
 }
 
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -60,10 +79,14 @@ export async function POST(request, props) {
   if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   const guard = assertLocationAccessOr404(user, r.locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, r.locationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db.from('race_checkins').insert({
-    race_registration_id,
-    team_member_id,
+    race_registration_id: r.registrationId,
+    team_member_id: r.member.id,
     contact_id: r.member.contact_id || null,
     location_id: r.locationId,
     checked_in_by: user.id,
@@ -81,8 +104,8 @@ export async function POST(request, props) {
       contactId: r.member.contact_id || null,
       locationId: r.locationId,
       sourceType: 'race_registration',
-      sourceId: race_registration_id,
-      metadata: { event_id: params.id, team_member_id },
+      sourceId: r.registrationId,
+      metadata: { event_id: params.id, team_member_id: r.member.id },
     })
   }
 
@@ -93,7 +116,7 @@ export async function DELETE(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -109,12 +132,16 @@ export async function DELETE(request, props) {
   if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   const guard = assertLocationAccessOr404(user, r.locationId)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, r.locationId, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const { error } = await db
     .from('race_checkins')
     .delete()
-    .eq('race_registration_id', race_registration_id)
-    .eq('team_member_id', team_member_id)
+    .eq('race_registration_id', r.registrationId)
+    .eq('team_member_id', r.member.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   return NextResponse.json({ success: true, data: { checked_in: false } })
@@ -127,7 +154,7 @@ export async function GET(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
   }
 
@@ -147,6 +174,10 @@ export async function GET(_request, props) {
   if (!race) return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Events feature is disabled at this location' }, { status: 403 })
+  }
 
   const confirmed = (race.registrations || []).filter((r) => r.status === 'confirmed')
   const regIds = confirmed.map((r) => r.id)

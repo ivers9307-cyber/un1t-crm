@@ -1,10 +1,14 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { setConversationalAutomation } from '@/lib/whatsapp'
+import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
+import { mergeLocationSettings } from '@/lib/location-settings'
+import { isOrganizationAdminFor } from '@/lib/whatsapp-blast-signoff'
+import { studiosUsingNumbers } from '@/lib/whatsapp-config'
 
 const ConversationalAutomationSchema = z.object({
   location_id: uuidLike,
@@ -18,7 +22,9 @@ const ConversationalAutomationSchema = z.object({
 // greeting) plus up to 4 ice-breaker prompts shown to users opening a
 // fresh chat. The applied config is mirrored into
 // locations.settings.conversational_automation so the settings UI can
-// re-hydrate it. Registered in src/lib/openapi.js.
+// re-hydrate it. Master or owner at the location (WAROLE.1), and the
+// location must be the number's home studio unless the caller is an
+// organisation admin (WAORGNUMBER.4). Registered in src/lib/openapi.js.
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -31,22 +37,74 @@ export async function POST(request) {
 
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
+  // WAROLE.1 — membership alone let any staff member change what Meta shows
+  // a customer opening a chat with this number. Master, or owner AT this
+  // location: the rule of the settings page this card lives on and of the
+  // number routes on the same tab. Decided BEFORE the Meta call.
+  const roleGuard = guardMasterOrOwner(user, locationId)
+  if (roleGuard) return roleGuard
+
+  // WAROLE.1 — the openers go on THIS location's own number. Passing the
+  // location id to setConversationalAutomation re-resolved it through
+  // getWhatsAppConfig, which (until WACONFIGFALLBACK.1) fell back to the
+  // global WHATSAPP_* env number when the location had no active
+  // whatsapp_numbers row: an owner of a studio without a number rewrote the
+  // openers on another studio's number. No number here → 409, Meta is never
+  // called; a failed lookup is a 500, never "no number".
+  const own = await ownNumberOrRefusal(locationId, 'wa-conversational-automation')
+  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
+
+  // WAORGNUMBER.4 (R8) — the openers belong to the NUMBER, and a number is
+  // shared by every studio of its organisation that switched it on: an owner
+  // at one of them would rewrite what customers of all of them see. Only an
+  // organisation admin (master passes), or an owner at the number's HOME
+  // studio, may change them. Decided BEFORE the Meta call.
+  if (own.config.homeLocationId !== locationId && !isOrganizationAdminFor(user, own.config.organizationId)) {
+    const phone = own.config.displayPhone || 'this number'
+    return NextResponse.json({
+      success: false,
+      error: `Chat openers apply to ${phone} at every studio that uses it. Change them at its home studio, or ask an organisation admin.`,
+    }, { status: 403 })
+  }
 
   try {
-    await setConversationalAutomation({ enableWelcome, prompts }, { locationId })
+    await setConversationalAutomation({ enableWelcome, prompts }, { config: own.config })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta conversational_automation call failed' }, { status: 502 })
   }
 
-  // Mirror the applied config onto the location (jsonb merge — read,
-  // spread, update) so the UI shows what's live at Meta.
+  // Mirror the applied config onto the location so the UI shows what's live
+  // at Meta. SETTINGSWIPE.1: this used to read with the error discarded and
+  // bare-write the whole column, so a blip wiped every other settings key and
+  // still said success. Meta already has the openers (the source of truth,
+  // and idempotent), so a failed mirror says exactly that.
+  // WAORGNUMBER.4 (R8) — the openers are the NUMBER's, so every studio with it
+  // switched on shows them, not just the one that saved (else another
+  // studio's card shows stale openers and a save there puts them back).
   const db = createServerClient()
-  const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
-  const settings = {
-    ...(loc?.settings || {}),
-    conversational_automation: { enable_welcome: enableWelcome, prompts },
+  let studios = [locationId]
+  try {
+    studios = [...new Set([locationId, ...(await studiosUsingNumbers(db, [own.config.id]))])]
+  } catch {
+    studios = null
   }
-  await db.from('locations').update({ settings }).eq('id', locationId)
+  let mirrored = Array.isArray(studios)
+  for (const studioId of studios || [locationId]) {
+    const saved = await mergeLocationSettings(
+      db,
+      studioId,
+      (s) => ({ ...s, conversational_automation: { enable_welcome: enableWelcome, prompts } }),
+      { scope: 'wa-conversational-automation' },
+    )
+    if (!saved.ok) mirrored = false
+  }
+  if (!mirrored) {
+    return NextResponse.json({
+      success: false,
+      applied_at_meta: true,
+      error: 'The chat openers are live on WhatsApp, but this screen could not record them just now. Save again so it shows what is live.',
+    }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: { enable_welcome: enableWelcome, prompts } })
 }

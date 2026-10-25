@@ -17,10 +17,9 @@
 // belongs to the body's own form state, not chrome this component can own.
 
 import Link from 'next/link'
-import { ArrowLeft, Mail, MessageCircle, MessageSquare } from 'lucide-react'
+import { ArrowLeft, Mail, MessageCircle } from 'lucide-react'
 
 export const SEND_CHANNELS = {
-  sms: { label: 'SMS', Icon: MessageSquare },
   whatsapp: { label: 'WhatsApp', Icon: MessageCircle },
   email: { label: 'Email', Icon: Mail },
 }

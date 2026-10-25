@@ -11,7 +11,9 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
+import { logError } from '@/lib/log'
 import { weekNoFor, slotFor } from '@/lib/hyrox/mapping'
+import { zoneOfLocation } from '@/lib/location-time'
 import HyroxPlanner from './HyroxPlanner'
 
 export const dynamic = 'force-dynamic'
@@ -49,11 +51,15 @@ export default async function HyroxAdmin() {
       .order('slot', { ascending: true })
     : { data: [] }
 
-  const { data: loc } = await db
+  // SETTINGSWIPE.1 — a failed read is not "default house style": passing
+  // resolveHyroxSettings(null) let Save replace the real style and wipe the
+  // saved examples. The planner shows Could not load instead.
+  const { data: loc, error: locErr } = await db
     .from('locations')
     .select('id, settings')
     .eq('id', locationId)
     .single()
+  if (locErr) logError('hyrox-page', 'settings read failed', { locationId, err: locErr.message })
 
   // The session the NEXT upcoming Hyrox class maps to (same date -> week/slot
   // logic the publish cron uses), so the planner can flag it as "next up".
@@ -70,8 +76,10 @@ export default async function HyroxAdmin() {
       .limit(1)
     const startsAt = nextClasses?.[0]?.starts_at
     if (startsAt) {
-      const wk = weekNoFor(block.starts_on, startsAt, block.weeks)
-      const slot = slotFor(block.session_weekdays || [], startsAt)
+      // TZ.9: by the block studio's day (the active location's clock).
+      const zone = zoneOfLocation(user.activeLocation)
+      const wk = weekNoFor(block.starts_on, startsAt, block.weeks, zone)
+      const slot = slotFor(block.session_weekdays || [], startsAt, zone)
       nextUpId = (sessions || []).find((s) => s.week_no === wk && s.slot === slot)?.id || null
     }
   }
@@ -80,7 +88,8 @@ export default async function HyroxAdmin() {
     <HyroxPlanner
       initialBlock={block || null}
       initialSessions={sessions || []}
-      initialSettings={resolveHyroxSettings(loc)}
+      initialSettings={locErr ? null : resolveHyroxSettings(loc)}
+      settingsUnreadable={!!locErr}
       locationId={locationId}
       canManage={['owner', 'manager', 'head_coach', 'master'].includes(user.role)}
       nextUpId={nextUpId}

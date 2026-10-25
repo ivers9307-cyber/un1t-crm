@@ -10,15 +10,15 @@ const req = (url) => new Request(url)
 
 describe('deviceFromRequest', () => {
   it('reads a fleet device name', () => {
-    expect(deviceFromRequest(req('https://x/api/public/live/loc?device=stillorgan-tv1')))
+    expect(deviceFromRequest(req('https://x/api/public/tv-live/tok?device=stillorgan-tv1')))
       .toBe('stillorgan-tv1')
   })
 
   it('is absent for every other viewer of the board', () => {
     // A laptop, the promo TV, the token-gated page — none pass a device, and
     // none should be treated as one.
-    expect(deviceFromRequest(req('https://x/api/public/live/loc'))).toBeNull()
-    expect(deviceFromRequest(req('https://x/api/public/live/loc?device='))).toBeNull()
+    expect(deviceFromRequest(req('https://x/api/public/tv-live/tok'))).toBeNull()
+    expect(deviceFromRequest(req('https://x/api/public/tv-live/tok?device='))).toBeNull()
   })
 
   it('refuses anything outside a hostname alphabet', () => {
@@ -41,7 +41,7 @@ describe('deviceFromRequest', () => {
   it('never throws on a url it cannot parse', () => {
     // This runs on the request that renders the board. A relative url (route
     // tests use one), a missing url, a junk object — none may break the TV.
-    expect(deviceFromRequest({ url: '/api/public/live/loc?device=tv1' })).toBeNull()
+    expect(deviceFromRequest({ url: '/api/public/tv-live/tok?device=tv1' })).toBeNull()
     expect(deviceFromRequest({ url: '' })).toBeNull()
     expect(deviceFromRequest({})).toBeNull()
     expect(deviceFromRequest(null)).toBeNull()

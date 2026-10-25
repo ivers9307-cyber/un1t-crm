@@ -27,7 +27,7 @@ describe('safeEqual', () => {
     expect(safeEqual('', '')).toBe(true)
   })
 
-  it('handles 64-char hex tokens correctly (typical CRM_API_KEY shape)', () => {
+  it('handles 64-char hex tokens correctly (typical shared-secret shape)', () => {
     const hex = 'a'.repeat(64)
     expect(safeEqual(hex, hex)).toBe(true)
     expect(safeEqual(hex, 'b'.repeat(64))).toBe(false)

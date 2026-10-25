@@ -1,0 +1,331 @@
+// Board-payload tests for the token-gated live TV route, through the REAL
+// buildLiveBoardPayload (the sibling route.test.js stubs it and covers token
+// resolution + status codes).
+//
+// W0.9c — these cases were ported from the removed location-keyed
+// /api/public/live/[locationId] route test; the token route returns the same
+// payload, so the guarantees move with it:
+//
+// Post audit W2/#11: the cumulative HR aggregate (zones_seconds / effort_points
+// / peak_hr_bpm / avg_hr_bpm) is maintained INCREMENTALLY at ingest and read
+// straight off the heart_rate_sessions row — the route NO LONGER scans every
+// sample every poll. The only per-poll hr_samples read left is the last-30s
+// window for the "current BPM" moving average, and that must still page past the
+// 1000-row db-max-rows cap (a 33+-strap class breaches it).
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/bridge-samples', () => ({
+  isBridgeOnline: () => true,
+  latestBridgeSeenMs: () => 0,
+  maskStrapLabel: (k) => k,
+}))
+vi.mock('@/lib/live-class', () => ({ getAvailableStraps: vi.fn(() => Promise.resolve([])) }))
+vi.mock('@/lib/class-occurrences', () => ({ resolveCurrentClassForTv: vi.fn(() => Promise.resolve(null)) }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+
+import { GET } from './route.js'
+import { createServerClient } from '@/lib/supabase'
+import { getAvailableStraps } from '@/lib/live-class'
+import { logWarn } from '@/lib/log'
+import { __resetIdleLogThrottle, __resetIdleCache } from '@/lib/tv-idle-content'
+
+const PAGE = 1000
+const TOKEN = 'tok-1'
+
+// Build a mock supabase client whose `hr_samples` select honours `.range(from,to)`
+// over a synthetic sample array (the last-30s recent-BPM read), so selectAll's
+// paging loop is exercised for real. The session rows carry the running
+// aggregate columns the route renders from. The token resolves through an
+// active tv_displays row to loc-1.
+// `idle` serves the three idle-scene tables (TVSCENE.1). Omitted, those tables
+// are not served at all: db.from() throws for them, which is how the
+// fail-to-absent case below exercises every catch in buildIdleContent. Filters
+// are ignored here on purpose; the query shape is asserted in
+// src/lib/tv-idle-content.test.js.
+function makeDb({ samples, sessions, idle, location = { id: 'loc-1', name: 'Stillorgan' } }) {
+  function idleTable(rows) {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      is: () => chain,
+      gte: () => chain,
+      lte: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
+      then: (resolve) => resolve({ data: rows, error: null }),
+    }
+    return chain
+  }
+
+  function hrSamplesQuery() {
+    const chain = {
+      select: () => chain,
+      in: () => chain,
+      gte: () => chain,
+      order: () => chain,
+      range: (from, to) => Promise.resolve({ data: samples.slice(from, to + 1), error: null }),
+      then: (resolve) => resolve({ data: samples.slice(0, PAGE), error: null }),
+    }
+    return chain
+  }
+
+  const defaultSession = {
+    id: 'sess-1',
+    contact_id: 'c-1',
+    device_identifier: null,
+    started_at: '2026-07-02T09:00:00Z',
+    max_hr_used: 190,
+    last_sample_at: new Date().toISOString(),
+    zones_seconds: { 1: 0, 2: 0, 3: 600, 4: 300, 5: 120 },
+    effort_points: 62,
+    peak_hr_bpm: 188,
+    avg_hr_bpm: 165,
+    contacts: { id: 'c-1', name: 'Alice Smith', location_id: 'loc-1', hr_leaderboard_opt_out: false },
+  }
+  const sessionRows = sessions || [defaultSession]
+
+  return {
+    rpc: vi.fn(() => Promise.resolve({ data: 1, error: null })), // rate_limit_hit → count 1
+    from: vi.fn((table) => {
+      if (table === 'tv_displays') {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { id: 'disp-1', location_id: 'loc-1', active: true }, error: null }) }) }) }
+      }
+      if (table === 'locations') {
+        return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: location, error: null }) }) }) }
+      }
+      if (table === 'ble_bridges') {
+        return { select: () => ({ eq: () => Promise.resolve({ data: [], error: null }) }) }
+      }
+      if (table === 'heart_rate_sessions') {
+        return { select: () => ({ eq: () => ({ is: () => ({ order: () => Promise.resolve({ data: sessionRows, error: null }) }) }) }) }
+      }
+      if (table === 'class_timer_runs') {
+        return { select: () => ({ eq: () => ({ in: () => ({ order: () => ({ limit: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }) }) }) }
+      }
+      if (table === 'hr_samples') {
+        return hrSamplesQuery()
+      }
+      if (idle && table === 'class_occurrences') return idleTable(idle.occurrences || [])
+      if (idle && table === 'contact_achievements') return idleTable(idle.achievements || [])
+      if (idle && table === 'tv_content') return idleTable(idle.content ? [idle.content] : [])
+      throw new Error(`unexpected table: ${table}`)
+    }),
+  }
+}
+
+async function callRoute(db) {
+  createServerClient.mockReturnValue(db)
+  const request = { headers: { get: () => null }, url: `https://crm.test/api/public/tv-live/${TOKEN}` }
+  return GET(request, { params: Promise.resolve({ token: TOKEN }) })
+}
+
+// Both are module-level state in tv-idle-content: the throttle would silence a
+// later test's log, and the read cache would hand it an earlier test's rows.
+beforeEach(() => { vi.clearAllMocks(); __resetIdleLogThrottle(); __resetIdleCache() })
+afterEach(() => { vi.unstubAllEnvs() })
+
+describe('GET /api/public/tv-live/[token] — board payload', () => {
+  it('renders the cumulative aggregate straight off the session row (no per-poll scan)', async () => {
+    const db = makeDb({ samples: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.location).toEqual({ id: 'loc-1', name: 'Stillorgan' })
+    expect(body.sessions).toHaveLength(1)
+    const tile = body.sessions[0]
+    // Cumulative fields come from the row's incrementally-maintained columns.
+    expect(tile.peakBpm).toBe(188)
+    expect(tile.avgBpm).toBe(165)
+    expect(tile.effortPoints).toBe(62)
+    expect(tile.zonesSeconds).toEqual({ 1: 0, 2: 0, 3: 600, 4: 300, 5: 120 })
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  // Privacy floor: the public board carries first name + last initial only —
+  // never a full name, contact id or MAC. (Capacity is never part of this
+  // payload either.)
+  it('never exposes the full name, contact id or device identifier on a tile', async () => {
+    const db = makeDb({ samples: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+    const tile = body.sessions[0]
+    expect(tile.displayName).toBe('Alice S.')
+    const serialised = JSON.stringify(tile)
+    expect(serialised).not.toContain('Alice Smith')
+    expect(serialised).not.toContain('c-1')
+    expect(tile).not.toHaveProperty('contact_id')
+    expect(tile).not.toHaveProperty('device_identifier')
+  })
+
+  it('coalesces null aggregate columns on a fresh session to a stable shape', async () => {
+    const sessions = [{
+      id: 'fresh', contact_id: 'c-2', device_identifier: null,
+      started_at: '2026-07-02T09:00:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(),
+      zones_seconds: null, effort_points: null, peak_hr_bpm: null, avg_hr_bpm: null,
+      contacts: { id: 'c-2', name: 'New Person', location_id: 'loc-1', hr_leaderboard_opt_out: false },
+    }]
+    const db = makeDb({ samples: [], sessions })
+    const res = await callRoute(db)
+    const body = await res.json()
+    const tile = body.sessions[0]
+    expect(tile.zonesSeconds).toEqual({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 })
+    expect(tile.effortPoints).toBe(0)
+    expect(tile.peakBpm).toBe(null)
+    expect(tile.avgBpm).toBe(null)
+  })
+
+  it('current BPM comes from the last-30s read, which pages past the 1000-row cap', async () => {
+    // 1500 recent samples: first 1000 are 150bpm, then 170bpm from row 1000 on.
+    // The current-BPM average must reflect the FULL recent window (paged), not
+    // just the first 1000 rows. With paging the mean is pulled above 150.
+    const base = Date.parse('2026-07-02T09:00:00Z')
+    const samples = []
+    for (let i = 0; i < 1500; i++) {
+      const bpm = i < 1000 ? 150 : 170
+      samples.push({ session_id: 'sess-1', recorded_at: new Date(base + i * 1000).toISOString(), bpm })
+    }
+    const db = makeDb({ samples })
+    const res = await callRoute(db)
+    const body = await res.json()
+    // mean of 1000×150 + 500×170 = (150000 + 85000)/1500 = 156.67 → 157.
+    // An un-paged read (first 1000 only) would give 150 — the regression gate.
+    expect(body.sessions[0].currentBpm).toBe(157)
+  })
+
+  // C11 — unpaired straps only render while seen inside the same 2-minute
+  // staleness window the session tiles use. A dead Pi stops overwriting
+  // last_seen_straps, so without the cutoff phantom BPMs froze on the TV
+  // indefinitely.
+  it('drops unpaired straps not seen within the 2-minute staleness window', async () => {
+    const now = Date.now()
+    getAvailableStraps.mockResolvedValueOnce([
+      { device_key: 'ant:1', protocol: 'ant', name: null, rssi: null, lastBpm: 120, seenAt: new Date(now - 10_000).toISOString(), bridgeId: 'b-1', bridgeName: 'Studio 1' },
+      { device_key: 'ant:2', protocol: 'ant', name: null, rssi: null, lastBpm: 140, seenAt: new Date(now - 10 * 60_000).toISOString(), bridgeId: 'b-1', bridgeName: 'Studio 1' },
+      { device_key: 'ant:3', protocol: 'ant', name: null, rssi: null, lastBpm: 90, seenAt: null, bridgeId: 'b-1', bridgeName: 'Studio 1' },
+    ])
+    const db = makeDb({ samples: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    // Only the fresh strap survives; the 10-min-stale one and the one with no
+    // seen_at (freshness unprovable) disappear. Payload shape unchanged.
+    expect(body.available_straps).toEqual([
+      { label: 'ant:1', protocol: 'ant', currentBpm: 120 },
+    ])
+  })
+
+  // DECISION #1 (mig 348) — opted-out members are dropped from the public tiles;
+  // opted-in members and anonymous (null-contact) walk-ins are kept.
+  it('excludes opted-out members from the tiles, keeps opted-in + anonymous walk-ins', async () => {
+    const sessions = [
+      { id: 'shown', contact_id: 'c-shown', device_identifier: null, started_at: '2026-07-02T09:00:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(), zones_seconds: { 3: 60 }, effort_points: 3, peak_hr_bpm: 150, avg_hr_bpm: 150, contacts: { id: 'c-shown', name: 'Alice Smith', location_id: 'loc-1', hr_leaderboard_opt_out: false } },
+      { id: 'hidden', contact_id: 'c-hidden', device_identifier: null, started_at: '2026-07-02T09:01:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(), zones_seconds: { 3: 60 }, effort_points: 3, peak_hr_bpm: 150, avg_hr_bpm: 150, contacts: { id: 'c-hidden', name: 'Bob Jones', location_id: 'loc-1', hr_leaderboard_opt_out: true } },
+      { id: 'anon', contact_id: null, device_identifier: 'ant:45075', started_at: '2026-07-02T09:02:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(), zones_seconds: { 3: 60 }, effort_points: 3, peak_hr_bpm: 150, avg_hr_bpm: 150, contacts: null },
+    ]
+    const db = makeDb({ samples: [], sessions })
+    const res = await callRoute(db)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    const ids = body.sessions.map((s) => s.id)
+    expect(ids).toContain('shown')
+    expect(ids).toContain('anon')      // anonymous walk-in unaffected
+    expect(ids).not.toContain('hidden') // opted-out member dropped
+  })
+})
+
+describe('GET /api/public/tv-live/[token] — TZ.12 board zone', () => {
+  it("carries the token's location zone; a row with no timezone is Europe/Dublin", async () => {
+    const ny = await (await callRoute(makeDb({ samples: [], location: { id: 'loc-1', name: 'NY', timezone: 'America/New_York' } }))).json()
+    expect(ny.timezone).toBe('America/New_York')
+    expect(ny.location).toEqual({ id: 'loc-1', name: 'NY' })
+    const dub = await (await callRoute(makeDb({ samples: [] }))).json()
+    expect(dub.timezone).toBe('Europe/Dublin')
+  })
+})
+
+describe('TVSCENE.1 — idle block', () => {
+  // A read that does NOT throw, end to end: rows served through the token route
+  // arrive as the populated block the scenes render, and the storage push comes
+  // out as a URL an <img> can use. Class entries carry the studio-zone time and
+  // the name, nothing else.
+  it('carries a populated idle block when there are no open sessions', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://proj.supabase.co')
+    const db = makeDb({
+      samples: [],
+      sessions: [],
+      idle: {
+        occurrences: [{ name: 'BU1LD — Strength', program: 'BU1LD', starts_at: '2026-10-16T05:00:00Z' }],
+        achievements: [{
+          earned_at: '2026-10-15T18:00:00Z',
+          metadata: {},
+          achievement_rules: { name: '50 classes', tier: 4 },
+          contacts: { name: 'Saoirse Murphy', location_id: 'loc-1', hr_leaderboard_opt_out: false },
+        }],
+        content: { source_type: 'storage', source_ref: 'offer.png', label: 'Summer offer', template_values: null },
+      },
+    })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.sessions).toEqual([])
+    expect(body.idle).toEqual({
+      up_next: [
+        { starts_at: '2026-10-16T05:00:00Z', starts_at_label: '06:00', class_name: 'BU1LD — Strength', program: 'BU1LD' },
+      ],
+      earned: [
+        { display_name: 'Saoirse M.', achievement: '50 classes', tier: 4, earned_at: '2026-10-15T18:00:00Z' },
+      ],
+      operator: {
+        source_type: 'storage',
+        source_ref: 'https://proj.supabase.co/storage/v1/object/public/tv-content/offer.png',
+        label: 'Summer offer',
+        template_values: null,
+      },
+    })
+    expect(JSON.stringify(body)).not.toContain('Murphy')
+  })
+
+  // Fail-to-absent, end to end: this stub serves no class_occurrences,
+  // contact_achievements or tv_content, so every read inside buildIdleContent
+  // throws and is caught. The block must still arrive, empty: a scene the
+  // scheduler skips is correct; a 500 on a studio TV is not. Content
+  // correctness is covered by src/lib/tv-idle-content.test.js.
+  it('returns an empty idle block rather than failing when the reads cannot be served', async () => {
+    const db = makeDb({ samples: [], sessions: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.idle.up_next).toEqual([])
+    expect(body.idle.earned).toEqual([])
+    expect(body.idle.operator).toBeNull()
+    // Absent, but not silent: each failed read left one structured line.
+    expect(logWarn.mock.calls.map(([module, , meta]) => `${module}:${meta.read}`).sort())
+      .toEqual(['tv-idle:earned', 'tv-idle:operator', 'tv-idle:up_next'])
+  })
+
+  it('omits idle entirely while a session is open', async () => {
+    const db = makeDb({ samples: [] }) // the file's default fixture carries one session
+    const res = await callRoute(db)
+    const body = await res.json()
+
+    expect(body.sessions.length).toBeGreaterThan(0)
+    expect(body.idle).toBeUndefined()
+  })
+
+  it('does not even read the idle tables while a session is open', async () => {
+    const db = makeDb({ samples: [] })
+    await callRoute(db)
+    const tables = db.from.mock.calls.map(([t]) => t)
+    expect(tables).not.toContain('class_occurrences')
+    expect(tables).not.toContain('contact_achievements')
+    expect(tables).not.toContain('tv_content')
+  })
+})

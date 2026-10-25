@@ -18,6 +18,8 @@
 // Both are deliberately in their own module (not postmark.js) to keep
 // postmark.js surgical — several parallel workstreams touch it.
 
+import { decodeCharRefs, stripInvisibleChars } from './mail-entities'
+
 /**
  * Convert an HTML email body to a conservative plain-text alternative.
  *
@@ -63,15 +65,24 @@ export function htmlToPlainText(html) {
   // Everything else goes.
   s = s.replace(/<[^>]+>/g, ' ')
 
-  // Decode the entity set that actually appears in our templates.
-  s = s
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&zwnj;|&#8204;|&#847;/gi, '')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0?39;|&apos;/gi, "'")
-    .replace(/&amp;/gi, '&')
+  // MAIL-READER.M1 — every reference, named or numeric, in ONE pass. This used
+  // to be seven ordered .replace() calls covering the named set plus two
+  // hard-coded numeric ones (`&#8204;`, `&#847;`), which is why `&#38;` reached
+  // a stored text_body and printed literally on the phone.
+  //
+  // stripInvisibleChars runs SECOND and is not optional here: this is
+  // INGEST, and its result is what lands in email_inbox_messages.text_body,
+  // which a GENERATED tsvector column indexes for search. decodeCharRefs
+  // turns `&#8204;` into the real U+200C ZERO WIDTH NON-JOINER character
+  // rather than deleting it (see shared/mail-entities.js for why), and
+  // Postgres's English text search parser treats that character as an
+  // ordinary letter — a sender's `cli&#8204;ck here` (a real preheader-hiding
+  // / spam-filter-evasion pattern) would decode-only to the unsearchable
+  // "cli‌ck here" and stay that way forever, because the tsvector is
+  // generated from the stored row. Stripping it back out here is what keeps
+  // that text searchable as "click here", same as the old code's two
+  // hard-coded deletions did.
+  s = stripInvisibleChars(decodeCharRefs(s))
 
   // Collapse: spaces/tabs within lines, trim each line, squeeze blank runs.
   s = s.replace(/[ \t]+/g, ' ')

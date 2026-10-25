@@ -18,6 +18,8 @@
 // here so adding a new block type is a single-file change.
 
 import { z } from 'zod'
+import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
+import { PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -87,24 +89,123 @@ const EVENT_DEFAULT = () => ({
   title: 'Sign up',
 })
 
-const LEAD_FORM_DEFAULT = () => ({
-  id:              newBlockId(),
-  type:            'lead_form',
-  heading:         'Join the founding members',
-  subtext:         'Be first through the doors at UN1T Hatch Street. Leave your details and we’ll be in touch with founding-member offers before we open.',
-  button_label:    'Join the waitlist',
-  success_message: "You're on the list — we'll be in touch soon.",
-  consent_label:   'I’d like to hear from UN1T about the Hatch Street launch and offers by email, SMS and WhatsApp. I can opt out anytime.',
-  tag:             'hatch-founding-member',
-  lead_source:     'hatch_launch',
+// Foundation-offer group on the lead-form block (HATCH-OFFER.1).
+// Off by default: with `enabled` false the lead-form section renders
+// exactly as it did before this group existed, so no other studio
+// page changes. Every visitor-facing string is a field — including
+// the prices and the deadline — so closing the offer on 19 September
+// is an edit at /settings/landing-page, not a deploy.
+//
+// Prices are STRINGS, not cents. Nothing here computes with them:
+// they are display copy pointing at a checkout this repo does not
+// own (hatchstreet.un1t.online). Deliberately unlike
+// class_funnel.price_cents, which actually charges.
+// Exported so the editor can SEED these into a block saved before
+// this group existed. Every live lead_form row predates it, so a bare
+// { enabled: true } would open an offer panel with a blank price —
+// the operator ticks the box and sees empty fields with nothing
+// telling them what belongs there.
+export const OFFER_DEFAULT = () => ({
+  enabled:         false,
+  section_eyebrow: 'Two ways in',
+  section_heading: 'Fix your rate\nbefore we open',
+  eyebrow:         'Foundation membership',
+  price:           '€189',
+  was_price:       '€219',
+  was_price_note:  'a month from 19 September',
+  unit:            'per month\nfixed for life',
+  deadline:        'Offer ends 19 September',
+  ticks: [
+    'Unlimited classes, full access from day one',
+    'Your rate never rises while your membership stays active',
+    'Pay today, next payment October',
+  ],
+  cta_label:       'Claim your rate',
+  // The sticky header has ~167px beside the logo and Events on a
+  // 375px screen. A CTA long enough to read as an action in the hero
+  // is clipped there, so the header takes this shorter one instead.
+  cta_label_short: '',
+  cta_url:         'https://hatchstreet.un1t.online/#join',
 })
 
-const CLASS_FUNNEL_DEFAULT = () => ({
+// W1.S1b — default consent copy names the studio's brand (the editor passes
+// it; the renderers pass the page's location), never a literal gym. With no
+// brand it still reads as a complete sentence.
+export function leadFormConsentDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return b
+    ? `I’d like to hear from ${b} about the launch and offers by email, SMS and WhatsApp. I can opt out anytime.`
+    : 'I’d like to hear about the launch and offers by email, SMS and WhatsApp. I can opt out anytime.'
+}
+
+export function classFunnelConsentDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return b
+    ? `I'd like to hear from ${b} by email, SMS and WhatsApp.`
+    : "I'd like to hear from this studio by email, SMS and WhatsApp."
+}
+
+const LEAD_FORM_DEFAULT = ({ brand = '' } = {}) => ({
+  id:              newBlockId(),
+  type:            'lead_form',
+  heading:         'Keep me posted',
+  subtext:         'Not ready to join yet? Leave your details and we’ll keep you in the loop on the opening, classes and offers.',
+  button_label:    'Keep me posted',
+  success_message: "You're on the list — we'll be in touch soon.",
+  consent_label:   leadFormConsentDefault(brand),
+  tag:             'hatch-founding-member',
+  lead_source:     'hatch_launch',
+  offer:           OFFER_DEFAULT(),
+  // HATCH-OPEN.1 — what sits beside a live offer card: 'form' (this
+  // block's own capture form, the pre-opening waitlist) or
+  // 'class_funnel' (a button to the class funnel shown on this page,
+  // i.e. the free class). 'form' is every block saved before the switch.
+  second_path:     'form',
+})
+
+// Single reader for the offer group — every consumer (pageCtas, the
+// renderer) goes through this, so "is there an offer to show?" is
+// answered in exactly one place. Returns a normalised offer or null.
+// A corrupted group must degrade to the no-offer render rather than
+// throw: this is the public funnel and a bad JSONB blob must never
+// 500 it.
+export function offerOf(block) {
+  const o = block && typeof block === 'object' ? block.offer : null
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null
+  if (o.enabled !== true) return null
+  return {
+    ...o,
+    // POSITION-PRESERVING on purpose. This used to filter blanks out,
+    // which silently broke inline editing: OfferPanel maps this list
+    // and emits setByPath(['offer','ticks', i]) against the RAW block,
+    // so one blank raw tick made every index after it point at the
+    // wrong slot — editing the first visible tick overwrote a
+    // different one and duplicated its neighbour on screen. The
+    // settings form always writes a fixed 3-slot array, so a blank in
+    // the middle is the normal shape, not an edge case. Blanks and
+    // non-strings normalise to '' and the renderer skips them by
+    // index instead.
+    ticks: Array.isArray(o.ticks)
+      ? o.ticks.map((t) => (typeof t === 'string' && t.trim() ? t : ''))
+      : [],
+    cta_url: typeof o.cta_url === 'string' ? o.cta_url.trim() : '',
+    cta_label: (typeof o.cta_label === 'string' && o.cta_label.trim()) || 'Claim your rate',
+    // The strike is aria-hidden, so this note is the ONLY thing that
+    // tells a screen reader which way the price moves. Emptied, the
+    // reading collapses to "EUR 219. EUR 189", which is the
+    // misleading was/now the note exists to prevent — so it falls
+    // back rather than rendering a bare price.
+    was_price_note: (typeof o.was_price_note === 'string' && o.was_price_note.trim())
+      || 'before the offer ends',
+  }
+}
+
+const CLASS_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
   id:                newBlockId(),
   type:              'class_funnel',
   heading:           'Your first 3 classes are free',
   subhead:           'Book your first class now — pop in your details to start.',
-  consent_label:     "I'd like to hear from UN1T by email, SMS and WhatsApp.",
+  consent_label:     classFunnelConsentDefault(brand),
   class_done_title:  "You're being booked in 🎉",
   class_done_body:   "That's the first of your 3 free classes — watch for a WhatsApp confirming it. See you soon!",
   consult_done_title:"You're booked 🎉",
@@ -114,6 +215,58 @@ const CLASS_FUNNEL_DEFAULT = () => ({
   trial_plan_code:     '',
   price_cents:         0,     // 0 ⇒ free trial (today's behaviour); >0 ⇒ paid intro
   currency:            'EUR',
+})
+
+// TRIALSTUDIO.2 — the active-member gate copy names the studio's brand like the
+// consent defaults do (W1.S1b: no default carries a literal gym), so the
+// brand-less block reads "at Hatch Street" and a branded one "at UN1T Hatch Street".
+export function paidTrialActiveMemberDefault(brand = '') {
+  const b = typeof brand === 'string' ? brand.trim() : ''
+  return `It looks like you already have an active membership at ${b ? `${b} ` : ''}Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch.`
+}
+
+// PAIDTRIAL.1 — a paid trial product sold from its own page (/trial): the
+// price panel + buyer form + embedded checkout, then the grant of a Glofox
+// plan onto the buyer's account once the money is in. Every customer-facing
+// string, the price, the duration and the Glofox product are operator fields.
+// membership_id + plan_code name the €0 Glofox plan bought after payment (the
+// CRM takes the money; Glofox never charges). BOTH must be set for the page
+// to take a purchase: paidTrialConfigFromBlocks (src/lib/paid-trial.js).
+const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
+  id:             newBlockId(),
+  type:           'paid_trial',
+  eyebrow:        '14 day reset',
+  heading:        'The 14 Day Reset',
+  subhead:        'Coach-led 45-minute sessions, as many as you want, for 14 days. Pay once, start this week.',
+  product_name:   'The 14 Day Reset',
+  price_cents:    3900,
+  currency:       'EUR',
+  duration_days:  14,
+  ticks:          ['Unlimited classes for 14 days', 'Every session coach-led', 'Book straight after you pay'],
+  cta_label:      'Start my 14 Day Reset',
+  consent_label:  classFunnelConsentDefault(brand),
+  done_title:     "You're in 🎉",
+  done_body:      'Your 14 Day Reset is on your account. Check your email for how to book your first class.',
+  // TRIALSTUDIO.10 — a un1t.online (Hatch Street) purchase not settled yet.
+  pending_body:   PAID_TRIAL_PENDING_BODY,
+  // TRIALSTUDIO.2 — the studio choice. studio_label '' ⇒ the page shows the
+  // studio's own name. un1t_product_id names the un1t.online product a Hatch
+  // Street block sells (priced from the mirrored un1t_products row, not here).
+  studio_label:   '',
+  un1t_product_id: '',
+  trial_used_text: "It looks like you've already had a trial with us at Stillorgan, so the 14 Day Reset can't be redeemed on this account. If that's not right, or you'd like to talk about your options, tap I need help and the team will be in touch.",
+  active_member_text: paidTrialActiveMemberDefault(brand),
+  help_cta_label: 'I need help',
+  help_sent_text: 'Thanks. The team will be in touch shortly.',
+  // Final-review F2 — a un1t.online studio only: the email a buyer whose
+  // un1t.online account the CRM created gets once the purchase settles.
+  account_email_subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject,
+  account_email_body:    PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body,
+  membership_id:  '',
+  plan_code:      '',
+  tag:            '',
+  lead_source:    '',
+  event_source_url: '',
 })
 
 const STATS_DEFAULT = () => ({
@@ -129,7 +282,7 @@ const STATS_DEFAULT = () => ({
 const TESTIMONIAL_DEFAULT = () => ({
   id:     newBlockId(),
   type:   'testimonial',
-  quote:  "The coaching is what separates UN1T from any gym I've trained at. I came in for a Hyrox PB. I stayed for the room.",
+  quote:  "The coaching is what separates this place from any gym I've trained at. I came in for a Hyrox PB. I stayed for the room.",
   author: 'Member, joined 2024',
 })
 
@@ -161,7 +314,8 @@ export const BLOCK_TYPES = [
   { type: 'booking',     label: 'Booking form', description: 'Embed the booking form for a chosen booking type.',    factory: BOOKING_DEFAULT },
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
-  { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Capture details, pick a live Glofox class, book. Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
+  { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
+  { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan, or the un1t.online product, is put on their account.', factory: PAID_TRIAL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
@@ -173,10 +327,11 @@ export const BLOCK_TYPES = [
 
 const TYPE_BY_NAME = new Map(BLOCK_TYPES.map((t) => [t.type, t]))
 
-export function newBlockOfType(type) {
+// `opts.brand` (W1.S1b): the studio's brand, for the defaults that name it.
+export function newBlockOfType(type, opts = {}) {
   const meta = TYPE_BY_NAME.get(type)
   if (!meta) throw new Error(`Unknown block type: ${type}`)
-  return meta.factory()
+  return meta.factory(opts)
 }
 
 // Default starter set — what an operator sees the FIRST time they
@@ -222,36 +377,80 @@ const BlockBaseSchema = z.object({
 
 export const BlocksArraySchema = z.array(BlockBaseSchema).max(40)
 
-// ─────────────────────────────────────────────────────────────
-// Primary conversion target — derived from a page's own blocks.
-// Priority: explicit lead capture > booking > event signup.
-// Returns { href, label } or null when the page has no funnel
-// block (the header/hero then render no CTA rather than a dead
-// anchor). Used by the public studio page + the dev preview.
-// ─────────────────────────────────────────────────────────────
-export function primaryCta(blocks) {
+// Conversion targets — derived from a page's own blocks.
+// Priority: a live foundation offer > explicit lead capture >
+// booking > event signup.
+//
+// `primary` is what the sticky header, hero and footer point at.
+// `secondary` exists only when a live offer has pushed the lead form
+// out of the primary slot, and only the hero renders it — the header
+// and footer are space-constrained and the second path is one scroll
+// away on the same page.
+//
+// Either may be null: a page with no funnel block renders no CTA
+// rather than a dead anchor.
+export function pageCtas(blocks) {
   const list = Array.isArray(blocks) ? blocks : []
   const leadForm = list.find((b) => b && b.type === 'lead_form')
-  if (leadForm) {
+  const offer = leadForm ? offerOf(leadForm) : null
+  const waitlist = leadForm
+    ? {
+        href: '#waitlist',
+        label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+      }
+    : null
+
+  // A live offer with no URL is an operator half-edit, not a reason
+  // to ship <a href="">. Fall through to the form.
+  if (offer && offer.cta_url) {
+    // HATCH-OPEN.1 — once the studio is open the second way in is the
+    // free class, not the waitlist. Operator-chosen on the lead form
+    // (`second_path`), and honoured only while the funnel is actually
+    // shown on this page: otherwise #start is a dead anchor and the
+    // form keeps the slot.
+    const funnelSecond = leadForm.second_path === 'class_funnel' && list.some((b) => classFunnelShownOnLanding(b))
+      ? { href: '#start', label: classFunnelCtaLabel(list) }
+      : null
     return {
-      href: '#waitlist',
-      label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
+      primary: {
+        href: offer.cta_url,
+        label: offer.cta_label,
+        // Header-only. Blank ⇒ the header just uses `label`, which is
+        // the pre-existing behaviour for every page without an offer.
+        labelShort: (typeof offer.cta_label_short === 'string' && offer.cta_label_short.trim()) || '',
+        external: true,
+      },
+      secondary: funnelSecond || waitlist,
     }
   }
-  if (list.some((b) => b && b.type === 'class_funnel')) {
-    return { href: '#start', label: 'Claim 3 free classes' }
+  if (waitlist) return { primary: waitlist, secondary: null }
+  // MANUALFUNNEL.1 — a funnel kept off the main page (it only configures
+  // /start/{path}) has no #start anchor here, so it must not own the CTA.
+  if (list.some((b) => classFunnelShownOnLanding(b))) {
+    return { primary: { href: '#start', label: classFunnelCtaLabel(list) }, secondary: null }
   }
   if (list.some((b) => b && b.type === 'booking')) {
-    return { href: '#book', label: 'Book a free consult' }
+    return { primary: { href: '#book', label: 'Book a free consult' }, secondary: null }
   }
   const event = list.find((b) => b && b.type === 'event')
   if (event) {
     return {
-      href: `#event-${event.slug || 'signup'}`,
-      label: (event.title && event.title.trim()) || 'Sign up',
+      primary: {
+        href: `#event-${event.slug || 'signup'}`,
+        label: (event.title && event.title.trim()) || 'Sign up',
+      },
+      secondary: null,
     }
   }
-  return null
+  return { primary: null, secondary: null }
+}
+
+// Back-compat wrapper. Both pages now call pageCtas directly, so the
+// only remaining callers are the tests — which is the point: they are
+// the regression harness proving pageCtas().primary still answers
+// exactly what primaryCta always answered.
+export function primaryCta(blocks) {
+  return pageCtas(blocks).primary
 }
 
 // ─────────────────────────────────────────────────────────────

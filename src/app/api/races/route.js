@@ -5,8 +5,8 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, getUserLocationIds, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -57,10 +57,10 @@ const CreateSchema = z.object({
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -68,13 +68,24 @@ export async function GET(request) {
   const filterLocation = url.searchParams.get('location_id')
 
   const db = createServerClient()
-  const locationIds = filterLocation ? [filterLocation] : getUserLocationIds(user)
+  // ROLESWEEP.1b — "every location I belong to" narrows to the ones where
+  // the caller is Manager+ AND holds `races` THERE, not at the active studio.
+  const locationIds = filterLocation
+    ? [filterLocation]
+    : getUserLocationIds(user).filter((id) => hasRoleAtLocation(user, id, MANAGER_ROLES) && hasPermissionForLocation(user, id, 'races'))
   if (locationIds.length === 0) {
     return NextResponse.json({ success: true, data: [] })
   }
   if (filterLocation) {
     const guard = assertLocationAccess(user, filterLocation)
     if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    // ROLESWEEP.1b — judged at ?location_id, not the caller's active studio.
+    if (!hasRoleAtLocation(user, filterLocation, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+    }
+    if (!hasPermissionForLocation(user, filterLocation, 'races')) {
+      return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+    }
   }
 
   const { data, error } = await db
@@ -98,10 +109,10 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -111,6 +122,13 @@ export async function POST(request) {
 
   const guard = assertLocationAccess(user, body.location_id)
   if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  // ROLESWEEP.1b — judged at body.location_id, not the caller's active studio.
+  if (!hasRoleAtLocation(user, body.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, body.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   const slug = body.slug || toSlug(body.name)
   if (!slug) {

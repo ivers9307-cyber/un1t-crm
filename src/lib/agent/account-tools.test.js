@@ -159,10 +159,10 @@ describe('formatRecentAttendance (rollup columns)', () => {
 })
 
 describe('tool registry', () => {
-  it('exposes all seven tools (4 read + 3 request)', () => {
+  it('exposes all eight tools (5 read + 3 request)', () => {
     expect([...ACCOUNT_TOOL_NAMES].sort()).toEqual(
       [
-        'get_my_membership', 'get_my_next_class', 'get_my_recent_attendance',
+        'get_my_membership', 'get_my_next_class', 'get_my_payment_reminder', 'get_my_recent_attendance',
         'request_cancellation', 'request_membership_purchase', 'request_pause', 'verify_identity',
       ].sort()
     )
@@ -495,6 +495,9 @@ describe('executeAccountTool · request_pause / request_cancellation elect the w
           eq(col, val) { st.filters[col] = val; return b },
           in(col, vals) { st.filters[col] = vals; return b },
           limit() { return b },
+          // ORGCONTACTS.2: studiosOfContacts pages contact_studios (answered empty here)
+          order() { return b },
+          range() { return b },
           insert(row) {
             st.op = 'insert'
             trace.push({

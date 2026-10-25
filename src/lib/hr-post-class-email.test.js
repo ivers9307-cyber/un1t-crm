@@ -7,9 +7,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
 }))
+// W1.S4 — loadContextForSession resolves the studio's short brand for the
+// highlight's product name; the db mocks here know no company_settings.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(() => Promise.resolve({ companyName: 'UN1T Dublin', shortName: 'UN1T', companyNameConfigured: true, logoUrl: null, faviconUrl: null })),
+}))
+// W1.L3a — the stop-emails link is minted on the session location's tenant
+// host. The default calls the REAL getAppUrl() (the resolver's own floor), so
+// every env-driven assertion in this file — including the throw-when-unset
+// one — keeps reading as before; the W1.L3a tests override it.
+vi.mock('@/lib/tenant-host', async () => {
+  const { getAppUrl } = await vi.importActual('@/lib/app-url')
+  return { resolveCustomerBaseUrl: vi.fn(async () => getAppUrl()) }
+})
 
 import { composeEmail, sendPostClassEmail, loadContextForSession } from './hr-post-class-email.js'
+import { withOrgLayer, STILLORGAN_BLOB, ORG_LAYER } from './agent/settings-fixtures.test-helpers'
 import { sendTransactionalEmail } from '@/lib/postmark'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 const NOW = new Date('2026-05-08T19:00:00Z').getTime()
 
@@ -28,6 +43,10 @@ function ctx({
   eventTypeName = 'RIDE',
   startedAt = '2026-05-08T18:00:00Z',
   endedAt = '2026-05-08T18:45:00Z',
+  // W1.S1a — what loadContextForSession resolves for a Stillorgan session:
+  // the SHORT brand for product names, the configured brand for the studio.
+  shortName = 'UN1T',
+  companyName = 'UN1T Stillorgan',
 } = {}) {
   return {
     ok: true,
@@ -59,6 +78,8 @@ function ctx({
     eventTypeName,
     contact: { id: 'c-1', name: contactName, email: 'sarah@test.com', hr_post_class_emails_enabled: true },
     unsubscribeToken,
+    shortName,
+    companyName,
   }
 }
 
@@ -103,7 +124,7 @@ describe('composeEmail', () => {
     expect(out.subject).toMatch(/peak HR/i)
   })
 
-  it('subject default: "Your <class> — N UN1T Points"', () => {
+  it('subject default: "Your <class>: N UN1T Points" (no em-dash, W1.S1a)', () => {
     // No highlight should fire — points 100, 10 prior RIDE sessions
     // also at 100 points and peak 180 (so this session's 175 doesn't
     // beat them), no streak (sessions every 3 days, not consecutive).
@@ -115,8 +136,41 @@ describe('composeEmail', () => {
       effort_points: 100, peak_hr_bpm: 180, avg_hr_bpm: 140, zones_seconds: { 5: 0 },
     }))
     const out = composeEmail(ctx({ history }), { nowMs: NOW })
-    expect(out.subject).toMatch(/RIDE/i)
-    expect(out.subject).toMatch(/100/)
+    expect(out.subject).toBe('Your RIDE: 100 UN1T Points')
+    expect(out.subject).not.toContain('—')
+  })
+
+  // W1.S1a — the email speaks in the session studio's brand: the eyebrow and
+  // the footer carry the configured brand ("UN1T Stillorgan"), the product
+  // names the SHORT brand ("UN1T Points" / "UN1T HR"), and another gym gets
+  // its own name in every one of those places.
+  it('W1.S1a: a Stillorgan session reads "UN1T Stillorgan" and "UN1T Points"', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW })
+    expect(out.html).toMatch(/color:#888;">UN1T Stillorgan &middot; /)
+    expect(out.html).toContain('text-transform:uppercase;">UN1T Points</div>')
+    expect(out.html).toContain('monitor at UN1T Stillorgan. <a href')
+    expect(out.text).toContain(': 100 UN1T Points.')
+    // The copy this module writes carries no em-dashes (the highlight
+    // message itself comes from hr-analytics, the shared seam).
+    expect(out.subject).not.toContain('—')
+    expect(out.text).toContain('RIDE on Fri, 8 May, 19:00: 100 UN1T Points.')
+  })
+
+  it('W1.S1a: a second gym never reads UN1T anywhere in the email', () => {
+    const out = composeEmail(ctx({ shortName: 'Northside', companyName: 'Northside Strength' }), { nowMs: NOW })
+    for (const part of [out.subject, out.text, out.html]) expect(part).not.toContain('UN1T')
+    expect(out.html).toContain('Northside Strength &middot; ')
+    expect(out.html).toContain('>Northside Points</div>')
+    expect(out.html).toContain('monitor at Northside Strength.')
+    expect(composeEmail(ctx({ shortName: 'Northside', companyName: 'Northside Strength', history: [] }), { nowMs: NOW }).subject)
+      .toBe('Welcome to Northside HR, Sarah')
+  })
+
+  it('W1.S1a: with no brand resolved the copy degrades to bare nouns, never another gym', () => {
+    const out = composeEmail(ctx({ shortName: '', companyName: '' }), { nowMs: NOW })
+    for (const part of [out.subject, out.text, out.html]) expect(part).not.toContain('UN1T')
+    expect(out.html).toContain('>Points</div>')
+    expect(out.html).toContain('heart-rate\n      monitor. <a href')
   })
 
   it('HTML includes zone breakdown rows for each non-zero zone', () => {
@@ -137,6 +191,15 @@ describe('composeEmail', () => {
     expect(out.html).toContain('/api/preferences/hr-emails')
     expect(out.html).toContain(`token=${UNSUB_TOKEN}`)
     expect(out.html).not.toContain('cid=c-1')
+  })
+
+  // W1.L3a — the send path resolves the session location's tenant host and
+  // hands it in; the pure composer builds the stop-emails link on it. With no
+  // host handed in it keeps the CRM seam (the resolver's own floor).
+  it('W1.L3a — builds the stop-emails link on the customer base URL it is handed', () => {
+    const out = composeEmail(ctx(), { nowMs: NOW, customerBaseUrl: 'https://gym-a.repset.ie' })
+    expect(out.html).toContain('https://gym-a.repset.ie/api/preferences/hr-emails')
+    expect(out.html).not.toContain('https://crm.repset.ie/api/preferences/hr-emails')
   })
 
   // REPSET-P6.C — the session CTA is a MEMBER link and must build on the
@@ -271,6 +334,8 @@ describe('sendPostClassEmail', () => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 single: vi.fn(() => Promise.resolve({ data: { settings: {} }, error: null })),
+                // MIAORG.1 — read through resolveAgentSettings (maybeSingle).
+                maybeSingle: vi.fn(() => Promise.resolve({ data: { settings: {} }, error: null })),
               })),
             })),
           }
@@ -423,6 +488,22 @@ describe('sendPostClassEmail', () => {
     expect(db.__stamps).toHaveLength(1) // markProcessed stamp
   })
 
+  // W1.L3a — the stop-emails link in the delivered email is minted on the
+  // SESSION LOCATION's tenant host (resolveCustomerBaseUrl(db, session.
+  // location_id)), never on the CRM host: a second gym's member must never see
+  // crm.repset.ie in their post-class email.
+  it("W1.L3a — the stop-emails link is minted on the session location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    sendTransactionalEmail.mockResolvedValue({ messageId: 'pm-1' })
+    const db = mockDb({ session: fullSessionRow({ location_id: 'loc-a1' }) })
+    const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
+    expect(out).toEqual(expect.objectContaining({ ok: true, sent: true }))
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, 'loc-a1')
+    const html = sendTransactionalEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('https://gym-a.repset.ie/api/preferences/hr-emails')
+    expect(html).not.toContain('https://crm.repset.ie/api/preferences/hr-emails')
+  })
+
   // Item 5 — claim-before-send: if a concurrent path already claimed the row
   // (our UPDATE … WHERE email_sent_at IS NULL affects 0 rows), we must NOT send.
   it('does not double-send when the claim affects no rows (already claimed)', async () => {
@@ -474,5 +555,49 @@ describe('loadContextForSession', () => {
     }
     const out = await loadContextForSession(db, 's')
     expect(out).toEqual({ ok: false, error: 'already-sent', alreadySent: true })
+  })
+})
+
+// MIAORG.1 Task 2 — the membership CTA comes from the studio's RESOLVED Mia
+// settings. membership_signup_url / membership_cta_label are STUDIO-ONLY keys:
+// an org layer never supplies them (each studio's join link is its own).
+describe('loadContextForSession — resolved settings (MIAORG.1)', () => {
+  const SESSION = {
+    id: 'sess-1', contact_id: 'c-1', location_id: 'loc-1', booking_id: null, started_at: '2026-05-08T18:00:00Z',
+    ended_at: '2026-05-08T18:45:00Z', email_sent_at: null, class_name: 'RIDE',
+    contact: { id: 'c-1', name: 'Sam', email: 's@example.test', hr_post_class_emails_enabled: true, pipeline_stage_slug: 'trial_done' },
+    booking: null,
+  }
+  function ctxDb({ customerAgent, org = null }) {
+    const inner = {
+      from(table) {
+        let single = { data: null, error: null }
+        if (table === 'heart_rate_sessions') single = { data: SESSION, error: null }
+        if (table === 'locations') single = { data: { id: 'loc-1', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: customerAgent === undefined ? {} : { customer_agent: customerAgent } }, error: null }
+        const b = {
+          select: () => b, eq: () => b, gte: () => b, not: () => b,
+          single: () => Promise.resolve(single), maybeSingle: () => Promise.resolve(single),
+          then: (ok, bad) => Promise.resolve({ data: [], error: null }).then(ok, bad),
+        }
+        return b
+      },
+    }
+    return withOrgLayer(inner, org)
+  }
+
+  it("the studio's own join link is used; an org's (studio-only key) never is", async () => {
+    const own = await loadContextForSession(ctxDb({ customerAgent: { membership_signup_url: 'https://studio.example.test/join', membership_cta_label: 'Join' }, org: ORG_LAYER }), 'sess-1')
+    expect(own.cta).toMatchObject({ membershipSignupUrl: 'https://studio.example.test/join', membershipLabel: 'Join' })
+    const none = await loadContextForSession(ctxDb({ customerAgent: { enabled: true }, org: ORG_LAYER }), 'sess-1')
+    expect(none.cta).toMatchObject({ membershipSignupUrl: null, membershipLabel: null })
+  })
+
+  it("no behaviour change: Stillorgan's blob and Hatch (no blob) carry no CTA link, org layer null", async () => {
+    for (const customerAgent of [STILLORGAN_BLOB, undefined]) {
+      const r = await loadContextForSession(ctxDb({ customerAgent }), 'sess-1')
+      expect(r.ok).toBe(true)
+      expect(r.cta).toEqual({ stage: 'trial_done', membershipSignupUrl: null, membershipLabel: null })
+      expect(r.zone).toBe('Europe/Dublin')
+    }
   })
 })

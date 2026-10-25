@@ -12,6 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 import AccountingTabs from '@/components/accounting/AccountingTabs'
 import HuntInboxesCard from '@/components/accounting/HuntInboxesCard'
 import EventFeesCard from '@/components/accounting/EventFeesCard'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,7 +29,9 @@ export default async function AccountingPage() {
       </p>
       <div className="mb-6 space-y-6">
         <HuntInboxesCard />
-        <EventFeesCard />
+        {/* C18 ORGROLE.1 — the org-wide event-fee report is for organisation
+            admins (GET /api/accounting/event-fees' rule). */}
+        {isActiveOrgAdmin(user) && <EventFeesCard />}
       </div>
       <AccountingTabs locationName={user.activeLocation?.name || ''} />
     </div>

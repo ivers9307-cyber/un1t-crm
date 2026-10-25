@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import {
   buildTestSendBody, statsLine, rowSubline, schedulePanelDefaults, audienceSummary, sendConfirmCopy, rowActions,
   designStateForDraft,
@@ -83,7 +84,10 @@ describe('schedulePanelDefaults', () => {
 
 describe('rowSubline — paused (HOST-EMAILS.2)', () => {
   it('a sending row with a paused_reason says why and who to ask', () => {
-    expect(rowSubline({ status: 'sending', paused_reason: 'no_stream' })).toBe('Paused. Marketing sending is not set up yet. Ask UN1T.')
+    expect(rowSubline({ status: 'sending', paused_reason: 'no_stream' }, undefined, 'Gym A')).toBe('Paused. Marketing sending is not set up yet. Ask Gym A.')
+  })
+  it('with no brand it floors on the platform name, never a literal gym', () => {
+    expect(rowSubline({ status: 'sending', paused_reason: 'no_stream' })).toBe(`Paused. Marketing sending is not set up yet. Ask ${PLATFORM_NAME}.`)
   })
   it('a sending row without a reason keeps the stats line fallback', () => {
     expect(rowSubline({ status: 'sending', sent_count: 3, recipient_count: 10 })).toBe('3/10 sent')
@@ -202,5 +206,22 @@ describe('HostEmailPreviewModal', () => {
   it('marks the active width with aria-pressed', () => {
     expect(render(375)).toMatch(/aria-pressed="true"[^>]*>Mobile/)
     expect(render(700)).toMatch(/aria-pressed="true"[^>]*>Desktop/)
+  })
+})
+
+// TZ.9 — the composer runs on the host's own clock (its anchor studio's zone);
+// with no zone it is Europe/Dublin, as above.
+describe('the host composer on a New York host', () => {
+  const NY = 'America/New_York'
+  it('a scheduled row shows New York time, in both halves of the year', () => {
+    expect(rowSubline({ status: 'scheduled', scheduled_for: '2026-09-09T13:00:00.000Z' }, NY)).toBe('Scheduled for Wed 9 Sep, 09:00')
+    expect(rowSubline({ status: 'scheduled', scheduled_for: '2026-11-04T14:00:00.000Z' }, NY)).toBe('Scheduled for Wed 4 Nov, 09:00')
+    expect(rowSubline({ status: 'scheduled', scheduled_for: '2026-11-04T14:00:00.000Z' }, 'Europe/Dublin'))
+      .toBe(rowSubline({ status: 'scheduled', scheduled_for: '2026-11-04T14:00:00.000Z' }))
+  })
+  it('the panel opens on New York wall clock', () => {
+    expect(schedulePanelDefaults({ scheduled_for: '2026-11-04T14:00:00.000Z' }, Date.parse('2026-11-01T10:03:00Z'), NY)).toEqual({ date: '2026-11-04', time: '09:00' })
+    // 2026-11-01T03:50Z is 23:50 EDT on 31 Oct; +17 min rounds up to 00:15 EDT on 1 Nov.
+    expect(schedulePanelDefaults({ scheduled_for: null }, Date.parse('2026-11-01T03:50:00Z'), NY)).toEqual({ date: '2026-11-01', time: '00:15' })
   })
 })

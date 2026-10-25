@@ -14,7 +14,7 @@
 // abort signal, a tracing tag) doesn't break the call sites.
 //
 // Step types covered (mig 087 / 089 / 091):
-//   email, whatsapp, sms                — message sends
+//   email, whatsapp                     — message sends (sms retired)
 //   apply_tag, update_field             — contact mutations
 //   branch                              — picks a continuation
 //   webhook                             — outbound HTTP
@@ -29,20 +29,22 @@ import {
   buildUnsubscribeUrl,
   appendUnsubscribeFooter,
 } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 import {
   sendTemplateMessage,
   buildTemplateComponents,
   getOrCreateConversation,
   renderTemplateBody,
 } from '@/lib/whatsapp'
-import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
+import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
+import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
-import { overlayConnections } from '@/lib/connection-registry'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
+import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
+import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -79,9 +81,8 @@ export function isTransactionalEnrolment(enrollment) {
 // hygiene gates above it — a suppressed contact is a recorded skip
 // (excluded anyway) and must be neither deferred nor stamped.
 //
-// SMS steps are deliberately NOT gated or stamped in this slice (the
-// cap covers email + WhatsApp, the two channels campaigns/broadcasts
-// share) — extend here if SMS marketing volume ever warrants it.
+// The cap covers email + WhatsApp, the two channels campaigns/broadcasts
+// share (SMS was retired with Twilio, TWILIO-RETIRE.1).
 // LOCCOMMS.5 — resolve the contact's consent row for the SEQUENCE'S location.
 //
 // Sequences do not go through buildAudienceQuery, so the PR 3 cutover missed
@@ -241,6 +242,20 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // DUNNING.3 — a marketing-pressure cap; a service message is never deferred by it.
   if (!transactional) assertNotFrequencyCapped(contact, frequencyCap)
 
+  // PRESEND.1 — belt and braces on the dunning exit. The invoice webhook
+  // (PAID / FORGIVEN -> exitDunningForContact) is the only thing that stops a
+  // reminder run today; if it is late or down, someone who has already paid
+  // gets chased anyway. Re-ask Glofox whether this run's invoice is still
+  // overdue, immediately before the send. No-ops (and costs nothing) for every
+  // non-dunning enrolment, and fails open on any Glofox trouble.
+  {
+    const presend = await dunningPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: presend.reason })
+      return null
+    }
+  }
+
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
   let html = step.html_content
@@ -267,11 +282,15 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
   // COMMSFIX.E.4 — {{location_name}} renders in sequence EMAIL steps as
-  // it already does in SMS steps (six shipped templates sign off 'UN1T
-  // {{location_name}}'; without it rendered 'UN1T ' with a trailing
-  // space). locationName is resolved above from the same location row
-  // the bundle gate fetched.
-  const baseUrl = getAppUrl()
+  // it already does in SMS steps. locationName is resolved above from the
+  // same location row the bundle gate fetched.
+  // W1.S1a — {{company_name}} is the sequence location's configured brand
+  // (getLocationBranding never throws; '' when unresolved), resolved below
+  // once the send is certain.
+  // W1.L3a — the unsubscribe + preference links are minted on the SEQUENCE
+  // LOCATION's tenant host (resolveCustomerBaseUrl floors to the CRM host and
+  // never throws past it), so a second gym's leads never see crm.repset.ie.
+  const baseUrl = await resolveCustomerBaseUrl(db, sequence?.location_id)
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
   // UNSUBTOKEN.2 — null means the contact has no
   // contact_preferences.unsubscribe_token, and a sequence step is MARKETING
@@ -304,14 +323,29 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     logWarn('sequences', `booking token not minted for ${contact.id}: ${e.message || e}`, { contactId: contact.id })
   }
 
-  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
+  // PAYLINK.7 — the run's payment (if any) resolves the two payment merge
+  // tags; both fragments are empty for every non-dunning email, so a body
+  // that never uses them is unaffected. payAmountPhrase(payment) is computed
+  // once and shared by both calls — the subject and body must never disagree
+  // on which run's amount they're quoting.
+  const payment = paymentFromEnrollment(enrollment)
+  const payPhrase = payAmountPhrase(payment)
+  const { companyName } = await getLocationBranding(db, sequence?.location_id)
+  // TZ.17 — {{current_year}} on the sequence studio's calendar. Text only, so
+  // an unreadable zone falls back to Europe/Dublin rather than hold the email.
+  const mergeZone = await getLocationZone(db, sequence?.location_id).catch(() => DEFAULT_TZ)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName, company_name: companyName || '', pay_amount_phrase: payPhrase, zone: mergeZone })
   const merged = applyMergeTags(html, contact, {
+    zone: mergeZone,
     location_name: locationName,
+    company_name: companyName || '',
     booking_token: bookingToken,
     unsubscribe_url: unsubscribeUrl,
     // Derived from the unsubscribe URL because both endpoints resolve the same
     // token column. Safe to split now that the null case returned above.
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
+    pay_amount_phrase: payPhrase,
+    payment_cta: paymentCtaHtml(payment),
   })
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
@@ -326,15 +360,13 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // sendTransactionalEmail → 'outbound', which never attached the RFC
   // 8058 List-Unsubscribe one-click headers). unsubscribeUrl is passed
   // through so sendEmail adds those headers alongside the visible footer.
-  // SEQSENDER.1 (mig 555) — a sequence may name its own sender. Built here the
-  // same way campaign-sender.js builds a campaign's, because the application
-  // owns the display name: Postmark does not stamp a signature's name onto a
-  // bare address. from_email NULL (every pre-existing sequence) → undefined →
-  // the global POSTMARK_FROM_EMAIL default, unchanged.
-  const sequenceFrom = sequence.from_email
-    ? (sequence.from_name ? `${sequence.from_name} <${sequence.from_email}>` : sequence.from_email)
-    : undefined
-
+  // SEQSENDER.1 (mig 555) / W1.E2 — a sequence may name its own sender, and
+  // that name is a DISPLAY NAME on the resolved address (the platform address
+  // with the studio's brand before a verified domain, the org's verified From
+  // after). from_name NULL (every pre-existing sequence) → the resolver's own
+  // name. FROMDOMAIN — sequence.from_email is the address only when it is on
+  // the org's VERIFIED sending domain (sendMarketingEmail → pickFromAddress);
+  // any other value is ignored and the resolver's address goes out.
   const result = await sendMarketingEmail({
     to: contact.email,
     subject: mergedSubject,
@@ -343,7 +375,8 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     locationId: sequence.location_id,
     tag: `seq-${sequence.id}`,
     unsubscribeUrl,
-    from: sequenceFrom,
+    fromName: sequence.from_name || undefined,
+    fromEmail: sequence.from_email || undefined,
     // NULL keeps EMAIL-INBOX.1's default (the location's unified-inbox address).
     replyTo: sequence.reply_to || undefined,
     sourceType: 'sequence',
@@ -355,9 +388,10 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump. increment_step_sent never
+  // existed (no migration, not in pg_proc), so this 404'd on every send and
+  // the resolved { error } was dropped; sequence_steps.total_* never moved.
+  // Per-step email numbers are counted from email_sends (/stats).
 
   return result?.messageId || null
 }
@@ -450,6 +484,20 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // DUNNING.3 — a marketing-pressure cap; a service message is never deferred by it.
   if (!transactional) assertNotFrequencyCapped(contact, frequencyCap)
 
+  // PRESEND.1 — belt and braces on the dunning exit. The invoice webhook
+  // (PAID / FORGIVEN -> exitDunningForContact) is the only thing that stops a
+  // reminder run today; if it is late or down, someone who has already paid
+  // gets chased anyway. Re-ask Glofox whether this run's invoice is still
+  // overdue, immediately before the send. No-ops (and costs nothing) for every
+  // non-dunning enrolment, and fails open on any Glofox trouble.
+  {
+    const presend = await dunningPresendGate(db, { enrollment, contact, sequence })
+    if (!presend.proceed) {
+      await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: presend.reason })
+      return null
+    }
+  }
+
   // Resolve the template; must be APPROVED to send.
   if (!template) template = await resolveApprovedWhatsappTemplate(db, step, sequence)
 
@@ -461,30 +509,89 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // Nudge, whose WhatsApp step failed while broadcasts sent the same
   // template fine (they always passed locationId).
   const variableMapping = step.whatsapp_variables || {}
+  // PAYLINK.6 — the overdue-payment reminder's pay link rides on the run. A
+  // template whose URL button wants the invoice id cannot be sent without one
+  // (Meta rejects a dynamic-URL send with no suffix, and a button to an
+  // unpayable invoice is worse than silence), and the approved body reads
+  // "payment of {{2}}", so an empty amount would ship a hole → recorded skip
+  // either way; the run's email steps still go out with the card-update
+  // wording. Templates that do not use the pay-link button are unaffected.
+  const payment = paymentFromEnrollment(enrollment)
+  if (variableMapping[URL_BUTTON_MAPPING_KEY] === 'pay_link_suffix' && !payment?.link_suffix) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment link for this invoice' })
+    return null
+  }
+  // PAYLINK.6b — keyed on the MAPPING (does this step actually place
+  // pay_amount somewhere in the body?), not on the url_button mapping — a
+  // pay-link step that maps the button but not {{2}} to pay_amount has no
+  // "payment of {{2}}" wording to protect, so an empty amount must not
+  // block its send.
+  if (Object.values(variableMapping).includes('pay_amount') && !payment?.amount) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no payment amount for this invoice' })
+    return null
+  }
   const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
     template,
     contact,
     variableMapping,
     step.whatsapp_header_media_url || null,
-    { companyName: branding.companyName, locationId: sequence.location_id },
+    { companyName: branding.companyName, locationName: branding.locationName, locationId: sequence.location_id, payment },
   )
+  // PAYLINK.6b — the general case the two checks above cover only for the
+  // pay-link feature specifically: ANY template whose approved link ends in
+  // a variable must ship a url-button component or Meta rejects the whole
+  // send (132012), which throws, feeds error_count, and can auto-pause the
+  // enrolment — killing its email steps too. An unmapped field, a wiped
+  // `variables` blob from the node editor, or a whitespace typo all resolve
+  // to nothing here just as surely as a missing payment link does, so treat
+  // it the same way: a recorded skip, never a throw.
+  if (dynamicUrlButtonIndex(template.components) >= 0
+    && !components.some((c) => c.type === 'button' && c.sub_type === 'url')) {
+    // PAYLINK.7 — this is an operator config fault (an unmapped field, a
+    // wiped `variables` blob, a whitespace typo), not a per-contact one — it
+    // will keep happening to every contact on the step until someone fixes
+    // the mapping. A recordStepSkip alone only reaches THIS contact's
+    // timeline; log it too so it surfaces to whoever watches the logs.
+    logWarn('sequences', 'WhatsApp step skipped: dynamic URL button has no value', {
+      sequenceId: sequence.id, stepId: step.id, contactId: contact.id,
+    })
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: "no value for the template's link button" })
+    return null
+  }
 
   // COMMS-AUDIT 2026-07-10: route from the sequence location's
-  // whatsapp_numbers row. Without { locationId } config resolution
-  // falls back to env vars — the wrong sender for any location that
-  // isn't the env default, and a dead send if the env token has
-  // rotted. The sequence's location is authoritative here (same as
+  // whatsapp_numbers row. Without { locationId } config resolution has
+  // no number to use and refuses (it used to fall back to the global env
+  // number, the wrong sender for every other location). The sequence's location is authoritative here (same as
   // broadcasts, which pass broadcast.location_id): the template,
   // branding, flow_token and conversation above are all already
   // resolved against sequence.location_id.
-  const result = await sendTemplateMessage(
-    contact.wa_phone,
-    template.name,
-    template.language,
-    components,
-    { locationId: sequence.location_id },
-  )
+  //
+  // WACONFIGFALLBACK.1 — a sequence location with no WhatsApp number of its
+  // own used to send from the global env number. It is now refused, and the
+  // refusal is a RECORDED SKIP, not a throw: a throw feeds error_count and
+  // can auto-pause the whole enrolment, killing its email steps too (a
+  // dunning or trial run losing its emails over a WhatsApp setup gap). Logged
+  // structurally, like PAYLINK.7, so whoever watches the logs sees the gap.
+  let result
+  try {
+    result = await sendTemplateMessage(
+      contact.wa_phone,
+      template.name,
+      template.language,
+      components,
+      // WAORGNUMBER.2 (R5) — the studio's number on the template's own WABA.
+      { locationId: sequence.location_id, ...(template.business_account_id && { businessAccountId: template.business_account_id }) },
+    )
+  } catch (e) {
+    if (!isWhatsAppNumberMissing(e)) throw e
+    logWarn('sequences', 'WhatsApp step skipped: no WhatsApp number at the sequence location', {
+      sequenceId: sequence.id, stepId: step.id, contactId: contact.id, locationId: sequence.location_id,
+    })
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no WhatsApp number at this location' })
+    return null
+  }
 
   // Log to whatsapp_messages so the inbox + analytics see it.
   // Conversation is upserted via the helper to attribute correctly.
@@ -507,7 +614,7 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
-      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName, payment }),
       status: 'sent',
       sent_at: new Date().toISOString(),
     }).select('id').single()
@@ -527,119 +634,24 @@ export async function sendWhatsappStep(db, { enrollment, step, sequence, contact
   // effort in the helper; stamped even while the cap is disabled).
   await stampMarketingTouch(db, [contact.id])
 
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
+  // STEPSENTRPC.1 — no per-step counter bump (increment_step_sent never
+  // existed; see sendEmailStep).
 
   return sendRowId
 }
 
-// ── sms (mig 062) ───────────────────────────────────────────────
+// ── sms (mig 062) — RETIRED (TWILIO-RETIRE.1) ───────────────────
+//
+// SMS left with Twilio. A legacy step row can still exist (the DB
+// CHECK admits 'sms' and the rows stay on disk as history), so the
+// runner keeps a branch for it — same reasoning as the retired
+// move_pipeline_stage: an unknown step_type throws and would wedge the
+// enrolment on this step forever. The step records a skip on the
+// contact's timeline and the enrolment advances normally.
 
-export async function sendSmsStep(db, { step, sequence, contact }) {
-  if (!step.sms_body) {
-    throw new Error('SMS step has no sms_body.')
-  }
-
-  // Resolve the sequence's location up front — needed both for the
-  // TENANT.8 (item 3b) bundle/feature gate below AND (already, before
-  // this change) the alpha sender ID (mig 059). Sequences are pinned
-  // to one location, so every enrolment in this sequence sends from
-  // the same sender. Config fault (no location row at all) still
-  // throws — that needs an operator fix, unlike a per-contact skip.
-  let { data: smsLocation } = await db
-    .from('locations')
-    .select('id, name, twilio_alpha_sender_id, features')
-    .eq('id', sequence.location_id)
-    .single()
-  if (!smsLocation) {
-    throw new Error('Sequence location not found — cannot resolve SMS sender.')
-  }
-  if (!(await channelEnabledOrSkip(db, {
-    location: smsLocation, sequence, step, contact, channel: 'SMS', featureKey: 'sms',
-  }))) {
-    return null
-  }
-
-  // Per-contact gates — recorded SKIPS, never errors (COMMSFIX.E.1).
-  // These used to THROW, feeding error_count until MAX_ERRORS auto-
-  // paused the whole enrolment — the identical wedge class fixed for
-  // email/WA after the live 2026-07-10 incident (see recordStepSkip).
-  if (!contact?.phone) {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: 'contact has no phone number' })
-    return null
-  }
-  // Send-time consent gate — the per-location model every other send
-  // path already enforces (LOCCOMMS.5): resolve the row for the
-  // SEQUENCE'S location; row absent = that location may never send.
-  // sendSmsStep was the last step still bypassing it (it only read
-  // the global sms_status), so a contact who opted out of SMS
-  // marketing for this location via the preference centre still got
-  // dunning SMS — the exact consent breach this programme prevents.
-  const smsConsent = locationConsent(contact, sequence)
-  if (smsConsent?.sms_marketing !== true) {
-    await recordStepSkip(db, {
-      contact, sequence, step, channel: 'SMS',
-      reason: smsConsent
-        ? 'no SMS marketing consent for this location'
-        : 'not on this location’s list',
-    })
-    return null
-  }
-  // Global channel-status gate (STOP replies, carrier invalidation).
-  // Mirrors the broadcast reachability predicate; absent = active
-  // (back-compat for pre-mig-059 contacts).
-  if (contact.sms_status && contact.sms_status !== 'active') {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: `sms_status is '${contact.sms_status}'` })
-    return null
-  }
-
-  // INTEG-A2 dual-read: registry twilio_sender row first. Reuses the
-  // location row fetched above for the bundle gate.
-  const location = await overlayConnections(db, smsLocation, ['twilio_sender'])
-
-  // Apply merge tags. Same set as email + ad-hoc SMS (first_name,
-  // name, location_name, etc.).
-  const renderedBody = applyMergeTags(step.sms_body, contact, {
-    location_name: location.name || '',
-  })
-
-  let result
-  try {
-    result = await sendLocationSms({ location, to: contact.phone, body: renderedBody })
-  } catch (e) {
-    const msg = e instanceof TwilioError
-      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
-      : (e?.message || 'SMS send failed')
-    throw new Error(msg)
-  }
-
-  // Activity timeline entry. Same shape as the broadcast + ad-hoc
-  // send paths (type='sms_sent', cyan chip in the contact page's
-  // activityIcons map). Its id doubles as the step's send id — a Twilio
-  // "SM…" sid is NOT a uuid and would hit the same 22P02 re-send loop
-  // the WhatsApp step did (last_step_send_id is a uuid column).
-  const { data: activityRow, error: activityErr } = await db.from('activities').insert({
-    contact_id: contact.id,
-    location_id: sequence.location_id,
-    type: 'sms_sent',
-    subject: `SMS sequence step: ${sequence.name || 'Untitled sequence'}`,
-    note: renderedBody,
-  }).select('id').single()
-  // SINGLEERR.1 — same as the WhatsApp step: this id doubles as the step's send
-  // id, so a rejected insert returned null and said nothing. The SMS is already
-  // out, so log rather than throw.
-  if (activityErr) {
-    logWarn('sequences', 'sms activity insert failed after a successful send', {
-      err: activityErr.message, stepId: step.id, contactId: contact.id,
-    })
-  }
-
-  // Bump per-step metric.
-  // supabase-js builders don't have .catch — try/catch around await.
-  try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
-
-  return activityRow?.id || null
+export async function retiredSmsStep(db, { step, sequence, contact }) {
+  await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: 'the SMS channel has been retired' })
+  return null
 }
 
 // ── apply_tag (Tier 1B / mig 087) ───────────────────────────────
@@ -724,6 +736,29 @@ export async function updateFieldStep(db, { step, contact }) {
 //   - has_tag         { tag }           — contact has the active tag
 //   - field_equals    { field, value }  — contact[field] === value
 //   - field_in        { field, values } — contact[field] is in the list
+//   - booked_class_at_studio {}         — the contact has booked a class at
+//                                         the sequence's studio (HATCHNUDGE.1)
+//   - in_pipeline_stage_at_studio { stages } — the contact has an open deal
+//                                         at the sequence's studio, on an
+//                                         enabled board, in one of the stage
+//                                         slugs (TDSEQ.1)
+//   - whatsapp_reply_since_enrolment {} — an inbound WhatsApp message from the
+//                                         contact on any of the organisation's
+//                                         threads since the enrolment began
+//                                         (TDSEQ.1; needs enrolled_at)
+//
+// booked_class_at_studio exists because the only "has booked" signal a
+// branch could read before was the glofox_first_booking tag, which the Glofox
+// webhook alone stamps. A studio whose bookings come from un1t.online (Hatch
+// Street) never gets it, so a "book your first class" nudge gated on the tag
+// would go to people who had already booked. This predicate reads the
+// bookings themselves: any non-cancelled class_bookings row for the contact
+// at the studio, whatever platform it came from, or a /start request at the
+// studio that is still in flight (queued / processing / booked / waiting on
+// staff), since a un1t.online booking only lands in class_bookings on the
+// next 15-minute sync. It selects ids only: it can withhold a step, never
+// put a booking's details into one (tests/class-bookings-readers-guard.test.js,
+// kind 'suppression').
 //
 // Allowed fields mirror update_field's whitelist plus a couple of
 // read-only ones that operators commonly want to fork on. Anything
@@ -748,11 +783,160 @@ const BRANCH_FIELD_WHITELIST = new Set([
   'marketing_opt_in',
 ])
 
-export async function evaluateBranchPredicate(db, { contact, predicate }) {
+// /start requests still on their way to a booking (class_booking_requests
+// status, mig 335). 'failed' is not a booking; 'awaiting_payment' has not
+// been paid for.
+const IN_FLIGHT_CLASS_REQUEST_STATUSES = ['queued', 'processing', 'booked', 'needs_review']
+
+async function hasBookedClassAtStudio(db, { contactId, locationId }) {
+  const { data: bookings, error: bookingsError } = await db
+    .from('class_bookings')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .neq('status', 'CANCELLED')
+    .limit(1)
+  if (bookingsError) throw new Error(`branch booked_class_at_studio: ${bookingsError.message}`)
+  if (bookings && bookings.length > 0) return true
+
+  const { data: requests, error: requestsError } = await db
+    .from('class_booking_requests')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .in('status', IN_FLIGHT_CLASS_REQUEST_STATUSES)
+    .limit(1)
+  if (requestsError) throw new Error(`branch booked_class_at_studio: ${requestsError.message}`)
+  return Boolean(requests && requests.length > 0)
+}
+
+// TDSEQ.1 — the studio's open deal in one of `stages`, on an ENABLED board at
+// that studio. contacts.pipeline_stage_slug cannot answer this: it follows the
+// contact's HOME studio's primary board, so a Stillorgan contact on Hatch
+// Street's un1t.online board reads Stillorgan's stage there. Bounded reads
+// (a studio has a handful of boards and stages); every failure throws.
+const STUDIO_LIST_MAX = 999
+
+async function inPipelineStageAtStudio(db, { contactId, locationId, stages }) {
+  const fail = (err) => new Error(`branch in_pipeline_stage_at_studio: ${err.message}`)
+  const { data: boards, error: boardsErr } = await db
+    .from('pipelines')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+    .order('id', { ascending: true })
+    .range(0, STUDIO_LIST_MAX)
+  if (boardsErr) throw fail(boardsErr)
+  const boardIds = (boards || []).map((b) => b.id)
+  if (boardIds.length === 0) return false
+
+  const { data: stageRows, error: stagesErr } = await db
+    .from('pipeline_stages')
+    .select('id')
+    .eq('location_id', locationId)
+    .in('pipeline_id', boardIds)
+    .in('slug', stages)
+    .order('id', { ascending: true })
+    .range(0, STUDIO_LIST_MAX)
+  if (stagesErr) throw fail(stagesErr)
+  const stageIds = (stageRows || []).map((s) => s.id)
+  if (stageIds.length === 0) return false
+
+  const { data: deals, error: dealsErr } = await db
+    .from('deals')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .eq('status', 'open')
+    .in('stage_id', stageIds)
+    .limit(1)
+  if (dealsErr) throw fail(dealsErr)
+  return Boolean(deals && deals.length > 0)
+}
+
+// TDSEQ.1 — an INBOUND WhatsApp message from this person after the enrolment
+// started, on any thread of the sequence studio's organisation for this
+// contact or this number (on an organisation-shared number a reply can file at
+// another studio, WAORGNUMBER.1). The number joins the .or() only in its
+// stored digits-only form, so nothing else can reach the filter.
+async function whatsappReplySinceEnrolment(db, { contact, locationId, enrolledAt }) {
+  const fail = (err) => new Error(`branch whatsapp_reply_since_enrolment: ${err.message}`)
+  const { data: studio, error: studioErr } = await db
+    .from('locations')
+    .select('id, organization_id')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (studioErr) throw fail(studioErr)
+  if (!studio) throw new Error('branch whatsapp_reply_since_enrolment: the sequence studio was not found')
+
+  let studios = [locationId]
+  if (studio.organization_id) {
+    const { data: orgStudios, error: orgErr } = await db
+      .from('locations')
+      .select('id')
+      .eq('organization_id', studio.organization_id)
+      .order('id', { ascending: true })
+      .range(0, STUDIO_LIST_MAX)
+    if (orgErr) throw fail(orgErr)
+    studios = [...new Set([...(orgStudios || []).map((l) => l.id), locationId])]
+  }
+
+  const match = [`contact_id.eq.${contact.id}`]
+  if (typeof contact.wa_phone === 'string' && /^\d+$/.test(contact.wa_phone)) {
+    match.push(`wa_phone.eq.${contact.wa_phone}`)
+  }
+  const { data: threads, error: threadsErr } = await db
+    .from('whatsapp_conversations')
+    .select('id')
+    .in('location_id', studios)
+    .or(match.join(','))
+    .order('id', { ascending: true })
+    .range(0, STUDIO_LIST_MAX)
+  if (threadsErr) throw fail(threadsErr)
+  const threadIds = (threads || []).map((t) => t.id)
+  if (threadIds.length === 0) return false
+
+  const { data: inbound, error: inboundErr } = await db
+    .from('whatsapp_messages')
+    .select('id')
+    .in('conversation_id', threadIds)
+    .eq('direction', 'inbound')
+    .gt('created_at', enrolledAt)
+    .limit(1)
+  if (inboundErr) throw fail(inboundErr)
+  return Boolean(inbound && inbound.length > 0)
+}
+
+export async function evaluateBranchPredicate(db, { contact, predicate, locationId = null, enrolledAt = null }) {
   if (!predicate || typeof predicate !== 'object') {
     throw new Error('branch step: config.predicate is required')
   }
   const type = String(predicate.type || '').trim()
+
+  if (type === 'in_pipeline_stage_at_studio') {
+    // Thrown, not guessed, like booked_class_at_studio: the runner retries.
+    if (!locationId) throw new Error('branch in_pipeline_stage_at_studio: the sequence studio is required')
+    const stages = Array.isArray(predicate.stages)
+      ? predicate.stages.map((s) => String(s || '').trim()).filter(Boolean)
+      : []
+    if (stages.length === 0) throw new Error('branch in_pipeline_stage_at_studio: stages must be a non-empty array')
+    return inPipelineStageAtStudio(db, { contactId: contact.id, locationId, stages })
+  }
+
+  if (type === 'whatsapp_reply_since_enrolment') {
+    if (!locationId) throw new Error('branch whatsapp_reply_since_enrolment: the sequence studio is required')
+    if (!enrolledAt || !Number.isFinite(Date.parse(enrolledAt))) {
+      throw new Error('branch whatsapp_reply_since_enrolment: the enrolment time is required')
+    }
+    return whatsappReplySinceEnrolment(db, { contact, locationId, enrolledAt })
+  }
+
+  if (type === 'booked_class_at_studio') {
+    // Thrown, not guessed: the runner retries a throwing step, and a branch
+    // that read "no studio" as "not booked" would nudge someone who booked.
+    if (!locationId) throw new Error('branch booked_class_at_studio: the sequence studio is required')
+    return hasBookedClassAtStudio(db, { contactId: contact.id, locationId })
+  }
 
   if (type === 'has_tag') {
     const tag = String(predicate.tag || '').trim()
@@ -797,11 +981,13 @@ export async function evaluateBranchPredicate(db, { contact, predicate }) {
  * own step_order). Falls back to sensible defaults when the config
  * doesn't specify a pointer.
  */
-export async function processBranchStep(db, { step, contact }) {
+export async function processBranchStep(db, { step, contact, locationId = null, enrolledAt = null }) {
   const cfg = step.config || {}
   const branchOrder = step.step_order
   const matched = await evaluateBranchPredicate(db, {
     contact,
+    locationId,
+    enrolledAt,
     predicate: cfg.predicate,
   })
   const rawTarget = matched ? cfg.then_step_order : cfg.else_step_order

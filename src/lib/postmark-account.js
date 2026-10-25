@@ -17,6 +17,8 @@
 // status when the body is unparseable) — NEVER the token. Response-shaping
 // helpers are pure and unit-tested against a mocked fetch.
 
+import { getAppUrl } from '@/lib/app-url'
+
 const POSTMARK_ACCOUNT_API_URL = 'https://api.postmarkapp.com'
 
 /**
@@ -67,7 +69,14 @@ async function accountRequest(method, path, body) {
     // status-based message below.
   }
   if (!res.ok) {
-    throw new Error(`Postmark account API error: ${json?.Message || `HTTP ${res.status}`}`)
+    const err = new Error(`Postmark account API error: ${json?.Message || `HTTP ${res.status}`}`)
+    // Structured copies so a caller can branch on WHICH refusal it was
+    // (isDomainAlreadyExistsError) without re-parsing the message. Neither
+    // carries the token: both come off Postmark's response body.
+    err.status = res.status
+    err.postmarkErrorCode = json?.ErrorCode ?? null
+    err.postmarkMessage = json?.Message || null
+    throw err
   }
   return json || {}
 }
@@ -165,6 +174,49 @@ export async function createTenantDomain(name) {
   return shapeDomainResponse(json)
 }
 
+/**
+ * True when an account-API error is Postmark refusing POST /domains because a
+ * domain of that name is already in the account ("Domain already exists.").
+ * Domains are ACCOUNT resources and a name exists once per account, so this is
+ * what a second registration of the same domain (or of the platform's own
+ * domain) answers. Judged on Postmark's Message, falling back to the thrown
+ * message. Pure.
+ * @param {unknown} e
+ * @returns {boolean}
+ */
+export function isDomainAlreadyExistsError(e) {
+  const text = String(e?.postmarkMessage || e?.message || '')
+  return /domain already exists/i.test(text)
+}
+
+// GET /domains pages at most 500 per call (Postmark's cap for `count`).
+const DOMAIN_LIST_PAGE = 500
+// Guard against a misbehaving TotalCount: 100 pages = 50,000 domains.
+const DOMAIN_LIST_MAX_PAGES = 100
+
+/**
+ * Find an account-level domain by name: GET /domains?count=&offset=, paged
+ * until TotalCount is reached or a page comes back short. Names compare
+ * case-insensitively. Returns the list entry ({ ID, Name, … }) or null.
+ * @param {string} name
+ * @returns {Promise<{ ID: number, Name: string }|null>}
+ */
+export async function findTenantDomainByName(name) {
+  const wanted = String(name || '').trim().toLowerCase()
+  if (!wanted) return null
+  for (let page = 0; page < DOMAIN_LIST_MAX_PAGES; page++) {
+    const offset = page * DOMAIN_LIST_PAGE
+    const json = await accountRequest('GET', `/domains?count=${DOMAIN_LIST_PAGE}&offset=${offset}`)
+    const domains = Array.isArray(json.Domains) ? json.Domains : []
+    const hit = domains.find((d) => String(d?.Name || '').trim().toLowerCase() === wanted)
+    if (hit) return hit
+    const total = Number(json.TotalCount)
+    if (domains.length < DOMAIN_LIST_PAGE) return null
+    if (Number.isFinite(total) && offset + domains.length >= total) return null
+  }
+  return null
+}
+
 /** GET /domains/{id} — current domain details (verification booleans + DNS values). */
 export async function getTenantDomain(id) {
   const json = await accountRequest('GET', `/domains/${id}`)
@@ -181,4 +233,121 @@ export async function verifyTenantDomainDkim(id) {
 export async function verifyTenantReturnPath(id) {
   const json = await accountRequest('PUT', `/domains/${id}/verifyReturnPath`)
   return shapeDomainResponse(json)
+}
+
+// ─────────────────────────────────────────────────────────────
+// W1.E3 — SERVER-token calls: a tenant server is born with its streams
+// and webhooks
+// ─────────────────────────────────────────────────────────────
+//
+// A bare server (POST /servers above) has only the outbound + inbound
+// streams and no webhooks: every campaign (MessageStream 'broadcast',
+// postmark.js sendBatch) would be refused (Postmark ErrorCode 1235), and list
+// health, bounce escalation and stats would read 0 for the tenant because no
+// Open/Click/Delivery/Bounce/SpamComplaint/SubscriptionChange event ever
+// reached /api/webhooks/postmark. Both helpers are idempotent (list first,
+// create only what is missing) and authenticate with the SERVER token — the
+// account token cannot manage a server's streams or hooks. The receiver
+// (src/app/api/webhooks/postmark/route.js) authenticates on the
+// X-Webhook-Token custom header, so a hook registered without it would 403
+// on every event: the helper refuses to register one.
+
+/** The six triggers the global CRM.UN1T server carries on both streams. */
+export const WEBHOOK_TRIGGERS = Object.freeze({
+  Open: { Enabled: true, PostFirstOpenOnly: false },
+  Click: { Enabled: true },
+  Delivery: { Enabled: true },
+  Bounce: { Enabled: true, IncludeContent: false },
+  SpamComplaint: { Enabled: true, IncludeContent: false },
+  SubscriptionChange: { Enabled: true },
+})
+
+/** The streams the app sends on: transactional + campaigns. */
+export const WEBHOOK_STREAMS = Object.freeze(['outbound', 'broadcast'])
+
+const BROADCAST_STREAM = Object.freeze({
+  ID: 'broadcast',
+  Name: 'Broadcasts',
+  MessageStreamType: 'Broadcasts',
+  // The app runs its own unsubscribe (preference centre + consent_log);
+  // Postmark's hosted unsubscribe would bypass consent_log.
+  SubscriptionManagementConfiguration: { UnsubscribeHandlingType: 'Custom' },
+})
+
+// Same error contract as accountRequest: Postmark's Message or the HTTP
+// status — NEVER the token.
+async function serverRequest(serverToken, method, path, body) {
+  if (!serverToken) throw new Error('Postmark server token missing.')
+  let res
+  try {
+    res = await fetch(`${POSTMARK_ACCOUNT_API_URL}${path}`, {
+      method,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Postmark-Server-Token': serverToken,
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+  } catch (e) {
+    throw new Error(`Postmark server API unreachable: ${e?.message || 'network error'}`)
+  }
+  let json = null
+  try {
+    json = await res.json()
+  } catch {
+    // Non-JSON body — fall through to the status-based message.
+  }
+  if (!res.ok) {
+    throw new Error(`Postmark server API error: ${json?.Message || `HTTP ${res.status}`}`)
+  }
+  return json || {}
+}
+
+/**
+ * Ensure the server has the `broadcast` message stream (campaign sends put
+ * MessageStream 'broadcast' on the wire). Idempotent.
+ * @param {string} serverToken - the tenant server's token (SECRET; never logged)
+ * @returns {Promise<{ created: boolean }>}
+ */
+export async function ensureTenantServerStreams(serverToken) {
+  const list = await serverRequest(serverToken, 'GET', '/message-streams')
+  const existing = (Array.isArray(list.MessageStreams) ? list.MessageStreams : []).map((s) => s?.ID)
+  if (existing.includes(BROADCAST_STREAM.ID)) return { created: false }
+  await serverRequest(serverToken, 'POST', '/message-streams', BROADCAST_STREAM)
+  return { created: true }
+}
+
+/**
+ * Ensure one six-trigger webhook per stream (outbound + broadcast) points at
+ * this deployment's /api/webhooks/postmark, carrying the X-Webhook-Token
+ * header the receiver checks. Idempotent: a hook on the same url + stream is
+ * left alone (never edited — a rotated token is the operator's rotation
+ * procedure, docs/architecture/INTEGRATIONS.md).
+ * @param {string} serverToken
+ * @returns {Promise<{ created: string[] }>} the streams a hook was created for
+ */
+export async function ensureTenantServerWebhooks(serverToken) {
+  const token = process.env.POSTMARK_WEBHOOK_TOKEN
+  if (!token) {
+    // No silent fallback: a hook without the header 403s on every event.
+    // (POSTMARK_WEBHOOK_TOKEN; the message reaches an org admin via
+    // last_error, so it names no env var.)
+    throw new Error('Webhook signing token is not configured on this deployment.')
+  }
+  const url = `${getAppUrl()}/api/webhooks/postmark`
+  const list = await serverRequest(serverToken, 'GET', '/webhooks')
+  const existing = Array.isArray(list.Webhooks) ? list.Webhooks : []
+  const created = []
+  for (const stream of WEBHOOK_STREAMS) {
+    if (existing.some((w) => w?.Url === url && w?.MessageStream === stream)) continue
+    await serverRequest(serverToken, 'POST', '/webhooks', {
+      Url: url,
+      MessageStream: stream,
+      HttpHeaders: [{ Name: 'X-Webhook-Token', Value: token }],
+      Triggers: WEBHOOK_TRIGGERS,
+    })
+    created.push(stream)
+  }
+  return { created }
 }

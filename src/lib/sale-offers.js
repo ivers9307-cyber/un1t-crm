@@ -10,6 +10,7 @@
 import { findOrCreateRaceContact } from './race-contact-linking'
 import { writeContactTag } from './contact-tags'
 import { sendOpsAlert } from './ops-alerts'
+import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
 export const OFFER_SALE_TAG = 'offer-sale-aug-2026'
 
@@ -38,13 +39,15 @@ export function formatEuro(cents) {
 // operator-editable in SQL, and a hard-coded date silently disagrees with
 // the live countdown the moment the window moves (it did: the footer read
 // "MONDAY 11 AUGUST" while ends_at was a Tuesday). Formats an absolute
-// instant into Dublin wall-clock via Intl, so no naive Date parsing.
-export function formatSaleDeadline(endsAt, { uppercase = true } = {}) {
+// instant into the offer's studio wall-clock via Intl (TZ.16: `zone`, the
+// zone of sale_offers.location_id; DEFAULT_TZ when none is given), so no
+// naive Date parsing. Customer copy: no zone abbreviation.
+export function formatSaleDeadline(endsAt, { uppercase = true, zone = DEFAULT_TZ } = {}) {
   if (!endsAt) return ''
   const d = new Date(endsAt)
   if (Number.isNaN(d.getTime())) return ''
   const parts = new Intl.DateTimeFormat('en-IE', {
-    timeZone: 'Europe/Dublin',
+    timeZone: resolveZone(zone),
     weekday: 'long', day: 'numeric', month: 'long',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(d).reduce((acc, p) => { acc[p.type] = p.value; return acc }, {})
@@ -78,9 +81,10 @@ export async function markOfferPurchaseState({ db, purchase, providerState }) {
 }
 
 // Resolve the buyer to a CRM contact (org-scoped — the public-form rule from
-// LEADCAP.1: contacts_email_unique is GLOBAL, restrictToOrg keeps a known
-// email from 500ing and from resolving a stranger's row) and tag them in
-// BOTH tag systems (contacts.tags text[] + contact_tags rows).
+// LEADCAP.1, and the helper's default since W0.6: contacts_email_org_unique
+// (mig 712) is per organisation, so restrictToOrg keeps a known email from
+// resolving a stranger's row in another tenant) and tag them in BOTH tag
+// systems (contacts.tags text[] + contact_tags rows).
 export async function linkOrCreateContactForPurchase(db, purchase) {
   const contactId = await findOrCreateRaceContact({
     db,

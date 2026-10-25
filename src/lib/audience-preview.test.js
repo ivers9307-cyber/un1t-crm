@@ -58,11 +58,6 @@ describe('toPreviewRow picks the identifier the CHANNEL would actually use', () 
     })
   })
 
-  it('sms -> the masked phone', () => {
-    expect(toPreviewRow(ROW, 'sms').identifier).toBe('•••• 4567')
-    expect(toPreviewRow(ROW, 'sms').identifier_kind).toBe('phone')
-  })
-
   it('whatsapp -> the masked wa_phone, NOT the ordinary phone column', () => {
     // wa_phone !== phone for a real slice of the base (WA-BROADCAST
     // reachability); showing `phone` here would preview a different audience

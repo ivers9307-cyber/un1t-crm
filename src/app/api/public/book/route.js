@@ -4,7 +4,8 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { validateCustomResponses } from '@/lib/booking-validation'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
+import { findBookableSlot } from '@/lib/booking-slots'
 
 export const runtime = 'nodejs'
 
@@ -39,7 +40,7 @@ const BookingSchema = z.object({
 // The database trigger (handle_new_booking) automatically:
 //   1. Creates or finds the contact
 //   2. Creates a deal at "New Lead" stage
-//   3. Fires the event's webhook URL (for n8n)
+//   3. Fires the event's webhook URL (for external automations)
 export async function POST(request) {
   const db = createServerClient()
 
@@ -55,8 +56,10 @@ export async function POST(request) {
   // validated the wrapper.
   // Mig 144 (GLOFOX3.2): also pull create_in_glofox + location_id so
   // we can fire the opt-in CRM → Glofox push after the booking lands.
+  // BOOKINGSELF.1: plus the slot rules (availability, buffer, max advance,
+  // the studio zone) so findBookableSlot judges the requested time below.
   const { data: event } = await db.from('event_types')
-    .select('name, duration_minutes, custom_fields, create_in_glofox, location_id')
+    .select('id, name, duration_minutes, buffer_minutes, availability, max_advance_days, custom_fields, create_in_glofox, location_id, locations:location_id ( timezone )')
     .eq('id', body.event_type_id)
     .single()
 
@@ -89,23 +92,29 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: customFieldsErr, field: 'custom_responses' }, { status: 400 })
   }
 
-  // Calculate end time
-  const [h, m] = body.start_time.split(':').map(Number)
-  const endMinutes = h * 60 + m + event.duration_minutes
-  const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`
-
-  // Check slot is still available
-  const { data: conflicts } = await db.from('bookings')
-    .select('id')
-    .eq('event_type_id', body.event_type_id)
-    .eq('booking_date', body.booking_date)
-    .in('status', ['confirmed', 'completed'])
-    .lt('start_time', endTime)
-    .gt('end_time', body.start_time)
-
-  if (conflicts && conflicts.length > 0) {
+  // BOOKINGSELF.1 — the requested time must be one the widget would offer
+  // right now: inside the day's availability window, on the duration +
+  // buffer grid, within max_advance_days, not past on the studio's clock,
+  // not blocked and not overlapping another confirmed/completed booking.
+  // findBookableSlot is the ONE check, shared with the customer reschedule
+  // (/api/public/booking-manage/[token]/reschedule). Before it this route
+  // checked only the overlap, so a scripted POST could book outside opening
+  // hours or months ahead. An unreadable occupancy read fails closed.
+  let found
+  try {
+    found = await findBookableSlot(db, event, body.booking_date, body.start_time)
+  } catch (e) {
+    logError('booking', 'slot check failed (zone unreadable)', { err: e, eventTypeId: body.event_type_id })
+    return NextResponse.json({ success: false, error: 'We could not check that time. Please try again.' }, { status: 500 })
+  }
+  if (found.error) {
+    logError('booking', 'slot check failed (occupancy unreadable)', { err: found.error, eventTypeId: body.event_type_id })
+    return NextResponse.json({ success: false, error: 'We could not check that time. Please try again.' }, { status: 500 })
+  }
+  if (!found.slot) {
     return NextResponse.json({ success: false, error: 'This time slot is no longer available' }, { status: 409 })
   }
+  const endTime = found.slot.end
 
   // Create booking — the DB trigger handles contact creation, deal creation, and webhook.
   // BOOKING.1 — copy event.location_id onto the booking. Without this
@@ -116,7 +125,7 @@ export async function POST(request) {
     event_type_id: body.event_type_id,
     location_id: event.location_id || null,
     booking_date: body.booking_date,
-    start_time: body.start_time,
+    start_time: found.slot.start,
     end_time: endTime,
     customer_name: body.customer_name,
     customer_email: body.customer_email.toLowerCase().trim(),
@@ -171,7 +180,7 @@ export async function POST(request) {
   }
 
   // Fire the per-event_type confirmation message (mig 077). Best-
-  // effort: a Postmark or Twilio hiccup never breaks the customer's
+  // effort: a Postmark hiccup never breaks the customer's
   // success response; the on-page confirmation still shows. The
   // helper writes its own activity row + handles channel gates.
   let confirmation = null
@@ -232,9 +241,12 @@ export async function POST(request) {
 
   // Campaign WhatsApp confirmation (the /start funnel sends source='meta_book').
   // Best-effort; never blocks the booking response. UTILITY template; Dublin
-  // day/time formatted the same way as the email/SMS confirmation.
+  // day/time formatted the same way as the email confirmation.
+  // EVENTCONFIRM-WA.1 — skipped when the event type's own confirmation already
+  // went out on WhatsApp above, so a /start booker never gets it twice.
   try {
-    if (body.source === 'meta_book' && data?.contact_id) {
+    const alreadyWhatsapped = Array.isArray(confirmation?.sent) && confirmation.sent.includes('whatsapp')
+    if (body.source === 'meta_book' && data?.contact_id && !alreadyWhatsapped) {
       const { fmtBookingTime } = await import('@/lib/booking-confirmations')
       const { maybeSendBookingWhatsappConfirm } = await import('@/lib/automations/booking-whatsapp-confirm')
       const { data: c } = await db.from('contacts')
@@ -244,7 +256,7 @@ export async function POST(request) {
         const whenLabel = fmtBookingTime(data.booking_date, data.start_time)
         await maybeSendBookingWhatsappConfirm({
           db, locationId: data.location_id, contact: c,
-          templateName: 'booking_consult_confirmed', bodyParams: [firstName, whenLabel],
+          purpose: 'consult_confirmed', bodyParams: [firstName, whenLabel],
         })
       }
     }

@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Field, Modal, Table } from '@/components/ui'
 import { isDue } from '@/lib/equipment'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn } from '@/lib/location-time'
 import { STATUS_CHIP, STATUS_LABEL } from './helpers'
 
 // Exported (not just inlined in the component) so columns.test.js can
@@ -63,7 +63,7 @@ const EMPTY_EQUIPMENT = {
   status: 'in_service',
 }
 
-export default function EquipmentTab() {
+export default function EquipmentTab({ timeZone } = {}) {
   const [equipment, setEquipment] = useState([])
   const [types, setTypes] = useState([])
   const [loading, setLoading] = useState(true)
@@ -72,11 +72,11 @@ export default function EquipmentTab() {
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [retiring, setRetiring] = useState(false)
-  // Dublin's calendar day, not the browser's — a staff phone/laptop set
-  // to another timezone must not shift what counts as "due today".
-  // dublinTodayStr() (dublin-time.js) is client-safe (Intl only, no
-  // server-only import) — seven other client components already use it.
-  const [today] = useState(() => dublinTodayStr())
+  // The studio's calendar day, not the browser's — a staff phone/laptop set
+  // to another timezone must not shift what counts as "due today". TZ.8b:
+  // `timeZone` is the active studio's (the page resolves it; the list is
+  // that studio's equipment). todayStrIn is client-safe (Intl only).
+  const [today] = useState(() => todayStrIn(timeZone))
 
   const load = useCallback(async () => {
     setLoading(true)

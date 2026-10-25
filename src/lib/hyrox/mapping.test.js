@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { dublinDateStr, dublinWeekday, weekNoFor, slotFor } from './mapping'
+import { zonedDateStr, zonedWeekday, weekNoFor, slotFor } from './mapping'
+
+// TZ.18b: the Dublin-named aliases are gone; pin the zone-taking reads on Europe/Dublin.
+const dublinDateStr = (iso) => zonedDateStr(iso, 'Europe/Dublin')
+const dublinWeekday = (iso) => zonedWeekday(iso, 'Europe/Dublin')
 
 describe('hyrox mapping (Dublin-safe)', () => {
   // 2026-07-22 is a Wednesday. 21:30 UTC is still Wed in Dublin (BST +1).

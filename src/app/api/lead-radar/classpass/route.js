@@ -20,6 +20,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadClassPass } from '@/lib/lead-radar-data'
 import { radarCache } from '@/lib/radar-cache'
+import { radarAvailability, RADAR_UNAVAILABLE } from '@/lib/radar-availability'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,6 +45,9 @@ export async function GET(request) {
   const filter = new URL(request.url).searchParams.get('filter')
   const db = createServerClient()
   try {
+    // UN1TRADAR.1 — before the cache: a source without membership data answers data:null
+    const avail = await radarAvailability(db, locationId, { module: 'lead-radar' })
+    if (!avail.available) return NextResponse.json(RADAR_UNAVAILABLE)
     const { classpass, summary } = await radarCache(
       'lead', locationId, 'classpass',
       () => loadClassPass(db, locationId),
@@ -55,6 +59,8 @@ export async function GET(request) {
     return NextResponse.json({
       success: true,
       data: { items: filtered.slice(0, LIST_CAP), total: filtered.length, summary },
+      source: avail.source,
+      dataAsOf: avail.dataAsOf,
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message || 'fetch_failed' }, { status: 500 })

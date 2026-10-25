@@ -12,7 +12,6 @@ import {
   matchLocationByRecipient,
   pickContact,
   replySubject,
-  buildReplyHeaders,
   inboundPreview,
   truncateHtmlBody,
   HTML_BODY_MAX_CHARS,
@@ -224,21 +223,6 @@ describe('replySubject', () => {
   })
 })
 
-describe('buildReplyHeaders', () => {
-  it('builds In-Reply-To + References with angle brackets', () => {
-    const headers = buildReplyHeaders({ rfcMessageId: 'abc@gmail.com', referencesHeader: '<root@x> <mid@y>' })
-    expect(headers).toContainEqual({ Name: 'In-Reply-To', Value: '<abc@gmail.com>' })
-    expect(headers).toContainEqual({ Name: 'References', Value: '<root@x> <mid@y> <abc@gmail.com>' })
-  })
-  it('starts References fresh when the inbound had none', () => {
-    const headers = buildReplyHeaders({ rfcMessageId: 'abc@gmail.com', referencesHeader: null })
-    expect(headers).toContainEqual({ Name: 'References', Value: '<abc@gmail.com>' })
-  })
-  it('returns [] when there is nothing to thread on', () => {
-    expect(buildReplyHeaders({ rfcMessageId: null, referencesHeader: null })).toEqual([])
-  })
-})
-
 describe('inboundPreview', () => {
   it('collapses whitespace and caps at 100 chars', () => {
     expect(inboundPreview('Hi,\n\nCan I  book a class?\n')).toBe('Hi, Can I book a class?')
@@ -258,3 +242,4 @@ describe('truncateHtmlBody', () => {
     expect(truncateHtmlBody(null)).toBe(null)
   })
 })
+

@@ -1,6 +1,6 @@
 import { redirect, notFound } from 'next/navigation'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { getCachedGbpToEur } from '@/lib/fx'
 import CarDetail from '@/components/cars/CarDetail'
@@ -11,7 +11,9 @@ export default async function CarDetailPage(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'car_processing')) redirect('/')
+  // PAGEGATES.1 — coarse pre-check only; the decision is at the car's
+  // location below, the same one every /api/cars/[id]/** route makes.
+  if (!hasPermissionAtAnyLocation(user, 'car_processing')) redirect('/')
 
   const db = createServerClient()
   const [{ data: car }, fx] = await Promise.all([
@@ -19,8 +21,8 @@ export default async function CarDetailPage(props) {
     getCachedGbpToEur(),
   ])
   if (!car) notFound()
-  const guard = assertLocationAccess(user, car.location_id)
-  if (guard) redirect('/cars/active')
+  if (assertLocationAccess(user, car.location_id)) notFound()
+  if (!hasPermissionForLocation(user, car.location_id, 'car_processing')) redirect('/')
 
   // Look up the BCA feature flag for the car's location + whether
   // there's an active non-error submission for this car. CarDetail

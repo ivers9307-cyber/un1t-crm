@@ -98,7 +98,7 @@ export const TRANSACTIONAL_CONSENT_SELECT =
  * which is NOT an opt-out: absence means "never expressed a preference".
  *
  * @param {object|null|undefined} contact
- * @param {'email_administrative'|'sms_administrative'|'email_marketing'|'sms_marketing'} key
+ * @param {'email_administrative'|'sms_administrative'|'whatsapp_administrative'|'email_marketing'|'sms_marketing'} key
  * @returns {boolean|undefined}
  */
 export function readContactPreference(contact, key) {
@@ -121,6 +121,30 @@ export function transactionalEmailSuppression(contact) {
   if (status && TRANSACTIONAL_EMAIL_HARD_STATUSES.includes(status)) return `email_status=${status}`
   if (readContactPreference(contact, 'email_administrative') === false) {
     return 'opted_out_administrative_email'
+  }
+  return null
+}
+
+/**
+ * The contacts.wa_status values that stop EVERY WhatsApp send — the same set
+ * the broadcast audience excludes (whatsapp.js buildWhatsAppAudience):
+ * a STOP / block, and a number Meta reported as not on WhatsApp.
+ */
+export const TRANSACTIONAL_WA_HARD_STATUSES = Object.freeze(['blocked', 'opted_out', 'undeliverable'])
+
+/**
+ * Why a TRANSACTIONAL WhatsApp message to this contact must not be sent, or
+ * null when it may. Pure. EVENTCONFIRM-WA.1 (booking confirmations).
+ *
+ * @param {object|null|undefined} contact
+ * @returns {string|null}
+ */
+export function transactionalWhatsappSuppression(contact) {
+  if (!contact) return null
+  const status = contact.wa_status
+  if (status && TRANSACTIONAL_WA_HARD_STATUSES.includes(status)) return `wa_status=${status}`
+  if (readContactPreference(contact, 'whatsapp_administrative') === false) {
+    return 'opted_out_administrative_whatsapp'
   }
   return null
 }

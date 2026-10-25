@@ -32,6 +32,9 @@ import { Clock, MapPin, ChevronLeft, ChevronRight, Check, AlertCircle, Globe } f
 // up Sunday's null availability and return zero slots — see the
 // roster.js docstring for the full incident reasoning.
 import { formatDate } from '@/lib/roster'
+import { PLATFORM_NAME } from '@/lib/brand-name'
+import { dayHasWindows } from '@/lib/booking-windows'
+import { resolveZone } from '@shared/zoned-time'
 
 export default function BookingWidget({ slug }) {
   const [event, setEvent] = useState(null)
@@ -63,17 +66,12 @@ export default function BookingWidget({ slug }) {
   // their own standalone signup widget at /race/[slug] and don't
   // share UI with the booking flow.)
 
-  // Detected timezone — surfaces on the calendar pane so customers
-  // know what zone the slot times are in (matches the Calendly
-  // pattern). Fallback to "Europe/Dublin" if Intl can't resolve.
-  const [viewerTimezone, setViewerTimezone] = useState('')
-  useEffect(() => {
-    try {
-      setViewerTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Dublin')
-    } catch {
-      setViewerTimezone('Europe/Dublin')
-    }
-  }, [])
+  // The zone the slot times are in — surfaces on the calendar pane so
+  // customers know (matches the Calendly pattern). TZ.7: slots are the
+  // STUDIO's wall clock and are never converted, so this names the studio's
+  // zone (the event's location, already in the GET payload), not the
+  // visitor's browser zone, which was wrong for anyone booking from abroad.
+  const studioTimezone = resolveZone(event?.locations?.timezone)
 
   // Load event details
   useEffect(() => {
@@ -143,7 +141,7 @@ export default function BookingWidget({ slug }) {
   function isAvailableForDayOfWeek(date) {
     if (!event || !date) return false
     const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-    return !!event.availability[dayNames[date.getDay()]]
+    return dayHasWindows(event.availability, dayNames[date.getDay()])
   }
   function isAvailableDay(date) {
     return isWithinAdvanceWindow(date) && isAvailableForDayOfWeek(date)
@@ -253,6 +251,8 @@ export default function BookingWidget({ slug }) {
   const days = getDaysInMonth(currentMonth)
   const showSlotsColumn = step === 'calendar' && !!selectedDate
   const location = event.locations || null
+  // W1.S1b — the studio's brand (payload), else its name; never a literal.
+  const brandName = event.brand || location?.name || ''
   const accent = event.color || '#111827'
 
   return (
@@ -296,7 +296,7 @@ export default function BookingWidget({ slug }) {
           {/* Footer powered-by sits with the brand panel so it
               doesn't fight the calendar for vertical space. */}
           <div className="pt-4 mt-auto">
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider">Powered by UN1T</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider">Powered by {PLATFORM_NAME}</p>
           </div>
         </aside>
 
@@ -405,7 +405,7 @@ export default function BookingWidget({ slug }) {
                   slot times are in. */}
               <div className="mt-5 pt-4 border-t border-gray-100 flex items-center gap-2 text-xs text-gray-500">
                 <Globe size={12} className="text-gray-400" />
-                <span>Times shown in <span className="text-gray-700 font-medium">{viewerTimezone || 'Europe/Dublin'}</span></span>
+                <span>Times shown in <span className="text-gray-700 font-medium">{studioTimezone}</span></span>
               </div>
             </>
           )}
@@ -554,7 +554,9 @@ export default function BookingWidget({ slug }) {
                   className="mt-0.5 shrink-0"
                 />
                 <span>
-                  Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
+                  {brandName
+                    ? `Yes, send me ${brandName} promotional updates and offers via email, SMS or WhatsApp.`
+                    : 'Yes, send me promotional updates and offers via email, SMS or WhatsApp.'}
                   You can unsubscribe at any time. Booking confirmations are sent regardless.
                 </span>
               </label>

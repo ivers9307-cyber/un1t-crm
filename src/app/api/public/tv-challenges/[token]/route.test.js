@@ -1,0 +1,186 @@
+// Tests for the W0.9a token-gated challenge board.
+//
+// The token resolves tv_displays.token → location, then returns the SAME
+// challenge payload for the resolved location. A good token returns 200 +
+// data scoped to THAT location; an invalid or inactive token returns 404
+// (never confirm existence); the limiter is keyed per token + IP.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// Stub the standings computation — it is covered by the challenges-io tests;
+// here we only assert token resolution, scoping and status codes.
+vi.mock('@/lib/challenges-io', () => ({
+  computeStandings: vi.fn(() => Promise.resolve([
+    { contact_id: 'c-1', name: 'Alice S.', value: 120, rank: 1 },
+    { contact_id: 'c-2', name: 'Bob T.', value: 80, rank: 2 },
+  ])),
+  computeCollective: vi.fn(() => Promise.resolve({ total: 500, target: 1000, pct: 50 })),
+}))
+
+// W1.S1b — the studio's brand rides the payload; resolved through the
+// per-location cache, mocked here so the assertion is the CALL + the shape.
+vi.mock('@/lib/host-brand', () => ({
+  resolveLocationBrand: vi.fn(async () => ({ companyName: 'Gym A North', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
+
+import { GET } from './route.js'
+import { resolveLocationBrand } from '@/lib/host-brand'
+import { createServerClient } from '@/lib/supabase'
+import { computeStandings } from '@/lib/challenges-io'
+
+const today = new Date()
+const iso = (d) => d.toISOString().slice(0, 10)
+const ACTIVE_CHALLENGE = {
+  id: 'ch-1', name: 'October Points', mode: 'individual', metric: 'points',
+  starts_on: iso(new Date(today.getTime() - 3 * 86_400_000)),
+  ends_on: iso(new Date(today.getTime() + 3 * 86_400_000)),
+  target: null,
+}
+
+function makeDb({ display, location, challenges = [] }) {
+  const challengesEq = vi.fn(() => ({ order: () => Promise.resolve({ data: challenges, error: null }) }))
+  return {
+    rpc: vi.fn(() => Promise.resolve({ data: 1, error: null })), // under rate limit
+    _challengesEq: challengesEq,
+    from: vi.fn((table) => {
+      if (table === 'tv_displays') {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: display, error: null }) }) }) }
+      }
+      if (table === 'locations') {
+        return { select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: location, error: null }) }) }) }
+      }
+      if (table === 'challenges') {
+        return { select: () => ({ eq: challengesEq }) }
+      }
+      throw new Error(`unexpected table: ${table}`)
+    }),
+  }
+}
+
+async function callRoute(db, token) {
+  createServerClient.mockReturnValue(db)
+  const request = { headers: { get: () => null }, url: `https://crm.test/api/public/tv-challenges/${token}` }
+  return GET(request, { params: Promise.resolve({ token }) })
+}
+
+beforeEach(() => { vi.clearAllMocks() })
+
+describe('GET /api/public/tv-challenges/[token]', () => {
+  it('resolves a good token to its location and returns the challenge payload scoped to it', async () => {
+    const db = makeDb({
+      display: { location_id: 'loc-1', active: true },
+      location: { id: 'loc-1', name: 'Stillorgan' },
+      challenges: [ACTIVE_CHALLENGE],
+    })
+    const res = await callRoute(db, 'good-token')
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.location).toEqual({ id: 'loc-1', name: 'Stillorgan' })
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+
+    // Scoped to the TOKEN's location, never a caller-supplied id.
+    expect(db._challengesEq).toHaveBeenCalledWith('location_id', 'loc-1')
+    for (const call of computeStandings.mock.calls) expect(call[1].locationId).toBe('loc-1')
+
+    // Same shape as the location-keyed twin: projected standings (no contact ids).
+    expect(body.challenges).toHaveLength(1)
+    expect(body.challenges[0]).toMatchObject({ id: 'ch-1', name: 'October Points', mode: 'individual', metric: 'points' })
+    expect(body.challenges[0].standings).toEqual([
+      { name: 'Alice S.', value: 120, rank: 1 },
+      { name: 'Bob T.', value: 80, rank: 2 },
+    ])
+    expect(body.gymBoard).toEqual([
+      { name: 'Alice S.', value: 120, rank: 1 },
+      { name: 'Bob T.', value: 80, rank: 2 },
+    ])
+    expect(JSON.stringify(body)).not.toContain('contact_id')
+  })
+
+  it("TZ.12: carries the token's location zone for the header clock (NULL column → Europe/Dublin)", async () => {
+    const ny = await (await callRoute(makeDb({
+      display: { location_id: 'loc-ny', active: true },
+      location: { id: 'loc-ny', name: 'NY', timezone: 'America/New_York' },
+    }), 'ny-token')).json()
+    expect(ny.timezone).toBe('America/New_York')
+    expect(ny.location).toEqual({ id: 'loc-ny', name: 'NY' })
+    const dub = await (await callRoute(makeDb({
+      display: { location_id: 'loc-1', active: true },
+      location: { id: 'loc-1', name: 'Stillorgan', timezone: null },
+    }), 'good-token')).json()
+    expect(dub.timezone).toBe('Europe/Dublin')
+  })
+
+  it('returns 404 for an unknown token (no row) without touching challenges', async () => {
+    const db = makeDb({ display: null, location: null })
+    const res = await callRoute(db, 'bad-token')
+    expect(res.status).toBe(404)
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+    expect(db._challengesEq).not.toHaveBeenCalled()
+    expect(computeStandings).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 for an inactive display', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: false }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'inactive-token')
+    expect(res.status).toBe(404)
+    expect(computeStandings).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the token has no token at all', async () => {
+    const db = makeDb({ display: null, location: null })
+    const res = await callRoute(db, '')
+    expect(res.status).toBe(404)
+  })
+
+  it('rate-limits per token + IP and returns 429 when the limiter denies', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    db.rpc = vi.fn(() => Promise.resolve({ data: 100000, error: null }))
+    const res = await callRoute(db, 'good-token')
+    expect(res.status).toBe(429)
+    const key = db.rpc.mock.calls[0][1]?.p_key ?? JSON.stringify(db.rpc.mock.calls[0])
+    expect(String(key)).toContain('good-token')
+  })
+
+  it('W1.S1b: carries the studio\'s brand from the per-location cache, keyed by the TOKEN\'s location', async () => {
+    const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan' } })
+    const res = await callRoute(db, 'good-token')
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.brand).toEqual({ name: 'Gym A North', short_name: 'Gym A' })
+    expect(resolveLocationBrand).toHaveBeenCalledWith(expect.objectContaining({ locationId: 'loc-1' }))
+    expect(JSON.stringify(body)).not.toMatch(/UN1T/)
+  })
+
+  it('W1.S1b: an unknown token never resolves a brand', async () => {
+    const db = makeDb({ display: null, location: null })
+    await callRoute(db, 'bad-token')
+    expect(resolveLocationBrand).not.toHaveBeenCalled()
+  })
+})
+
+// TZ.17 ⚠️ — the monthly gym board starts on the studio's 1st at local midnight.
+describe('TZ.17 the gym board month is the studio month', () => {
+  const run = async (nowIso, timezone) => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(nowIso))
+    try {
+      const db = makeDb({ display: { location_id: 'loc-1', active: true }, location: { id: 'loc-1', name: 'Stillorgan', timezone } })
+      await callRoute(db, 'good-token')
+    } finally { vi.useRealTimers() }
+    return computeStandings.mock.calls.at(-1)[1].fromIso
+  }
+  it('Dublin at 00:30 IST on 2 Jul: from 00:00 IST on 1 Jul (it was 00:00 UTC)', async () => {
+    expect(await run('2026-07-01T23:30:00Z', 'Europe/Dublin')).toBe('2026-06-30T23:00:00.000Z')
+  })
+  it('Dublin at 00:30 IST on 1 Jul is already July (the UTC board still showed June)', async () => {
+    expect(await run('2026-06-30T23:30:00Z', 'Europe/Dublin')).toBe('2026-06-30T23:00:00.000Z')
+  })
+  it('Dublin in winter: unchanged (00:00 UTC on the 1st)', async () => {
+    expect(await run('2026-01-15T12:00:00Z', 'Europe/Dublin')).toBe('2026-01-01T00:00:00.000Z')
+  })
+  it('New York: 00:00 EDT on 1 Nov, 00:00 EST on 1 Dec', async () => {
+    expect(await run('2026-11-15T12:00:00Z', 'America/New_York')).toBe('2026-11-01T04:00:00.000Z')
+    expect(await run('2026-12-15T12:00:00Z', 'America/New_York')).toBe('2026-12-01T05:00:00.000Z')
+  })
+})

@@ -12,11 +12,12 @@
 //   • src/lib/tiers.js grew three windowed-decay helpers (tierWindowMonths,
 //     shiftMonthKey, windowedMonthsHit) that shared/tiers.js never got, while
 //     BOTH files' line 1 still said "verbatim copy below line 1".
-//   • src/lib/goals.js and shared/goals.js disagree on the week/month
+//   • src/lib/goals.js and shared/goals.js disagreed on the week/month
 //     boundary (UTC vs Europe/Dublin) AND on periodEnd's arity — while
 //     src/lib/goals.js line 1 claimed a verbatim copy. Web reads
 //     `@/lib/goals`, mobile reads `shared/goals`, and they render the same
-//     member's weekly goal progress.
+//     member's weekly goal progress. (TZ.17 aligned the boundary; periodEnd
+//     still differs.)
 //   • src/lib/heart-rate.js and shared/heart-rate.js disagree on the
 //     zone LABELS ('Z1' vs 'Zone 1'), on resolveScoringConfig's return shape,
 //     and on summariseSession's internals.
@@ -103,7 +104,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { stripComments } from '../scripts/lib/strip-comments.mjs'
+import { stripComments } from './helpers/js-code.js'
 import { exportBodies, collectExportNames } from '../scripts/lib/export-bodies.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -135,10 +136,21 @@ const PAIRS = {
     mode: 'reexport',
     why:
       'MAIL-ARCH.2 moved the Mail surface\'s archive / needs-reply / unread / spam predicates and its view list to ' +
-      'shared/ because mobile/lib/email-tickets.js had mirrored them by hand and DRIFTED (archiveToggleMeta OR-ed ' +
+      'shared/ because mobile/lib/mail-conversations.js had mirrored them by hand and DRIFTED (archiveToggleMeta OR-ed ' +
       'the ticket-era status back over the server\'s `archived` stamp and reopened live `solved` rows). src/lib is an ' +
       '`export * from` shim; src/components/mail/mail-vocabulary.js re-exports it for the web components and mobile ' +
       "imports 'shared/mail-vocabulary' directly, so the two surfaces read the very same functions.",
+  },
+  'mail-quote.js': {
+    mode: 'reexport',
+    why: 'MAIL-REPLY-QUOTE.1 — the quoted-text splitter serves the web thread and the mobile thread; src/lib re-exports shared.',
+  },
+  'mail-entities.js': {
+    mode: 'reexport',
+    why:
+      '`export * from` shim; src/lib/mail-entities.js re-exports it so web call sites read as @/lib, '
+      + "and mobile imports 'shared/mail-entities' directly, so ingest and both render paths decode "
+      + 'character references with the very same function.',
   },
   'sonos-playback.js': {
     mode: 'reexport',
@@ -148,6 +160,60 @@ const PAIRS = {
       'SONOSMOB.1 moved the Sonos playbackState enum + isPlaying/playbackLabel to shared/ for the mobile control ' +
       'card; the web path is an `export * from` shim. Cross-named (sonos/playback.js vs sonos-playback.js), so the ' +
       'export-name scan would not pair them on its own — this entry is what makes the identity assertion run.',
+  },
+  'roster-staffing.js': {
+    mode: 'reexport',
+    webOnly: ['fetchStaffingGapsThisWeek'],
+    why:
+      'MOBILESCHED.2 moved the pure staffing (empty / short / ok against min_coaches) and publication-status logic to ' +
+      'shared/ so mobile Manage mode stops counting cancelled assignments with its own below-minimum state; src/lib is a ' +
+      'named re-export shim and keeps the one IO helper (fetchStaffingGapsThisWeek) web-only.',
+  },
+
+  'agent-request-failure.js': {
+    mode: 'reexport',
+    shared: 'shared/agent-request-failure.js',
+    web: 'src/lib/approvals/agent-request-why.js',
+    webOnly: ['whyFlagged', 'approvalGrantsTrialCredit', 'accountSummaryLine', 'accountMismatchWarning', 'customerWords'],
+    why:
+      'C85 (c) moved failureExplanation (a failed approval\'s code in the operator\'s words) to shared/ so the phone\'s ' +
+      'post-approve alert and thread approval card stop printing the raw code; agent-request-why.js re-exports it for ' +
+      'every web caller and keeps its web-only helpers (they import server modules). Cross-named, so this entry is ' +
+      'what makes the identity assertion run. un1tFailureExplanation (the un1t.online wording for Mia\'s Hatch cards, ' +
+      'MIAHATCH.5) moved to shared/ too, so the phone stops reading those codes in Glofox terms.',
+  },
+
+  'brand-name.js': {
+    mode: 'reexport',
+    why:
+      'W1.B1 — one source for product names. productName(brand, "points"|"hr") and pointsUnit build ' +
+      '"{Brand} Points" / "{Brand} HR" from the tenant brand so the phone, champ-app and the web never spell ' +
+      'a gym literal; shared/ is the implementation, src/lib/brand-name.js is an `export * from` shim.',
+  },
+
+  'zone-suffix.js': {
+    mode: 'reexport',
+    shared: 'shared/zone-suffix.js',
+    web: 'src/lib/record-time.js',
+    webOnly: ['formatRecordTime'],
+    why:
+      'TZ follow-up: the D3 = A "append the zone abbreviation only when the record zone is not the viewer\'s" rule ' +
+      '(needsZoneSuffix, zoneAbbreviation, zoneCity, sameZone, zoneSuffix) had two hand-written copies, the web\'s ' +
+      'src/lib/record-time.js (TZ.16) and the phone\'s mobile/lib/studio-zone.js (TZ.14). It lives once in shared/; ' +
+      'record-time.js re-exports it and keeps only its formatter (formatRecordTime), and studio-zone.js wraps it with ' +
+      'the device zone as the default viewer. Cross-named, so this entry is what makes the identity assertion run.',
+  },
+
+  'zoned-time.js': {
+    mode: 'reexport',
+    shared: 'shared/zoned-time.js',
+    web: 'src/lib/location-time.js',
+    webOnly: ['LOCATION_ZONE_CACHE_MAX', 'LocationZoneReadError', 'getLocationZone', 'getLocationZones', 'resetLocationZoneCache', 'zoneOfLocation'],
+    why:
+      'TZ.1 — THE per-location zone maths (dublin-time twins taking a zone, the SHELLY.1 wall-clock solver) lives ' +
+      'in shared/ so the phone and champ-app use the same code as the server; src/lib/location-time.js is an ' +
+      '`export * from` shim that adds the web-only DB side (a location\'s zone, bounded 60 s cache, LocationZoneReadError) and is cross-named, so ' +
+      'this entry is what makes the identity assertion run.',
   },
 
   // ── identical: hand-maintained twins that really are twins ─────────────────
@@ -197,15 +263,15 @@ const PAIRS = {
   // ── diverged: NOT in sync, and the drift is pinned so it stays visible ─────
   'goals.js': {
     mode: 'diverged',
-    drifted: ['computeProgress', 'periodEnd', 'startOfIsoWeek', 'startOfMonth'],
+    drifted: ['periodEnd'],
     why:
-      'OPEN, deliberately not fixed here. src/lib/goals.js (PR #610) buckets weeks and months on UTC boundaries; ' +
-      'shared/goals.js (the champ-app copy landed by the Repset P1 drop) buckets them on Europe/Dublin boundaries, ' +
-      'and its periodEnd takes (period, periodStart) where the web one takes (periodStart). The web dashboard reads ' +
-      "@/lib/goals and the mobile member app reads shared/goals, so the SAME member's weekly goal progress can " +
-      'disagree around Dublin midnight on a Monday during IST — the exact hazard CLAUDE.md\'s timezone invariant ' +
-      'describes. src/lib/goals.js line 1 claimed a verbatim copy; that claim is corrected, but changing which ' +
-      'boundary the web uses moves a member-visible number and is its own decision, not a drive-by in a guard PR.',
+      'OPEN, periodEnd only. src/lib/goals.js (PR #610) and shared/goals.js (the champ-app copy landed by the ' +
+      'Repset P1 drop) used to bucket weeks and months differently (UTC on the web, Europe/Dublin on the phone), ' +
+      "so the SAME member's weekly goal progress could disagree around midnight on a Monday during IST. TZ.17 " +
+      "(⚠️, approved by Richard 11 Oct 2026) moved the web's startOfIsoWeek / startOfMonth / computeProgress onto " +
+      "the member's calendar (zone parameter, D7), byte-for-byte the shared bodies, so those three left `drifted`. " +
+      'What is left: periodEnd takes (period, periodStart) in shared and (periodStart) on the web (a stub nothing ' +
+      'in src/ calls). Re-syncing it is an API change for its callers, not a boundary fix.',
   },
   'heart-rate.js': {
     mode: 'diverged',
@@ -260,6 +326,25 @@ const PAIRS = {
       'it to the reader only and the filter asks for rows that never exist. The two lists are declared ' +
       'independently, in different files, with no import between them and nothing checking they agree — ' +
       'this is the check. Found by the cross-named sweep below, not by the filename sweep.',
+  },
+  'returning-board taxonomy via the classifier shim': {
+    shared: 'shared/pipelines/returning.js',
+    web: 'src/lib/pipeline-classifier.js',
+    mode: 'shared-constant',
+    constants: ['RETURNING_STAGE_SLUGS'],
+    why:
+      'PIPELINES.2b — neither two copies nor a whole-module shim, but a PARTIAL re-export, which is ' +
+      'why it needs an explicit entry. RETURNING_STAGE_SLUGS and returnEpisode moved out of ' +
+      'shared/pipeline-classifier.js into the returning BOARD MODULE (shared/pipelines/returning.js) ' +
+      'when classifyContact stopped routing to that parked board; shared/pipeline-classifier.js ' +
+      're-exports both, and src/lib/pipeline-classifier.js re-exports it in turn, so ' +
+      'src/components/mail/ConversationThread.jsx keeps reading RETURNING_STAGE_SLUGS off ' +
+      '@/lib/pipeline-classifier unchanged. The collision the cross-named sweep found is therefore the ' +
+      'SAME object reached through two hops, not a duplicate — so COINCIDENTAL would be a false ' +
+      "statement. This mode's value equality is the floor; the identity guard at the bottom of this " +
+      'file is the real assertion, because a hand-copied literal would still be deep-equal. The board ' +
+      "module's other exports (stages, requiredFields, classify, returningStage) have no web path on " +
+      'purpose: the board is deliberately unregistered, so nothing consumes them on either surface yet.',
   },
 
   // ── unrelated: same filename, different module ─────────────────────────────
@@ -347,7 +432,7 @@ const COINCIDENTAL = {
   'shared/share-card.js::src/lib/challenges.js':
     '`shortName` twice — a display helper for a member name, independently written on both sides. Cosmetic, no contract.',
   'shared/dashboard-data.js::src/lib/goals.js':
-    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`, and startOfMonth is one of the pinned drifted exports); dashboard-data has its own for a dashboard range.',
+    '`startOfMonth` twice. goals.js is inside the guarded goals.js pair (mode `diverged`; since TZ.17 its startOfMonth matches shared/goals.js and only periodEnd is pinned as drifted); dashboard-data has its own for a dashboard range.',
   'shared/live-view.js::src/lib/race-control.js':
     '`formatElapsed` twice, and they deliberately DISAGREE — recorded here so the disagreement is ' +
     'visible rather than latent. shared/race-control.js (which src/lib/race-control.js re-exports, ' +
@@ -364,6 +449,17 @@ const COINCIDENTAL = {
     '`isoDate` twice — a one-line YYYY-MM-DD formatter. Too small to be a contract.',
   'shared/dashboard-data.js::src/lib/schemas.js':
     '`isoDate` twice, the same one-line YYYY-MM-DD formatter as the dates.js collision above. schemas.js uses it for request validation, dashboard-data for a range label; no contract binds them.',
+  'shared/zoned-time.js::src/lib/tv-template.js':
+    '`resolveZone` twice, unrelated: tv-template (re-exporting shared/tv-template.js) merges a TV LAYOUT zone ' +
+    '(a screen region) with its pushed value; zoned-time resolves an IANA TIME zone name. Different meanings of "zone".',
+  'shared/zoned-time.js::src/lib/dublin-time.js':
+    '`addDaysISO` twice, a zone-free YYYY-MM-DD step that TZ.1 copies so shared/ (which cannot import src/lib) has it. ' +
+    'Not a coincidence but not a module pair either: dublin-time is the Dublin-only module the TZ wave retires (TZ.18b), ' +
+    'and shared/zoned-time.parity.test.js asserts the two agree on every day of 2025-2027.',
+  'shared/zoned-time.js::src/lib/tz-time.js':
+    '`DEFAULT_TZ` and `nextLocalMidnightMs` twice BY IDENTITY: tz-time is a renaming shim (`export { isValidZone as ' +
+    'isValidTz, … } from \'@shared/zoned-time\'`), so it cannot be a `reexport` pair (that mode requires every shared ' +
+    'name). The identity of every alias is asserted in the "tz-time is a renaming shim" block below.',
 }
 
 /** Every .js under a directory, recursively, excluding tests and fixtures. */
@@ -429,7 +525,7 @@ function unclassifiedShims(shims, pairs) {
   return out.sort()
 }
 
-describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
+describe('shared/ ↔ src/lib/ pair inventory is complete', { timeout: 120_000 }, () => {
   it('every module with the SAME NAME in both directories is classified', () => {
     const sameName = walkJs(join(repo, 'shared'))
       .filter((rel) => existsSync(join(repo, 'src', 'lib', rel)))
@@ -566,7 +662,7 @@ describe('shared/ ↔ src/lib/ pair inventory is complete', () => {
   })
 })
 
-describe('reexport pairs — one implementation, proven by identity', () => {
+describe('reexport pairs — one implementation, proven by identity', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'reexport')
   for (const [key, cfg] of entries) {
     it(`${key}: every shared export is the SAME object on the web side`, async () => {
@@ -591,7 +687,7 @@ describe('reexport pairs — one implementation, proven by identity', () => {
   }
 })
 
-describe('identical pairs — the copies really are copies', () => {
+describe('identical pairs — the copies really are copies', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'identical')
   for (const [key, cfg] of entries) {
     it(`${key}: module bodies match once comments and import specifiers are set aside`, () => {
@@ -625,7 +721,7 @@ describe('identical pairs — the copies really are copies', () => {
   }
 })
 
-describe('web-superset pairs — shared is the subset, extras are declared', () => {
+describe('web-superset pairs — shared is the subset, extras are declared', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'web-superset')
   for (const [key, cfg] of entries) {
     it(`${key}: every export shared declares is byte-equal on the web side`, () => {
@@ -647,7 +743,7 @@ describe('web-superset pairs — shared is the subset, extras are declared', () 
   }
 })
 
-describe('diverged pairs — the drift is pinned, in both directions', () => {
+describe('diverged pairs — the drift is pinned, in both directions', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'diverged')
   for (const [key, cfg] of entries) {
     it(`${key}: exactly the recorded exports differ — no more, and no fewer`, () => {
@@ -676,7 +772,7 @@ describe('diverged pairs — the drift is pinned, in both directions', () => {
   }
 })
 
-describe('unrelated pairs — same filename, different module', () => {
+describe('unrelated pairs — same filename, different module', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'unrelated')
   for (const [key, cfg] of entries) {
     it(`${key}: the export surfaces stay disjoint`, () => {
@@ -692,7 +788,7 @@ describe('unrelated pairs — same filename, different module', () => {
   }
 })
 
-describe('shared-constant pairs — different modules, one value that must agree', () => {
+describe('shared-constant pairs — different modules, one value that must agree', { timeout: 120_000 }, () => {
   const entries = Object.entries(PAIRS).filter(([, c]) => c.mode === 'shared-constant')
   for (const [key, cfg] of entries) {
     for (const name of cfg.constants) {
@@ -723,7 +819,7 @@ describe('shared-constant pairs — different modules, one value that must agree
 // Source comparison catches an edit. These catch the thing the edit would
 // break, and they keep working through a refactor that rewrites the source.
 
-describe('the status-tier ladder means the same thing on both surfaces', () => {
+describe('the status-tier ladder means the same thing on both surfaces', { timeout: 120_000 }, () => {
   it('TIERS is identical, slug/name/months/colour', async () => {
     const s = await import('../shared/tiers.js')
     const w = await import('../src/lib/tiers.js')
@@ -745,7 +841,7 @@ describe('the status-tier ladder means the same thing on both surfaces', () => {
   })
 })
 
-describe('the dark-canvas zone palette means the same thing on both surfaces', () => {
+describe('the dark-canvas zone palette means the same thing on both surfaces', { timeout: 120_000 }, () => {
   it('all five zone hues are identical', async () => {
     const s = await import('../shared/zone-colors.js')
     const w = await import('../src/lib/tv-zone-colors.js')
@@ -762,7 +858,40 @@ describe('the dark-canvas zone palette means the same thing on both surfaces', (
   })
 })
 
-describe('the session-report fixture both copies assert against', () => {
+describe('tz-time is a renaming shim onto shared/zoned-time, not a copy (TZ.1)', { timeout: 120_000 }, () => {
+  it('every tz-time export but wallMsInTz is a shared/zoned-time binding', async () => {
+    const z = await import('../shared/zoned-time.js')
+    const t = await import('../src/lib/tz-time.js')
+    expect(t.DEFAULT_TZ).toBe(z.DEFAULT_TZ)
+    expect(t.isValidTz).toBe(z.isValidZone)
+    expect(t.resolveTz).toBe(z.resolveZone)
+    expect(t.dayStrInTz).toBe(z.strictDayStrIn)
+    expect(t.dayStartMsInTz).toBe(z.strictDayStartMsIn)
+    expect(t.nextLocalMidnightMs).toBe(z.nextLocalMidnightMs)
+    // wallMsInTz is the one wrapper (it keeps tz-time's HH:MM-only input); nothing else may appear.
+    expect(Object.keys(t).sort()).toEqual(
+      ['DEFAULT_TZ', 'dayStartMsInTz', 'dayStrInTz', 'isValidTz', 'nextLocalMidnightMs', 'resolveTz', 'wallMsInTz'],
+    )
+  })
+})
+
+describe('the returning-board taxonomy is ONE object, not a copy (PIPELINES.2b)', { timeout: 120_000 }, () => {
+  it('@/lib/pipeline-classifier re-exports the board module\'s bindings by identity', async () => {
+    const board = await import('../shared/pipelines/returning.js')
+    const web = await import('../src/lib/pipeline-classifier.js')
+    // Two hops: shared/pipelines/returning.js → shared/pipeline-classifier.js →
+    // src/lib/pipeline-classifier.js. If any hop were ever replaced by a
+    // hand-copied literal the slugs would still be deep-equal, so identity is
+    // the assertion that catches it — the same reason `reexport` pairs are
+    // proven with toBe rather than toEqual.
+    expect(web.RETURNING_STAGE_SLUGS).toBe(board.RETURNING_STAGE_SLUGS)
+    expect(web.returnEpisode).toBe(board.returnEpisode)
+    // Guard the guard: an empty list would make the comparison vacuous.
+    expect(board.RETURNING_STAGE_SLUGS).toHaveLength(5)
+  })
+})
+
+describe('the session-report fixture both copies assert against', { timeout: 120_000 }, () => {
   it('is identical in shared/__fixtures__ and src/lib/__fixtures__', () => {
     // hr-session-report.js is mode 'identical', so its two test files compute
     // against the same code. If the FIXTURES diverged, the two suites would

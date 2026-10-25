@@ -8,13 +8,20 @@
 // a one-line summary, and the worst-moment quote. The analytics page surfaces
 // flagged conversations; Mondays, managers get a 7-day digest push.
 //
+// TZ.5 — "yesterday" and "Monday" are each studio's own (locations.timezone):
+// conversations are reviewed per zone, against that zone's yesterday, and the
+// digest reaches a studio on its own Monday. An all-Dublin estate runs the one
+// Dublin window it always did.
+//
 // Direct API calls, deliberately NOT the Batch API: at ~3 agent conversations
 // a day batching buys nothing (revisit if the line 10x's). Reviews ride the
 // same model + thinking config as Mia herself so the reviewer's bar moves
 // with the model she runs on.
 
 import { anthropicMessages } from '@/lib/anthropic'
-import { dublinDayStr, dublinAddDays, dublinDayStartMs } from '@/lib/dublin-time'
+import { dayStrIn, addDaysIn, dayStartMsIn, zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
+import { logError } from '@/lib/log'
+import { selectAll } from '@/lib/select-all'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { AGENT_MODEL, AGENT_THINKING } from './auto-reply'
@@ -37,17 +44,47 @@ export const REVIEW_RUBRIC = [
 ]
 
 /**
- * Yesterday as a full Dublin day. Pure.
+ * Yesterday as a full local day in `zone` (the studio's). Pure.
+ * @param {number} [nowMs]
+ * @param {string} [zone] IANA zone
  * @returns {{reviewDate: string, startIso: string, endIso: string}}
  */
-export function reviewWindow(nowMs = Date.now()) {
-  const today = dublinDayStr(nowMs)
-  const reviewDate = dublinAddDays(today, -1)
+export function reviewWindow(nowMs = Date.now(), zone = DEFAULT_TZ) {
+  const today = dayStrIn(nowMs, zone)
+  const reviewDate = addDaysIn(today, -1, zone)
   return {
     reviewDate,
-    startIso: new Date(dublinDayStartMs(reviewDate)).toISOString(),
-    endIso: new Date(dublinDayStartMs(today)).toISOString(),
+    startIso: new Date(dayStartMsIn(reviewDate, zone)).toISOString(),
+    endIso: new Date(dayStartMsIn(today, zone)).toISOString(),
   }
+}
+
+/**
+ * Is it Monday on the studio's clock? Weekday of the LOCAL date key (noon-UTC
+ * of the key is safely the same weekday; midnight-UTC would read the day
+ * before for a zone east of UTC). Pure.
+ */
+export function isMondayIn(nowMs, zone = DEFAULT_TZ) {
+  return new Date(`${dayStrIn(nowMs, zone)}T12:00:00Z`).getUTCDay() === 1
+}
+
+// TZ.5 — every location's zone, read once per run. The candidate query spans
+// all studios, so the zones are needed BEFORE it, keyed by id; a location the
+// list does not hold (or a NULL location_id) reads as DEFAULT_TZ, the same
+// answer getLocationZone gives for a missing row. Paged (the 1k row cap);
+// throws on a failed read.
+async function readLocationZones(db) {
+  const rows = await selectAll((from, to) => db.from('locations').select('id, timezone').order('id').range(from, to))
+  return new Map(rows.map((row) => [row.id, zoneOfLocation(row)]))
+}
+
+// Distinct zones in first-seen order, DEFAULT_TZ always among them (it owns
+// rows whose location has no row). One zone for an all-Dublin estate.
+function zoneGroups(zones) {
+  const out = []
+  for (const z of zones.values()) if (!out.includes(z)) out.push(z)
+  if (!out.includes(DEFAULT_TZ)) out.push(DEFAULT_TZ)
+  return out
 }
 
 /** Speaker-labelled transcript, oldest first. Pure. */
@@ -144,87 +181,99 @@ export async function runAgentReview(db, { nowMs = Date.now() } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { ...results, error: 'no_api_key' }
 
-  const { reviewDate, startIso, endIso } = reviewWindow(nowMs)
+  // TZ.5 — a failed zone read is a DB outage: skip the run (reruns are
+  // idempotent; tomorrow's run reviews tomorrow's yesterday), never a guess.
+  let zones
+  try {
+    zones = await readLocationZones(db)
+  } catch (e) {
+    logError('agent-review', 'location zones unreadable; run skipped', { err: e })
+    return { ...results, error: 'zone_read_failed' }
+  }
+  const zoneOf = (locationId) => zones.get(locationId) ?? DEFAULT_TZ
 
   for (const channel of CHANNELS) {
-    // Conversations Mia touched in the window.
-    const { data: touched, error } = await db.from(channel.messagesTable)
-      .select('conversation_id, location_id')
-      .eq('source', 'agent')
-      .gte('created_at', startIso)
-      .lt('created_at', endIso)
-      .limit(500)
-    if (error) {
-      console.error(`[agent-review] candidate query failed (${channel.name}):`, error.message)
-      continue
-    }
-    const byConversation = new Map()
-    for (const row of touched || []) {
-      if (row.conversation_id) byConversation.set(row.conversation_id, row.location_id)
-    }
-    if (!byConversation.size) continue
-
-    // Idempotence: skip conversations already reviewed for this date.
-    const ids = [...byConversation.keys()]
-    const { data: existing } = await db.from('agent_conversation_reviews')
-      .select('conversation_id')
-      .eq('channel', channel.name)
-      .eq('review_date', reviewDate)
-      .in('conversation_id', ids)
-    const done = new Set((existing || []).map(r => r.conversation_id))
-
-    for (const [conversationId, locationId] of byConversation) {
-      if (done.has(conversationId)) { results.skipped++; continue }
-      if (results.reviewed >= MAX_CONVERSATIONS_PER_RUN) {
-        console.warn(`[agent-review] per-run cap (${MAX_CONVERSATIONS_PER_RUN}) reached — remainder picks up tomorrow`)
-        break
+    for (const zone of zoneGroups(zones)) {
+      const { reviewDate, startIso, endIso } = reviewWindow(nowMs, zone)
+      // Conversations Mia touched in this zone's window (rows of studios in
+      // another zone are theirs to review against their own day).
+      const { data: touched, error } = await db.from(channel.messagesTable)
+        .select('conversation_id, location_id')
+        .eq('source', 'agent')
+        .gte('created_at', startIso)
+        .lt('created_at', endIso)
+        .limit(500)
+      if (error) {
+        console.error(`[agent-review] candidate query failed (${channel.name}):`, error.message)
+        continue
       }
-      try {
-        const { data: rows } = await db.from(channel.messagesTable)
-          .select('direction, source, sent_by, body, created_at')
-          .eq('conversation_id', conversationId)
-          .lt('created_at', endIso)
-          .order('created_at', { ascending: false })
-          .limit(MAX_TRANSCRIPT_MESSAGES)
-        const transcript = buildReviewTranscript((rows || []).reverse())
-        if (!transcript) { results.skipped++; continue }
+      const byConversation = new Map()
+      for (const row of touched || []) {
+        if (row.conversation_id && zoneOf(row.location_id) === zone) byConversation.set(row.conversation_id, row.location_id)
+      }
+      if (!byConversation.size) continue
 
-        const { res, data } = await anthropicMessages(
-          buildReviewRequest(transcript, reviewDate),
-          { apiKey, locationId, source: 'agent_review' },
-        )
-        if (!res.ok) { results.skipped++; continue }
-        const text = (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
-        const review = parseReviewJson(text)
-        if (!review || !review.score) { results.skipped++; continue }
+      // Idempotence: skip conversations already reviewed for this date.
+      const ids = [...byConversation.keys()]
+      const { data: existing } = await db.from('agent_conversation_reviews')
+        .select('conversation_id')
+        .eq('channel', channel.name)
+        .eq('review_date', reviewDate)
+        .in('conversation_id', ids)
+      const done = new Set((existing || []).map(r => r.conversation_id))
 
-        const { error: insertError } = await db.from('agent_conversation_reviews').insert({
-          location_id: locationId,
-          channel: channel.name,
-          conversation_id: conversationId,
-          review_date: reviewDate,
-          score: review.score,
-          flags: review.flags,
-          summary: review.summary,
-          worst_quote: review.worst_quote,
-          model: AGENT_MODEL,
-        })
-        if (insertError) { results.skipped++; continue } // unique race = already done
-        results.reviewed++
-        if (review.score <= FLAGGED_SCORE_THRESHOLD || review.flags.length) results.flagged++
-      } catch (e) {
-        results.skipped++
-        console.error(`[agent-review] review error (${channel.name}):`, e?.message || e)
+      for (const [conversationId, locationId] of byConversation) {
+        if (done.has(conversationId)) { results.skipped++; continue }
+        if (results.reviewed >= MAX_CONVERSATIONS_PER_RUN) {
+          console.warn(`[agent-review] per-run cap (${MAX_CONVERSATIONS_PER_RUN}) reached — remainder picks up tomorrow`)
+          break
+        }
+        try {
+          const { data: rows } = await db.from(channel.messagesTable)
+            .select('direction, source, sent_by, body, created_at')
+            .eq('conversation_id', conversationId)
+            .lt('created_at', endIso)
+            .order('created_at', { ascending: false })
+            .limit(MAX_TRANSCRIPT_MESSAGES)
+          const transcript = buildReviewTranscript((rows || []).reverse())
+          if (!transcript) { results.skipped++; continue }
+
+          const { res, data } = await anthropicMessages(
+            buildReviewRequest(transcript, reviewDate),
+            { apiKey, locationId, source: 'agent_review' },
+          )
+          if (!res.ok) { results.skipped++; continue }
+          const text = (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+          const review = parseReviewJson(text)
+          if (!review || !review.score) { results.skipped++; continue }
+
+          const { error: insertError } = await db.from('agent_conversation_reviews').insert({
+            location_id: locationId,
+            channel: channel.name,
+            conversation_id: conversationId,
+            review_date: reviewDate,
+            score: review.score,
+            flags: review.flags,
+            summary: review.summary,
+            worst_quote: review.worst_quote,
+            model: AGENT_MODEL,
+          })
+          if (insertError) { results.skipped++; continue } // unique race = already done
+          results.reviewed++
+          if (review.score <= FLAGGED_SCORE_THRESHOLD || review.flags.length) results.flagged++
+        } catch (e) {
+          results.skipped++
+          console.error(`[agent-review] review error (${channel.name}):`, e?.message || e)
+        }
       }
     }
   }
 
   // Monday digest — the week in one push, per location with anything flagged.
   try {
-    // Weekday of the DUBLIN date (noon-UTC of the date key is safely the
-    // same weekday — midnight-UTC would read Sunday during Irish Summer Time).
-    const isMonday = new Date(`${dublinDayStr(nowMs)}T12:00:00Z`).getUTCDay() === 1
-    if (isMonday) {
+    // TZ.5 — each studio's own Monday (isMondayIn). The read runs when it is
+    // Monday for at least one zone; for an all-Dublin estate, exactly as before.
+    if (zoneGroups(zones).some((z) => isMondayIn(nowMs, z))) {
       const weekAgoIso = new Date(nowMs - 7 * 86_400_000).toISOString()
       const { data: recent } = await db.from('agent_conversation_reviews')
         .select('location_id, score, flags')
@@ -239,6 +288,7 @@ export async function runAgentReview(db, { nowMs = Date.now() } = {}) {
       }
       for (const [locationId, s] of byLocation) {
         if (!s.flagged) continue
+        if (!isMondayIn(nowMs, zoneOf(locationId))) continue
         await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
           title: 'Mia weekly review',
           body: `${s.flagged} of ${s.total} agent conversations were flagged this week. The list is on the agent analytics page.`,

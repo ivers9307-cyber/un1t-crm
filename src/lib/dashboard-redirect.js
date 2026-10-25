@@ -16,7 +16,7 @@
 //      expected to fall through to /dashboard's empty-state render.
 
 import { hasPermission } from '@/lib/permissions'
-import { getOwnerOrganizationIds } from '@/lib/auth'
+import { isOrgAdmin } from '@/lib/org-admin'
 import { resolveLandingPreference, LANDING_PREFERENCE_TARGETS } from '@shared/permissions'
 
 // REPSET-ACCOUNT.1 — the Account Home (org portfolio) route. `/account`
@@ -47,10 +47,12 @@ export const PLATFORM_CONSOLE_HOME = '/admin/tenants'
  *                                            Console home — REPSET-PLATFORM.1;
  *                                            no active org required, the
  *                                            console is cross-tenant)
- *   owner of the active org, ≥2 accessible
- *     studios in that org                  → /portfolio
- *   owner with 1 studio                    → null (studio dashboard, UNCHANGED)
- *   manager / head_coach / staff           → null (not account-tier)
+ *   organisation admin of the active org
+ *     (org_admin grant — C141 ORGROLE.2),
+ *     ≥2 accessible studios in that org    → /portfolio
+ *   org admin with 1 studio                → null (studio dashboard, UNCHANGED)
+ *   owner / manager / head_coach / staff
+ *     without an org_admin grant           → null (not account-tier)
  *   no active org / any error / ambiguity  → null (FAIL-SAFE: existing behaviour)
  *
  * Pure — no DB. Wrapped in try/catch so any unexpected shape degrades to
@@ -80,9 +82,10 @@ export function resolveLandingTarget(user) {
     const activeOrgId = user.activeOrganization?.id
     if (!activeOrgId) return null // missing/ambiguous org → existing behaviour
 
-    // Only an account-tier operator (owner of the ACTIVE org) is routed to
-    // the portfolio — a multi-studio manager stays in their studio.
-    if (!getOwnerOrganizationIds(user).includes(activeOrgId)) return null
+    // Only an account-tier operator (organisation admin of the ACTIVE org,
+    // C141 ORGROLE.2 — the /portfolio guard's rule) is routed to the
+    // portfolio; a multi-studio owner or manager stays in their studio.
+    if (!isOrgAdmin(user, activeOrgId)) return null
 
     // Count the caller's accessible studios WITHIN the active org.
     const orgStudioCount = (user.locations || [])

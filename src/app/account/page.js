@@ -4,6 +4,7 @@
 //   - Default landing page (permissions.landing_preference)
 //   - Email signature (profiles.email_signature, EMAIL-TICKET.5) —
 //     only for people who work an email queue somewhere
+//   - Calendar subscription link (ICSFEED.1, /api/me/calendar-feed)
 //
 // Linked to from the user block at the bottom of the sidebar.
 // Visible to every authenticated user — no permission gate beyond
@@ -21,6 +22,9 @@ import AccountForm from '@/components/AccountForm'
 import EmailSignatureForm from '@/components/EmailSignatureForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
+import CalendarFeedCard from '@/components/CalendarFeedCard'
+import { getLocationBranding } from '@/lib/location-branding'
+import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,7 +52,7 @@ export default async function AccountPage() {
   // staff at another would otherwise lose the editor for their own
   // signature whenever their session happened to be pointed at the
   // second one — the same active-vs-requested mix-up EMAIL-TICKET.5
-  // fixed on /api/email/tickets.
+  // fixed on /api/email/mail.
   const worksAQueue = (user.locations || []).some(
     (l) => hasPermissionForLocation(user, l.id, 'email_inbox')
   )
@@ -57,6 +61,8 @@ export default async function AccountPage() {
   // device settings card. Single targeted read; the rest of the user
   // object is already loaded by getCurrentUser.
   const db = createServerClient()
+  // W1.S2 — the contracts link names the studio's brand, never a literal.
+  const { companyName: brand } = await getLocationBranding(db, user.activeLocation?.id)
   const { data: pinInfo } = await db
     .from('profiles')
     .select('pin_hash, pin_set_at, home_screen_path')
@@ -79,7 +85,8 @@ export default async function AccountPage() {
 
       {worksAQueue && (
         <div className="mt-8">
-          {/* getCurrentUser() spreads the whole profiles row, so both the
+          {/* getCurrentUser()'s user object carries USER_PROFILE_COLUMNS
+              (email_signature, email_signature_rich included), so both the
               plain column and the MAIL-SIG.1 rich JSONB are already loaded —
               no extra read. */}
           <EmailSignatureForm
@@ -101,6 +108,10 @@ export default async function AccountPage() {
         />
       </div>
 
+      <div className="mt-8">
+        <CalendarFeedCard timezone={viewerZoneOf(user)} />
+      </div>
+
       <div className="mt-8 pt-6 border-t border-un1t-border">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">
           More
@@ -115,7 +126,7 @@ export default async function AccountPage() {
               <div>
                 <div className="text-sm font-medium text-un1t-text">Your contracts</div>
                 <div className="text-xs text-un1t-subtle mt-0.5">
-                  Review and sign documents UN1T has issued you
+                  Review and sign documents {brand || 'your employer'} has issued you
                 </div>
               </div>
             </div>

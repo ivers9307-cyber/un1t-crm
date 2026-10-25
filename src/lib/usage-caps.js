@@ -12,22 +12,27 @@
 //
 // Spend is computed LIVE from usage_events via SQL functions (mig 421)
 // — the daily rollups feed the usage page, not the cap check, so there
-// is no rollup-lag drift. Month boundaries are Dublin calendar months.
+// is no rollup-lag drift. Month boundaries are the PLATFORM billing
+// calendar's (D5 = B: PLATFORM_TZ, Europe/Dublin), the same for every tenant.
 //
 // Both checks FAIL OPEN: a metering-infrastructure error must never
 // silence Mia or block a campaign.
 
 import { createServerClient } from '@/lib/supabase'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 
-/** First day of the Dublin month containing `todayStr` (default: today). */
-export function dublinMonthStartStr(todayStr = dublinTodayStr()) {
+/**
+ * First day of the billing month containing `todayStr` (default: today on
+ * the platform billing calendar). D5: the platform billing calendar
+ * (PLATFORM_TZ), the same for every tenant (was platformMonthStartStr; TZ.18b).
+ */
+export function platformMonthStartStr(todayStr = todayStrIn(PLATFORM_TZ)) {
   return `${todayStr.slice(0, 7)}-01`
 }
 
 /**
  * SAAS4-M3 — should the 80%-of-hard-cap notice go out?
- * One notice per meter per Dublin month; nothing without a cap.
+ * One notice per meter per billing month (D5: PLATFORM_TZ); nothing without a cap.
  *
  * @param {{ cap: number|null, current: number, noticeMonth: string|null, month: string }} p
  *   month/noticeMonth are 'YYYY-MM' strings.
@@ -78,7 +83,7 @@ export async function getAiCapStatus({ organizationId, locationId }, { db } = {}
 
     const { data: spend, error } = await client.rpc('org_ai_spend_month_cents', {
       p_org: orgId,
-      p_month_start: dublinMonthStartStr(),
+      p_month_start: platformMonthStartStr(),
     })
     if (error) return { capped: false, organizationId: orgId }
 
@@ -112,7 +117,7 @@ export async function getEmailCapStatus({ organizationId, locationId }, { db } =
 
     const { data: sends, error } = await client.rpc('org_email_sends_month', {
       p_org: orgId,
-      p_month_start: dublinMonthStartStr(),
+      p_month_start: platformMonthStartStr(),
     })
     if (error) return { capped: false, organizationId: orgId }
 

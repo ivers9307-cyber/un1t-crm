@@ -20,7 +20,7 @@ import {
   Radar, CreditCard, Clock, Activity, Sparkles, Phone, BellOff,
   Check, Filter, Users, TrendingUp,
 } from 'lucide-react'
-import RadarOutreachButton from '@/components/RadarOutreachButton'
+import RadarOutreachButton, { RadarOutreachAvailable } from '@/components/RadarOutreachButton'
 
 const TIER_STYLE = {
   high:   { label: 'High',   cls: 'bg-red-100 text-red-700' },
@@ -64,6 +64,8 @@ function formatJoined(iso) {
 export default function LeadRadar() {
   const [tab, setTab] = useState('funnel')
   const [funnel, setFunnel] = useState(null)
+  // UN1TRADAR.3 — a studio with no WhatsApp number switched on: a note, not a picker
+  const [outreachAvailable, setOutreachAvailable] = useState(true)
   const [cleanup, setCleanup] = useState(null)
   const [cleanupBucket, setCleanupBucket] = useState('all')
   const [classpass, setClasspass] = useState(null)
@@ -81,6 +83,7 @@ export default function LeadRadar() {
       const j = await r.json()
       if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load funnel')
       setFunnel(j.data)
+      setOutreachAvailable(j.outreachAvailable !== false)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -193,6 +196,7 @@ export default function LeadRadar() {
   const td = summary.trend?.deltas || null
 
   return (
+    <RadarOutreachAvailable.Provider value={outreachAvailable}>
     <div>
       {flash && (
         <p className={`mb-4 rounded-lg border p-3 text-sm ${
@@ -261,6 +265,7 @@ export default function LeadRadar() {
           onTriage={runCleanup} />
       )}
     </div>
+    </RadarOutreachAvailable.Provider>
   )
 }
 

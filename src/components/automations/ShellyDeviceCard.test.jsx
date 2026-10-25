@@ -396,6 +396,17 @@ describe('ShellyDeviceCard — the schedule switch and run now', () => {
     expect(screen.getByLabelText('Schedule on').disabled).toBe(false)
   })
 
+  it('an UNKNOWN Glofox status reaches the editor and the toggle as "couldn\'t check", never "connect Glofox"', () => {
+    render(<ShellyDeviceCard connected glofoxConnected={false} glofoxUnknown
+      device={managed({ enabled: false, schedule_mode: 'class', fixed_windows: [] })} />)
+    const toggle = screen.getByLabelText('Schedule on')
+    expect(toggle.disabled).toBe(true)
+    expect(toggle.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
+    expect(screen.getByLabelText('Class timetable').closest('label').getAttribute('title'))
+      .toBe("Couldn't check Glofox. Reload to try again.")
+    expect(document.body.innerHTML).not.toMatch(/connect Glofox/i)
+  })
+
   it('turning a schedule OFF is never blocked by the state it is in', () => {
     render(<ShellyDeviceCard connected glofoxConnected={false}
       device={managed({ enabled: true, schedule_mode: 'class', fixed_windows: [] })} />)

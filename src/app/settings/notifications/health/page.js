@@ -33,8 +33,14 @@
 // PUSH-TEST.1 and the route's header. Same delivery path as real
 // notifications, so it's still a true end-to-end test.
 //
-// Auth: master or owner. /settings/notifications already gates on
-// hasPermission(user, 'settings') — same gate inherited here.
+// Auth (C18 ORGROLE.1, Richard 1 Oct 2026): an organisation admin of the
+// active org (master or an org_admin grant), the rule of GET /api/staff-devices
+// and the nudge this page drives. It used to be `settings` at the active studio.
+//
+// TENANTSCOPE.1 — the fleet is the ACTIVE organisation's studios and staff
+// (loadFleetScope; a master keeps the estate). The target version still
+// comes from every active person's devices: one app binary for the estate,
+// and only the version string is rendered.
 //
 // STAFF-DEV.4 — this page is also the fleet view for app versions and
 // geofence permission (it already loads every device_tokens row, so a
@@ -44,14 +50,16 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
 import NudgeUpdateButton from '@/components/settings/NudgeUpdateButton'
 import { deriveTargetVersion, deviceVerdict, currentDevice, pushHealthStatus, PUSH_HEALTHY_DAYS } from '@/lib/staff-devices'
+import { loadFleetScope, inFleetScope } from '@/lib/staff-fleet-scope'
 import { geofencePermissionChip } from '@/lib/geofence-permission-chips'
+import { logError, logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,15 +80,27 @@ function fmtRelative(iso) {
 export default async function PushHealthPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'settings')) redirect('/')
+  if (!isActiveOrgAdmin(user)) redirect('/')
 
   const db = createServerClient()
+
+  // A failed scope read throws to the error page: it is never "no staff".
+  const scope = await loadFleetScope(db, user)
+  // A non-master with no active organisation has no fleet to show.
+  if (!scope.all && scope.locationIds.length === 0) redirect('/')
+
+  let locationsQuery = db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false)
+  let linksQuery = db.from('profile_locations').select('profile_id, location_id')
+  if (!scope.all) {
+    locationsQuery = locationsQuery.in('id', scope.locationIds)
+    linksQuery = linksQuery.in('location_id', scope.locationIds)
+  }
 
   // One round-trip per resource. Compose in JS — datasets are small
   // (~30 staff, ~few hundred device tokens at most).
   const [profilesRes, locationsRes, tokensRes, sendsRes, plRes] = await Promise.all([
     db.from('profiles').select('id, full_name, email, role, active').eq('active', true),
-    db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false).order('name'),
+    locationsQuery.order('name'),
     // ANDROID-VIS.1b — expo_push_token is SELECTED (never rendered) purely
     // so pushHealthStatus can tell "reports but unreachable" from "healthy".
     // REPSET-PUB.1A — native_build is SELECTED so the Build column can show
@@ -91,10 +111,31 @@ export default async function PushHealthPage() {
     db.from('push_reminder_sends')
       .select('recipient_id, sent_at')
       .gte('sent_at', new Date(Date.now() - 30 * 86400 * 1000).toISOString()),
-    db.from('profile_locations').select('profile_id, location_id'),
+    linksQuery,
   ])
 
-  const profiles = profilesRes.data || []
+  // HUBREAD.1 — these four reads ARE the page. A failure in any of them used
+  // to render "0 staff", everyone "No app installed" under a Nudge, or
+  // everyone under "No active studio". Say we could not load it instead.
+  const spineFailed = [
+    ['profiles', profilesRes], ['locations', locationsRes],
+    ['device_tokens', tokensRes], ['profile_locations', plRes],
+  ].filter(([, res]) => res.error)
+  if (spineFailed.length) {
+    logError('push-health', 'fleet page read failed', {
+      tables: spineFailed.map(([t]) => t),
+      error: spineFailed[0][1].error,
+    })
+    return <FleetUnavailable />
+  }
+  // The 30-day push count is one column: a failed read blanks it, never 0.
+  const sendsKnown = !sendsRes.error
+  if (!sendsKnown) logWarn('push-health', 'push_reminder_sends read failed — Pushes 30d unknown', { error: sendsRes.error })
+
+  // The whole active fleet feeds the target version (below); only the
+  // people in scope are listed, counted or offered a button.
+  const fleetProfiles = profilesRes.data || []
+  const profiles = fleetProfiles.filter((p) => inFleetScope(scope, p.id))
   const locations = locationsRes.data || []
   const tokens = tokensRes.data || []
   const sends = sendsRes.data || []
@@ -120,39 +161,55 @@ export default async function PushHealthPage() {
   // the target is derived from ACTIVE staff's devices only — a leaver's
   // newer phone must not mark everyone still here as outdated.
   const now = Date.now()
-  const activeIds = new Set(profiles.map(p => p.id))
+  const activeIds = new Set(fleetProfiles.map(p => p.id))
   const targetVersion = deriveTargetVersion(tokens.filter(t => activeIds.has(t.user_id)), now)
+
+  const toRow = (p) => {
+    const ownTokens = tokensByUser.get(p.id) || []
+    return {
+      ...p,
+      tokens: ownTokens,
+      pushesLast30d: sendsKnown ? (sendsByUser.get(p.id) || 0) : null,
+      verdict: deviceVerdict(ownTokens, targetVersion, now),
+      // Permission reads off the CURRENT device only — an old iPad
+      // that once granted "always" says nothing about today's phone.
+      permission: currentDevice(ownTokens)?.geofence_permission ?? null,
+      // REPSET-PUB.1A — same rule for the binary's build number: the
+      // question is which app THIS person is using today.
+      nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
+    }
+  }
+  const byName = (a, b) => (a.full_name || '').localeCompare(b.full_name || '')
 
   // Group profiles by location for display. A profile can be at
   // multiple locations — show them under each (rare; only ~3 staff
   // hit this today).
   const groups = locations.map(loc => ({
     location: loc,
-    profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id))
-      .map(p => {
-        const ownTokens = tokensByUser.get(p.id) || []
-        return {
-          ...p,
-          tokens: ownTokens,
-          pushesLast30d: sendsByUser.get(p.id) || 0,
-          verdict: deviceVerdict(ownTokens, targetVersion, now),
-          // Permission reads off the CURRENT device only — an old iPad
-          // that once granted "always" says nothing about today's phone.
-          permission: currentDevice(ownTokens)?.geofence_permission ?? null,
-          // REPSET-PUB.1A — same rule for the binary's build number: the
-          // question is which app THIS person is using today.
-          nativeBuild: currentDevice(ownTokens)?.native_build ?? null,
-        }
-      })
-      .sort((a, b) => a.full_name.localeCompare(b.full_name || '')),
+    profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id)).map(toRow).sort(byName),
   }))
+
+  // TENANTSCOPE.1 — everyone counted in "Total staff" is listed somewhere.
+  // An org admin (profile_organizations, no studio membership) is in the
+  // fleet — GET /api/staff-devices lists them and the nudge reaches them —
+  // but sits under no studio above, and so does anyone whose only
+  // membership is an inactive or host-anchor location. They get their own
+  // group rather than being counted and never shown.
+  const listed = new Set(groups.flatMap(g => g.profiles.map(p => p.id)))
+  const unlisted = profiles.filter(p => !listed.has(p.id))
+  if (unlisted.length > 0) {
+    groups.push({
+      location: { id: 'no-active-studio', name: 'No active studio' },
+      profiles: unlisted.map(toRow).sort(byName),
+    })
+  }
 
   // Rollup counts for the header
   const totals = {
     profiles: profiles.length,
     healthy: 0, stale: 0, no_app: 0, no_push: 0,
     on_latest: 0,
-    total_tokens: tokens.length,
+    total_tokens: tokens.filter(t => profiles.some(p => p.id === t.user_id)).length,
   }
   for (const p of profiles) {
     const s = pushHealthStatus(tokensByUser.get(p.id) || [], now)
@@ -195,6 +252,12 @@ export default async function PushHealthPage() {
           sub={targetVersion ? `v${targetVersion}` : 'no version reported'}
         />
       </div>
+
+      {!sendsKnown && (
+        <p className="text-xs text-amber-700 mb-4">
+          Push counts for the last 30 days could not be loaded just now, so that column shows a dash. Reload the page to try again.
+        </p>
+      )}
 
       {totals.no_app > 0 && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-6 text-xs text-amber-700">
@@ -277,7 +340,7 @@ export default async function PushHealthPage() {
                         <PermissionChip value={p.permission} />
                       </td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">{fmtRelative(newestSeen)}</td>
-                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d}</td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d ?? '—'}</td>
                       <td className="px-4 py-2.5 text-right">
                         {/* ANDROID-VIS.1b — gated on canPush, NOT on having
                             a device row: a token-less device has a row and
@@ -306,6 +369,23 @@ export default async function PushHealthPage() {
         Stale = the device hasn&apos;t opened the app in {PUSH_HEALTHY_DAYS}+ days. Token may still be valid; a test push tells you for sure.
         Visible, no push = the device reports its version and permissions but holds no push token, so nothing can reach it — Android until FCM credentials are set up (mobile/docs/android-fcm-setup.md), or a declined iOS notification prompt. There is no test push to send.
         Tokens that come back DeviceNotRegistered from Expo are auto-pruned by src/lib/push.js.
+      </p>
+    </div>
+  )
+}
+
+function FleetUnavailable() {
+  return (
+    <div className="p-8 max-w-5xl">
+      <Link
+        href="/settings/notifications"
+        className="inline-flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text mb-4"
+      >
+        <ArrowLeft size={12} /> Notification registry
+      </Link>
+      <h2 className="text-2xl font-bold mb-2">Push delivery health</h2>
+      <p className="text-sm text-amber-700">
+        Could not load the staff fleet just now. Nothing is shown rather than a wrong count. Reload the page to try again.
       </p>
     </div>
   )

@@ -12,7 +12,7 @@ import { presetFilter } from '@/lib/audience-presets'
 import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
 // FILTER-P1.4 — a seeded date must be the operator's business today, not a
 // UTC one; `new Date().toISOString().split('T')[0]` is lint-banned for this.
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, resolveZone } from '@shared/zoned-time'
 
 // FILTER-A.2 — the groups an operator thinks in, in the order they think of
 // them. Rendered as <optgroup>s; every FIELD_OPTIONS entry must name one (the
@@ -61,9 +61,13 @@ export const FIELD_OPTIONS = [
   // classifier-derived (webhook + nightly cron) — operators never write
   // it. It replaced the legacy "Lead Status" filter that was effectively
   // dead (>99% defaulted on import and was never reliably updated).
-  { value: 'pipeline_stage_slug',   label: 'Stage',                 type: 'select',
+  // ORGCONTACTS.4 (decision 3) — the stage AT THIS STUDIO (contact_studios,
+  // read as studio_stage_slug on the audience view): a Stillorgan member who
+  // is a lead at Hatch is a lead in Hatch's audiences. "is empty" = no stage
+  // at this studio (on the list, no relationship here).
+  { value: 'pipeline_stage_slug',   label: 'Pipeline stage (at this studio)', type: 'select',
     group: 'Funnel',
-    hint: 'Where our funnel classifier places them. This is the one to use — Membership Status below is the raw vendor field it reads.',
+    hint: 'Where our funnel classifier places them at this studio. This is the one to use — Membership Status below is the raw vendor field it reads. "Is empty" means no stage here yet.',
     options: ['new_lead', 'first_class', 'second_class', 'trial_done',
               'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant'],
     valueLabels: STAGE_LABELS },
@@ -527,8 +531,10 @@ function FieldSelect({ value, onChange, disabled, describedBy, className, cellCl
 const DAYS_SINCE_OPS = ['days_since_gt', 'days_since_lt']
 const DEFAULT_DAY_COUNT = '30'
 
-function defaultValueForDateOp(op) {
-  return DAYS_SINCE_OPS.includes(op) ? DEFAULT_DAY_COUNT : dublinTodayStr()
+// TZ.4 — "today" is the studio's calendar day (`zone`: the host passes the
+// location's timezone as the `timeZone` prop; omitted, Europe/Dublin).
+function defaultValueForDateOp(op, zone) {
+  return DAYS_SINCE_OPS.includes(op) ? DEFAULT_DAY_COUNT : todayStrIn(resolveZone(zone))
 }
 
 // FILTER-A.2 — euro ↔ cent shim for the two money-typed fields. The STORED
@@ -577,7 +583,7 @@ const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select', 'location-s
 // for the next embed; the default closes it at the component. Hosts wanting a
 // live number now mount the shared <AudienceCount> instead of feeding this
 // footer, which survives only for CampaignEditor's own count state.
-export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null }) {
+export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null, timeZone = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -755,7 +761,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
     const fieldConfig = getFieldConfig(current?.field)
     if (fieldConfig?.type === 'date'
         && DAYS_SINCE_OPS.includes(newOp) !== DAYS_SINCE_OPS.includes(current?.op)) {
-      updateRow(index, { op: newOp, value: defaultValueForDateOp(newOp) })
+      updateRow(index, { op: newOp, value: defaultValueForDateOp(newOp, timeZone) })
       return
     }
     updateRow(index, { op: newOp })
@@ -792,7 +798,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount = null
     const defaultValue = config.type === 'select' ? (config.options?.[0] || '')
       : config.type === 'boolean' ? 'true'
       // FILTER-P1.4 — never leave a fresh date row on an empty value.
-      : config.type === 'date' ? defaultValueForDateOp(defaultOp)
+      : config.type === 'date' ? defaultValueForDateOp(defaultOp, timeZone)
       : ''
     updateRow(index, { field: newField, op: defaultOp, value: defaultValue })
   }

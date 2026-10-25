@@ -56,7 +56,7 @@ export function outcomeMessageText({ kind, finalStatus, copy, vars, declineTempl
 async function loadTemplate(db, locationId, name) {
   if (!name) return null
   const { data: rows } = await db.from('whatsapp_templates')
-    .select('name, language, category, status, components')
+    .select('name, language, category, status, components, business_account_id')
     .eq('location_id', locationId)
     .eq('name', name)
     .order('created_at', { ascending: false })
@@ -119,7 +119,7 @@ export async function sendMembershipOutcomeMessage(db, { row, finalStatus, endDa
           const phone = conv?.contacts?.wa_phone || conv?.wa_phone || null
           if (phone) {
             const params = [{ type: 'text', text: vars.first_name || 'there' }, { type: 'text', text: vars.end_date || ' ' }]
-            await sendTemplateMessage(phone, tpl.name, tpl.language || 'en', [{ type: 'body', parameters: params }], { locationId: row.location_id })
+            await sendTemplateMessage(phone, tpl.name, tpl.language || 'en', [{ type: 'body', parameters: params }], { locationId: row.location_id, ...(tpl.business_account_id && { businessAccountId: tpl.business_account_id }) })
             return { sent: true, channel, via: 'template' }
           }
         }

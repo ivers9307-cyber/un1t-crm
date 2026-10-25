@@ -7,27 +7,26 @@
 //
 // Month-boundary choice
 // ---------------------
-// "Which month just ended" is resolved on the Europe/Dublin calendar (the
-// estate standard — see shared/dublin-time.js), NOT UTC. We take the Dublin
-// month of `nowMs`, step back one Dublin month, and match THAT year+month
+// "Which month just ended" is resolved on the MEMBER's calendar — `zone`, their
+// home studio's (TZ.13, D7; omitted = Europe/Dublin) — NOT UTC. We take the
+// local month of `nowMs`, step back one month, and match THAT year+month
 // against the recap's months array. `monthlyRecap` itself buckets sessions in
 // UTC months; the only sessions that land in a different bucket are those in
 // the 00:00–01:00 Dublin window on the 1st during IST (a negligible edge for
 // a whole-month total), and picking the completed month on the Dublin calendar
 // keeps the label + auto-present timing consistent with streaks/goals/tiers.
 
+import { monthKeyIn, DEFAULT_TZ } from './zoned-time.js'
+
 // Full month names (the recap story spells them out — no abbreviations).
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
 
-// Europe/Dublin calendar year+month (0-based month) for a UTC ms instant.
-// Local to this module so we don't widen dublin-time's surface; uses the same
-// Intl-based approach.
-const _ymFmt = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit',
-})
-function dublinYearMonth(ms) {
-  const [y, m] = _ymFmt.format(new Date(ms)).split('-').map(Number)
+// Calendar year+month (0-based month) in `zone` for a UTC ms instant. TZ.13:
+// through zoned-time's lazily-built formatters — this module used to build a
+// Dublin formatter at import time, which Hermes evaluates on app start.
+function localYearMonth(ms, zone) {
+  const [y, m] = monthKeyIn(ms, zone).split('-').map(Number)
   return { year: y, month: m - 1 } // month → 0-based to match monthlyRecap
 }
 
@@ -39,7 +38,7 @@ function prevMonth({ year, month }) {
 }
 
 /**
- * The 'YYYY-MM' key of the last COMPLETED Dublin month — the month a recap at
+ * The 'YYYY-MM' key of the last COMPLETED local month (in `zone`) — the month a recap at
  * `nowMs` would cover. Derivable from the clock ALONE (no session data), so
  * callers can consult the "seen this month's recap" flag BEFORE fetching
  * anything. Always matches `monthWrappedModel(...).monthKey` for the same
@@ -48,8 +47,8 @@ function prevMonth({ year, month }) {
  * @param {number} [nowMs]
  * @returns {string} e.g. '2026-06'
  */
-export function monthWrappedKey(nowMs = Date.now()) {
-  const target = prevMonth(dublinYearMonth(nowMs))
+export function monthWrappedKey(nowMs = Date.now(), zone = DEFAULT_TZ) {
+  const target = prevMonth(localYearMonth(nowMs, zone))
   return `${target.year}-${String(target.month + 1).padStart(2, '0')}`
 }
 
@@ -62,7 +61,7 @@ export function monthWrappedKey(nowMs = Date.now()) {
  * @param {number} [nowMs]
  * @returns {{
  *   hasContent: boolean,
- *   monthKey: string,            // 'YYYY-MM' of the recapped month (Dublin)
+ *   monthKey: string,            // 'YYYY-MM' of the recapped month (local)
  *   label: string,               // e.g. 'June 2026'
  *   monthName: string,           // e.g. 'June'
  *   year: number,
@@ -74,9 +73,9 @@ export function monthWrappedKey(nowMs = Date.now()) {
  *   pr: { kind: string, label: string, value: number, unit: string }|null,
  * }}
  */
-export function monthWrappedModel(recap, records, nowMs = Date.now()) {
-  const target = prevMonth(dublinYearMonth(nowMs)) // the month that just ended
-  const monthKey = monthWrappedKey(nowMs)
+export function monthWrappedModel(recap, records, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  const target = prevMonth(localYearMonth(nowMs, zone)) // the month that just ended
+  const monthKey = monthWrappedKey(nowMs, zone)
   const monthName = MONTHS[target.month] || ''
   const label = `${monthName} ${target.year}`
 
@@ -104,19 +103,19 @@ export function monthWrappedModel(recap, records, nowMs = Date.now()) {
     minutes: Math.round(m.minutes || 0),
     avgPeakHr: Number.isFinite(m.avgPeakHr) ? m.avgPeakHr : null,
     isFittest,
-    pr: pickMonthPr(records, target, nowMs),
+    pr: pickMonthPr(records, target, zone),
   }
 }
 
 // Best-effort: surface a personal record IF it was set during the recapped
-// Dublin month. personalRecords records carry `atMs` (session PRs) or
+// local month. personalRecords records carry `atMs` (session PRs) or
 // `weekStartMs` (best-week); streak has no timestamp so it's excluded here.
 // Returns { kind, label, value, unit } or null.
-function pickMonthPr(records, target, nowMs) {
+function pickMonthPr(records, target, zone) {
   const r = records || {}
   const inTargetMonth = (ms) => {
     if (!Number.isFinite(ms)) return false
-    const ym = dublinYearMonth(ms)
+    const ym = localYearMonth(ms, zone)
     return ym.year === target.year && ym.month === target.month
   }
 

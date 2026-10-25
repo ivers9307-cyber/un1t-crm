@@ -1,6 +1,7 @@
 // SAAS-3 — GET /api/stages (requireApiKeyOrManager dual-auth route)
-// under per-org keys: the org filter really filters, the legacy shared
-// key stays unscoped. api-auth is real; only supabase/auth are faked.
+// under per-org keys: the org filter really filters, and (APIKEYS.4)
+// the retired shared key is refused. api-auth is real; only
+// supabase/auth are faked.
 //
 // SAAS-12 — the cookie/manager path: orgScopeLocationIds no-ops for
 // cookie callers (orgId is null), so before the fix a manager cookie
@@ -11,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  makeFakeDb, twoOrgFixture, GLOBAL_KEY, ORG1_KEY,
+  makeFakeDb, twoOrgFixture, RETIRED_SHARED_KEY, ORG1_KEY,
 } from '@/lib/api-auth.test-helpers.js'
 
 let db
@@ -39,10 +40,11 @@ const managerAt = (...locationIds) => ({
   role: 'manager',
   isMaster: false,
   locations: locationIds.map((id) => ({ id, organization_id: 'org-1' })),
+  // ROLESWEEP.2 — the role is judged per location (hasRoleAtLocation).
+  rolesByLocation: Object.fromEntries(locationIds.map((id) => [id, 'manager'])),
 })
 
 beforeEach(() => {
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
   getCurrentUser.mockResolvedValue(null)
   const tables = twoOrgFixture()
   tables.pipeline_stages = [
@@ -64,10 +66,9 @@ describe('GET /api/stages — API-key callers', () => {
     expect(body.data.map((s) => s.id)).toEqual(['s1'])
   })
 
-  it('legacy CRM_API_KEY stays unscoped — sees both orgs (unchanged)', async () => {
-    const res = await GET(req(GLOBAL_KEY))
-    const body = await res.json()
-    expect(body.data.map((s) => s.id).sort()).toEqual(['s1', 's2'])
+  it('the retired shared key → 401 (APIKEYS.4)', async () => {
+    const res = await GET(req(RETIRED_SHARED_KEY))
+    expect(res.status).toBe(401)
   })
 })
 

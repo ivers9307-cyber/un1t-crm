@@ -18,7 +18,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendTransactionalEmail } from '@/lib/postmark'
@@ -33,7 +33,9 @@ const CancelSchema = z.object({
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1b — coarse pre-check; the role is judged at the booking's
+  // location below.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -64,6 +66,11 @@ export async function POST(request, props) {
     const userLocationIds = getUserLocationIds(user)
     if (bookingLocationId && !userLocationIds.includes(bookingLocationId)) {
       return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
+    }
+    // ROLESWEEP.1b — MANAGER_ROLES judged at the booking's location. A booking
+    // with no resolvable location cannot be judged, so it is master-only.
+    if (!hasRoleAtLocation(user, bookingLocationId, MANAGER_ROLES)) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
     }
   }
 

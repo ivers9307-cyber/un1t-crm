@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -38,25 +39,37 @@ const SequenceCreateSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
+// SEQROUTEGATE.1 — named columns. Never webhook_token / webhook_secret: the
+// builder's settings panel gets those from the /automations/[id] page's own
+// read. The one list caller (SequencePicker) reads id, name, description,
+// status and trigger_type. SEQCOUNTERS.1 — no total_* (never maintained;
+// mig 663).
+const SEQUENCE_LIST_COLUMNS = 'id, location_id, name, description, status, trigger_type, created_at, updated_at, sequence_steps(count)'
+
 // GET /api/sequences — list sequences
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  // SEQROUTEGATE.1 — the builder's rule (email or whatsapp), judged at the
+  // location listed; a coarse pre-check first.
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (locationId && !canBuildSequencesAt(user, locationId)) return sequencePermissionRequired()
 
   const db = createServerClient()
   let query = db.from('email_sequences')
-    .select('*, sequence_steps(count)')
+    .select(SEQUENCE_LIST_COLUMNS)
     .order('created_at', { ascending: false })
 
   if (locationId) {
     query = query.eq('location_id', locationId)
   } else {
-    const userLocationIds = getUserLocationIds(user)
+    // Only the member studios where the caller may build sequences.
+    const userLocationIds = getUserLocationIds(user).filter((id) => canBuildSequencesAt(user, id))
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, sequences: [] })
     query = query.in('location_id', userLocationIds)
   }
@@ -71,13 +84,16 @@ export async function GET(request) {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const validation = await validateBody(request, SequenceCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id
+  if (!locationId) return NextResponse.json({ success: false, error: 'location_id required' }, { status: 400 })
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+  if (!canBuildSequencesAt(user, locationId)) return sequencePermissionRequired()
 
   const db = createServerClient()
   // FLOW2 — auto-generate a webhook_token whenever the sequence

@@ -28,6 +28,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { supabase } from '../../../lib/member/supabase'
 import { markMonthRecapSeen } from '../../../lib/member/recap-seen'
+import { useMemberBrand } from '../../../lib/member/use-member-brand'
+import { useMemberZoneState } from '../../../lib/member/use-member-zone'
 import { monthlyRecap, personalRecords } from 'shared/progress-analytics'
 import { monthWrappedModel } from 'shared/month-wrapped'
 import { PEARL, VOLT } from '../../../lib/member/brand'
@@ -36,7 +38,7 @@ import { PEARL, VOLT } from '../../../lib/member/brand'
 const SCRIM = 'rgba(19,19,22,0.62)'
 
 // ── animated points count-up ──────────────────────────────────────
-function PointsCountUp({ target, reduceMotion }) {
+function PointsCountUp({ target, reduceMotion, pointsName = 'Points' }) {
   const [display, setDisplay] = useState(reduceMotion ? target : 0)
   const val = useRef(new Animated.Value(0)).current
 
@@ -56,7 +58,7 @@ function PointsCountUp({ target, reduceMotion }) {
     <Text
       className="text-chalk font-display-black"
       style={{ fontSize: 76, lineHeight: 84, letterSpacing: -2 }}
-      accessibilityLabel={`${target} UN1T Points`}
+      accessibilityLabel={`${target} ${pointsName}`}
     >
       {display.toLocaleString()}
     </Text>
@@ -128,6 +130,12 @@ function Stat({ label, value, unit }) {
 export default function MonthWrapped() {
   const router = useRouter()
   const { width } = useWindowDimensions()
+  // W1.S5 — share copy + hero label from the member's studio brand.
+  const { shortName, productNames } = useMemberBrand()
+  // TZ.14 (D7) — "last month" and the records on the member's home studio
+  // clock. Opening the story marks that month seen, so it waits for the zone:
+  // a non-Dublin member must not burn a month key from the fallback clock.
+  const { zone: tz, loading: tzLoading } = useMemberZoneState()
 
   const [model, setModel] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -152,6 +160,7 @@ export default function MonthWrapped() {
   // fittest across the year), compute the completed-month story. RLS scopes
   // the read to the signed-in member.
   useEffect(() => {
+    if (tzLoading) return undefined
     let cancelled = false
     async function load() {
       setLoading(true)
@@ -174,9 +183,9 @@ export default function MonthWrapped() {
         }
         if (cancelled) return
         const now = Date.now()
-        const recap = monthlyRecap(all, now, 6)
-        const records = personalRecords(all)
-        const m = monthWrappedModel(recap, records, now)
+        const recap = monthlyRecap(all, now, 6, tz) // TZ.17: the member's months
+        const records = personalRecords(all, tz)
+        const m = monthWrappedModel(recap, records, now, tz)
         setModel(m)
         // Mark the recapped month seen the moment it opens, so it never
         // re-ambushes the member on a later home visit this month.
@@ -189,7 +198,7 @@ export default function MonthWrapped() {
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [tz, tzLoading])
 
   // Kick the wash-in + reveal once data + motion pref are ready.
   useEffect(() => {
@@ -204,8 +213,8 @@ export default function MonthWrapped() {
   function handleShare() {
     if (!model?.hasContent) return
     const bits = [
-      `My ${model.label} at UN1T 💪`,
-      `${model.points.toLocaleString()} UN1T Points · ${model.sessions} ${model.sessions === 1 ? 'session' : 'sessions'} · ${model.minutes} min`,
+      `My ${model.label}${shortName ? ` at ${shortName}` : ''} 💪`,
+      `${model.points.toLocaleString()} ${productNames.points} · ${model.sessions} ${model.sessions === 1 ? 'session' : 'sessions'} · ${model.minutes} min`,
     ]
     if (model.isFittest) bits.push('My fittest month yet 🏆')
     if (model.pr) bits.push(`${model.pr.label}: ${model.pr.value.toLocaleString()} ${model.pr.unit}`)
@@ -291,8 +300,8 @@ export default function MonthWrapped() {
           {/* Hero: month label + points count-up */}
           <View className="items-center mt-8">
             <Text className="text-base font-display mb-2" style={{ color: 'rgba(241,238,231,0.9)' }}>{model.label}</Text>
-            <PointsCountUp target={model.points} reduceMotion={reduceMotion} />
-            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.85)' }}>UN1T Points</Text>
+            <PointsCountUp target={model.points} reduceMotion={reduceMotion} pointsName={productNames.points} />
+            <Text className="text-base font-body-medium mt-1" style={{ color: 'rgba(241,238,231,0.85)' }}>{productNames.points}</Text>
           </View>
 
           <Animated.View style={revealStyle}>

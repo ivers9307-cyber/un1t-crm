@@ -1,14 +1,22 @@
-// Vercel cron — daily 10:00 UTC (~midday Dublin).
+// Vercel cron — hourly (TZ.6); acts for each member's home studio at its daily
+// slot: 10:00 UTC for a Europe/Dublin studio (as before, ~midday Dublin), 10:00
+// local for any other zone (src/lib/cron-daily-slot.js, at most once per studio
+// per local day). The month key is the studio's local month.
 // Pushes a re-engagement nudge to members whose HR-class attendance dropped
 // below their personal baseline but who are still visiting occasionally.
 // Idempotent per member per calendar month via customer_engagement_nudges.
 // Reachable members only (push token).
+// C21 PUSHDONE.1b — claim, send and release through sendNudgeOnce: a nudge
+// that reached nobody because something broke gives its claim back, so the
+// next daily run (same month key) tries again while the member still
+// qualifies. It used to keep the claim, and the month's nudge was gone.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { sendCustomerPush } from '@/lib/customer-push'
+import { sendNudgeOnce, readReachableContacts, nudgeFailed } from '@/lib/customer-nudge-claim'
 import { attendanceDrop, buildWinbackPush } from '@/lib/customer-notifications'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { gateDailySlot, slotFor, readContactHomes, slotTickStampable } from '@/lib/cron-daily-slot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -25,11 +33,31 @@ export async function GET(request) {
   }
   const db = createServerClient()
   const nowMs = Date.now()
+
+  // TZ.6 — which home studios are at their daily slot this tick (claimed, so
+  // never twice in one local day). An unreadable zone acts for nobody.
+  const gate = await gateDailySlot(db, 'notify-winback', { nowMs, module: 'cron-winback' })
+  if (!gate.ok) return NextResponse.json({ ok: false, slot: gate.summary }, { status: 500 })
+  if (gate.slots.size === 0) {
+    // A quiet tick (no slot taken) never stamps; the row keeps the legacy clock.
+    // A faulted one (claim write failed) answers 500: the slot is skipped and pages.
+    return NextResponse.json({ ok: !gate.faulted, slot: gate.summary, candidates: 0, dropping: 0, nudged: 0 }, { status: gate.faulted ? 500 : 200 })
+  }
+  // Stamp only a slot tick with no fault of the gate's or the body's own.
+  const stamp = async (outcome, status = 200) => {
+    if (status === 200 && slotTickStampable(gate)) {
+      await stampHeartbeat('notify-winback').catch((err) => logWarn('cron-winback', 'heartbeat failed', { err }))
+      return NextResponse.json({ ok: true, ...outcome })
+    }
+    return NextResponse.json({ ok: false, ...outcome, slot: gate.summary }, { status: 500 })
+  }
+
   const DAY = 24 * 3600 * 1000
-  const n = new Date(nowMs)
-  const todayMs = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
-  const dedupKey = new Date(todayMs).toISOString().slice(0, 7) // YYYY-MM (monthly)
-  const since84Iso = new Date(todayMs - 84 * DAY).toISOString()
+  // The read floor is attendanceDrop's own: its windows are rolling multiples
+  // of 24h back from nowMs, not calendar days, so no zone moves them. TZ.17:
+  // it was 84 days before UTC midnight, a calendar floor that only ever read a
+  // few hours more than attendanceDrop looks at (who is picked is unchanged).
+  const since84Iso = new Date(nowMs - 84 * DAY).toISOString()
 
   // 1. Candidates = contacts with >= 1 ended session in the last 84 days.
   const candidateIds = new Set()
@@ -47,8 +75,7 @@ export async function GET(request) {
     if (!rows || rows.length < PAGE) break
   }
   if (candidateIds.size === 0) {
-    await stampHeartbeat('notify-winback').catch(() => {})
-    return NextResponse.json({ ok: true, candidates: 0, dropping: 0, nudged: 0 })
+    return stamp({ candidates: 0, dropping: 0, nudged: 0 })
   }
 
   const ids = [...candidateIds]
@@ -76,37 +103,42 @@ export async function GET(request) {
     if (isDrop) dropping.push(cid)
   }
   if (dropping.length === 0) {
-    await stampHeartbeat('notify-winback').catch(() => {})
-    return NextResponse.json({ ok: true, candidates: ids.length, dropping: 0, nudged: 0 })
+    return stamp({ candidates: ids.length, dropping: 0, nudged: 0 })
   }
 
-  // 4. Keep only reachable (has a push token).
-  const reachable = new Set()
-  for (let i = 0; i < dropping.length; i += 200) {
-    const chunk = dropping.slice(i, i + 200)
-    const { data: toks } = await db.from('champ_push_tokens').select('contact_id').in('contact_id', chunk)
-    for (const t of toks || []) reachable.add(t.contact_id)
-  }
-
-  // 5. Record (idempotent, monthly dedup_key) + push.
-  let nudged = 0
+  // 4. TZ.6 — only members whose home studio is at its slot this tick. The
+  //    monthly dedup key is that studio's local month (for Dublin at 10:00
+  //    UTC, the same month as the UTC one it used to be).
+  const { homes, unread: homesUnread } = await readContactHomes(db, dropping, 'cron-winback')
+  const due = []
   for (const cid of dropping) {
-    if (!reachable.has(cid)) continue
-    const { data: ins, error: insErr } = await db
-      .from('customer_engagement_nudges')
-      .insert({ contact_id: cid, type: 'winback', dedup_key: dedupKey })
-      .select('id')
-    if (insErr || !ins || !ins.length) continue // already nudged this month, or error
-    try {
-      await sendCustomerPush(db, cid, buildWinbackPush())
-      nudged++
-    } catch (err) {
-      logWarn('cron-winback', 'push threw', { err, cid })
-    }
+    if (!homes.has(cid)) continue
+    const slot = slotFor(gate.slots, homes.get(cid))
+    if (slot) due.push({ cid, dedupKey: slot.day.slice(0, 7) }) // YYYY-MM (monthly)
   }
 
-  logInfo('cron-winback', 'tick', { candidates: ids.length, dropping: dropping.length, nudged })
-  await stampHeartbeat('notify-winback').catch((err) =>
-    logWarn('cron-winback', 'heartbeat failed', { err }))
-  return NextResponse.json({ ok: true, candidates: ids.length, dropping: dropping.length, nudged })
+  // 5. Keep only reachable (has a push token). A failed token read skips
+  //    that chunk (counted), it is not "unreachable".
+  const { reachable, failed: reachabilityFailed } = await readReachableContacts(db, due.map((d) => d.cid), 'cron-winback')
+
+  // 6. Claim (idempotent, monthly dedup_key) + push, released if nothing reached them.
+  let nudged = 0
+  let failed = 0
+  for (const { cid, dedupKey } of due) {
+    if (!reachable.has(cid)) continue
+    const { status } = await sendNudgeOnce(db, {
+      contactId: cid, type: 'winback', dedupKey, payload: buildWinbackPush(), module: 'cron-winback',
+    })
+    if (status === 'sent') nudged++
+    else if (nudgeFailed(status)) failed++
+  }
+
+  const summary = {
+    candidates: ids.length, dropping: dropping.length, due: due.length, nudged, failed,
+    reachability_failed: reachabilityFailed, homes_unread: homesUnread, slot: gate.summary,
+  }
+  logInfo('cron-winback', 'tick', summary)
+  // An unreadable home is a member not seen this slot (they were skipped, not
+  // guessed): no stamp, so the run reads as failed.
+  return stamp(summary, homesUnread > 0 ? 500 : 200)
 }

@@ -35,7 +35,14 @@ const LOC_2 = '44444444-4444-4444-4444-444444444444'
  * returns; `stage` is what the location-scoped pipeline_stages lookup resolves
  * to (null = "no such stage for this location").
  */
-function mockDb({ contact = { location_id: 'loc-1' }, stage = { id: STAGE_CONV } } = {}) {
+function mockDb({
+  contact = { location_id: 'loc-1' },
+  stage = { id: STAGE_CONV, pipeline_id: 'p-acq' },
+  // PIPELINES.5 — the deal's location's boards. Only read on the STAGELESS
+  // path, where there is no stage to take the board off; a resolved stage
+  // carries its own pipeline_id and this is never queried.
+  pipelines = [{ id: 'p-acq', mode: 'derived' }],
+} = {}) {
   const insert = vi.fn(() => ({
     select: vi.fn(() => ({ single: vi.fn(async () => ({ data: { id: 'd1' }, error: null })) })),
   }))
@@ -58,6 +65,14 @@ function mockDb({ contact = { location_id: 'loc-1' }, stage = { id: STAGE_CONV }
       return builder
     }
     if (table === 'deals') return { insert }
+    if (table === 'pipelines') {
+      const builder = {
+        select: vi.fn(() => builder),
+        eq: vi.fn(() => builder),
+        limit: vi.fn(async () => ({ data: pipelines, error: null })),
+      }
+      return builder
+    }
     throw new Error(`unexpected table: ${table}`)
   })
   return { from, insert, stageBuilders }
@@ -87,6 +102,11 @@ describe('POST /api/deals — stage lookups are location-scoped (DEALSCOPE.2)', 
     expect(eqCalls).toContainEqual(['location_id', 'loc-1'])
     // and the resolved stage actually reaches the insert
     expect(db.insert.mock.calls[0][0].stage_id).toBe(STAGE_CONV)
+    // PIPELINES.5 — with it, the board the stage belongs to. A null
+    // pipeline_id is invisible to the nightly orchestrator's
+    // `.in('pipeline_id', …)` read, which then opens a duplicate deal for
+    // this contact every night.
+    expect(db.insert.mock.calls[0][0].pipeline_id).toBe('p-acq')
   })
 
   it('anchors on an explicit location_id when one is supplied', async () => {
@@ -130,5 +150,9 @@ describe('POST /api/deals — stage lookups are location-scoped (DEALSCOPE.2)', 
 
     expect(res.status).toBe(200)
     expect(db.stageBuilders).toHaveLength(0)
+    // PIPELINES.5 — stageless, but NOT boardless: with no stage to read the
+    // board off, the deal takes its location's primary one. A null here is the
+    // nightly-duplication bug.
+    expect(db.insert.mock.calls[0][0].pipeline_id).toBe('p-acq')
   })
 })

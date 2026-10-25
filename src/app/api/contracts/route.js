@@ -1,13 +1,15 @@
 // /api/contracts
 //   GET   role-aware list:
 //           recipient (any role) → only their own
-//           owner                → contracts in their org
+//           org admin            → contracts in the orgs they administer
+//                                  (C18 ORGROLE.1: an org_admin grant; a
+//                                  studio owner is not one)
 //           master               → everything
-//   POST  issue a new contract (master/owner only). Body:
+//   POST  issue a new contract (master / org admin of the template's org). Body:
 //         { template_id, profile_id, location_id?, variables, issuer_signature }
 //
 // Issue path:
-//   1. Validate the issuer is master/owner.
+//   1. Validate the issuer is a master or an org admin (contract-gates).
 //   2. Look up the template (must be active, employment_type
 //      compatible with the recipient's profile).
 //   3. Look up the recipient's primary location → org_id (if not
@@ -23,26 +25,27 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { adminOrganizationIds } from '@/lib/org-admin'
+import { canManageContractsInOrg, canManageContractsSomewhere } from '@/lib/contract-gates'
 import { contractIssueSchema } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import {
   mergeVariables,
+  linksInTemplateOrg,
+  issuingLocationLink,
   renderTemplate,
   validateCustomVariables,
   extractPlaceholders,
   locationVariables,
 } from '@/lib/contracts'
 import { getLocationBranding } from '@/lib/location-branding'
+import { zoneOfLocation } from '@/lib/location-time'
 import { getContractingEntity } from '@/lib/contracting-entity'
 import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
-
-function isOwnerOrMaster(user) {
-  return user?.role === 'master' || user?.role === 'owner'
-}
 
 export async function GET() {
   const user = await getCurrentUser()
@@ -77,11 +80,16 @@ export async function GET() {
   // otherwise see a contract that was never actually sent to them).
   // The org-owner arm is unaffected: an owner reviewing their org's
   // contracts still needs to see drafts to send/discard them.
+  // C18 ORGROLE.1 (Richard, 1 Oct 2026): the org arm is the orgs the caller
+  // ADMINISTERS (an org_admin grant), the rule of GET /api/contracts/[id] and
+  // every contract action. It used to be getOwnerOrganizationIds (any studio
+  // owner role), so a studio owner's list (mobile's "my contracts" too) held
+  // org rows whose detail answered 404.
   if (!user.isMaster) {
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (ownerOrgIds.length > 0) {
+    const adminOrgIds = adminOrganizationIds(user)
+    if (adminOrgIds.length > 0) {
       query = query.or(
-        `and(profile_id.eq.${user.id},status.neq.draft),organization_id.in.(${ownerOrgIds.join(',')})`
+        `and(profile_id.eq.${user.id},status.neq.draft),organization_id.in.(${adminOrgIds.join(',')})`
       )
     } else {
       query = query.eq('profile_id', user.id).neq('status', 'draft')
@@ -96,7 +104,12 @@ export async function GET() {
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!isOwnerOrMaster(user)) {
+  // GATES-3 (c) — the coarse pre-check is GATES-2's: master, or an org admin
+  // of SOME org (C18 ORGROLE.1: an org_admin grant, not a studio owner role). `user.role` is the ACTIVE studio's
+  // role, so it refused an owner of the template's org working from a studio
+  // where they are a manager, and an org admin whose own role there is not
+  // owner. The decision is the template's org, below.
+  if (!canManageContractsSomewhere(user)) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
@@ -126,11 +139,10 @@ export async function POST(request) {
   //     template is master-only. Same 404 as a missing template so
   //     foreign ids can't be probed (this must precede the `active`
   //     check for the same reason).
-  if (!user.isMaster) {
-    const ownerOrgIds = getOwnerOrganizationIds(user)
-    if (!template.organization_id || !ownerOrgIds.includes(template.organization_id)) {
-      return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
-    }
+  //     GATES-3: canManageContractsInOrg is that same rule (master, or an
+  //     org admin of the org; a null org is master-only. C18 ORGROLE.1).
+  if (!canManageContractsInOrg(user, template.organization_id)) {
+    return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
   }
 
   if (!template.active) return NextResponse.json({ success: false, error: 'Template is inactive' }, { status: 400 })
@@ -145,12 +157,28 @@ export async function POST(request) {
       id, full_name, email, role, employment_type,
       annual_salary, hourly_rate, overtime_rate, contracted_hours_per_week,
       profile_locations:profile_locations(location_id, is_default,
-        location:locations!location_id(id, organization_id, name, address, phone, email))
+        location:locations!location_id(id, organization_id, name, address, phone, email, timezone))
     `)
     .eq('id', parsed.data.profile_id)
     .maybeSingle()
   if (rErr) return NextResponse.json({ success: false, error: rErr.message }, { status: 500 })
   if (!recipient) return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
+
+  // 2a. C140 CONTRACTRECIPIENT.1 (security) — the recipient must belong to the
+  //     template's org. Only the template's org was judged against the issuer,
+  //     so an owner of org A could issue A's template to a person in org B and
+  //     the contract rendered B's person (name, email, pay). A template with an
+  //     org needs a recipient with a studio in it; anyone else is the same 404
+  //     as an unknown id, before any other check reads their row, so other
+  //     orgs' people cannot be probed. A null-org
+  //     template (master-only) keeps its old behaviour.
+  //     The issue wizard previews with the same two helpers
+  //     (linksInTemplateOrg / issuingLocationLink), so its {{today}} is
+  //     rendered in the studio picked here.
+  const recipientLinks = linksInTemplateOrg(recipient.profile_locations, template)
+  if (template.organization_id && recipientLinks.length === 0) {
+    return NextResponse.json({ success: false, error: 'Recipient not found' }, { status: 404 })
+  }
 
   // Employment-type sanity check — block issuing an FTE-only template
   // to a contractor and vice versa. 'both' templates always pass.
@@ -162,13 +190,19 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  // 3. Resolve location_id + org_id.
+  // 3. Resolve location_id + org_id. C140: the studio is one of the
+  //    recipient's studios IN the template's org (their default there first);
+  //    an explicit location_id outside them is refused.
   let locationId = parsed.data.location_id || null
   let organizationId = template.organization_id || null
-  const recipientLinks = recipient.profile_locations || []
+  if (locationId && template.organization_id && !recipientLinks.some(l => l.location_id === locationId)) {
+    return NextResponse.json({
+      success: false,
+      error: 'That location is not one of the recipient\'s studios in this template\'s organisation.',
+    }, { status: 400 })
+  }
   if (!locationId) {
-    const def = recipientLinks.find(l => l.is_default) || recipientLinks[0]
-    locationId = def?.location_id || null
+    locationId = issuingLocationLink(recipient, template)?.location_id || null
   }
   if (!organizationId) {
     const link = recipientLinks.find(l => l.location_id === locationId)
@@ -187,8 +221,9 @@ export async function POST(request) {
   //     through to {} fields if an explicit request-body location_id
   //     isn't actually one of the recipient's own links — an edge case
   //     that just means fewer location vars resolve, not an error).
-  //     Branding is location -> org -> 'UN1T' inheritance (see
-  //     getLocationBranding); fetch once, reused by the render below.
+  //     Branding is company_settings -> org_settings -> locations.name
+  //     inheritance (see getLocationBranding); fetch once, reused by the
+  //     render below.
   const locationRow = recipientLinks.find(l => l.location_id === locationId)?.location || null
   const branding = await getLocationBranding(db, locationId)
   //     LEGALENT.1 — {{legal_entity_name}} is the CONTRACTING COMPANY
@@ -197,6 +232,19 @@ export async function POST(request) {
   //     against the org already established above, so a CCF Autos
   //     contract can never inherit the gym's entity.
   const entity = await getContractingEntity(db, { organizationId, locationId, branding })
+  //     W1.S1a — never issue (or draft) a contract without a contracting
+  //     entity. Since the literal sweep the resolver's floor is the org's
+  //     own name, then '' when even that row is unreadable. A row stored
+  //     without legal_entity_name reads as pre-LEGALENT.1 to
+  //     contractCountersignatureLabel and would countersign as the legacy
+  //     entity on every surface and the archived PDF, for good. Refuse
+  //     before any insert; the operator retries.
+  if (!String(entity?.label || '').trim()) {
+    return NextResponse.json({
+      success: false,
+      error: "Couldn't confirm the contracting company for this organisation. Nothing was issued; please try again.",
+    }, { status: 503 })
+  }
   const locVars = locationVariables({ location: locationRow, branding, entity })
 
   // 4. Validate custom variables required by the template.
@@ -216,7 +264,9 @@ export async function POST(request) {
   //    signature stays profile/custom) so a same-named custom variable
   //    can still override a location auto-fill if a template ever
   //    declares one.
-  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables })
+  //    TZ.8b — {{today}} is the issuing studio's day (the location row
+  //    embedded above carries its timezone).
+  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables }, { zone: zoneOfLocation(locationRow) })
   let bodyRendered = renderTemplate(template.body_markdown, merged)
 
   // 5a. CONTRACT-VARS.1 — reject if any placeholder remains in the

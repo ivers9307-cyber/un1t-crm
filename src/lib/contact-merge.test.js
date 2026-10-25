@@ -566,9 +566,12 @@ describe('getContactImpact — falls back when migration 538 is not applied', ()
   it('counts every hand-maintained pair with one request each', async () => {
     const db = makeImpactDb({ rpcThrows: true })
     await getContactImpact(db, 'c-1')
-    // 21 legacy pairs + the two mail tables MAIL-GDPR.1 added to the redact list.
-    expect(db.countCalls).toHaveLength(23)
+    // 20 legacy pairs + the two mail tables MAIL-GDPR.1 added to the redact list
+    // (21 until SMSTABLESDROP.1: mig 688 dropped sms_broadcast_recipients, and a
+    // count against a missing table would only ever fail).
+    expect(db.countCalls).toHaveLength(22)
     expect(db.countCalls.every(c => c.value === 'c-1')).toBe(true)
+    expect(db.countCalls.map(c => c.table)).not.toContain('sms_broadcast_recipients')
   })
 
   it('a failed count reports partial, never a confident 0', async () => {

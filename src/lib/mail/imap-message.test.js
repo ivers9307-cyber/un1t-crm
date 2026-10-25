@@ -4,7 +4,7 @@
 // pipeline behind it is inherited from the Postmark webhook, so if the payload
 // is right the feature is right — and if the payload is subtly wrong, the
 // symptom is a member's email filed against the wrong studio, or a reply that
-// opens a second ticket, and nothing errors anywhere.
+// opens a second conversation, and nothing errors anywhere.
 //
 // Every fixture below is shaped the way imapflow really returns things:
 // envelope addresses as { name, address } objects, envelope.date as a Date,
@@ -104,7 +104,7 @@ describe('syntheticMessageId', () => {
     expect(id).not.toMatch(/^[0-9a-f-]{36}$/i)
   })
 
-  it('namespaces per mailbox, so two mailboxes copied on one email get two tickets', () => {
+  it('namespaces per mailbox, so two mailboxes copied on one email get two conversations', () => {
     const a = syntheticMessageId('mailbox-a', 'same@id.com')
     const b = syntheticMessageId('mailbox-b', 'same@id.com')
     expect(a).not.toBe(b)
@@ -160,7 +160,7 @@ describe('toInboundPayload — OriginalRecipient (the field that routes the mail
     // THE CROSS-TENANT TEST. `To:` is written by whoever sent the mail, and
     // recipientEmails' precedence is ToFull → CcFull → To → OriginalRecipient,
     // so a stranger mailing hatchstreet@ with `To: stillorgan@un1t.com` used to
-    // resolve STILLORGAN: the ticket filed at Stillorgan's location, its
+    // resolve STILLORGAN: the conversation filed at Stillorgan's location, its
     // attachments staged against Stillorgan, contact-matched against
     // Stillorgan's contacts, pushed to Stillorgan's staff — while Hatch
     // Street, the studio the message was actually delivered to, never saw it,
@@ -200,7 +200,7 @@ describe('toInboundPayload — OriginalRecipient (the field that routes the mail
   it('🔴 drops a foreign mailbox off Cc too, so each mailbox files its OWN copy', () => {
     // The second half of the same defect. With sales@ and accounts@ both
     // connected and a member mailing `To: sales@, Cc: accounts@`, the
-    // accounts@ POLL also resolved sales@ — sales@ got two tickets, accounts@
+    // accounts@ POLL also resolved sales@ — sales@ got two conversations, accounts@
     // got none, and because mailbox visibility is grant-gated a coach granted
     // only accounts@ never saw their own correspondence.
     const accounts = 'accounts@un1t.com'
@@ -531,7 +531,7 @@ describe('toInboundPayload — MessageID', () => {
   it('caps an absurdly long Message-ID before it reaches a stored column', () => {
     // The digest makes the MessageID fixed-width whatever arrives, but the raw
     // id also rides into email_inbox_messages.rfc_message_id via the Headers
-    // array and is re-read on every render of the ticket. Bound it.
+    // array and is re-read on every render of the conversation. Bound it.
     const long = 'x'.repeat(5000)
     const p = map(fixture({ headers: headerBuffer([`Message-ID: <${long}@x.com>`]) }))
     expect(p.MessageID).toBe(syntheticMessageId(MAILBOX_ID, 'x'.repeat(400)))

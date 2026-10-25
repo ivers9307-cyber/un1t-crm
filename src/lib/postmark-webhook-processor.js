@@ -83,7 +83,7 @@ function classifyMissingSendRow(body, messageId, recordType) {
  * `.single()` with a discarded error, which is wrong here in a specific way:
  * **a missing row is the NORMAL case, not an anomaly.** Postmark delivers
  * events for mail this system never recorded — the zero-GUID SubscriptionChange
- * documented on resolveReactivationContact below, and any message sent on the
+ * documented on resolveReactivationContacts below, and any message sent on the
  * server outside the campaign path. `.single()` turns that expected miss into a
  * PGRST116 error, and discarding it collapsed "no such send", "duplicate
  * message id" and "the query failed" into one `data = null` that every call
@@ -96,6 +96,8 @@ function classifyMissingSendRow(body, messageId, recordType) {
  * reachable in principle and worth a line in the log rather than a silent null.
  */
 async function findSendByMessageId(db, messageId, columns) {
+  // PMSUBCHANGE.1 — no message, no send (a NULL-MessageID SubscriptionChange).
+  if (!messageId) return null
   const { data, error } = await db.from('email_sends')
     .select(columns)
     .eq('postmark_message_id', messageId)
@@ -108,7 +110,47 @@ async function findSendByMessageId(db, messageId, columns) {
 }
 
 /**
- * COMMSFIX.C.7 — which contact a SubscriptionChange reactivation is about.
+ * W0.6b — the ORGANISATION scope for a Recipient-resolved reactivation.
+ *
+ * A Postmark suppression lives on a Postmark SERVER, and the estate has two
+ * kinds (mig 427, INTEG-B3): the shared default server every organisation
+ * sends through unless it holds its own, and a per-organisation server
+ * (`tenant_email_domains.postmark_server_id`). The event's `ServerID` says
+ * which one cleared the address:
+ *   • a tenant server → the address is deliverable again for THAT
+ *     organisation only, so the lookup is pinned to it;
+ *   • the shared server → for every organisation that sends through it,
+ *     which is every one WITHOUT its own server, so those are excluded.
+ *
+ * An unreadable table is logged and treated as "no tenant servers" (the
+ * shared-server rule): a wrong reactivation self-corrects on the next bounce,
+ * a lost one is permanent (this branch is never retried — see the one-click
+ * handler below), and today the table is empty, so that is also the
+ * byte-identical behaviour.
+ *
+ * @returns {Promise<{ organizationId: string|null, excludeOrganizationIds: Set<string> }>}
+ */
+async function reactivationScopeFor(db, serverId) {
+  const { data: rows, error } = await db.from('tenant_email_domains')
+    .select('organization_id, postmark_server_id')
+  if (error) {
+    console.error('[postmark processor] tenant_email_domains read failed; reactivating on the shared-server rule:', error.message)
+    return { organizationId: null, excludeOrganizationIds: new Set() }
+  }
+  const tenantServers = (rows || []).filter((r) => r?.postmark_server_id != null && r?.organization_id)
+  const own = serverId != null
+    ? tenantServers.find((r) => String(r.postmark_server_id) === String(serverId))
+    : null
+  if (own) return { organizationId: own.organization_id, excludeOrganizationIds: new Set() }
+  return { organizationId: null, excludeOrganizationIds: new Set(tenantServers.map((r) => r.organization_id)) }
+}
+
+// More holders than this for ONE address on ONE server is not a real world;
+// the cap only bounds the write loop.
+const REACTIVATION_HOLDER_LIMIT = 20
+
+/**
+ * COMMSFIX.C.7 — which contact(s) a SubscriptionChange reactivation is about.
  *
  * Message-bound events resolve through email_sends like every other handler.
  * A Postmark-SIDE reactivation is not tied to a delivered message, so it
@@ -119,19 +161,36 @@ async function findSendByMessageId(db, messageId, columns) {
  * `.ilike` with escapeLikePattern, not `.eq`: contacts are stored mixed-case,
  * and an unescaped pattern would let `_`/`%` — both legal email characters —
  * match a DIFFERENT contact (CLAUDE.md, the inbound-email misfiling class).
+ *
+ * W0.6b — contacts_email_org_unique (mig 712) is per ORGANISATION, so one
+ * address can be a contact at several tenants. This used `.maybeSingle()`:
+ * two holders → PGRST116 → "no contact" → the suppression mirror stayed stuck
+ * for BOTH, the exact bug this branch exists to fix. The Recipient fallback
+ * now reads every holder inside the scope of the Postmark server that cleared
+ * the address (reactivationScopeFor) and returns them all.
+ *
+ * @returns {Promise<string[]>} contact ids, possibly empty
  */
-async function resolveReactivationContact(db, body, messageId) {
+async function resolveReactivationContacts(db, body, messageId) {
   const send = await findSendByMessageId(db, messageId, 'contact_id')
-  if (send?.contact_id) return send.contact_id
+  if (send?.contact_id) return [send.contact_id]
 
   const recipient = typeof body?.Recipient === 'string' ? body.Recipient.trim() : ''
-  if (!recipient) return null
+  if (!recipient) return []
 
-  const { data: contact } = await db.from('contacts')
-    .select('id')
+  const scope = await reactivationScopeFor(db, body?.ServerID)
+  let q = db.from('contacts')
+    .select('id, organization_id')
     .ilike('email', escapeLikePattern(recipient))
-    .maybeSingle()
-  return contact?.id || null
+  if (scope.organizationId) q = q.eq('organization_id', scope.organizationId)
+  const { data: holders, error } = await q.limit(REACTIVATION_HOLDER_LIMIT)
+  if (error) {
+    console.error('[postmark processor] reactivation contact lookup failed:', error.message)
+    return []
+  }
+  return (holders || [])
+    .filter((c) => c?.id && !(c.organization_id && scope.excludeOrganizationIds.has(c.organization_id)))
+    .map((c) => c.id)
 }
 
 /**
@@ -160,10 +219,15 @@ async function reportRpc(db, fn, args) {
  */
 export async function processPostmarkEvent(db, body) {
   const messageId = body?.MessageID
-  if (!messageId) {
+  const recordType = body?.RecordType
+  // PMSUBCHANGE.1 — a SubscriptionChange may legitimately carry MessageID
+  // NULL (an account-made suppression, e.g. our own consent-drift push, or a
+  // reactivation), and the webhook route now queues it. It resolves through
+  // `Recipient` (reactivation) or is a no-op echo of a refusal we already
+  // hold (suppression). Every other record type still needs a message.
+  if (!messageId && recordType !== 'SubscriptionChange') {
     return { ok: false, error: 'missing_message_id' }
   }
-  const recordType = body.RecordType
 
   // BCA submission events ride on the same Postmark webhook firehose
   // but tagged 'bca-submit'. They never match an email_sends or
@@ -171,7 +235,7 @@ export async function processPostmarkEvent(db, body) {
   // no-op on them. Route them here first; if the message id maps to
   // a car_bca_submissions row, handle it and return — the rest of
   // the switch is for marketing / transactional / campaign events.
-  if (body?.Tag === 'bca-submit') {
+  if (body?.Tag === 'bca-submit' && messageId) {
     const bca = await findBcaSubmissionByMessageId(db, messageId)
     if (bca) {
       const r = await recordBcaPostmarkEvent(db, bca.id, body)
@@ -635,8 +699,8 @@ export async function processPostmarkEvent(db, body) {
           // flipping email_marketing back on off a provider event would be
           // opting somebody in without their say-so. Marketing consent is
           // restored only by the person themselves, via the preference centre.
-          const contactId = await resolveReactivationContact(db, body, messageId)
-          if (contactId) {
+          const contactIds = await resolveReactivationContacts(db, body, messageId)
+          for (const contactId of contactIds) {
             // Same guarded no-op shape as the Open/Click hygiene clear.
             await db.from('contacts')
               .update({ email_suppressed_at: null })

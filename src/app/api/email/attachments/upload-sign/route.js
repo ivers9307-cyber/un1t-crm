@@ -23,7 +23,7 @@
 // moment later, to send them to a member. So the gate is not a weaker "can you
 // use the CRM" check — it is EXACTLY the gate the send it feeds will apply:
 //
-//   ticket_id  → loadTicketForUser: the ticket's location, `email_inbox` THERE,
+//   ticket_id  → loadConversationForUser: the ticket's location, `email_inbox` THERE,
 //                and the mailbox the ticket arrived at must be in the caller's
 //                visible set. Identical to the reply route.
 //   mailbox_id → loadSendingMailbox: the mailbox's location, `email_inbox`
@@ -57,7 +57,7 @@ import {
   outboundFileTooLargeError,
 } from '@/lib/email-outbound-attachments'
 import { OutboundAttachmentSchema } from '@/lib/email-outbound-attachments-server'
-import { loadTicketForUser, loadSendingMailbox, ticketNotFound } from '../../tickets/_helpers'
+import { loadConversationForUser, loadSendingMailbox, conversationNotFound } from '../../mail/_conversation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -104,7 +104,7 @@ export async function POST(request) {
 
   // THE GATE — the send's own, in both shapes. See the header.
   if (hasTicket) {
-    const loaded = await loadTicketForUser(db, user, body.ticket_id)
+    const loaded = await loadConversationForUser(db, user, body.ticket_id)
     if (loaded.response) return loaded.response
   } else {
     const loaded = await loadSendingMailbox(db, user, body.mailbox_id)
@@ -127,7 +127,7 @@ export async function POST(request) {
   } catch {
     // Unreachable behind the Zod shapes above; a 404 rather than a 500 because
     // the only way here is a request that named something that cannot exist.
-    return ticketNotFound()
+    return conversationNotFound()
   }
 
   const { data, error } = await db.storage

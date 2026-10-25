@@ -68,6 +68,10 @@ export default function SwapActions({ locationId, todayIso, currentProfileId }) 
   const [onToday, setOnToday] = useState([])
   const [busyId, setBusyId] = useState(null)   // swap id currently mutating (+ verb)
   const [error, setError] = useState(null)
+  // SWAPS.2 — advisory sentences from a successful claim/accept (approved
+  // leave that day, an overlapping shift). The claim stands; the coach is
+  // just told before their manager is.
+  const [notice, setNotice] = useState(null)
 
   const loadSwaps = useCallback(async () => {
     if (!locationId) return
@@ -113,18 +117,20 @@ export default function SwapActions({ locationId, todayIso, currentProfileId }) 
     if (busyId) return
     setBusyId(`${id}:${verb}`)
     setError(null)
+    setNotice(null)
     try {
       const res = await fetch(`/api/schedule/swaps/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ status }),
       })
+      const json = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const json = await res.json().catch(() => ({}))
         const msg = json.error || `Could not ${verb} (${res.status}).`
         console.error(`[SwapActions] ${verb} failed:`, msg)
         setError(msg)
       } else {
+        if (Array.isArray(json.warnings) && json.warnings.length) setNotice(json.warnings)
         await loadSwaps()
         router.refresh()
       }
@@ -145,6 +151,12 @@ export default function SwapActions({ locationId, todayIso, currentProfileId }) 
     <div className="max-w-5xl">
       {error && (
         <div className="mt-3 rounded-lg bg-red-500/10 text-red-700 text-sm px-3 py-2">{error}</div>
+      )}
+      {notice && (
+        <div role="status" className="mt-3 rounded-lg bg-amber-500/10 text-amber-800 text-sm px-3 py-2">
+          <div className="font-medium">Sent to your manager. Heads up:</div>
+          {notice.map((m, i) => <div key={i}>{m}</div>)}
+        </div>
       )}
 
       {/* 1 — Swaps offered to you */}

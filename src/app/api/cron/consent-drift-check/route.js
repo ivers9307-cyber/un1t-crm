@@ -27,12 +27,23 @@
 // differently; the short version is that one of them only ever adds a refusal
 // and the other would infer a consent change, which is the class of silent
 // write that caused the incident above.
+//
+// W1.E4 — PER POSTMARK SERVER. A suppression list is per (server, stream). An
+// org with a LIVE tenant_email_domains row sends from its OWN server, so the
+// reconciliation runs once per server: the global CRM.UN1T server plus every
+// live tenant server (planPostmarkServers). Each pass scopes the DATABASE side
+// to that server's locations — one tenant's opted-out addresses must never be
+// pushed onto another tenant's (or UN1T's) Postmark account, which would be a
+// cross-tenant address leak into a third party's system. With no live tenant
+// server (every org today) the plan is the global server alone, unscoped —
+// byte-for-byte the pre-W1.E4 queries.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { MARKETING_STREAM } from '@/lib/postmark'
 import { listPostmarkSuppressions, suppressAtPostmark } from '@/lib/postmark-suppressions'
+import { listLiveTenantServers } from '@/lib/postmark-server-for-location'
 import { CONSENT_ACTIONS, LEGACY_CONSENT_ACTIONS, isConsentOptOut } from '@/lib/consent-actions'
 import { CONSENT_SOURCE_CATEGORIES, sourcesInCategory } from '@/lib/consent-sources'
 
@@ -49,6 +60,9 @@ export const PAGE_SIZE = 1000
 // invocation is a timeout, not a repair. The set is ordered, healed addresses
 // drop out of it, and the job runs daily — so it converges, and the response
 // reports what is left.
+//
+// W1.E4 — the cap is PER SERVER PASS (global + each live tenant server), not
+// per run: each server's backlog converges on its own clock.
 export const MAX_SUPPRESSIONS_PER_RUN = 500
 
 // PMSUPP.1 — WHICH opt-outs the auto-heal is allowed to push, by
@@ -139,15 +153,21 @@ async function pageAll(build, label) {
  * NOT appear here: it leaves the global row true, and a Postmark suppression
  * is server-wide.
  */
-export async function loadOptedOutEmails(db) {
+export async function loadOptedOutEmails(db, { locationIds = null } = {}) {
   return pageAll(
-    (from, to) => db
-      .from('contacts')
-      .select('id, email')
-      .eq('email_marketing', false)
-      .not('email', 'is', null)
-      .order('id', { ascending: true })
-      .range(from, to),
+    (from, to) => {
+      let q = db
+        .from('contacts')
+        .select('id, email')
+        .eq('email_marketing', false)
+        .not('email', 'is', null)
+      // W1.E4 — null = every location (the global server with no tenants);
+      // an array = only this server's locations. CAVEAT: once any tenant is
+      // live, a contact with a NULL location_id matches no server's .in() and
+      // is reconciled by none of the passes (0 such rows today).
+      if (Array.isArray(locationIds)) q = q.in('location_id', locationIds)
+      return q.order('id', { ascending: true }).range(from, to)
+    },
     'contacts',
   )
 }
@@ -164,20 +184,86 @@ export async function loadOptedOutEmails(db) {
  * (one row per list the contact is on), and .range() over a non-unique sort
  * silently drops and repeats rows at the page boundaries.
  */
-export async function loadMailableEmails(db) {
+export async function loadMailableEmails(db, { locationIds = null } = {}) {
   return pageAll(
-    (from, to) => db
-      .from('contact_location_audience')
-      .select('id, email, audience_location_id')
-      .eq('loc_email_marketing', true)
-      .not('email_status', 'in', '("bounced","complained")')
-      .is('email_suppressed_at', null)
-      .not('email', 'is', null)
-      .order('id', { ascending: true })
-      .order('audience_location_id', { ascending: true })
-      .range(from, to),
+    (from, to) => {
+      let q = db
+        .from('contact_location_audience')
+        .select('id, email, audience_location_id')
+        .eq('loc_email_marketing', true)
+        .not('email_status', 'in', '("bounced","complained")')
+        .is('email_suppressed_at', null)
+        .not('email', 'is', null)
+      // W1.E4 — "still mailable SOMEWHERE" means somewhere this server sends
+      // for; a list at another org's location goes out on another server.
+      if (Array.isArray(locationIds)) q = q.in('audience_location_id', locationIds)
+      return q
+        .order('id', { ascending: true })
+        .order('audience_location_id', { ascending: true })
+        .range(from, to)
+    },
     'contact_location_audience',
   )
+}
+
+/**
+ * W1.E4 — the Postmark servers this run must reconcile, each with the
+ * locations whose mail goes out on it.
+ *
+ *   no live tenant server → [ global, locationIds: null ]  (unscoped — today)
+ *   N live tenant servers → [ global (every location NOT in a tenant org),
+ *                             one per tenant (its org's locations) ]
+ *
+ * `locationIds: null` means "no location filter at all", which keeps the
+ * global pass byte-identical to PMSUPP.1 until the first tenant goes live;
+ * from then on the global pass is scoped too, so a tenant's addresses never
+ * reach UN1T's server. A location with no organization_id stays global.
+ *
+ * `locations` is paged (pageAll): under the 1k cap a tenant's 1,001st
+ * location would silently land on the global pass.
+ *
+ * Returns `{ servers, error }`; `serverToken` on each entry is a SECRET that
+ * goes to the header builder and nowhere else — GET strips it before the
+ * response. Never throws (both reads report `{ error }`, and anything else is
+ * caught); a failed read is an error, not "no tenants".
+ */
+export async function planPostmarkServers(db) {
+  const { servers: tenants, error: tenantError } = await listLiveTenantServers(db)
+  if (tenantError) return { servers: [], error: `tenant_email_domains: ${tenantError}` }
+
+  const global = { label: 'global', organizationId: null, serverToken: null, locationIds: null }
+  if (tenants.length === 0) return { servers: [global], error: null }
+
+  let locations
+  try {
+    const { rows, error: locError } = await pageAll(
+      (from, to) => db.from('locations').select('id, organization_id').order('id', { ascending: true }).range(from, to),
+      'locations',
+    )
+    if (locError) return { servers: [], error: locError }
+    locations = rows
+  } catch (err) {
+    return { servers: [], error: `locations: ${err?.message || String(err)}` }
+  }
+
+  const byOrg = new Map(tenants.map(t => [t.organizationId, []]))
+  const globalIds = []
+  for (const loc of locations || []) {
+    if (loc.organization_id && byOrg.has(loc.organization_id)) byOrg.get(loc.organization_id).push(loc.id)
+    else globalIds.push(loc.id)
+  }
+  return {
+    servers: [
+      { ...global, locationIds: globalIds },
+      ...tenants.map(t => ({
+        label: `tenant:${t.organizationId}`,
+        organizationId: t.organizationId,
+        serverToken: t.serverToken,
+        locationIds: byOrg.get(t.organizationId),
+      })),
+    ],
+    error: null,
+  }
 }
 
 /**
@@ -233,7 +319,7 @@ const lower = (e) => String(e || '').trim().toLowerCase()
  * caller turns into "no heartbeat" — a check that could not look must go
  * stale rather than report health it never measured.
  */
-export async function reconcilePostmarkSuppressions(db, { stream = MARKETING_STREAM } = {}) {
+export async function reconcilePostmarkSuppressions(db, { stream = MARKETING_STREAM, serverToken = null, locationIds = null } = {}) {
   const empty = {
     missingSuppression: 0, suppressed: 0, suppressFailed: 0, remaining: 0,
     suppressedButMailable: 0, byReason: {}, suppressedButMailableSample: [],
@@ -242,13 +328,14 @@ export async function reconcilePostmarkSuppressions(db, { stream = MARKETING_STR
   // Read Postmark FIRST. An empty list from a failed dump would read as
   // "nothing is suppressed" and push the entire opted-out backlog for no
   // reason — listPostmarkSuppressions returns an explicit error so it cannot.
-  const { suppressions, error: pmError } = await listPostmarkSuppressions({ stream })
+  // W1.E4 — this server's list, and only this server's locations on our side.
+  const { suppressions, error: pmError } = await listPostmarkSuppressions({ stream, serverToken })
   if (pmError) return { ...empty, error: `postmark: ${pmError}` }
 
-  const { rows: optedOut, error: optedOutError } = await loadOptedOutEmails(db)
+  const { rows: optedOut, error: optedOutError } = await loadOptedOutEmails(db, { locationIds })
   if (optedOutError) return { ...empty, error: optedOutError }
 
-  const { rows: mailableRows, error: mailableError } = await loadMailableEmails(db)
+  const { rows: mailableRows, error: mailableError } = await loadMailableEmails(db, { locationIds })
   if (mailableError) return { ...empty, error: mailableError }
 
   const { ids: voluntaryOptOuts, error: voluntaryError } = await loadVoluntaryOptOutContactIds(db)
@@ -306,7 +393,7 @@ export async function reconcilePostmarkSuppressions(db, { stream = MARKETING_STR
   let suppressed = 0
   let suppressFailed = 0
   if (toPush.length > 0) {
-    const result = await suppressAtPostmark(toPush, { stream })
+    const result = await suppressAtPostmark(toPush, { stream, serverToken })
     suppressed = result?.ok || 0
     suppressFailed = result?.failed?.length || 0
     console.error(
@@ -375,18 +462,44 @@ export async function GET(request) {
   }
 
   // PMSUPP.1 — the second half of the check: our database vs Postmark.
-  const postmark = await reconcilePostmarkSuppressions(db)
-  if (postmark.error) {
-    // Same rule as the drift query above — no heartbeat. A reconciliation that
-    // could not read one of its two sides has not checked anything, and going
-    // stale is how that surfaces. Nothing customer-facing depends on this
-    // route, so failing loudly here costs nobody their opt-out.
+  // W1.E4 — once per Postmark server (the global one first, then every live
+  // tenant server). Every server is visited even after one fails, so the
+  // response says what each one did; but ANY failure means no heartbeat —
+  // same rule as the drift query above. A reconciliation that could not read
+  // one of its two sides has not checked anything, and going stale is how
+  // that surfaces. Nothing customer-facing depends on this route, so failing
+  // loudly here costs nobody their opt-out.
+  const { servers, error: planError } = await planPostmarkServers(db)
+  if (planError) {
     return NextResponse.json(
-      { success: false, error: postmark.error, data: { drift: rows.length, contacts: rows } },
+      { success: false, error: planError, data: { drift: rows.length, contacts: rows } },
+      { status: 500 },
+    )
+  }
+
+  const results = []
+  for (const server of servers) {
+    const result = await reconcilePostmarkSuppressions(db, { serverToken: server.serverToken, locationIds: server.locationIds })
+    // The token never leaves this handler: label + org id only.
+    results.push({ server: server.label, organization_id: server.organizationId, ...result })
+    if (result.error) {
+      console.error(`[consent-drift-check] Postmark reconciliation failed on ${server.label}: ${result.error}`)
+    }
+  }
+  const postmark = results[0]
+  const tenants = results.slice(1)
+  const failed = results.filter(r => r.error)
+  if (failed.length > 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: failed.map(r => `${r.server}: ${r.error}`).join('; '),
+        data: { drift: rows.length, contacts: rows, postmark, tenants },
+      },
       { status: 500 },
     )
   }
 
   await stampHeartbeat('consent-drift-check')
-  return NextResponse.json({ success: true, data: { drift: rows.length, contacts: rows, postmark } })
+  return NextResponse.json({ success: true, data: { drift: rows.length, contacts: rows, postmark, tenants } })
 }

@@ -13,8 +13,11 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { LeadSchema, normaliseLead, leadConfigFromBlocks, resolveCampaign } from '@/lib/leads'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { stampLeadSource } from '@/lib/lead-source-stamp'
+import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
+import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 
 export const runtime = 'nodejs'
 
@@ -26,7 +29,7 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const { firstName, email, phone, publicPath, campaign } = normaliseLead(body)
+  const { firstName, email, phone, publicPath, campaign, visit } = normaliseLead(body)
 
   // SAAS-6: tenant-keyed (the landing public_path, resolved to a studio
   // just below) — one tenant's lead traffic can never consume another
@@ -65,24 +68,35 @@ export async function POST(request) {
   // Find-or-create the contact at this studio (shared public-form helper).
   // restrictToOrg (LEADCAP.1): match here first, then sibling locations in the
   // same organisation, never globally. restrictToLocation used to be the flag,
-  // but `contacts_email_unique` is a GLOBAL index — so an existing Stillorgan
+  // but under mig 008's GLOBAL `contacts_email_unique` an existing Stillorgan
   // member joining the Hatch Street waitlist found no match, hit 23505 on the
-  // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true })
+  // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed; since
+  // W0.6 (mig 712, unique per organisation) it is also the helper's default.
+  // SOURCE-LABEL.1 — see class-booking: a website lead form is not a race
+  // signup. CREATE only; matched contacts are untouched.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true, insertFields: { source: 'lead_form' } })
   if (!contactId) {
     return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
   }
 
   // Stamp lead_source only when the contact has none yet (don't clobber
-  // a richer existing attribution). Best-effort.
+  // a richer existing attribution). FUNNEL.5 — LAST-touch alongside it, so a
+  // contact re-entering through the website records what brought them back;
+  // ORGCONTACTS.4 — only when this studio is the contact's primary (at a
+  // sibling studio the lead_form contact_studios row is the record). Best-effort.
   try {
-    await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null)
-    // FUNNEL.5 — LAST-touch alongside the first-touch stamp above, so a
-    // contact re-entering through the website records what brought them back.
-    await db.from('contacts')
-      .update({ last_lead_source: leadSource, last_lead_source_at: new Date().toISOString() })
-      .eq('id', contactId)
+    await stampLeadSource(db, { contactId, locationId, leadSource })
   } catch (e) { logWarn('leads', 'lead_source set failed', { err: e }) }
+  // VISIT-ORIGIN.1 — first touch, stamp-if-null, best-effort.
+  try {
+    const v = sanitiseVisitOrigin(visit)
+    if (v) {
+      await db.from('contacts')
+        .update({ visit_referrer: v.referrer, visit_landing_path: v.landing_path, visit_captured_at: new Date().toISOString() })
+        .eq('id', contactId)
+        .is('visit_captured_at', null)
+    }
+  } catch (e) { logWarn('leads', 'visit origin failed', { err: e }) }
 
   // CAPI: paid-funnel website Lead event. Contact-keyed event_id so repeat
   // submits dedupe at Meta; dataset gating lives in the helper.
@@ -111,18 +125,18 @@ export async function POST(request) {
     alreadyOnList = !!r.alreadyPresent
   } catch (e) { logWarn('leads', 'tag write failed', { err: e }) }
 
-  // Open a new_lead deal so the lead shows in the pipeline. Direct +
-  // deterministic (a brand-new web lead is unambiguously new_lead);
-  // skip when the contact already has an open deal. Best-effort.
+  // Open (or re-open) this lead's place on the studio's primary board so they
+  // show in the pipeline. Best-effort — losing the deal must never cost the
+  // lead capture, so the helper swallows its own failures and this try/catch is
+  // the belt to its braces. The reasoning for each line of the placement, and
+  // for the manual-board re-signup bump, lives in the helper (WAITLIST.4).
   try {
-    const { data: openDeal } = await db.from('deals').select('id').eq('contact_id', contactId).eq('status', 'open').maybeSingle()
-    if (!openDeal) {
-      const { data: stage } = await db.from('pipeline_stages').select('id').eq('location_id', locationId).eq('slug', 'new_lead').maybeSingle()
-      if (stage) {
-        await db.from('deals').insert({ title: firstName || 'Website lead', contact_id: contactId, stage_id: stage.id, location_id: locationId, status: 'open' })
-      }
-    }
-  } catch (e) { logWarn('leads', 'deal create failed', { err: e }) }
+    await placeWaitlistEntry(db, {
+      contactId,
+      locationId,
+      title: firstName || 'Website lead',
+    })
+  } catch (e) { logWarn('leads', 'deal placement failed', { err: e }) }
 
   // AUTOMATIONS: glofox_lead_provisioning (website lead path).
   try {
@@ -135,7 +149,9 @@ export async function POST(request) {
       const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
       await maybeProvisionLeadInGlofox({ db, locationId, contact: contactRow, source: 'website_lead' })
       const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
-      await triggerSequencesForContactCreated(contactRow.id)
+      // SHAREDCONTACT.1 — the form's studio, not the contact's home: a
+      // Stillorgan member joining Hatch Street's list is new to Hatch.
+      await triggerSequencesForContactCreated(contactRow.id, { locationId })
     }
   } catch (e) { logWarn('leads', 'glofox provisioning hook failed', { err: e }) }
 
@@ -152,7 +168,7 @@ export async function POST(request) {
         .maybeSingle()
       if (c) {
         const { maybeSendCampaignWhatsappWelcome } = await import('@/lib/automations/meta-ad-whatsapp-welcome')
-        await maybeSendCampaignWhatsappWelcome({ db, locationId, contact: c, templateName: camp.whatsappTemplate })
+        await maybeSendCampaignWhatsappWelcome({ db, locationId, contact: c, templateName: camp.whatsappTemplate, purpose: 'meta_ad_welcome' })
       }
     }
   } catch (e) { logWarn('leads', 'campaign WA welcome failed', { err: e }) }

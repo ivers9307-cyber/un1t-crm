@@ -57,8 +57,11 @@ vi.mock('@/lib/xero/client', () => ({
 const syncBankLines = vi.fn(async () => ({ pulled: 2, new: 1, covered: 0 }))
 vi.mock('./coverage', () => ({ syncBankLines: (...args) => syncBankLines(...args) }))
 
-vi.mock('@/lib/dublin-time', () => ({
-  dublinTodayStr: () => '2026-07-04',
+// TZ.11c: the window is the location's day; the zone read and the day are
+// stubbed here (src/lib/external-zones.tz.test.js runs them for real).
+vi.mock('@/lib/location-time', () => ({
+  getLocationZone: async () => 'Europe/Dublin',
+  todayStrIn: () => '2026-07-04',
   addDaysISO: (d, days) => {
     const t = new Date(d + 'T00:00:00Z')
     t.setUTCDate(t.getUTCDate() + days)

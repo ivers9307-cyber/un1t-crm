@@ -31,7 +31,10 @@ import { performFullSignOut } from '../sign-out'
 import { useIdentity } from '../identity-context'
 import { UNKNOWN, probeMember, shouldAttemptLinkContact, getHasEverBeenStaff, writeCachedMemberContactId } from '../identity'
 
-const CONTACT_COLUMNS = 'id, name, email, dob, gender, weight_kg, profile_setup_completed_at'
+// W1.S5 — location_id is the member's home studio: useMemberBrand() hands it
+// to useBrand() so every member screen reads that studio's brand. Readable
+// under the own-row leg of contacts_select (`user_id = auth.uid()`, mig 690).
+const CONTACT_COLUMNS = 'id, name, email, dob, gender, weight_kg, profile_setup_completed_at, location_id'
 
 const AuthContext = createContext(null)
 

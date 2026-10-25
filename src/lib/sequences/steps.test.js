@@ -1,6 +1,6 @@
 // Step handler tests. The bug-prone surface here isn't the
-// "happy path send" — those depend on Postmark / WhatsApp /
-// Twilio mocks that mostly tell you whether you wired the SDK
+// "happy path send" — those depend on Postmark / WhatsApp
+// mocks that mostly tell you whether you wired the SDK
 // correctly. The bugs that have actually shipped (or could
 // silently ship) live in:
 //
@@ -16,7 +16,7 @@
 // Tests focus on those validation surfaces. Send-step send
 // mechanics are out of scope for this slice.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { glofoxProvisionStep } from './steps.js'
 
 vi.mock('@/lib/postmark', () => ({
@@ -27,6 +27,10 @@ vi.mock('@/lib/postmark', () => ({
   appendUnsubscribeFooter: vi.fn((html) => html),
 }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: vi.fn(() => 'https://crm.test') }))
+// W1.L3a — the sequence's location decides the host its email links land on.
+// Defaults to the CRM host so the pre-existing 'https://crm.test' assertions
+// keep reading as before; the W1.L3a test overrides it.
+vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
 vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: vi.fn(),
   buildTemplateComponents: vi.fn(),
@@ -36,17 +40,13 @@ vi.mock('@/lib/whatsapp', () => ({
 vi.mock('@/lib/location-branding', () => ({
   getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })),
 }))
-vi.mock('@/lib/twilio', () => ({
-  sendLocationSms: vi.fn(),
-  TwilioError: class TwilioError extends Error {
-    constructor(m, opts = {}) { super(m); Object.assign(this, opts) }
-  },
-}))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 vi.mock('./triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn() }))
 
 const steps = await import('./steps.js')
 const { triggerSequencesForPipelineStageChange } = await import('./triggers.js')
+const { logWarn } = await import('@/lib/log')
+const { resolveCustomerBaseUrl } = await import('@/lib/tenant-host')
 
 beforeEach(() => {
   triggerSequencesForPipelineStageChange.mockReset()
@@ -229,6 +229,260 @@ describe('evaluateBranchPredicate', () => {
       expect(await steps.evaluateBranchPredicate(mockDb(), {
         contact, predicate: { type: 'field_equals', field: 'pipeline_stage_slug', value: 'dormant' },
       })).toBe(false)
+    })
+  })
+
+  describe('booked_class_at_studio', () => {
+    // Records every chain per table so the test can see exactly what was
+    // asked of class_bookings / class_booking_requests.
+    function recordingDb({ bookings = [], requests = [], bookingsError = null, requestsError = null } = {}) {
+      const calls = { class_bookings: [], class_booking_requests: [] }
+      const result = { class_bookings: { data: bookings, error: bookingsError }, class_booking_requests: { data: requests, error: requestsError } }
+      return {
+        calls,
+        from: vi.fn((table) => {
+          const ops = []
+          calls[table]?.push(ops)
+          const builder = {}
+          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit']) {
+            builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
+          }
+          builder.then = (onF, onR) => Promise.resolve(result[table] || { data: [], error: null }).then(onF, onR)
+          return builder
+        }),
+      }
+    }
+    const pred = { type: 'booked_class_at_studio' }
+
+    it('is true when the contact has a class booking at the studio, whatever platform it came from', async () => {
+      const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(true)
+      const ops = db.calls.class_bookings[0]
+      expect(ops).toContainEqual(['eq', 'contact_id', 'c1'])
+      expect(ops).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(ops).toContainEqual(['neq', 'status', 'CANCELLED'])
+      // A un1t.online booking must count: the read never narrows by platform.
+      expect(ops.some(([, col]) => col === 'source_platform')).toBe(false)
+      // Booked already: no need to look at the request queue.
+      expect(db.calls.class_booking_requests).toHaveLength(0)
+    })
+
+    it('is true when the only sign is an in-flight /start request at the studio (not yet synced back)', async () => {
+      const db = recordingDb({ bookings: [], requests: [{ id: 'req-1' }] })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(true)
+      const ops = db.calls.class_booking_requests[0]
+      expect(ops).toContainEqual(['eq', 'contact_id', 'c1'])
+      expect(ops).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(ops).toContainEqual(['in', 'status', ['queued', 'processing', 'booked', 'needs_review']])
+    })
+
+    it('is false when the contact has neither a booking nor a live request at the studio', async () => {
+      const db = recordingDb()
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    it('throws without the sequence studio rather than guessing', async () => {
+      await expect(steps.evaluateBranchPredicate(recordingDb(), { contact, predicate: pred }))
+        .rejects.toThrow(/studio/)
+    })
+
+    it('throws on a read error (the runner retries) instead of reading it as "not booked"', async () => {
+      await expect(steps.evaluateBranchPredicate(recordingDb({ bookingsError: { message: 'boom' } }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/boom/)
+      await expect(steps.evaluateBranchPredicate(recordingDb({ requestsError: { message: 'bang' } }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/bang/)
+    })
+
+    it('processBranchStep hands the studio through to the predicate', async () => {
+      const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+      const target = await steps.processBranchStep(db, {
+        step: { step_order: 2, config: { predicate: pred, then_step_order: 3, else_step_order: 4 } },
+        contact,
+        locationId: 'loc-hatch',
+      })
+      expect(target).toBe(3)
+      expect(db.calls.class_bookings[0]).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+    })
+  })
+
+  // TDSEQ.1 — a studio-scoped recorder: each table answers from a queue (one
+  // result per call, last one repeats) and every chain's ops are kept.
+  function studioDb(results = {}) {
+    const calls = {}
+    return {
+      calls,
+      from: vi.fn((table) => {
+        const ops = []
+        ;(calls[table] ||= []).push(ops)
+        const queue = results[table] || []
+        const idx = calls[table].length - 1
+        const result = queue[Math.min(idx, queue.length - 1)] || { data: [], error: null }
+        const builder = {}
+        for (const m of ['select', 'eq', 'neq', 'in', 'is', 'or', 'gt', 'order', 'range', 'limit']) {
+          builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
+        }
+        builder.maybeSingle = vi.fn(() => { ops.push(['maybeSingle']); return Promise.resolve(result) })
+        builder.then = (onF, onR) => Promise.resolve(result).then(onF, onR)
+        return builder
+      }),
+    }
+  }
+
+  describe('in_pipeline_stage_at_studio (TDSEQ.1)', () => {
+    const pred = { type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] }
+    const ok = (data) => ({ data, error: null })
+
+    it('is true when the contact has an OPEN deal at the studio on an enabled board in one of the stages', async () => {
+      const db = studioDb({
+        pipelines: [ok([{ id: 'pl-hatch' }])],
+        pipeline_stages: [ok([{ id: 'st-td' }])],
+        deals: [ok([{ id: 'deal-1' }])],
+      })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(true)
+      const boards = db.calls.pipelines[0]
+      expect(boards).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(boards).toContainEqual(['eq', 'enabled', true])
+      const stageOps = db.calls.pipeline_stages[0]
+      expect(stageOps).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(stageOps).toContainEqual(['in', 'pipeline_id', ['pl-hatch']])
+      expect(stageOps).toContainEqual(['in', 'slug', ['trial_done']])
+      const dealOps = db.calls.deals[0]
+      expect(dealOps).toContainEqual(['eq', 'contact_id', 'c1'])
+      expect(dealOps).toContainEqual(['eq', 'location_id', 'loc-hatch'])
+      expect(dealOps).toContainEqual(['eq', 'status', 'open'])
+      expect(dealOps).toContainEqual(['in', 'stage_id', ['st-td']])
+    })
+
+    it('is false when the contact has no open deal in those stages at the studio', async () => {
+      const db = studioDb({
+        pipelines: [ok([{ id: 'pl-hatch' }])],
+        pipeline_stages: [ok([{ id: 'st-td' }])],
+        deals: [ok([])],
+      })
+      expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    it('is false (no deal read) when the studio has no enabled board, or no such stage on one', async () => {
+      const noBoards = studioDb({ pipelines: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(noBoards, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+      expect(noBoards.calls.deals).toBeUndefined()
+      const noStage = studioDb({ pipelines: [ok([{ id: 'pl-hatch' }])], pipeline_stages: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(noStage, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+      expect(noStage.calls.deals).toBeUndefined()
+    })
+
+    it('never reads contacts.pipeline_stage_slug (the HOME studio\'s board)', async () => {
+      const homeSaysTrialDone = { ...contact, pipeline_stage_slug: 'trial_done' }
+      const db = studioDb({ pipelines: [ok([{ id: 'pl-hatch' }])], pipeline_stages: [ok([{ id: 'st-td' }])], deals: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: homeSaysTrialDone, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    it('throws on any failed read (the runner retries) instead of guessing', async () => {
+      const boom = { data: null, error: { message: 'boards-boom' } }
+      await expect(steps.evaluateBranchPredicate(studioDb({ pipelines: [boom] }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/boards-boom/)
+      await expect(steps.evaluateBranchPredicate(studioDb({ pipelines: [ok([{ id: 'p' }])], pipeline_stages: [{ data: null, error: { message: 'stages-boom' } }] }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/stages-boom/)
+      await expect(steps.evaluateBranchPredicate(studioDb({ pipelines: [ok([{ id: 'p' }])], pipeline_stages: [ok([{ id: 's' }])], deals: [{ data: null, error: { message: 'deals-boom' } }] }), { contact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/deals-boom/)
+    })
+
+    it('throws without the sequence studio or without stages', async () => {
+      await expect(steps.evaluateBranchPredicate(studioDb(), { contact, predicate: pred }))
+        .rejects.toThrow(/studio/)
+      await expect(steps.evaluateBranchPredicate(studioDb(), { contact, predicate: { type: 'in_pipeline_stage_at_studio', stages: [] }, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/stages/)
+      await expect(steps.evaluateBranchPredicate(studioDb(), { contact, predicate: { type: 'in_pipeline_stage_at_studio' }, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/stages/)
+    })
+  })
+
+  describe('whatsapp_reply_since_enrolment (TDSEQ.1)', () => {
+    const pred = { type: 'whatsapp_reply_since_enrolment' }
+    const waContact = { ...contact, wa_phone: '353871234567' }
+    const enrolledAt = '2026-10-20T09:00:00.000Z'
+    const ok = (data) => ({ data, error: null })
+    const orgDb = (over = {}) => studioDb({
+      locations: [ok({ id: 'loc-hatch', organization_id: 'org-1' }), ok([{ id: 'loc-hatch' }, { id: 'loc-still' }])],
+      whatsapp_conversations: [ok([{ id: 'conv-hatch' }, { id: 'conv-still' }])],
+      whatsapp_messages: [ok([{ id: 'm-1' }])],
+      ...over,
+    })
+
+    it('is true when an INBOUND message landed on any organisation thread after enrolment', async () => {
+      const db = orgDb()
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(true)
+      expect(db.calls.locations[0]).toContainEqual(['eq', 'id', 'loc-hatch'])
+      expect(db.calls.locations[1]).toContainEqual(['eq', 'organization_id', 'org-1'])
+      const threads = db.calls.whatsapp_conversations[0]
+      expect(threads).toContainEqual(['in', 'location_id', ['loc-hatch', 'loc-still']])
+      expect(threads).toContainEqual(['or', 'contact_id.eq.c1,wa_phone.eq.353871234567'])
+      const msgs = db.calls.whatsapp_messages[0]
+      expect(msgs).toContainEqual(['in', 'conversation_id', ['conv-hatch', 'conv-still']])
+      expect(msgs).toContainEqual(['eq', 'direction', 'inbound'])
+      expect(msgs).toContainEqual(['gt', 'created_at', enrolledAt])
+    })
+
+    it('is false when no inbound message arrived since enrolment', async () => {
+      const db = orgDb({ whatsapp_messages: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(false)
+    })
+
+    it('is false (no message read) when the contact has no thread in the organisation', async () => {
+      const db = orgDb({ whatsapp_conversations: [ok([])] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(false)
+      expect(db.calls.whatsapp_messages).toBeUndefined()
+    })
+
+    it('matches threads on contact_id alone when the contact has no usable wa_phone', async () => {
+      const db = orgDb()
+      await steps.evaluateBranchPredicate(db, { contact: { ...contact, wa_phone: null }, predicate: pred, locationId: 'loc-hatch', enrolledAt })
+      expect(db.calls.whatsapp_conversations[0]).toContainEqual(['or', 'contact_id.eq.c1'])
+      const odd = orgDb()
+      await steps.evaluateBranchPredicate(odd, { contact: { ...contact, wa_phone: '1,location_id.neq.x' }, predicate: pred, locationId: 'loc-hatch', enrolledAt })
+      expect(odd.calls.whatsapp_conversations[0]).toContainEqual(['or', 'contact_id.eq.c1'])
+    })
+
+    it('uses the studio alone when it has no organisation', async () => {
+      const db = orgDb({ locations: [ok({ id: 'loc-hatch', organization_id: null })] })
+      expect(await steps.evaluateBranchPredicate(db, { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt })).toBe(true)
+      expect(db.calls.locations).toHaveLength(1)
+      expect(db.calls.whatsapp_conversations[0]).toContainEqual(['in', 'location_id', ['loc-hatch']])
+    })
+
+    it('throws on any failed read instead of reading it as "no reply"', async () => {
+      const bad = (m) => ({ data: null, error: { message: m } })
+      await expect(steps.evaluateBranchPredicate(orgDb({ locations: [bad('loc-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/loc-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ locations: [ok({ id: 'loc-hatch', organization_id: 'org-1' }), bad('org-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/org-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ whatsapp_conversations: [bad('conv-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/conv-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ whatsapp_messages: [bad('msg-boom')] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/msg-boom/)
+      await expect(steps.evaluateBranchPredicate(orgDb({ locations: [ok(null)] }), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt }))
+        .rejects.toThrow(/studio/)
+    })
+
+    it('throws without the studio or the enrolment time', async () => {
+      await expect(steps.evaluateBranchPredicate(orgDb(), { contact: waContact, predicate: pred, enrolledAt }))
+        .rejects.toThrow(/studio/)
+      await expect(steps.evaluateBranchPredicate(orgDb(), { contact: waContact, predicate: pred, locationId: 'loc-hatch' }))
+        .rejects.toThrow(/enrol/)
+      await expect(steps.evaluateBranchPredicate(orgDb(), { contact: waContact, predicate: pred, locationId: 'loc-hatch', enrolledAt: 'not-a-date' }))
+        .rejects.toThrow(/enrol/)
+    })
+
+    it('processBranchStep hands the enrolment time through to the predicate', async () => {
+      const db = orgDb()
+      const target = await steps.processBranchStep(db, {
+        step: { step_order: 5, config: { predicate: pred, then_step_order: 9, else_step_order: 6 } },
+        contact: waContact,
+        locationId: 'loc-hatch',
+        enrolledAt,
+      })
+      expect(target).toBe(9)
+      expect(db.calls.whatsapp_messages[0]).toContainEqual(['gt', 'created_at', enrolledAt])
     })
   })
 
@@ -597,19 +851,6 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     })
     expect(out).toBeNull()
   })
-
-  it('sms step returns the activities row id, NOT the Twilio SM sid', async () => {
-    const tw = await import('@/lib/twilio')
-    tw.sendLocationSms.mockResolvedValue({ sid: 'SM_PROVIDER' })
-    const out = await steps.sendSmsStep(sendStepDb(), {
-      step: { id: 'step-2', sms_body: 'Hi there' },
-      sequence: { id: 'seq-1', location_id: 'loc-1', name: 'Nudge' },
-      // COMMSFIX.E.1 — the SMS step now gates on the per-location consent row.
-      contact: { id: 'c1', phone: '+353860000000', sms_status: 'active', contact_location_preferences: [{ location_id: 'loc-1', sms_marketing: true, email_marketing: true, whatsapp_marketing: true }] },
-    })
-    expect(out).toBe('bbbbbbbb-0000-0000-0000-000000000002')
-    expect(String(out)).not.toContain('SM')
-  })
 })
 
 // ── COMMS-AUDIT 2026-07-10 (SEQ batch) — WhatsApp step consent gate,
@@ -666,8 +907,16 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     wa = await import('@/lib/whatsapp')
     wa.sendTemplateMessage.mockReset()
     wa.sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.X==' })
+    wa.buildTemplateComponents.mockReset()
     wa.buildTemplateComponents.mockReturnValue([])
     wa.getOrCreateConversation.mockResolvedValue('conv-1')
+    // PAYLINK.6 — buildTemplateComponents/renderTemplateBody's call args are
+    // asserted below; without a reset each test's call index would include
+    // every prior test's calls (mockReturnValue alone doesn't clear history).
+    wa.renderTemplateBody.mockClear()
+    // PAYLINK.7 — logWarn is asserted below; clear so a prior test's calls
+    // don't leak into the assertion.
+    logWarn.mockClear()
   })
 
   it('missing wa_phone → recorded skip (resolves null, nothing sent, no throw)', async () => {
@@ -723,7 +972,7 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     await steps.sendWhatsappStep(db, {
       step, sequence, contact: { ...consentedContact, wa_phone: null },
     })
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('a skip still resolves even when the activities insert fails (never wedge the runner)', async () => {
@@ -744,7 +993,8 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
       [],
       { locationId: 'loc-1' },
     )
-    expect(db.rpcCalls).toContain('increment_step_sent')
+    // STEPSENTRPC.1 — no per-step counter RPC (increment_step_sent never existed).
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('a missing template still throws (sequence-config fault → operator must fix; error path is correct)', async () => {
@@ -758,6 +1008,146 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     }
     await expect(steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact }))
       .rejects.toThrow(/template not found/)
+  })
+
+  it('PAYLINK.6 — a pay-link template with no link on the run is a recorded skip, not a send', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '', error: 'not_retriable' } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
+  })
+
+  it('PAYLINK.6 — a link with no amount is also a recorded skip (the approved body reads "payment of {{2}}")', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '', error: null } } },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment amount/i)
+  })
+
+  it('PAYLINK.6 — with a link on the run the payment rides into buildTemplateComponents and renderTemplateBody opts', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const payment = { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true }
+    await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment } },
+    })
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(wa.buildTemplateComponents.mock.calls[0][4]).toMatchObject({ payment })
+    expect(wa.renderTemplateBody.mock.calls[0][3]).toMatchObject({ payment })
+  })
+
+  it('PAYLINK.6 — a template that does not use the pay-link button ignores the run entirely (no skip)', async () => {
+    const db = consentDb()
+    await steps.sendWhatsappStep(db, {
+      step, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: null, link_suffix: null, amount: '' } } },
+    })
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('PAYLINK.6b — a dunning enrolment with no metadata at all still skips the pay-link step (every in-flight run on deploy day)', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due' },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no payment link/i)
+  })
+
+  it('PAYLINK.6b — a pay-link step with no pay_amount in its mapping sends even with an empty amount on the run', async () => {
+    const db = consentDb()
+    const payStep = { ...step, whatsapp_variables: { '1': 'first_name', url_button: 'pay_link_suffix' } }
+    const out = await steps.sendWhatsappStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '' } } },
+    })
+    expect(out).not.toBeNull()
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('PAYLINK.6b — any dynamic-URL-button template whose resolved components carry no url button is a skip, never a throw', async () => {
+    // A template unrelated to the pay-link feature that still ends its URL
+    // button link in a variable — the node editor wiped `variables`, or a
+    // whitespace typo means `campaign_code` never resolves. buildTemplateComponents
+    // is mocked in this describe, so the omission (what the REAL function does
+    // when a mapped field is empty) is simulated directly on the mock's return.
+    const dynUrlTemplate = {
+      id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'promo_link', language: 'en',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'View', url: 'https://example.com/{{1}}', example: ['x'] }] },
+      ],
+    }
+    const db = {
+      activityInserts: [],
+      from(table) {
+        if (table === 'activities') {
+          return { insert: (row) => { db.activityInserts.push(row); return Promise.resolve({ error: null }) } }
+        }
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: dynUrlTemplate }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({ data: null, error: null }),
+    }
+    // No 'button' entry in the mock's return — mirrors what the real
+    // buildTemplateComponents does when the mapped field resolves empty.
+    wa.buildTemplateComponents.mockReturnValue([{ type: 'body', parameters: [{ type: 'text', text: 'Richard' }] }])
+    const dynStep = { ...step, whatsapp_template_id: 't1', whatsapp_variables: { '1': 'first_name', url_button: 'campaign_code' } }
+    const out = await steps.sendWhatsappStep(db, { step: dynStep, sequence, contact: consentedContact })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/no value for the template's link button/i)
+    expect(logWarn).toHaveBeenCalledWith(
+      'sequences', 'WhatsApp step skipped: dynamic URL button has no value',
+      { sequenceId: sequence.id, stepId: dynStep.id, contactId: consentedContact.id },
+    )
+  })
+
+  it('PAYLINK.7 — positive control: a resolved url button on a dynamic-URL template SENDS (pins the other half of the gate)', async () => {
+    // Same dynamic-URL template fixture as the skip test above, but this
+    // time buildTemplateComponents DOES resolve a url button — the send
+    // must go through, never a skip.
+    const dynUrlTemplate = {
+      id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'promo_link', language: 'en',
+      components: [
+        { type: 'BODY', text: 'Hi {{1}}' },
+        { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'View', url: 'https://example.com/{{1}}', example: ['x'] }] },
+      ],
+    }
+    const db = {
+      activityInserts: [],
+      from(table) {
+        if (table === 'activities') {
+          return { insert: (row) => { db.activityInserts.push(row); return Promise.resolve({ error: null }) } }
+        }
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: dynUrlTemplate }) }) }) }
+        if (table === 'whatsapp_messages') return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'aaaaaaaa-0000-0000-0000-000000000002' } }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({ data: null, error: null }),
+    }
+    wa.buildTemplateComponents.mockReturnValue([{ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: 'abc' }] }])
+    const dynStep = { ...step, whatsapp_template_id: 't1', whatsapp_variables: { '1': 'first_name', url_button: 'campaign_code' } }
+    const out = await steps.sendWhatsappStep(db, { step: dynStep, sequence, contact: consentedContact })
+    expect(out).not.toBeNull()
+    expect(wa.sendTemplateMessage).toHaveBeenCalledTimes(1)
+    expect(db.activityInserts).toHaveLength(0)
   })
 })
 
@@ -803,7 +1193,13 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     pm = await import('@/lib/postmark')
     pm.sendMarketingEmail.mockReset()
     pm.sendTransactionalEmail.mockReset()
-    pm.applyMergeTags.mockClear()
+    // PAYLINK.7b — mockReset (not mockClear) so a PAYLINK.7 test's real-
+    // implementation override from the previous run can never survive into
+    // this one; re-arm the identity stub every test dep on it (all of them
+    // except the two PAYLINK.7 tests, which swap it back to the real
+    // implementation for themselves only).
+    pm.applyMergeTags.mockReset()
+    pm.applyMergeTags.mockImplementation((s) => s)
     pm.sendMarketingEmail.mockResolvedValue({ messageId: 'cccccccc-0000-0000-0000-000000000003' })
   })
 
@@ -826,6 +1222,24 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     )
   })
 
+  // W1.S1a — {{company_name}} renders the sequence location's configured
+  // brand (getLocationBranding, mocked above as 'UN1T'), on the subject AND
+  // the body, so the shipped templates' "Welcome to {{company_name}}" names
+  // the sending studio's brand, never a fixed gym.
+  it('W1.S1a — {{company_name}} renders the location brand on subject and body', async () => {
+    const { getLocationBranding } = await import('@/lib/location-branding')
+    getLocationBranding.mockResolvedValueOnce({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'Stillorgan' })
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(getLocationBranding).toHaveBeenCalledWith(db, sequence.location_id)
+    for (const content of [step.subject, step.html_content]) {
+      expect(pm.applyMergeTags).toHaveBeenCalledWith(
+        content, consentedContact,
+        expect.objectContaining({ company_name: 'UN1T Stillorgan', location_name: 'Stillorgan' }),
+      )
+    }
+  })
+
   // SEQSENDER.1 (mig 555) — a sequence may name its own sender.
   it('SEQSENDER.1 — sends with no `from` when the sequence names no sender (every pre-existing sequence)', async () => {
     const db = emailDb()
@@ -835,7 +1249,11 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(arg.replyTo).toBeUndefined()
   })
 
-  it('SEQSENDER.1 — builds "Name <address>" from the sequence and passes reply_to through', async () => {
+  // W1.E2 — the sequence's from_name is a DISPLAY NAME; `from` is never built
+  // here. FROMDOMAIN — sequence.from_email is handed to sendMarketingEmail as
+  // the REQUESTED address, which uses it only on the org's verified domain
+  // (pinned in postmark-tenant-send.test.js).
+  it('SEQSENDER.1 / W1.E2 / FROMDOMAIN — passes from_name as the display name, from_email as the requested address, reply_to through', async () => {
     const db = emailDb()
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
@@ -844,12 +1262,20 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       contact: consentedContact,
     })
     expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
-      from: 'Alex Example <alex@example.test>',
+      fromName: 'Alex Example',
+      fromEmail: 'alex@example.test',
       replyTo: 'alex@example.test',
     }))
+    expect(pm.sendMarketingEmail.mock.calls[0][0].from).toBeUndefined()
   })
 
-  it('SEQSENDER.1 — a bare from_email with no from_name sends the address alone, not "undefined <addr>"', async () => {
+  it('FROMDOMAIN — no from_email → no requested address (the resolver\'s own goes out)', async () => {
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(pm.sendMarketingEmail.mock.calls[0][0].fromEmail).toBeUndefined()
+  })
+
+  it('W1.E2 — a bare from_email with no from_name sends with no from and no fromName (the resolver\'s brand; FROMDOMAIN judges the address)', async () => {
     const db = emailDb()
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
@@ -857,12 +1283,13 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       sequence: { ...sequence, from_email: 'alex@example.test' },
       contact: consentedContact,
     })
-    expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
-      from: 'alex@example.test',
-    }))
+    const arg = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(arg.from).toBeUndefined()
+    expect(arg.fromName).toBeUndefined()
+    expect(arg.fromEmail).toBe('alex@example.test')
   })
 
-  it('SEQSENDER.1 — from_name WITHOUT from_email is ignored, never sent as a nameless header', async () => {
+  it('W1.E2 — from_name WITHOUT from_email is still the display name (it needs no address of its own)', async () => {
     const db = emailDb()
     await steps.sendEmailStep(db, {
       enrollment: { id: 'e9' },
@@ -870,6 +1297,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       sequence: { ...sequence, from_name: 'Alex Example' },
       contact: consentedContact,
     })
+    expect(pm.sendMarketingEmail.mock.calls[0][0].fromName).toBe('Alex Example')
     expect(pm.sendMarketingEmail.mock.calls[0][0].from).toBeUndefined()
   })
 
@@ -888,7 +1316,8 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       sequenceId: 'seq-9',
       sequenceStepId: 'st-9',
     }))
-    expect(db.rpcCalls).toContain('increment_step_sent')
+    // STEPSENTRPC.1 — no per-step counter RPC (increment_step_sent never existed).
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('per-location email consent not true → recorded skip (broadcast and sequence paths must agree)', async () => {
@@ -905,7 +1334,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       expect(out).toBeNull()
       expect(db.activityInserts).toHaveLength(1)
       expect(db.activityInserts[0].subject).toMatch(/skipped/i)
-      expect(db.rpcCalls).not.toContain('increment_step_sent')
+      expect(db.rpcCalls).toEqual([])
     }
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
   })
@@ -949,7 +1378,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
     expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/repeat bounces/i)
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('email_suppressed_at null → sends normally (suppression is the exception, not the rule)', async () => {
@@ -960,6 +1389,26 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     })
     expect(out).toBe('cccccccc-0000-0000-0000-000000000003')
     expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+  })
+
+  // W1.L3a — the unsubscribe + preference links in a sequence email are minted
+  // on the SEQUENCE LOCATION's tenant host (resolveCustomerBaseUrl), so a
+  // second gym's enrolled leads never see crm.repset.ie.
+  it("W1.L3a — unsubscribe and preference links use the sequence location's tenant host", async () => {
+    resolveCustomerBaseUrl.mockResolvedValueOnce('https://gym-a.repset.ie')
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(resolveCustomerBaseUrl).toHaveBeenCalledWith(db, sequence.location_id)
+    expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
+      unsubscribeUrl: 'https://gym-a.repset.ie/unsubscribe/c9',
+    }))
+    expect(pm.applyMergeTags).toHaveBeenCalledWith(
+      step.html_content, consentedContact,
+      expect.objectContaining({
+        unsubscribe_url: 'https://gym-a.repset.ie/unsubscribe/c9',
+        preference_url: 'https://gym-a.repset.ie/preferences/c9',
+      }),
+    )
   })
 
   it('missing email still throws (unchanged contract)', async () => {
@@ -984,7 +1433,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
     expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/unsubscribe/i)
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
+    expect(db.rpcCalls).toEqual([])
   })
 
   it('the skip does not crash on the preference URL derivation', async () => {
@@ -997,29 +1446,80 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       enrollment: { id: 'e9' }, step, sequence, contact: consentedContact,
     })).resolves.toBeNull()
   })
+
+  it('PAYLINK.7 — the run\'s payment renders into the email as amount phrase + CTA link', async () => {
+    // applyMergeTags is mocked as an identity function in this describe
+    // (see the top-of-file vi.mock, re-armed every test in the beforeEach
+    // above) — swap in the real implementation for just this test so the
+    // rendering asserted below is real, not a stub echo.
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, html_content: '<p>Your membership payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>' }
+    await steps.sendEmailStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true } } },
+    })
+    // PAYLINK.7b — pins the SUBJECT half: sendEmailStep's first applyMergeTags
+    // call is the subject, and it must carry pay_amount_phrase too (the body
+    // assertions below only prove the BODY call received it).
+    expect(pm.applyMergeTags).toHaveBeenNthCalledWith(
+      1, payStep.subject, consentedContact,
+      expect.objectContaining({ pay_amount_phrase: ' of €209' }),
+    )
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.htmlBody).toContain('payment of €209 failed')
+    expect(sent.htmlBody).toContain('<a href="https://pay.test/inv-1">pay it now</a>, it takes a few seconds, or update your card in the Glofox app')
+  })
+
+  it('PAYLINK.7 — no payment on the run → the card-update wording, no empty link', async () => {
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, html_content: '<p>Your membership payment{{pay_amount_phrase}} failed. To keep it, {{payment_cta}}.</p>' }
+    await steps.sendEmailStep(db, { step: payStep, sequence, contact: consentedContact, enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: {} } })
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.htmlBody).toContain('Your membership payment failed. To keep it, update your card in the Glofox app.')
+    expect(sent.htmlBody).not.toContain('href=""')
+  })
+
+  it('PAYLINK.7b — the subject never renders {{payment_cta}} as HTML, even with a link on the run', async () => {
+    // The subject line is plain text (an inbox header, not a rendered body) —
+    // sendEmailStep deliberately feeds payment_cta only to the BODY merge,
+    // never the subject's. A subject carrying {{payment_cta}} must render the
+    // tag as empty, not leak an <a> tag into an email client's subject line.
+    const { applyMergeTags: realApplyMergeTags } = await vi.importActual('@/lib/postmark')
+    pm.applyMergeTags.mockImplementation(realApplyMergeTags)
+    const db = emailDb()
+    const payStep = { ...step, subject: 'Payment failed{{pay_amount_phrase}} — {{payment_cta}}' }
+    await steps.sendEmailStep(db, {
+      step: payStep, sequence, contact: consentedContact,
+      enrollment: { id: 'e1', source_type: 'invoice_past_due', metadata: { payment: { invoice_id: 'inv-1', link: 'https://pay.test/inv-1', link_suffix: 'inv-1', amount: '€209', retriable: true } } },
+    })
+    const sent = pm.sendMarketingEmail.mock.calls[0][0]
+    expect(sent.subject).not.toContain('<a')
+    expect(sent.subject).toBe('Payment failed of €209 — ')
+  })
+
+  // PAYLINK.7c — the two tests above swap in the REAL applyMergeTags for
+  // themselves only; without this, that real implementation leaks past
+  // this describe's last test into the describes below (which expect the
+  // identity stub).
+  afterEach(() => {
+    pm.applyMergeTags.mockImplementation((s) => s)
+  })
 })
 
-// ── COMMSFIX.E.1 — SMS step: per-location marketing consent + graceful
-// skips ───────────────────────────────────────────────────────────
+// ── TWILIO-RETIRE.1 — the SMS step is retired ───────────────────────
 //
-// The 2026-08-09 comms audit confirmed sendSmsStep was the ONLY send
-// step still bypassing the per-location consent model (it read global
-// contacts.sms_status only, never contact_location_preferences.
-// sms_marketing) AND still THROWING on per-contact conditions (no
-// phone / opted out), feeding error_count until MAX_ERRORS auto-
-// paused the whole enrolment — the identical wedge class already
-// fixed for email/WA after the live 2026-07-10 incident. These tests
-// pin the email/WA contract onto SMS: locationConsent() gate, row
-// absent = never send, per-contact conditions are recorded SKIPS.
-describe('sendSmsStep — per-location consent gate + graceful skips (COMMSFIX.E.1)', () => {
-  const step = { id: 'st-sms', step_order: 3, sms_body: 'Hi {{first_name}}' }
-  const sequence = { id: 'seq-sms', name: 'Dunning chase', location_id: 'loc-1' }
-  const consentedContact = {
-    id: 'c1', location_id: 'loc-1', phone: '+353860000000', sms_status: 'active',
-    contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true }],
-  }
-
-  function smsDb() {
+// SMS left with Twilio. A legacy 'sms' step row can still be reached (the DB
+// CHECK admits it), so the runner hands it to retiredSmsStep: a recorded skip
+// on the contact's timeline, then the enrolment advances like any other skip.
+// It must never send, never read the location, never bump the sent metric and
+// never throw — not even for the missing sms_body that used to be a config
+// fault, because there is nothing left for an operator to fix but deleting it.
+describe('retiredSmsStep — records a skip and advances (TWILIO-RETIRE.1)', () => {
+  function skipDb() {
     const activityInserts = []
     const rpcCalls = []
     return {
@@ -1027,115 +1527,25 @@ describe('sendSmsStep — per-location consent gate + graceful skips (COMMSFIX.E
       rpcCalls,
       from(table) {
         if (table === 'activities') {
-          return {
-            insert: (row) => {
-              activityInserts.push(row)
-              // recordStepSkip awaits the bare insert (thenable); the
-              // send path chains .select().single() — support both.
-              return {
-                select: () => ({ single: async () => ({ data: { id: 'dddddddd-0000-0000-0000-000000000004' } }) }),
-                then: (onF) => Promise.resolve({ error: null }).then(onF),
-              }
-            },
-          }
+          return { insert: (row) => { activityInserts.push(row); return Promise.resolve({ error: null }) } }
         }
-        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T' } }) }) }) }
         throw new Error(`unexpected table ${table}`)
       },
       rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
     }
   }
+  const sequence = { id: 'seq-sms', name: 'Dunning chase', location_id: 'loc-1' }
+  const contact = { id: 'c1', location_id: 'loc-1', phone: '+353860000000' }
 
-  let tw
-  beforeEach(async () => {
-    tw = await import('@/lib/twilio')
-    tw.sendLocationSms.mockReset()
-    tw.sendLocationSms.mockResolvedValue({ sid: 'SM_PROVIDER' })
-  })
-
-  it('per-location sms consent not true → recorded skip (no Twilio call, resolves null, no throw)', async () => {
-    for (const sms_marketing of [false, null, undefined]) {
-      const db = smsDb()
-      const out = await steps.sendSmsStep(db, {
-        step, sequence, contact: {
-          ...consentedContact,
-          contact_location_preferences: [{ location_id: 'loc-1', sms_marketing, email_marketing: true, whatsapp_marketing: true }],
-        },
-      })
-      expect(out).toBeNull()
-      expect(db.activityInserts).toHaveLength(1)
-      expect(db.activityInserts[0].subject).toMatch(/skipped/i)
-      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/sms marketing/i)
-    }
-    expect(tw.sendLocationSms).not.toHaveBeenCalled()
-  })
-
-  it('no preferences row for the sequence location → recorded skip (row absent = never send)', async () => {
-    const db = smsDb()
-    const out = await steps.sendSmsStep(db, {
-      step, sequence, contact: {
-        ...consentedContact,
-        contact_location_preferences: [{ location_id: 'loc-other', sms_marketing: true, email_marketing: true, whatsapp_marketing: true }],
-      },
-    })
+  it.each([
+    ['a configured legacy step', { id: 'st-sms', step_order: 3, sms_body: 'Hi {{first_name}}' }],
+    ['a legacy step with no body', { id: 'st-sms', step_order: 3, sms_body: null }],
+  ])('%s → one recorded skip, resolves null, no metric bump', async (_label, step) => {
+    const db = skipDb()
+    const out = await steps.retiredSmsStep(db, { step, sequence, contact })
     expect(out).toBeNull()
-    expect(tw.sendLocationSms).not.toHaveBeenCalled()
     expect(db.activityInserts).toHaveLength(1)
-    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/list/i)
-  })
-
-  it('missing phone → recorded skip, not a throw (no more MAX_ERRORS wedge)', async () => {
-    const db = smsDb()
-    const out = await steps.sendSmsStep(db, {
-      step, sequence, contact: { ...consentedContact, phone: null },
-    })
-    expect(out).toBeNull()
-    expect(tw.sendLocationSms).not.toHaveBeenCalled()
-    expect(db.activityInserts).toHaveLength(1)
-    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/phone/i)
-  })
-
-  it.each(['opted_out', 'invalid', 'undeliverable'])(
-    'sms_status %s → recorded skip, not a throw',
-    async (sms_status) => {
-      const db = smsDb()
-      const out = await steps.sendSmsStep(db, {
-        step, sequence, contact: { ...consentedContact, sms_status },
-      })
-      expect(out).toBeNull()
-      expect(tw.sendLocationSms).not.toHaveBeenCalled()
-      expect(db.activityInserts).toHaveLength(1)
-      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(sms_status)
-    },
-  )
-
-  it('a skip does not bump the per-step sent metric', async () => {
-    const db = smsDb()
-    await steps.sendSmsStep(db, {
-      step, sequence, contact: { ...consentedContact, phone: null },
-    })
-    expect(db.rpcCalls).not.toContain('increment_step_sent')
-  })
-
-  it('consented contact with active status sends and returns the activities row id', async () => {
-    const db = smsDb()
-    const out = await steps.sendSmsStep(db, { step, sequence, contact: consentedContact })
-    expect(tw.sendLocationSms).toHaveBeenCalledTimes(1)
-    expect(out).toBe('dddddddd-0000-0000-0000-000000000004')
-    expect(db.rpcCalls).toContain('increment_step_sent')
-  })
-
-  it('absent sms_status still sends (back-compat for pre-mig-059 contacts)', async () => {
-    const db = smsDb()
-    const { sms_status: _drop, ...noStatus } = consentedContact
-    const out = await steps.sendSmsStep(db, { step, sequence, contact: noStatus })
-    expect(tw.sendLocationSms).toHaveBeenCalledTimes(1)
-    expect(out).toBe('dddddddd-0000-0000-0000-000000000004')
-  })
-
-  it('missing sms_body still throws (sequence-config fault → operator must fix)', async () => {
-    await expect(steps.sendSmsStep(smsDb(), {
-      step: { ...step, sms_body: null }, sequence, contact: consentedContact,
-    })).rejects.toThrow(/sms_body/)
+    expect(db.activityInserts[0].subject).toBe('Sequence SMS step skipped — the SMS channel has been retired')
+    expect(db.rpcCalls).toEqual([])
   })
 })

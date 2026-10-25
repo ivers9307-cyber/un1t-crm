@@ -7,12 +7,17 @@
 //     else. A young finished row waits; a 'pending' or 'failed' row of ANY age
 //     is never touched (it is the morgue's live work).
 //   • postmark_webhook_queue (mig 158, no status column): a row whose
-//     processed_at is set AND older than RETENTION_DAYS — nothing else. An
-//     unprocessed row (processed_at NULL) of any age is never touched, and
-//     that includes an EXHAUSTED row (attempts >= MAX_ATTEMPTS, processed_at
-//     still NULL — POSTMARK-DLQ.1) and a stale claim (processed_at set but
-//     `error` still carrying CLAIMED_ERROR_MARKER — POSTMARK-QUEUE-RECLAIM.1),
-//     which is an UNFINISHED event wearing a finished timestamp.
+//     processed_at is set AND older than RETENTION_DAYS. An unprocessed
+//     in-budget row (processed_at NULL) of any age is never touched, nor is a
+//     stale claim (processed_at set but `error` still carrying
+//     CLAIMED_ERROR_MARKER — POSTMARK-QUEUE-RECLAIM.1), which is an
+//     UNFINISHED event wearing a finished timestamp.
+//   • an EXHAUSTED queue row (attempts >= MAX_ATTEMPTS, processed_at NULL —
+//     POSTMARK-DLQ.1) received more than RETENTION_DAYS ago goes too
+//     (PURGEEXHAUSTED.1, Richard's 5 Sep decision): its payload lives on in
+//     the dead-letter twin — but ONLY when that twin exists. A row whose
+//     capture failed (or that predates POSTMARK-DLQ.1) is the only copy of
+//     the event and is kept, counted and logged.
 //   • pages with .range() and an explicit .order() — every select caps at
 //     1,000 rows whatever the code asks for.
 //   • collects failures PER TABLE: a broken delete on one table still purges
@@ -28,6 +33,7 @@ import { GET, RETENTION_DAYS, PURGE_PAGE_SIZE, retentionCutoff } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { CLAIMED_ERROR_MARKER, EXHAUSTED_ERROR_PREFIX, MAX_ATTEMPTS } from '@/lib/postmark-queue'
+import { EXHAUSTED_PROVIDER } from '@/lib/postmark-queue'
 import { makeDb, deletesFrom } from '../../email/tickets/_test-db'
 
 const NOW = Date.parse('2026-09-05T10:00:00Z')
@@ -64,6 +70,22 @@ function queueRow(id, { processedDaysAgo = null, receivedDaysAgo = 200, attempts
     processed_at: processedDaysAgo === null ? null : daysAgo(processedDaysAgo),
     error,
     attempts,
+  }
+}
+
+function attemptRow(id, { processedDaysAgo }) {
+  return {
+    id,
+    event_row_id: 'event-row-1',
+    location_id: 'loc-1',
+    trace_id: `trace-${id}`,
+    event_type: 'BOOKING_UPDATED',
+    emitted_at: daysAgo(processedDaysAgo),
+    delivered_at: daysAgo(processedDaysAgo),
+    processed_at: daysAgo(processedDaysAgo),
+    status: 'applied',
+    error_message: null,
+    digest: { contact_id: 'c', tags: [] },
   }
 }
 
@@ -122,7 +144,7 @@ describe('the cutoff', () => {
       ],
     })
     const body = await (await GET(req())).json()
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.deadLetters)).toEqual(['d-89'])
     expect(ids(db._state.webhookQueue)).toEqual(['q-89'])
   })
@@ -180,9 +202,9 @@ describe('postmark_webhook_queue — what gets purged', () => {
         // Never processed, ancient — still the consumers' work (or a row the
         // sweeper has not reached). Never.
         queueRow('q-unprocessed-ancient', { receivedDaysAgo: 400 }),
-        // Exhausted (POSTMARK-DLQ.1): processed_at NULL, attempts at the
-        // budget, error prefixed. Its payload was captured to the dead letter,
-        // whose row is purged on ITS resolution — this one is not "finished".
+        // Exhausted (POSTMARK-DLQ.1) with NO dead-letter twin (the capture
+        // failed): this row is the event's only copy, so it survives here.
+        // PURGEEXHAUSTED.1's twin-backed purge is its own describe below.
         queueRow('q-exhausted', {
           receivedDaysAgo: 400, attempts: MAX_ATTEMPTS, error: `${EXHAUSTED_ERROR_PREFIX}: boom`,
         }),
@@ -199,7 +221,7 @@ describe('postmark_webhook_queue — what gets purged', () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 2 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 2, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.webhookQueue)).toEqual([
       'q-exhausted', 'q-processed-young', 'q-stale-claim', 'q-unprocessed-ancient',
     ])
@@ -246,7 +268,10 @@ describe('paging', () => {
     // Every candidate read ordered by the table's finished clock.
     expect(orders.filter(o => o.table === 'webhook_dead_letter').every(o => o.column === 'resolved_at')).toBe(true)
     expect(orders.filter(o => o.table === 'webhook_dead_letter').length).toBe(3)
-    expect(orders.filter(o => o.table === 'postmark_webhook_queue').every(o => o.column === 'processed_at')).toBe(true)
+    // The processed spec orders by processed_at; the exhausted spec (below)
+    // by received_at then id. Nothing else.
+    expect(orders.filter(o => o.table === 'postmark_webhook_queue').every(o => ['processed_at', 'received_at', 'id'].includes(o.column))).toBe(true)
+    expect(orders.filter(o => o.table === 'postmark_webhook_queue').some(o => o.column === 'processed_at')).toBe(true)
     expect(body.data.pages.webhook_dead_letter).toBe(3)
   })
 
@@ -259,8 +284,55 @@ describe('paging', () => {
     expect(res.status).toBe(200)
     expect(db.deletes).toEqual([])
     expect(stampHeartbeat).toHaveBeenCalledWith('purge-webhook-payloads', expect.objectContaining({
-      deleted: { webhook_dead_letter: 0, postmark_webhook_queue: 0 },
+      deleted: { webhook_dead_letter: 0, postmark_webhook_queue: 0, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 },
     }))
+  })
+})
+
+describe('glofox_webhook_attempts — what gets purged (WEBHOOKAUDIT.1)', () => {
+  it('deletes attempt rows processed before the cutoff, keeps younger ones, ordered by processed_at', async () => {
+    setupDb({
+      glofoxAttempts: [
+        attemptRow('a-200', { processedDaysAgo: 200 }),
+        attemptRow('a-91', { processedDaysAgo: RETENTION_DAYS + 1 }),
+        attemptRow('a-89', { processedDaysAgo: RETENTION_DAYS - 1 }),
+        attemptRow('a-1', { processedDaysAgo: 1 }),
+      ],
+    })
+    const orders = []
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      const origOrder = b.order
+      b.order = (...a) => { orders.push({ table, column: a[0] }); return origOrder(...a) }
+      return b
+    }
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deleted.glofox_webhook_attempts).toBe(2)
+    expect(ids(db._state.glofoxAttempts)).toEqual(['a-1', 'a-89'])
+    const attemptOrders = orders.filter(o => o.table === 'glofox_webhook_attempts')
+    expect(attemptOrders.length).toBeGreaterThan(0)
+    expect(attemptOrders.every(o => o.column === 'processed_at')).toBe(true)
+    expect(db.ranges.filter(r => r.table === 'glofox_webhook_attempts').every(r => r.from === 0 && r.to === PURGE_PAGE_SIZE - 1)).toBe(true)
+  })
+
+  it('a failed attempts delete still purges the other two tables, answers 500 and does NOT stamp', async () => {
+    setupDb({
+      deadLetters: [deadLetter('d-old', 'resolved', { resolvedDaysAgo: 200 })],
+      webhookQueue: [queueRow('q-old', { processedDaysAgo: 200 })],
+      glofoxAttempts: [attemptRow('a-old', { processedDaysAgo: 200 })],
+      errors: { glofox_webhook_attempts: { code: '42P01', message: 'relation does not exist' } },
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/glofox_webhook_attempts/)
+    expect(body.data.errors).toEqual({ glofox_webhook_attempts: 'relation does not exist' })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 1, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })
 
@@ -276,7 +348,7 @@ describe('heartbeat and per-table failure', () => {
     expect(stampHeartbeat).toHaveBeenCalledWith('purge-webhook-payloads', expect.objectContaining({
       cutoff: CUTOFF,
       retention_days: RETENTION_DAYS,
-      deleted: { webhook_dead_letter: 1, postmark_webhook_queue: 1 },
+      deleted: { webhook_dead_letter: 1, postmark_webhook_queue: 1, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 },
     }))
   })
 
@@ -292,7 +364,7 @@ describe('heartbeat and per-table failure', () => {
     expect(body.success).toBe(false)
     expect(body.error).toMatch(/webhook_dead_letter/)
     expect(body.data.errors).toEqual({ webhook_dead_letter: 'column does not exist' })
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 1 })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 0, postmark_webhook_queue: 1, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.webhookQueue)).toEqual(['q-young'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
@@ -307,9 +379,105 @@ describe('heartbeat and per-table failure', () => {
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.error).toMatch(/postmark_webhook_queue/)
-    expect(body.data.errors).toEqual({ postmark_webhook_queue: 'permission denied' })
-    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 0 })
+    // The injected error fails every operation on the table, so the
+    // exhausted spec's scan fails too (PURGEEXHAUSTED.1).
+    expect(body.data.errors).toEqual({ postmark_webhook_queue: 'permission denied', postmark_webhook_queue_exhausted: 'permission denied' })
+    expect(body.data.deleted).toEqual({ webhook_dead_letter: 1, postmark_webhook_queue: 0, postmark_webhook_queue_exhausted: 0, glofox_webhook_attempts: 0 })
     expect(ids(db._state.deadLetters)).toEqual(['d-pending'])
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+
+// PURGEEXHAUSTED.1 — Richard's 5 Sep decision ("exhausted queue rows purge
+// too") reached cron_heartbeats.notes but never the code. An exhausted row
+// was never processed, so processed_at never gives it a clock: its clock is
+// received_at, and its payload survives in the dead-letter twin
+// captureExhaustedRow wrote at exhaustion (provider postmark_queue, error
+// text naming the queue row id). The twin is checked per row before purging.
+describe('postmark_webhook_queue — exhausted rows (PURGEEXHAUSTED.1)', () => {
+  const exhausted = (id, receivedDaysAgo) => queueRow(id, {
+    receivedDaysAgo, attempts: MAX_ATTEMPTS, error: `${EXHAUSTED_ERROR_PREFIX}: boom`,
+  })
+  const twin = (queueId, status = 'pending') => ({
+    ...deadLetter(`dl-${queueId}`, status),
+    provider: EXHAUSTED_PROVIDER,
+    error: `postmark_webhook_queue row ${queueId} exhausted after ${MAX_ATTEMPTS} attempts: boom`,
+  })
+
+  it('purges an old exhausted row whose dead-letter twin exists; keeps a young one and a twinless one', async () => {
+    setupDb({
+      webhookQueue: [
+        exhausted('q-ex-old', 200),
+        exhausted('q-ex-young', RETENTION_DAYS - 1),
+        exhausted('q-ex-no-twin', 300),
+        // In budget (attempts < MAX): still the consumers' live work.
+        queueRow('q-in-budget-ancient', { receivedDaysAgo: 400, attempts: MAX_ATTEMPTS - 1, error: 'transient' }),
+      ],
+      deadLetters: [twin('q-ex-old'), twin('q-ex-young')],
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.deleted).toMatchObject({ postmark_webhook_queue_exhausted: 1, postmark_webhook_queue: 0 })
+    expect(body.data.kept_no_twin).toBe(1)
+    expect(ids(db._state.webhookQueue)).toEqual(['q-ex-no-twin', 'q-ex-young', 'q-in-budget-ancient'])
+    // The twins are untouched: pending dead letters are the morgue's work.
+    expect(ids(db._state.deadLetters)).toEqual(['dl-q-ex-old', 'dl-q-ex-young'])
+    const deletes = deletesFrom(db, 'postmark_webhook_queue')
+    expect(deletes.length).toBe(1)
+    const d = deletes[0]
+    expect(d.filters).toContainEqual(['is', 'processed_at', null])
+    expect(d.filters).toContainEqual(['gte', 'attempts', MAX_ATTEMPTS])
+    expect(d.filters).toContainEqual(['lt', 'received_at', CUTOFF])
+    expect(d.filters).toContainEqual(['in', 'id', ['q-ex-old']])
+    expect(stampHeartbeat).toHaveBeenCalled()
+  })
+
+  it('a twin under another provider, or naming another row, is not a twin', async () => {
+    setupDb({
+      webhookQueue: [exhausted('q-1', 200), exhausted('q-10', 200)],
+      deadLetters: [
+        { ...twin('q-1'), provider: 'postmark' },
+        // `q-10`'s twin must not vouch for `q-1` (a prefix of it) and vice versa.
+        twin('q-10'),
+      ],
+    })
+    const body = await (await GET(req())).json()
+    expect(body.data.deleted.postmark_webhook_queue_exhausted).toBe(1)
+    expect(ids(db._state.webhookQueue)).toEqual(['q-1'])
+  })
+
+  it('an exhausted row is purged even when its twin was already resolved (the payload was dealt with)', async () => {
+    setupDb({
+      webhookQueue: [exhausted('q-ex', 200)],
+      deadLetters: [{ ...twin('q-ex', 'resolved'), resolved_at: daysAgo(10) }],
+    })
+    const body = await (await GET(req())).json()
+    expect(body.data.deleted.postmark_webhook_queue_exhausted).toBe(1)
+    expect(db._state.webhookQueue).toEqual([])
+  })
+
+  it('pages past twinless rows instead of re-reading them forever', async () => {
+    const noTwin = Array.from({ length: PURGE_PAGE_SIZE + 3 }, (_, i) => exhausted(`q-a-${String(i).padStart(4, '0')}`, 300))
+    const withTwin = Array.from({ length: 5 }, (_, i) => exhausted(`q-b-${i}`, 300))
+    setupDb({ webhookQueue: [...noTwin, ...withTwin], deadLetters: withTwin.map((r) => twin(r.id)) })
+    const body = await (await GET(req())).json()
+    expect(body.data.deleted.postmark_webhook_queue_exhausted).toBe(5)
+    expect(body.data.kept_no_twin).toBe(noTwin.length)
+    expect(db._state.webhookQueue.length).toBe(noTwin.length)
+  })
+
+  it('a failed twin read purges nothing from the queue, answers 500 and does NOT stamp', async () => {
+    setupDb({
+      webhookQueue: [exhausted('q-ex', 200)],
+      deadLetters: [twin('q-ex')],
+      errors: { webhook_dead_letter: { code: '57014', message: 'statement timeout' } },
+    })
+    const res = await GET(req())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.data.errors).toMatchObject({ postmark_webhook_queue_exhausted: 'statement timeout' })
+    expect(ids(db._state.webhookQueue)).toEqual(['q-ex'])
     expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 })

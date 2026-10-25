@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { toSlug } from '@/lib/slug'
 import { seedLocationDefaults } from '@/lib/location-seed'
+import { canonicalZone, PLATFORM_TZ } from '@/lib/location-time'
 
 // GET /api/locations — List all active locations
 export async function GET(request) {
@@ -37,7 +38,8 @@ export async function GET(request) {
 // LocationForm's browser-client insert — the client-side path seeded a
 // stale pre-FUNNEL pipeline taxonomy (the mig 150 incident class) and
 // left seeding at the mercy of the browser session. Edits stay
-// browser-side in LocationForm (RLS-checked, unchanged).
+// browser-side in LocationForm (RLS-checked), except the timezone: since
+// TZ.2 (mig 719) no client may write it; TZ.3's route changes it.
 const INVOICE_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/
 
 const LocationCreate = z.object({
@@ -46,7 +48,14 @@ const LocationCreate = z.object({
   address: z.string().trim().max(300).nullish(),
   phone: z.string().trim().max(50).nullish(),
   email: z.string().trim().email().max(200).nullish(),
-  timezone: z.string().trim().min(1).max(64).default('Europe/Dublin'),
+  // TZ.2 (D1 = A): any IANA zone canonicalZone() accepts, stored in its
+  // canonical spelling; fixed offsets ('+05:30', 'Etc/GMT-5') and unknown names
+  // are refused here, before any write (mig 719's trigger refuses the same
+  // shapes in the DB). Absent → the platform default; the CRM's forms always
+  // send the zone the creator chose (D8).
+  timezone: z.string().trim().max(64).default(PLATFORM_TZ)
+    .refine((v) => canonicalZone(v) !== null, { message: 'Choose a real timezone, such as Europe/Dublin or America/New_York.' })
+    .transform((v) => canonicalZone(v)),
   country: z.string().trim().length(2).toUpperCase().default('IE'),
   active: z.boolean().default(true),
   monthly_contractor_budget_eur: z.number().min(0).nullish(),
@@ -117,7 +126,7 @@ export async function POST(request) {
     // message names the location id for exactly that.
     return NextResponse.json({
       success: false,
-      error: `Location ${created.id} was created but seeding its pipeline stages failed: ${seedErr.message}. Re-running the seed is safe.`,
+      error: `Location ${created.id} was created but seeding its defaults (pipeline, bundles, settings) failed: ${seedErr.message}. Re-running the seed is safe.`,
       data: created,
     }, { status: 500 })
   }

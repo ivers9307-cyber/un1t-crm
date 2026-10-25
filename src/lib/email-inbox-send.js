@@ -1,19 +1,19 @@
-// EMAIL-OUTBOUND-SERVER.1 — the SEND path for ticket mail (reply + compose).
+// EMAIL-OUTBOUND-SERVER.1 — the SEND path for conversation mail (reply + compose).
 //
 // WHY THIS FILE EXISTS
 // Richard's topology is that marketing and the support inbox live on SEPARATE
 // Postmark servers, so a bad campaign can never make a support reply bounce.
 // Inbound honoured that from day one — the ticketing server has its own
-// inbound stream and webhook token. Outbound did not: both ticket routes
+// inbound stream and webhook token. Outbound did not: both conversation routes
 // called sendEmail(), which resolves POSTMARK_API_KEY || POSTMARK_SERVER_TOKEN
 // (the MARKETING server, ~3,280 sends in 30 days). Every support reply left on
 // the same server, the same streams and the same sender reputation as the bulk
 // campaigns — precisely what the separation exists to prevent.
 //
 // Three things move together here, because they are one decision:
-//   1. the SERVER   — POSTMARK_EMAIL_INBOX_SERVER_TOKEN, ticket sends only
+//   1. the SERVER   — POSTMARK_EMAIL_INBOX_SERVER_TOKEN, conversation sends only
 //   2. the STREAM   — Postmark's `email-send` stream on that server
-//   3. the FROM     — the ticket's own mailbox address, when it can be sent from
+//   3. the FROM     — the conversation's own mailbox address, when it can be sent from
 //
 // ─────────────────────────────────────────────────────────────────────
 // TWO THINGS CALLED "STREAM", AND THEY MUST NEVER TOUCH
@@ -26,7 +26,7 @@
 //   A POSTMARK message stream id : 'email-send'. An opaque provider slug,
 //     scoped to ONE Postmark server, meaningless to this application.
 //
-// A ticket reply is BOTH: internally 'outbound' (transactional, gated on
+// A conversation reply is BOTH: internally 'outbound' (transactional, gated on
 // email_administrative, no marketing consent gate, no unsubscribe footer) AND
 // on the wire `MessageStream: 'email-send'`. Two values, two jobs.
 //
@@ -55,7 +55,7 @@
 // its replies over its OWN provider's SMTP rather than through Postmark,
 // because Postmark cannot DKIM-sign a domain the business does not control.
 // `email_mailboxes.egress` ('postmark' | 'smtp', mig 572) is the switch, and
-// sendTicketEmail branches on it in its FIRST statement — ahead of the server
+// sendConversationEmail branches on it in its FIRST statement — ahead of the server
 // token, the stream and plannedFroms(), all three of which are Postmark
 // vocabulary that an SMTP send has no answer for.
 //
@@ -72,15 +72,18 @@
 import { sendEmail } from './postmark'
 import { logError } from './log'
 import { sendViaSmtp } from './mail/smtp-send'
+import { createServerClient } from './supabase'
+import { getLocationBranding } from './location-branding'
+import { platformFromHeader, parseAddressHeader } from './platform-sender'
 
 /**
- * THIS APP'S internal stream for all ticket mail. Ticket mail is
+ * THIS APP'S internal stream for all conversation mail. Conversation mail is
  * transactional: gated on email_administrative, no marketing-consent gate, no
  * unsubscribe footer.
  *
  * Exported so the routes stamp email_sends.postmark_stream from the SAME
  * constant they send with. That is the structural half of the guard above —
- * there is no expression anywhere in the ticket paths that could evaluate to a
+ * there is no expression anywhere in the conversation paths that could evaluate to a
  * Postmark stream id and land in that column.
  */
 export const TICKET_INTERNAL_STREAM = 'outbound'
@@ -147,12 +150,21 @@ export function inboxMessageStream() {
 }
 
 /**
- * The From we fall back to when the mailbox address cannot be sent from.
- * A domain we own and Postmark has verified. Mirrors sendEmail's own default
- * chain so what we record is what went on the wire.
+ * The From we fall back to when the mailbox address cannot be sent from:
+ * the PLATFORM address (POSTMARK_FROM_EMAIL — a domain we own and Postmark
+ * has verified) with the LOCATION'S BRAND as display name (W1.E2), so a
+ * customer of a second gym never reads another gym's name on a degraded
+ * reply. PLATFORM_NAME when no location is known or the brand cannot be
+ * resolved; null when the env is unset (no invented address — the attempt
+ * list then holds the mailbox alone, and the refusal stays loud).
+ * Never throws: getLocationBranding swallows its own errors.
+ * @param {object} db - a supabase-js client
+ * @param {string|null} locationId
+ * @returns {Promise<string|null>}
  */
-export function fallbackFromAddress() {
-  return process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>'
+export async function fallbackFromAddress(db, locationId) {
+  const branding = locationId ? await getLocationBranding(db, locationId) : null
+  return platformFromHeader(branding?.companyName)
 }
 
 /**
@@ -167,8 +179,8 @@ export function fallbackFromAddress() {
  * reputation, and the only symptom is a bounce rate nobody attributes. A
  * silent correct-looking wrong answer is worse than a loud stop.
  *
- * Refusing is cheap HERE and nowhere else, because both ticket routes send
- * BEFORE they write: a refusal writes nothing, advances no ticket, creates no
+ * Refusing is cheap HERE and nowhere else, because both conversation routes send
+ * BEFORE they write: a refusal writes nothing, advances no conversation, creates no
  * orphan, and the retry after setting the var is exact. And the message names
  * the variable, so the fix is a single Vercel setting away rather than a
  * debugging session. (Same posture as isPostmarkAccountConfigured() in
@@ -178,7 +190,7 @@ export function fallbackFromAddress() {
  * preview deploys and local dev, where a stopped support reply harms nobody.
  */
 export const INBOX_NOT_CONFIGURED_MESSAGE =
-  'Ticket email is not configured, so nothing was sent. ' +
+  'Conversation email is not configured, so nothing was sent. ' +
   'POSTMARK_EMAIL_INBOX_SERVER_TOKEN (the support inbox’s own Postmark server token) ' +
   'is not set. Nothing has changed — try again once it is.'
 
@@ -206,7 +218,7 @@ export function isSenderSignatureError(err) {
  * verdict so this stays a statement of the rule rather than a lookup.
  *
  * THE RULE
- *   • mailbox address, when the ticket has one and it is not known-unsendable
+ *   • mailbox address, when the conversation has one and it is not known-unsendable
  *   • then the fallback (a domain we own), Reply-To still the mailbox
  *
  * Hatch Street's accounts@hatchstreetfitness.com is verified, so it is the
@@ -261,7 +273,7 @@ function markUnverified(address) {
 }
 
 /**
- * Send one ticket email on the SUPPORT INBOX'S OWN Postmark server.
+ * Send one conversation email on the SUPPORT INBOX'S OWN Postmark server.
  *
  * Never throws. Returns a verdict:
  *   { ok: true,  result, fromEmail, degraded }   — `fromEmail` is what actually
@@ -272,7 +284,7 @@ function markUnverified(address) {
  *       answer 400, exactly as they did when sendEmail threw.
  *
  * Deliberately does NOT consult resolveEmailSender() (the INTEG-B3 per-tenant
- * sending domain): ticket mail belongs on the ticketing server by topology, and
+ * sending domain): conversation mail belongs on the ticketing server by topology, and
  * an org-level override would silently move it back onto a shared one. The
  * feature is unreachable today (no org has the add-on), so this is a decision
  * recorded ahead of the collision, not a behaviour change.
@@ -331,7 +343,7 @@ function markUnverified(address) {
  * changes: no lookup, no branch taken, the Postmark path below runs verbatim.
  *
  * `mailboxAddress` is kept as its own parameter rather than derived from
- * `mailbox`, because the two answer different questions. A ticket whose
+ * `mailbox`, because the two answer different questions. A conversation whose
  * mailbox row was deleted still has an address to put in Reply-To; an elevated
  * caller answering that correspondence passes `mailboxAddress` with no
  * `mailbox` at all. Deriving one from the other would make that case
@@ -346,11 +358,15 @@ function markUnverified(address) {
  * still in flight. Keeping the key off the Postmark verdict keeps that path
  * byte-identical to what three routes already consume.
  */
-export async function sendTicketEmail({
+export async function sendConversationEmail({
   mailboxAddress = null,
   // MAILBOX-CONNECT.7 — the transport selector; see the docblock. Optional,
   // and defaulting to null keeps every existing call site byte-identical.
   mailbox = null,
+  // W1.E2 — the studio whose brand names a DEGRADED send (the fallback From
+  // on the platform address). The conversation's location when the caller
+  // has it; else the mailbox's own studio; else PLATFORM_NAME.
+  locationId = null,
   // EMAIL-CC.1 / EMAIL-OUTBOUND-ATTACH.1 — cc, bcc and attachments all default
   // to undefined, so a caller that passes none of them (and every caller
   // before those two tasks) produces a byte-identical sendEmail call.
@@ -382,14 +398,14 @@ export async function sendTicketEmail({
     // and the log has to say why without waiting for someone to report it.
     // No recipient in the meta — logError's contract is PII-free, and the
     // operator already gets the reason in the response.
-    logError('email-inbox-send', 'POSTMARK_EMAIL_INBOX_SERVER_TOKEN is not set — refusing to send ticket mail on the marketing server')
+    logError('email-inbox-send', 'POSTMARK_EMAIL_INBOX_SERVER_TOKEN is not set — refusing to send conversation mail on the marketing server')
     return { ok: false, reason: 'not_configured', error: INBOX_NOT_CONFIGURED_MESSAGE }
   }
 
   const postmarkStream = inboxMessageStream()
   const attempts = plannedFroms({
     mailboxAddress,
-    fallback: fallbackFromAddress(),
+    fallback: await fallbackFromAddress(createServerClient(), locationId || mailbox?.location_id || null),
     skipMailbox: isKnownUnverified(mailboxAddress),
   })
 
@@ -406,7 +422,7 @@ export async function sendTicketEmail({
         subject,
         htmlBody,
         textBody,
-        // Reply-To stays the ticket's mailbox unconditionally — redundant when
+        // Reply-To stays the conversation's mailbox unconditionally — redundant when
         // it equals the From, load-bearing when the fallback fired. One line
         // that is correct in both cases beats a branch that has to stay in
         // step with the From.
@@ -425,7 +441,9 @@ export async function sendTicketEmail({
         // The tenant-override seam carries BOTH the server token and the From
         // (src/lib/postmark.js resolveTenantOverride). Passing `sender`
         // explicitly also stops it looking up a per-tenant sender by location.
-        sender: { serverToken, fromEmail: attempt.from, fromName: null },
+        // W1.E2 — the resolver contract is fromEmail = ADDRESS, fromName =
+        // display name, so a branded fallback ("Gym A <addr>") is split here.
+        sender: { serverToken, fromEmail: parseAddressHeader(attempt.from).address, fromName: parseAddressHeader(attempt.from).name || null },
       })
       return { ok: true, result, fromEmail: attempt.from, degraded: attempt.degraded }
     } catch (err) {

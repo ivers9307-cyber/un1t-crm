@@ -12,9 +12,11 @@
 //      supabase.storage.from('branding').uploadToSignedUrl(path, token, file)
 //   4. client stores the returned public `url` in the block payload
 //
-// The bucket's own allowed_mime_types + file_size_limit (mig 252:
-// + video/quicktime, 200MB) are the real ceiling on the direct
-// upload — we can't see the bytes here, so the bucket enforces size.
+// The bucket's own allowed_mime_types + file_size_limit
+// (src/lib/branding-media.js, migs 252 and 675: 200MB) are the real
+// ceiling on the direct upload — we can't see the bytes here, so the
+// bucket enforces size. The token authorises the upload, not RLS: no
+// client session writes this bucket (mig 675, BRANDINGBUCKET.1).
 //
 // Master OR owner at the location (same gate as /media).
 

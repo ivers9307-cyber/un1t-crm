@@ -5,15 +5,28 @@ import { Music2, Plug } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { AUTOMATIONS, automationStatus, glofoxConnected } from '@/lib/automations/registry'
+import { logError } from '@/lib/log'
+import { zoneOfLocation } from '@/lib/location-time'
+import { canCloneSequenceAt } from '@/lib/sequence-access'
+import { AUTOMATIONS } from '@/lib/automations/registry'
+import { readGlofoxAutomationStatus } from '@/lib/automations/glofox-status'
+import { membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
+import MembershipSourceGate from '@/components/MembershipSourceGate'
 import AutomationsView from '@/components/automations/AutomationsView'
 import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
 import ClassClimateCard from '@/components/automations/ClassClimateCard'
 import BathroomClimateCard from '@/components/automations/BathroomClimateCard'
+import ScreenModeCard from '@/components/automations/ScreenModeCard'
 
 export const dynamic = 'force-dynamic'
 
 const NO_LOCATION = '00000000-0000-0000-0000-000000000000'
+
+// SEQCOUNTERS.1 — what AutomationsFlowList reads, plus (first read only) the
+// enrolment count embedded from sequence_enrollments. Module consts so
+// check:select-columns resolves both.
+const FLOW_COLUMNS = 'id, name, status, trigger_type, created_at, sequence_steps(id)'
+const FLOW_COLUMNS_COUNTED = `${FLOW_COLUMNS}, sequence_enrollments(count)`
 
 export default async function AutomationsPage() {
   const user = await getCurrentUser()
@@ -28,26 +41,42 @@ export default async function AutomationsPage() {
   const db = createServerClient()
 
   // Curated toggle cards (only when the user has the automations perm).
-  // class_climate + bathroom_climate are rendered by their own cards (they
-  // need config), so they're filtered out of the generic toggle list.
+  // class_climate, bathroom_climate + screen_mode are rendered by their own
+  // cards (they need config), so they're filtered out of the generic toggle list.
   let cards = []
   let climate = null
   let bathroom = null
   let climateDevices = []
+  let glofox = null
+  // SCREENMODE.12 — the class-screens card sits OUTSIDE the membership-source
+  // gate (Hatch's source, un1t.online, declares no schedule capability, so
+  // every gated card is hidden there), so it gates itself on what is read here.
+  let screens = []
+  let hasTimetable = false
+  let screenMode = null
   if (canCurated) {
-    const { data: rows } = await db
-      .from('location_automations')
-      .select('automation_key, enabled, config')
-      .eq('location_id', location?.id || NO_LOCATION)
+    // PROFILESPREAD.1 — Glofox presence read by id (the user object no
+    // longer carries settings). Booleans only reach the client; a failed
+    // read is `known: false` and the page says so. The reader never throws
+    // (it logs and answers unknown), so running it alongside the
+    // location_automations read changes neither read's failure handling.
+    let rows
+    ;[glofox, { data: rows }] = await Promise.all([
+      readGlofoxAutomationStatus(db, location?.id || null),
+      db
+        .from('location_automations')
+        .select('automation_key, enabled, config')
+        .eq('location_id', location?.id || NO_LOCATION),
+    ])
     const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
 
     cards = AUTOMATIONS
-      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate')
+      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate' && a.key !== 'screen_mode')
       .map((a) => ({
         key: a.key, label: a.label, description: a.description,
         supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
         enabled: Boolean(byKey[a.key]?.enabled),
-        status: automationStatus(a.key, location),
+        status: glofox.statuses[a.key],
       }))
 
     const { data: devices } = await db
@@ -60,18 +89,76 @@ export default async function AutomationsPage() {
     climate = { enabled: Boolean(row?.enabled), config: row?.config || {} }
     const bathroomRow = byKey['bathroom_climate']
     bathroom = { enabled: Boolean(bathroomRow?.enabled), config: bathroomRow?.config || {} }
+
+    const screenLocationId = location?.id || NO_LOCATION
+    const [screensRes, timetableRes] = await Promise.all([
+      db
+        .from('fleet_devices')
+        .select('device_name, label')
+        .eq('location_id', screenLocationId)
+        .eq('role', 'screen')
+        .order('device_name'),
+      db
+        .from('class_occurrences')
+        .select('id')
+        .eq('location_id', screenLocationId)
+        .is('cancelled_at', null)
+        .gte('starts_at', new Date().toISOString())
+        .limit(1),
+    ])
+    if (screensRes.error) {
+      // No card rather than a card that offers screens we could not list.
+      logError('automations', 'screens read failed; the class screens card is not shown', { code: screensRes.error.code || null, locationId: screenLocationId })
+    } else {
+      screens = screensRes.data || []
+    }
+    if (timetableRes.error) {
+      // Treated as "no timetable": the card then cannot be enabled, which is
+      // the safe side of an unreadable answer.
+      logError('automations', 'timetable read failed; treated as no timetable', { code: timetableRes.error.code || null, locationId: screenLocationId })
+    } else {
+      hasTimetable = (timetableRes.data || []).length > 0
+    }
+    const screenRow = byKey['screen_mode']
+    screenMode = { enabled: Boolean(screenRow?.enabled), config: screenRow?.config || {} }
   }
 
   // Custom flows (only when the user has email/whatsapp).
+  // SEQCOUNTERS.1 — named columns (AutomationsFlowList reads id, name,
+  // status, trigger_type, sequence_steps, enrolled_count), and the enrolled
+  // number is COUNTED from sequence_enrollments in the same read: the
+  // email_sequences.total_* counters were never maintained (mig 663).
+  // The count must not cost the list: if the read with the embed fails, the
+  // list is read again without it and renders with no chips. Only if that
+  // fails too is it a notice, never "No automations yet".
   let sequences = []
+  let flowsLoadFailed = false
   if (canFlows) {
-    const { data } = await db
-      .from('email_sequences')
-      .select('*, sequence_steps(id)')
-      .eq('location_id', location?.id)
+    const flowsLocationId = location?.id || NO_LOCATION
+    const scoped = (query) => query
+      .eq('location_id', flowsLocationId)
       .order('created_at', { ascending: false })
-    sequences = data || []
+    const counted = await scoped(db.from('email_sequences').select(FLOW_COLUMNS_COUNTED))
+    if (!counted.error) {
+      sequences = (counted.data || []).map(({ sequence_enrollments: enrolments, ...row }) => ({
+        ...row,
+        enrolled_count: Number(enrolments?.[0]?.count ?? 0),
+      }))
+    } else {
+      logError('automations', 'enrolment count read failed; the flow list renders without counts', { code: counted.error.code || null, locationId: flowsLocationId })
+      const plain = await scoped(db.from('email_sequences').select(FLOW_COLUMNS))
+      if (!plain.error) {
+        sequences = (plain.data || []).map((row) => ({ ...row, enrolled_count: null }))
+      } else {
+        logError('automations', 'sequences read failed; the flow list shows a notice', { code: plain.error.code || null, locationId: flowsLocationId })
+        flowsLoadFailed = true
+      }
+    }
   }
+
+  // C123 GATES-4 (b) — the list is the ACTIVE studio's sequences, so the
+  // clone route's rule is asked there.
+  const canClone = canFlows && canCloneSequenceAt(user, location?.id || null)
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-10">
@@ -79,22 +166,60 @@ export default async function AutomationsPage() {
         <h1 className="text-xl font-semibold text-un1t-text">Automations</h1>
         <p className="text-sm text-un1t-subtle mt-1">Things that run by themselves for {location?.name || 'your studio'}</p>
       </div>
+      {/* W1.M3a — every curated card needs the membership source (Glofox
+          accounts for lead provisioning, its class schedule for the climate
+          cards), so the cards render only behind the gate: a studio with no
+          source sees "No membership source connected" instead of three
+          disabled toggles; a failed state read sees the gate's retry copy.
+          Inside the gate, a failed SETTINGS read (trial config) keeps the
+          PROFILESPREAD.1 notice and the unknown cards. */}
       {canCurated && (
+        <MembershipSourceGate
+          state={glofox?.membership}
+          capability="schedule"
+          settingsHref={membershipSettingsHref(location?.id || null)}
+          canManage={canManageMembershipSource(user, location?.id || null)}
+          padding="md"
+          className="bg-un1t-surface border border-un1t-border rounded-lg"
+        >
+          {glofox?.known === false && (
+            <p role="alert" className="text-sm bg-amber-500/10 text-amber-700 border border-amber-500/30 rounded-md px-3 py-2 mb-4">
+              Couldn&apos;t check whether Glofox is connected at this location. The automation cards below can&apos;t be changed until it can. Reload to try again.
+            </p>
+          )}
+          <div className="space-y-4">
+            <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
+            <ClassClimateCard
+              locationId={location?.id || null}
+              timezone={zoneOfLocation(location)}
+              glofoxConnected={glofox?.connected === true}
+              glofoxUnknown={glofox?.known === false}
+              devices={climateDevices}
+              initialEnabled={climate?.enabled}
+              initialConfig={climate?.config}
+            />
+            <BathroomClimateCard
+              locationId={location?.id || null}
+              timezone={zoneOfLocation(location)}
+              glofoxConnected={glofox?.connected === true}
+              glofoxUnknown={glofox?.known === false}
+              devices={climateDevices}
+              initialEnabled={bathroom?.enabled}
+              initialConfig={bathroom?.config}
+            />
+          </div>
+        </MembershipSourceGate>
+      )}
+      {/* SCREENMODE.12 — outside the gate on purpose; see the reads above. */}
+      {canCurated && screens.length > 0 && (
         <div className="space-y-4">
-          <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
-          <ClassClimateCard
+          <ScreenModeCard
             locationId={location?.id || null}
-            glofoxConnected={glofoxConnected(location)}
-            devices={climateDevices}
-            initialEnabled={climate?.enabled}
-            initialConfig={climate?.config}
-          />
-          <BathroomClimateCard
-            locationId={location?.id || null}
-            glofoxConnected={glofoxConnected(location)}
-            devices={climateDevices}
-            initialEnabled={bathroom?.enabled}
-            initialConfig={bathroom?.config}
+            timezone={zoneOfLocation(location)}
+            screens={screens}
+            hasTimetable={hasTimetable}
+            initialEnabled={screenMode?.enabled}
+            initialConfig={screenMode?.config}
           />
         </div>
       )}
@@ -120,7 +245,9 @@ export default async function AutomationsPage() {
           </Link>
         </div>
       )}
-      {canFlows && <AutomationsFlowList sequences={sequences} />}
+      {canFlows && (
+        <AutomationsFlowList sequences={sequences} loadFailed={flowsLoadFailed} canClone={canClone} />
+      )}
     </div>
   )
 }

@@ -7,6 +7,10 @@
 import { z } from 'zod'
 import { sanitizePermissionsBlob } from '@shared/permissions'
 import { UUID_SHAPE } from './uuid-shape'
+import { isFreshSecret } from './integration-secret-merge'
+import { PURPOSE_KEYS } from './whatsapp-purpose-templates'
+import { CONSENT_COPY_MAX } from './whatsapp-consent-copy'
+import { MIA_OFFER_BLURB_MAX, MIA_OFFERS_MAX } from './agent/mia-offer-limits'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -21,6 +25,31 @@ export const isoDate = z.string().regex(
   /^\d{4}-\d{2}-\d{2}$/,
   'Use YYYY-MM-DD'
 )
+
+/**
+ * CHANGELOG.1 — isoDate above checks the SHAPE only: '2026-13-01' and
+ * '2026-02-30' pass it, reach Postgres, and come back as a 500. This is the
+ * calendar check to pair with it on a route that hands a date to the database.
+ * Pure arithmetic on the three numbers: no Date parsing, so no host timezone
+ * and no engine leniency (V8 rolls '2026-02-30' over to 2 March).
+ */
+export function isRealCalendarDate(str) {
+  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return false
+  const [y, m, d] = str.split('-').map(Number)
+  if (m < 1 || m > 12 || d < 1) return false
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+  return d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+}
+
+/**
+ * DATECHECK.1 — isoDate AND isRealCalendarDate as one schema. Use it for any
+ * date a route hands to the database or does arithmetic on: the shape alone
+ * lets 2026-02-30 through, which V8 reads as 2 March and Postgres refuses.
+ * A well-shaped impossible date gets one issue (the message below); a bad
+ * shape gets 'Use YYYY-MM-DD' as well (Zod runs the refine after a failed
+ * regex). For a raw query param, call isRealCalendarDate directly.
+ */
+export const realIsoDate = isoDate.refine(isRealCalendarDate, 'Use a real date, YYYY-MM-DD')
 
 // Time of day, HH:MM or HH:MM:SS.
 export const timeOfDay = z.string().regex(
@@ -212,9 +241,34 @@ export const timeOffStatusSchema = z.enum(['pending', 'approved', 'rejected', 'c
 // DB (no CHECK constraint) — this enum is the only gate.
 export const swapStatusSchema = z.enum(['pending', 'awaiting_approval', 'approved', 'rejected', 'cancelled'])
 
+// SCHEDSTATUS.1 — shift_assignments.status.
+//
+// The DB set is the CHECK constraint `shift_assignments_status_check`
+// (mig 067, widened by mig 337) — anything outside it is rejected by Postgres,
+// and the route hands the caller the raw constraint message as a 400. The PUT
+// schema on /api/schedule/assignments/[id] used to accept 'declined', which is
+// NOT in that set: every such request failed at the database with a message
+// naming a constraint, not a field. `tests/shift-assignment-status.test.js`
+// pins this list against the migration so the two cannot drift again.
+export const SHIFT_ASSIGNMENT_DB_STATUSES = Object.freeze([
+  'scheduled', 'confirmed', 'completed', 'cancelled', 'swapped',
+])
+
+// What THIS route may set. A strict subset of the DB set, and deliberately so:
+//   - 'swapped' is written only by mig 615's approve_* functions, inside the
+//     transaction that moves the assignment;
+//   - 'cancelled' is the tombstone ROSTER-FIX.1 (D4) removed and mig 603
+//     deleted from disk — the roster DELETEs an assignment instead, and a
+//     tombstone would make the block look staffed and keep billing the coach.
+// Anything a manager legitimately sets by hand is here.
+export const assignmentStatusSchema = z.enum(['scheduled', 'confirmed', 'completed'])
+
 // Report frequency / type — match scheduled_reports.frequency and the
-// report-generator's switch statement.
-export const reportFrequencySchema = z.enum(['once', 'daily', 'weekly', 'monthly'])
+// report-generator's switch statement. ROSTER-FIX.5: 'fortnightly' has been
+// in the table's CHECK and the UI dropdown since day one but was missing
+// here, so every Fortnightly schedule the UI offered was 400'd; 'daily' was
+// the mirror image (accepted here, refused by the CHECK until mig 601).
+export const reportFrequencySchema = z.enum(['once', 'daily', 'weekly', 'fortnightly', 'monthly'])
 export const reportTypeSchema = z.enum([
   'staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation',
 ])
@@ -368,3 +422,113 @@ export const giversEnquirySchema = z.object({
   email: email.or(z.literal('')).optional(),
   message: z.string().trim().max(2000).optional(),
 })
+
+// UN1TSYNC.7 — PUT /api/locations/[id]/un1t-online. The per-studio API token
+// from un1t.online (Settings > API tokens). Shape only: whether it is accepted,
+// read-only, and a server-side (no browser origins) token is judged by calling
+// un1t.online with it. Never echoed in a response or a validation issue.
+export const Un1tOnlineConnectSchema = z.object({
+  token: z.string().trim().max(512).regex(/^un1t_[A-Za-z0-9_-]{20,}$/, 'That does not look like an un1t.online API token'),
+})
+
+// WAORGNUMBER.1 — the organisation's WhatsApp number admin
+// (/api/organizations/[id]/whatsapp/*). A number belongs to the ORGANISATION;
+// home_location_id is its home studio (where new-enquiry threads and
+// coexistence history land), and must be a studio of that organisation (the
+// route checks, the database does not).
+export const orgWhatsAppNumberCreateSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  phone_number_id: z.string().trim().min(1).max(64),
+  access_token: z.string().min(20).max(2000),
+  business_account_id: z.string().max(64).nullable().optional(),
+  app_id: z.string().max(64).nullable().optional(),
+  display_phone: z.string().max(32).nullable().optional(),
+  source: z.enum(['cloud_api', 'coexistence']).optional().default('cloud_api'),
+  home_location_id: uuidLike,
+})
+
+// WAORGNUMBER.1 (R8, Task 6) — a studio admin switches an organisation number
+// on or off at THIS studio (PUT /api/locations/[id]/whatsapp/numbers) and may
+// make it the studio default. isDefault is read only with on:true.
+export const studioWhatsAppNumberSwitchSchema = z.object({
+  numberId: uuidLike,
+  on: z.boolean(),
+  isDefault: z.boolean().optional(),
+})
+
+// WAORGNUMBER.2 (R5): which of the studio's own templates an automatic message
+// uses (PUT /api/locations/[id]/whatsapp/purpose-templates). null clears the
+// pick, so the sender goes back to its default template name.
+export const studioPurposeTemplateSchema = z.object({
+  purpose: z.enum(PURPOSE_KEYS),
+  templateId: uuidLike.nullable(),
+})
+
+// WAORGNUMBER.3 (R6): the studio's STOP / START acknowledgement copy
+// (PUT /api/locations/[id]/whatsapp/consent-copy). Blank or null = the default.
+// {studio} is replaced with the studio's name at send time.
+const consentCopyField = z.string().trim().max(CONSENT_COPY_MAX, `Keep it to ${CONSENT_COPY_MAX} characters or fewer`).nullable()
+export const studioConsentCopySchema = z.object({
+  stop_ack: consentCopyField,
+  start_ack: consentCopyField,
+})
+
+// ORGCONTACTS.0 (WAORGNUMBER R7, spec §3.3): the studio's blast sign-off
+// window (PUT /api/locations/[id]/whatsapp/blast-signoff). A plain calendar
+// date on the studio's clock ('2026-11-16'); null clears the window. The
+// day's existence (no 30 Feb) is judged in the route with strictDayStartMsIn.
+export const studioBlastSignoffSchema = z.object({
+  until: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-11-16').nullable(),
+})
+
+// N8NECHO.1: the screens are handed SECRET_MASK for a stored token. A mask (or
+// a blank) sent back is "no change", so it is dropped BEFORE validation and the
+// rest of the save applies; only a fresh token is ever written. min(20) below
+// is not the guard: it would refuse the whole save instead.
+const dropStaleAccessToken = (raw) => {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'access_token' in raw && !isFreshSecret(raw.access_token)) {
+    const { access_token: _dropped, ...rest } = raw
+    return rest
+  }
+  return raw
+}
+
+export const orgWhatsAppNumberPatchSchema = z.preprocess(dropStaleAccessToken, z.object({
+  label: z.string().trim().min(1).max(120).optional(),
+  phone_number_id: z.string().trim().min(1).max(64).optional(),
+  access_token: z.string().min(20).max(2000).optional(),
+  business_account_id: z.string().max(64).nullable().optional(),
+  app_id: z.string().max(64).nullable().optional(),
+  display_phone: z.string().max(32).nullable().optional(),
+  source: z.enum(['cloud_api', 'coexistence']).optional(),
+  is_active: z.boolean().optional(),
+  home_location_id: uuidLike.optional(),
+}))
+
+// The Embedded Signup dialog's result. Cloud API supplies phone_number_id from
+// the session; coexistence resolves it server-side from the WABA. A NEW number
+// needs a home studio; reconnecting a number the organisation already holds
+// keeps the one it has.
+export const orgWhatsAppEmbeddedSignupSchema = z.object({
+  mode: z.enum(['cloud_api', 'coexistence']).default('cloud_api'),
+  code: z.string().min(1),
+  waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
+  phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
+  home_location_id: uuidLike.optional(),
+})
+
+// MIAHATCH.4 (Task 14) — PUT /api/locations/[id]/mia-offers: the products
+// staff let Mia sell at a un1t.online studio, in the order Mia offers them.
+// The array order IS the sort order. `un1t_product_row_id` is the
+// un1t_products.id (a uuid), not the remote un1t id. A blurb is a one-line
+// pitch (mig 752 CHECK: 140 characters); blank saves as none. A product may
+// appear once (the table's unique key would refuse the second row anyway).
+export const miaOffersPutSchema = z.object({
+  offers: z.array(z.object({
+    un1t_product_row_id: uuidLike,
+    blurb: z.string().trim().max(MIA_OFFER_BLURB_MAX).default(''),
+  })).max(MIA_OFFERS_MAX),
+}).refine(
+  (v) => new Set(v.offers.map((o) => o.un1t_product_row_id)).size === v.offers.length,
+  { message: 'A product can be listed once.', path: ['offers'] },
+)

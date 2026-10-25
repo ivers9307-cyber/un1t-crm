@@ -37,7 +37,8 @@ const MEDIA_FIELDS = 'id,media_type,media_product_type,media_url,thumbnail_url,p
 
 /**
  * Fetch + normalize the latest media for a connected IG account.
- * Throws on a Graph/HTTP error so the caller can keep the last-good cache.
+ * Throws on a Graph/HTTP error so the caller can keep the last-good cache;
+ * the Error carries `status` (HTTP) and `graphError` (Meta's error object).
  * @param {{external_account_id:string, access_token:string}} connection
  * @param {{limit?:number, fetchImpl?:Function}} [opts]
  */
@@ -48,7 +49,14 @@ export async function fetchIgMedia(connection, { limit = 12, fetchImpl = fetch }
   const url = `${GRAPH}/${igId}/media?fields=${MEDIA_FIELDS}&limit=${limit}`
   const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } })
   const json = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(`instagram-feed graph ${res.status}: ${json?.error?.message || 'unknown'}`)
+  if (!res.ok) {
+    // status + graphError ride on the throw so the cron can tell a dead
+    // token (isMetaAuthError) from a transient Graph failure.
+    const err = new Error(`instagram-feed graph ${res.status}: ${json?.error?.message || 'unknown'}`)
+    err.status = res.status
+    err.graphError = json?.error || null
+    throw err
+  }
   return normalizeIgMedia(json?.data || [])
 }
 

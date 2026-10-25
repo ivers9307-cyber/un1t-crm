@@ -4,18 +4,26 @@
 // gated by the same customer_agent switches as the auto-reply so a disabled
 // or test-mode agent never greets strangers.
 import { sendTextMessage } from '@/lib/whatsapp'
+import { getLocationBranding } from '@/lib/location-branding'
 import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
+import { defaultWelcomeGreeting } from './default-copy'
+import { DEFAULTS } from './settings-contract'
+import { resolveAgentSettings } from './settings-resolve'
+import { zoneOfLocation, DEFAULT_TZ } from '@/lib/location-time'
 
 // HUMANIZE.1 — no em dash, no emoji, low-key: this is shipped customer copy on
 // the click-to-WhatsApp path, and the deterministic scrub below covers the
-// operator's override too.
-export const DEFAULT_WELCOME_GREETING =
-  "Hi, I'm Mia, the studio's assistant at UN1T. Ask me anything, or tell me if you'd like to book a free class or a consultation."
+// operator's override too. W1.S3 — the default is a function of the agent's
+// configured name and the location's brand (default-copy.js), so a second
+// gym's greeting never names another gym and the review's "the greeting
+// ignores agent_name" is closed.
+export { defaultWelcomeGreeting }
 
 // Pure gate: mirrors shouldAgentReply's on-duty rules (enabled/test allowlist/
 // quiet hours) without the per-conversation state (a request_welcome thread is
-// brand new by definition).
-export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
+// brand new by definition). TZ.5 — `zone` is the location's (quiet hours with
+// no stored tz are read on the studio's own clock).
+export function shouldSendWelcome({ settings, senderPhone, now = new Date(), zone = DEFAULT_TZ }) {
   const s = settings || {}
   // Shared combine (core.resolveAgentGate) so this gate can't drift from
   // shouldAgentReply — enabled+test_mode is live for everyone on both.
@@ -24,7 +32,7 @@ export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
   if (!enabled && testMode && !phoneMatchesAllowlist(senderPhone, s.test_phones)) {
     return { send: false, reason: 'not_in_test_allowlist' }
   }
-  if (isWithinQuietHours(now, s.quiet_hours)) return { send: false, reason: 'quiet_hours' }
+  if (isWithinQuietHours(now, s.quiet_hours, zone)) return { send: false, reason: 'quiet_hours' }
   return { send: true }
 }
 
@@ -32,9 +40,13 @@ export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
 export async function maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId }) {
   try {
     if (!conversationId || !locationId || !senderPhone) return { sent: false, reason: 'missing_context' }
-    const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).single()
-    const settings = loc?.settings?.customer_agent || null
-    const gate = shouldSendWelcome({ settings, senderPhone })
+    // MIAORG.1 — DEFAULTS <- org <- studio (resolveAgentSettings; the on/off
+    // switches are the studio's own). A failed studio read is no settings, so
+    // the gate answers 'disabled', as it always did.
+    const resolved = await resolveAgentSettings(db, locationId)
+    const settings = resolved.ok ? resolved.settings : null
+    // TZ.5 — the zone rides the row already read (no second query).
+    const gate = shouldSendWelcome({ settings, senderPhone, zone: zoneOfLocation({ id: locationId, timezone: resolved.ok ? resolved.location.timezone : null }) })
     if (!gate.send) return { sent: false, reason: gate.reason }
 
     // Idempotency: greet a thread once — skip if ANY outbound already exists.
@@ -45,9 +57,18 @@ export async function maybeSendWelcomeGreeting(db, { conversationId, locationId,
     if ((count || 0) > 0) return { sent: false, reason: 'already_greeted' }
 
     // Scrubbed like every other agent message (core.js parseAgentResponse) so
-    // an operator-typed greeting can't ship an em dash either.
-    const text = stripEmDashes((settings?.welcome_greeting || '').trim() || DEFAULT_WELCOME_GREETING)
-    const result = await sendTextMessage(senderPhone, text, { locationId })
+    // an operator-typed greeting can't ship an em dash either. The brand is
+    // resolved only when the code default is what will be sent.
+    let text = (settings?.welcome_greeting || '').trim()
+    if (!text) {
+      const { companyName } = await getLocationBranding(db, locationId)
+      // A blob saved without a name sends the same text the editor shows as
+      // the default (the contract names the agent on every save).
+      text = defaultWelcomeGreeting({ agentName: settings?.agent_name || DEFAULTS.agent_name, brand: companyName })
+    }
+    text = stripEmDashes(text)
+    // WAREPLYNUMBER.1 (C86) — from the number the chat was opened on.
+    const result = await sendTextMessage(senderPhone, text, { locationId, replyInConversation: conversationId })
     await db.from('whatsapp_messages').insert({
       conversation_id: conversationId,
       contact_id: contactId || null,

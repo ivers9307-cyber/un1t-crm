@@ -56,11 +56,13 @@ export async function listMyTasks({ locationId, profileId, includeDone = false }
 /**
  * Create a task at a location, optionally assigned to a colleague.
  *
- * Mirrors the web TasksPage `addTask` insert shape exactly (kind=task,
- * status=todo, source=manual) so it rides the same RLS path
- * (activities_location_scoped) and the mig 159 status/done trigger. The
- * returning select uses TASK_SELECT — NO profiles embed (the
- * authenticated role can't SELECT profiles; see the note above).
+ * Inserts kind=task, status=todo, source=crm, riding the activities RLS
+ * path and the mig 159 status/done trigger. source must be in
+ * activities_source_check (mig 138: 'crm' | 'glofox'); the 'manual' this
+ * used to send was refused by Postgres on every create (C150,
+ * tests/activities-source-check-guard.test.js). The returning select uses
+ * TASK_SELECT — NO profiles embed (the authenticated role can't SELECT
+ * profiles; see the note above).
  *
  * @param {object} p
  * @param {string} p.locationId   the task's location (the active studio)
@@ -78,7 +80,7 @@ export async function createTask({ locationId, subject, assigneeId = null, dueDa
   const insert = {
     kind: 'task',
     status: 'todo',
-    source: 'manual',
+    source: 'crm',
     location_id: locationId,
     subject: trimmed,
     assignee_id: assigneeId || null,

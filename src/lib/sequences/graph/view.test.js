@@ -80,6 +80,10 @@ describe('describeNode — operator-facing one-line summary per type', () => {
     [{ type: 'webhook', config: { url: 'https://x.io/hook', method: 'POST' } }, 'Webhook', 'POST https://x.io/hook'],
     [{ type: 'move_pipeline_stage', config: { stage_slug: 'converted' } }, 'Move pipeline', 'Move to converted'],
     [{ type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }, 'Branch', 'Has tag “vip”'],
+    [{ type: 'branch', config: { predicate: { type: 'booked_class_at_studio' } } }, 'Branch', 'Has booked a class at this studio'],
+    [{ type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] } } }, 'Branch', 'In stage trial_done at this studio'],
+    [{ type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done', 'second_class'] } } }, 'Branch', 'In stage trial_done or second_class at this studio'],
+    [{ type: 'branch', config: { predicate: { type: 'whatsapp_reply_since_enrolment' } } }, 'Branch', 'Replied on WhatsApp since this flow began'],
     [{ type: 'branch', config: { predicate: { type: 'field_equals', field: 'label', value: 'hot' } } }, 'Branch', 'label = hot'],
     [{ type: 'glofox_provision', config: {} }, 'Create in Glofox', 'Create Glofox account + trial'],
   ]

@@ -49,7 +49,7 @@ const TARGET = 'c0000000-0000-0000-0000-000000000003'
 
 // Records which tables were read, so "never read the person" is an
 // assertion rather than an assumption.
-function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null } = {}) {
+function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null, locationRows = [], locationsError = null } = {}) {
   const touched = []
   const from = (table) => {
     touched.push(table)
@@ -80,8 +80,12 @@ function makeDb({ targetLocationIds = [LOC_THEIRS], locError = null } = {}) {
     }
     // locations / location_role_permissions / profile_organizations
     const chain = {}
-    for (const op of ['select', 'eq', 'order']) chain[op] = () => chain
-    chain.then = (res) => Promise.resolve({ data: [] }).then(res)
+    for (const op of ['select', 'eq', 'order', 'in']) chain[op] = () => chain
+    chain.then = (res) => Promise.resolve(
+      table === 'locations'
+        ? { data: locationsError ? null : locationRows, error: locationsError }
+        : { data: [] },
+    ).then(res)
     return chain
   }
   return { touched, from }
@@ -163,8 +167,28 @@ describe('/settings/staff/[id] — the target must be the caller’s to see', ()
   it('refuses an owner-role caller who owns no location at all, before any query', async () => {
     getCurrentUser.mockResolvedValue(user({ role: 'owner', rolesByLocation: { [LOC_MINE]: 'manager' } }))
 
-    await expect(call()).rejects.toThrow('NEXT_NOT_FOUND')
+    // PAGEGATES.1 — the entry gate now reads rolesByLocation ("owner
+    // somewhere"), so this caller is bounced there, with the same answer for
+    // every id (nothing to enumerate), instead of one step later.
+    await expect(call()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(db.touched).toEqual([])
+  })
+
+  // PAGEGATES.1 — the entry gate was user.role (the ACTIVE studio's). PUT and
+  // DELETE /api/staff/[id] pre-check "owner somewhere" and then judge the
+  // target's studios, so an owner at the target's studio whose active studio
+  // is one where they are a manager was bounced from a record the routes let
+  // them edit.
+  it('opens for an owner at the target\'s studio whose ACTIVE studio is one where they are a manager (main: redirected)', async () => {
+    db = makeDb({ targetLocationIds: [LOC_THEIRS] })
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(user({ role: 'manager', rolesByLocation: { [LOC_MINE]: 'manager', [LOC_THEIRS]: 'owner' } }))
+
+    await call()
+
+    expect(notFound).not.toHaveBeenCalled()
+    expect(redirect).not.toHaveBeenCalled()
+    expect(db.touched).toContain('profiles')
   })
 
   it('still bounces a non-owner outright', async () => {
@@ -172,5 +196,69 @@ describe('/settings/staff/[id] — the target must be the caller’s to see', ()
 
     await expect(call()).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(db.touched).toEqual([])
+  })
+})
+
+// STAFFFORMSETTINGS.1 — StaffForm is a client component. The page read every
+// active studio with select('*') and passed the rows (credentials masked by
+// SECFIX.3a) to it, so each studio's settings (the customer agent's test
+// phone numbers, every integration's config) went into the editor's HTML.
+// The prop is now the identity + a server-computed unifi_configured.
+describe('/settings/staff/[id] — STAFFFORMSETTINGS.1: StaffForm gets identity + unifi_configured, never settings', () => {
+  function findElement(node, name) {
+    if (!node || typeof node !== 'object') return null
+    if (Array.isArray(node)) {
+      for (const n of node) { const f = findElement(n, name); if (f) return f }
+      return null
+    }
+    const t = node.type
+    if (t && (t.name === name || t.displayName === name)) return node
+    return findElement(node.props?.children, name)
+  }
+
+  it('hands StaffForm no settings, no test phone and no credential, and a UniFi boolean', async () => {
+    const db = makeDb({
+      locationRows: [
+        {
+          id: LOC_MINE, name: 'Mine', slug: 'mine', features: {}, sensibo_api_key: 'SYNTH-S', thinq_pat: 'SYNTH-T',
+          settings: {
+            glofox: { api_key: 'SYNTH-GK' },
+            unifi: { host: 'https://unifi.example.test', api_token: 'SYNTH-UT', staff_policy_id: 'p1', manager_policy_id: 'p2' },
+            customer_agent: { enabled: true, test_phones: ['+353000000000'] },
+          },
+        },
+        { id: LOC_THEIRS, name: 'Theirs', slug: 'theirs', features: {}, settings: { unifi: { host: 'https://u2.example.test' } } },
+      ],
+    })
+    createServerClient.mockReturnValue(db)
+    getCurrentUser.mockResolvedValue(user({ role: 'master', isMaster: true, rolesByLocation: {} }))
+
+    const el = findElement(await call(), 'StaffForm')
+    expect(el).toBeTruthy()
+    const [mine, theirs] = el.props.locations
+    expect(mine).not.toHaveProperty('settings')
+    expect(mine).toMatchObject({ id: LOC_MINE, name: 'Mine', unifi_configured: true })
+    expect(theirs.unifi_configured).toBe(false)
+    // ACALLOWLISTGATE.1 — the AC allowlist's gate: Mine holds a Sensibo key
+    // (read on the server; the no-SYNTH- line below proves it never crosses),
+    // Theirs holds no AC credential.
+    expect(mine.ac_configured).toBe(true)
+    expect(theirs.ac_configured).toBe(false)
+    expect(JSON.stringify(el.props.locations)).not.toMatch(/SYNTH-|\+353000000000|test_phones/)
+    expect(el.props.callerOwnerLocationIds).toEqual([LOC_MINE, LOC_THEIRS])
+    expect(el.props.locationsLoadFailed).toBe(false)
+  })
+
+  // Review N1: the helper's error used to be discarded, so a failed read
+  // looked like "no studios". The form still renders (never louder), and is
+  // told the read failed so it can say so.
+  it('a failed studios read still renders StaffForm, flagged', async () => {
+    createServerClient.mockReturnValue(makeDb({ locationsError: { code: '57014', message: 'statement timeout' } }))
+    getCurrentUser.mockResolvedValue(user({ role: 'master', isMaster: true, rolesByLocation: {} }))
+
+    const el = findElement(await call(), 'StaffForm')
+    expect(el).toBeTruthy()
+    expect(el.props.locations).toEqual([])
+    expect(el.props.locationsLoadFailed).toBe(true)
   })
 })

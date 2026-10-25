@@ -5,10 +5,13 @@
 // auto-reply.js; the webhook owns the trigger.
 
 import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
+import { DEFAULT_TZ } from '@/lib/location-time'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
-export const DEFAULT_HOLDING_MESSAGE =
-  "Thanks for your message! One of the UN1T team will get back to you shortly."
+// W1.S3 — the holding message is a function of the location's brand
+// (src/lib/agent/default-copy.js); auto-reply.js resolves the brand once per
+// turn (getLocationBranding) and passes it down to every hand-off.
+export { defaultHoldingMessage } from './default-copy'
 
 // MIA-CREDITS.1 — sent (verbatim, operator-editable via
 // settings.no_credits_handoff_text) when a booking pre-flight finds no
@@ -79,15 +82,18 @@ function parseHHMM(s) {
 /**
  * Is `now` within the configured quiet-hours window? Handles overnight
  * ranges (e.g. 21:00 → 07:00). Returns false if config is incomplete.
+ * TZ.5 — the window is read in `quiet.tz` when one is stored, else in the
+ * studio's own zone (it used to fall back to Europe/Dublin for everyone).
  * @param {Date} now
- * @param {{start?:string,end?:string,tz?:string}|null} quiet
+ * @param {{start?:string,end?:string,tz?:string|null}|null} quiet
+ * @param {string} [zone] the location's IANA zone
  */
-export function isWithinQuietHours(now, quiet) {
+export function isWithinQuietHours(now, quiet, zone = DEFAULT_TZ) {
   if (!quiet || !quiet.start || !quiet.end) return false
   const start = parseHHMM(quiet.start)
   const end = parseHHMM(quiet.end)
   if (start == null || end == null || start === end) return false
-  const cur = minutesOfDayInTz(now, quiet.tz || 'Europe/Dublin')
+  const cur = minutesOfDayInTz(now, quiet.tz || zone)
   if (cur == null) return false
   if (start < end) return cur >= start && cur < end      // same-day window
   return cur >= start || cur < end                        // overnight wrap
@@ -103,6 +109,7 @@ export function isWithinQuietHours(now, quiet) {
  * @param {object}      args.message       { type, body }
  * @param {string}      args.senderPhone
  * @param {Date}        [args.now]
+ * @param {string}      [args.zone]    the location's IANA zone (quiet hours, TZ.5)
  */
 // AGENT-REARM.1 — default hours before a handed-off thread auto-releases
 // back to the agent when nobody resolved it. 0/null = never.
@@ -241,7 +248,14 @@ export function warnLiveDespiteTestMode(locationId, settings) {
 // a "sent a photo / voice / attachment" page.
 const IGNORABLE_MESSAGE_TYPES = new Set(['reaction'])
 
-export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date() }) {
+// Message types Mia answers as text: a typed message, and a button tap whose
+// body is what the customer tapped (the webhook stores it). 'interactive' is a
+// session button/list reply (Mia's own [[OPTIONS]]); 'button' is a quick-reply
+// on a TEMPLATE (WABUTTONTAP.1: the Meta-ad welcome, which hands the lead to
+// Mia on the tap and used to get the holding message instead).
+const REPLYABLE_MESSAGE_TYPES = new Set(['text', 'interactive', 'button'])
+
+export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date(), zone = DEFAULT_TZ }) {
   const s = settings || {}
   const { enabled, testMode } = resolveAgentGate(s)
   if (!enabled && !testMode) return { reply: false, reason: 'disabled' }
@@ -282,7 +296,7 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
     }
   }
 
-  if (isWithinQuietHours(now, s.quiet_hours)) {
+  if (isWithinQuietHours(now, s.quiet_hours, zone)) {
     return { reply: false, reason: 'quiet_hours' }
   }
 
@@ -290,8 +304,8 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // caller can ACKNOWLEDGE a non-text message (soft handoff → a human)
   // instead of silently dropping it. (Checked after the on-duty gates so
   // we never acknowledge while disabled, off-allowlist, or in quiet hours.)
-  // 'interactive' = a tapped quick-reply/list button; the webhook maps the
-  // tap to its title in body, so it's a text reply in all but name.
+  // 'interactive' / 'button' = a tapped button or list row; the webhook maps
+  // the tap to its text in body, so it's a text reply in all but name.
   // Voice notes (Richard's call, 2026-06-12): no transcription vendor —
   // audio takes the soft-handoff path below, so Mia acknowledges the
   // voice note and the thread lands in the team's review queue.
@@ -301,7 +315,7 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   if (IGNORABLE_MESSAGE_TYPES.has(type)) {
     return { reply: false, reason: 'ignorable_type' }
   }
-  if (type !== 'text' && type !== 'interactive') {
+  if (!REPLYABLE_MESSAGE_TYPES.has(type)) {
     return { reply: false, reason: 'unsupported_type', onDuty: true }
   }
   if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
@@ -355,6 +369,13 @@ export function formatHistoryForClaude(rows, opts = {}) {
     // HARDEN.2 — inbound text is untrusted: neutralise the markers that carry
     // authority in this protocol before it enters history.
     let text = (role === 'user' ? sanitizeInboundText(r.body) : (r.body || '')).trim()
+    // MIAFIX.1 — a button message is recorded as "text\n[Options: a | b]" for
+    // the inbox; the model reads it back as the real sentinel, so a reply that
+    // copies its own history makes working buttons instead of plain text.
+    if (role === 'assistant') {
+      const recorded = text.match(RECORDED_OPTIONS_RE)
+      if (recorded) text = `${text.slice(0, recorded.index)}\n${OPTIONS_PREFIX} ${recorded[1].trim()}`.trim()
+    }
     if (!text) {
       const t = r.message_type && r.message_type !== 'text' ? r.message_type : 'message'
       text = `[${t}]`
@@ -388,6 +409,95 @@ export function formatHistoryForClaude(rows, opts = {}) {
     }
   }
   return mapped
+}
+
+/**
+ * MIAPREFILL.1 — is this stored inbound row one Mia would answer? The same
+ * content gate shouldAgentReply applies to the live message: a text or a
+ * tapped button with something in it, and a text that does not read like a
+ * business auto-responder (AGENT-BOTLOOP.1). Reactions, media, stickers,
+ * empty rows and auto-responders are not. Pure.
+ */
+export function isReplyWorthyInbound(row) {
+  if (!row || row.direction !== 'inbound') return false
+  const type = row.message_type || 'text'
+  if (!REPLYABLE_MESSAGE_TYPES.has(type)) return false
+  if (!String(row.body || '').trim()) return false
+  if (type === 'text' && isLikelyBusinessAutoReply(row.body)) return false
+  return true
+}
+
+// created_at strings from one column. Compare as instants; fall back to the
+// string when both land in the same millisecond (PostgREST keeps
+// microseconds, Date.parse drops them). Pure.
+function isAfterIso(a, b) {
+  const ta = Date.parse(a)
+  const tb = Date.parse(b)
+  if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta > tb
+  return String(a) > String(b)
+}
+
+/**
+ * MIAPREFILL.1 — the `messages` array for one reply turn. Pure.
+ *
+ * Guarantee: `messages` is either empty or starts on a user turn, alternates
+ * roles, has no empty content, and ENDS ON A USER TURN. Sonnet 5 rejects a
+ * request whose last message is an assistant turn ("assistant message
+ * prefill", HTTP 400), and so does every newer model.
+ *
+ * answeredThroughIso — set only on a missed-inbound rerun: the newest inbound
+ * the previous pass saw. A reply-worthy inbound AFTER it arrived while Mia was
+ * composing, so it sits BEFORE her reply in time although she never read it.
+ * Those rows move to right after the previous pass's own reply, so the model
+ * sees that reply and then the message it still owes an answer to. Without
+ * this the rerun's history ended on Mia's own reply: 3 of 3 reruns since
+ * 22 Aug got the 400.
+ *
+ * The previous pass's reply is the FIRST agent-sourced outbound after
+ * answeredThroughIso: that pass replied only because nothing outbound followed
+ * its newest inbound, the claim keeps any other agent turn out while it runs,
+ * and a reply pass records exactly one agent row. Anchoring there, not after
+ * the newest outbound, matters when a later row already follows the missed
+ * message ([A, B, R, R2]: R2 came after B), which then ends the request on
+ * R2 and returns nothing_to_answer instead of answering B a second time.
+ * With no agent row in view (an unrecorded reply, a row without `source`),
+ * the late rows go last, as before.
+ *
+ * @param {Array<{direction:string,body?:string,message_type?:string,created_at?:string,source?:string|null}>} rows ascending by time
+ * @param {{ maxMessages?: number, answeredThroughIso?: string|null }} [opts]
+ * @returns {{ messages: Array<{role:string,content:string}>, reason: null|'no_history'|'nothing_to_answer', trailing?: {source:string|null,message_type:string|null} }}
+ *   `trailing` (only with nothing_to_answer) names the newest row by source
+ *   and type, never its body, so a cause other than STOP is measurable.
+ */
+export function buildReplyTurnMessages(rows, opts = {}) {
+  const { maxMessages = 20, answeredThroughIso = null } = opts
+  let ordered = rows || []
+  if (answeredThroughIso) {
+    const late = ordered.filter((r) => isReplyWorthyInbound(r) && r.created_at && isAfterIso(r.created_at, answeredThroughIso))
+    if (late.length) {
+      const rest = ordered.filter((r) => !late.includes(r))
+      const anchor = rest.findIndex((r) => r.direction === 'outbound' && r.source === AGENT_MESSAGE_SOURCE &&
+        r.created_at && isAfterIso(r.created_at, answeredThroughIso))
+      ordered = anchor === -1
+        ? [...rest, ...late]
+        : [...rest.slice(0, anchor + 1), ...late, ...rest.slice(anchor + 1)]
+    }
+  }
+  const messages = formatHistoryForClaude(ordered, { maxMessages })
+  if (messages.length === 0) return { messages: [], reason: 'no_history' }
+  // The newest turn is the studio's (a STOP/START acknowledgement, a staff
+  // send, a template, a Mia reply that already followed the missed message)
+  // and nothing after it needs an answer. Calling the API anyway is the
+  // prefill 400.
+  if (messages[messages.length - 1].role !== 'user') {
+    const last = ordered[ordered.length - 1] || {}
+    return {
+      messages: [],
+      reason: 'nothing_to_answer',
+      trailing: { source: last.source ?? null, message_type: last.message_type ?? null },
+    }
+  }
+  return { messages, reason: null }
 }
 
 /**
@@ -437,6 +547,15 @@ const SKIP_RE = looseSentinel(SKIP_PREFIX)
 // still opens a sentinel must never reach the customer as body text.
 const HANDOFF_OPEN_RE = /\[\[\s*HANDOFF/i
 const OPTIONS_OPEN_RE = /\[\[\s*OPTIONS/i
+
+// MIAFIX.1 — the form sendAndLog RECORDS a button message in (a last line
+// "[Options: a | b]", what staff read in the inbox). Mia re-reads her history
+// and imitated it, which reached the customer as a plain bubble with no
+// buttons (MIA TEST, 19 Oct 2026). A TRAILING line of that form (any case,
+// optional spaces, "[Option:" too, markdown emphasis at the edges) is read
+// like the sentinel; the same form anywhere else is ordinary text. Group 1 is
+// the payload.
+const RECORDED_OPTIONS_RE = /(?:^|\n)[ \t*_`~]*\[\s*options?\s*:([^\]\n]*)\][ \t*_`~]*$/i
 
 /**
  * Does this model output carry the [[SKIP]] sentinel? Matched as leniently as
@@ -539,6 +658,14 @@ export function parseAgentResponse(raw) {
     const cut = cutSentinelLine(text, openOptions)
     if (!options) options = normalizeAgentOptions(stripEmDashes(cut.payload))
     text = cut.text
+  }
+  // MIAFIX.1 — a trailing "[Options: a | b]" line (the recorded form, copied
+  // from history) is the sentinel too: stripped whatever its payload, and the
+  // options source only when no sentinel gave one.
+  const recorded = text.match(RECORDED_OPTIONS_RE)
+  if (recorded) {
+    if (!options) options = normalizeAgentOptions(stripEmDashes(recorded[1]))
+    text = text.slice(0, recorded.index).replace(SENTINEL_WRAP, '').trim()
   }
 
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }
@@ -707,7 +834,12 @@ export const VERIFY_FAIL_HANDOFF_DEFAULT = 2
 // Per-location threshold from the agent settings blob. 0/negative disables the
 // auto-handoff. Mirrors resolveHandoffSlaMinutes. Pure.
 export function resolveVerifyFailHandoff(settings) {
-  const raw = Number(settings?.handoff_after_verify_failures)
+  const stored = settings?.handoff_after_verify_failures
+  // MIAORG.1 T2-A — null / blank = "not set" (resolved settings carry DEFAULTS'
+  // null where a blob has no key). Number(null) is 0, the disable switch below:
+  // it would have turned this safety net OFF at Stillorgan on deploy.
+  if (stored == null || (typeof stored === 'string' && stored.trim() === '')) return VERIFY_FAIL_HANDOFF_DEFAULT
+  const raw = Number(stored)
   if (!Number.isFinite(raw)) return VERIFY_FAIL_HANDOFF_DEFAULT
   return raw > 0 ? Math.round(raw) : 0
 }

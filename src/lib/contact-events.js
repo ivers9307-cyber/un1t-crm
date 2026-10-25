@@ -35,12 +35,14 @@ export const EVENT_TYPES = Object.freeze({
   RACE_STARTED:         'race.started',
   RACE_FINISHED:        'race.finished',
   RACE_NO_SHOW:         'race.no_show',
+  RACE_MOVED:           'race.moved',
   RACE_STARTS_IN_24H:   'race.starts_in_24h',
   RACE_STARTS_IN_1H:    'race.starts_in_1h',
   RACE_COMPLETED_24H_AGO: 'race.completed_24h_ago',
   RACE_COMPLETED_7D_AGO:  'race.completed_7d_ago',
   MEMBER_VALIDATED:     'member.validated',
   MEMBER_VALIDATION_FAILED: 'member.validation_failed',
+  DONATION_PAID:        'donation.paid',
 })
 
 // ─── emitEvent ───────────────────────────────────────────────────

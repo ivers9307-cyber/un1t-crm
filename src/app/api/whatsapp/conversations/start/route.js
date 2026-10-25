@@ -1,9 +1,10 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess, requireInboxPermission } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, requireWebWhatsAppInboxAnywhere, requireWebWhatsAppInboxAt } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { contactWhatsAppNumber } from '@/lib/phone-validate'
 
 const StartConvoSchema = z.object({
   contact_id: uuidLike,
@@ -15,8 +16,11 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
-  const perm = requireInboxPermission(user, 'wa')
+  // INBOXWEBONLY3.1 — web only (the phone never starts a thread), so the WEB
+  // `whatsapp` key: coarse pre-check at any studio before the contact is read;
+  // the decision is requireWebWhatsAppInboxAt at the contact's studio (where
+  // the thread is made).
+  const perm = requireWebWhatsAppInboxAnywhere(user)
   if (perm) return perm
 
   const validation = await validateBody(request, StartConvoSchema)
@@ -38,14 +42,27 @@ export async function POST(request) {
     // Caller must belong to the contact's location.
     const guard = assertLocationAccess(user, contact.location_id)
     if (guard) return guard
+    // INBOXWEBONLY3.1 — the WEB `whatsapp` key judged at THIS studio, not the active one.
+    const permHere = requireWebWhatsAppInboxAt(user, contact.location_id)
+    if (permHere) return permHere
 
-    const phone = contact.wa_phone || contact.phone
-    if (!phone) {
+    if (!contact.wa_phone && !contact.phone) {
       return NextResponse.json({ success: false, error: 'Contact has no phone number' }, { status: 400 })
     }
 
-    // Normalize phone — strip the + for consistency with Meta's format
-    const normalizedPhone = phone.startsWith('+') ? phone.slice(1) : phone
+    // WAPHONE.1 — the contact's WhatsApp number in the form wa_phone, the
+    // webhook and Meta's wa_id use (E.164 digits, no '+'): the stored wa_phone,
+    // else the phone through the same rule as the contacts trigger (mig 753).
+    // This used to store the raw phone minus a leading '+' ('087 123 4567',
+    // a landline, a bare foreign number) as the contact's wa_phone and key the
+    // thread on it.
+    const normalizedPhone = contactWhatsAppNumber(contact)
+    if (!normalizedPhone) {
+      return NextResponse.json({
+        success: false,
+        error: 'This phone number is not a WhatsApp number we can use. Use a mobile, and add the country code (e.g. +34…) for a number outside Ireland and the UK.',
+      }, { status: 400 })
+    }
 
     // Check for existing conversation
     const { data: existing } = await db.from('whatsapp_conversations')
@@ -97,9 +114,12 @@ export async function POST(request) {
 
     // Update contact's wa_phone if not set
     if (!contact.wa_phone) {
-      await db.from('contacts')
+      const { error: waErr } = await db.from('contacts')
         .update({ wa_phone: normalizedPhone })
         .eq('id', contact.id)
+        .is('wa_phone', null)
+      // Bookkeeping: the thread exists and is returned; log, never fail it.
+      if (waErr) console.error('[wa-start] contact wa_phone write failed', contact.id, waErr.message)
     }
 
     return NextResponse.json({ success: true, conversation_id: newConv.id })

@@ -10,8 +10,9 @@
 //     payload measured in hundreds of KB on a studio with history, fetched
 //     to answer a yes/no question. This route answers it in one row per
 //     race, no embeds beyond a wave start time.
-//   - The "today" boundary is Europe/Dublin, and it is computed HERE, on the
-//     server, via todayIsoDublin(). A phone's clock and timezone belong to
+//   - The "today" boundary is the STUDIO's (its locations.timezone, TZ.9;
+//     Europe/Dublin for every UN1T studio), and it is computed HERE, on the
+//     server, via todayIsoIn(zone). A phone's clock and timezone belong to
 //     whoever is holding it — an operator whose device is still on holiday
 //     time, or a tablet that never left UTC, must not get a different answer
 //     about the studio's day than the person standing next to them. Mobile
@@ -28,9 +29,10 @@
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { todayIsoDublin } from '@shared/events'
+import { todayIsoIn } from '@shared/events'
+import { getLocationZone } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,13 +63,15 @@ function firstWaveStart(waves) {
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  // ROLESWEEP.1b — coarse pre-check only; the real gate is the
+  // hasPermissionForLocation at the target below.
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
   const url = new URL(request.url)
   // The mobile client always sends the studio it is asking about, but fall
-  // back to the caller's active location so a bare hit from the web/n8n side
+  // back to the caller's active location so a bare hit from the web or an integration
   // still means something. No location at all (a master with no active
   // studio selected) is not an error — there is simply no race to report.
   const locationId = url.searchParams.get('location_id') || user.activeLocation?.id || null
@@ -77,7 +81,8 @@ export async function GET(request) {
   if (guard) return guard
 
   // Second gate, scoped to the TARGET studio rather than the active one.
-  // hasPermission above resolves against user.activeLocation, so a
+  // (Before ROLESWEEP.1b the pre-check above was hasPermission, which
+  // resolves against user.activeLocation, so a
   // multi-studio operator whose active context lags the studio they asked
   // about would otherwise be judged at the wrong one — races can be enabled
   // at Stillorgan and off at Hatch for the same person. Same message as the
@@ -87,6 +92,14 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
+  // TZ.9 — the studio's day. An unreadable zone is a failed read like any
+  // other here (500), never a guessed day.
+  let zone
+  try {
+    zone = await getLocationZone(db, locationId)
+  } catch (err) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 })
+  }
   const { data, error } = await db
     .from('race_events')
     .select('id, name, slug, race_date, waves:race_waves ( start_time )')
@@ -100,7 +113,7 @@ export async function GET(request) {
     // registrations to control, so neither belongs on race day.
     .eq('active', true)
     .eq('status', 'published')
-    .eq('race_date', todayIsoDublin())
+    .eq('race_date', todayIsoIn(zone))
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 

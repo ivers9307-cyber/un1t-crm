@@ -32,10 +32,13 @@ export function resolveSequenceGraph(sequence, { preferDraft = true } = {}) {
 /**
  * The publish gate. Validates the graph, then compiles it to sequence_steps
  * rows (without sequence_id — the caller stamps that + does the replace IO).
+ * @param opts.whatsappTemplates the location's { id, name, components } rows, so
+ *   the URL-button rule (SEQ-URLBUTTON.1) can see the buttons behind a step's
+ *   template id. Omit and that rule simply says nothing.
  * @returns {{ok:false, errors:Array}|{ok:true, steps:Array}}
  */
-export function compileForPublish(graph) {
-  const v = validateGraph(graph)
+export function compileForPublish(graph, { whatsappTemplates } = {}) {
+  const v = validateGraph(graph, { whatsappTemplates })
   if (!v.ok) return { ok: false, errors: v.errors }
   return { ok: true, steps: compileGraphToSteps(graph) }
 }

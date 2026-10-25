@@ -51,6 +51,13 @@ describe('parseSeededRows', () => {
     expect(parseSeededRows(source)).toEqual([{ key: 'real', bundle: 'bundle_y' }])
   })
 
+  it('a /* inside a string hides no row (GUARDSTRIP.1)', () => {
+    const source = `SELECT '/*';
+      INSERT INTO private.permission_key_bundles (key, bundle) VALUES ('real', 'bundle_y');
+      SELECT '*/';`
+    expect(parseSeededRows(source)).toEqual([{ key: 'real', bundle: 'bundle_y' }])
+  })
+
   it('returns an empty array for a migration with no seed INSERT', () => {
     expect(parseSeededRows('CREATE TABLE foo (id uuid);')).toEqual([])
   })

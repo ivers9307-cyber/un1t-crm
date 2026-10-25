@@ -29,10 +29,12 @@
 // checkout) regardless of kind. The /register API handler is
 // indifferent to kind.
 
-import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Calendar, Clock, MapPin, AlertCircle, Loader2, Check, BadgeCheck, BadgeEuro, Info } from 'lucide-react'
-import { windowedWaves } from '@/lib/wave-window'
+import { timePickerWaves, initialWaveId, formatTimeChoices } from '@/lib/event-time-slots'
+import EventWaitlistForm from './EventWaitlistForm.jsx'
+import DonateCard, { CharityRaisedStrip, OrDivider } from './DonateCard.jsx'
 
 // Kind-keyed copy. Adding a new kind = one entry. The 'race' entry
 // holds the original strings so the operator-visible UX for races
@@ -43,6 +45,12 @@ import { windowedWaves } from '@/lib/wave-window'
 // teammates may well be non-members. n is the person's position on the
 // team (captain = 1), so this only ever sees 2..8.
 const ordinal = (n) => `${n}${n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`
+
+// W1.S1b — the members-only copy names the studio's brand (the payload's
+// organization_name, HOST-CONSENT.1), never a literal gym; with no brand it
+// reads as plain "member".
+const memberOf = (brand) => (brand ? `${brand} member` : 'member')
+const accountOf = (brand) => (brand ? `${brand} account` : 'member account')
 
 const KIND_COPY = {
   race: {
@@ -60,9 +68,9 @@ const KIND_COPY = {
     closedFull: 'This race is full.',
     closedNotYet: "Registration hasn't opened yet for this race.",
     closedClosed: 'Registration has closed for this race.',
-    membersOnlyExtra: ' This race is members-only — every team member must be a verified UN1T member.',
-    membersOnlyBlock: (n) =>
-      `This is a members-only race. We couldn't verify membership for ${n} team member(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This race is members-only: every team member must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only race. We couldn't verify membership for ${n} team member(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   workshop: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -79,9 +87,9 @@ const KIND_COPY = {
     closedFull: 'This workshop is full.',
     closedNotYet: "Bookings haven't opened yet for this workshop.",
     closedClosed: 'Bookings have closed for this workshop.',
-    membersOnlyExtra: " This workshop is members-only — every attendee must be a verified UN1T member.",
-    membersOnlyBlock: (n) =>
-      `This is a members-only workshop. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This workshop is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only workshop. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   seminar: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -98,9 +106,9 @@ const KIND_COPY = {
     closedFull: 'This seminar is full.',
     closedNotYet: "Bookings haven't opened yet for this seminar.",
     closedClosed: 'Bookings have closed for this seminar.',
-    membersOnlyExtra: " This seminar is members-only — every attendee must be a verified UN1T member.",
-    membersOnlyBlock: (n) =>
-      `This is a members-only seminar. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This seminar is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only seminar. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   open_day: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -117,9 +125,9 @@ const KIND_COPY = {
     closedFull: 'This open day is full.',
     closedNotYet: "Reservations haven't opened yet for this open day.",
     closedClosed: 'Reservations have closed for this open day.',
-    membersOnlyExtra: ' This open day is members-only — every attendee must be a verified UN1T member.',
-    membersOnlyBlock: (n) =>
-      `This is a members-only open day. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This open day is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only open day. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   masterclass: {
     sidebarTimeOne: (t) => `Starts at ${t}`,
@@ -136,9 +144,9 @@ const KIND_COPY = {
     closedFull: 'This masterclass is full.',
     closedNotYet: "Bookings haven't opened yet for this masterclass.",
     closedClosed: 'Bookings have closed for this masterclass.',
-    membersOnlyExtra: ' This masterclass is members-only — every attendee must be a verified UN1T member.',
-    membersOnlyBlock: (n) =>
-      `This is a members-only masterclass. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their UN1T account.`,
+    membersOnlyExtra: (brand) => ` This masterclass is members-only: every attendee must be a verified ${memberOf(brand)}.`,
+    membersOnlyBlock: (n, brand) =>
+      `This is a members-only masterclass. We couldn't verify membership for ${n} attendee(s). Make sure everyone uses the email on their ${accountOf(brand)}.`,
   },
   // Lead Gen — a pure name/email/phone capture form. No team, no wave,
   // no pricing. The size selector hides itself (allowed_team_sizes is
@@ -160,12 +168,27 @@ const KIND_COPY = {
     closedFull: 'This form is closed.',
     closedNotYet: "This form isn't open yet.",
     closedClosed: 'This form is closed.',
-    membersOnlyExtra: '',
+    membersOnlyExtra: () => '',
     membersOnlyBlock: () => '',
   },
 }
 
 const copyFor = (k) => KIND_COPY[k] || KIND_COPY.race
+
+// CHARITY.8 — a redirect checkout returns to /event/<slug>?donation=<id>
+// (and &cancelled=1 when abandoned). useSearchParams needs a Suspense
+// boundary for the static shell, so it is read here, under the widget's
+// <Suspense>, and handed to the card.
+function DonateCardFromUrl(props) {
+  const params = useSearchParams()
+  return (
+    <DonateCard
+      {...props}
+      resumeDonationId={params?.get('donation') || null}
+      resumeCancelled={params?.get('cancelled') === '1'}
+    />
+  )
+}
 
 export default function RaceSignupWidget({ slug, embedded = false }) {
   // When embedded in a cross-site iframe, post-submit navigation must
@@ -189,6 +212,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // Form state
   const [teamName, setTeamName] = useState('')
   const [teamSize, setTeamSize] = useState(1)
+  // FINDTEAM.4 — a solo entrant who wants staff to place them in a team. Never
+  // preselected; picking it forces teamSize 1, picking a size clears it.
+  const [findTeam, setFindTeam] = useState(false)
   const [waveId, setWaveId] = useState('')
   const [members, setMembers] = useState([])
   const [captainName, setCaptainName] = useState('')
@@ -218,6 +244,18 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const [promoCode, setPromoCode] = useState('')
   const [promoError, setPromoError] = useState(null)
 
+  // EVENT-WAITLIST.1 — a waitlist offer link opens this page with ?wl=<token>.
+  // Kept in state and sent as waitlist_token on register, so the waitlist row
+  // is marked claimed once the booking exists. It holds no place: the register
+  // route's capacity gate decides, first come first served.
+  const [waitlistToken, setWaitlistToken] = useState(null)
+  useEffect(() => {
+    try {
+      const wl = new URLSearchParams(window.location.search).get('wl')
+      if (wl) setWaitlistToken(wl)
+    } catch { /* no URL to read: no token */ }
+  }, [])
+
   // Initial load
   useEffect(() => {
     fetch(`/api/public/events/${slug}`)
@@ -231,19 +269,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         const sizes = j.data.allowed_team_sizes || [1]
         const initial = [...sizes].sort((a, b) => a - b)[0]
         setTeamSize(initial)
-        const waves = Array.isArray(j.data.waves) ? j.data.waves : []
-        const available = waves.filter((w) => !w.is_full)
-        // For non-race kinds we always auto-select the (single)
-        // available wave because the picker is hidden. For races
-        // we only auto-select when there's exactly one option.
-        const kind = j.data.kind || 'race'
-        if (kind !== 'race' && available.length >= 1) {
-          setWaveId(available[0].id)
-        } else if (waves.length === 1 && available.length === 1) {
-          setWaveId(waves[0].id)
-        } else if (available.length === 1) {
-          setWaveId(available[0].id)
-        }
+        // Auto-select only when exactly one time has space; with two
+        // open times (races or EVENT-MULTITIME.1 classes) the customer
+        // chooses. A single-time event is still auto-selected.
+        const initialWave = initialWaveId(j.data.waves)
+        if (initialWave) setWaveId(initialWave)
       })
       .catch(e => setLoadError(e.message || 'Network error'))
   }, [slug])
@@ -370,6 +400,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const kind = race?.kind || 'race'
   const copy = copyFor(kind)
   const isLeadGen = kind === 'lead_gen'
+  // FINDTEAM.4 — offered on races only; the server already omits the block elsewhere.
+  const findTeamEnabled = kind === 'race' && !!race?.find_team?.enabled
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -381,8 +413,8 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     // Team name required only for races. Non-race kinds synthesise
     // a server-bound team_name from the captain so the team_id FK
     // stays satisfied.
-    if (copy.showTeamName && !teamName.trim()) errors.team_name = 'Team name is required'
-    if (!copy.isLeadGen && !waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : 'No time slot available'
+    if (copy.showTeamName && !findTeam && !teamName.trim()) errors.team_name = 'Team name is required'
+    if (!copy.isLeadGen && !waveId) errors.wave_id = copy.showWavePicker ? 'Pick a wave' : (race?.waves?.length || 0) > 1 ? 'Pick a time' : 'No time slot available'
     if (!captainName.trim()) errors.captain_name = 'Your name is required'
     if (!validateEmail(captainEmail)) errors.captain_email = 'Valid email required'
     if (!captainPhone.trim()) errors.captain_phone = 'Phone number is required'
@@ -395,7 +427,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     if (race?.members_only) {
       const unverified = liveRoster.filter((m) => !isVerifiedMember(m.email))
       if (unverified.length > 0) {
-        setSubmitError(copy.membersOnlyBlock(unverified.length))
+        setSubmitError(copy.membersOnlyBlock(unverified.length, race?.organization_name || ''))
         return
       }
     }
@@ -421,19 +453,25 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        team_name: outboundTeamName,
-        team_size: teamSize,
+        // FINDTEAM.4 — a solo entry sends find_team and no team_name, team_size
+        // or members: the server forces size 1 and names the team itself.
+        ...(findTeam
+          ? { find_team: true }
+          : { team_name: outboundTeamName, team_size: teamSize }),
         ...(waveId ? { wave_id: waveId } : {}),
         captain_name: captainName.trim(),
         captain_email: captainEmail.trim().toLowerCase(),
         captain_phone: captainPhone.trim(),
-        members: members.map((m) => ({
-          name: m.name.trim(),
-          email: m.email.trim() || null,
-        })),
+        ...(findTeam ? {} : {
+          members: members.map((m) => ({
+            name: m.name.trim(),
+            email: m.email.trim() || null,
+          })),
+        }),
         source: 'race_signup_widget',
         marketing_consent: marketingConsent,
         ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),
+        ...(waitlistToken ? { waitlist_token: waitlistToken } : {}),
       }),
     })
     const json = await res.json()
@@ -501,11 +539,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const showMemberNotice = !!(race.member_pricing_enabled || race.members_only)
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
-  // WAVEWIN.1 — the picker only offers the immediately-available
-  // 90-minute window (earlier sold-out waves stay, greyed; later waves
-  // release as the window slides). The sidebar summary and every
-  // operator surface still see the full schedule.
-  const pickerWaves = windowedWaves(wavesArr)
+  // WAVEWIN.1 — for races the picker only offers the immediately-
+  // available 90-minute window (earlier sold-out waves stay, greyed;
+  // later waves release as the window slides). EVENT-MULTITIME.1 —
+  // other kinds show every time once there's more than one; [] = no
+  // picker. Every operator surface still sees the full schedule.
+  const pickerWaves = timePickerWaves(kind, wavesArr)
 
   // ── Render-only derived values (no behaviour change) ──────────────
   // Human label for the event kind, used in the hero eyebrow.
@@ -596,6 +635,432 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   // outside the <form>) can submit it via the `form` attribute.
   const formId = `event-signup-form-${slug}`
 
+  // CHARITY.8 — donations on: the side-by-side page. Never in the embed.
+  const charityOn = !embedded && !!race.charity?.enabled
+  // After a paid donation, re-read the event so the strip's total moves; only
+  // the charity block is taken, so the signup form's state is left alone.
+  const refreshCharity = () => {
+    fetch(`/api/public/events/${slug}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => { if (j?.success && j.data) setRace(prev => (prev ? { ...prev, charity: j.data.charity } : prev)) })
+      .catch(() => { /* the strip just keeps its old total */ })
+  }
+
+  // CHARITY.8 — the event story/details/pricing and the signup card, as
+  // values: the two-column page and the donations-on page arrange the same
+  // elements differently.
+  const eventDetails = (
+    <div className="min-w-0">
+      {race.description && (
+        <p className="text-[15px] md:text-base text-white/70 whitespace-pre-line leading-relaxed">
+          {race.description}
+        </p>
+      )}
+
+      {/* date / time / location rows */}
+      {(!isLeadGen || wavesArr.length > 0 || venueAddress) && (
+        <div className={`${race.description ? 'mt-8' : ''} rounded-2xl border border-white/10 bg-white/[0.03] p-5 space-y-3.5 text-sm text-white/70`}>
+          {!isLeadGen && race.race_date && (
+            <div className="flex items-center gap-3">
+              <Calendar size={16} className="text-white/40 shrink-0" />
+              <span className="text-white/85">
+                {new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+              </span>
+            </div>
+          )}
+          {/* Multi-wave events don't list every start time here (26
+              generated waves made this a wall of numbers) — the wave
+              picker in the form is the time surface. A single-wave
+              event (workshops etc.) still shows its start time. */}
+          {(wavesArr.length === 1 || (!copy.showWavePicker && !isLeadGen && wavesArr.length > 1)) && (
+            <div className="flex items-start gap-3">
+              <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
+              <span>{copy.sidebarTimeOne(formatTimeChoices(wavesArr))}</span>
+            </div>
+          )}
+          {/* Per-person price at a glance; the Total card below still
+              carries the live, membership-confirmed sum.
+              EVENT-PRICEBOX.1 — with member pricing on, BOTH rates show,
+              and a null member fee reads "free" (it used to fall through
+              to "€25.00 per person", so members thought they'd pay). */}
+          {(memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
+            <div className="flex items-start gap-3">
+              <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
+              <span>
+                {memberPricing && nonMemberFeeCents != null
+                  ? `Members ${memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'} · Non-members ${fmtMoney(nonMemberFeeCents)}`
+                  : `${fmtMoney(nonMemberFeeCents ?? memberFeeCents)} per person`}
+              </span>
+            </div>
+          ) : null}
+          {/* EVENT-PRICEBOX.1 — the member-rate reminder beside the price
+              (the form's notice repeats it). Same copy source as that notice. */}
+          {memberPricing && (
+            <div className="flex items-start gap-3">
+              <Info size={16} className="text-white/40 mt-0.5 shrink-0" />
+              <span>{race.organization_name ? `${race.organization_name} members` : 'Members'}: sign up with the email on your {accountOf(race.organization_name)} to get the member rate.</span>
+            </div>
+          )}
+          {venueAddress && (
+            <div className="flex items-start gap-3">
+              <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
+              <span>{venueAddress}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pricing summary — same logic as before, kind-agnostic. */}
+      {showPricingCard && (
+        <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45 mb-2">Total</div>
+          <div className="text-3xl font-bold text-white">
+            {liveTotalLabel}
+          </div>
+          {ratePending && (
+            <div className="text-[12px] text-white/55 mt-3">
+              {anyCheckInFlight
+                ? 'Checking member rate…'
+                : 'Add your email to confirm your rate.'}
+            </div>
+          )}
+          {!ratePending && memberPricing && (memberCount > 0 || nonMemberCount > 0) && (
+            <div className="text-[12px] text-white/55 mt-3 space-y-1">
+              {memberCount > 0 && (
+                <div>{memberCount} × member {memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'}</div>
+              )}
+              {nonMemberCount > 0 && (
+                <div>{nonMemberCount} × non-member {nonMemberFeeCents != null ? fmtMoney(nonMemberFeeCents) : 'free'}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+
+  // RIGHT — registration form
+  const signupCard = (
+    <div className="lp-card-glow rounded-2xl p-6 md:sticky md:top-6">
+      <h2 className="text-lg font-semibold text-white">{copy.headingTitle}</h2>
+      <p className="text-[13px] text-white/55 mt-1 mb-5">
+        {copy.headingSubtitle}
+      </p>
+
+      {showMemberNotice && (
+        <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
+          <Info size={14} className="mt-0.5 shrink-0 text-amber-300" />
+          <span>
+            <strong className="text-amber-200">{race.organization_name ? `${race.organization_name} members:` : 'Members:'}</strong> use the email on your {accountOf(race.organization_name)} so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
+            {race.members_only && copy.membersOnlyExtra(race.organization_name || '')}
+          </span>
+        </div>
+      )}
+
+      {isClosed && (
+        <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm flex items-start gap-2">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" /> {closeMsg}
+        </div>
+      )}
+
+      {/* EVENT-WAITLIST.1 — sold out (and only then): join the waitlist.
+          Never shows how many are waiting, nor any capacity. */}
+      {regState === 'full' && (
+        <EventWaitlistForm
+          slug={slug}
+          allowedTeamSizes={race.allowed_team_sizes}
+          sizeLabel={String(copy.sizeLabel || 'Group size').replace(/\s*\*$/, '')}
+          hostName={race.host_name || null}
+          organizationName={race.organization_name || null}
+        />
+      )}
+
+      {/* EVENT-WAITLIST.1 — arrived from a waitlist offer and it is open. */}
+      {waitlistToken && !isClosed && (
+        <div className="mb-4 p-3 rounded-xl bg-white/5 border border-white/20 text-white/85 text-sm flex items-start gap-2" role="status">
+          <Check size={14} className="mt-0.5 shrink-0" /> A spot opened up. Book now; first come, first served.
+        </div>
+      )}
+
+      <form id={formId} onSubmit={handleSubmit} className="space-y-4">
+        <fieldset disabled={isClosed} className="space-y-4">
+          {/* Wave / time picker. Races always; other kinds only when
+              the event has 2+ times (EVENT-MULTITIME.1) — a single
+              time is auto-selected and shown in the details block. */}
+          {pickerWaves.length > 0 && (
+            <div>
+              <label className={labelCls}>{copy.showWavePicker ? 'Pick your wave *' : 'Choose your time *'}</label>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-3 gap-2">
+                {pickerWaves.map((w) => {
+                  const full = !!w.is_full
+                  const selected = waveId === w.id
+                  const time = (w.start_time || '').slice(0, 5)
+                  return (
+                    <button
+                      key={w.id}
+                      type="button"
+                      disabled={full}
+                      onClick={() => setWaveId(w.id)}
+                      aria-pressed={selected}
+                      title={w.label ? `${time} — ${w.label}${full ? ' (full)' : ''}` : full ? `${time} (full)` : time}
+                      className={`px-2 py-2.5 rounded-xl border text-center transition-colors ${
+                        selected
+                          ? 'border-white bg-white/10 text-white'
+                          : full
+                            ? 'border-white/10 bg-white/[0.03] text-white/40 line-through cursor-not-allowed'
+                            : 'border-white/15 bg-white/5 text-white hover:border-white/40'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold leading-tight tabular-nums">{time}</div>
+                      {w.label && (
+                        <div className={`text-[10px] truncate leading-tight mt-0.5 ${selected ? 'text-white/70' : 'text-white/50'}`}>
+                          {w.label}
+                        </div>
+                      )}
+                      {full && !w.label && (
+                        <div className="text-[10px] leading-tight mt-0.5">Full</div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              {pickerWaves.length < wavesArr.length && (
+                <p className="text-[11px] text-white/45 mt-1.5">
+                  More start times are released as these waves fill.
+                </p>
+              )}
+              {fieldErrors.wave_id && <p className={errCls}>{fieldErrors.wave_id}</p>}
+            </div>
+          )}
+
+          {/* Team name — race-only. Non-race kinds synthesise a
+              team_name from the captain + group size on submit. */}
+          {copy.showTeamName && !findTeam && (
+            <div>
+              <label className={labelCls}>Team name *</label>
+              <input
+                type="text"
+                required
+                value={teamName}
+                onChange={e => setTeamName(e.target.value)}
+                placeholder="The Iron Dogs"
+                className={inputCls(!!fieldErrors.team_name)}
+              />
+              {fieldErrors.team_name && <p className={errCls}>{fieldErrors.team_name}</p>}
+            </div>
+          )}
+
+          {((race.allowed_team_sizes || []).length > 1 || findTeamEnabled) && (
+            <div>
+              <label className={labelCls}>{copy.sizeLabel}</label>
+              <div className="flex flex-wrap gap-2">
+                {findTeamEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => { setFindTeam(true); setTeamSize(1) }}
+                    className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
+                      findTeam
+                        ? 'border-white bg-white text-black'
+                        : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
+                    }`}
+                  >
+                    {race.find_team.label}
+                  </button>
+                )}
+                {[...(race.allowed_team_sizes || [])].sort((a, b) => a - b).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => { setTeamSize(s); setFindTeam(false) }}
+                    className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
+                      !findTeam && teamSize === s
+                        ? 'border-white bg-white text-black'
+                        : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
+                    }`}
+                  >
+                    {s}-{s === 1 || !copy.sizeButtonSuffix
+                      ? copy.sizeButtonSuffix
+                      : copy.sizeButtonSuffix === 'person' ? 'people' : `${copy.sizeButtonSuffix}s`}
+                  </button>
+                ))}
+              </div>
+              {findTeam && race.find_team.blurb && (
+                <p className="text-[11px] text-white/60 mt-1.5">{race.find_team.blurb}</p>
+              )}
+            </div>
+          )}
+
+          <div className="pt-4 border-t border-white/10">
+            <div className={sectionEyebrow}>{copy.captainSectionLabel}</div>
+            <div className="space-y-2.5">
+              <input
+                type="text"
+                required
+                placeholder="Your name *"
+                value={captainName}
+                onChange={e => setCaptainName(e.target.value)}
+                className={inputCls(!!fieldErrors.captain_name)}
+              />
+              {fieldErrors.captain_name && <p className={errCls}>{fieldErrors.captain_name}</p>}
+              <div>
+                <input
+                  type="email"
+                  required
+                  placeholder="Your email *"
+                  value={captainEmail}
+                  onChange={e => {
+                    setCaptainEmail(e.target.value)
+                    scheduleMemberCheck(e.target.value)
+                  }}
+                  onBlur={() => scheduleMemberCheck(captainEmail)}
+                  className={inputCls(!!fieldErrors.captain_email)}
+                />
+                <MemberStatusBadge
+                  email={captainEmail}
+                  checks={memberChecks}
+                  memberFeeCents={memberFeeCents}
+                  nonMemberFeeCents={nonMemberFeeCents}
+                  memberPricing={memberPricing}
+                  fmt={fmtMoney}
+                  onRetry={() => scheduleMemberCheck(captainEmail)}
+                  brand={race.organization_name || ''}
+                />
+                {fieldErrors.captain_email && <p className={errCls}>{fieldErrors.captain_email}</p>}
+              </div>
+              <div>
+                <input
+                  type="tel"
+                  required
+                  placeholder="Your phone *"
+                  value={captainPhone}
+                  onChange={e => setCaptainPhone(e.target.value)}
+                  className={inputCls(!!fieldErrors.captain_phone)}
+                />
+                {fieldErrors.captain_phone && <p className={errCls}>{fieldErrors.captain_phone}</p>}
+              </div>
+            </div>
+          </div>
+
+          {members.length > 0 && (
+            <div className="pt-4 border-t border-white/10">
+              <div className={sectionEyebrow}>{copy.membersSectionLabel}</div>
+              <div className="space-y-4">
+                {members.map((m, i) => (
+                  <div key={i} className="space-y-1.5">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <input
+                          type="text"
+                          required
+                          placeholder={kind === 'race' ? `${ordinal(i + 2)} name *` : `Attendee ${i + 2} name *`}
+                          value={m.name}
+                          onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+                          className={inputCls(!!fieldErrors[`member_${i}_name`])}
+                        />
+                        {fieldErrors[`member_${i}_name`] && <p className={errCls}>{fieldErrors[`member_${i}_name`]}</p>}
+                      </div>
+                      <div>
+                        <input
+                          type="email"
+                          placeholder={kind === 'race' ? `${ordinal(i + 2)} email` : `Attendee ${i + 2} email`}
+                          value={m.email}
+                          onChange={e => {
+                            const next = e.target.value
+                            setMembers(prev => prev.map((x, j) => j === i ? { ...x, email: next } : x))
+                            scheduleMemberCheck(next)
+                          }}
+                          onBlur={() => scheduleMemberCheck(m.email)}
+                          className={inputCls(!!fieldErrors[`member_${i}_email`])}
+                        />
+                        {fieldErrors[`member_${i}_email`] && <p className={errCls}>{fieldErrors[`member_${i}_email`]}</p>}
+                      </div>
+                    </div>
+                    <MemberStatusBadge
+                      email={m.email}
+                      checks={memberChecks}
+                      memberFeeCents={memberFeeCents}
+                      nonMemberFeeCents={nonMemberFeeCents}
+                      memberPricing={memberPricing}
+                      fmt={fmtMoney}
+                      onRetry={() => scheduleMemberCheck(m.email)}
+                      brand={race.organization_name || ''}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* EVENTS-PROMO.1 — optional discount code. Only shown on
+              paid events (nothing to discount otherwise). No live
+              preview by design — the discounted total shows at the
+              payment step. An invalid code comes back as a 400 and
+              is surfaced inline here so the customer can retry. */}
+          {showPricingCard && (
+            <div className="pt-4 border-t border-white/10">
+              <label className={labelCls}>Promo code</label>
+              <input
+                type="text"
+                value={promoCode}
+                onChange={e => { setPromoCode(e.target.value); if (promoError) setPromoError(null) }}
+                placeholder="Have a code? Enter it here"
+                autoCapitalize="characters"
+                autoComplete="off"
+                className={inputCls(!!promoError)}
+              />
+              {promoError && <p className={errCls}>{promoError}</p>}
+            </div>
+          )}
+
+          {/* CONSENT.4 — soft opt-in for marketing comms.
+              Defaulted on; the registration is the legitimate-
+              interest service relationship that qualifies under
+              PECR / GDPR soft opt-in. Operator-side helper
+              excludes ClassPass contacts regardless.
+              HOST-CONSENT.1 — hosted events name both lists. */}
+          <label className="flex items-start gap-2.5 text-[12px] text-white/55 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={marketingConsent}
+              onChange={(e) => setMarketingConsent(e.target.checked)}
+              className="mt-0.5 shrink-0 accent-white"
+            />
+            <span>
+              {race.host_name ? (
+                <>
+                  Yes, send me emails from {race.host_name} about their events, and promotional updates from {race.organization_name || 'the studio'} via email, SMS or WhatsApp. You can leave either list at any time. Event-related notifications are sent regardless.
+                </>
+              ) : (
+                <>
+                  {race.organization_name
+                    ? `Yes, send me ${race.organization_name} promotional updates and offers via email, SMS or WhatsApp.`
+                    : 'Yes, send me promotional updates and offers via email, SMS or WhatsApp.'}
+                  {' '}You can unsubscribe at any time. Event-related notifications are sent regardless.
+                </>
+              )}
+            </span>
+          </label>
+
+          {submitError && (
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-start gap-2">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" /> {submitError}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting || isClosed}
+            className="lp-btn w-full mt-1 disabled:opacity-50 disabled:pointer-events-none"
+          >
+            {submitting && <Loader2 size={16} className="animate-spin" />}
+            <span>{submitLabel}</span>
+            {!submitting && <span className="lp-btn-arrow">→</span>}
+          </button>
+        </fieldset>
+      </form>
+    </div>
+  )
+
   return (
     <div className="relative w-full">
       {/* ── HERO (poster style, works with no image) — full page only;
@@ -667,6 +1132,69 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
       )}
 
       {/* ── BODY ─────────────────────────────────────────────────── */}
+      {/* CHARITY.8 — donations on (full page only): the raised-so-far
+          strip, the donate and signup cards side by side with an OR between
+          them, then the event story full width below. Otherwise the
+          two-column page (or the embed) exactly as before. */}
+      {charityOn ? (
+        <div className="max-w-6xl mx-auto px-5 pb-28 pt-10">
+          <CharityRaisedStrip charity={race.charity} currency={race.payment_currency || 'EUR'} brand={race.organization_name || ''} />
+          {/* CHARITY.13 — items-start so the donate card hugs its content instead of
+              stretching to the taller signup card; the OR rule still spans the row. */}
+          <div className="grid gap-6 md:gap-5 md:grid-cols-[1fr_auto_1fr] md:items-start">
+            <Suspense fallback={null}>
+              <DonateCardFromUrl
+                slug={slug}
+                charity={race.charity}
+                currency={race.payment_currency || 'EUR'}
+                brand={race.organization_name || ''}
+                onRaised={refreshCharity}
+              />
+            </Suspense>
+            <OrDivider />
+            {signupCard}
+          </div>
+          {/* CHARITY.13 — the operator's video beside the summary when set. */}
+          {race.charity?.video?.provider ? (
+            <div className="mt-12 grid gap-8 md:grid-cols-2 md:items-start">
+              {eventDetails}
+              <div className={`overflow-hidden rounded-2xl border border-white/10 bg-black ${
+                race.charity.video.provider === 'file'
+                  // CHARITY.15 — an uploaded file keeps its own shape (a phone-shot
+                  // portrait clip or a landscape one) instead of being cropped to
+                  // fill a 16:9 box; capped at 70% of the viewport height and
+                  // centred, so a portrait clip sits beside the summary.
+                  ? 'flex justify-center'
+                  : race.charity.video.provider === 'instagram' ? 'min-h-[600px]' : 'aspect-video'
+              }`}>
+                {race.charity.video.provider === 'file' ? (
+                  // CHARITY.14 — an uploaded file plays in a plain player, tap to
+                  // play, with the hero image as its poster.
+                  <video
+                    src={race.charity.video.src}
+                    poster={race.charity.video.poster || undefined}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="block w-auto max-w-full h-auto max-h-[70vh] object-contain"
+                  />
+                ) : (
+                  <iframe
+                    src={race.charity.video.embedUrl}
+                    title={`${race.name} video`}
+                    className="w-full h-full"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    loading="lazy"
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-12 max-w-3xl">{eventDetails}</div>
+          )}
+        </div>
+      ) : (
       <div className={embedded
         ? 'max-w-xl mx-auto px-4 py-6'
         : 'max-w-6xl mx-auto px-5 pb-28 pt-10 grid gap-10 md:grid-cols-[1fr_420px] md:items-start'}>
@@ -687,367 +1215,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           </div>
         )}
         {/* LEFT — event story + details + pricing (full page only) */}
-        {!embedded && (
-        <div className="min-w-0">
-          {race.description && (
-            <p className="text-[15px] md:text-base text-white/70 whitespace-pre-line leading-relaxed">
-              {race.description}
-            </p>
-          )}
+        {!embedded && eventDetails}
 
-          {/* date / time / location rows */}
-          {(!isLeadGen || wavesArr.length > 0 || venueAddress) && (
-            <div className={`${race.description ? 'mt-8' : ''} rounded-2xl border border-white/10 bg-white/[0.03] p-5 space-y-3.5 text-sm text-white/70`}>
-              {!isLeadGen && race.race_date && (
-                <div className="flex items-center gap-3">
-                  <Calendar size={16} className="text-white/40 shrink-0" />
-                  <span className="text-white/85">
-                    {new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-                  </span>
-                </div>
-              )}
-              {/* Multi-wave events don't list every start time here (26
-                  generated waves made this a wall of numbers) — the wave
-                  picker in the form is the time surface. A single-wave
-                  event (workshops etc.) still shows its start time. */}
-              {wavesArr.length === 1 && (
-                <div className="flex items-start gap-3">
-                  <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>{copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))}</span>
-                </div>
-              )}
-              {/* Per-person price at a glance; the Total card below still
-                  carries the live, membership-confirmed sum. */}
-              {(memberPricing && memberFeeCents != null) || nonMemberFeeCents != null ? (
-                <div className="flex items-start gap-3">
-                  <BadgeEuro size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>
-                    {memberPricing && memberFeeCents != null && nonMemberFeeCents != null
-                      ? `${fmtMoney(memberFeeCents)} members · ${fmtMoney(nonMemberFeeCents)} non-members`
-                      : `${fmtMoney(nonMemberFeeCents ?? memberFeeCents)} per person`}
-                  </span>
-                </div>
-              ) : null}
-              {venueAddress && (
-                <div className="flex items-start gap-3">
-                  <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>{venueAddress}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Pricing summary — same logic as before, kind-agnostic. */}
-          {showPricingCard && (
-            <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45 mb-2">Total</div>
-              <div className="text-3xl font-bold text-white">
-                {liveTotalLabel}
-              </div>
-              {ratePending && (
-                <div className="text-[12px] text-white/55 mt-3">
-                  {anyCheckInFlight
-                    ? 'Checking member rate…'
-                    : 'Add your email to confirm your rate.'}
-                </div>
-              )}
-              {!ratePending && memberPricing && (memberCount > 0 || nonMemberCount > 0) && (
-                <div className="text-[12px] text-white/55 mt-3 space-y-1">
-                  {memberCount > 0 && (
-                    <div>{memberCount} × member {memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'}</div>
-                  )}
-                  {nonMemberCount > 0 && (
-                    <div>{nonMemberCount} × non-member {nonMemberFeeCents != null ? fmtMoney(nonMemberFeeCents) : 'free'}</div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        )}
-
-        {/* RIGHT — registration form */}
-        <div className="lp-card-glow rounded-2xl p-6 md:sticky md:top-6">
-          <h2 className="text-lg font-semibold text-white">{copy.headingTitle}</h2>
-          <p className="text-[13px] text-white/55 mt-1 mb-5">
-            {copy.headingSubtitle}
-          </p>
-
-          {showMemberNotice && (
-            <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
-              <Info size={14} className="mt-0.5 shrink-0 text-amber-300" />
-              <span>
-                <strong className="text-amber-200">UN1T members:</strong> use the email on your UN1T account so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
-                {race.members_only && copy.membersOnlyExtra}
-              </span>
-            </div>
-          )}
-
-          {isClosed && (
-            <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm flex items-start gap-2">
-              <AlertCircle size={14} className="mt-0.5 shrink-0" /> {closeMsg}
-            </div>
-          )}
-
-          <form id={formId} onSubmit={handleSubmit} className="space-y-4">
-            <fieldset disabled={isClosed} className="space-y-4">
-              {/* Wave picker — race-only. Non-race kinds have a single
-                  auto-selected wave; the time is shown in the details
-                  block so the operator UX still surfaces it. */}
-              {copy.showWavePicker && pickerWaves.length > 0 && (
-                <div>
-                  <label className={labelCls}>Pick your wave *</label>
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-3 gap-2">
-                    {pickerWaves.map((w) => {
-                      const full = !!w.is_full
-                      const selected = waveId === w.id
-                      const time = (w.start_time || '').slice(0, 5)
-                      return (
-                        <button
-                          key={w.id}
-                          type="button"
-                          disabled={full}
-                          onClick={() => setWaveId(w.id)}
-                          aria-pressed={selected}
-                          title={w.label ? `${time} — ${w.label}${full ? ' (full)' : ''}` : full ? `${time} (full)` : time}
-                          className={`px-2 py-2.5 rounded-xl border text-center transition-colors ${
-                            selected
-                              ? 'border-white bg-white/10 text-white'
-                              : full
-                                ? 'border-white/10 bg-white/[0.03] text-white/40 line-through cursor-not-allowed'
-                                : 'border-white/15 bg-white/5 text-white hover:border-white/40'
-                          }`}
-                        >
-                          <div className="text-sm font-semibold leading-tight tabular-nums">{time}</div>
-                          {w.label && (
-                            <div className={`text-[10px] truncate leading-tight mt-0.5 ${selected ? 'text-white/70' : 'text-white/50'}`}>
-                              {w.label}
-                            </div>
-                          )}
-                          {full && !w.label && (
-                            <div className="text-[10px] leading-tight mt-0.5">Full</div>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {pickerWaves.length < wavesArr.length && (
-                    <p className="text-[11px] text-white/45 mt-1.5">
-                      More start times are released as these waves fill.
-                    </p>
-                  )}
-                  {fieldErrors.wave_id && <p className={errCls}>{fieldErrors.wave_id}</p>}
-                </div>
-              )}
-
-              {/* Team name — race-only. Non-race kinds synthesise a
-                  team_name from the captain + group size on submit. */}
-              {copy.showTeamName && (
-                <div>
-                  <label className={labelCls}>Team name *</label>
-                  <input
-                    type="text"
-                    required
-                    value={teamName}
-                    onChange={e => setTeamName(e.target.value)}
-                    placeholder="The Iron Dogs"
-                    className={inputCls(!!fieldErrors.team_name)}
-                  />
-                  {fieldErrors.team_name && <p className={errCls}>{fieldErrors.team_name}</p>}
-                </div>
-              )}
-
-              {(race.allowed_team_sizes || []).length > 1 && (
-                <div>
-                  <label className={labelCls}>{copy.sizeLabel}</label>
-                  <div className="flex flex-wrap gap-2">
-                    {[...(race.allowed_team_sizes || [])].sort((a, b) => a - b).map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => setTeamSize(s)}
-                        className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
-                          teamSize === s
-                            ? 'border-white bg-white text-black'
-                            : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
-                        }`}
-                      >
-                        {s}-{s === 1 || !copy.sizeButtonSuffix
-                          ? copy.sizeButtonSuffix
-                          : copy.sizeButtonSuffix === 'person' ? 'people' : `${copy.sizeButtonSuffix}s`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="pt-4 border-t border-white/10">
-                <div className={sectionEyebrow}>{copy.captainSectionLabel}</div>
-                <div className="space-y-2.5">
-                  <input
-                    type="text"
-                    required
-                    placeholder="Your name *"
-                    value={captainName}
-                    onChange={e => setCaptainName(e.target.value)}
-                    className={inputCls(!!fieldErrors.captain_name)}
-                  />
-                  {fieldErrors.captain_name && <p className={errCls}>{fieldErrors.captain_name}</p>}
-                  <div>
-                    <input
-                      type="email"
-                      required
-                      placeholder="Your email *"
-                      value={captainEmail}
-                      onChange={e => {
-                        setCaptainEmail(e.target.value)
-                        scheduleMemberCheck(e.target.value)
-                      }}
-                      onBlur={() => scheduleMemberCheck(captainEmail)}
-                      className={inputCls(!!fieldErrors.captain_email)}
-                    />
-                    <MemberStatusBadge
-                      email={captainEmail}
-                      checks={memberChecks}
-                      memberFeeCents={memberFeeCents}
-                      nonMemberFeeCents={nonMemberFeeCents}
-                      memberPricing={memberPricing}
-                      fmt={fmtMoney}
-                      onRetry={() => scheduleMemberCheck(captainEmail)}
-                    />
-                    {fieldErrors.captain_email && <p className={errCls}>{fieldErrors.captain_email}</p>}
-                  </div>
-                  <div>
-                    <input
-                      type="tel"
-                      required
-                      placeholder="Your phone *"
-                      value={captainPhone}
-                      onChange={e => setCaptainPhone(e.target.value)}
-                      className={inputCls(!!fieldErrors.captain_phone)}
-                    />
-                    {fieldErrors.captain_phone && <p className={errCls}>{fieldErrors.captain_phone}</p>}
-                  </div>
-                </div>
-              </div>
-
-              {members.length > 0 && (
-                <div className="pt-4 border-t border-white/10">
-                  <div className={sectionEyebrow}>{copy.membersSectionLabel}</div>
-                  <div className="space-y-4">
-                    {members.map((m, i) => (
-                      <div key={i} className="space-y-1.5">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <input
-                              type="text"
-                              required
-                              placeholder={kind === 'race' ? `${ordinal(i + 2)} name *` : `Attendee ${i + 2} name *`}
-                              value={m.name}
-                              onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                              className={inputCls(!!fieldErrors[`member_${i}_name`])}
-                            />
-                            {fieldErrors[`member_${i}_name`] && <p className={errCls}>{fieldErrors[`member_${i}_name`]}</p>}
-                          </div>
-                          <div>
-                            <input
-                              type="email"
-                              placeholder={kind === 'race' ? `${ordinal(i + 2)} email` : `Attendee ${i + 2} email`}
-                              value={m.email}
-                              onChange={e => {
-                                const next = e.target.value
-                                setMembers(prev => prev.map((x, j) => j === i ? { ...x, email: next } : x))
-                                scheduleMemberCheck(next)
-                              }}
-                              onBlur={() => scheduleMemberCheck(m.email)}
-                              className={inputCls(!!fieldErrors[`member_${i}_email`])}
-                            />
-                            {fieldErrors[`member_${i}_email`] && <p className={errCls}>{fieldErrors[`member_${i}_email`]}</p>}
-                          </div>
-                        </div>
-                        <MemberStatusBadge
-                          email={m.email}
-                          checks={memberChecks}
-                          memberFeeCents={memberFeeCents}
-                          nonMemberFeeCents={nonMemberFeeCents}
-                          memberPricing={memberPricing}
-                          fmt={fmtMoney}
-                          onRetry={() => scheduleMemberCheck(m.email)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* EVENTS-PROMO.1 — optional discount code. Only shown on
-                  paid events (nothing to discount otherwise). No live
-                  preview by design — the discounted total shows at the
-                  payment step. An invalid code comes back as a 400 and
-                  is surfaced inline here so the customer can retry. */}
-              {showPricingCard && (
-                <div className="pt-4 border-t border-white/10">
-                  <label className={labelCls}>Promo code</label>
-                  <input
-                    type="text"
-                    value={promoCode}
-                    onChange={e => { setPromoCode(e.target.value); if (promoError) setPromoError(null) }}
-                    placeholder="Have a code? Enter it here"
-                    autoCapitalize="characters"
-                    autoComplete="off"
-                    className={inputCls(!!promoError)}
-                  />
-                  {promoError && <p className={errCls}>{promoError}</p>}
-                </div>
-              )}
-
-              {/* CONSENT.4 — soft opt-in for marketing comms.
-                  Defaulted on; the registration is the legitimate-
-                  interest service relationship that qualifies under
-                  PECR / GDPR soft opt-in. Operator-side helper
-                  excludes ClassPass contacts regardless.
-                  HOST-CONSENT.1 — hosted events name both lists. */}
-              <label className="flex items-start gap-2.5 text-[12px] text-white/55 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={marketingConsent}
-                  onChange={(e) => setMarketingConsent(e.target.checked)}
-                  className="mt-0.5 shrink-0 accent-white"
-                />
-                <span>
-                  {race.host_name ? (
-                    <>
-                      Yes, send me emails from {race.host_name} about their events, and promotional updates from {race.organization_name || 'the studio'} via email, SMS or WhatsApp. You can leave either list at any time. Event-related notifications are sent regardless.
-                    </>
-                  ) : (
-                    <>
-                      Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
-                      You can unsubscribe at any time. Event-related notifications are sent regardless.
-                    </>
-                  )}
-                </span>
-              </label>
-
-              {submitError && (
-                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-start gap-2">
-                  <AlertCircle size={14} className="mt-0.5 shrink-0" /> {submitError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={submitting || isClosed}
-                className="lp-btn w-full mt-1 disabled:opacity-50 disabled:pointer-events-none"
-              >
-                {submitting && <Loader2 size={16} className="animate-spin" />}
-                <span>{submitLabel}</span>
-                {!submitting && <span className="lp-btn-arrow">→</span>}
-              </button>
-            </fieldset>
-          </form>
-        </div>
+        {signupCard}
       </div>
+      )}
 
       {/* ── MOBILE STICKY ACTION BAR (full page only) ─────────────── */}
       {!isClosed && !embedded && (
@@ -1074,7 +1246,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 // Per-email status pill rendered under each email input. Quiet when
 // member pricing is off (no signal to give); renders the verified
 // badge or a muted "non-member rate" line otherwise.
-function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt, onRetry }) {
+function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, memberPricing, fmt, onRetry, brand = '' }) {
   if (!memberPricing) return null
   const e = (email || '').trim().toLowerCase()
   if (!e) return null
@@ -1095,7 +1267,7 @@ function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, m
     // count); the boxed treatment splits it into a title + subtitle.
     const title = c.first_name
       ? (count === 0 ? `Welcome, ${c.first_name}` : `Welcome back, ${c.first_name}`)
-      : 'UN1T member'
+      : (brand ? `${brand} member` : 'Member')
     let subtitle = 'Verified member'
     if (count != null && count >= 2) {
       subtitle = `Verified member · ${count} race${count === 1 ? '' : 's'} finished`

@@ -1,11 +1,11 @@
 // src/lib/recon/report-email.js
 //
 // RCOV.P0 — weekly coverage report. Pure renderer (unit-tested) +
-// thin send wrapper over the Postmark helper. Recipients come from
-// RECEIPT_COVERAGE_REPORT_TO (comma-separated) — REQUIRED, no silent
-// fallback per repo convention (the cron checks it up-front and fails
-// loudly).
-import { sendEmail } from '@/lib/postmark'
+// thin send wrapper. W0.7: one report per ORGANISATION, delivered
+// through sendOpsAlert to that organisation's org_settings
+// .ops_alert_emails (push fallback to the location's admins when none
+// are set). The env recipient RECEIPT_COVERAGE_REPORT_TO is retired.
+import { sendOpsAlert } from '@/lib/ops-alerts'
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -14,17 +14,6 @@ const eur = (n) => {
   const v = Number(n) || 0
   const abs = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(Math.abs(v))
   return v < 0 ? `-${abs}` : abs
-}
-
-// Dublin-hour gate for the Friday cron: vercel.json fires at both
-// 07:00 and 08:00 UTC on Fridays (see the two crons entries) because
-// a single UTC cron can't track Dublin's GMT/IST straddle — this gate
-// picks whichever firing lands in the 08:xx Dublin wall-clock hour,
-// and alreadyRanToday absorbs the other firing plus any retry/manual
-// re-fire from landing a second run the same day.
-export function shouldRunFridayCron({ dublinMinutes, alreadyRanToday }) {
-  const hour = Math.floor(dublinMinutes / 60)
-  return hour === 8 && !alreadyRanToday
 }
 
 function foundSectionHtml(found) {
@@ -135,19 +124,21 @@ export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) 
   </div>`
 }
 
-export function reportRecipients() {
-  const raw = process.env.RECEIPT_COVERAGE_REPORT_TO
-  if (!raw) throw new Error('RECEIPT_COVERAGE_REPORT_TO is not set (comma-separated recipient list)')
-  return raw.split(',').map((s) => s.trim()).filter(Boolean)
-}
-
-export async function sendCoverageReport({ html, dateStr }) {
-  const to = reportRecipients().join(',')
-  return sendEmail({
-    to,
-    subject: `Receipt coverage — ${dateStr}`,
-    htmlBody: html,
-    stream: 'outbound',
-    tag: 'receipt-coverage',
-  })
+/**
+ * W0.7 — one report per organisation, to its own ops_alert_emails (push
+ * fallback inside sendOpsAlert). sendOpsAlert never throws: it answers
+ * `{ channel: 'none' }` when delivery failed, so that is turned into a
+ * throw here so the finalizer returns email_failed and retries next tick
+ * (a push_fallback counts as delivered). On the push_fallback path the
+ * rendered HTML is NOT retained anywhere: the admins get a push pointing
+ * at /accounting and read the live board instead.
+ */
+export async function sendCoverageReportForOrg({ db, organizationId, locationId, html, dateStr }) {
+  if (!organizationId) throw new Error('coverage report: section without an organisation')
+  const result = await sendOpsAlert(
+    { organizationId, locationId, subject: `Receipt coverage — ${dateStr}`, htmlBody: html, pushBody: 'Weekly receipt coverage report is ready in Accounting.' },
+    { db },
+  )
+  if (!result || result.channel === 'none') throw new Error('coverage report: no delivery channel for organisation ' + organizationId)
+  return result
 }

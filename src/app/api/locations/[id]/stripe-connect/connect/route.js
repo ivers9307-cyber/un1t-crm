@@ -29,6 +29,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { getAppUrl } from '@/lib/app-url'
 import { createConnectedAccount, createOnboardingLink } from '@/lib/payments/stripe-connect'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,10 +62,12 @@ export async function POST(_request, props) {
       if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
     }
     const base = getAppUrl()
+    // INTEGONE.1 — Stripe returns the operator to the Payments drawer in the
+    // Integrations hub (the per-location Integrations tab is gone).
     const url = await createOnboardingLink({
       accountId,
       refreshUrl: `${base}/api/locations/${locationId}/stripe-connect/refresh`,
-      returnUrl: `${base}/settings/locations/${locationId}?section=integrations&tab=payments&stripe=return`,
+      returnUrl: `${base}${hubManageHref(locationId, 'payments')}&stripe=return`,
     })
     return NextResponse.json({ success: true, data: { url } })
   } catch (e) {

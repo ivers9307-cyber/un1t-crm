@@ -1,7 +1,10 @@
 // TV-MOBILE.C — mobile template editor (create / edit).
 //
 // Name + base image + draggable text zones (TvTemplateCanvas) + a
-// per-zone property panel. Saves to tv_templates (RLS-direct). The web
+// per-zone property panel. Saves through /api/admin/tv-templates*
+// (mobile/lib/tv-api.js, MEMBERWRITESWEEP.1f). C118: a base image is
+// uploaded at the TEMPLATE's own studio (mobile/lib/tv-template-studio.js),
+// not the active one. The web
 // editor's drag/resize canvas, mirrored to RN with PanResponder; styling
 // uses a curated colour palette + chip pickers in place of the desktop
 // colour input. Authoring stays available on web too.
@@ -18,6 +21,7 @@ import { canMobile } from '../../../lib/permissions'
 import {
   getTvTemplate, saveTvTemplate, deleteTvTemplate, uploadTvImage, tvImageUrl,
 } from '../../../lib/tv-api'
+import { templateStudioId } from '../../../lib/tv-template-studio'
 import TvTemplateCanvas from '../../../components/TvTemplateCanvas'
 
 const WEIGHTS = [
@@ -48,6 +52,11 @@ export default function TemplateEditScreen() {
   const allowed = canMobile(profile, 'tv_displays', activeLocation)
 
   const [loaded, setLoaded] = useState(isNew)
+  // C118 — the studio this template lives at (loaded), and the studio a NEW
+  // template was started at; uploads and the create go there.
+  const [templateLocationId, setTemplateLocationId] = useState(null)
+  const [openedAtLocationId] = useState(activeLocation?.id || null)
+  const studioId = templateStudioId({ isNew, templateLocationId, openedAtLocationId, activeLocationId: activeLocation?.id })
   const [name, setName] = useState('')
   const [basePath, setBasePath] = useState(null)
   const [zones, setZones] = useState([])
@@ -61,6 +70,7 @@ export default function TemplateEditScreen() {
     const r = await getTvTemplate(id)
     if (!r.success) { setError(r.error || 'Could not load template'); setLoaded(true); return }
     setName(r.data.name || '')
+    setTemplateLocationId(r.data.location_id || null)
     setBasePath(r.data.base_image_path || null)
     setZones(Array.isArray(r.data.zones) ? r.data.zones : [])
     setLoaded(true)
@@ -90,11 +100,12 @@ export default function TemplateEditScreen() {
     if (r.canceled) return
     const a = r.assets?.[0]
     if (!a) return
+    if (!studioId) { setError('The template is still loading. Try again in a moment.'); return }
     setUploading(true)
     setError(null)
     const up = await uploadTvImage(
       { uri: a.uri, name: a.fileName || 'template.jpg', mimeType: a.mimeType || 'image/jpeg' },
-      activeLocation?.id,
+      studioId,
       'template',
     )
     setUploading(false)
@@ -108,7 +119,7 @@ export default function TemplateEditScreen() {
     setError(null)
     const r = await saveTvTemplate({
       id: isNew ? undefined : id,
-      locationId: activeLocation?.id,
+      locationId: studioId,
       name,
       base_image_path: basePath,
       zones,

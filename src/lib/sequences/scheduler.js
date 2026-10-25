@@ -17,14 +17,15 @@
 // broken contact (e.g. invalid email) can't fill the cron logs forever.
 
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logWarn, logInfo } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
 import { nextAcceptableSend, QUIET_HOURS_COLUMNS } from '@/lib/send-quiet-hours'
+import { DEFAULT_TZ, resolveZone, instantToZonedParts, getLocationZone, LocationZoneReadError } from '@/lib/location-time'
 import { evaluateSequenceAudience } from './audience.js'
 import {
   sendEmailStep,
   sendWhatsappStep,
-  sendSmsStep,
+  retiredSmsStep,
   applyTagStep,
   updateFieldStep,
   webhookStep,
@@ -45,17 +46,11 @@ export const CLAIM_LEASE_MS = 10 * 60_000
 
 // ── Public: pause / resume / exit ────────────────────────────────
 
-/**
- * Update the status of a single enrolment. Used by /api/sequences/...
- * pause / resume / exit endpoints.
- */
-export async function setEnrollmentStatus({ enrollmentId, status, reason }) {
-  const db = createServerClient()
-  const updates = { status }
-  if (reason) updates.last_error = reason
-  const { error } = await db.from('sequence_enrollments').update(updates).eq('id', enrollmentId)
-  if (error) throw error
-}
+// PRESEND.1 — moved to ./enrollment-status.js (a leaf), because the dunning
+// pre-send gate needs to end a run and importing it from HERE closed a cycle
+// back through steps.js. Re-exported so every existing caller — the pause /
+// resume / exit routes, dunning.js — keeps its import path.
+export { setEnrollmentStatus } from './enrollment-status.js'
 
 // ── Internal: pick the next step for an enrolment ────────────────
 
@@ -97,38 +92,32 @@ export function nextStepDelayMs(step) {
  * sequence's send window. Returns the original timestamp if no
  * window configured or already inside the window.
  *
- * Window is interpreted in Europe/Dublin local time. skip_days
- * uses 0=Sunday … 6=Saturday convention (JavaScript getDay()).
+ * TZ.4: the window is the wall clock of the SEQUENCE's location
+ * (`zone`, its locations.timezone; default Europe/Dublin, byte-identical to
+ * the pre-TZ.4 Dublin-only clamp). skip_days uses 0=Sunday … 6=Saturday
+ * convention (JavaScript getDay()).
  *
  * @param {Date} candidate
  * @param {object|null} window  { start_hour, end_hour, skip_days }
+ * @param {string} [zone]  the sequence location's IANA zone
  * @returns {Date}
  */
-export function clampToSendWindow(candidate, window) {
+export function clampToSendWindow(candidate, window, zone = DEFAULT_TZ) {
   if (!window) return candidate
   const startH = Number.isFinite(window.start_hour) ? window.start_hour : null
   const endH = Number.isFinite(window.end_hour) ? window.end_hour : null
   const skipDays = Array.isArray(window.skip_days) ? window.skip_days.map(Number) : []
   if (startH == null && endH == null && skipDays.length === 0) return candidate
+  const tz = resolveZone(zone)
 
   // Iterate at most ~14 days forward — operators won't configure
   // an empty window in practice, but bound it defensively.
   let attempt = new Date(candidate.getTime())
   for (let i = 0; i < 14 * 24; i++) {
-    // Use Intl to get the local hour + dow in Europe/Dublin without
-    // fighting Date's local-tz coupling. getParts gives strings.
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Dublin',
-      hour: 'numeric',
-      hourCycle: 'h23',
-      weekday: 'short',
-    }).formatToParts(attempt)
-    const hourStr = parts.find((p) => p.type === 'hour')?.value || '0'
-    const dowStr = parts.find((p) => p.type === 'weekday')?.value || ''
-    const localHour = Number(hourStr) || 0
-    // Map en-GB short weekday to 0-6 (Sun=0).
-    const DOW_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
-    const localDow = DOW_MAP[dowStr] ?? 0
+    // Local hour + day of week in the location's zone (shared/zoned-time:
+    // weekday is ISO 1=Mon … 7=Sun, so % 7 maps it onto getDay()'s Sun=0).
+    const { h: localHour, weekday } = instantToZonedParts(attempt, tz)
+    const localDow = weekday % 7
 
     const dayOk = !skipDays.includes(localDow)
     let hourOk = true
@@ -348,7 +337,9 @@ export async function isGoalMet({ db, contact, goalConfig, enrolledAt = null }) 
  */
 export async function runSequences({ now = new Date() } = {}) {
   const db = createServerClient()
-  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0 }
+  // TZ.4 — zone_unavailable: enrolments left untouched this tick because their
+  // studio's timezone could not be read (see the block before the dispatch).
+  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0, zone_unavailable: 0 }
 
   // FREQ-CAP.1 — the marketing frequency-cap setting is per LOCATION;
   // resolve it once per location per tick (a 100-enrolment batch is
@@ -378,7 +369,18 @@ export async function runSequences({ now = new Date() } = {}) {
   // we update current_step_order before returning.
   const { data: due, error: dueErr } = await db
     .from('sequence_enrollments')
-    .select('id, sequence_id, contact_id, current_step_order, error_count, status, metadata')
+    // PRESEND.1 — this column list IS the handlers' view of the enrolment: the
+    // row is handed to sendEmailStep / sendWhatsappStep verbatim
+    // as `enrollment`. Three columns were missing and each failure was silent.
+    // `source_type` is what isTransactionalEnrolment reads, so without it the
+    // predicate was ALWAYS false here: DUNNING.3's transactional lane (the
+    // marketing-consent and frequency-cap bypass a payment reminder depends on)
+    // had never applied on the runner path, and PRESEND.1's pre-send gate would
+    // have proceeded on every send. `enrolled_at` feeds isGoalMet's
+    // 'booked_since_enrolment' goal, which fails CLOSED without it — that goal
+    // could never exit anybody. Adding a column here is cheap; leaving one out
+    // is invisible, so prefer the wider select.
+    .select('id, sequence_id, contact_id, current_step_order, error_count, status, metadata, source_type, source_ref, enrolled_at')
     .eq('status', 'active')
     .lte('next_step_at', now.toISOString())
     .order('next_step_at', { ascending: true })
@@ -481,7 +483,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // step for a filter that matches everyone.
       if (sequence.audience_filter?.filters?.length) {
         const audienceState = await evaluateSequenceAudience(
-          db, enrollment.contact_id, sequence.audience_filter,
+          db, enrollment.contact_id, sequence.audience_filter, { locationId: sequence.location_id },
         )
         if (audienceState === 'no_match') {
           await db.from('sequence_enrollments').update({
@@ -510,8 +512,6 @@ export async function runSequences({ now = new Date() } = {}) {
           last_processed_at: now.toISOString(),
           next_step_at: null,
         }).eq('id', enrollment.id)
-        // supabase-js builders don't have .catch — try/catch around await.
-        try { await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }) } catch {}
         stats.completed++
         continue
       }
@@ -527,6 +527,29 @@ export async function runSequences({ now = new Date() } = {}) {
         throw new Error(
           `Step ${step.step_order}: config.next_step_order points at itself — refusing to loop`,
         )
+      }
+
+      // TZ.4 — the send window and the quiet-hours fallback below are the
+      // wall clock of the SEQUENCE's studio, so read its zone now, BEFORE the
+      // step dispatches: a read failing after a send would route to the error
+      // path, which leaves the cursor behind and re-sends the step 30 minutes
+      // later. A failed read (LocationZoneReadError) is a DB outage, never a
+      // reason to guess Dublin: the enrolment is skipped this tick with
+      // nothing sent and no error_count, and the claim lease above
+      // (CLAIM_LEASE_MS) brings it back on a later tick. Test enrolments never
+      // clamp, so they need no zone.
+      let zone = null
+      if (enrollment.metadata?.test !== true) {
+        try {
+          zone = await getLocationZone(db, sequence.location_id)
+        } catch (e) {
+          if (!(e instanceof LocationZoneReadError)) throw e
+          logWarn('sequences', 'studio timezone unreadable; enrolment skipped this tick, nothing sent', {
+            enrollmentId: enrollment.id, sequenceId: sequence.id, locationId: sequence.location_id,
+          })
+          stats.zone_unavailable++
+          continue
+        }
       }
 
       // Branch by step type.
@@ -548,7 +571,9 @@ export async function runSequences({ now = new Date() } = {}) {
         const frequencyCap = await capSettingFor(sequence.location_id)
         sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact, frequencyCap })
       } else if (step.step_type === 'sms') {
-        sendId = await sendSmsStep(db, { enrollment, step, sequence, contact })
+        // RETIRED (TWILIO-RETIRE.1) — records a skip and advances, so a
+        // legacy SMS step never reaches the unknown-step throw below.
+        sendId = await retiredSmsStep(db, { step, sequence, contact })
       } else if (step.step_type === 'apply_tag') {
         // Mig 087: apply a contact_tags row. Config: { tag }.
         // No send_id since nothing went out the door.
@@ -574,7 +599,13 @@ export async function runSequences({ now = new Date() } = {}) {
       } else if (step.step_type === 'branch') {
         // Mig 091 / Tier 3E. No send. Pick the target step_order
         // based on the predicate; the cursor jumps below.
-        branchTargetOrder = await processBranchStep(db, { step, contact })
+        // HATCHNUDGE.1 — the studio is the sequence's, never the contact's
+        // home: an org-shared contact can live at another studio.
+        // TDSEQ.1 — enrolled_at feeds the time-relative predicates
+        // (whatsapp_reply_since_enrolment), as it does the goal check above.
+        branchTargetOrder = await processBranchStep(db, {
+          step, contact, locationId: sequence.location_id, enrolledAt: enrollment.enrolled_at,
+        })
         sendId = null
       } else if (step.step_type === 'move_pipeline_stage') {
         // RETIRED (FUNNEL.1) — stage is classifier-derived; the
@@ -642,9 +673,9 @@ export async function runSequences({ now = new Date() } = {}) {
         if (isTest) {
           clamped = rawNext
         } else if (hasSendWindow(sequence.send_window)) {
-          clamped = clampToSendWindow(rawNext, sequence.send_window)
+          clamped = clampToSendWindow(rawNext, sequence.send_window, zone)
         } else {
-          clamped = nextAcceptableSend(rawNext, await quietHoursFor(sequence.location_id))
+          clamped = nextAcceptableSend(rawNext, await quietHoursFor(sequence.location_id), zone)
         }
         nextFireAt = clamped.toISOString()
       }
@@ -657,7 +688,17 @@ export async function runSequences({ now = new Date() } = {}) {
       // it implements the jump. A terminal step (followingOrder null)
       // parks the cursor on the step just executed — never past it, so
       // a stray reactivation can't land on another arm's row.
-      const { error: advanceErr } = await db.from('sequence_enrollments').update({
+      // PRESEND.1 — the advance is a CAS on status='active', not a blind
+      // update by id. A step handler may END the run while it is executing
+      // (the dunning pre-send gate exits the enrolment the moment it learns
+      // the invoice was paid, then resolves null like any recorded skip).
+      // Without the predicate this update would match that just-exited row
+      // and write `status: 'active'` straight back onto it, so the next
+      // reminder would go out anyway — invisibly, because nothing errors.
+      // The row was claimed with status='active', so the only way to miss
+      // here is a deliberate mid-step exit; a 0-row match is not an error
+      // and leaves the throw-on-advance-failure discipline untouched.
+      const { data: advanced, error: advanceErr } = await db.from('sequence_enrollments').update({
         current_step_order: followingOrder != null ? followingOrder - 1 : step.step_order,
         next_step_at: nextFireAt,
         status: newStatus,
@@ -665,7 +706,29 @@ export async function runSequences({ now = new Date() } = {}) {
         last_step_send_id: sendId,
         last_error: null,
         error_count: 0,
-      }).eq('id', enrollment.id)
+      }).eq('id', enrollment.id).eq('status', 'active').select('id')
+      // PRESEND.1 (review) — a CAS that can match nothing must SAY so. There
+      // are exactly two ways to land here and they read very differently:
+      //   - the run was exited mid-step (the dunning pre-send gate). Expected.
+      //   - the row is anything else. The realistic one is an operator pausing
+      //     the enrolment while this step was in flight — and that carries a
+      //     known DUPLICATE-SEND window: buildResumePatch (resume.js) does not
+      //     touch current_step_order, so the resumed run re-sends step N, which
+      //     has already gone out. Fixing resume is a separate change; the log
+      //     is what makes it diagnosable instead of invisible.
+      if (!advanceErr && (advanced || []).length === 0) {
+        const { data: nowRow } = await db.from('sequence_enrollments')
+          .select('id, status').eq('id', enrollment.id).maybeSingle()
+        const meta = {
+          enrollmentId: enrollment.id, stepOrder: step.step_order,
+          stepType: step.step_type, sendId, status: nowRow?.status ?? null,
+        }
+        if (nowRow?.status === 'exited') {
+          logInfo('sequences', 'advance skipped — enrolment was exited mid-step', meta)
+        } else {
+          logWarn('sequences', 'advance matched no active row', meta)
+        }
+      }
       // A rejected advance is the WORST failure mode: the step may already
       // have SENT, and swallowing the error leaves the cursor behind — the
       // claim lease expires and the send repeats every ~10 minutes, forever,
@@ -679,8 +742,6 @@ export async function runSequences({ now = new Date() } = {}) {
       }
 
       if (newStatus === 'completed') {
-        // supabase-js builders don't have .catch — try/catch around await.
-        try { await db.rpc('increment_sequence_completed', { p_sequence_id: sequence.id, p_delta: 1 }) } catch {}
         stats.completed++
       }
       stats.sent++

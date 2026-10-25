@@ -23,6 +23,7 @@ import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
+import { contactInStudioOrganisation } from '../contact-studio-link.js'
 
 // ── segment_added / segment_removed (SEG-TRIG.1) ─────────────────
 //
@@ -218,27 +219,54 @@ export async function triggerSequencesForBooking(bookingId) {
  * Best-effort — errors are swallowed so the upstream mutation isn't
  * blocked by a sequence enrol failure.
  *
+ * TDSEQ.1 — `{ locationId }` names the studio whose BOARD moved (the pipeline
+ * reclassifier passes it for a un1t.online board). That studio's
+ * pipeline_stage_change sequences fire, not the contact's home studio's: a
+ * Stillorgan contact on Hatch Street's board moves there, and the stage is a
+ * fact about Hatch. A studio outside the contact's organisation is refused
+ * (`stage_change_skipped`, reason `cross_organisation`), the same door as
+ * triggerSequencesForContactCreated. Without it, the home studio as before.
+ *
  * @param {string} contactId
  * @param {string|null} oldStage  pipeline_stage_slug before the change
  * @param {string|null} newStage  pipeline_stage_slug after the change
+ * @param {{ locationId?: string|null }} [opts]
  */
-export async function triggerSequencesForPipelineStageChange(contactId, oldStage, newStage) {
+export async function triggerSequencesForPipelineStageChange(contactId, oldStage, newStage, { locationId = null } = {}) {
   if (oldStage === newStage) return
   const db = createServerClient()
   try {
-    const { data: contact } = await db
+    const { data: contact, error: contactErr } = await db
       .from('contacts')
-      .select('id, location_id')
+      .select('id, location_id, organization_id')
       .eq('id', contactId)
       .single()
+    if (contactErr && locationId) {
+      logWarn('sequences', 'stage_change_skipped', { reason: 'contact_unreadable', locationId })
+      return
+    }
     if (!contact) return
 
-    const { data: sequences } = await db
+    const studioId = locationId || contact.location_id
+    if (!studioId) return
+    if (studioId !== contact.location_id) {
+      const check = await contactInStudioOrganisation(db, { contact, locationId: studioId })
+      if (!check.ok) {
+        logWarn('sequences', 'stage_change_skipped', { reason: check.reason, locationId: studioId })
+        return
+      }
+    }
+
+    const { data: sequences, error: sequencesErr } = await db
       .from('email_sequences')
       .select('id, trigger_config, audience_filter')
-      .eq('location_id', contact.location_id)
+      .eq('location_id', studioId)
       .eq('trigger_type', 'pipeline_stage_change')
       .eq('status', 'active')
+    if (sequencesErr) {
+      logWarn('sequences', 'stage_change_skipped', { reason: 'sequences_unreadable', locationId: studioId, err: sequencesErr.message })
+      return
+    }
     if (!sequences || sequences.length === 0) return
 
     for (const seq of sequences) {
@@ -292,16 +320,47 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
  * Best-effort and never throws: every caller has already committed its
  * primary write.
  *
+ * HATCHPIPE.1 — the FENCE. A deal move enrols only when ALL hold:
+ *   • the caller says which board the deal sits on (`dealLocationId` and
+ *     `pipelineId` both present) — else `missing_board`;
+ *   • that board's studio is the contact's OWN studio (a contact's deal on
+ *     another studio's board must not start the contact's sequences there
+ *     or here) — else `cross_location`;
+ *   • the move is the SOURCE of the contact's `pipeline_stage_slug`, i.e.
+ *     the slug the database now holds equals `to_slug` (mig 736 derives it
+ *     from the contact's own studio's boards only) — else `not_slug_source`.
+ * An unreadable contact skips too (`contact_unreadable`). Each skip is a
+ * `logWarn('sequences', 'stage_trigger_skipped', { reason, dealLocationId })`.
+ *
+ * Best-effort and never throws: every caller has already committed its
+ * primary write.
+ *
  * @param {string} contactId
  * @param {{action: string, from_slug?: string|null, to_slug?: string|null}|null} dealResult
  *   the return value of ensureDealForContact.
+ * @param {{dealLocationId?: string|null, pipelineId?: string|null}} [board]
+ *   location_id and pipeline_id of the deal that moved.
  */
-export async function triggerSequencesForDealPlacement(contactId, dealResult) {
+export async function triggerSequencesForDealPlacement(contactId, dealResult, { dealLocationId, pipelineId } = {}) {
   if (!contactId || dealResult?.action !== 'move') return
   const from = dealResult.from_slug ?? null
   const to = dealResult.to_slug ?? null
   if (from === to) return
+  const skip = (reason) =>
+    logWarn('sequences', 'stage_trigger_skipped', { reason, dealLocationId })
   try {
+    if (!dealLocationId || !pipelineId) return skip('missing_board')
+
+    const db = createServerClient()
+    const { data: contact, error } = await db
+      .from('contacts')
+      .select('id, location_id, pipeline_stage_slug')
+      .eq('id', contactId)
+      .maybeSingle()
+    if (error || !contact) return skip('contact_unreadable')
+    if (contact.location_id !== dealLocationId) return skip('cross_location')
+    if (contact.pipeline_stage_slug !== to) return skip('not_slug_source')
+
     await triggerSequencesForPipelineStageChange(contactId, from, to)
   } catch (e) {
     // triggerSequencesForPipelineStageChange swallows its own errors;
@@ -673,6 +732,16 @@ export async function triggerSequencesForFirstBooking(bookingId) {
  * arrives for an unknown member and the real-time sync INSERTS the contact
  * — per-event single-member creation, so it sits outside the guard below.
  *
+ * SHAREDCONTACT.1 — "created" means NEW TO A STUDIO. A contact is one person
+ * per organisation (mig 712), so a Stillorgan member who signs up at Hatch
+ * Street is attached to their Stillorgan row and nothing is inserted. Pass
+ * `locationId` (the studio they signed up at) and that studio's
+ * contact_created sequences fire, not their home studio's: the lead form
+ * passes its studio, and the un1t.online sync passes its studio for a fresh
+ * signup it created or attached (un1t-online-sync.js, recency-gated). A studio
+ * outside the contact's organisation is refused (`cross_organisation`). With
+ * no `locationId` the home studio is used, as before.
+ *
  * Deliberately NOT wired into bulk-import or the nightly Glofox bulk sync
  * (the mass-create guard) — same scoping as the curated
  * glofox_lead_provisioning hook.
@@ -681,22 +750,35 @@ export async function triggerSequencesForFirstBooking(bookingId) {
  * contact insert.
  *
  * @param {string} contactId
+ * @param {{ locationId?: string|null, sourceRef?: string }} [opts]
  */
-export async function triggerSequencesForContactCreated(contactId) {
+export async function triggerSequencesForContactCreated(contactId, { locationId = null, sourceRef = null } = {}) {
   if (!contactId) return
   const db = createServerClient()
   try {
     const { data: contact } = await db
       .from('contacts')
-      .select('id, location_id')
+      .select('id, location_id, organization_id')
       .eq('id', contactId)
       .single()
     if (!contact) return
 
+    const studioId = locationId || contact.location_id
+    if (!studioId) return
+    let joined = false
+    if (studioId !== contact.location_id) {
+      const check = await contactInStudioOrganisation(db, { contact, locationId: studioId })
+      if (!check.ok) {
+        logWarn('sequences', 'contact_created_skipped', { reason: check.reason, locationId: studioId })
+        return
+      }
+      joined = !check.sameStudio
+    }
+
     const { data: sequences } = await db
       .from('email_sequences')
       .select('id, audience_filter')
-      .eq('location_id', contact.location_id)
+      .eq('location_id', studioId)
       .eq('trigger_type', 'contact_created')
       .eq('status', 'active')
     if (!sequences || sequences.length === 0) return
@@ -708,7 +790,7 @@ export async function triggerSequencesForContactCreated(contactId) {
         sequenceId: seq.id,
         contactIds: [contactId],
         sourceType: 'contact_created',
-        sourceRef: 'created',
+        sourceRef: sourceRef || (joined ? 'joined_studio' : 'created'),
       })
     }
   } catch (e) {

@@ -25,6 +25,11 @@ function makeDb(schedules, { updateError = null } = {}) {
           },
         }
       }
+      // TZ.10 — the tick reads every location's zone once. No row → the
+      // platform zone (Europe/Dublin), which every schedule here is written in.
+      if (table === 'locations') {
+        return { select: () => ({ in: () => ({ order: async () => ({ data: [], error: null }) }) }) }
+      }
       throw new Error(`unexpected table ${table}`)
     },
   }
@@ -110,6 +115,15 @@ describe('runSonosReconcile', () => {
     const out = await runSonosReconcile(db, deps({ getGroups: async () => ({ ok: false, statusCode: 0 }) }))
     expect(db.updates).toHaveLength(0)
     expect(out).toMatchObject({ ok: true, sonosDown: true })
+  })
+
+  it('counts a gone household (410) as householdGone, not sonosDown, and writes nothing', async () => {
+    const db = makeDb([baseSchedule])
+    const out = await runSonosReconcile(db, deps({ getGroups: async () => ({ ok: false, statusCode: 410 }) }))
+    expect(db.updates).toHaveLength(0)
+    expect(out).toMatchObject({ ok: true, householdGone: 1 })
+    expect(out.sonosDown).toBeUndefined()
+    expect(logWarn).toHaveBeenCalledWith('sonos-reconcile', 'household gone — re-link needed', { locationId: 'loc-1', statusCode: 410 })
   })
 
   it('surfaces a revoked grant without throwing', async () => {

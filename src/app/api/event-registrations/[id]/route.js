@@ -6,6 +6,12 @@
 //          from race_registrations doesn't take the team — teams
 //          live across events).
 //
+// FINDTEAM.8 (I3, M4): a placed solo's row (status 'placed') is history — it
+// holds their payment and placement record — so PUT and DELETE refuse it (409
+// not_active). DELETE also refuses a team entry that solos were placed into
+// (409 has_placed_solos): deleting it would leave their placement pointing at
+// nothing.
+//
 // Note: race-day timing routes (start/finish/reset) live at
 // /api/registrations/[id]/race-* — they're a separate concern.
 // This route is for team management edits.
@@ -13,9 +19,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { placedSolosRefusal } from '@/lib/race-cancel'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,6 +31,12 @@ const UpdateSchema = z.object({
   wave_id: z.string().uuid().optional(),
   status: z.enum(['pending_payment', 'confirmed', 'cancelled', 'no_show']).optional(),
 })
+
+const placedRefusal = (verb) => NextResponse.json({
+  success: false,
+  error: 'not_active',
+  message: `This entrant has been placed in a team, so their own entry is no longer active and cannot be ${verb}.`,
+}, { status: 409 })
 
 async function loadReg(db, regId) {
   return db
@@ -40,7 +53,7 @@ export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
@@ -55,6 +68,11 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, reg.race?.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the registration's event location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, reg.race?.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
+  }
+  if (reg.status === 'placed') return placedRefusal('changed')
 
   const updates = {}
   if (body.wave_id) {
@@ -87,7 +105,7 @@ export async function DELETE(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
   }
 
@@ -98,6 +116,23 @@ export async function DELETE(_request, props) {
   }
   const guard = assertLocationAccessOr404(user, reg.race?.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the registration's event location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, reg.race?.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature not enabled for your account' }, { status: 403 })
+  }
+  if (reg.status === 'placed') return placedRefusal('deleted')
+
+  const { count: placedCount, error: placedErr } = await db
+    .from('race_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('placed_into_registration_id', params.id)
+  if (placedErr) {
+    return NextResponse.json({ success: false, error: 'Could not check for placed entrants. Nothing was deleted.' }, { status: 500 })
+  }
+  if ((placedCount || 0) > 0) {
+    // FINDTEAM.9 — the same body the cancel route answers (placedSolosRefusal).
+    return NextResponse.json(placedSolosRefusal(placedCount, 'deleted'), { status: 409 })
+  }
 
   const { error } = await db
     .from('race_registrations')

@@ -25,13 +25,14 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
-import { sendDepositReceiptSms } from '@/lib/deposit-receipts'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { overlayConnections } from '@/lib/connection-registry'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
+import { pickContact } from '@/lib/email-inbox'
+import { logInfo } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -101,17 +102,19 @@ export async function POST(request) {
   if (dedup.seen) {
     return NextResponse.json({ success: true, deduped: true })
   }
+  // REVOLUT.1 — buyer_email, deposit_revolut_order_id and
+  // deposit_link_sent_at are read by the orders sync and the buyer-contact
+  // branch below. buyer_email was missing from this select until REVOLUT.1,
+  // so both were dead in production (syncOrderFromCarDeposit returns null
+  // without it, and the `car.buyer_email` guard never passed).
   const { data: car } = await db
     .from('cars')
     .select(`
       id, location_id, deposit_token, deposit_status, deposit_paid_at,
-      deposit_amount, deposit_paid_amount, deposit_receipt_sent_at,
-      buyer_phone, buyer_name, make, model, irish_reg,
-      locations (
-        id, name,
-        car_deposit_receipt_sms_enabled,
-        twilio_alpha_sender_id
-      )
+      deposit_amount, deposit_paid_amount,
+      deposit_revolut_order_id, deposit_link_sent_at,
+      buyer_email, buyer_phone, buyer_name, make, model, irish_reg,
+      locations ( id, name )
     `)
     .eq('deposit_revolut_order_id', orderId)
     .maybeSingle()
@@ -121,11 +124,6 @@ export async function POST(request) {
     // Revolut moves on.
     console.warn(`[revolut-webhook] no car for order ${orderId} (event ${event})`)
     return NextResponse.json({ success: true, skipped: 'unknown_order' })
-  }
-
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  if (car.locations) {
-    car.locations = await overlayConnections(db, car.locations, ['twilio_sender'])
   }
 
   // Fetch the live order — gives us authoritative state + actual
@@ -161,7 +159,7 @@ export async function POST(request) {
   // Project the cars deposit state into the generic orders ledger
   // and emit a contact_events row for the matching transition.
   // Best-effort — orders/events failures must not affect the
-  // receipt-SMS step or the webhook 200.
+  // webhook 200.
   try {
     const carForOrders = { ...car, ...updates }
     await syncOrderFromCarDeposit({ db, car: carForOrders })
@@ -171,7 +169,13 @@ export async function POST(request) {
       cancelled: EVENT_TYPES.ORDER_ABANDONED,
     }
     const evType = evMap[state]
-    if (evType && car.buyer_email) {
+    const buyerEmail = String(car.buyer_email || '').toLowerCase().trim()
+    if (evType && !buyerEmail) {
+      // No buyer email on the car: nothing to match a contact on, so no
+      // event and no order_* enrolment. The deposit write above stands.
+      logInfo('revolut-webhook', 'buyer contact skipped: no buyer_email', { carId: car.id, state })
+    }
+    if (evType && buyerEmail) {
       // Look up a contact by buyer_email so the order_* sequence
       // trigger (Tier 1A) has someone to enrol. We don't auto-create
       // contacts on the cars side — the cars deposit flow is for
@@ -179,12 +183,29 @@ export async function POST(request) {
       // escapeLikePattern: buyer_email is typed into the public deposit form,
       // so a '%' or '_' in it would resolve to some unrelated contact and
       // enrol THEM in the order_* sequence.
-      const { data: existingContact } = await db
+      //
+      // W0.6b — scoped to the CAR'S ORGANISATION (cars.location_id is NOT
+      // NULL, mig 025, so there is always a scope; a failed sibling read
+      // narrows to the car's own studio). contacts_email_org_unique (mig 712)
+      // is per organisation, so one address can be a contact at several
+      // tenants: the estate-wide `.maybeSingle()` enrolled ANOTHER tenant's
+      // person in this tenant's order_* sequence when they were the only
+      // holder, and enrolled nobody (PGRST116 read as "no contact") when
+      // there were two. pickContact prefers the car's studio, then the
+      // oldest row, then the lowest id — the same choice the mail webhook
+      // makes. The error is logged, never discarded: no match is "no
+      // enrolment", which the caller already tolerates.
+      const orgLocIds = await orgLocationIdsFor(db, car.location_id)
+      const { data: holders, error: holdersErr } = await db
         .from('contacts')
-        .select('id')
-        .ilike('email', escapeLikePattern(car.buyer_email.toLowerCase().trim()))
-        .maybeSingle()
-      const buyerContactId = existingContact?.id || null
+        .select('id, location_id, created_at')
+        .in('location_id', scopeFor(orgLocIds))
+        .ilike('email', escapeLikePattern(buyerEmail))
+        .limit(20)
+      if (holdersErr) {
+        console.warn(`[revolut-webhook] buyer contact lookup failed for car ${car.id}: ${holdersErr.message}`)
+      }
+      const buyerContactId = pickContact(holders || [], car.location_id)?.id || null
 
       await emitEvent({
         db,
@@ -220,34 +241,9 @@ export async function POST(request) {
     console.warn(`[revolut-webhook] orders/events sync failed for car ${car.id}: ${e?.message || e}`)
   }
 
-  // Fire-and-forget receipt SMS to the buyer when the deposit lands.
-  // Best-effort — SMS / DB hiccups never affect the webhook response,
-  // because the deposit_status update above is the authoritative
-  // signal and the receipt is a customer-facing courtesy on top.
-  // Three gates inside sendDepositReceiptSms (location toggle,
-  // already-sent stamp, no-buyer-phone) skip cheaply; only successful
-  // sends stamp deposit_receipt_sent_at, so a Twilio outage during
-  // one webhook delivery can be picked up by the next retry.
-  let receiptResult = null
-  if (state === 'completed') {
-    try {
-      // Merge the just-applied update into the car snapshot so the
-      // body builder sees the actual captured amount even though we
-      // haven't refetched.
-      const carForReceipt = { ...car, ...updates }
-      receiptResult = await sendDepositReceiptSms({
-        db,
-        car: carForReceipt,
-        location: car.locations,
-        actorId: null, // webhook — no operator session
-      })
-    } catch (e) {
-      console.warn(`[revolut-webhook] receipt SMS error for car ${car.id}: ${e?.message || e}`)
-      receiptResult = { status: 'failed', reason: 'unhandled_exception' }
-    }
-  }
-
-  return NextResponse.json({ success: true, applied: updates, receipt: receiptResult })
+  // The buyer receipt SMS (mig 078) was retired with Twilio
+  // (TWILIO-RETIRE.1); the public deposit page shows the paid receipt.
+  return NextResponse.json({ success: true, applied: updates })
 }
 
 // Revolut dashboard hits GET on the URL when configuring the

@@ -5,7 +5,8 @@ import { authenticateApiKey, orgScopeLocationIds } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
-import { crossoverContactIds, fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
+import { fetchCrossoverContext, fetchListMembershipFlags } from '@/lib/contact-crossovers'
+import { listStudioContactsQuery, countStudioContactsQuery } from '@/lib/studio-contacts-query'
 import { attachLinkedCounts } from '@/lib/person-links'
 import { validateBody } from '@/lib/validate'
 
@@ -52,7 +53,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // Match Pipedrive's response shape so n8n code nodes need minimal changes
+  // Match Pipedrive's response shape (the original integration contract)
   return NextResponse.json({
     success: true,
     data: {
@@ -86,14 +87,6 @@ const SearchBody = z.object({
   location_id: z.string().nullable().optional(),
   limit: z.number().int().min(1).max(500).optional(),
   offset: z.number().int().min(0).optional(),
-  // Opt-in: fold in "crossover" deal-holders (contacts owned by another
-  // studio that have a deal at this one). Only the /contacts list wants
-  // them — the unified-send people-picker (ContactMultiSelect) shares
-  // this route and must stay strictly owned-only, so the union is OFF by
-  // default and the list opts in explicitly. Send safety doesn't depend
-  // on this (the send path re-scopes by location_id) — this just keeps
-  // crossovers from appearing in the picker's type-ahead.
-  include_crossovers: z.boolean().optional(),
   // CONTACT-DEDUP (mig 334): lookup callers (the /contacts list) set this to
   // fold each linked person down to ONE row (the group primary). Reach callers
   // (the send people-picker) omit it so every account/channel stays visible.
@@ -134,29 +127,20 @@ export async function POST(request) {
   // then layer the modifiers at the end. Earlier version of this
   // route built .order().range() up front and crashed any time an
   // audience filter was set.
-  // PERF.2 — narrowed from select('*') to the same explicit field
-  // set that /contacts page.js uses for the no-filter path, so
-  // ContactsView gets a stable shape whichever code path it took.
-  // Keep this list in lock-step with `CONTACT_LIST_FIELDS` in
-  // src/app/contacts/page.js.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status, person_group_id'
-  // Crossovers are opt-in (see schema) — default OFF so shared callers
-  // such as the send people-picker stay owned-only.
-  const wantCrossovers = parsed.data.include_crossovers === true
-  const crossIds = wantCrossovers ? await crossoverContactIds(db, locationId) : []
-  const applyLoc = (q) => crossIds.length > 0
-    ? q.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
-    : q.eq('location_id', locationId)
-  let listQuery = applyLoc(db.from('contacts').select(CONTACT_LIST_FIELDS))
-  let countQuery = applyLoc(db.from('contacts').select('id', { count: 'exact', head: true }))
-
-  // CONTACT-DEDUP — lookup callers fold each linked person to one row (the
-  // group primary). Applied before order/range so the filter methods remain
-  // available. Reach callers leave primary_only unset → every account shown.
-  if (parsed.data.primary_only === true) {
-    listQuery = listQuery.eq('is_primary_contact', true)
-    countQuery = countQuery.eq('is_primary_contact', true)
-  }
+  // ORGCONTACTS.2 — both queries read public.studio_contacts (mig 765)
+  // filtered on the studio: every contact with ANY relationship here (a
+  // crossover included; the pill reads studio_is_crossover), in one
+  // equality filter. The old include_crossovers opt-in is gone: the send
+  // people-picker shares this route and a relationship at the studio IS
+  // what makes a person sendable from it (its own send path re-scopes by
+  // studio anyway). The field set is CONTACT_LIST_FIELDS in
+  // src/lib/studio-contacts-query.js, shared with the /contacts page.
+  // CONTACT-DEDUP — primary_only folds each linked person to one row (the
+  // group primary), applied inside the helper before order/range so the
+  // filter methods remain available. Reach callers leave it unset.
+  const primaryOnly = parsed.data.primary_only === true
+  let listQuery = listStudioContactsQuery(db, { locationId, primaryOnly })
+  let countQuery = countStudioContactsQuery(db, { locationId, primaryOnly })
 
   // Free-text search applies on top of the audience filter — separate
   // substring match, not part of the filter schema. Both queries get it.
@@ -231,15 +215,16 @@ export async function POST(request) {
     ? await attachLinkedCounts(db, listRes.data || [])
     : (listRes.data || [])
 
-  const crossoverContext = wantCrossovers
+  // ORGCONTACTS.2 — the two decorations (the primary-studio pill, the
+  // "also on <studio>'s list" pills) belong to the contacts LIST, which is
+  // the primary_only caller; the send people-picker neither asks for them
+  // nor should pay for the queries. ContactsView swaps to this route the
+  // moment the operator searches or filters, so omitting them here would
+  // make the pills flicker out mid-typing.
+  const crossoverContext = primaryOnly
     ? await fetchCrossoverContext(db, contacts, locationId)
     : {}
-  // LISTFLAG.1 — gated on the same flag as the crossover context: the two
-  // decorate the contacts LIST, and the other callers of this route (the send
-  // people-picker) neither ask for them nor should pay for the queries.
-  // ContactsView swaps to this route the moment the operator searches or
-  // filters, so omitting it here would make the pills flicker out mid-typing.
-  const listFlags = wantCrossovers
+  const listFlags = primaryOnly
     ? await fetchListMembershipFlags(db, contacts, locationId)
     : {}
   return NextResponse.json({

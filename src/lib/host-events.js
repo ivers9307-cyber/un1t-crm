@@ -55,16 +55,8 @@ export function hostEventDefaults() {
   }
 }
 
-// Turn a display name into a URL-safe slug. Lowercases, collapses any
-// run of non-alphanumerics to a single '-', trims leading/trailing
-// dashes, and falls back to 'event' when nothing usable remains.
-export function deriveSlug(name) {
-  const slug = String(name || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug || 'event'
-}
+// EVENT-SLUG.1 — slugs come from `@/lib/event-slug` (place-date-time);
+// the name-based deriveSlug that lived here is gone.
 
 // Decide what an edit does to a host event's status.
 //
@@ -170,7 +162,7 @@ export async function ensureAnchorLocation(db, host) {
 // behaviour, never to a wrong location. Errors also fall back.
 //
 // FAIL-OPEN IS ONLY RIGHT FOR CONTACT HOMING. For SENDER selection the same
-// fallback IS the wrong location — the host anchor has no Twilio/email
+// fallback IS the wrong location — the host anchor has no email
 // identity, so falling back there sends under the wrong brand. That caller
 // (`resolveEventCommsLocation`) must use `resolveMasterLocationIdStrict`
 // below, which surfaces the read failure instead of folding it into the

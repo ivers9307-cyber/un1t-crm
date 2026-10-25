@@ -19,35 +19,28 @@ vi.mock('@/lib/whatsapp', () => ({
   getTemplates: vi.fn(),
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+// WACONFIGFALLBACK.1 — the sync resolves the location's OWN numbers first
+// (route.own-number.test.js covers a location without one). WAORGNUMBER.2: it
+// walks each WABA of the numbers switched on there; this one is homed here.
+vi.mock('@/lib/whatsapp-config', () => ({
+  listLocationNumberConfigs: vi.fn(async () => [{ source: 'db', id: 'n1', locationId: 'loc-1', homeLocationId: 'loc-1', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth', businessAccountId: 'WABA-SYNTH' }]),
+}))
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { GET } from './route.js'
 import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'
 import { createServerClient } from '@/lib/supabase'
+import { fakeTemplatesDb } from './templates-fake-db.test-helpers.js'
 
-const CACHED = [{ id: 'row-1', name: 'book_first_visit', status: 'APPROVED' }]
+const CACHED = [{ id: 'row-1', name: 'book_first_visit', status: 'APPROVED', location_id: 'loc-1', meta_template_id: 'meta-1' }]
 const META = [{ id: 'meta-1', name: 'book_first_visit', language: 'en', category: 'MARKETING', components: [], status: 'APPROVED' }]
 
-// One builder per from(); which result it resolves to depends on the verbs used,
-// mirroring the three shapes the route actually issues: a maybeSingle() lookup,
-// an update()/insert() write, and the final select().order() list.
-function makeDb({ find = { data: null, error: null }, write = { error: null }, list = { data: CACHED, error: null } } = {}) {
-  return {
-    from: () => {
-      let mode = 'list'
-      const b = {
-        select: () => b,
-        eq: () => b,
-        in: () => b,
-        order: () => b,
-        update: () => { mode = 'write'; return b },
-        insert: () => { mode = 'write'; return b },
-        maybeSingle: async () => find,
-        // A supabase builder is a THENABLE, not a Promise (see CLAUDE.md).
-        then: (res, rej) => Promise.resolve(mode === 'write' ? write : list).then(res, rej),
-      }
-      return b
-    },
-  }
+// The fake filters for real: the cached row is this studio's, saved before its
+// WABA was recorded, so the sync's one Meta template updates it (by Meta's id).
+let state
+function makeDb(faults = {}) {
+  state = { whatsapp_templates: CACHED.map((r) => ({ ...r })), faults }
+  return fakeTemplatesDb(state)
 }
 
 function req({ sync = true } = {}) {
@@ -66,7 +59,8 @@ describe('GET /api/whatsapp/templates?sync=true — sync_error contract', () => 
     const body = await (await GET(req())).json()
     expect(body.success).toBe(true)
     expect(body.sync_error).toBeNull()
-    expect(body.templates).toEqual(CACHED)
+    // The refreshed row: Meta's fields written over it, stamped with the WABA.
+    expect(body.templates).toEqual([expect.objectContaining({ id: 'row-1', business_account_id: 'WABA-SYNTH', category: 'MARKETING' })])
   })
 
   it('surfaces a Meta fetch failure instead of swallowing it, and still serves the cache', async () => {
@@ -84,7 +78,7 @@ describe('GET /api/whatsapp/templates?sync=true — sync_error contract', () => 
   it('reports a per-row write failure, which supabase-js returns rather than throws', async () => {
     // The case the old catch could never see: nothing throws, the loop completes,
     // and yet not one template was persisted.
-    createServerClient.mockReturnValue(makeDb({ write: { error: { message: 'permission denied' } } }))
+    createServerClient.mockReturnValue(makeDb({ 'whatsapp_templates:update': { message: 'permission denied' } }))
 
     const body = await (await GET(req())).json()
 
@@ -92,12 +86,13 @@ describe('GET /api/whatsapp/templates?sync=true — sync_error contract', () => 
     expect(body.sync_error).toBe('Refreshed from Meta, but 1 of 1 templates could not be saved.')
   })
 
-  it('reports a failed lookup without attempting the write', async () => {
-    createServerClient.mockReturnValue(makeDb({ find: { data: null, error: { message: 'timeout' } } }))
+  it('reports a failed read of the saved templates without attempting a write', async () => {
+    createServerClient.mockReturnValue(makeDb({ 'whatsapp_templates:select': (cols) => (cols.includes('meta_template_id') ? { message: 'timeout' } : null) }))
 
     const body = await (await GET(req())).json()
 
-    expect(body.sync_error).toBe('Refreshed from Meta, but 1 of 1 templates could not be saved.')
+    expect(body.sync_error).toBe('Could not read the saved templates: timeout')
+    expect(state.writes).toEqual([])
   })
 
   it('omits the key entirely when no refresh was requested, so absent never reads as clean', async () => {

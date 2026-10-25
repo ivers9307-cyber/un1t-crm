@@ -7,8 +7,17 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import SettingsBreadcrumb from '@/components/settings/SettingsBreadcrumb'
+import { staffTabMetadata } from '@/lib/staff-tab-title'
 
 export const dynamic = 'force-dynamic'
+
+// TABTITLE.1 — the tab names the ACTIVE studio for every page under this
+// layout (see src/lib/staff-tab-title.js). This is the OUTERMOST staff layout
+// of its subtree: a layout nested under it must NOT export this again, or the
+// tab reads "Studio · Studio".
+export async function generateMetadata() {
+  return staffTabMetadata()
+}
 
 export default async function SettingsLayout({ children }) {
   const user = await getCurrentUser()
@@ -19,22 +28,24 @@ export default async function SettingsLayout({ children }) {
   // step 2) — the family is genuinely heterogeneous, with no common floor
   // beyond "signed in":
   //   - hasPermission(user, 'settings'): staff, notifications,
-  //     integration-health, status-page, and this index page itself.
+  //     status-page, and this index page itself.
   //   - MANAGER_ROLES (master/owner/manager/head_coach): class-categories,
   //     holidays, shifts, customer-agent (+ analytics/requests), scoring.
   //   - ADMIN_ROLES (master/owner/manager): usage (view tier), hosts
   //     (+ hosts/[id]).
   //   - hardcoded owner/master (narrower than MANAGER_ROLES, no
   //     `settings` key involved): email-domain, api-keys, billing,
-  //     integrations-hub.
+  //     integrations-hub (which since INTEGONE.3 also holds integration
+  //     health, the organisation's WhatsApp numbers and the Zoom phone
+  //     directory as views/drawers; /settings/integration-health,
+  //     /settings/whatsapp-numbers and /settings/integrations/zoom-contacts
+  //     only redirect there after the signed-in check).
   //   - hardcoded master/owner (excludes manager + head_coach, so
   //     narrower again): locations/[id], staff/new, staff/[id].
   //   - master only: locations/new; impersonate (the real underlying
   //     master, even mid-impersonation).
   //   - a single permission key narrower than 'settings': landing-page
   //     ('landing_page').
-  //   - open to any authenticated user, with an org-scoped empty shell
-  //     otherwise: integrations/zoom-contacts.
   // A layout-level `settings` gate would 403 every MANAGER_ROLES /
   // ADMIN_ROLES / hardcoded-role page for a legitimate holder of one of
   // those narrower grants who doesn't happen to also hold `settings` (a

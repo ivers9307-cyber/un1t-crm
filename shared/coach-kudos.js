@@ -11,6 +11,8 @@
 // The customer only ever reads their OWN rows (RLS: contact_id =
 // private.auth_contact_id(), same customer-self pattern as heart_rate_sessions).
 
+import { formatInZone, DEFAULT_TZ } from './zoned-time.js'
+
 // Message length bounds — mirror the CHECK the un1t-crm migration enforces.
 // Kept here so both sides validate identically (defence in depth; the DB is
 // the source of truth).
@@ -42,9 +44,10 @@ export function unseenCount(list) {
  *
  * @param {string|number|Date} isoOrMs  created_at
  * @param {number} [nowMs=Date.now()]   injectable clock for tests
+ * @param {string} [zone]  IANA zone for the plain-date form (default Europe/Dublin)
  * @returns {string}
  */
-export function kudosRelativeTime(isoOrMs, nowMs = Date.now()) {
+export function kudosRelativeTime(isoOrMs, nowMs = Date.now(), zone = DEFAULT_TZ) {
   const t =
     isoOrMs instanceof Date
       ? isoOrMs.getTime()
@@ -67,13 +70,10 @@ export function kudosRelativeTime(isoOrMs, nowMs = Date.now()) {
   const wk = Math.floor(day / 7)
   if (wk < 5) return `${wk}w ago`
 
-  // Older than ~a month — show a plain calendar date (Dublin gym, so format
-  // in Europe/Dublin for consistency with the rest of the app).
-  return new Intl.DateTimeFormat('en-IE', {
-    day: 'numeric',
-    month: 'short',
-    timeZone: 'Europe/Dublin',
-  }).format(new Date(t))
+  // Older than ~a month — show a plain calendar date in `zone`, the studio
+  // the kudos came from (coach_kudos.location_id; TZ.13, D7 — the member's
+  // home studio). Omitted = Europe/Dublin.
+  return formatInZone(new Date(t), zone, { day: 'numeric', month: 'short' })
 }
 
 /**

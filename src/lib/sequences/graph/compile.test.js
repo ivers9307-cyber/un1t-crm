@@ -127,3 +127,23 @@ describe('compileGraphToSteps — successor stamping', () => {
     expect(compileGraphToSteps(g)[0].config.next_step_order).toBe('end')
   })
 })
+
+// STEPATTRIB.1 — the publish route keys step rows on the graph node id so a
+// republish updates rows in place instead of re-inserting them. Only the
+// publish path asks for the id; every other caller's rows stay unchanged.
+describe('compileGraphToSteps — withNodeIds (STEPATTRIB.1)', () => {
+  it('stamps each row with the node id it was compiled from', () => {
+    const rows = compileGraphToSteps(branched, { withNodeIds: true })
+    expect(rows.map(r => [r.step_order, r.graph_node_id])).toEqual([[1, 'br'], [2, 'y'], [3, 'n']])
+  })
+
+  it('leaves the default output without the key (other callers insert these rows as-is)', () => {
+    for (const r of compileGraphToSteps(branched)) expect(r).not.toHaveProperty('graph_node_id')
+  })
+
+  it('changes nothing else about a row', () => {
+    const plain = compileGraphToSteps(linear)
+    const withIds = compileGraphToSteps(linear, { withNodeIds: true }).map(({ graph_node_id, ...rest }) => { void graph_node_id; return rest })
+    expect(withIds).toEqual(plain)
+  })
+})

@@ -1,6 +1,8 @@
 // /api/events/[id]/teams
 //
-// GET   — list all registrations for a race with team + members
+// GET   — list all registrations for a race with team + members, plus the
+//         move history (EVENT-MOVE.1): `last_move` per registration and a
+//         top-level `moved_out`
 // POST  — manually create a team registration (no payment flow)
 //
 // Manager+ at the race's location.
@@ -8,13 +10,16 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
 import { logError } from '@/lib/log'
+import { loadMoveHistory } from '@/lib/registration-move-history'
+import { entryLeadName } from '@/lib/registration-entry'
+import { pendingLapsed } from '@/lib/entry-policy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,7 +38,7 @@ const CreateTeamSchema = z.object({
 async function loadRaceForAccess(db, raceId) {
   return db
     .from('race_events')
-    .select('id, location_id, allowed_team_sizes, waves:race_waves ( id )')
+    .select('id, location_id, allowed_team_sizes, entry_policy, waves:race_waves ( id )')
     .eq('id', raceId)
     .single()
 }
@@ -42,7 +47,7 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -51,12 +56,18 @@ export async function GET(_request, props) {
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   const { data: registrations, error } = await db
     .from('race_registrations')
     .select(`
       id, status, registered_at, team_composition, wave_id,
       race_started_at, race_finished_at,
+      looking_for_team, placed_into_registration_id, placed_at,
+      contact:contact_id ( first_name, last_name, email, phone ),
       teams:team_id (
         id, name, size, captain_contact_id,
         team_members ( id, name, email, role, is_member, member_validation_status )
@@ -78,11 +89,14 @@ export async function GET(_request, props) {
   if (regIds.length > 0) {
     const { data: payments } = await db
       .from('race_payments')
-      .select('id, race_registration_id, status, payment_checkout_url, contact_phone, contact_name, created_at')
+      .select('id, race_registration_id, kind, status, payment_checkout_url, contact_email, contact_phone, contact_name, created_at')
       .in('race_registration_id', regIds)
       .order('created_at', { ascending: false })
     const byReg = {}
     for (const pmt of payments || []) {
+      // EVENT-MOVE.5 — `payment` is the ENTRY's payment (its link, its
+      // status); a price-difference payment for a move is not it.
+      if ((pmt.kind || 'entry') !== 'entry') continue
       if (!byReg[pmt.race_registration_id]) {
         byReg[pmt.race_registration_id] = {
           id: pmt.id,
@@ -93,20 +107,32 @@ export async function GET(_request, props) {
           // server-side — this is just for render + the confirm dialog.
           contact_phone: pmt.contact_phone || null,
           contact_name: pmt.contact_name || null,
+          contact_email: pmt.contact_email || null,
         }
       }
     }
     for (const r of regs) r.payment = byReg[r.id] || null
   }
+  // EVENT-MOVE.5 — the person a payment link for the difference is emailed
+  // to, so the confirm names the recipient (entryLeadEmail's order).
+  for (const r of regs) r.lead_name = entryLeadName({ registration: r, payment: r.payment || null })
 
-  return NextResponse.json({ success: true, data: regs })
+  const { lastMoveByReg, movedOut } = await loadMoveHistory(db, { eventId: params.id, regIds })
+  for (const r of regs) r.last_move = lastMoveByReg[r.id] || null
+  // ENTRYPOLICY.1 — an unpaid entry past the event's hold no longer holds its
+  // place; the Teams page shows it as "Lapsed (unpaid)". The row stays: staff
+  // may still confirm it by hand or delete it.
+  const nowMs = Date.now()
+  for (const r of regs) r.lapsed = pendingLapsed(r, nowMs, race)
+
+  return NextResponse.json({ success: true, data: regs, moved_out: movedOut })
 }
 
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!hasPermission(user, 'races')) {
+  if (!hasPermissionAtAnyLocation(user, 'races')) {
     return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
   }
 
@@ -119,6 +145,10 @@ export async function POST(request, props) {
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
+  // ROLESWEEP.1b — judged at the event's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, race.location_id, 'races')) {
+    return NextResponse.json({ success: false, error: 'Races feature is disabled at this location' }, { status: 403 })
+  }
 
   // Validate team size against allowed sizes.
   if (Array.isArray(race.allowed_team_sizes) && !race.allowed_team_sizes.includes(body.team_size)) {

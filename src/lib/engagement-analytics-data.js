@@ -6,7 +6,7 @@
 // pure summarizer. DB-touching — kept out of engagement-analytics.js so that
 // module stays pure + unit-tested.
 
-import { fetchMembers, fetchPastDue } from '@/lib/churn-radar-data'
+import { radarReads } from '@/lib/churn-radar-data'
 import { summarizeEngagementChurn } from '@/lib/engagement-analytics'
 
 const PAGE = 1000
@@ -54,9 +54,11 @@ async function fetchFriendCounts(db, locationId, memberIds) {
  */
 export async function loadEngagementChurn(db, locationId, nowMs = Date.now()) {
   if (!db || !locationId) return null
+  // UN1TRADAR.1 — the same rows the radar reads, through the seam
+  const r = await radarReads(db, locationId, ['radarMembers', 'radarPastDue'])
   const [members, pastDue] = await Promise.all([
-    fetchMembers(db, locationId),
-    fetchPastDue(db, locationId),
+    r.radarMembers(db, locationId, { nowMs }),
+    r.radarPastDue(db, locationId, { nowMs }),
   ])
   const memberIds = new Set(members.map((m) => m.id))
   const friendCountById = await fetchFriendCounts(db, locationId, memberIds)

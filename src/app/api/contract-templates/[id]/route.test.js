@@ -53,6 +53,7 @@ function twoOrgRows() {
 
 const ownerA = () => ({
   id: 'owner-a', isMaster: false, role: 'owner',
+  orgAdminOrgIds: [ORG_A], // C18 ORGROLE.1: contracts are for org admins
   rolesByLocation: { [LOC_A1]: 'owner' },
   locations: [{ id: LOC_A1, organization_id: ORG_A }],
 })
@@ -182,15 +183,15 @@ describe('GET /api/contract-templates/[id] — detail scoping', () => {
     expect(res.status).toBe(404)
   })
 
-  it('owner-role caller who owns NO org gets 404, not an unscoped read', async () => {
+  it('owner-role caller who administers NO org is refused, never an unscoped read', async () => {
     setup({
       id: 'mgr-1', isMaster: false, role: 'owner',
-      // owner role string but no owner assignment → owns no org
+      // owner role string but no org_admin grant → administers no org
       rolesByLocation: { [LOC_B1]: 'manager' },
       locations: [{ id: LOC_B1, organization_id: ORG_B }],
     })
     const res = await GET(null, props(TPL_B))
-    expect(res.status).toBe(404)
+    expect(res.status).toBe(403)
   })
 
   it('master can read any template, including NULL-org rows', async () => {
@@ -202,17 +203,26 @@ describe('GET /api/contract-templates/[id] — detail scoping', () => {
     expect(body.data.id).toBe(TPL_NULL)
   })
 
-  it('passes the role gate on owner-org membership alone (composes with org-admin grants)', async () => {
-    // Role string is not owner/master, but getOwnerOrganizationIds
-    // resolves an org — the gate must accept membership, not just the
-    // role label (SAAS-4 extends membership to org-admin grants).
+  it('passes the gate on an org_admin grant alone, whatever the role label', async () => {
+    // Role string is not owner/master: the grant is what counts (C18 ORGROLE.1).
     setup({
       id: 'grantee', isMaster: false, role: 'manager',
+      rolesByLocation: { [LOC_A1]: 'manager' },
+      locations: [{ id: LOC_A1, organization_id: ORG_A }],
+      orgAdminOrgIds: [ORG_A],
+    })
+    const res = await GET(null, props(TPL_A))
+    expect(res.status).toBe(200)
+  })
+
+  it('a studio owner in the org with no org_admin grant is refused (C18 ORGROLE.1)', async () => {
+    setup({
+      id: 'studio-owner', isMaster: false, role: 'owner',
       rolesByLocation: { [LOC_A1]: 'owner' },
       locations: [{ id: LOC_A1, organization_id: ORG_A }],
     })
     const res = await GET(null, props(TPL_A))
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(403)
   })
 })
 

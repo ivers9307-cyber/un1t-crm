@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -22,8 +22,14 @@ async function loadOwned(db, user, id) {
     .eq('id', id)
     .single()
   if (!row) return { error: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }
-  const allowed = getUserLocationIds(user) // null = master (no restriction)
-  if (allowed !== null && !allowed.includes(row.location_id)) {
+  // Every location the caller belongs to; a master's is every active one
+  // (getCurrentUser), so a master still passes here. Never null.
+  if (!getUserLocationIds(user).includes(row.location_id)) {
+    return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
+  }
+  // ROLESWEEP.1a — the role is judged at the ROW's location, not the
+  // caller's active studio (user.role).
+  if (!hasRoleAtLocation(user, row.location_id, MANAGER_ROLES)) {
     return { error: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
   }
   return { row }
@@ -33,7 +39,7 @@ export async function PUT(request, { params }) {
   const { id } = await params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const db = createServerClient()
@@ -63,7 +69,7 @@ export async function DELETE(request, { params }) {
   const { id } = await params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
   const db = createServerClient()

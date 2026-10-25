@@ -8,7 +8,8 @@
 // authenticated admin path; the TV itself has no session).
 //
 // Response shape:
-//   200 { display: { id, label, location_id, rotation, logo_url, company_name }, content: { ... } | null }
+//   200 { timezone, display: { id, label, location_id, rotation, logo_url, company_name }, content: { ... } | null }
+//       timezone (TZ.12): the location's IANA zone, for the idle clock
 //   404 { error: 'invalid_token' }
 //
 // content.source_type 'template' (TV-TEMPLATE.1) carries an extra
@@ -22,6 +23,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationBranding } from '@/lib/location-branding'
+import { boardZoneForLocation } from '@/lib/tv-board-zone'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
@@ -116,9 +118,15 @@ export async function GET(request, props) {
   // screen shows it in place of the hard-coded "UN1T" wordmark.
   // Operator-editable via company_settings; logoUrl null → the
   // client keeps the wordmark fallback. Never throws.
-  const branding = await getLocationBranding(db, display.location_id)
+  // TZ.12 — the studio's zone, for the idle screen's clock and day line. A
+  // failed read falls back to Europe/Dublin with a warning; never a blank TV.
+  const [branding, timezone] = await Promise.all([
+    getLocationBranding(db, display.location_id),
+    boardZoneForLocation(db, display.location_id),
+  ])
 
   return NextResponse.json({
+    timezone,
     display: {
       id: display.id,
       label: display.label,

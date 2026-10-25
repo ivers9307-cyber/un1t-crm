@@ -2,6 +2,8 @@
 // execution crashed between the atomic claim and the Glofox call finishing.
 import { describe, it, expect } from 'vitest'
 import {
+  EXECUTING_KINDS,
+  RETRYABLE_KINDS,
   EXECUTION_STALE_MS,
   stuckExecutionStartedAt,
   isStuckExecuting,
@@ -143,5 +145,69 @@ describe('CANCEL-FORM.5 — conditional executing kinds', () => {
     expect(stuckExecutionStartedAt(row)).toBe(started)
     // No marker (toggle was off, nothing executed) → never "stuck".
     expect(stuckExecutionStartedAt({ status: 'approved', kind: 'cancellation', details: {} })).toBeNull()
+  })
+})
+
+// AGENT-RETRY.3 — a superseded duplicate is a TOMBSTONE, not a failed execution.
+// booking-tools writes `status:'failed'` + `reason:'superseded_duplicate'` when a
+// second attempt hits the same account-shaped rejection while an earlier request
+// for the same event is still pending: it deliberately does NOT raise a second
+// pending card or a second manager push. Nobody approved it (`decided_at` is
+// null), so surfacing it under "these were APPROVED but Glofox rejected them"
+// told the operator something untrue and offered a retry whose outcome the
+// SIBLING row owns. Live 2026-09-08 (mary cate kelly, THE 50+ CLUB 14 Sept):
+// the real request was approved and actioned, and the tombstone still sat in
+// the fix-&-retry lane afterwards.
+describe('AGENT-RETRY.3 — superseded duplicates never reach the retry lane', () => {
+  const NOW3 = Date.parse('2026-09-08T19:00:00.000Z')
+  const future = new Date(NOW3 + 6 * 86_400_000).toISOString()
+
+  it('withholds a superseded duplicate even though its class is still in the future', () => {
+    const tombstone = {
+      status: 'failed',
+      kind: 'class_booking',
+      decided_at: null,
+      details: { reason: 'superseded_duplicate', duplicate_of: 'sibling-id', starts_at: future },
+    }
+    expect(retryOffered(tombstone, NOW3)).toBe(false)
+  })
+
+  it('still offers a genuine booking_rejected failure for the same class', () => {
+    const real = {
+      status: 'failed',
+      kind: 'class_booking',
+      details: { reason: 'booking_rejected', starts_at: future },
+    }
+    expect(retryOffered(real, NOW3)).toBe(true)
+  })
+
+  it('leaves the ROUTE gate permissive — only the UI lane is fenced', () => {
+    const tombstone = {
+      status: 'failed',
+      kind: 'class_booking',
+      details: { reason: 'superseded_duplicate', duplicate_of: 'sibling-id', starts_at: future },
+    }
+    expect(isRetryableFailure(tombstone)).toBe(true)
+  })
+})
+
+// EVENT-MOVE.7 — approving a Mia event_move runs the move in the same
+// request, so a crash mid-move must be visible and retryable like the others.
+describe('event_move', () => {
+  it('is an executing kind, so a crashed or failed move is retryable', () => {
+    expect(EXECUTING_KINDS.has('event_move')).toBe(true)
+    expect(RETRYABLE_KINDS.has('event_move')).toBe(true)
+  })
+})
+
+// UN1TWRITE.8 — a refund_request is record-only. It must stay out of the
+// executing and retry machinery: no crash recovery marker lane, no fix-and-retry
+// queue, no failed-retry rows in /approvals. The route closes it itself.
+describe('UN1TWRITE.8 — refund_request is not an executing or retryable kind', () => {
+  it('is in none of EXECUTING_KINDS, CONDITIONAL_EXECUTING_KINDS or RETRYABLE_KINDS', async () => {
+    const m = await import('./request-recovery.js')
+    expect(m.EXECUTING_KINDS.has('refund_request')).toBe(false)
+    expect(m.CONDITIONAL_EXECUTING_KINDS.has('refund_request')).toBe(false)
+    expect(m.RETRYABLE_KINDS.has('refund_request')).toBe(false)
   })
 })

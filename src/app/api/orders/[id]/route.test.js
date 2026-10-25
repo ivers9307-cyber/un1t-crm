@@ -14,7 +14,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth', async () => ({
+  // ROLESWEEP.1b — the route judges Manager+ with the real per-location helpers.
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   assertLocationAccess: (user, locationId) => {
     if (!user) {
@@ -129,20 +131,20 @@ describe('GET /api/orders/[id]', () => {
   })
 
   it('returns 403 when user role is not manager+', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'staff', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'staff' }, assignmentsByLocation: { 'loc-A': { role: 'staff', permissions: {} } } })
     const res = await GET(FAKE_REQUEST, { params: { id: 'order-1' } })
     expect(res.status).toBe(403)
   })
 
   it('returns 404 when the order is not found', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     createServerClient.mockReturnValue(mockDb({ order: null, orderError: { message: 'not found' } }))
     const res = await GET(FAKE_REQUEST, { params: { id: 'order-missing' } })
     expect(res.status).toBe(404)
   })
 
   it('returns 404 when user is manager+ but order is in a different location (IDOR)', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     createServerClient.mockReturnValue(mockDb({
       order: { id: 'order-1', location_id: 'loc-B', source_type: 'race_registration', source_id: 's1' },
     }))
@@ -151,7 +153,7 @@ describe('GET /api/orders/[id]', () => {
   })
 
   it('returns the order + chain + events + race source on the happy path', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     const order = {
       id: 'order-1', location_id: 'loc-A',
       source_type: 'race_registration', source_id: 'pay-1',
@@ -183,7 +185,7 @@ describe('GET /api/orders/[id]', () => {
   })
 
   it('returns the car summary for a car_deposit source', async () => {
-    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }], rolesByLocation: { 'loc-A': 'manager' }, assignmentsByLocation: { 'loc-A': { role: 'manager', permissions: {} } } })
     const order = {
       id: 'order-1', location_id: 'loc-A',
       source_type: 'car_deposit', source_id: 'car-1',

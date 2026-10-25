@@ -26,6 +26,8 @@
 // Billing health is handled separately — members whose payment has
 // failed land in the Overdue tab (see classifyContact), not here.
 
+import { formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
+
 // Membership tiers that count as paying members — the radar's
 // population. Drop-in (classpass_payg), trials and leads are out.
 export const MEMBER_STATUSES = Object.freeze(['member', 'credit_member'])
@@ -269,6 +271,9 @@ function detectNoShow(contact) {
 
 function detectRenewalCliff(contact, nowMs) {
   if (!contact.glofox_membership_expiry) return null
+  // UN1TRADAR.3 — a member who has asked to cancel will not renew; the
+  // Cancelling signal says so (no Glofox row carries the key)
+  if (contact.cancel_at_period_end === true) return null
   const d = daysSince(contact.glofox_membership_expiry, nowMs)
   if (d == null) return null
   const daysToRenewal = -d  // positive = days until the membership renews
@@ -338,7 +343,30 @@ function detectPaymentSlipping(contact, nowMs) {
   }
 }
 
+// UN1TRADAR.3 — a member who has asked to cancel (un1t.online's
+// cancel_at_period_end) is leaving whatever their attendance says: weight 6
+// makes them high tier, and `pin` sorts them above every unpinned row. Only a
+// un1t row carries the key, so Stillorgan's radar never sees this signal.
+const CANCELLING_WEIGHT = 6
+
+export function detectCancelling(contact, _nowMs, ctx = {}) {
+  if (contact?.cancel_at_period_end !== true) return null
+  const end = contact.glofox_membership_expiry
+  const day = end && Number.isFinite(Date.parse(end))
+    ? formatInZone(end, ctx.zone || DEFAULT_TZ, { day: 'numeric', month: 'short' })
+    : null
+  return {
+    key: 'cancelling',
+    label: 'Cancelling',
+    detail: day ? `Membership ends on ${day}` : 'Membership ends at the end of the current period',
+    weight: CANCELLING_WEIGHT,
+    severity: 'critical',
+    pin: true,
+  }
+}
+
 const DETECTORS = [
+  detectCancelling,
   detectGoneQuiet, detectDisengaging, detectNoShow, detectRenewalCliff,
   detectPackRunningLow, detectPaymentSlipping,
 ]
@@ -360,7 +388,7 @@ export function scoreMember(contact, nowMs = Date.now(), ctx = {}) {
   if (classifyContact(contact, ctx) !== 'active') return null
   const signals = []
   for (const detect of DETECTORS) {
-    const s = detect(contact, nowMs)
+    const s = detect(contact, nowMs, ctx)
     if (s) signals.push(s)
   }
   if (signals.length === 0) return null
@@ -446,7 +474,10 @@ export function buildRadar(contacts, nowMs = Date.now(), ctx = {}) {
     const r = scoreMember(c, nowMs, ctx)
     if (r) scored.push(r)
   }
+  const pinned = (r) => (r.signals.some((s) => s.pin === true) ? 1 : 0)
   scored.sort((a, b) => {
+    // UN1TRADAR.3 — pinned rows (a cancelling member) first; no Glofox row is pinned
+    if (pinned(b) !== pinned(a)) return pinned(b) - pinned(a)
     if (b.score !== a.score) return b.score - a.score
     // Within a tier, highest monthly revenue at risk rises to the top.
     if (b.monthlyValueCents !== a.monthlyValueCents) return b.monthlyValueCents - a.monthlyValueCents
@@ -551,7 +582,9 @@ export function bucketArrears(arrears) {
     const out = new Map()
     if (!(m instanceof Map)) return out
     for (const [id, agg] of m) {
-      if ((agg?.amountCents || 0) > 0) out.set(id, agg)
+      // UN1TRADAR.2 — a un1t.online debt with no euro figure (amountUnknown)
+      // stays on its tab; a Glofox aggregate never carries the flag.
+      if ((agg?.amountCents || 0) > 0 || agg?.amountUnknown === true) out.set(id, agg)
     }
     return out
   }
@@ -593,6 +626,10 @@ export function buildOverdue(contacts, nowMs = Date.now(), ctx = {}) {
       daysOverdue: dDue == null ? null : Math.floor(dDue),
       lastAttendedAt: c.last_attended_at || null,
       daysSinceAttended: dAtt == null ? null : Math.floor(dAtt),
+      // UN1TRADAR.2 — only when the amount is an estimate (a un1t.online
+      // past-due row with no reported amount), so a Glofox row is unchanged.
+      ...(pd.amountEstimated === true ? { amountEstimated: true } : {}),
+      ...(pd.amountUnknown === true ? { amountUnknown: true } : {}),
     })
   }
   rows.sort((a, b) => {

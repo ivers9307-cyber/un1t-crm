@@ -15,6 +15,7 @@ import {
   readContactPreference,
   transactionalEmailSuppression,
   transactionalSmsSuppression,
+  transactionalWhatsappSuppression,
   loadTransactionalConsent,
   checkTransactionalConsent,
   administrativeOptOutProvenance,
@@ -95,6 +96,32 @@ describe('transactionalSmsSuppression', () => {
 
   it('sends when sms_status is unset (never assume opted out)', () => {
     expect(transactionalSmsSuppression({ sms_status: null })).toBeNull()
+  })
+})
+
+// EVENTCONFIRM-WA.1 — the WhatsApp booking confirmation's gate.
+describe('transactionalWhatsappSuppression', () => {
+  it('SENDS to someone who opted out of MARKETING whatsapp', () => {
+    expect(transactionalWhatsappSuppression({
+      wa_status: 'active',
+      contact_preferences: [{ whatsapp_marketing: false, whatsapp_administrative: true }],
+    })).toBeNull()
+  })
+
+  it('suppresses the hard statuses the broadcast gate excludes', () => {
+    for (const s of ['blocked', 'opted_out', 'undeliverable']) {
+      expect(transactionalWhatsappSuppression({ wa_status: s })).toBe(`wa_status=${s}`)
+    }
+  })
+
+  it('suppresses an administrative whatsapp opt-out', () => {
+    expect(transactionalWhatsappSuppression({ contact_preferences: [{ whatsapp_administrative: false }] }))
+      .toBe('opted_out_administrative_whatsapp')
+  })
+
+  it('sends when wa_status is unset or no preferences row exists', () => {
+    expect(transactionalWhatsappSuppression({ wa_status: null })).toBeNull()
+    expect(transactionalWhatsappSuppression({})).toBeNull()
   })
 })
 

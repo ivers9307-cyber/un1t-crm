@@ -8,7 +8,7 @@
 // HOST-EMAILS.2 — `paused_reason` (real hostSendBlockReason predicate, same
 // as the list route), `non_openers_count` (resolveHostRecipients with
 // nonOpenersOf: campaign.id, null on failure) and top-level `links`
-// (aggregated host_campaign_clicks rows, mig 594).
+// (aggregated host_campaign_clicks rows, mig 772).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 

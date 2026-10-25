@@ -105,26 +105,9 @@ describe('audience-count POST', () => {
     expect(json.error).toMatch(/boom/)
   })
 
-  // COMMSFIX.B.5 — SMS gates exactly like the send path (sms.js
-  // smsAudienceBase: loc_sms_marketing + sms_status='active' + phone).
-  // FILTER-B.8 — `eligible` is no longer a hand-copy of those gates: it comes
-  // from buildEligibleAudienceQuery (mocked to 640 here). The remaining VIEW
-  // counts are diagnostic sub-counts and run matched → no_phone →
-  // not_opted_in → opted_out.
-  it('channel=sms counts consent-gated eligibility with an excluded breakdown', async () => {
-    createServerClient.mockReturnValue(fakeCountDb(1000, 200, 100, 60))
-    buildEligibleAudienceQuery.mockResolvedValueOnce({
-      query: { then: (resolve) => resolve({ count: 640, error: null }) },
-    })
-    const res = await POST(reqWith({ location_id: 'loc', audience_filter: { logic: 'and', filters: [] }, channel: 'sms' }))
-    const json = await res.json()
-    expect(json).toEqual({
-      success: true,
-      count: 640,           // eligible / will receive
-      matched: 1000,        // filter-only
-      excluded: { no_phone: 200, not_opted_in: 100, opted_out: 60 },
-    })
-  })
+  // TWILIO-RETIRE.1 — the SMS branch left with the channel; the route's
+  // schema (enforced by validateBody, mocked in this file) no longer admits
+  // channel 'sms'.
 
   it('channel=whatsapp returns reachable + excluded breakdown', async () => {
     const res = await POST(reqWith({ location_id: 'loc', audience_filter: { logic: 'and', filters: [] }, channel: 'whatsapp' }))
@@ -138,12 +121,11 @@ describe('audience-count POST', () => {
 
 // ── FILTER-B.8 — the count and the preview must share ONE query path ──
 //
-// The email branch already delegated to the send builder. The SMS branch did
-// not: it re-spelled the three send gates inline (loc_sms_marketing +
-// sms_status + phone). Identical today, but that is a coincidence maintained
-// by hand — the exact shape that lets a preview and a send drift apart. Both
-// now go through buildEligibleAudienceQuery, which delegates to the per-
-// channel SEND builder, and the preview route calls the same function.
+// The email branch already delegated to the send builder. The (since retired)
+// SMS branch did not: it re-spelled its send gates inline — the exact shape
+// that lets a preview and a send drift apart. The count goes through
+// buildEligibleAudienceQuery, which delegates to the per-channel SEND builder,
+// and the preview route calls the same function.
 describe('audience-count — the will-receive number comes from the shared send builder', () => {
   it('channel=email delegates to buildEligibleAudienceQuery', async () => {
     createServerClient.mockReturnValue(fakeCountDb(4900, 1200, 24, 300))
@@ -151,16 +133,6 @@ describe('audience-count — the will-receive number comes from the shared send 
     await POST(reqWith({ location_id: 'loc', audience_filter: filter, channel: 'email' }))
     expect(buildEligibleAudienceQuery).toHaveBeenCalledWith(expect.objectContaining({
       channel: 'email', filter, locationId: 'loc',
-      columns: 'id', selectOpts: { count: 'exact', head: true },
-    }))
-  })
-
-  it('channel=sms delegates to buildEligibleAudienceQuery, not an inline re-spelling of the gates', async () => {
-    createServerClient.mockReturnValue(fakeCountDb(1000, 200, 100, 60))
-    const filter = { logic: 'and', filters: [] }
-    await POST(reqWith({ location_id: 'loc', audience_filter: filter, channel: 'sms' }))
-    expect(buildEligibleAudienceQuery).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'sms', filter, locationId: 'loc',
       columns: 'id', selectOpts: { count: 'exact', head: true },
     }))
   })

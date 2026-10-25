@@ -1,0 +1,17 @@
+{
+  "id": "88888888-8888-4888-8888-888888888888",
+  "studio_id": "22222222-2222-4222-8222-222222222222",
+  "series_id": "99999999-9999-4999-8999-999999999999",
+  "timeslot_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "workout_id": null,
+  "title": "Test Class",
+  "status": "scheduled",
+  "clients_limit": 12,
+  "start_time": "2026-03-02T07:00:00.000Z",
+  "end_time": "2026-03-02T08:00:00.000Z",
+  "access_mode": "members",
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "updated_at": "2026-01-02T00:00:00.000Z",
+  "bookings_count": 7,
+  "is_free": false
+}

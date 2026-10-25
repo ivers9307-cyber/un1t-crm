@@ -82,7 +82,7 @@ describe('decideLegacyHostRedirect', () => {
   it('never redirects /api/* (kiosk heartbeats, bridges, fleet, webhooks)', () => {
     expect(decide({ pathname: '/api/auth/studio-heartbeat', search: '?device=abc' })).toBeNull()
     expect(decide({ pathname: '/api/bridge/heartbeat' })).toBeNull()
-    expect(decide({ pathname: '/api/webhooks/twilio/status' })).toBeNull()
+    expect(decide({ pathname: '/api/webhooks/postmark' })).toBeNull()
     expect(decide({ pathname: '/api/openapi.json' })).toBeNull()
   })
 

@@ -36,9 +36,25 @@
  * retries — callers that keep a "was this reminder sent?" ledger use it
  * to distinguish "nothing to send" from "the send pipeline fell over"
  * (see send-push-reminders cron).
+ *
+ * C16 PUSHREADERR.1 — a failed READ is a failed send too. When the
+ * permission, template or device read fails, every recipient that could
+ * not be judged or reached counts in `failed`, the result carries
+ * `read_failed: 1`, and the failure is logged once with logError. It used
+ * to come back as `skipped` / plain zeros — "nobody to tell" — and the
+ * send-once callers ledgered it, losing the message for good. The clean
+ * path's shape is unchanged (no `read_failed` key).
+ *
+ * Each of those reads (profiles, profile_locations, the role templates,
+ * device_tokens) is retried ONCE, in-process, after a short pause
+ * (READ_RETRY_DELAY_MS, overridable per call with `readRetryDelayMs`) before
+ * it counts as failed — most read errors are a one-request blip, and the
+ * retry turns them back into a normal send instead of a deferred one. Only a
+ * read is ever retried here, never a send; the final failure is logged once.
  */
 
 import { createServerClient } from './supabase'
+import { logError } from './log'
 import { androidChannelId } from '@shared/push-channels'
 import { resolvePermission, mergeTemplates, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
@@ -52,6 +68,27 @@ const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
 const RETRY_DELAYS_MS = [500, 2000]
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// C16 PUSHREADERR.1 review — the pause before the one retry of a failed READ.
+// Short on purpose: at most four reads per sendPush call can each spend it
+// once, so a send that hits a real outage costs well under a second more.
+const READ_RETRY_DELAY_MS = 200
+
+/**
+ * Run a read, and on an `{ error }` run it once more after `delayMs`. The
+ * retry's answer is final, whatever it is. `read` must BUILD the query each
+ * time (a supabase-js builder is a thenable; the retry needs a fresh one).
+ * A read that throws is not caught here: the caller decides, as before.
+ *
+ * @param {() => PromiseLike<{ data?: any, error?: any }>} read
+ * @param {number} delayMs
+ */
+async function readWithOneRetry(read, delayMs) {
+  const first = await read()
+  if (!first?.error) return first
+  if (delayMs > 0) await sleep(delayMs)
+  return read()
+}
 
 /**
  * POST one batch of messages to Expo with retry + backoff.
@@ -106,6 +143,17 @@ async function postExpoBatch(chunk) {
   return null
 }
 
+// C16 PUSHREADERR.1 — the one answer to a read sendPush could not make:
+// logged once, structurally, and returned with every recipient it could not
+// judge or reach counted as failed, so a ledger caller retries instead of
+// recording "nobody to tell".
+function pushReadFailed(what, meta, payload, error, { skipped = 0, failed }) {
+  logError('push', `${what} read failed; nobody was told`, {
+    ...meta, type: payload?.data?.type ?? null, category: payload?.category ?? null, err: error,
+  })
+  return { sent: 0, skipped, invalidated: 0, failed, read_failed: 1 }
+}
+
 /**
  * Resolve which of `ids` may receive a push for `category`, reading the LIVE
  * permission source — `profile_locations.permissions` (per mig 058).
@@ -143,35 +191,64 @@ async function postExpoBatch(chunk) {
  * 2026-07-03). Users with no assignment at the given location (master;
  * cross-location assignees) keep the conservative all-assignments rule.
  *
+ * C16 PUSHREADERR.1 — returns the read errors beside the answer. `error`
+ * (profiles or profile_locations unreadable): nobody can be judged, `allowed`
+ * is empty and means nothing. `templatesError` (role templates unreadable):
+ * `allowed` is judged on the code defaults, as it always silently was, so a
+ * refusal in it may be a default standing in for a template that turns the
+ * category ON (the staff/fte template does, for bookings) — the caller must
+ * not read that refusal as an opt-out.
+ *
  * @param {object} db        service-role supabase client
  * @param {string[]} ids     profile ids to consider
  * @param {string} [category]  notify_<category> to gate on (omit = master only)
  * @param {object} [opts]
  * @param {string} [opts.locationId]  the location this notification belongs to
- * @returns {Promise<Set<string>>} the allowed profile ids
+ * @param {number} [opts.readRetryDelayMs]  pause before the one retry of a
+ *   failed read (default READ_RETRY_DELAY_MS; tests pass 0)
+ * @returns {Promise<{ allowed: Set<string>, error: object|null, templatesError: object|null }>}
  */
-export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
+export async function readPushAllowedIds(db, ids, category, opts = {}) {
   const allowed = new Set()
-  if (!ids?.length) return allowed
-  const { data: profiles } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
-  const { data: links } = await db
-    .from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids)
+  if (!ids?.length) return { allowed, error: null, templatesError: null }
+  const retryDelay = opts.readRetryDelayMs ?? READ_RETRY_DELAY_MS
+  // Each read gets one retry before it counts as failed (see the file header).
+  // Without these two nobody can be judged: `active` and every opt-out live
+  // here. A failed read is not "nobody may be told" (and not "everybody").
+  const { data: profiles, error: profilesErr } = await readWithOneRetry(
+    () => db.from('profiles').select('id, active, employment_type').in('id', ids), retryDelay,
+  )
+  if (profilesErr) return { allowed, error: profilesErr, templatesError: null }
+  const { data: links, error: linksErr } = await readWithOneRetry(
+    () => db.from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids),
+    retryDelay,
+  )
+  if (linksErr) return { allowed, error: linksErr, templatesError: null }
 
   // Role templates (mig 364) for every (location, role) pair in play.
   // RECEPTION.2 (mig 367): 'all' rows apply to everyone of the role;
   // employment-type rows layer on top for matching users.
   const locationIds = [...new Set((links || []).map(l => l.location_id).filter(Boolean))]
   let templates = []
+  let templatesError = null
   if (locationIds.length > 0) {
-    try {
-      const { data } = await db
-        .from('location_role_permissions')
-        .select('location_id, role, employment_type, permissions')
-        .in('location_id', locationIds)
-      templates = data || []
-    } catch {
-      templates = [] // degrade to code defaults
-    }
+    // A builder RESOLVES with { error } rather than throwing, so the old
+    // try/catch alone never saw a failed read. Both are kept: the catch for a
+    // genuine throw (folded into `error`, so it gets the one retry too).
+    // Either way we degrade to code defaults (as before) and SAY so, so
+    // sendPush can count the refusals as unjudged.
+    const { data, error } = await readWithOneRetry(async () => {
+      try {
+        return await db
+          .from('location_role_permissions')
+          .select('location_id, role, employment_type, permissions')
+          .in('location_id', locationIds)
+      } catch (err) {
+        return { data: null, error: err }
+      }
+    }, retryDelay)
+    if (error) templatesError = error
+    else templates = data || []
   }
   const rowFor = (locId, role, emp) =>
     templates.find(t => t.location_id === locId && t.role === role && t.employment_type === emp)?.permissions || null
@@ -216,7 +293,19 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
     if (opts.requireMobileKey && gateLinks.some(l => !resolves(l, opts.requireMobileKey))) continue
     allowed.add(id)
   }
-  return allowed
+  return { allowed, error: null, templatesError }
+}
+
+/**
+ * The allowed set alone — the pre-C16 contract (an empty Set on a failed
+ * read). No production caller may use it (tests/push-allowed-callers.test.js):
+ * a caller that ledgers, claims or reports must use readPushAllowedIds and
+ * treat `error` / `templatesError` as "not judged", never as "opted out".
+ *
+ * @returns {Promise<Set<string>>}
+ */
+export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
+  return (await readPushAllowedIds(db, ids, category, opts)).allowed
 }
 
 /**
@@ -243,8 +332,10 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
  * @param {string} [opts.requireMobileKey]  Extra mobile-permission capability
  *                                    the recipient must hold (e.g. 'whatsapp'
  *                                    inbox access) on top of the category gate.
+ * @param {number} [opts.readRetryDelayMs]  Pause before the one retry of a
+ *                                    failed read (default READ_RETRY_DELAY_MS).
  *
- * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number}>}
+ * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number, read_failed?:1}>}
  */
 export async function sendPush(userIds, payload, opts = {}) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
@@ -258,11 +349,31 @@ export async function sendPush(userIds, payload, opts = {}) {
   // immediately be filtered out anyway.
   // Per-category opt-out lives on profile_locations.permissions (mig 058);
   // profiles.permissions is stale and must NOT be read here.
-  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category, { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey })
-  const allowedIds = ids.filter(id => allowedSet.has(id))
-  let skipped = ids.length - allowedIds.length
+  const meta = { candidates: ids.length, locationId: opts.locationId ?? null }
+  const retryDelay = opts.readRetryDelayMs ?? READ_RETRY_DELAY_MS
+  const { allowed: allowedSet, error: permErr, templatesError } = await readPushAllowedIds(
+    db, ids, payload.category,
+    { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey, readRetryDelayMs: retryDelay },
+  )
+  // C16 PUSHREADERR.1 (D1/D2) — nobody could be judged: report it, never as
+  // opt-outs.
+  if (permErr) return pushReadFailed('permissions', meta, payload, permErr, { failed: ids.length })
 
-  if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
+  const allowedIds = ids.filter(id => allowedSet.has(id))
+  const refused = ids.length - allowedIds.length
+  // D3 — with the role templates unreadable, a refusal was made on the code
+  // default, which a template may override (staff/fte turns bookings ON). It
+  // is unjudged, not an opt-out: counted as failed so a ledger caller retries.
+  const unjudged = templatesError ? refused : 0
+  const skipped = refused - unjudged
+  const readFlag = templatesError ? { read_failed: 1 } : {}
+  if (templatesError) {
+    logError('push', 'role templates read failed; judged on code defaults', {
+      ...meta, refused, type: payload?.data?.type ?? null, category: payload?.category ?? null, err: templatesError,
+    })
+  }
+
+  if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0, failed: unjudged, ...readFlag }
 
   // Fetch all push tokens for the allowed users.
   //
@@ -271,13 +382,20 @@ export async function sendPush(userIds, payload, opts = {}) {
   // credentials exist; iOS with notifications declined). Those rows are not
   // recipients — `to: null` would be sent to Expo and come back as a
   // per-ticket error, counted as `failed`, which is a lie about the send.
-  const { data: tokens } = await db
+  // One retry before it counts as failed (see the file header).
+  const { data: tokens, error: tokensErr } = await readWithOneRetry(() => db
     .from('device_tokens')
     .select('id, expo_push_token')
     .not('expo_push_token', 'is', null)
-    .in('user_id', allowedIds)
+    .in('user_id', allowedIds), retryDelay)
 
-  if (!tokens?.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
+  // D4 — "no device" is only true when the read worked.
+  if (tokensErr) {
+    return pushReadFailed('device_tokens', { ...meta, candidates: allowedIds.length }, payload, tokensErr, {
+      skipped, failed: allowedIds.length + unjudged,
+    })
+  }
+  if (!tokens?.length) return { sent: 0, skipped, invalidated: 0, failed: unjudged, ...readFlag }
 
   // Build Expo messages — one per token. Expo will silently drop
   // malformed tokens; we additionally prune any reported as
@@ -347,37 +465,64 @@ export async function sendPush(userIds, payload, opts = {}) {
     if (pruneErr) console.error('[push] dead-token prune failed', pruneErr)
   }
 
-  return { sent, skipped, invalidated, failed }
+  return { sent, skipped, invalidated, failed: failed + unjudged, ...readFlag }
 }
 
 /**
- * Resolve the active profile ids holding one of `roles` at `locationId`.
- * Shared by the role fan-out senders here, in notify.js, and in
- * push-dedup.js (which must know the recipient list BEFORE sending so it
- * can claim per-recipient dedup rows).
+ * The role rule, pure. PUSH-ROLES.1 — judge the PER-LOCATION role (roles are
+ * per-location, mig 051), not the global profiles.role: filtering on the
+ * global role both over-notified (global owner holding a staff row here) and,
+ * worse, silently excluded every `master` from owner/manager fan-outs —
+ * masters hold every decision right, so they are always included. Live miss:
+ * Richard (global role master, owner at Stillorgan) never received the
+ * new-time-off-request push, 2026-07-27.
+ *
+ * Exported so a caller that has ALREADY read the studio's profile_locations
+ * rows (with `role` and `profiles(role, active)`) applies the same rule
+ * without a second read (swap-cover-server.js notifyOpenPool).
+ *
+ * @param {object[]|null} links  profile_locations rows: { profile_id, role, profiles: { role, active } }
+ * @param {string[]} roles
+ * @returns {string[]} profile ids, in row order
+ */
+export function roleRecipientIdsFromLinks(links, roles) {
+  if (!roles?.length) return []
+  return (links || [])
+    .filter(l => l?.profiles?.active && (roles.includes(l.role) || l.profiles.role === 'master'))
+    .map(l => l.profile_id)
+}
+
+/**
+ * The active profile ids holding one of `roles` at `locationId`, WITH the
+ * read error. REPLACE.1b review 1: the "taken" notice of a claimed shift
+ * offer stamped itself done on the empty list a failed read returned, so the
+ * managers' only signal was lost. C1 RECIPIENTS.1 moved every caller here.
+ * A caller that stamps, claims or reports after sending must treat `error`
+ * as "try again" (or as a fault), never as "nobody to tell".
  *
  * @param {object} db          service-role supabase client
  * @param {string} locationId
  * @param {string[]} roles     e.g. ['owner', 'manager']
- * @returns {Promise<string[]>} profile ids
+ * @returns {Promise<{ ids: string[], error: object|null }>}
  */
-export async function resolveRoleRecipientIds(db, locationId, roles) {
-  if (!locationId || !roles?.length) return []
-  const { data: links } = await db
+export async function readRoleRecipientIds(db, locationId, roles) {
+  if (!locationId || !roles?.length) return { ids: [], error: null }
+  const { data: links, error } = await db
     .from('profile_locations')
     .select('profile_id, role, profiles!inner(id, role, active)')
     .eq('location_id', locationId)
+  if (error) return { ids: [], error }
+  return { ids: roleRecipientIdsFromLinks(links, roles), error: null }
+}
 
-  // PUSH-ROLES.1 — judge the PER-LOCATION role (roles are per-location, mig
-  // 051), not the global profiles.role: filtering on the global role both
-  // over-notified (global owner holding a staff row here) and, worse,
-  // silently excluded every `master` from owner/manager fan-outs — masters
-  // hold every decision right, so they are always included. Live miss:
-  // Richard (global role master, owner at Stillorgan) never received the
-  // new-time-off-request push, 2026-07-27.
-  return (links || [])
-    .filter(l => l.profiles?.active && (roles.includes(l.role) || l.profiles.role === 'master'))
-    .map(l => l.profile_id)
+// C1 RECIPIENTS.1 — the fan-out wrappers' answer to a FAILED recipients read:
+// logged once, structurally, and said in the result beside the zero counts,
+// so it never passes for "nobody to tell" (plain zeros, no key).
+function recipientsReadFailed(what, meta, payload, error) {
+  logError('push', `${what} recipients read failed; nobody was told`, {
+    ...meta, type: payload?.data?.type ?? null, category: payload?.category ?? null, err: error?.message ?? String(error),
+  })
+  return { sent: 0, skipped: 0, invalidated: 0, failed: 0, recipients_failed: 1 }
 }
 
 /**
@@ -385,13 +530,19 @@ export async function resolveRoleRecipientIds(db, locationId, roles) {
  * given location. Useful for fan-out events like "new time-off request
  * needs approval" → notify all managers at the requester's location.
  *
+ * Never throws. C1 RECIPIENTS.1: a FAILED recipients read is logged here,
+ * once, with logError, and returned as `recipients_failed: 1` beside the zero
+ * counts, so it can never pass for "nobody holds the role" (plain zeros, no
+ * key). Callers are one-shot best-effort alerts; the log is their signal.
+ *
  * @param {string} locationId
  * @param {string[]} roles     e.g. ['owner', 'manager']
  * @param {object} payload     Same shape as sendPush()
  */
 export async function sendPushToRolesAtLocation(locationId, roles, payload) {
   const db = createServerClient()
-  const ids = await resolveRoleRecipientIds(db, locationId, roles)
+  const { ids, error } = await readRoleRecipientIds(db, locationId, roles)
+  if (error) return recipientsReadFailed('role', { locationId, roles }, payload, error)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
   // PUSH-LOC.1 — this fan-out is location-scoped by definition, so the
   // per-category opt-out is judged at THIS location, not any other
@@ -400,17 +551,24 @@ export async function sendPushToRolesAtLocation(locationId, roles, payload) {
 }
 
 /**
- * Every active profile linked to a location (any role). Candidate set for a
- * fan-out that is then narrowed by a capability gate (e.g. inbox access) +
- * the per-category opt-out inside sendPush.
+ * Every active profile linked to a location (any role), WITH the read error.
+ * Candidate set for a fan-out that is then narrowed by a capability gate
+ * (e.g. inbox access) + the per-category opt-out inside sendPush.
+ *
+ * C1 RECIPIENTS.1 — was resolveLocationMemberIds, which discarded the error
+ * and returned [] on a failed read ("nobody here"). Renamed so no caller can
+ * keep reading the old string[] shape by accident.
+ *
+ * @returns {Promise<{ ids: string[], error: object|null }>}
  */
-export async function resolveLocationMemberIds(db, locationId) {
-  if (!locationId) return []
-  const { data: links } = await db
+export async function readLocationMemberIds(db, locationId) {
+  if (!locationId) return { ids: [], error: null }
+  const { data: links, error } = await db
     .from('profile_locations')
     .select('profile_id, profiles!inner(id, active)')
     .eq('location_id', locationId)
-  return (links || []).filter(l => l.profiles?.active).map(l => l.profile_id)
+  if (error) return { ids: [], error }
+  return { ids: (links || []).filter(l => l?.profiles?.active).map(l => l.profile_id), error: null }
 }
 
 /**
@@ -419,12 +577,16 @@ export async function resolveLocationMemberIds(db, locationId) {
  * `whatsapp` permission), not just managers. Used for the "Mia is handling a
  * chat" agent-activity ping. Category opt-out + master switch still apply.
  *
+ * Never throws. A FAILED member read is logged and returned as
+ * `recipients_failed: 1`, exactly as sendPushToRolesAtLocation does.
+ *
  * @param {string} locationId
  * @param {object} payload   Same shape as sendPush() (set payload.category)
  */
 export async function sendPushToInboxStaffAtLocation(locationId, payload) {
   const db = createServerClient()
-  const ids = await resolveLocationMemberIds(db, locationId)
+  const { ids, error } = await readLocationMemberIds(db, locationId)
+  if (error) return recipientsReadFailed('inbox-staff', { locationId }, payload, error)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
   return sendPush(ids, payload, { locationId, requireMobileKey: 'whatsapp' })
 }

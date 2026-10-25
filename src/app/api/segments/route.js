@@ -27,7 +27,7 @@
 // Manager+ only.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { TAG_RULES } from '@/lib/contact-events'
@@ -40,7 +40,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
@@ -50,6 +50,10 @@ export async function GET(request) {
     if (guard) return guard
   }
   const locationId = requested || user.activeLocation?.id || null
+  // ROLESWEEP.1a — the role is judged at the location whose tags are counted.
+  if (locationId && !hasRoleAtLocation(user, locationId, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   const ruleDescriptions = new Map(TAG_RULES.map(r => [r.tag, r.description]))
   const build = (counts) => {

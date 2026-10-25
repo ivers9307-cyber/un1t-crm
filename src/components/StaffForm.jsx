@@ -10,6 +10,7 @@ import StaffDevicesCard from './settings/StaffDevicesCard'
 import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
 import MobileBarPlanner from './MobileBarPlanner'
 import AcDeviceAllowlistPicker from './AcDeviceAllowlistPicker'
+import { describeTombstoneImpact, describeAuthOutcome, describeDeleteResult, needsAuthRetry } from '@/lib/staff-tombstone'
 import {
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
@@ -63,6 +64,13 @@ export default function StaffForm({
   // Only the edit page passes these (and only for master callers).
   organizations = [],
   orgAdminOrgIds = [],
+  // STAFFFORMSETTINGS.1 (review N1) — the page's studios read failed, so
+  // `locations` is empty for a reason other than "there are none". The form
+  // still renders (never louder than before); it just says so.
+  locationsLoadFailed = false,
+  // C18 ORGROLE.1 — the staff device fleet (GET /api/staff-devices) is for
+  // organisation admins of the active org; the page decides and passes it.
+  canSeeDevices = false,
 }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -119,6 +127,11 @@ export default function StaffForm({
     permissions: hydratePermissions(a.permissions, a.role, templateFor(a.location_id, a.role, targetEmploymentType)),
   }))
 
+  // STAFFPROFILEPICK.1 — every `staff.<field>` read here must be in
+  // STAFF_EDITOR_FIELDS (src/lib/staff-fields.js): the edit page selects and
+  // passes exactly that list, and tests/staff-profile-to-client.test.js
+  // fails until a new field is added there too (a field the page does not
+  // send would render as a default and be saved back over the real value).
   const [form, setForm] = useState({
     full_name: staff?.full_name || '',
     email: staff?.email || '',
@@ -136,6 +149,10 @@ export default function StaffForm({
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  // ACTIVEUSER.1 — a save can succeed AND carry a `warning` (the Active toggle
+  // went off but their login could not be disabled, or was deliberately kept).
+  // Navigating away on success would throw it away unread.
+  const [notice, setNotice] = useState(null)
 
   // Which assignment's permissions are currently being edited. Set
   // to the first editable assignment's location_id by default; the
@@ -197,12 +214,18 @@ export default function StaffForm({
   const addableLocations = locations
     .filter(l => callerScope.has(l.id) && !assignedIds.has(l.id))
 
+  // STAFFFORMSETTINGS.1 — computed on the server (loadStaffFormLocations,
+  // the save path's own rule: registry overlay + getLocationUnifiConfig).
+  // The form never receives a location's settings.
   function isUnifiConfigured(loc) {
-    const cfg = loc?.settings?.unifi || {}
-    return Boolean(
-      cfg.host && cfg.api_token &&
-      cfg.staff_policy_id && cfg.manager_policy_id
-    )
+    return loc?.unifi_configured === true
+  }
+
+  // ACALLOWLISTGATE.1 — AC units (Sensibo / LG ThinQ) have nothing to do with
+  // UniFi. ac_configured is computed on the server (loadStaffFormLocations:
+  // the AC control path's credential rule after the registry overlay).
+  function isAcConfigured(loc) {
+    return loc?.ac_configured === true
   }
 
   // All toggle helpers now operate on the SELECTED assignment's
@@ -446,14 +469,22 @@ export default function StaffForm({
     const data = await res.json()
     setSaving(false)
 
-    if (data.success) {
+    if (data.success && (data.warning || data.notice)) {
+      // `notice` (review round 3): a reactivation that landed, with the one
+      // thing the operator now has to do by hand (door access stays off).
+      setNotice([data.warning, data.notice].filter(Boolean).join(' '))
+      router.refresh()
+    } else if (data.success) {
       router.push('/settings')
       router.refresh()
     } else {
       const issues = Array.isArray(data.issues) && data.issues.length
         ? data.issues.map(i => `${i.path || '(root)'}: ${i.message}`).join('; ')
         : null
-      setError(issues ? `${data.error || 'Failed to save'} — ${issues}` : (data.error || 'Failed to save'))
+      const base = issues ? `${data.error || 'Failed to save'} — ${issues}` : (data.error || 'Failed to save')
+      // ACTIVEUSER.1 (review S5) — a FAILED save can still carry a login
+      // `warning` (the Active flip landed, then the pay write failed).
+      setError([base, data.warning].filter(Boolean).join(' '))
     }
   }
 
@@ -466,6 +497,18 @@ export default function StaffForm({
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3">
+          Saved. {notice}
+        </div>
+      )}
+
+      {locationsLoadFailed && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3">
+          Couldn&apos;t load studios. Reload before editing.
         </div>
       )}
 
@@ -585,6 +628,7 @@ export default function StaffForm({
           const loc = locations.find(l => l.id === a.location_id)
           if (!loc) return null
           const configured = isUnifiConfigured(loc)
+          const acConfigured = isAcConfigured(loc)
           const isManagerRole = a.role === 'owner' || a.role === 'manager'
           return (
             <div key={a.location_id} className="border border-un1t-border/70 rounded-lg p-4 space-y-3">
@@ -730,8 +774,10 @@ export default function StaffForm({
               {/* STUDIO-AC-DEVICES.3 / AC-ROLE.1 — per-location AC device
                   allowlist. Tri-state: null = inherit the role-template
                   (or code) default, [] = this user explicitly sees no
-                  AC, [ids] = this user sees exactly those. */}
-              {isEdit && configured && (
+                  AC, [ids] = this user sees exactly those.
+                  ACALLOWLISTGATE.1 — gated on the studio's AC set-up, not
+                  UniFi's (it used `configured`, the UniFi flag). */}
+              {isEdit && acConfigured && (
                 <AcDeviceAllowlistPicker
                   locationId={a.location_id}
                   locationName={loc.name}
@@ -1129,7 +1175,7 @@ export default function StaffForm({
       {/* STAFF-DEV.6 — which devices this person actually has, what
           version they run and whether background location is granted.
           Edit-only: a profile that doesn't exist yet has no devices. */}
-      {isEdit && staff?.id && <StaffDevicesCard profileId={staff.id} />}
+      {isEdit && staff?.id && canSeeDevices && <StaffDevicesCard profileId={staff.id} />}
 
       <button
         type="submit"
@@ -1173,7 +1219,7 @@ function DangerZone({ staffId, staffName, isActive, callerIsMaster }) {
         <p className="text-xs text-un1t-subtle mt-1">
           {isActive
             ? "Deactivating revokes all door access and prevents sign-in. Their history (shifts, contact events, audit log) stays intact — that's almost always what you want when someone leaves."
-            : "This account is deactivated. They can't sign in. Reactivate to restore access, or permanently delete (master only) to fulfil a GDPR right-to-be-forgotten request."}
+            : "This account is deactivated. Reactivate to restore access, or permanently delete (master only). Permanent delete removes their personal details, staff access, any admin role and upcoming shifts (their login is disabled too, unless the same account is also a gym member or event host); their past shifts (including any already started today), leave, invoices and reports stay under their name."}
         </p>
       </div>
 
@@ -1194,8 +1240,13 @@ function DangerZone({ staffId, staffName, isActive, callerIsMaster }) {
 // Soft-archive (DELETE /api/staff/[id]). Two-state inline confirm.
 function DeactivateButton({ staffId, staffName }) {
   const router = useRouter()
-  const [state, setState] = useState('idle') // idle | confirming | working | error
+  const [state, setState] = useState('idle') // idle | confirming | working | error | warned
   const [error, setError] = useState(null)
+  // ACTIVEUSER.1 — the deactivation landed but their LOGIN was not disabled
+  // (the ban failed, or the login is also a member's / host's). Shown until
+  // the operator has read it: router.refresh() swaps this whole component for
+  // the Reactivate button, so it only runs from "Done".
+  const [warning, setWarning] = useState(null)
 
   async function run() {
     setState('working')
@@ -1206,12 +1257,45 @@ function DeactivateButton({ staffId, staffName }) {
       if (!res.ok || data.success === false) {
         throw new Error(data.error || `Deactivate failed (${res.status})`)
       }
+      if (data.warning) {
+        setWarning({ text: data.warning, retryable: data.data?.login === 'ban_failed' || data.data?.login === 'kept_unverified' })
+        setState('warned')
+        return
+      }
       router.refresh()
       setState('idle')
     } catch (e) {
       setState('error')
       setError(e.message || 'Deactivate failed')
     }
+  }
+
+  if (state === 'warned' && warning) {
+    return (
+      <div role="status" className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 space-y-2">
+        <div className="text-xs text-amber-700">
+          <span className="font-medium">{staffName} is deactivated.</span> {warning.text}
+        </div>
+        <div className="flex items-center gap-2">
+          {warning.retryable && (
+            <button
+              type="button"
+              onClick={run}
+              className="text-xs bg-un1t-surface border border-un1t-border text-un1t-text px-3 py-1.5 rounded-md hover:bg-un1t-bg font-medium"
+            >
+              Try again
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => { setWarning(null); setState('idle'); router.refresh() }}
+            className="text-xs text-un1t-subtle hover:text-un1t-text"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    )
   }
 
   if (state === 'confirming' || state === 'working' || state === 'error') {
@@ -1262,10 +1346,15 @@ function DeactivateButton({ staffId, staffName }) {
 }
 
 // Reactivate (PUT /api/staff/[id] with active:true). One-step — low risk.
+// ACTIVEUSER.1 — it also lifts the login ban. If THAT fails the route answers
+// 502 (login_restore_failed) although the profile is now active: the error
+// stays on screen with this button still under it, and pressing it again is
+// the retry (the route re-attempts the unban for an already-active profile).
 function ReactivateButton({ staffId }) {
   const router = useRouter()
-  const [state, setState] = useState('idle')
+  const [state, setState] = useState('idle') // idle | working | error | done
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   async function run() {
     setState('working')
@@ -1280,12 +1369,34 @@ function ReactivateButton({ staffId }) {
       if (!res.ok || data.success === false) {
         throw new Error(data.error || `Reactivate failed (${res.status})`)
       }
+      if (data.notice) {
+        // Shown until read: router.refresh() swaps this component for the
+        // Deactivate button, so it only runs from "Done".
+        setNotice(data.notice)
+        setState('done')
+        return
+      }
       router.refresh()
       setState('idle')
     } catch (e) {
       setState('error')
       setError(e.message || 'Reactivate failed')
     }
+  }
+
+  if (state === 'done' && notice) {
+    return (
+      <div role="status" className="bg-green-500/10 border border-green-500/30 rounded-md p-3 space-y-2">
+        <div className="text-xs text-green-700"><span className="font-medium">Reactivated.</span> {notice}</div>
+        <button
+          type="button"
+          onClick={() => { setNotice(null); setState('idle'); router.refresh() }}
+          className="text-xs text-un1t-subtle hover:text-un1t-text"
+        >
+          Done
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -1315,6 +1426,25 @@ function PermanentDeleteButton({ staffId, staffName }) {
   const [state, setState] = useState('idle') // idle | confirming | working | error
   const [typedName, setTypedName] = useState('')
   const [error, setError] = useState(null)
+  // STAFFDELETE.1 — GET is a dry run of the very function DELETE calls, so
+  // what this dialog promises is what will happen.
+  const [impact, setImpact] = useState(null)
+  // The person is already deleted but their login step did not finish.
+  const [loginRetry, setLoginRetry] = useState(false)
+
+  async function openConfirm() {
+    setState('confirming')
+    setImpact(null)
+    try {
+      const res = await fetch(`/api/staff/${staffId}/permanent`)
+      const data = await res.json().catch(() => ({}))
+      // `login` is what will happen to their LOGIN — it is NOT always removed.
+      if (res.ok && data.success) setImpact({ ...describeTombstoneImpact(data.data), login: describeAuthOutcome(data.data?.auth) })
+      else setError(data.error || `Could not load what this will remove (${res.status})`)
+    } catch (e) {
+      setError(e.message || 'Could not load what this will remove')
+    }
+  }
 
   const expectsConfirmText = (staffName || 'this user').trim()
   const matches = typedName.trim().toLowerCase() === expectsConfirmText.toLowerCase()
@@ -1329,11 +1459,18 @@ function PermanentDeleteButton({ staffId, staffName }) {
       if (!res.ok || data.success === false) {
         throw new Error(data.error || `Delete failed (${res.status})`)
       }
-      // Hard delete — there's no profile to return to. Send the
-      // operator back to the staff list (which lives at /settings,
-      // not /settings/staff — there's no index page in that subtree).
-      // data.warning surfaces the auth-orphan case if it happened.
-      if (data.warning) alert(data.warning)
+      // The profile is a tombstone now — there is no page to return to. Tell
+      // the operator what was removed (and any login caveat) before leaving.
+      // If the login step did not finish (the ban failed), stay here: the
+      // detail page 404s a tombstone, so this dialog is the only place to
+      // retry from. Pressing the button again re-runs ONLY that step.
+      if (needsAuthRetry(data.data)) {
+        setLoginRetry(true)
+        setState('error')
+        setError([...describeDeleteResult(data.data), data.warning].filter(Boolean).join(' '))
+        return
+      }
+      alert([...describeDeleteResult(data.data), data.warning].filter(Boolean).join('\n\n'))
       router.push('/settings')
     } catch (e) {
       setState('error')
@@ -1344,12 +1481,30 @@ function PermanentDeleteButton({ staffId, staffName }) {
   if (state === 'confirming' || state === 'working' || state === 'error') {
     return (
       <div className="bg-red-500/10 border border-red-500/40 rounded-md p-3 space-y-3">
-        <div className="text-xs text-red-200">
-          <strong className="block text-red-100 mb-1">This is irreversible.</strong>
-          Permanently deleting <span className="font-mono text-white">{staffName}</span> removes their
-          profile, login, and all per-location assignments. Audit attribution on rosters,
-          shifts, and broadcasts becomes anonymous (the row stays, the &ldquo;by&rdquo; column goes NULL).
-          Use this only for a confirmed GDPR right-to-be-forgotten request.
+        <div className="text-xs text-un1t-text space-y-2">
+          <strong className="block text-red-700">This cannot be undone.</strong>
+          <p>
+            Permanently deleting <span className="font-mono">{staffName}</span> removes their personal details
+            (email, photo, PIN, door credentials, devices), their staff access and every studio assignment. Any
+            admin role they held is taken off the account, and kept on record.
+          </p>
+          {impact ? (
+            <>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {impact.removes.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+              {impact.keptToday && <p>{impact.keptToday}</p>}
+              {impact.demotion && <p>{impact.demotion}</p>}
+              {impact.reports && <p className="font-medium text-red-700">{impact.reports}</p>}
+              <p>{impact.login}</p>
+              <p>{impact.keeps}</p>
+            </>
+          ) : !error ? (
+            <p className="text-un1t-subtle">Checking their upcoming shifts…</p>
+          ) : null}
+          <p className="text-un1t-subtle">
+            Their name stays on those records so payroll, leave and invoice history remain reportable. They can never be reactivated.
+          </p>
         </div>
         <div>
           <label className="block text-xs text-un1t-subtle mb-1">
@@ -1368,19 +1523,19 @@ function PermanentDeleteButton({ staffId, staffName }) {
           <button
             type="button"
             onClick={run}
-            disabled={!matches || state === 'working'}
+            disabled={!matches || !impact || state === 'working'}
             className="text-xs bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-700 font-medium inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {state === 'working' ? <Loader2 size={11} className="animate-spin" /> : <Skull size={11} />}
-            {state === 'working' ? 'Deleting…' : 'Permanently delete'}
+            {state === 'working' ? 'Working…' : loginRetry ? 'Retry disabling their login' : 'Permanently delete'}
           </button>
           <button
             type="button"
-            onClick={() => { setState('idle'); setError(null); setTypedName('') }}
+            onClick={() => { if (loginRetry) { router.push('/settings'); return } setState('idle'); setError(null); setTypedName('') }}
             disabled={state === 'working'}
             className="text-xs text-un1t-subtle hover:text-un1t-text"
           >
-            Cancel
+            {loginRetry ? 'Leave (already deleted)' : 'Cancel'}
           </button>
         </div>
         {error && (
@@ -1395,7 +1550,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
   return (
     <button
       type="button"
-      onClick={() => setState('confirming')}
+      onClick={openConfirm}
       className="text-xs bg-red-500/15 text-red-700 border border-red-500/40 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
     >
       <Skull size={12} /> Permanently delete (GDPR)

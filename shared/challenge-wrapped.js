@@ -8,18 +8,33 @@
 // cross-member figure and it is passed in already masked by the standings RPC —
 // never recomputed here).
 //
-// Challenge windows are Europe/Dublin CALENDAR days — the same boundaries as the
-// challenge_standings RPC — so own totals here line up with the standings a
-// member saw on the live board. windowIso already encodes that (end-exclusive
-// 00:00 Dublin of the day after ends_on).
+// Challenge windows are CALENDAR days in the challenge's studio zone (TZ.13:
+// challenges.location_id → locations.timezone; omitted = Europe/Dublin) — the
+// same boundaries the challenge_standings RPC is handed — so own totals here
+// line up with the standings a member saw on the live board. windowIso already
+// encodes that (end-exclusive 00:00 local of the day after ends_on).
+//
+// 🔴 PAIRED with the challenges_read RLS policy (mig 686; TZ.15 moves it to
+// private.location_tz(location_id)): a member reads their studio's challenges
+// until 14 LOCAL days after ends_on, and endedRecentlyFlagship below offers the
+// finisher for the same 14 days. Change the two together, and pass the
+// challenge's studio zone here (a member's challenges are their home studio's,
+// so the member zone is that zone).
 
 import { metricValue, windowIso } from './challenges.js'
+import { productName } from './brand-name.js'
+import { DEFAULT_TZ } from './zoned-time.js'
 
 // Metric → the count-up hero label + how the member's own total reads.
-const METRIC_LABEL = {
-  points: 'UN1T Points',
-  classes: 'classes',
-  z4plus_minutes: 'Zone 4+ min',
+// W1.S4 — the points label is the tenant's product name ("UN1T Points"),
+// built from the short brand the screen passes (useBrand()); bare "Points"
+// when it has none in hand. Never a gym literal.
+export function metricLabels(shortName) {
+  return {
+    points: productName(shortName, 'points'),
+    classes: 'classes',
+    z4plus_minutes: 'Zone 4+ min',
+  }
 }
 
 function startedMs(s) {
@@ -28,13 +43,13 @@ function startedMs(s) {
 }
 
 /**
- * Europe/Dublin day window for a challenge, in ms. End is EXCLUSIVE (00:00
- * Dublin of the day after ends_on), matching windowIso / the standings RPC.
- * Returns null when either date is missing/unparseable.
+ * Local-day window for a challenge in `zone` (its studio's), in ms. End is
+ * EXCLUSIVE (00:00 local of the day after ends_on), matching windowIso / the
+ * standings RPC. Returns null when either date is missing/unparseable.
  */
-export function challengeWindowMs(challenge) {
+export function challengeWindowMs(challenge, zone = DEFAULT_TZ) {
   if (!challenge?.starts_on || !challenge?.ends_on) return null
-  const { fromIso, toIso } = windowIso(challenge)
+  const { fromIso, toIso } = windowIso(challenge, zone)
   const fromMs = Date.parse(fromIso)
   const toMs = Date.parse(toIso)
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null
@@ -49,14 +64,15 @@ export function challengeWindowMs(challenge) {
  * @param {object} challenge  { is_flagship, starts_on, ends_on }
  * @param {number} [nowMs]
  * @param {number} [days]  window after end during which the finisher is offered
+ * @param {string} [zone]  the challenge's studio zone (default Europe/Dublin)
  */
-export function endedRecentlyFlagship(challenge, nowMs = Date.now(), days = 14) {
+export function endedRecentlyFlagship(challenge, nowMs = Date.now(), days = 14, zone = DEFAULT_TZ) {
   if (challenge?.is_flagship !== true) return false
   // Bail on missing/unparseable dates first — challengeWindowMs is date-safe
-  // (returns null) where challengePhase would throw via dublinDayStartMs.
-  const win = challengeWindowMs(challenge)
+  // (returns null) where challengePhase would throw on a bad date.
+  const win = challengeWindowMs(challenge, zone)
   if (!win) return false
-  // toMs is the end-exclusive instant (00:00 Dublin after ends_on) — i.e. the
+  // toMs is the end-exclusive instant (00:00 local after ends_on) — i.e. the
   // moment the challenge closed. It has ended iff we're at/after that instant;
   // offer the finisher for `days` after it (and never before the close).
   const sinceMs = nowMs - days * 24 * 3600 * 1000
@@ -69,15 +85,15 @@ export function endedRecentlyFlagship(challenge, nowMs = Date.now(), days = 14) 
  * (source-agnostic, same as the RPC's COUNT(*)); metric totals reuse the shared
  * per-session metricValue so they match the live board's arithmetic.
  */
-export function ownWindowStats(sessions, challenge, nowMs = Date.now()) {
-  const win = challengeWindowMs(challenge)
+export function ownWindowStats(sessions, challenge, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  const win = challengeWindowMs(challenge, zone)
   const out = { classes: 0, points: 0, metricTotal: 0 }
   if (!win) return out
   const metric = challenge?.metric || 'classes'
   for (const s of Array.isArray(sessions) ? sessions : []) {
     const t = startedMs(s)
     // In-window is [fromMs, toMs) AND at/before now (a future-dated row can't
-    // count). Dublin-day boundaries via windowIso keep this aligned to the RPC.
+    // count). Local-day boundaries via windowIso keep this aligned to the RPC.
     if (t === null || t < win.fromMs || t >= win.toMs || t > nowMs) continue
     out.classes += 1
     out.points += metricValue(s, 'points')
@@ -99,6 +115,7 @@ export function ownWindowStats(sessions, challenge, nowMs = Date.now()) {
  * @param {number|null} [args.count] participant count for the "of N" line; null when unknown
  * @param {object|null} [args.bookend]  inbodyBookend(...) output, or null
  * @param {number}   [args.nowMs]
+ * @param {string}   [zone]  the challenge's studio zone (default Europe/Dublin)
  * @returns {{
  *   hasContent: boolean,
  *   name: string,
@@ -113,10 +130,10 @@ export function ownWindowStats(sessions, challenge, nowMs = Date.now()) {
  *   inbody: { label: string, unit: string, delta: number, dp: number }|null,
  * }}
  */
-export function challengeWrappedModel({ challenge, sessions, rank = null, count = null, bookend = null, nowMs = Date.now() } = {}) {
+export function challengeWrappedModel({ challenge, sessions, rank = null, count = null, bookend = null, nowMs = Date.now(), shortName = '' } = {}, zone = DEFAULT_TZ) {
   const name = String(challenge?.name || 'Challenge')
   const metric = challenge?.metric || 'classes'
-  const metricLabel = METRIC_LABEL[metric] || metric
+  const metricLabel = metricLabels(shortName)[metric] || metric
 
   const empty = {
     hasContent: false,
@@ -131,10 +148,10 @@ export function challengeWrappedModel({ challenge, sessions, rank = null, count 
   // model must independently refuse a premature/ineligible recap so a direct
   // deep-link to /wrapped/challenge/<id> for a non-flagship or still-running
   // challenge can't render a false finisher story.
-  const win = challengeWindowMs(challenge)
+  const win = challengeWindowMs(challenge, zone)
   if (challenge?.is_flagship !== true || !win || win.toMs > nowMs) return empty
 
-  const stats = ownWindowStats(sessions, challenge, nowMs)
+  const stats = ownWindowStats(sessions, challenge, nowMs, zone)
 
   // No participation in the window → nothing to celebrate (the trigger also
   // gates on this, but the model must not present an empty finisher).
@@ -174,4 +191,3 @@ function pickInbodyHighlight(bookend) {
   return null
 }
 
-export { METRIC_LABEL }

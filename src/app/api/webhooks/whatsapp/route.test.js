@@ -24,6 +24,8 @@ vi.mock('@/lib/whatsapp-flow/completion.js', () => ({ handleFlowCompletion: vi.f
 vi.mock('@/lib/whatsapp-config', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveWhatsAppNumberByPhoneNumberId: vi.fn(),
+  // WANUMBERLESS.1 — the contact's own studio's number; null = no number there.
+  getLocationWhatsAppNumberConfig: vi.fn(async () => null),
 }))
 vi.mock('@/lib/webhook-auth', () => ({ verifyMetaSignature: vi.fn(() => ({ ok: true })), safeEqual: vi.fn(() => true) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(), sendPushToRolesAtLocation: vi.fn() }))
@@ -35,12 +37,15 @@ vi.mock('@/lib/webhook-events', () => ({
 vi.mock('@/lib/agent/auto-reply', () => ({ maybeAutoReply: vi.fn(async () => ({ handled: false })) }))
 vi.mock('@/lib/agent/welcome-greeting', () => ({ maybeSendWelcomeGreeting: vi.fn() }))
 vi.mock('@/lib/whatsapp-template-events', () => ({ applyTemplateEvent: vi.fn(async () => ({ template: null, notify: null })) }))
+// NOTE (WA-COEX.7): this EMPTY set is why the unreachable account_update branch went
+// unnoticed — with the real set the field is claimed by the number-event branch. Tests
+// that need the real dispatch use vi.importActual (route.account-update.test.js).
 vi.mock('@/lib/whatsapp-number-events', () => ({ NUMBER_EVENT_FIELDS: new Set(), applyNumberEvent: vi.fn() }))
 vi.mock('@/lib/whatsapp-flow-events', () => ({ FLOW_EVENT_FIELDS: new Set(), applyFlowEvent: vi.fn() }))
 vi.mock('@/lib/meta-capi', () => ({ recordCtwaTouch: vi.fn() }))
 vi.mock('@/lib/whatsapp-pricing', () => ({ pricingColumnsFromStatus: vi.fn(() => null) }))
 vi.mock('@/lib/whatsapp-media-server', () => ({ ensureMediaRehosted: vi.fn() }))
-vi.mock('@/lib/whatsapp-bsuid', () => ({ captureInboundBsuid: vi.fn() }))
+vi.mock('@/lib/whatsapp-bsuid', () => ({ captureInboundBsuid: vi.fn(), extractInboundBsuid: vi.fn(() => null) }))
 vi.mock('@/lib/whatsapp-coexistence', () => ({
   parseEchoMessages: vi.fn(() => []),
   parseSyncContacts: vi.fn(() => []),
@@ -53,7 +58,10 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
+import { parseConsentKeyword, pickInboundContact } from '@/lib/whatsapp'
+import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
 import { ingestCoexistenceMessage, syncContactMatchOnly } from '@/lib/whatsapp-coexistence-ingest'
+import { parseSyncContacts } from '@/lib/whatsapp-coexistence'
 
 // Recording fake supabase client: chainable builder, thenable (matches
 // supabase-js), with per-table response handlers. Every terminal call is
@@ -68,7 +76,7 @@ function makeDb(handlers = {}) {
       return (typeof h === 'function' ? h(ops, terminal) : h) || { data: null, error: null }
     }
     const b = {}
-    for (const m of ['select', 'eq', 'or', 'is', 'in', 'order', 'limit', 'insert', 'update', 'upsert', 'delete']) {
+    for (const m of ['select', 'eq', 'neq', 'or', 'is', 'in', 'order', 'limit', 'insert', 'update', 'upsert', 'delete']) {
       b[m] = (...args) => { ops.push([m, ...args]); return b }
     }
     b.single = async () => finish('single')
@@ -83,7 +91,8 @@ function makeDb(handlers = {}) {
 
 const REGISTERED_PNI = '1233588839827698'
 // The resolver's config shape for an active whatsapp_numbers row.
-const STILLORGAN = { source: 'db', id: 'wn-1', locationId: 'loc-still', phoneNumberId: REGISTERED_PNI, token: 'tok' }
+// WAORGNUMBER.1 — the resolver's config names the number's home studio (classifyInboundOwner routes on it).
+const STILLORGAN = { source: 'db', id: 'wn-1', locationId: 'loc-still', homeLocationId: 'loc-still', phoneNumberId: REGISTERED_PNI, token: 'tok' }
 
 function reqFor(body) {
   return { text: async () => JSON.stringify(body), headers: { get: () => 'sha256=sig' } }
@@ -98,6 +107,14 @@ function inboundText(pniOrNull) {
     metadata: pniOrNull ? { phone_number_id: pniOrNull } : {},
     contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
     messages: [{ id: 'wamid.test1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: 'hi' } }],
+  })
+}
+
+function inboundTextBody(text) {
+  return envelope({
+    metadata: { phone_number_id: REGISTERED_PNI },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.kw1', from: '353871234567', timestamp: '1770000000', type: 'text', text: { body: text } }],
   })
 }
 
@@ -134,6 +151,41 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('W0.2 — the sender phone matches contacts inside the receiving organisation only', () => {
+  it('the contacts lookup is fenced to [receiving, sibling] alongside the phone match', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    // The real siblingLocationIds runs against the fake: the receiving row,
+    // then its organisation's other locations.
+    db = makeDb({
+      locations: (ops, terminal) => terminal === 'maybeSingle'
+        ? { data: { id: 'loc-still', organization_id: 'org-un1t' }, error: null }
+        : { data: [{ id: 'loc-hatch' }], error: null },
+      contacts: { data: [], error: null },
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'conv-1' }, error: null }
+        return { data: null, error: null }
+      },
+      whatsapp_messages: (ops) => ops.some(([m]) => m === 'insert') ? { data: { id: 'msg-row-1' }, error: null } : { data: null, error: null },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+
+    const lookup = db.calls.find((c) => c.table === 'contacts' && c.ops.some(([m]) => m === 'or'))
+    expect(lookup).toBeTruthy()
+    expect(lookup.ops).toContainEqual(['in', 'location_id', ['loc-still', 'loc-hatch']])
+  })
+
+  it('a contact-sync event passes the receiving location to the match-only sync', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    parseSyncContacts.mockReturnValueOnce([{ phone: '353871234567' }])
+    const res = await POST(reqFor(envelope({ metadata: { phone_number_id: REGISTERED_PNI }, contacts: [{ wa_id: '353871234567' }] }, 'smb_app_state_sync')))
+    expect(res.status).toBe(200)
+    expect(syncContactMatchOnly).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-still' }))
+  })
 })
 
 describe('POST /api/webhooks/whatsapp — inbound message routing', () => {
@@ -254,6 +306,62 @@ describe('POST /api/webhooks/whatsapp — inbound persistence guards', () => {
   })
 })
 
+// WABUTTONTAP.1 — a quick-reply tap on a TEMPLATE arrives as type 'button'
+// ({ button: { text, payload } }). It fell to default as "[button message]",
+// so the Meta-ad welcome's "consultation vs first class" tap reached Mia as an
+// unreadable type and got the holding message instead of a booking.
+function inboundMessage(message) {
+  return envelope({
+    metadata: { phone_number_id: REGISTERED_PNI },
+    contacts: [{ wa_id: '353871234567', profile: { name: 'Test Sender' } }],
+    messages: [{ id: 'wamid.tap1', from: '353871234567', timestamp: '1770000000', ...message }],
+  })
+}
+
+function insertedMessage() {
+  const call = db.calls.find((c) => c.table === 'whatsapp_messages' && c.ops.some(([m]) => m === 'insert'))
+  return call?.ops.find(([m]) => m === 'insert')[1]
+}
+
+describe('POST /api/webhooks/whatsapp — button taps', () => {
+  beforeEach(() => resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN))
+
+  it('stores a template quick-reply tap as what was tapped and hands it to Mia as a button reply', async () => {
+    const res = await POST(reqFor(inboundMessage({
+      type: 'button',
+      context: { from: '353000000000', id: 'wamid.template1' },
+      button: { text: 'Book a consultation', payload: 'Book a consultation' },
+    })))
+    expect(res.status).toBe(200)
+
+    expect(insertedMessage()).toMatchObject({ message_type: 'button', body: 'Book a consultation', direction: 'inbound' })
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ messageType: 'button', body: 'Book a consultation' }))
+    const stamp = db.calls.find((c) => c.table === 'whatsapp_conversations' && c.ops.some(([m, u]) => m === 'update' && u?.last_message_preview))
+    expect(stamp.ops.find(([m]) => m === 'update')[1].last_message_preview).toBe('Book a consultation')
+  })
+
+  it('keeps a custom template payload in the body (no column holds it)', async () => {
+    await POST(reqFor(inboundMessage({ type: 'button', button: { text: 'First class', payload: 'WELCOME_FIRST_CLASS' } })))
+    expect(insertedMessage()).toMatchObject({ message_type: 'button', body: 'First class (button payload: WELCOME_FIRST_CLASS)' })
+  })
+
+  it('never stores the "[button message]" placeholder', async () => {
+    await POST(reqFor(inboundMessage({ type: 'button', button: { payload: 'WELCOME_CONSULT' } })))
+    expect(insertedMessage().body).toBe('WELCOME_CONSULT')
+  })
+
+  it("keeps an interactive reply's id when it is not one of Mia's opt_<n>", async () => {
+    await POST(reqFor(inboundMessage({ type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: 'slot_42', title: 'Sat 9am' } } })))
+    expect(insertedMessage()).toMatchObject({ message_type: 'interactive', body: 'Sat 9am (option id: slot_42)' })
+  })
+
+  it("an interactive tap on Mia's own options still stores just the title", async () => {
+    await POST(reqFor(inboundMessage({ type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: 'opt_1', title: '8am' } } })))
+    expect(insertedMessage()).toMatchObject({ message_type: 'interactive', body: '8am' })
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ messageType: 'interactive', body: '8am' }))
+  })
+})
+
 describe('POST /api/webhooks/whatsapp — status updates', () => {
   it('still applies a status update for a registered number (unchanged live path)', async () => {
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
@@ -288,5 +396,48 @@ describe('POST /api/webhooks/whatsapp — coexistence events', () => {
     expect(ingestCoexistenceMessage).not.toHaveBeenCalled()
     expect(syncContactMatchOnly).not.toHaveBeenCalled()
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('9999_UNKNOWN'))
+  })
+})
+
+// STOPWORDS.1 — only UNSUBSCRIBE / STOP (/STOP ALL / STOPALL) opt a member out.
+// An exact "cancel" is usually about a booking or a membership: it must write
+// no consent change and flow on to the normal inbound path (Mia or staff).
+// Uses the REAL parser so the route + keyword list pair is what is tested.
+describe('POST /api/webhooks/whatsapp — consent keywords', () => {
+  const CONSENT_TABLES = ['contact_preferences', 'contact_location_preferences', 'consent_log']
+
+  beforeEach(async () => {
+    const actual = await vi.importActual('@/lib/whatsapp')
+    parseConsentKeyword.mockImplementation(actual.parseConsentKeyword)
+    pickInboundContact.mockReturnValue({ id: 'contact-1', location_id: 'loc-still' })
+    applyWhatsappConsentKeyword.mockResolvedValue({ applied: true })
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+  })
+
+  afterEach(() => {
+    // clearAllMocks keeps implementations; put the module defaults back.
+    parseConsentKeyword.mockImplementation(() => null)
+    pickInboundContact.mockImplementation(() => null)
+  })
+
+  it.each(['cancel', ' CANCEL ', 'end', 'quit'])('an exact %j is NOT an opt-out and reaches the normal inbound path', async (text) => {
+    const res = await POST(reqFor(inboundTextBody(text)))
+    expect(res.status).toBe(200)
+
+    expect(applyWhatsappConsentKeyword).not.toHaveBeenCalled()
+    expect(db.writes().filter((c) => CONSENT_TABLES.includes(c.table))).toEqual([])
+    // The wa_phone backfill and the undeliverable→active reset on contacts are
+    // normal inbound handling; an opt-out flip is what must not happen.
+    const consentFlips = db.writes().filter((c) => c.table === 'contacts' && c.ops.some(([m, v]) =>
+      m === 'update' && v && (v.wa_status === 'opted_out' || 'whatsapp_marketing' in v)))
+    expect(consentFlips).toEqual([])
+    expect(maybeAutoReply).toHaveBeenCalledWith(db, expect.objectContaining({ body: text, contactId: 'contact-1', messageType: 'text' }))
+  })
+
+  it.each(['unsubscribe', 'STOP'])('an exact %j still opts the member out', async (text) => {
+    const res = await POST(reqFor(inboundTextBody(text)))
+    expect(res.status).toBe(200)
+
+    expect(applyWhatsappConsentKeyword).toHaveBeenCalledWith(expect.objectContaining({ keyword: 'stop', contact: expect.objectContaining({ id: 'contact-1' }) }))
   })
 })

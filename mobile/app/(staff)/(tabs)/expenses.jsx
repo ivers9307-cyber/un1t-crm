@@ -20,14 +20,8 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { listExpenseClaims, periodLabel } from '../../../lib/expenses-api'
 import TabletConstrained from '../../../components/TabletConstrained'
-
-const STATUS_STYLE = {
-  draft:     { label: 'Draft',           color: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700', icon: 'create-outline' },
-  submitted: { label: 'Awaiting review', color: '#D97706', bg: 'bg-amber-500/20', text: 'text-amber-700', icon: 'time-outline' },
-  approved:  { label: 'Approved',        color: '#059669', bg: 'bg-green-500/20', text: 'text-green-700', icon: 'checkmark-circle-outline' },
-  declined:  { label: 'Declined',        color: '#DC2626', bg: 'bg-red-500/20',   text: 'text-red-700',   icon: 'close-circle-outline' },
-  revoked:   { label: 'Revoked',         color: '#64748B', bg: 'bg-slate-500/20', text: 'text-slate-700', icon: 'arrow-undo-outline' },
-}
+// EXPENSELIFE.1 — badge from the server's honest lifecycle label.
+import { expenseStatusBadge } from '../../../lib/expense-review'
 
 export default function ExpensesScreen() {
   const router = useRouter()
@@ -93,7 +87,7 @@ export default function ExpensesScreen() {
             </Text>
           </View>
         ) : (
-          claims.map((c) => (
+          claims.map((c) => { const badge = expenseStatusBadge(c); return (
             <Pressable
               key={c.id}
               onPress={() => router.push(`/expenses/${c.id}`)}
@@ -106,14 +100,14 @@ export default function ExpensesScreen() {
                 </Text>
               </View>
               <View className="flex-row items-center justify-between">
-                <View className={`px-2 py-0.5 rounded-full flex-row items-center ${STATUS_STYLE[c.status]?.bg || 'bg-slate-500/20'}`}>
+                <View className={`px-2 py-0.5 rounded-full flex-row items-center ${badge.bg}`}>
                   <Ionicons
-                    name={STATUS_STYLE[c.status]?.icon || 'help-circle-outline'}
+                    name={badge.icon}
                     size={11}
-                    color={STATUS_STYLE[c.status]?.color || '#64748B'}
+                    color={badge.color}
                   />
-                  <Text className={`text-[11px] uppercase font-medium ml-1 ${STATUS_STYLE[c.status]?.text || 'text-un1t-subtle'}`}>
-                    {STATUS_STYLE[c.status]?.label || c.status}
+                  <Text className={`text-[11px] uppercase font-medium ml-1 ${badge.text}`}>
+                    {badge.label}
                   </Text>
                 </View>
                 <Text className="text-[11px] text-un1t-subtle">
@@ -126,7 +120,7 @@ export default function ExpensesScreen() {
                 </Text>
               )}
             </Pressable>
-          ))
+          ) })
         )}
       </ScrollView>
       </TabletConstrained>

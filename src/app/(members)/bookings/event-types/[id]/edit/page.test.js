@@ -42,7 +42,7 @@ vi.mock('next/navigation', () => ({
   }),
 }))
 
-vi.mock('@/components/EventForm', () => ({ default: () => null }))
+vi.mock('@/components/EventForm', () => ({ default: () => <form data-testid="event-form" /> }))
 vi.mock('next/link', () => ({
   default: ({ href, children }) => <a href={typeof href === 'string' ? href : ''}>{children}</a>,
 }))
@@ -66,10 +66,13 @@ function mockDb({ event = null } = {}) {
   }
 }
 
+// ROLEUI.1 — a manager at loc-mine: the form's PUT decides MANAGER_ROLES at
+// the booking type's location, and so does the page now.
 const user = {
   id: 'user-1',
   locations: [{ id: 'loc-mine' }],
   activeLocation: { id: 'loc-mine' },
+  rolesByLocation: { 'loc-mine': 'manager' },
 }
 
 function props(id = 'evt-1') {
@@ -110,5 +113,28 @@ describe('/bookings/event-types/[id]/edit page', () => {
     const html = renderToStaticMarkup(await EditBookingTypePage(props()))
     expect(html).toContain('Edit booking type')
     expect(html).toContain('PT Consult')
+  })
+
+  // ROLEUI.1 — the form's PUT /api/bookings/event-types/[id] accepts a master
+  // or MANAGER_ROLES at the booking type's location and 404s anyone else; the
+  // page used to render the form for anyone at the location, whose Save then
+  // answered "Not found". Now they get the page's own not-found panel.
+  describe('ROLEUI.1 — only a caller the PUT would accept gets the form', () => {
+    const myEvent = { id: 'evt-1', location_id: 'loc-mine', name: 'PT Consult' }
+
+    it('staff at the booking type\'s studio get the not-found panel (main: the form)', async () => {
+      getCurrentUser.mockResolvedValue({ ...user, rolesByLocation: { 'loc-mine': 'staff' } })
+      createServerClient.mockReturnValue(mockDb({ event: myEvent }))
+      const html = renderToStaticMarkup(await EditBookingTypePage(props()))
+      expect(html).toContain('Booking type not found')
+      expect(html).not.toContain('data-testid="event-form"')
+    })
+
+    it('a master gets the form', async () => {
+      getCurrentUser.mockResolvedValue({ ...user, isMaster: true, profileRole: 'master', role: 'master', rolesByLocation: {} })
+      createServerClient.mockReturnValue(mockDb({ event: myEvent }))
+      const html = renderToStaticMarkup(await EditBookingTypePage(props()))
+      expect(html).toContain('data-testid="event-form"')
+    })
   })
 })

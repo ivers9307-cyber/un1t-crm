@@ -14,52 +14,57 @@
 //   showLocation — boolean; show per-shift location chip when true
 //
 // Task 2 additions (Phase 2):
-//   • Each shift chip / row is clickable → ShiftActionMenu (post for swap
-//     or adjust time). Hidden for past shifts and swapped shifts.
+//   • Each shift chip / row is clickable → ShiftActionMenu. Hidden for past
+//     shifts and swapped shifts.
 //   • "Request time off" button in the header → RequestTimeOffModal.
+//
+// ROSTER-FIX.3 (D3) — this is a COACH surface, so the menu offers swaps
+// only. A coach is paid for a window a manager set; the "Adjust time" panel
+// that used to live here PUT /api/schedule/assignments/[id], which is now
+// manager-only and would 403. The "(adjusted)" marker stays so a coach can
+// still see when a manager moved their hours.
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { CalendarOff, RefreshCw } from 'lucide-react'
+import { CalendarOff, CalendarX, RefreshCw } from 'lucide-react'
 import { pickLocationColor } from '@shared/location-colors'
+import { briefingOf } from '@shared/shift-briefing'
+import { effectiveShiftStart, effectiveShiftEnd } from '@shared/roster-month'
 import Modal from '@/components/ui/Modal'
 import Button from '@/components/ui/Button'
 import RequestTimeOffModal from './RequestTimeOffModal'
+import Link from 'next/link'
+import { canRequestTimeOff } from '@shared/time-off'
+import { formatDate } from '@/lib/roster'
+import { shiftHours } from '@/lib/payroll'
 
 // ── Week-mode helpers (moved from today/page.js, byte-identical) ────────────
 
+// REPORTS.2 — override → block → template (shared/roster-month.js). The
+// template-only fallback showed a block's ORIGINAL template times after the
+// block had been moved; the rows carry block_start_time/block_end_time
+// (shared/dashboard-data.js fetchDashboardShifts).
 function shiftTime(shift) {
-  const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
-  const end = (shift.end_time_override || shift.shift_templates?.end_time || '').slice(0, 5)
+  const start = (effectiveShiftStart(shift) || '').slice(0, 5)
+  const end = (effectiveShiftEnd(shift) || '').slice(0, 5)
   return `${start} – ${end}`
 }
 
-function shiftHours(shift) {
-  const start = shift.start_time_override || shift.shift_templates?.start_time
-  const end = shift.end_time_override || shift.shift_templates?.end_time
-  if (!start || !end) return 0
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  let mins = eh * 60 + em - (sh * 60 + sm)
-  if (mins < 0) mins += 24 * 60
-  return Math.round((mins / 60) * 10) / 10
-}
-
-function isoDate(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+// ROSTER-FIX.6c — shiftHours and isoDate were local re-implementations of
+// shiftHours (@/lib/payroll) and formatDate (@/lib/roster). payroll's returns
+// UNROUNDED hours where the local one rounded to 1dp, so the rounding moves to
+// the one place that prints it (roundHours below) and the number on screen is
+// unchanged.
+function roundHours(n) { return Math.round(n * 10) / 10 }
 
 function buildWeek(weekStartIso, shifts) {
   const start = new Date(weekStartIso + 'T00:00:00')
-  const todayIso = isoDate(new Date())
+  const todayIso = formatDate(new Date())
   const days = []
   for (let i = 0; i < 7; i++) {
     const d = new Date(start)
     d.setDate(start.getDate() + i)
-    const iso = isoDate(d)
+    const iso = formatDate(d)
     const daysShifts = shifts.filter(s => s.shift_date === iso)
     days.push({
       iso,
@@ -89,30 +94,17 @@ function isActionable(shift, isPast) {
   return true
 }
 
-// Convert HH:MM:SS or HH:MM to HH:MM for <input type="time">
-function toTimeInput(raw) {
-  if (!raw) return ''
-  return raw.slice(0, 5)
-}
-
-// ── ShiftActionMenu — modal that provides post-for-swap + adjust-time ────────
+// ── ShiftActionMenu — modal that provides the coach's two swap routes ───────
 
 function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
   const name = shift.shift_templates?.name || 'Shift'
-  const effectiveStart = shift.start_time_override || shift.shift_templates?.start_time || ''
-  const effectiveEnd   = shift.end_time_override   || shift.shift_templates?.end_time   || ''
   const hasOverride    = !!(shift.start_time_override || shift.end_time_override)
 
-  // Which sub-panel is open: null | 'swap' | 'adjust' | 'target'
+  // Which sub-panel is open: null | 'swap' | 'target'
   const [panel, setPanel]       = useState(null)
   const [saving, setSaving]     = useState(false)
   const [error, setError]       = useState(null)
   const [success, setSuccess]   = useState(null)
-
-  // Adjust-time form state
-  const [adjStart, setAdjStart] = useState(toTimeInput(effectiveStart))
-  const [adjEnd, setAdjEnd]     = useState(toTimeInput(effectiveEnd))
-  const [adjReason, setAdjReason] = useState('')
 
   // Targeted-swap colleague picker state
   const [colleagues, setColleagues] = useState(null)   // null = not loaded yet
@@ -151,7 +143,17 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
     if (colleagues !== null || loadingColleagues) return
     setLoadingColleagues(true)
     try {
-      const res = await fetch(`/api/staff?location_id=${encodeURIComponent(shift.location_id)}`)
+      // ROSTER-FIX.6c — two params, two different defects, one line.
+      // `fields=picker` is the pay-free shape: without it an admin caller's
+      // browser received `*` off `profiles` (hourly_rate, annual_salary,
+      // overtime_rate) to render a list of names, the same leak the calendar
+      // just closed. `location_id` is honoured by the route now: the read
+      // service scopes to ALL of the caller's locations, so a manager at two
+      // studios was offered the other studio's coaches as swap partners for a
+      // shift they cannot work.
+      const res = await fetch(
+        `/api/staff?location_id=${encodeURIComponent(shift.location_id)}&fields=picker`
+      )
       const data = await res.json()
       if (!res.ok || !data.success) {
         setError(data.error || 'Could not load colleagues. Please try again.')
@@ -186,70 +188,6 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
         return
       }
       setSuccess('Swap request sent — your colleague can accept it, then your manager confirms.')
-      setSaving(false)
-      onDone?.()
-    } catch {
-      setError('Network error. Please try again.')
-      setSaving(false)
-    }
-  }
-
-  // ── Adjust time ────────────────────────────────────────────────────────────
-  async function handleAdjust(e) {
-    e.preventDefault()
-    if (!adjStart || !adjEnd) {
-      setError('Please enter both start and end times.')
-      return
-    }
-    if (adjStart === adjEnd) {
-      setError('Start and end times cannot be identical.')
-      return
-    }
-    setSaving(true)
-    setError(null)
-    const body = {
-      start_time_override: adjStart + ':00',
-      end_time_override:   adjEnd   + ':00',
-    }
-    if (adjReason.trim()) body.partial_reason = adjReason.trim()
-    try {
-      const res = await fetch(`/api/schedule/assignments/${shift.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        setError(data.error || 'Could not save time adjustment. Please try again.')
-        setSaving(false)
-        return
-      }
-      setSuccess('Shift time updated.')
-      setSaving(false)
-      onDone?.()
-    } catch {
-      setError('Network error. Please try again.')
-      setSaving(false)
-    }
-  }
-
-  // ── Clear override ─────────────────────────────────────────────────────────
-  async function handleClearOverride() {
-    setSaving(true)
-    setError(null)
-    try {
-      const res = await fetch(`/api/schedule/assignments/${shift.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_time_override: null, end_time_override: null, partial_reason: null }),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        setError(data.error || 'Could not clear override. Please try again.')
-        setSaving(false)
-        return
-      }
-      setSuccess('Override cleared — shift is back to default time.')
       setSaving(false)
       onDone?.()
     } catch {
@@ -305,16 +243,11 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
               <span className="font-medium">Swap with a specific coach…</span>
               <span className="block text-xs text-un1t-subtle mt-0.5">Send the request straight to one colleague</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setPanel('adjust')}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-border text-sm text-un1t-text transition-colors"
-            >
-              <span className="font-medium">Adjust time</span>
-              <span className="block text-xs text-un1t-subtle mt-0.5">
-                {hasOverride ? 'Change or clear the time override' : 'Override start or end time'}
-              </span>
-            </button>
+            {/* ROSTER-FIX.3 (D3) — say who owns the hours, now that the coach
+                cannot change them here. */}
+            <p className="text-xs text-un1t-muted pt-1">
+              Your hours are set by your manager. If you worked different hours, tell them and they will adjust the shift.
+            </p>
           </div>
         )}
 
@@ -385,77 +318,6 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
               </Button>
             </div>
           </div>
-        )}
-
-        {/* Adjust time panel */}
-        {panel === 'adjust' && !success && (
-          <form onSubmit={handleAdjust} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-start">
-                  Start
-                </label>
-                <input
-                  id="adj-start"
-                  type="time"
-                  value={adjStart}
-                  onChange={(e) => setAdjStart(e.target.value)}
-                  required
-                  disabled={saving}
-                  className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-end">
-                  End
-                </label>
-                <input
-                  id="adj-end"
-                  type="time"
-                  value={adjEnd}
-                  onChange={(e) => setAdjEnd(e.target.value)}
-                  required
-                  disabled={saving}
-                  className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-reason">
-                Reason <span className="text-un1t-muted font-normal">(optional)</span>
-              </label>
-              <input
-                id="adj-reason"
-                type="text"
-                value={adjReason}
-                onChange={(e) => setAdjReason(e.target.value)}
-                maxLength={200}
-                disabled={saving}
-                placeholder="e.g. leaving early for appointment"
-                className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent placeholder:text-un1t-muted"
-              />
-            </div>
-            <div className="flex gap-2 justify-between items-center">
-              {hasOverride ? (
-                <button
-                  type="button"
-                  onClick={handleClearOverride}
-                  disabled={saving}
-                  className="text-xs text-red-700 hover:text-red-800 underline underline-offset-2 disabled:opacity-50"
-                >
-                  Clear override
-                </button>
-              ) : <span />}
-              <div className="flex gap-2">
-                <Button type="button" variant="secondary" onClick={() => { setPanel(null); setError(null) }} disabled={saving}>
-                  Back
-                </Button>
-                <Button type="submit" variant="primary" loading={saving}>
-                  Save
-                </Button>
-              </div>
-            </div>
-          </form>
         )}
 
         {/* Close button when success is shown */}
@@ -529,11 +391,6 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
                           {s.shift_templates?.name || 'Shift'}
                         </button>
                         <div className="flex items-center gap-1 shrink-0">
-                          {s.published === false && (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 text-[10px] uppercase font-semibold whitespace-nowrap">
-                              Draft
-                            </span>
-                          )}
                           {s.status === 'swapped' && (
                             <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 text-[10px] uppercase font-semibold whitespace-nowrap">
                               Swapped
@@ -547,7 +404,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
                         </div>
                       </div>
                       <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
-                        <span>{shiftTime(s)} · {shiftHours(s)}h</span>
+                        <span>{shiftTime(s)} · {roundHours(shiftHours(s))}h</span>
                         {showLocation && s.locations?.name && (() => {
                           const c = pickLocationColor(s.locations.id || s.location_id)
                           return (
@@ -557,6 +414,12 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
                           )
                         })()}
                       </div>
+                      {/* BLOCKEDIT.1 — the manager's note for the coaches on this shift. */}
+                      {!day.isPast && briefingOf(s) && (
+                        <p data-testid="shift-briefing-line" className="mt-0.5 text-xs text-un1t-text whitespace-pre-line">
+                          <span className="font-semibold">Briefing: </span>{briefingOf(s)}
+                        </p>
+                      )}
                     </div>
                   )
                 })
@@ -599,9 +462,11 @@ function ModeToggle({ mode, onChange }) {
 // ── Month chip — one shift entry inside a calendar cell ──────────────────────
 
 function ShiftChip({ shift, isPast, onShiftClick, cellDate }) {
-  const time = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
+  const time = (effectiveShiftStart(shift) || '').slice(0, 5)
   const name = shift.shift_templates?.name || 'Shift'
-  const isDraft = shift.published === false
+  // ROSTER-FIX.1 (D1) — the amber "draft" treatment is gone: this component
+  // only ever renders the PERSONAL dashboard's shifts, and those are now
+  // published-only (shared/dashboard-data.js fetchPersonalDashboardData).
   const actionable = isActionable(shift, isPast)
 
   return (
@@ -610,11 +475,7 @@ function ShiftChip({ shift, isPast, onShiftClick, cellDate }) {
       disabled={!actionable}
       onClick={() => actionable && onShiftClick?.(shift, cellDate)}
       title={actionable ? `${name} — tap to manage` : undefined}
-      className={`w-full flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight border-l-2 text-left ${
-        isDraft
-          ? 'border-amber-500 bg-amber-500/10 text-amber-700'
-          : 'border-blue-500 bg-blue-500/10 text-blue-700'
-      } ${isPast ? 'opacity-60' : ''} ${actionable ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
+      className={`w-full flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight border-l-2 text-left border-blue-500 bg-blue-500/10 text-blue-700 ${isPast ? 'opacity-60' : ''} ${actionable ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
     >
       <span className="font-semibold whitespace-nowrap">{time}</span>
       <span className="truncate">{name}</span>
@@ -739,14 +600,26 @@ export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanel
             <span className="text-xs text-un1t-muted">{monthSummary}</span>
           )}
           <ModeToggle mode={mode} onChange={setMode} />
-          <button
-            type="button"
-            onClick={() => { setTimeOffSuccess(false); setTimeOffOpen(true) }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
-          >
-            <CalendarOff size={13} aria-hidden="true" />
-            Request time off
-          </button>
+          {canRequestTimeOff(employmentType) ? (
+            <button
+              type="button"
+              onClick={() => { setTimeOffSuccess(false); setTimeOffOpen(true) }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
+            >
+              <CalendarOff size={13} aria-hidden="true" />
+              Request time off
+            </button>
+          ) : (
+            // AVAIL.3 — contractors have no leave types; "unavailable" is My availability.
+            <Link
+              href="/schedule/availability"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border transition-colors"
+            >
+              <CalendarX size={13} aria-hidden="true" />
+              My availability
+            </Link>
+          )}
+
         </div>
       </div>
 

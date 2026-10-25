@@ -1,4 +1,6 @@
 import { hasBookableMembership } from '@/lib/person-accounts'
+import { CLASS_BOOKING_MAX_ATTEMPTS } from '@/lib/class-booking-attempts'
+import { isHandBookedEventId } from '@/lib/manual-timetable'
 
 // AGENT-REQ-UX.1 — operator-readable explanations for agent requests.
 //
@@ -26,14 +28,37 @@ const MACHINE_REASONS = {
   // means "attended before AND nothing on the account to book with".
   prior_attendance:
     'They have attended before and no usable balance was found (no class credits, no active membership) — the free intro does not apply. Grant a credit or set up a membership in Glofox, then approve to book.',
+  // TRIALGRANT.1 — approving buys the trial first and judges the purchase;
+  // if Glofox will not add it, nothing is booked and this card says why.
   needs_credit_grant:
-    'Their Glofox account has no class credits left. Approving grants the trial credit and completes the booking automatically.',
+    'Their Glofox account has no class credits left. Approving adds the trial in Glofox first, then books. If Glofox will not add the trial, nothing is booked and this card says why.',
   // MIA-CREDITS.1 — Mia's pre-flight found nothing to book with and handed
   // the thread to a human; this card carries the booking intent.
   no_credits:
     'Mia escalated: they asked to book but have no class credits or active membership. Talk to them in the conversation, grant a credit or set them up in Glofox, then approve to book.',
   account_ambiguous:
     'More than one Glofox account matched this customer. Pick the right account in Glofox before approving.',
+  // UN1TWRITE.23 — un1t.online funnel cards (details.provider 'un1t_online').
+  // The record-only ones execute nothing: approving records that staff
+  // booked the class by hand in un1t.online (the funnel row reads booked).
+  un1t_email_in_use_elsewhere:
+    'Their email already has a un1t.online account at another studio, so none was made here. Sort the account and book them in un1t.online, then approve to record it (approving books nothing).',
+  un1t_link_conflict:
+    'The un1t.online account is linked to a different contact here. Sort it in un1t.online, book them there, then approve to record it (approving books nothing).',
+  un1t_trial_used:
+    'They have had the free trial before, so nothing was booked and they were emailed the options. Approve once they are booked in un1t.online (approving books nothing).',
+  terms_not_accepted:
+    'They have not accepted un1t.online\'s terms and waiver, so no account was made. Book them by hand in un1t.online, then approve to record it (approving books nothing).',
+  un1t_funnel_off:
+    'The un1t.online funnel is off at this studio. Book them by hand in un1t.online, then approve to record it (approving books nothing).',
+  un1t_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
+  un1t_trial_unverified:
+    'The free trial could not be confirmed in un1t.online. Approving books only if their credits show; it never buys a trial.',
+  // UN1TBOOK.20 — the class left un1t.online's timetable before the queued
+  // booking ran; nothing was sent there (record-only).
+  un1t_class_no_longer_available:
+    'This class was removed in un1t.online before it could be booked. Offer the customer another class.',
   // PERSON-ACCT.7 — the agent elects ONE linked account per booking and
   // escalates instead of coin-flipping between two that are both live.
   account_conflict:
@@ -48,10 +73,41 @@ const MACHINE_REASONS = {
     'Their Glofox account match needs a human check. Confirm the account in Glofox, then approve to book.',
   attendance_check_failed:
     'Their attendance history could not be read from Glofox, so it was not auto-booked. Check the account and decide.',
+  // CBPCREDITREAD.1 — the funnel could not READ their Glofox credit balance
+  // on any of its attempts (class-booking-queue.js at MAX_ATTEMPTS; the
+  // count in the copy is that same constant). The
+  // balance is UNKNOWN, not empty, and approving grants nothing
+  // (approvalGrantsTrialCredit below): staff add a credit themselves if one
+  // is really missing.
+  credit_check_failed:
+    `Their Glofox credit balance could not be read (Glofox did not answer after ${CLASS_BOOKING_MAX_ATTEMPTS} tries), so the booking was not made. This does not mean they have no credits. Check their account in Glofox: if they have credits or a membership, approve to book against it. If they have none, add a credit in Glofox first, then approve. Approving does not add a credit.`,
   booking_rejected:
     'Glofox rejected the live booking attempt. Fix the account (credits / membership), then approve to retry the booking.',
   superseded_duplicate:
     'Duplicate of an earlier pending booking request for the same class.',
+  // REGISTRYREAD.1a — the automatic booking THREW on every attempt
+  // (class-booking-queue.js at MAX_ATTEMPTS). Nothing reached Glofox.
+  processing_error:
+    `The automatic booking failed ${CLASS_BOOKING_MAX_ATTEMPTS} times (for example, the studio's Glofox settings could not be read). Nothing was booked. Approve to book now.`,
+  // REGISTRYREAD.1a — the cron's reaper found the row stuck mid-run past the
+  // attempt cap. A run that died mid-flight may already have booked it.
+  max_attempts_stuck_processing:
+    `The automatic booking was interrupted ${CLASS_BOOKING_MAX_ATTEMPTS} times and never finished, so it may or may not have gone through. Check Glofox for the booking first; if it is not there, approve to book now.`,
+}
+
+// CBPCREDITREAD.1 — credit_check_failed names WHICH account's credits could
+// not be read (details.credit_unread_accounts, written by the processor): the
+// account the booking was for, or another account linked to the same person.
+// By Glofox member ID only, which staff can look up in Glofox; no name, email
+// or phone. A malformed list renders nothing extra.
+function creditUnreadLine(accounts) {
+  if (!Array.isArray(accounts)) return null
+  const parts = accounts
+    .filter((a) => a && typeof a.glofox_member_id === 'string' && a.glofox_member_id)
+    .map((a) => (a.role === 'linked_account'
+      ? `another Glofox account linked to this person (member ID ${a.glofox_member_id})`
+      : `the Glofox account this booking was for (member ID ${a.glofox_member_id})`))
+  return parts.length ? `Could not be read: ${parts.join('; ')}.` : null
 }
 
 // booking_failed:<CODE> — keep the Glofox message code visible but lead
@@ -69,11 +125,105 @@ function bookingFailedExplanation(code) {
  * draft-mode default), or null when there is nothing mechanical to
  * explain (pause/cancel — the reason there is the customer's own words).
  */
+// MANUALFUNNEL.1 — a class off a studio's hand-written timetable (no Glofox
+// there). Judged on the event id, not on `reason`: a request that reached
+// the card through the retry path carries 'processing_error', and its
+// approve still books nothing.
+const MANUAL_BOOKING =
+  'This studio books by hand. Create their account on the booking platform and book them into this class, using the contact details on this card, and let them know they are booked. Then approve to record it as done. Approving does not book anything.'
+
+const TRIAL_UNSETTLED_AT_MINT =
+  'Their Glofox account was just created, but Glofox gave no clear answer when the trial was being added, so it may already be there. Approving books only if class credits show on the account, and will not buy a second trial. Check their account in Glofox for a €0 trial invoice; if there is none, add a credit by hand, then approve.'
+
+// MIAHATCH.5 — Mia's own un1t.online cards (details.provider 'un1t_online',
+// origin 'mia', filed by src/lib/agent/un1t-booking.js) at a studio with no
+// Glofox. Their reasons are machine codes, so they are explained here in
+// un1t.online's terms and never rendered as the customer's words (customerWords).
+const isMiaUn1tRow = (row) => row?.details?.provider === 'un1t_online' && row?.details?.origin === 'mia'
+
+const MIA_UN1T_REASONS = {
+  mia_booking:
+    "Mia drafted this booking because the studio's booking mode needs approval. Approving books it in un1t.online.",
+  mia_cancellation:
+    "Mia drafted this cancellation because the studio's booking mode needs approval. Approving cancels it in un1t.online.",
+  no_credits:
+    'Mia escalated: they asked to book, but no credits or membership show in un1t.online. Talk to them in the conversation, add credits there, then approve to book.',
+  un1t_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
+  cancel_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and cancels only if it is still booked.',
+  // MIAHATCH.6 (Task 20) — the free trial (src/lib/agent/purchase-intents.js).
+  un1t_trial_check_failed:
+    'Mia could not check whether they can have the free trial (the check failed), so she offered no trial and handed over. Check their account in un1t.online and talk to them in the conversation.',
+  trial_not_configured:
+    'Mia tried to give them the free trial, but no trial product is set for this studio, so nothing was given. Set the trial product in the un1t.online settings, or sort it in un1t.online by hand.',
+  un1t_trial_unverified:
+    'Mia asked un1t.online for the free trial, but it could not be confirmed. Check their account in un1t.online for the trial credits.',
+  trial_product_not_free:
+    "The studio's trial product is not a live free product in un1t.online, so no trial was given. Fix the product or the trial setting, then sort the member in un1t.online.",
+  un1t_trial_granted_no_credits:
+    'Mia gave them the free trial in un1t.online, but its credits did not show when she booked the class, so nothing was booked. Check their credits in un1t.online.',
+  // Mia's closed trial rows (status failed), as Fix & retry may show them.
+  un1t_trial_used:
+    'un1t.online says they have had the free trial before, so Mia gave no trial and showed them the paid options instead.',
+  un1t_trial_retry:
+    'un1t.online was busy when Mia asked for the free trial, so nothing was given and the member was asked to try again.',
+  un1t_trial_not_sent:
+    'The free trial request could not be sent to un1t.online, so nothing was given and Mia handed over.',
+}
+
+// What approving a Mia trial card does: the class on it is booked only if
+// credits show (Ruling 28, never a trial); with no class there is nothing to book.
+const TRIAL_REASON = /^(un1t_trial_check_failed|trial_not_configured|un1t_trial_unverified|trial_product_not_free|un1t_trial_granted_no_credits|un1t_trial_used|un1t_trial_retry|un1t_trial_not_sent|un1t_trial_failed:)/
+function trialApproveLine(d) {
+  // un1t_trial_used is record-only in D's executor (UN1T_RECORD_ONLY_REASONS).
+  if (d.reason === 'un1t_trial_used') return 'Approving only records this; it books nothing and never gives a trial.'
+  return d.event_id
+    ? 'Approving books the class on this card only if credits show in un1t.online; it never gives a trial.'
+    : 'No class is named on this card, so approving books nothing.'
+}
+
+// un1t.online's own words, as Mia's card recorded them (scrubbed), quoted.
+function refusedLine(what, d, next) {
+  const words = typeof d.result?.message === 'string' && d.result.message.trim() ? d.result.message.trim() : null
+  return `un1t.online refused the ${what}${words ? `: "${words}"` : ''}. ${next}`
+}
+
+function miaUn1tWhy(d) {
+  const reason = typeof d.reason === 'string' ? d.reason : null
+  if (reason === 'booking_rejected') return refusedLine('booking', d, 'Check the member in un1t.online, then approve to try the booking again.')
+  if (reason === 'cancel_rejected') return refusedLine('cancellation', d, 'Check the booking in un1t.online, then approve to try the cancellation again.')
+  if (reason && TRIAL_REASON.test(reason)) {
+    const code = reason.startsWith('un1t_trial_failed:') ? reason.slice('un1t_trial_failed:'.length) || 'unknown' : null
+    const why = code
+      ? `un1t.online did not give them the free trial (${code}), so nothing was given or booked. Check their account in un1t.online, and give the trial or credits there by hand if they should have it.`
+      : MIA_UN1T_REASONS[reason]
+    return `${why} ${trialApproveLine(d)}`
+  }
+  if (reason && MIA_UN1T_REASONS[reason]) return MIA_UN1T_REASONS[reason]
+  // A reason this list does not know yet: never the raw code, never Glofox.
+  return 'Mia passed this to the team. Check the member in un1t.online before approving.'
+}
+
 export function whyFlagged(row) {
+  if (row && (row.kind === 'class_booking' || row.kind === 'class_cancellation') && isMiaUn1tRow(row)) {
+    return miaUn1tWhy(row.details)
+  }
   if (!row || row.kind !== 'class_booking') return null
   const d = row.details || {}
   const reason = typeof d.reason === 'string' ? d.reason : null
+  // A un1t.online funnel reason names what happened on that card, so it wins
+  // over the studio's book-by-hand line (its un1t: event id is hand-booked).
+  if (reason?.startsWith('un1t_') && MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
+  if (isHandBookedEventId(d.event_id)) return MANUAL_BOOKING
   if (reason) {
+    if (reason === 'credit_check_failed') {
+      const line = creditUnreadLine(d.credit_unread_accounts)
+      return line ? `${MACHINE_REASONS[reason]} ${line}` : MACHINE_REASONS[reason]
+    }
+    // GLOFOXPOSTRETRY.1 review — the account was just made, but the trial
+    // purchase got no clear answer, so this card's approve will not buy one.
+    if (reason === 'needs_credit_grant' && d.trial_grant?.outcome_unknown === true) return TRIAL_UNSETTLED_AT_MINT
     if (MACHINE_REASONS[reason]) return MACHINE_REASONS[reason]
     if (reason.startsWith('booking_failed:')) {
       return bookingFailedExplanation(reason.slice('booking_failed:'.length) || 'unknown')
@@ -91,36 +241,21 @@ export function whyFlagged(row) {
   return null
 }
 
-// AGENT-RETRY.1 — what a FAILED execution's Glofox code means and what to
-// fix before retrying. Keyed on details.result.message_code.
-const FAILURE_EXPLANATIONS = {
-  YOU_HAVE_NO_CREDITS_LEFT:
-    'Glofox refused the booking — no class credits on their account. Grant a credit in Glofox, then retry.',
-  NOT_EXECUTABLE:
-    'The request could not be executed — the contact has no linked Glofox account (or Glofox is not configured here). Link the account, then retry.',
-  // PERSON-ACCT.7 — the row named the Glofox account the agent chose for this
-  // booking, and the contact is now linked to a different one, so nothing was
-  // booked (rather than booking on an account nobody picked).
-  ACCOUNT_MISMATCH:
-    'This booking was queued for a different Glofox account than the one the contact is linked to now, so it was not executed. Check which account is right in Glofox, then retry.',
-  // CANCEL-FORM.5 — membership cancellation execution (auto-cancel toggle on).
-  NO_END_DATE:
-    'No machine-readable end date on this request, so Glofox was not called. Set the end date on the card and approve again, or cancel in Glofox by hand.',
-  NO_USER_MEMBERSHIP:
-    'Glofox returned no active membership for this account, so there was nothing to cancel. Check the membership in Glofox (it may already be cancelled or on another account), then retry.',
+// CBPCREDITREAD.1 — the ONE card reason whose approval buys the trial
+// membership before booking (membership-requests/[id]/route.js): a credits
+// read that WORKED and found none on a never-attended account. Every other
+// reason grants nothing, credit_check_failed above all (the balance is
+// UNKNOWN, and the member may already hold a paid pack). Pure.
+export function approvalGrantsTrialCredit(details) {
+  return details?.reason === 'needs_credit_grant'
 }
 
-/**
- * Operator-readable line for a failed execution, or null when the row is
- * not a failed execution. Pure.
- */
-export function failureExplanation(row) {
-  if (!row || row.status !== 'failed') return null
-  const code = row.details?.result?.message_code || row.details?.result?.reason || null
-  if (!code) return 'The execution failed. Check the account in Glofox, fix what is wrong, then retry.'
-  return FAILURE_EXPLANATIONS[code]
-    || `Glofox rejected the action (${code}). Fix the issue in Glofox, then retry.`
-}
+// C85 (c) — failureExplanation moved to shared/agent-request-failure.js so the
+// phone's post-approve alert can use it (it printed the raw code). One
+// definition, re-exported here for every web caller. MIAHATCH.5's un1t.online
+// wording for failed Hatch cards (un1tFailureExplanation, which
+// failureExplanation reads first) lives there too, so the phone shares it.
+export { failureExplanation, FAILURE_CODES, un1tFailureExplanation, UN1T_FAILURE_CODES } from '@shared/agent-request-failure'
 
 // PERSON-ACCT.3 — states that mean the membership (whatever its status)
 // cannot book right now. glofox_membership_status is NEVER the string
@@ -211,6 +346,8 @@ export function customerWords(row) {
   const note = typeof rawNote === 'string' ? rawNote.trim() : ''
   if (note) return note
   if (row.kind === 'class_booking') return null
+  // MIAHATCH.5 — a Mia un1t.online card's reason is a machine code (whyFlagged).
+  if (isMiaUn1tRow(row)) return null
   const reason = row.details && typeof row.details.reason === 'string' ? row.details.reason.trim() : ''
   return reason || null
 }

@@ -1,12 +1,17 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { blockConfirmMessage } from '@/lib/whatsapp-block-copy'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
 import { isServableMedia } from '@shared/whatsapp-media'
 import { mergeTimeline } from '@shared/approval-cards'
 import { CHANNELS } from '@shared/channels'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
+import {
+  bodyVariableSlots, templateSendBlock, SEND_BLOCK_TEXT,
+  initialTemplateValues, renderTemplatePreview, buildTemplateSend,
+} from '@shared/wa-template-send'
 import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
@@ -52,6 +57,15 @@ function MessageTypeIcon({ type }) {
   }
 }
 
+// WASTUDIOPICK.1 — how this thread's studio was decided (spec R9). Anything
+// not covered (null, unresolved, an unknown status or `by`) renders nothing.
+const FILED_BY_LABEL = { ad: 'ad', reply: 'reply', ai: 'AI', picker: 'picker', staff: 'staff' }
+export function studioNote(resolution) {
+  if (resolution?.status === 'asked') return 'Asked which studio'
+  if (resolution?.status === 'decided' && Object.hasOwn(FILED_BY_LABEL, resolution.by)) return `Filed by: ${FILED_BY_LABEL[resolution.by]}`
+  return null
+}
+
 // Display name helper — prefers contact name, falls back to WA profile name, then phone
 function getDisplayName(conv) {
   if (conv.contacts?.name) return conv.contacts.name
@@ -73,7 +87,7 @@ function initialsOf(name) {
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal conversation list is hidden and selection is driven by
 // the `initialConversationId` prop (synced on change, not just mount).
-export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab }) {
+export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab, onMoved }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
@@ -89,11 +103,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     if (!conversation?.id || !msg.wa_message_id) return
     setReactingId(msg.id)
     try {
-      await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
+      const res = await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: msg.wa_message_id, emoji }),
       })
+      const data = await res.json()
+      // Sent, but the thread row was lost: say so rather than show nothing.
+      if (data.success && data.warnings?.length) alert(data.warnings.join('\n\n'))
     } catch {} finally {
       setReactingId(null)
     }
@@ -109,6 +126,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // No dropdown/menu primitive exists yet in src/components/ui, so this is a
   // minimal click-toggled popover (ref pattern mirrors PersonActionBar.jsx).
   const [showMoreMenu, setShowMoreMenu] = useState(false)
+  // WAHOMESTUDIO.1 (R7) — studios this thread can move to (null = not loaded
+  // for the open thread; reset whenever the selection changes).
+  const [moveTargets, setMoveTargets] = useState(null)
   const moreButtonRef = useRef(null)
   const moreMenuRef = useRef(null)
   useEffect(() => {
@@ -134,6 +154,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // FLOW-SEND — drop the location's booking Flow into an open conversation
   // (availability comes back on the conversation GET).
   const [flowAvailable, setFlowAvailable] = useState(false)
+  // C126 INBOXCONTROLS.1 — the thread GET's canUseWebControls: web `whatsapp`
+  // at the thread's studio, the rule of the web-only /agent (Handled-by) and
+  // /add-contact routes. The thread itself opens on web OR mobile `whatsapp`,
+  // so without this those two controls were offered and then failed.
+  const [canUseWebControls, setCanUseWebControls] = useState(false)
   const [sendingFlow, setSendingFlow] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
@@ -141,6 +166,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // WA-TPL-GROUPS — search box inside the template picker (mig 450 groups).
   const [templateSearch, setTemplateSearch] = useState('')
   const [sendingTemplate, setSendingTemplate] = useState(false)
+  // A ref, not state: a second click can land before the re-render that
+  // disables the button, and a template to a customer can't be unsent.
+  const sendingTplRef = useRef(false)
   // INBOX-REDESIGN.3.2 — unified "+" composer menu (Template / Card set /
   // Booking Flow), open-window-only. Same click-toggled popover idiom as
   // the header's ⋯ menu above: trigger + menu refs, outside-click
@@ -198,7 +226,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   async function toggleBlocked(conv) {
     const next = !conv.is_blocked
     const msg = next
-      ? 'Block this sender? They will no longer be able to message this number (and it cannot message them).'
+      // WAORGNUMBER.4 (R8) — a block is on the number, shared across studios.
+      ? blockConfirmMessage(conv.whatsapp_numbers?.display_phone)
       : 'Unblock this sender?'
     if (!window.confirm(msg)) return
     try {
@@ -230,6 +259,50 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     } catch { /* leave state as-is */ }
   }
 
+  // WAHOMESTUDIO.1 (R7) — "Move to <studio>": re-file the thread at another
+  // studio of the same organisation. The server decides who may; this only
+  // lists what GET /move offered.
+  async function loadMoveTargets(conv) {
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/move`)
+      const j = await res.json().catch(() => ({}))
+      // The thread changed while this was in flight: drop the answer.
+      if (selectedIdRef.current !== conv.id) return
+      setMoveTargets(j.success ? (j.data?.targets || []) : [])
+    } catch {
+      if (selectedIdRef.current === conv.id) setMoveTargets([])
+    }
+  }
+
+  async function moveTo(conv, target) {
+    if (!window.confirm(`Move this conversation to ${target.name}? It will leave this inbox.`)) return
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: target.id }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) { window.alert(j.error || 'Move failed'); return }
+      setConversations(prev => prev.filter(c => c.id !== conv.id))
+      // Deliberately close the thread: it no longer belongs to this inbox.
+      // selectedId drives the pane, the poll and the realtime handler; a null
+      // thread is handled by the effects that read it (template restore,
+      // card-set, poll all guard on it).
+      if (selectedIdRef.current === conv.id) {
+        setSelectedId(null)
+        setConversation(null)
+        setMessages([])
+        setMoveTargets(null)
+      }
+      // Embedded: the parent (UnifiedInbox) owns the queue and its own
+      // selection, so tell it once our own state is clear. Standalone: no-op.
+      if (typeof onMoved === 'function') onMoved(conv.id)
+    } catch {
+      window.alert('Move failed')
+    }
+  }
+
   const fetchTemplates = useCallback(async () => {
     try {
       const res = await fetch(`/api/whatsapp/templates?location_id=${locationId}&status=APPROVED`)
@@ -247,6 +320,41 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     pollRef.current = setInterval(fetchConversations, 60000)
     return () => clearInterval(pollRef.current)
   }, [locationId, fetchConversations, fetchTemplates])
+
+  // WAHOMESTUDIO.1 (R5) — inside a thread, ask for templates by conversation:
+  // the thread's own studio's (a thread at another studio than the active one
+  // lists its studio's). A separate effect keyed on the thread id, NOT a change
+  // to fetchTemplates' deps: its identity must stay put or every thread click
+  // would re-run the initial-load effect (fetchConversations + the 60s poll).
+  // With no thread open the location list above stays as it is.
+  const threadTemplatesRef = useRef(false)
+  const openThreadId = conversation?.id || null
+  useEffect(() => {
+    if (!openThreadId) {
+      // Back to no thread: restore the location list if a thread's replaced it.
+      if (threadTemplatesRef.current) {
+        threadTemplatesRef.current = false
+        fetchTemplates()
+      }
+      return
+    }
+    let stale = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/whatsapp/templates?conversation_id=${openThreadId}&status=APPROVED`)
+        const data = await res.json()
+        // The thread changed while this was in flight: drop the answer.
+        if (stale) return
+        if (data.success) {
+          threadTemplatesRef.current = true
+          setTemplates(data.templates || [])
+        }
+      } catch (err) {
+        if (!stale) console.error('Failed to fetch thread templates:', err)
+      }
+    })()
+    return () => { stale = true }
+  }, [openThreadId, fetchTemplates])
 
   // Realtime subscription — push updates instead of polling. RLS scopes
   // events to rows the user can read, so the per-location filter is
@@ -300,6 +408,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   useEffect(() => {
     selectedIdRef.current = selectedId
     setApprovals([])
+    setMoveTargets(null)
     threadSigRef.current = ''   // force a fresh load when switching threads
     if (selectedId) {
       fetchMessages(selectedId)
@@ -363,6 +472,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     try {
       const res = await fetch(`/api/whatsapp/conversations/${convId}`)
       const data = await res.json()
+      // A closed (e.g. moved) or switched thread must not repopulate the pane.
+      if (convId !== selectedIdRef.current) return
       if (data.success) {
         const msgs = data.messages || []
         const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`
@@ -371,6 +482,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setConversation(data.conversation)
         setMessages(msgs)
         setFlowAvailable(Boolean(data.flow_available))
+        setCanUseWebControls(data.canUseWebControls === true)
 
         // Pre-fill add contact form with WA profile name
         if (!data.conversation.contact_id && data.conversation.wa_profile_name) {
@@ -420,6 +532,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
 
       if (data.success) {
         setNewMessage('')
+        // WATPLSEND.1 — sent, but the thread row or the conversation update failed.
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -462,45 +576,30 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     }
   }
 
+  // WATPLSEND.1 — the same rules the phone uses (shared/wa-template-send.js):
+  // a template the send route would refuse cannot be picked, and {{1}} starts
+  // as the contact's first name (editable).
   function selectTemplate(template) {
+    if (templateSendBlock(template)) return
     setSelectedTemplate(template)
-    setTemplateVars({})
-    // Pre-fill variable mapping with contact name if available
-    const bodyComp = template.components?.find(c => c.type === 'BODY')
-    const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-    if (vars.length > 0 && conversation?.contacts?.first_name) {
-      setTemplateVars({ '1': conversation.contacts.first_name })
-    }
+    setTemplateVars(initialTemplateValues(template, conversation?.contacts?.first_name))
   }
 
   async function handleSendTemplate() {
-    if (!selectedTemplate || !selectedId) return
+    if (!selectedTemplate || !selectedId || sendingTplRef.current) return
+    // One value per DISTINCT {{n}}, in number order (what Meta expects), the
+    // row's own language, and never a blank: buildTemplateSend refuses to build
+    // until every slot is filled, and the button stays disabled until then.
+    const built = buildTemplateSend(selectedTemplate, templateVars)
+    if (!built.ok) return
 
+    sendingTplRef.current = true
     setSendingTemplate(true)
     try {
-      // Build template components with variable values
-      const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-      const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-      const components = []
-
-      if (vars.length > 0) {
-        const parameters = vars.map((_, i) => ({
-          type: 'text',
-          text: templateVars[String(i + 1)] || ' ',
-        }))
-        components.push({ type: 'body', parameters })
-      }
-
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'template',
-          template_name: selectedTemplate.name,
-          template_language: selectedTemplate.language || 'en',
-          template_components: components,
-          sent_by: userId,
-        }),
+        body: JSON.stringify(built.payload),
       })
 
       const data = await res.json()
@@ -508,6 +607,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setShowTemplatePicker(false)
         setSelectedTemplate(null)
         setTemplateVars({})
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -517,6 +617,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     } catch {
       alert('Failed to send template')
     } finally {
+      sendingTplRef.current = false
       setSendingTemplate(false)
     }
   }
@@ -557,6 +658,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send-flow`, { method: 'POST' })
       const data = await res.json()
       if (data.success) {
+        // FLOWTOKENDEDUP.1 — sent, but the thread row could not be saved.
+        if (data.warnings?.length) alert(data.warnings.join('\n\n'))
         await fetchMessages(selectedId)
         await fetchApprovals(selectedId)
         await fetchConversations()
@@ -614,12 +717,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                 <div className="space-y-1">
                   {group.templates.map(t => {
                     const bodyComp = t.components?.find(c => c.type === 'BODY')
+                    const block = templateSendBlock(t)
                     return (
                       <button
                         key={t.id}
                         type="button"
                         onClick={() => selectTemplate(t)}
-                        className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
+                        disabled={!!block}
+                        className={`w-full text-left px-3 py-2 rounded-md transition-colors ${block ? 'opacity-60 cursor-not-allowed' : 'hover:bg-un1t-border/30'}`}
                       >
                         <p className="text-sm font-medium flex items-center gap-1.5">
                           {t.name}
@@ -629,6 +734,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         <p className="text-xs text-un1t-muted truncate mt-0.5">
                           {bodyComp?.text || 'No body text'}
                         </p>
+                        {!!block && (
+                          <p className="text-xs text-amber-700 mt-0.5">{SEND_BLOCK_TEXT[block]}</p>
+                        )}
                       </button>
                     )
                   })}
@@ -664,49 +772,36 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
           the sibling INBOX-REDESIGN.3.1 bubble retoken. */}
       <div className="bg-un1t-surface text-un1t-text border border-un1t-border rounded-lg px-3 py-2 mb-3 max-w-[80%]">
         <p className="text-sm whitespace-pre-wrap">
-          {(() => {
-            const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-            let text = bodyComp?.text || ''
-            // Replace variables with filled values
-            text = text.replace(/\{\{(\d+)\}\}/g, (match, num) => {
-              return templateVars[num] || `{{${num}}}`
-            })
-            return text
-          })()}
+          {renderTemplatePreview(selectedTemplate, templateVars)}
         </p>
       </div>
 
-      {/* Variable inputs */}
-      {(() => {
-        const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-        const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-        if (vars.length === 0) return null
-
-        return (
-          <div className="space-y-2 mb-3">
-            {vars.map((v, i) => {
-              const num = String(i + 1)
-              return (
-                <div key={num} className="flex items-center gap-2">
-                  <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
-                  <input
-                    type="text"
-                    value={templateVars[num] || ''}
-                    onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
-                    placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
-                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                  />
-                </div>
-              )
-            })}
-          </div>
-        )
-      })()}
+      {/* Variable inputs — WATPLLOG.1: one per DISTINCT {{n}}, in number order,
+          which is how Meta takes them; a repeated {{1}} is one box. */}
+      {bodyVariableSlots(selectedTemplate).length > 0 && (
+        <div className="space-y-2 mb-3">
+          {bodyVariableSlots(selectedTemplate).map((n) => {
+            const num = String(n)
+            return (
+              <div key={num} className="flex items-center gap-2">
+                <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
+                <input
+                  type="text"
+                  value={templateVars[num] || ''}
+                  onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
+                  placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
+                  className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                />
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       <button
         type="button"
         onClick={handleSendTemplate}
-        disabled={sendingTemplate}
+        disabled={sendingTemplate || !buildTemplateSend(selectedTemplate, templateVars).ok}
         className="flex items-center gap-2 text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 w-full justify-center"
       >
         <Send size={14} />
@@ -852,6 +947,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         {conversation.contacts.pipeline_stage_slug.replace(/_/g, ' ')}
                       </span>
                     )}
+                    {studioNote(conversation?.studio_resolution) && (
+                      <span className="text-[11px] text-un1t-subtle">{studioNote(conversation.studio_resolution)}</span>
+                    )}
                   </div>
                   <p className="text-xs text-un1t-muted flex items-center gap-1">
                     {conversation?.wa_phone}
@@ -865,7 +963,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {conversation && (
+                {conversation && canUseWebControls && (
                   <HandledByControl
                     channel="wa"
                     conversation={conversation}
@@ -893,7 +991,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     <button
                       ref={moreButtonRef}
                       type="button"
-                      onClick={() => setShowMoreMenu(v => !v)}
+                      onClick={() => {
+                        const opening = !showMoreMenu
+                        setShowMoreMenu(opening)
+                        if (opening && moveTargets === null) loadMoveTargets(conversation)
+                      }}
                       className="p-1.5 text-un1t-subtle hover:text-un1t-text rounded-md border border-un1t-border transition-colors"
                       aria-haspopup="menu"
                       aria-expanded={showMoreMenu}
@@ -918,7 +1020,24 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         >
                           {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                         </button>
-                        {isUnknown ? (
+                        {(moveTargets || []).map((t) => (
+                          // WAMOVENUMBER.1 — a studio with no WhatsApp number
+                          // switched on could not answer the thread: shown,
+                          // disabled, saying why (the route would 409).
+                          <button
+                            key={t.id}
+                            type="button"
+                            role="menuitem"
+                            disabled={t.whatsapp === false}
+                            title={t.whatsapp === false ? `${t.name} has no WhatsApp number switched on, so it could not answer this conversation.` : undefined}
+                            onClick={() => { setShowMoreMenu(false); moveTo(conversation, t) }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 transition-colors disabled:text-un1t-muted disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                          >
+                            Move to {t.name}
+                            {t.whatsapp === false && <span className="block text-[11px] text-un1t-muted">No WhatsApp number switched on</span>}
+                          </button>
+                        ))}
+                        {isUnknown ? (canUseWebControls && (
                           <button
                             type="button"
                             role="menuitem"
@@ -928,7 +1047,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                             <UserPlus size={13} />
                             Add to Contacts
                           </button>
-                        ) : conversation?.contacts?.id && (
+                        )) : conversation?.contacts?.id && (
                           <Link
                             href={`/contacts/${conversation.contacts.id}`}
                             role="menuitem"
@@ -957,7 +1076,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
             )}
 
             {/* Add to Contacts form — slides in below header */}
-            {showAddContact && isUnknown && (
+            {showAddContact && isUnknown && canUseWebControls && (
               <div className="border-b border-un1t-border bg-un1t-surface/80 px-5 py-4 shrink-0">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-semibold flex items-center gap-2">

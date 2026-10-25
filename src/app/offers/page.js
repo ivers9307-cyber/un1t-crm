@@ -12,6 +12,7 @@
 import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerHasDeadline, formatEuro } from '@/lib/sale-offers'
+import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import SaleCountdown from '@/components/offers/SaleCountdown'
 
 export const runtime = 'nodejs'
@@ -113,10 +114,12 @@ function heroFor(offers) {
 
 export default async function OffersPage() {
   const db = createServerClient()
+  const homeId = await resolveOffersHomeLocationId(db)
   const { data } = await db
     .from('sale_offers')
     .select('*')
     .eq('active', true)
+    .eq('location_id', homeId || NO_HOME_LOCATION_ID)
     .order('sort', { ascending: true })
 
   const offers = (data || []).filter((o) => offerIsOpen(o))

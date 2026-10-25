@@ -17,7 +17,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/auth', () => ({
+// ROLESWEEP.1c — the REAL per-location role helpers (pure: role-at-location).
+vi.mock('@/lib/auth', async () => ({
+  ...(await vi.importActual('@/lib/role-at-location')),
   getCurrentUser: vi.fn(),
   assertLocationAccessOr404: vi.fn(() => null),
 }))
@@ -65,7 +67,7 @@ const prefOut = { id: 'p1', email_marketing: false, sms_marketing: false, whatsa
 
 beforeEach(() => {
   vi.clearAllMocks()
-  getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', isMaster: false })
+  getCurrentUser.mockResolvedValue({ id: 'u1', role: 'owner', isMaster: false, rolesByLocation: { 'loc-1': 'owner' } })
 })
 
 async function run({ emailStatus, body, pref }) {

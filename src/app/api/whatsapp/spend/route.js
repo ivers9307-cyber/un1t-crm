@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchPricingAnalytics } from '@/lib/whatsapp-pricing'
+import { getLocationWhatsAppNumberConfig } from '@/lib/whatsapp-config'
 
 export async function GET(request) {
   const user = await getCurrentUser()
@@ -35,15 +36,13 @@ export async function GET(request) {
   // number isn't configured or the API errors.
   let meta = null
   try {
-    const { data: num } = await db.from('whatsapp_numbers')
-      .select('business_account_id, access_token')
-      .eq('location_id', locationId)
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle()
-    if (num?.business_account_id && num?.access_token) {
+    // WAORGNUMBER.1 — the WABA + token of the number switched on at THIS studio
+    // (link default first), whatever its home. A lookup that throws is lost
+    // enrichment, logged below.
+    const num = await getLocationWhatsAppNumberConfig(locationId)
+    if (num?.businessAccountId && num?.token) {
       meta = await fetchPricingAnalytics(
-        { wabaId: num.business_account_id, accessToken: num.access_token },
+        { wabaId: num.businessAccountId, accessToken: num.token },
         { start: Math.floor(sinceMs / 1000), end: Math.floor(Date.now() / 1000), granularity: 'MONTHLY' },
       )
     }

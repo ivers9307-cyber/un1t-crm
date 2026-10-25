@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  normaliseShellyHost, fingerprintAuthKey, keyHint, redactSecret,
+  normaliseShellyHost, fingerprintAuthKey, redactSecret,
   classifyV2, classifyV1, parseGroupsResult, createShellyClient,
   MIN_GAP_MS, RETRY_429_AFTER_MS, MAX_GET_IDS,
 } from './client'
+import * as shellyClient from './client'
 
 const KEY = 'MTIzNDU2Nzg5MGFiY2RlZg-SECRET-KEY-VALUE'
 const conn = { host: 'shelly-103-eu.shelly.cloud', auth_key: KEY }
@@ -29,7 +30,7 @@ describe('normaliseShellyHost', () => {
   })
 })
 
-describe('fingerprintAuthKey / keyHint / redactSecret', () => {
+describe('fingerprintAuthKey / redactSecret', () => {
   it('fingerprint is 64 hex and stable', () => {
     expect(fingerprintAuthKey(KEY)).toMatch(/^[0-9a-f]{64}$/)
     expect(fingerprintAuthKey(KEY)).toBe(fingerprintAuthKey(KEY))
@@ -37,10 +38,6 @@ describe('fingerprintAuthKey / keyHint / redactSecret', () => {
   })
   it('a blank key has no fingerprint — never a valid-looking digest', () => {
     for (const blank of ['', null, undefined]) expect(fingerprintAuthKey(blank)).toBe('')
-  })
-  it('hint is the last four characters', () => {
-    expect(keyHint(KEY)).toBe('ALUE')
-    expect(keyHint('ab')).toBe('')
   })
   it('redactSecret strips the key out of a message that embeds a URL', () => {
     const e = new Error(`fetch failed for https://x/v2?auth_key=${KEY}`)
@@ -411,5 +408,11 @@ describe('createShellyClient', () => {
     const c2 = createShellyClient(conn, { fetchImpl: retry.fetchImpl, ...clockAndSleep() })
     expect(await c2.deviceList()).toMatchObject({ ok: true, retried: true })
     expect(retry.calls).toHaveLength(2)
+  })
+})
+
+describe('SECRETTAILS.1', () => {
+  it('no helper computes a key hint any more', () => {
+    expect(shellyClient.keyHint).toBeUndefined()
   })
 })

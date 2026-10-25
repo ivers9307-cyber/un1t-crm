@@ -25,6 +25,12 @@ export const LeadSchema = z.object({
   // against the LEAD_CAMPAIGNS allowlist server-side — an unknown or
   // studio-mismatched value is ignored, never trusted to set a tag.
   campaign: z.string().trim().min(1).max(80).optional(),
+  // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
+  // sanitiseVisitOrigin reduces it before anything is stored.
+  visit: z.object({
+    referrer: z.string().max(2000).optional(),
+    landing_path: z.string().max(500).optional(),
+  }).optional(),
 })
 
 // Normalise a validated body into the fields the handler stores.
@@ -35,6 +41,7 @@ export function normaliseLead(data) {
     phone: data.phone.trim(),
     publicPath: data.public_path.trim(),
     campaign: data.campaign ? data.campaign.trim() : null,
+    visit: data.visit || null,
   }
 }
 
@@ -71,8 +78,10 @@ export const LEAD_CAMPAIGNS = {
     leadSource: 'meta_free_trial',
     // First-touch WhatsApp: the instant the lead signs up, send this
     // APPROVED template (asks consultation vs first class via quick-reply
-    // buttons); the reply hands off to the Mia agent who books it. Name
-    // must match a whatsapp_templates row at the campaign's location.
+    // buttons); the reply hands off to the Mia agent who books it. This is
+    // the DEFAULT name: a studio's own pick for the 'meta_ad_welcome' purpose
+    // (WAORGNUMBER.2 R5) wins; without one, it must match a
+    // whatsapp_templates row at the campaign's location.
     whatsappTemplate: 'meta_ad_whatsapp_lead',
   },
 }

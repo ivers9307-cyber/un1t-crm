@@ -140,7 +140,7 @@ describe('sanitizeSearchTerm', () => {
   })
   it('leaves a normal email/name search untouched', () => {
     expect(sanitizeSearchTerm('sarah@example.com')).toBe('sarah@example.com')
-    expect(sanitizeSearchTerm('Sarah Doyle')).toBe('Sarah Doyle')
+    expect(sanitizeSearchTerm('Sam Demo')).toBe('Sam Demo')
   })
 })
 
@@ -226,6 +226,7 @@ describe('entityResult', () => {
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { pageFileFor } from '../../tests/helpers/app-router-resolve.js'
+import { stripComments } from '../../tests/helpers/js-code.js'
 
 // A page whose whole job is redirect() — the retired-stub shape.
 function isRedirectStub(file) {
@@ -236,9 +237,8 @@ function isRedirectStub(file) {
   // session-dependent target resolution) still renders for someone — only a
   // bare unconditional redirect is a retired stub. /dashboard is the case
   // that matters: it resolves a per-user target rather than being retired.
-  return !/\breturn\b|\bif\s*\(|&&|\?\?|\?\s/.test(
-    source.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''),
-  )
+  // Comments blanked by the TypeScript parser's ranges, never a regex (GUARDSTRIP.1).
+  return !/\breturn\b|\bif\s*\(|&&|\?\?|\?\s/.test(stripComments(source))
 }
 
 // AUDIT-13.G — the resolver that used to live here now lives in

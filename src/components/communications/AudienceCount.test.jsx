@@ -2,7 +2,8 @@
 //
 // FILTER-B.2 — the shared audience-count surface.
 //
-// Three of the five audience builders (WhatsApp broadcast, SMS broadcast,
+// Three of the five audience builders (WhatsApp broadcast, SMS broadcast — since
+// retired with Twilio, TWILIO-RETIRE.1 —
 // sequence settings) shipped with `audienceCount={null}`: every filter defect
 // the correctness phase fixed was INVISIBLE there — a blank date, an
 // unresolvable tag, a filter matching nobody, all silent. This component is
@@ -53,7 +54,7 @@ function ok(body) { return { ok: true, status: 200, json: async () => ({ success
 function bad(error, status = 400) { return { ok: false, status, json: async () => ({ success: false, error }) } }
 
 describe('AudienceCount — channel parity', () => {
-  it.each(['email', 'sms', 'whatsapp'])('asks the count route for its OWN channel (%s)', async (channel) => {
+  it.each(['email', 'whatsapp'])('asks the count route for its OWN channel (%s)', async (channel) => {
     const calls = stubCount(() => ok({ count: 1, matched: 1 }))
     render(<AudienceCount locationId="loc-1" filter={FILTER} channel={channel} />)
     await waitFor(() => expect(calls.length).toBeGreaterThan(0), WAIT)
@@ -66,7 +67,7 @@ describe('AudienceCount — channel parity', () => {
     render(
       <AudienceCount
         locationId="loc-1"
-        channel="sms"
+        channel="email"
         filter={{ logic: 'and', filters: [FILTER.filters[0], { field: '', op: '', value: '' }] }}
       />,
     )
@@ -78,13 +79,13 @@ describe('AudienceCount — channel parity', () => {
 describe('AudienceCount — states', () => {
   it('shows a loading state while the count is in flight', () => {
     stubCount(() => new Promise(() => {}))
-    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" />)
+    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
     expect(screen.getByText(/counting/i)).toBeTruthy()
   })
 
   it('surfaces the server error message rather than the placeholder', async () => {
     stubCount(() => bad('OR logic is not supported together with tag, event or studio-list filters.'))
-    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" />)
+    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" />)
     await screen.findByText(/OR logic is not supported together with tag, event or studio-list filters/, undefined, WAIT)
     expect(screen.queryByText(/Add a condition to see how many contacts match/)).toBeNull()
   })
@@ -103,15 +104,6 @@ describe('AudienceCount — send mode reports match vs will-receive', () => {
     await screen.findByText(/1,200 no marketing opt-in/, undefined, WAIT)
     screen.getByText(/24 bounced or complained/)
     screen.getByText(/300 suppressed for repeat bounces/)
-  })
-
-  it('sms: renders the excluded breakdown the composer never showed', async () => {
-    stubCount(() => ok({ count: 5, matched: 9, excluded: { no_phone: 2, not_opted_in: 1, opted_out: 1 } }))
-    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" />)
-    await screen.findByText(/will receive it/, undefined, WAIT)
-    await screen.findByText(/2 no phone number/, undefined, WAIT)
-    screen.getByText(/1 no marketing opt-in/)
-    screen.getByText(/1 opted out/)
   })
 
   it('whatsapp: N match · M reachable on WhatsApp (never an email-reachable number)', async () => {
@@ -184,7 +176,7 @@ describe('AudienceCount — onResult lets a host gate Send on the same number', 
   it('reports an error result so Send can stay disabled', async () => {
     stubCount(() => bad('tag filter requires a non-empty string value'))
     const seen = []
-    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="sms" onResult={r => seen.push(r)} />)
+    render(<AudienceCount locationId="loc-1" filter={FILTER} channel="email" onResult={r => seen.push(r)} />)
     await waitFor(() => expect(seen.some(r => r.status === 'error')).toBe(true), WAIT)
     const err = seen.find(r => r.status === 'error')
     expect(err.sendable).toBeNull()

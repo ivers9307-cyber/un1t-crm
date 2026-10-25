@@ -6,6 +6,8 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
+import { createServerClient } from '@/lib/supabase'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostSignOut from '@/components/host/HostSignOut'
 import HostImpersonationBanner from '@/components/host/HostImpersonationBanner'
 import HostNav from '@/components/host/HostNav'
@@ -15,6 +17,9 @@ export const dynamic = 'force-dynamic'
 export default async function HostPortalLayout({ children }) {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
+  // W1.S1c: the wordmark is the host's ORGANISATION (short name: UN1T keeps
+  // its bare "UN1T"), never a literal gym and never the host's own name.
+  const brand = await resolveHostOrgBrand(createServerClient(), session.host)
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -25,7 +30,7 @@ export default async function HostPortalLayout({ children }) {
       <header className="border-b border-white/10">
         <div className="max-w-4xl mx-auto px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-baseline gap-3 shrink-0">
-            <span className="font-bold tracking-[0.2em]">UN1T</span>
+            <span className="font-bold tracking-[0.2em]">{brand.shortName}</span>
             <span className="text-xs uppercase tracking-[0.15em] text-white/45">Hosts</span>
           </div>
           <HostNav />

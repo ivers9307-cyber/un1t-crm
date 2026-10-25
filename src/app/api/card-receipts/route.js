@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { isCardReceiptPath, sniffReceiptMime, CARD_RECEIPTS_BUCKET, MAX_RECEIPT_BYTES } from '@/lib/card-receipts'
@@ -41,7 +41,8 @@ export async function POST(request) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'card_receipts')) {
+  // ROLESWEEP.1b — coarse pre-check; judged at the receipt's location below.
+  if (!hasPermissionAtAnyLocation(user, 'card_receipts')) {
     return NextResponse.json(
       { success: false, error: 'You do not have permission to submit company-card receipts.' },
       { status: 403 }
@@ -74,6 +75,13 @@ export async function POST(request) {
   }
   if (!userLocationIds.includes(locationId)) {
     return NextResponse.json({ success: false, error: 'You are not assigned to that location.' }, { status: 403 })
+  }
+  // ROLESWEEP.1b — judged at the receipt's location, not the caller's active studio.
+  if (!hasPermissionForLocation(user, locationId, 'card_receipts')) {
+    return NextResponse.json(
+      { success: false, error: 'You do not have permission to submit company-card receipts.' },
+      { status: 403 }
+    )
   }
 
   // Only paths shaped by upload-sign AND inside this submitter's own

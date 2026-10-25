@@ -69,6 +69,8 @@ vi.mock('@/lib/live-class', () => ({ endSession: vi.fn(() => Promise.resolve({ o
 vi.mock('@/lib/hr-post-class-email', () => ({ sendPostClassEmail: vi.fn(() => Promise.resolve({ ok: true, sent: false })) }))
 vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
+// W1.S1a — the session-ready push names the studio's product.
+vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async (_db, id) => ({ companyName: id === 'L1' ? 'UN1T Stillorgan' : '', shortName: id === 'L1' ? 'UN1T' : '', locationName: '' })) }))
 
 import { GET } from './route.js'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
@@ -190,5 +192,19 @@ describe('auto-end-stale-hr-sessions — Phase 2 email-sweep query', () => {
     const pushedIds = sendCustomerPush.mock.calls.map((c) => c[2].data.session_id)
     expect(pushedIds).toContain('s-real')      // real session → push
     expect(pushedIds).not.toContain('s-junk')  // junk session → no push (the spam fix)
+  })
+
+  it('W1.S1a: the push names the session studio product, bare "Points" when unresolved', async () => {
+    sweepRows = [
+      { id: 's-still', contact_id: 'c1', location_id: 'L1', effort_points: 30, class_name: 'RIDE' },
+      { id: 's-other', contact_id: 'c2', location_id: 'L2', effort_points: 12, class_name: null },
+    ]
+    sendPostClassEmail.mockResolvedValue({ ok: true, sent: true })
+
+    await GET(req())
+
+    const bodies = Object.fromEntries(sendCustomerPush.mock.calls.map((c) => [c[2].data.session_id, c[2]]))
+    expect(bodies['s-still']).toMatchObject({ title: 'Your session is ready', body: '30 UN1T Points · RIDE', data: { type: 'session_report' } })
+    expect(bodies['s-other'].body).toBe('12 Points')
   })
 })

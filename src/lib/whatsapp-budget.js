@@ -13,10 +13,14 @@
 // business-initiated conversations. Known deltas, both conservative:
 //   • a template sent inside an already-open customer-service window doesn't
 //     consume Meta budget but we count it → we under-spend, never over-spend;
+//   • WAORGNUMBER.4 (R7) — Meta's limit belongs to the NUMBER, and one number
+//     can be switched on at several studios of its organisation
+//     (location_whatsapp_numbers), so usage is counted over EVERY studio with
+//     the number switched on, plus the sending studio itself;
 //   • whatsapp_messages carries no sender-number id, so usage is counted per
-//     LOCATION — a multi-number location debits every number's tier with the
-//     location's whole spend (single-number locations, i.e. all of them today,
-//     are exact).
+//     LOCATION — a studio with two numbers switched on debits each number's
+//     tier with the studio's whole spend (over-counts only; a per-message
+//     number column is a possible follow-up).
 // Free-form sends (Mia replies, inbox 1:1 text) ride user-initiated windows,
 // are message_type != 'template', and correctly never count.
 //
@@ -32,9 +36,11 @@
 // inbox template sends) COUNT toward usage but are NOT gated: they are
 // conversation-level and low-volume, and blocking a booking confirmation to
 // protect a marketing budget would be backwards. Null/unknown/UNLIMITED tier
-// (or an env-fallback config with no location) = no gate.
+// (or a config with no location) = no gate.
 
 import { tierLabel } from './whatsapp-number-health'
+import { WA_PHONE_APP_SOURCES_IN_LIST } from './whatsapp-staff-sources'
+import { studiosUsingNumbers } from './whatsapp-config'
 
 // Meta messaging-limit tier → business-initiated conversations per rolling 24h.
 // UNLIMITED (and unknown/null) carry no numeric limit → ungated.
@@ -75,16 +81,22 @@ export function effectiveTickHeadroom(capHeadroom, budget) {
 }
 
 /**
- * DISTINCT contacts who received a template (business-initiated) message at
- * this location in the trailing 24h — the shared usage counter every sender
+ * DISTINCT contacts who received a template (business-initiated) message from
+ * number `numberId` in the trailing 24h — the shared usage counter every sender
  * (blast, drip, sequence, automation, inbox template) contributes to via its
  * whatsapp_messages insert. Rows with no linked contact each count once
  * (conservative: can only over-count usage, never free up phantom headroom).
- * Paginated (>1k-safe) with a deterministic order, per the PostgREST cap rule.
+ * WAORGNUMBER.4 — counts the rows of every studio with the number switched on
+ * (studiosUsingNumbers) plus `locationId`; with no `numberId`, `locationId`
+ * alone. A failed read throws, so the budget fails closed. Paginated
+ * (>1k-safe) with a deterministic order, per the PostgREST cap rule.
  */
-export async function countBusinessInitiatedContactsLast24h(db, locationId) {
+export async function countBusinessInitiatedContactsLast24h(db, { numberId = null, locationId = null } = {}) {
   const PAGE = 1000
   const HARD_LIMIT = 200_000
+  const using = numberId ? await studiosUsingNumbers(db, [numberId]) : []
+  const locationIds = [...new Set([locationId, ...using].filter(Boolean))]
+  if (locationIds.length === 0) return 0
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const seen = new Set()
   let unlinked = 0
@@ -93,9 +105,12 @@ export async function countBusinessInitiatedContactsLast24h(db, locationId) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db.from('whatsapp_messages')
       .select('id, contact_id')
-      .eq('location_id', locationId)
+      .in('location_id', locationIds)
       .eq('direction', 'outbound')
       .eq('message_type', 'template')
+      // C106 (d) — phone-app rows (coexistence echoes, history) never went
+      // through the Cloud API: not our send, not our tier budget.
+      .not('source', 'in', WA_PHONE_APP_SOURCES_IN_LIST)
       .gt('sent_at', since)
       .order('id', { ascending: true })
       .range(start, end)
@@ -113,12 +128,13 @@ export async function countBusinessInitiatedContactsLast24h(db, locationId) {
 }
 
 /**
- * The location's current send budget against `tier`, or null when there is no
- * gate (UNLIMITED / unknown tier, or an env-fallback config with no location —
- * matching the quality gate's "env configs carry no rating" posture).
+ * Number `numberId`'s current send budget against `tier`, spent by every studio
+ * using it (WAORGNUMBER.4), or null when there is no gate (UNLIMITED / unknown
+ * tier, or no sending studio: every resolver stamps one since
+ * WACONFIGFALLBACK.1 retired the env number).
  */
-export async function getSendBudget(db, { locationId, tier } = {}) {
+export async function getSendBudget(db, { numberId = null, locationId, tier } = {}) {
   if (!locationId || tierDailyLimit(tier) == null) return null
-  const used = await countBusinessInitiatedContactsLast24h(db, locationId)
+  const used = await countBusinessInitiatedContactsLast24h(db, { numberId, locationId })
   return budgetSnapshot({ tier, usedContacts: used })
 }

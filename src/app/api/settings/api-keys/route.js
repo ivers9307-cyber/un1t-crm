@@ -1,8 +1,10 @@
 // APIKEYS.2 — management API: list + create per-org API keys.
 //
-// Auth: master/owner only (sensitive — a key grants programmatic access
-// to the org's data). Keys are always scoped to the caller's ACTIVE
-// organization; an owner can only manage keys for an org they operate in.
+// Auth: organisation admins only (sensitive — a key grants programmatic
+// access to the org's data). Keys are always scoped to the caller's ACTIVE
+// organization, and the caller must be an admin of it (C18 ORGROLE.1:
+// master or an org_admin grant; a studio owner is not one — it used to ask
+// the ACTIVE studio's role).
 //
 // GET  /api/settings/api-keys           → { success, keys: [...] }  (no secrets)
 // POST /api/settings/api-keys { name }  → { success, key, secret }  (secret shown ONCE)
@@ -11,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { activeOrganizationId, isOrgAdmin } from '@/lib/org-admin'
 import { validateBody } from '@/lib/validate'
 import { generateApiKey } from '@/lib/api-keys'
 
@@ -26,10 +29,10 @@ const CreateSchema = z.object({
 async function gate() {
   const user = await getCurrentUser()
   if (!user) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) }
-  if (!['master', 'owner'].includes(user.role)) {
+  const orgId = activeOrganizationId(user)
+  if (!isOrgAdmin(user, orgId)) {
     return { error: NextResponse.json({ success: false, error: 'forbidden' }, { status: 403 }) }
   }
-  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) {
     return { error: NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 }) }
   }

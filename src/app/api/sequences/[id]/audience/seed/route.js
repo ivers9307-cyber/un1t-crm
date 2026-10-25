@@ -25,8 +25,9 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
+import { sequenceNotFound } from '@/lib/sequence-access'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { buildEligibleAudienceQuery } from '@/lib/audience-eligibility'
@@ -71,10 +72,12 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   // Starting a mass enrolment is an owner/manager act, not a general email one.
-  if (!MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1a — coarse pre-checks; both are judged at the sequence's
+  // location once it is loaded.
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
-  if (!hasPermission(user, 'email')) {
+  if (!hasPermissionAtAnyLocation(user, 'email')) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
@@ -83,9 +86,15 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const seq = await loadSequence(db, params.id)
-  if (!seq) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!seq) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seq.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, seq.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
+  if (!hasPermissionForLocation(user, seq.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
+  }
 
   if (seq.trigger_type !== 'audience_match') {
     return NextResponse.json({
@@ -147,7 +156,7 @@ export async function POST(request, props) {
     .select('id')
   if (updErr) throw new Error(`seed failed: ${updErr.message}`)
   if (!updated?.length) {
-    return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+    return sequenceNotFound()
   }
 
   return NextResponse.json({
@@ -168,15 +177,18 @@ export async function DELETE(_request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
+  if (!hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
   const db = createServerClient()
   const seq = await loadSequence(db, params.id)
-  if (!seq) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  if (!seq) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seq.location_id)
   if (guard) return guard
+  if (!hasRoleAtLocation(user, seq.location_id, MANAGER_ROLES)) {
+    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
+  }
 
   const { data: updated, error } = await db
     .from('email_sequences')
@@ -185,7 +197,7 @@ export async function DELETE(_request, props) {
     .select('id')
   if (error) throw new Error(`clear seed failed: ${error.message}`)
   if (!updated?.length) {
-    return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+    return sequenceNotFound()
   }
 
   return NextResponse.json({ success: true, data: { seeded_at: null } })

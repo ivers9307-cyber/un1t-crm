@@ -1,7 +1,7 @@
 // BYTE-SYNC: champ-app/shared/customer-notifications.js ↔ un1t-crm/src/lib/customer-notifications.js.
-// The two files are identical except the two import lines below
-// ('./hr-analytics.js' + './dublin-time.js' in champ-app,
-// '@/lib/hr-analytics' + '@/lib/dublin-time' in un1t-crm).
+// The two files are identical except the three import lines below
+// ('./hr-analytics.js' + './zoned-time.js' + './brand-name.js' in champ-app,
+// '@/lib/hr-analytics' + '@shared/zoned-time' + '@/lib/brand-name' in un1t-crm).
 // champ-app is the canonical copy — edit there first, then mirror the change.
 // Both surfaces push to the SAME member: drift here means the once-per-period
 // idempotency key or the push copy disagree between the CRM crons and the
@@ -14,15 +14,20 @@
 // fixture-testable.
 
 import { currentStreak } from './hr-analytics.js'
-import { dublinMonthKey, dublinIsoWeekKey, dublinDayStartMs, dublinDateKey } from './dublin-time.js'
+import { monthKeyIn, isoWeekKeyIn, dayStartMsIn, dateKeyIn, DEFAULT_TZ } from './zoned-time.js'
+import { productName } from './brand-name.js'
 
-function pointsPhrase(effortPoints) {
-  return Number.isFinite(effortPoints) ? `${effortPoints} UN1T Points` : 'Tap to see your stats'
+// W1.S4 — the product name is built from the tenant's SHORT brand
+// ("UN1T" → "280 UN1T Points"); with no brand in hand it reads bare
+// "280 Points". Never a gym literal: the web resolves shortName through
+// getLocationBranding, the phone through useBrand().
+function pointsPhrase(effortPoints, shortName) {
+  return Number.isFinite(effortPoints) ? `${effortPoints} ${productName(shortName, 'points')}` : 'Tap to see your stats'
 }
 
 /** One consolidated session-end push. Leads with the achievement if any unlocked. */
-export function buildSessionPush({ effortPoints, className, sessionId, unlocked }) {
-  const pts = pointsPhrase(effortPoints)
+export function buildSessionPush({ effortPoints, className, sessionId, unlocked, shortName }) {
+  const pts = pointsPhrase(effortPoints, shortName)
   const cls = className ? ` · ${className}` : ''
   const n = (unlocked || []).length
   if (n === 1) {
@@ -97,13 +102,14 @@ export function buildClassReminderPush({ className, timeLabel, classBookingId } 
 }
 
 /** Idempotency key for a goal/period: YYYY-MM (month) or YYYY-Www (ISO week),
- *  on the Europe/Dublin calendar. Keying on the Dublin day (not UTC) keeps
- *  the once-per-period push idempotent right up to Dublin midnight — near a
+ *  on the MEMBER's calendar (`zone` = their home studio's zone, TZ.13 D7;
+ *  omitted = Europe/Dublin). Keying on the local day (not UTC) keeps the
+ *  once-per-period push idempotent right up to local midnight — near a
  *  year-roll a send at 00:30 IST on 1 Jan belongs to the new year's period,
  *  not the old one (UTC would still read 31 Dec / prior week). */
-export function periodKey(period, nowMs = Date.now()) {
-  if (period === 'month') return dublinMonthKey(nowMs)
-  return dublinIsoWeekKey(nowMs)
+export function periodKey(period, nowMs = Date.now(), zone = DEFAULT_TZ) {
+  if (period === 'month') return monthKeyIn(nowMs, zone)
+  return isoWeekKeyIn(nowMs, zone)
 }
 
 export function buildFriendRequestPush({ fromName }) {
@@ -118,20 +124,24 @@ export function buildReactionPush({ fromName, reactionEmoji, context }) {
 
 /**
  * Streak-at-risk: returns the streak length if the member trained YESTERDAY
- * (not today) and the run ending yesterday is >= minStreak; else 0.
+ * (not today) and the run ending yesterday is >= minStreak; else 0. Days are
+ * the member's calendar days in `zone` (their home studio's zone, TZ.13 D7;
+ * omitted = Europe/Dublin).
  */
-export function streakAtRisk(sessions, nowMs = Date.now(), minStreak = 3) {
-  // currentStreak returns lastDayMs as the Dublin-midnight instant of the
-  // most recent training day. "Yesterday" must be the Dublin-midnight of
-  // the previous Dublin calendar day (not nowMs - 24h), so this stays
-  // correct across an IST/GMT DST-transition night.
-  const yesterdayKey = dublinDateKey(dublinDayStartMs(dublinDateKey(nowMs)) - 12 * 3600 * 1000)
-  const yesterdayMs = dublinDayStartMs(yesterdayKey)
-  const st = currentStreak(sessions, nowMs)
+export function streakAtRisk(sessions, nowMs = Date.now(), minStreak = 3, zone = DEFAULT_TZ) {
+  // currentStreak returns lastDayMs as the local-midnight instant of the most
+  // recent training day. "Yesterday" must be the local midnight of the
+  // previous local calendar day (not nowMs - 24h), so this stays correct
+  // across a DST-transition night.
+  const yesterdayKey = dateKeyIn(dayStartMsIn(dateKeyIn(nowMs, zone), zone) - 12 * 3600 * 1000, zone)
+  const yesterdayMs = dayStartMsIn(yesterdayKey, zone)
+  const st = currentStreak(sessions, nowMs, zone)
   if (st.lastDayMs === yesterdayMs && st.current >= minStreak) return st.current
   return 0
 }
 
+// attendanceDrop is zone-free on purpose: its windows are rolling multiples of
+// 24h back from nowMs, not calendar days, so no zone can move them.
 // Personalized HR-attendance drop detector for win-back nudges.
 // baseline window [now-baselineDays, now-recentDays); recent window [now-recentDays, now).
 export function attendanceDrop(sessions, nowMs = Date.now(), {

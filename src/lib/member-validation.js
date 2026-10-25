@@ -7,14 +7,22 @@
 //
 //   - Email-only: lowest friction. The signup form shows a notice
 //     telling members to use the email on their UN1T account.
-//   - Location-scoped: a contact only counts as a member of THIS
-//     race's location. Cross-location membership is a future call
-//     (and would belong to organisations, not contacts).
+//   - Organisation-scoped (EVENT-MEMBER-ORG.1): a member of ANY studio
+//     in the event's organisation counts, whichever studio owns the
+//     event. Every UN1T member's contact still lives on Stillorgan (its
+//     Glofox namespace holds Hatch Street's members too), so a
+//     location-scoped check charged every member full price on a Hatch
+//     event. Host-anchor locations (`is_host_anchor`) are not studios:
+//     an event owned by one keeps the old single-location scope, and
+//     their contacts never count as studio members.
 //   - pipeline_stage_slug ∈ {converted, member} is the membership
 //     signal (FUNNEL.1: 'converted' = became a member ≤60d ago,
 //     'member' = established member). The stage is classifier-derived
 //     from Glofox status, so membership changes flow through here
 //     without app code touching the column.
+//   - OR an ACTIVE contact_studios row of kind member at one of those
+//     studios (ORGCONTACTS.2, mig 764): a membership sold outside Glofox,
+//     e.g. Hatch Street's un1t.online plans.
 //
 // We never leak whether an email exists in contacts when the lookup
 // fails — the route returns { is_member: false } whether the email
@@ -28,14 +36,56 @@
 // this header says it prevents. See src/lib/like-escape.js.
 
 import { escapeLikePattern } from './like-escape'
+import { logWarn } from './log'
+import { contactsAtStudio } from './contact-studios'
+
+const MEMBER_STAGES = ['converted', 'member']
 
 /**
- * Look up a single email against members for one location.
+ * The locations whose members count as members on an event owned by
+ * `locationId`: every non-host-anchor location in the same organisation.
+ * A host-anchor owner, an org-less location, or a failed read falls back
+ * to `[locationId]` (the pre-org behaviour), never to nothing.
+ *
+ * @returns {Promise<string[]>}
+ */
+export async function memberLocationIdsFor(db, locationId) {
+  if (!locationId) return []
+  const narrow = [locationId]
+  // .maybeSingle(): primary key, 0-or-1 rows.
+  const { data: loc, error } = await db
+    .from('locations')
+    .select('id, organization_id, is_host_anchor')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (error || !loc) {
+    logWarn('member-validation', 'event location unreadable; member check stays on that location', { locationId, error: error?.message })
+    return narrow
+  }
+  if (loc.is_host_anchor || !loc.organization_id) return narrow
+  const { data: sibs, error: sibErr } = await db
+    .from('locations')
+    .select('id')
+    .eq('organization_id', loc.organization_id)
+    .eq('is_host_anchor', false)
+  if (sibErr || !Array.isArray(sibs)) {
+    logWarn('member-validation', 'org studios unreadable; member check stays on the event location', { locationId, error: sibErr?.message })
+    return narrow
+  }
+  const ids = new Set(sibs.map((r) => r.id))
+  ids.add(locationId)
+  return [...ids]
+}
+
+/**
+ * Look up a single email against members of the event's organisation.
  *
  * @param {object} args
  * @param {SupabaseClient} args.db   service-role or RLS-bypass client
  * @param {string} args.email        raw email from form input
  * @param {string} args.locationId   race_event.location_id
+ * @param {string[]} [args.memberLocationIds]  precomputed
+ *   memberLocationIdsFor(db, locationId) — a roster passes it once
  * @returns {Promise<{
  *   is_member: boolean,
  *   contact_id: string|null,
@@ -43,7 +93,7 @@ import { escapeLikePattern } from './like-escape'
  *   status: 'verified' | 'failed'
  * }>}
  */
-export async function validateMemberByEmail({ db, email, locationId }) {
+export async function validateMemberByEmail({ db, email, locationId, memberLocationIds = null }) {
   const fail = { is_member: false, contact_id: null, first_name: null, status: 'failed' }
   if (!email || typeof email !== 'string') return fail
   if (!locationId) return fail
@@ -52,24 +102,49 @@ export async function validateMemberByEmail({ db, email, locationId }) {
   if (!normalised || !normalised.includes('@')) return fail
 
   // ilike on email column (already indexed by mig 001) so unicode/
-  // case differences match. Tight scope: location + active membership.
+  // case differences match. Scope: the org's studios + active membership.
   //
   // escapeLikePattern: `email` is typed into the PUBLIC race/event register
   // and check-member forms. Unescaped, `a_b@example.com` also matches
   // `axb@example.com` — so a stranger could submit a lookalike address, be
   // told is_member: true, and receive that member's contact_id and
   // first_name back. Member pricing keys off exactly this result.
-  const { data, error } = await db
+  //
+  // `contacts_email_org_unique` is per org but case-sensitive, so one
+  // address can still sit on several rows as case variants (Foo@ vs foo@),
+  // and .maybeSingle() would error on those and fail a real member. Read a
+  // few and take a member row if any is one; the escaped pattern only ever
+  // matches case variants of THIS address.
+  const locationIds = memberLocationIds?.length ? memberLocationIds : await memberLocationIdsFor(db, locationId)
+  const { data: rows, error } = await db
     .from('contacts')
     .select('id, first_name, name, pipeline_stage_slug')
-    .eq('location_id', locationId)
+    .in('location_id', locationIds)
     .ilike('email', escapeLikePattern(normalised))
-    .maybeSingle()
+    .limit(10)
 
-  if (error || !data) return fail
+  if (error || !Array.isArray(rows)) return fail
   // FUNNEL.1 — current members sit in 'converted' (≤60d since joining)
-  // or 'member' (established).
-  if (!['converted', 'member'].includes(data.pipeline_stage_slug)) return fail
+  // or 'member' (established). That stage is classified from Glofox.
+  let data = rows.find((r) => MEMBER_STAGES.includes(r.pipeline_stage_slug))
+  // ORGCONTACTS.2 (mig 764) — a membership held outside Glofox (Hatch
+  // Street's un1t.online plans) is an ACTIVE contact_studios row of kind
+  // member at one of the same studios. A failed read here only means "not
+  // proven a member this way", the same as the stage check finding nothing.
+  if (!data && rows.length > 0) {
+    let holder = null
+    for (const locationId of locationIds) {
+      const held = await contactsAtStudio(db, locationId, { kinds: ['member'], status: 'active', contactIds: rows.map((r) => r.id) })
+      if (!held.ok) {
+        logWarn('member-validation', 'contact_studios unreadable; stage check only', { error: held.error })
+        break
+      }
+      holder = held.rows[0]?.contact_id ?? null
+      if (holder) break
+    }
+    data = holder ? rows.find((r) => r.id === holder) : null
+  }
+  if (!data) return fail
 
   return {
     is_member: true,
@@ -98,6 +173,7 @@ export async function validateMemberByEmail({ db, email, locationId }) {
  */
 export async function validateTeamRoster({ db, members, locationId }) {
   const out = []
+  let memberLocationIds = null
   for (const m of members || []) {
     if (!m?.email) {
       out.push({
@@ -109,7 +185,8 @@ export async function validateTeamRoster({ db, members, locationId }) {
       })
       continue
     }
-    const r = await validateMemberByEmail({ db, email: m.email, locationId })
+    if (!memberLocationIds) memberLocationIds = await memberLocationIdsFor(db, locationId)
+    const r = await validateMemberByEmail({ db, email: m.email, locationId, memberLocationIds })
     out.push({
       name: m.name || '',
       email: m.email,

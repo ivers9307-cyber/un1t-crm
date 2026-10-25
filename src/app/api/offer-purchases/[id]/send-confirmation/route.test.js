@@ -9,7 +9,13 @@ vi.mock('@/lib/auth', () => ({
     return ok ? null : new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
   },
 }))
-vi.mock('@/lib/permissions', () => ({ hasPermission: (u, k) => Boolean(u?.perms?.[k]) }))
+// ROLESWEEP.1b — the route now pre-checks at any location and judges the
+// purchase's location; the fixture's one perms bag answers both.
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: (u, k) => Boolean(u?.perms?.[k]),
+  hasPermissionAtAnyLocation: (u, k) => Boolean(u?.perms?.[k]),
+  hasPermissionForLocation: (u, _l, k) => Boolean(u?.perms?.[k]),
+}))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from() { return this }, select() { return this }, eq() { return this },

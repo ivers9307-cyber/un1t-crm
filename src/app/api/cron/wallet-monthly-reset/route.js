@@ -35,7 +35,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
 import { applyWalletEntry, shouldReset, currentPeriodStart } from '@/lib/wallet'
 
 export const runtime = 'nodejs'
@@ -47,7 +47,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
-  const today = dublinTodayStr()
+  const today = todayStrIn(PLATFORM_TZ) // D5: the platform billing calendar (PLATFORM_TZ)
   const newPeriod = currentPeriodStart(today)
   const db = createServerClient()
 

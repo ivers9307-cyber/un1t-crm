@@ -5,13 +5,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/whatsapp', () => ({
   sendTextMessage: vi.fn(async () => ({ messageId: 'wamid.OUT1', status: 'sent' })),
 }))
+// W1.S3 — the code-default greeting is built from the location's resolved
+// brand; the resolver is mocked so the fake db below sees only its two tables.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(async () => ({ companyName: 'Gym A', shortName: 'Gym A', locationName: 'Gym A North' })),
+}))
 
 import { sendTextMessage } from '@/lib/whatsapp'
+import { getLocationBranding } from '@/lib/location-branding'
 import {
   shouldSendWelcome,
   maybeSendWelcomeGreeting,
-  DEFAULT_WELCOME_GREETING,
+  defaultWelcomeGreeting,
 } from './welcome-greeting.js'
+
+// What the code default renders for the mocked brand and an unset agent name
+// (the contract's default name stands in, so the text matches the editor's).
+const DEFAULT_WELCOME_GREETING = defaultWelcomeGreeting({ agentName: 'Mia', brand: 'Gym A' })
 
 const PHONE = '353871234567'
 // Fixed clock — 13:00 Dublin (summer), safely inside any all-day quiet window
@@ -56,19 +66,27 @@ describe('shouldSendWelcome', () => {
 // Chainable fake db covering the two whatsapp_messages shapes the module
 // uses: the head-count select (awaited builder resolves { count }) and the
 // insert. locations returns the settings blob.
-function fakeDb({ customerAgent, outboundCount = 0 } = {}) {
+// MIAORG.1 — the settings now come through resolveAgentSettings, which reads
+// the location row (maybeSingle) and then its organisation's layer (`org`).
+function fakeDb({ customerAgent, outboundCount = 0, org = null, locationError = null } = {}) {
   const inserted = []
+  const locRow = { id: 'loc1', timezone: 'Europe/Dublin', organization_id: 'org1', settings: customerAgent === undefined ? {} : { customer_agent: customerAgent } }
   return {
     inserted,
     from(table) {
       if (table === 'locations') {
+        const result = locationError ? { data: null, error: locationError } : { data: locRow, error: null }
         return {
           select: () => ({
             eq: () => ({
-              single: async () => ({ data: { settings: { customer_agent: customerAgent } } }),
+              single: async () => result,
+              maybeSingle: async () => result,
             }),
           }),
         }
+      }
+      if (table === 'org_settings') {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: org ? { customer_agent: org } : null, error: null }) }) }) }
       }
       if (table === 'whatsapp_messages') {
         return {
@@ -97,7 +115,7 @@ describe('maybeSendWelcomeGreeting', () => {
     const r = await maybeSendWelcomeGreeting(db, CTX)
     expect(r).toEqual({ sent: true })
     expect(sendTextMessage).toHaveBeenCalledTimes(1)
-    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, DEFAULT_WELCOME_GREETING, { locationId: 'loc1' })
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, DEFAULT_WELCOME_GREETING, { locationId: 'loc1', replyInConversation: 'conv1' })
     expect(db.inserted).toHaveLength(1)
     expect(db.inserted[0]).toMatchObject({
       conversation_id: 'conv1',
@@ -118,10 +136,38 @@ describe('maybeSendWelcomeGreeting', () => {
     expect(DEFAULT_WELCOME_GREETING).not.toMatch(/\p{Extended_Pictographic}/u)
   })
 
+  // W1.S3 — the default names the studio's brand and the configured agent.
+  it('the default greeting carries the resolved brand and the agent_name, never a literal gym', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, agent_name: 'Ava' } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(getLocationBranding).toHaveBeenCalledWith(db, 'loc1')
+    const sent = sendTextMessage.mock.calls[0][1]
+    expect(sent).toBe("Hi, I'm Ava, the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+    expect(sent).not.toMatch(/UN1T/)
+  })
+
+  it('a blob saved without agent_name greets as the contract default name (what the editor shows)', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(sendTextMessage.mock.calls[0][1]).toMatch(/^Hi, I'm Mia, the studio's assistant at Gym A\./)
+  })
+
+  it('an operator-set greeting never resolves the brand (no query spent on a text that is not sent)', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: 'Hello there.' } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(getLocationBranding).not.toHaveBeenCalled()
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, 'Hello there.', { locationId: 'loc1', replyInConversation: 'conv1' })
+  })
+
+  it('with no agent name the greeting still reads naturally', () => {
+    expect(defaultWelcomeGreeting({ brand: 'Gym A' })).toBe("Hi, I'm the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+    expect(defaultWelcomeGreeting({ agentName: 'Mia' })).toBe("Hi, I'm Mia, the studio's assistant. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+  })
+
   it('scrubs an em dash out of an operator-set greeting before sending', async () => {
     const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: "Hi — I'm Mia, ask away." } })
     await maybeSendWelcomeGreeting(db, CTX)
-    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, "Hi, I'm Mia, ask away.", { locationId: 'loc1' })
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, "Hi, I'm Mia, ask away.", { locationId: 'loc1', replyInConversation: 'conv1' })
     expect(db.inserted[0].body).toBe("Hi, I'm Mia, ask away.")
   })
 
@@ -129,7 +175,7 @@ describe('maybeSendWelcomeGreeting', () => {
     const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: '  Howdy from UN1T!  ' } })
     const r = await maybeSendWelcomeGreeting(db, CTX)
     expect(r).toEqual({ sent: true })
-    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, 'Howdy from UN1T!', { locationId: 'loc1' })
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, 'Howdy from UN1T!', { locationId: 'loc1', replyInConversation: 'conv1' })
     expect(db.inserted[0].body).toBe('Howdy from UN1T!')
   })
 
@@ -162,6 +208,52 @@ describe('maybeSendWelcomeGreeting', () => {
     const r = await maybeSendWelcomeGreeting(db, CTX)
     expect(r).toEqual({ sent: false, reason: 'exception' })
     expect(db.inserted).toHaveLength(0)
+    errSpy.mockRestore()
+  })
+})
+
+// WACONFIGFALLBACK.1 — the greeting only fires for inbound, which only lands at
+// a location that owns the receiving number, so a refusal here means the
+// number was removed between receipt and reply. It used to go out on the
+// global env number; now it is a quiet { sent:false }, nothing logged.
+describe('maybeSendWelcomeGreeting — no WhatsApp number (WACONFIGFALLBACK.1)', () => {
+  it('sent:false, never throws, nothing logged to the thread', async () => {
+    const { WhatsAppNumberMissingError } = await import('@/lib/whatsapp-number-missing')
+    sendTextMessage.mockRejectedValueOnce(new WhatsAppNumberMissingError('loc1'))
+    const db = fakeDb({ customerAgent: { enabled: true } })
+    const r = await maybeSendWelcomeGreeting(db, CTX)
+    expect(r).toEqual({ sent: false, reason: 'exception' })
+    expect(db.inserted).toEqual([])
+  })
+})
+
+// MIAORG.1 Task 2 — the greeting reads resolved settings (DEFAULTS <- org <- studio).
+describe('maybeSendWelcomeGreeting — resolved settings (MIAORG.1)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('an org-only welcome_greeting reaches a studio that sets none', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: null }, org: { welcome_greeting: 'Hello from the org.' } })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: true })
+    expect(sendTextMessage.mock.calls[0][1]).toBe('Hello from the org.')
+  })
+
+  it('an org enabled:true never greets for a studio with no blob (Hatch)', async () => {
+    const db = fakeDb({ customerAgent: undefined, org: { enabled: true, welcome_greeting: 'Hi' } })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: false, reason: 'disabled' })
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+
+  it("no behaviour change: Stillorgan's blob with no org layer sends its own greeting", async () => {
+    const { STILLORGAN_BLOB } = await import('./settings-fixtures.test-helpers')
+    const db = fakeDb({ customerAgent: STILLORGAN_BLOB, org: null })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: true })
+    expect(sendTextMessage.mock.calls[0][1]).toBe(STILLORGAN_BLOB.welcome_greeting)
+  })
+
+  it('a failed studio read sends nothing (disabled), as before', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = fakeDb({ customerAgent: { enabled: true }, locationError: { message: 'down' } })
+    expect(await maybeSendWelcomeGreeting(db, CTX)).toEqual({ sent: false, reason: 'disabled' })
     errSpy.mockRestore()
   })
 })

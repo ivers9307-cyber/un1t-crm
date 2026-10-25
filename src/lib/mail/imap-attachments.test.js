@@ -164,7 +164,7 @@ describe('attachmentParts — a SINGLE-PART, attachment-only message', () => {
   // non-multipart message carries NONE — and a leaf has no childNodes, so a
   // walk that required `part` returned []. There was then no attachment row,
   // no skipped_reason and no log line, and because selectBodyParts()
-  // (imap-poll.js) also declines a non-text/* root the ticket was completely
+  // (imap-poll.js) also declines a non-text/* root the conversation was completely
   // empty. RFC 3501 numbers the body of a non-multipart message '1', which is
   // exactly what the sibling module already asks for.
   const scan = (over = {}) => ({
@@ -207,7 +207,7 @@ describe('attachmentParts — a SINGLE-PART, attachment-only message', () => {
   it('🔴 does not turn an EMPTY bodyStructure into a phantom attachment', () => {
     // The root fallback makes every root addressable, so the permissive tail of
     // isAttachmentNode would otherwise call a typeless `{}` a file, stage part
-    // '1' — the message BODY — as one, and put it on the ticket as
+    // '1' — the message BODY — as one, and put it on the conversation as
     // `attachment` / application/octet-stream. A leaf with no declared type is
     // a structure imapflow did not parse, not a file.
     expect(attachmentParts({})).toEqual({ parts: [], overflow: 0 })
@@ -228,7 +228,7 @@ describe('attachmentParts — a SINGLE-PART, attachment-only message', () => {
   it('does NOT claim part 1 for a partless node deeper in the tree', () => {
     // Only the ROOT of a non-multipart message is legitimately part '1'.
     // Anywhere else a missing `part` means a structure we cannot address, and
-    // staging it as '1' would put some other part's bytes on the ticket under
+    // staging it as '1' would put some other part's bytes on the conversation under
     // this one's name.
     const orphan = { type: 'application/pdf', encoding: 'base64', size: 700, disposition: 'attachment' }
     expect(attachmentParts(mixed([textBody, orphan])).parts).toEqual([])

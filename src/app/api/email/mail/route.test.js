@@ -3,16 +3,16 @@
 // THE TWO PROPERTIES THIS FILE EXISTS FOR
 //
 // 1. 🔴 A `surface='tickets'` MAILBOX NEVER APPEARS HERE. Every fixture puts
-//    accounts@ on the ticket surface at the SAME location as studio@, visible
+//    accounts@ on the conversation surface at the SAME location as studio@, visible
 //    to the elevated caller and granted to nobody in particular — so if the
 //    surface filter is ever dropped, an accounts@ conversation shows up on
 //    this screen and these tests fail. Without that filter there is no trial:
 //    both screens would show everything and Richard would be comparing one
 //    surface with itself.
 //
-// 2. The access model is UNCHANGED. It is the ticket surface's own, imported
+// 2. The access model is UNCHANGED. It is the conversation surface's own, imported
 //    rather than re-implemented, so the gate tests here are deliberately the
-//    same shapes as the ticket route's — a coach without a grant, a location
+//    same shapes as the conversation route's — a coach without a grant, a location
 //    outside the caller's assignments, a failed visibility lookup. If someone
 //    "simplifies" _helpers.js into its own copy of the access logic, this
 //    block is what catches the divergence.
@@ -29,7 +29,7 @@ vi.mock('@/lib/permissions', async () => {
   return { ...actual, hasPermissionForLocation: vi.fn(() => true) }
 })
 vi.mock('./_search', () => ({
-  searchTicketIds: vi.fn(),
+  searchConversationIds: vi.fn(),
   SEARCH_SCAN_LIMIT: 1000,
 }))
 
@@ -37,7 +37,7 @@ import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { searchTicketIds } from './_search'
+import { searchConversationIds } from './_search'
 import { makeDb } from '../tickets/_test-db'
 import {
   LOC_A, LOC_B, MB_MAIL, MB_TICKETS, T_STUDIO, T_ACCOUNTS,
@@ -66,7 +66,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   hasPermissionForLocation.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(OWNER)
-  searchTicketIds.mockResolvedValue({ ok: true, skipped: true, ids: null, partial: false })
+  searchConversationIds.mockResolvedValue({ ok: true, skipped: true, ids: null, partial: false })
   setupDb(mailState())
 })
 
@@ -121,7 +121,7 @@ describe('GET /api/email/mail — lists every visible mailbox', () => {
 
   it('🔴 a NULL-mailbox conversation IS on this surface for an owner — orphans live here now', async () => {
     // mailbox_id is ON DELETE SET NULL, so orphaned correspondence exists.
-    // The ticket queue — its only other home — is deleted; excluding it here
+    // The conversation queue — its only other home — is deleted; excluding it here
     // would make a member's correspondence silently stop existing, the one
     // outcome the retirement must never produce.
     setupDb(mailState({
@@ -178,10 +178,10 @@ describe('GET /api/email/mail — per-account access still applies', () => {
 })
 
 describe('GET /api/email/mail — views', () => {
-  const world = (tickets) => setupDb(mailState({
+  const world = (conversations) => setupDb(mailState({
     // Everything on the ONE mail mailbox, so the view is the only thing under
     // test here rather than the surface filter.
-    tickets: tickets.map(t => ({ ...t, mailbox_id: MB_MAIL.id })),
+    tickets: conversations.map(t => ({ ...t, mailbox_id: MB_MAIL.id })),
   }))
 
   it('the inbox is everything that is not archived — including legacy `solved`', async () => {
@@ -207,7 +207,7 @@ describe('GET /api/email/mail — views', () => {
     expect(ids(body.data.conversations)).toEqual(['closed-1'])
   })
 
-  // 🔴 The one thing a mail client cannot tell you, kept from the ticket model.
+  // 🔴 The one thing a mail client cannot tell you, kept from the conversation model.
   it('needs_reply is open AND the last word was theirs', async () => {
     world([
       { ...T_STUDIO, id: 'waiting-1', status: 'open', last_message_direction: 'inbound' },
@@ -359,7 +359,7 @@ describe('GET /api/email/mail — search', () => {
     // rather than trusted.
     getCurrentUser.mockResolvedValue(COACH)
     setupDb(mailState({ tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS }], grants: [GRANT_STUDIO] }))
-    searchTicketIds.mockResolvedValue({
+    searchConversationIds.mockResolvedValue({
       ok: true, skipped: false, partial: false,
       ids: [T_STUDIO.id, T_ACCOUNTS.id],
     })
@@ -371,7 +371,7 @@ describe('GET /api/email/mail — search', () => {
 
   it('searches across views — an archived conversation is still findable', async () => {
     setupDb(mailState({ tickets: [{ ...T_STUDIO, status: 'closed' }] }))
-    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, partial: false, ids: [T_STUDIO.id] })
+    searchConversationIds.mockResolvedValue({ ok: true, skipped: false, partial: false, ids: [T_STUDIO.id] })
 
     // The inbox view would normally exclude a closed conversation.
     const { body } = await list(`?location_id=${LOC_A}&view=inbox&q=freeze`)
@@ -381,7 +381,7 @@ describe('GET /api/email/mail — search', () => {
 
   it('answers an empty page when nothing matched, without running an unfiltered query', async () => {
     setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
-    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, partial: false, ids: [] })
+    searchConversationIds.mockResolvedValue({ ok: true, skipped: false, partial: false, ids: [] })
 
     const { body } = await list(`?location_id=${LOC_A}&q=zzzz`)
 
@@ -391,7 +391,7 @@ describe('GET /api/email/mail — search', () => {
 
   it('surfaces a FAILED search as an error, never as no results', async () => {
     setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
-    searchTicketIds.mockResolvedValue({ ok: false, error: 'boom' })
+    searchConversationIds.mockResolvedValue({ ok: false, error: 'boom' })
 
     const { res, body } = await list(`?location_id=${LOC_A}&q=freeze`)
 
@@ -401,7 +401,7 @@ describe('GET /api/email/mail — search', () => {
 
   it('passes search_partial through so the list can say the scan was truncated', async () => {
     setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
-    searchTicketIds.mockResolvedValue({ ok: true, skipped: false, partial: true, ids: [T_STUDIO.id] })
+    searchConversationIds.mockResolvedValue({ ok: true, skipped: false, partial: true, ids: [T_STUDIO.id] })
 
     const { body } = await list(`?location_id=${LOC_A}&q=the`)
 
@@ -411,7 +411,7 @@ describe('GET /api/email/mail — search', () => {
   it('does not search at all when no query was given', async () => {
     setupDb(mailState({ tickets: [{ ...T_STUDIO }] }))
     await list(`?location_id=${LOC_A}`)
-    expect(searchTicketIds).not.toHaveBeenCalled()
+    expect(searchConversationIds).not.toHaveBeenCalled()
   })
 })
 

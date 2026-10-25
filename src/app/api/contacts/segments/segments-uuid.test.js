@@ -26,7 +26,13 @@ const HATCH      = '28c78d6b-f7b3-4edf-8c7c-840bd047b3f4'  // ordinary v4
 let inserted = []
 
 vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(async () => ({ id: 'u1', activeLocation: { id: STILLORGAN } })),
+  // SEGMENTROUTE.1: saving needs Contacts and Email AT the studio, so the caller holds a role there (owner: both on by default).
+  getCurrentUser: vi.fn(async () => ({
+    id: 'u1',
+    role: 'owner',
+    activeLocation: { id: STILLORGAN },
+    locations: [{ id: STILLORGAN, role: 'owner' }, { id: HATCH, role: 'owner' }],
+  })),
   assertLocationAccess: vi.fn(() => null),
 }))
 

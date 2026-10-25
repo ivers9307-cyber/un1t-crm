@@ -8,8 +8,8 @@
 // keystroke response — no debounced server round-trips needed.
 //
 // Empty state: when the cache is empty OR stale (>30d), we show a
-// nudge with a link to /settings/locations/<id> so the bookkeeper
-// can press Refresh on the Xero card.
+// nudge with a link to the Integrations hub's Xero drawer for the location
+// (INTEGONE.1) so the bookkeeper can press Refresh on the Xero card.
 //
 // Output shape: passes back the full account row so the caller can
 // store xero_account_id + display the code+name as the rendered
@@ -17,6 +17,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { ChevronDown, Search, AlertTriangle } from 'lucide-react'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 
 // Abort the cache fetch if it hangs — a never-settling request would
 // otherwise strand the picker on "Loading…" with no way to recover.
@@ -122,7 +123,7 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
             {!error && accounts.length === 0 && !loading && (
               <div className="p-2 text-xs text-un1t-subtle">
                 No accounts cached. Press <strong>Refresh</strong> on the Xero card in
-                {' '}<a className="underline" href={`/settings/locations/${locationId}`} target="_blank" rel="noreferrer">Settings</a>.
+                {' '}<a className="underline" href={hubManageHref(locationId, 'xero')} target="_blank" rel="noreferrer">Settings → Integrations</a>.
               </div>
             )}
             {!error && filtered.length === 0 && query && (

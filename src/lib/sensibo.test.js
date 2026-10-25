@@ -328,6 +328,29 @@ describe('error handling', () => {
     })
   })
 
+  it('SENSIBO-RATE.3: a retried request gets a FRESH timeout signal, not the one that already fired', async () => {
+    // The limiter retries a timeout once. Before this fix the retry
+    // re-used the SAME `init` — and with it the same AbortSignal.timeout,
+    // which had already fired — so the second attempt aborted the
+    // instant it started. Prod showed it: "auto-off failed" landed ~14s
+    // after the cron began = one 12s timeout + backoff + an instant
+    // no-op retry, never a second real attempt.
+    const signals = []
+    global.fetch = vi.fn(async (_url, init) => {
+      signals.push(init.signal)
+      if (signals.length === 1) {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+      }
+      return jsonResponse({ status: 'success', result: { acState: { on: false } } })
+    })
+    await expect(setPodState('key', 'pod-1', { on: false })).resolves.toEqual({ on: false })
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+    expect(signals[0]).toBeInstanceOf(AbortSignal)
+    expect(signals[1]).toBeInstanceOf(AbortSignal)
+    expect(signals[1]).not.toBe(signals[0])
+    expect(signals[1].aborted).toBe(false)
+  })
+
   it('wraps fetch network errors as SensiboError with status: 0', async () => {
     global.fetch = vi.fn(async () => { throw new Error('ECONNRESET') })
     const err = await getPodState('key', 'pod-1').catch(e => e)

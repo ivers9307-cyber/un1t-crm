@@ -9,6 +9,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { getAppUrl } from '@/lib/app-url'
 import { createOnboardingLink } from '@/lib/payments/stripe-connect'
+import { hubManageHref } from '@/lib/integrations-hub-links'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,7 +19,9 @@ const STRIPE_REFRESH_ROLES = Object.freeze(['master', 'owner', 'manager'])
 export async function GET(_request, props) {
   const { id: locationId } = await props.params
   const base = getAppUrl()
-  const settingsUrl = `${base}/settings/locations/${locationId}?section=integrations&tab=payments`
+  // INTEGONE.1 — the Payments drawer in the Integrations hub (the
+  // per-location Integrations tab is gone).
+  const settingsUrl = `${base}${hubManageHref(locationId, 'payments')}`
 
   const user = await getCurrentUser()
   if (!user) {

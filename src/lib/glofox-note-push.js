@@ -31,6 +31,8 @@ export async function pushNoteToGlofox(db, { contactId, sourceTable, sourceId, t
     // non-Glofox locations (CCF Autos, SourceIt) would log bogus 'failed'
     // pushes and hit the API pointlessly.
     const creds = await glofoxCredentialsForLocation(db, contact.location_id)
+    // REGISTRYREAD.1b: a failed settings read is not "no glofox creds".
+    if (creds?.readError) return { pushed: false, reason: creds.readError }
     if (!creds || !creds.branchId) return { pushed: false, reason: 'no glofox creds' }
 
     const { description, truncated } = buildInteractionDescription({ authorName, content })

@@ -1,43 +1,71 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
-import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
+import { getWhatsAppConfig, getLocationWhatsAppNumberConfig, getLocationNumberForWaba, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
+import { isWhatsAppNumberMissing, WhatsAppNumberMissingError } from './whatsapp-number-missing'
+import { agentOptionId } from './whatsapp-inbound-tap'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
 import { getSendBudget, blastBudgetBlockError, effectiveTickHeadroom } from './whatsapp-budget.js'
+import { readSignoffLocation, broadcastSignoffBlock, BlastSignoffRequiredError } from './whatsapp-blast-signoff.js'
 import { checkSpend } from './wallet-enforcement.js'
 import { sliceBlastChunk } from './whatsapp-schedule.js'
 import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from './frequency-cap.js'
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { formatMetaError } from './whatsapp-meta-error.js'
-import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY } from './whatsapp-template-buttons.js'
+import { dynamicUrlButtonIndex, urlButtonSendBlock, URL_BUTTON_MAPPING_KEY, flowButtonComponentFor } from './whatsapp-template-buttons.js'
+import { flowTokenFor } from './whatsapp-flow/config.js'
+import { bodyVariableSlots, renderSentTemplateBody } from '@shared/wa-template-send'
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
 
-// WA-MULTI.1 — config is now per-location. Resolution helper +
-// env fallback live in whatsapp-config.js; the META_API_URL +
-// version constants are re-exported from there for consistency.
+// WA-MULTI.1 — config is per-location. The resolution helper lives in
+// whatsapp-config.js; the META_API_URL + version constants are
+// re-exported from there for consistency.
 //
 // Every public function in this file takes an optional `opts`
 // object as its last argument. Supported keys:
 //
 //   opts.locationId  — resolve credentials from whatsapp_numbers
-//                       for this location. If no row exists, falls
-//                       back to env vars (transitional backwards-
-//                       compat). New callers should always pass.
+//                       for this location (its default active row).
 //   opts.config      — pre-resolved config object (the caller
 //                       already did the lookup, e.g. to send from
 //                       a specific non-default number). When set,
 //                       locationId is ignored.
 //
-// Calling with no opts → env vars only. Existing callers that
-// haven't been updated yet keep working unchanged.
+// WACONFIGFALLBACK.1 — there is no env fallback any more. A location with
+// no active number, or a call with neither key, throws
+// WhatsAppNumberMissingError BEFORE any Meta call; every caller's handling
+// of that refusal is tabled in tests/whatsapp-config-callers.test.js.
 
-async function resolveConfig(opts = {}) {
+//   opts.replyInConversation — WAREPLYNUMBER.1 (C86): a reply into this
+//                       whatsapp_conversations id goes from the number the
+//                       customer wrote to (getConversationReplyConfig), else
+//                       the location default. Needs opts.locationId. A template
+//                       goes from the thread number only within the default's
+//                       WABA. A studio with nothing switched on refuses
+//                       (WAORGNUMBER.6: no sibling's stamped number).
+//   opts.businessAccountId — WAORGNUMBER.2 (R5): the WABA a template lives on
+//                       (whatsapp_templates.business_account_id). Meta sends a
+//                       template only from a number on its own WABA, so the
+//                       send goes from the studio's number on THAT WABA
+//                       (getLocationNumberForWaba), or, with
+//                       replyInConversation, the thread number when it is on
+//                       it. None switched on there → WhatsAppNumberMissingError.
+//                       Null/absent → the rules above (a row before mig 745).
+async function resolveConfig(opts = {}, { template = false } = {}) {
   if (opts.config) return opts.config
+  if (opts.replyInConversation) {
+    return await getConversationReplyConfig(opts.locationId || null, opts.replyInConversation, { template, businessAccountId: opts.businessAccountId || null })
+  }
+  if (opts.businessAccountId) {
+    const config = await getLocationNumberForWaba(opts.locationId || null, opts.businessAccountId)
+    if (!config) throw new WhatsAppNumberMissingError(opts.locationId || null)
+    return config
+  }
   return await getWhatsAppConfig(opts.locationId || null)
 }
 
@@ -54,8 +82,8 @@ function headersFor(config) {
 
 /**
  * Send a text message (only works within 24h window).
- * Pass `opts.locationId` to route from a specific location's WA
- * number; omit for env-fallback (legacy single-number behaviour).
+ * Pass `opts.locationId` to route from that location's own WA number
+ * (or `opts.config`); with neither it refuses (WhatsAppNumberMissingError).
  */
 export async function sendTextMessage(to, text, opts = {}) {
   const config = await resolveConfig(opts)
@@ -100,9 +128,11 @@ export async function sendTextMessage(to, text, opts = {}) {
 // AGENT-UX.1 — interactive tap-choice messages. Meta caps: quick-reply
 // buttons max 3 / titles 20 chars; list messages max 10 rows / titles 24
 // chars. The payload builder picks the right shape from the option count
-// so callers never think about the split. Pure — exported for tests.
+// so callers never think about the split. An option is a string (id
+// `opt_<i>`) or `{ id, title }` (WASTUDIOPICK.1). Pure — exported for tests.
 export function buildInteractivePayload(to, text, options) {
   const opts = (options || []).slice(0, 10)
+  const norm = (o, i) => (o && typeof o === 'object' ? { id: String(o.id), title: String(o.title) } : { id: agentOptionId(i), title: String(o) })
   const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive' }
   if (opts.length <= 3) {
     return {
@@ -111,7 +141,7 @@ export function buildInteractivePayload(to, text, options) {
         type: 'button',
         body: { text },
         action: {
-          buttons: opts.map((o, i) => ({ type: 'reply', reply: { id: `opt_${i}`, title: String(o).slice(0, 20) } })),
+          buttons: opts.map((o, i) => { const n = norm(o, i); return { type: 'reply', reply: { id: n.id, title: n.title.slice(0, 20) } } }),
         },
       },
     }
@@ -123,7 +153,7 @@ export function buildInteractivePayload(to, text, options) {
       body: { text },
       action: {
         button: 'Choose an option',
-        sections: [{ rows: opts.map((o, i) => ({ id: `opt_${i}`, title: String(o).slice(0, 24) })) }],
+        sections: [{ rows: opts.map((o, i) => { const n = norm(o, i); return { id: n.id, title: n.title.slice(0, 24) } }) }],
       },
     },
   }
@@ -293,7 +323,7 @@ export async function sendMediaCarousel(to, { bodyText, cards }, opts = {}) {
  * Send a template message (works anytime — no 24h window needed)
  */
 export async function sendTemplateMessage(to, templateName, language = 'en', components = [], opts = {}) {
-  const config = await resolveConfig(opts)
+  const config = await resolveConfig(opts, { template: true })
 
   const body = {
     messaging_product: 'whatsapp',
@@ -583,8 +613,15 @@ export async function createTemplate({ name, category, language, components, par
   }
 }
 
+// WAORGNUMBER.2 — a runaway `paging.next` (Meta repeating a cursor) cannot loop
+// forever: at 100 a page this is 5,000 templates, past Meta's per-WABA ceiling.
+export const TEMPLATE_PAGES_MAX = 50
+
 /**
- * Get all templates from Meta
+ * Get templates from Meta: one page of `limit`, or (WAORGNUMBER.2, R5)
+ * `opts.all === true` every page, following `paging.next` (the sync read only
+ * the first 100 before). A page error throws, so a partial list is never
+ * mistaken for the whole account.
  */
 export async function getTemplates(limit = 100, opts = {}) {
   const config = await resolveConfig(opts)
@@ -592,15 +629,17 @@ export async function getTemplates(limit = 100, opts = {}) {
     throw new Error('WhatsApp Business Account ID is not configured for this number.')
   }
 
-  const response = await fetch(
-    `${META_API_URL}/${config.businessAccountId}/message_templates?limit=${limit}`,
-    { headers: headersFor(config) }
-  )
-
-  const result = await response.json()
-  if (result.error) throw new Error(result.error.message)
-
-  return result.data || []
+  let url = `${META_API_URL}/${config.businessAccountId}/message_templates?limit=${limit}`
+  const out = []
+  for (let page = 0; url && page < TEMPLATE_PAGES_MAX; page++) {
+    const response = await fetch(url, { headers: headersFor(config) })
+    const result = await response.json()
+    if (result.error) throw new Error(result.error.message)
+    out.push(...(result.data || []))
+    if (opts.all !== true) break
+    url = result.paging?.next || null
+  }
+  return out
 }
 
 /**
@@ -777,7 +816,7 @@ export const CAPPED_RETRY_HOURS = 20
 // WA-QUALITY.2 — blast preflight quality gate. A RED/FLAGGED number is one
 // strike from a Meta messaging ban; blasting the whole list into it is how a
 // number dies. Returns the operator-facing refusal, or null to proceed.
-// GREEN/YELLOW/unknown (null — env config or never polled) pass. Pure.
+// GREEN/YELLOW/unknown (null: never polled) pass. Pure.
 export function broadcastQualityBlockError(qualityRating) {
   if (qualityRating !== 'RED' && qualityRating !== 'FLAGGED') return null
   return `This location's WhatsApp number quality is ${qualityRating} — sending paused to protect the number. ` +
@@ -1052,7 +1091,8 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
  * what makes the CAS exclusive: a second tick arriving after the first has
  * re-claimed no longer matches `created_at < cutoff`. Nothing reads
  * `created_at` on this table for any other purpose (checked across src/ —
- * the only recipient-row ordering is on `sms_broadcast_recipients`).
+ * the only other recipient-row ordering was on `sms_broadcast_recipients`,
+ * dropped with SMS in mig 688).
  *
  * Any other existing status ('sent' / 'delivered' / 'read' / 'failed', or a
  * 'pending' still inside its lease) means somebody else holds it — skip,
@@ -1173,6 +1213,28 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / sending can be sent`)
   }
 
+  // C120 GATES-3 (e) — a DRIP is STARTED here, never blasted: the operator's
+  // Send (and the composer's send-now drip, created as a draft since GATES-3)
+  // runs the entry checks below, flips draft→sending, and returns; the
+  // run-whatsapp-broadcasts cron paces it inside its window from there
+  // (sendDripChunk). One already 'sending' belongs to the cron: return without
+  // touching it (this used to blast the whole remaining audience at once).
+  const isDrip = broadcast.delivery_mode === 'drip'
+  if (isDrip && broadcast.status === 'sending') {
+    return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
+  }
+
+  // WAORGNUMBER.4 (R7) — blast sign-off. While the studio's sign-off window
+  // is open, an unsigned broadcast is refused here, before any status flip:
+  // the send route answers 409, and the cron's refused-start path keeps a
+  // scheduled row a draft and pushes the managers. The studio read fails
+  // closed (throws); a signed row skips it.
+  if (!broadcast.signed_off_by) {
+    const signoffLocation = await readSignoffLocation(db, broadcast.location_id)
+    const signoffBlock = broadcastSignoffBlock(signoffLocation, broadcast)
+    if (signoffBlock) throw new BlastSignoffRequiredError(signoffBlock)
+  }
+
   // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
   // reuse for every recipient. Cheaper than re-resolving per-send;
   // also ensures the whole broadcast goes from one consistent
@@ -1180,7 +1242,13 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // Resolved BEFORE the status flip so a refusal (quality gate below, or an
   // unconfigured location) leaves the broadcast in its entry state instead of
   // stranding it at 'sending'.
-  const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
+  // WAORGNUMBER.2 (R5) — from the studio's number on the TEMPLATE's WABA (Meta
+  // sends a template only from a number on its own account); none switched on
+  // there refuses exactly like a studio with no number.
+  const broadcastConfig = await resolveConfig({
+    locationId: broadcast.location_id,
+    businessAccountId: broadcast.whatsapp_templates.business_account_id || null,
+  }, { template: true })
 
   // WA-QUALITY.2 — preflight quality gate: refuse to start (or resume) a blast
   // from a RED/FLAGGED number. Every blast entry funnels through this function,
@@ -1214,15 +1282,21 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // claim below de-dupes that path), so fall through. Clearing paused_at here
   // re-opens a breaker-aborted broadcast the operator re-sends (WA-QUALITY.3).
   if (broadcast.status !== 'sending') {
-    const { data: claimed } = await db.from('whatsapp_broadcasts')
+    const { data: claimed, error: claimErr } = await db.from('whatsapp_broadcasts')
       .update({ status: 'sending', paused_at: null })
       .eq('id', broadcastId)
       .eq('status', broadcast.status)
       .select('id')
+    // GATES-3 (e) — a failed flip is not "someone else claimed it": throw
+    // (the row is still in its entry state, like every refusal above).
+    if (claimErr) throw new Error(`Could not start the broadcast: ${claimErr.message}`)
     if (!claimed?.length) {
       return { sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
     }
   }
+
+  // GATES-3 (e) — the drip is started; the cron sends it.
+  if (isDrip) return { status: 'sending', mode: 'drip', sent: 0, failed: 0, total: 0 }
 
   // Get audience — AUDIT P1-2: route the blast through the paginated
   // fetchAllWhatsAppAudience (the drip path already does) instead of awaiting
@@ -1285,7 +1359,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   // Gated AFTER the pending count is known, so on refusal we un-strand the row
   // this call just flipped draft→sending; a 'sending' entry (crash resume)
   // stays 'sending' — re-running later is legitimate.
-  const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: broadcastConfig.messagingLimitTier })
+  const budget = await getSendBudget(db, { numberId: broadcastConfig.id, locationId: broadcast.location_id, tier: broadcastConfig.messagingLimitTier })
   const budgetBlock = blastBudgetBlockError(budget, pending.length)
   if (budgetBlock) {
     if (broadcast.status === 'draft') {
@@ -1342,7 +1416,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
 
     try {
       // Build template components with variable substitution
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationName: branding.locationName, locationId: broadcast.location_id })
 
       const result = await sendTemplateMessage(
         contact.wa_phone,
@@ -1370,7 +1444,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
         message_type: 'template',
         template_name: template.name,
         template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName }),
         status: 'sent',
         broadcast_id: broadcastId,
         sent_at: new Date().toISOString(),
@@ -1571,10 +1645,48 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     return { status: 'sending', skipped: 'url_button_value_missing', paused: true, sent: 0, failed: 0 }
   }
 
+  // WAORGNUMBER.4 (R7) — an unsigned drip at a studio inside its sign-off
+  // window pauses (a throw would error-loop every tick); an org admin's
+  // Resume (POST …/pause { paused: false }) signs it off and resumes it. The
+  // studio read throws on failure, so
+  // the tick sends nothing.
+  if (!broadcast.signed_off_by) {
+    const signoffLocation = await readSignoffLocation(db, broadcast.location_id)
+    if (broadcastSignoffBlock(signoffLocation, broadcast)) {
+      // Conditional: an org admin's resume (which signs it off) landing
+      // between this tick's read and here is never undone.
+      const { error: pauseErr } = await db.from('whatsapp_broadcasts')
+        .update({ paused_at: new Date().toISOString() })
+        .eq('id', broadcastId)
+        .is('signed_off_by', null)
+        .is('paused_at', null)
+      if (pauseErr) throw new Error(`Could not pause the unsigned drip: ${pauseErr.message}`)
+      return { status: 'sending', skipped: 'needs_signoff', paused: true, sent: 0, failed: 0 }
+    }
+  }
+
   // Resolve the location's WA config once for the whole tick (as the blast
   // does). Resolved up here (moved from below the recipient selection) because
   // the tier-budget layer needs config.messagingLimitTier before sizing the tick.
-  const config = await getWhatsAppConfig(broadcast.location_id)
+  // WACONFIGFALLBACK.1 — a location with no number of its own (it used to send
+  // from the global env number) PAUSES the drip like an unapproved template:
+  // a throw would error-loop every cron tick, and the operator sees a paused
+  // broadcast they can resume once a number is connected.
+  let config
+  try {
+    // WAORGNUMBER.2 (R5) — the studio's number on the template's WABA; none
+    // there pauses the drip like no number at all.
+    config = await resolveConfig({
+      locationId: broadcast.location_id,
+      businessAccountId: template.business_account_id || null,
+    }, { template: true })
+  } catch (e) {
+    if (!isWhatsAppNumberMissing(e)) throw e
+    await db.from('whatsapp_broadcasts')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('id', broadcastId)
+    return { status: 'sending', skipped: 'no_whatsapp_number', paused: true, sent: 0, failed: 0 }
+  }
 
   // Rolling-24h headroom. head:true count — the .select() is the first one off
   // .from() so it reads the count option (see CLAUDE.md postgrest two-overload lesson).
@@ -1597,7 +1709,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // whatever the tier has left; a fully-spent tier parks the drip until
   // earlier sends age out of the rolling 24h window (no pause needed — the
   // next tick re-checks). Ungated tier (null budget) changes nothing.
-  const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: config.messagingLimitTier })
+  const budget = await getSendBudget(db, { numberId: config.id, locationId: broadcast.location_id, tier: config.messagingLimitTier })
   const headroom = effectiveTickHeadroom(capHeadroom, budget)
   if (headroom <= 0) return { status: 'sending', skipped: 'no_tier_headroom', headroom: 0, sent: 0, failed: 0 }
 
@@ -1701,7 +1813,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       continue
     }
     try {
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationName: branding.locationName, locationId: broadcast.location_id })
       const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
 
       // Promote the claimed row. Upsert (not update): the claim above may have
@@ -1722,7 +1834,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         contact_id: contact.id, location_id: broadcast.location_id,
         wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
         template_name: template.name, template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName, locationName: branding.locationName }),
         status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
       })
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)
@@ -1871,14 +1983,11 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   // flow_token when the caller supplies locationId (broadcast/drip paths);
   // callers that mint their own token (the welcome path) pass no locationId
   // and keep appending their own component.
-  const buttonsComp = templateComponents.find(c => c.type === 'BUTTONS')
-  const flowIdx = (buttonsComp?.buttons || []).findIndex(b => String(b.type || '').toUpperCase() === 'FLOW')
-  if (flowIdx >= 0) {
-    const flowToken = opts.flowToken || (contact?.id && opts.locationId ? `${contact.id}.${opts.locationId}` : null)
-    if (flowToken) {
-      components.push({ type: 'button', sub_type: 'flow', index: String(flowIdx), parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
-    }
-  }
+  // WATPLSEND.1 — the token format and the button parameter each live in ONE
+  // place (flowTokenFor / flowButtonComponentFor), shared with the inbox send.
+  const flowToken = opts.flowToken || (opts.locationId ? flowTokenFor(contact?.id, opts.locationId) : null)
+  const flowComponent = flowButtonComponentFor(templateComponents, flowToken)
+  if (flowComponent) components.push(flowComponent)
 
   // Dynamic URL buttons: the approved template's link ends in a variable, so
   // every send must carry its value or Meta rejects the message (132012). The
@@ -1906,9 +2015,12 @@ export function buildTemplateComponents(template, contact, variableMapping, head
  * what was actually sent instead of a "[template]" placeholder).
  */
 export function resolveTemplateVariableValues(template, contact, variableMapping, opts = {}) {
-  const bodyComp = (template.components || []).find(c => c.type === 'BODY')
-  const varMatches = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-  return varMatches.map((_, i) => resolveContactField((variableMapping || {})[String(i + 1)], contact, opts))
+  // TPLVARORDER.1 — one value per DISTINCT {{n}}, ascending, each resolved
+  // from mapping key n. Meta fills a positional template by number (parameter
+  // i is the i-th distinct slot), so mapping occurrence i to key i+1 sent the
+  // wrong value once a template repeated a variable or put {{2}} before {{1}}.
+  // Same slot order the inbox send uses (shared/wa-template-send.js).
+  return bodyVariableSlots(template).map((n) => resolveContactField((variableMapping || {})[String(n)], contact, opts))
 }
 
 /**
@@ -1923,18 +2035,36 @@ function resolveContactField(fieldName, contact, opts = {}) {
   if (fieldName === 'name') return contact.name || ''
   if (fieldName === 'email') return contact.email || ''
   if (fieldName === 'phone') return contact.phone || contact.wa_phone || ''
-  if (fieldName === 'location_name') return opts.companyName || 'UN1T'
+  // W1.S3 — `location_name` has always rendered the BRAND on WhatsApp (the
+  // approved templates were authored that way), so it keeps doing so and the
+  // studio's own label is its fallback; `company_name` is the same brand under
+  // the name email uses, so a template mapped on either channel agrees.
+  // Both come from getLocationBranding at the call site; never a literal gym.
+  if (fieldName === 'location_name') return opts.companyName || opts.locationName || ''
+  if (fieldName === 'company_name') return opts.companyName || opts.locationName || ''
+  // PAYLINK.6 — reserved names for the overdue-payment reminder, resolved
+  // from the RUN (opts.payment, off sequence_enrollments.metadata) and never
+  // from the contact, so a contact column of the same name can't leak in.
+  if (fieldName === 'pay_amount') return opts.payment?.amount || ''
+  if (fieldName === 'pay_link_suffix') return opts.payment?.link_suffix || ''
   return contact[fieldName] || fieldName // literal fallback, as today
 }
 
-/** Positionally substitute {{n}} placeholders with resolved values. */
+/**
+ * Substitute {{n}} placeholders BY NUMBER. `values` holds one value per
+ * distinct slot in ascending order (what resolveTemplateVariableValues
+ * returns and what Meta receives); every occurrence of {{n}} gets slot n's
+ * value, a missing one renders blank. TPLVARORDER.1 — fills through the same
+ * renderSentTemplateBody the inbox send route logs with, so the two cannot drift.
+ */
 export function substituteTemplateBody(bodyText, values) {
   if (!bodyText) return null
-  let i = 0
-  return bodyText.replace(/\{\{\d+\}\}/g, () => {
-    const v = values?.[i++]
-    return v == null ? '' : String(v)
-  })
+  const tpl = { components: [{ type: 'BODY', text: bodyText }] }
+  const parameters = bodyVariableSlots(tpl).map((_, i) => ({
+    type: 'text',
+    text: values?.[i] == null ? '' : String(values[i]),
+  }))
+  return renderSentTemplateBody(tpl, [{ type: 'body', parameters }])
 }
 
 /**
@@ -1961,41 +2091,72 @@ export function renderTemplateBody(template, contact, variableMapping, opts = {}
 
 /**
  * Inbound consent keywords. The broadcast footer promises "Reply STOP
- * to Unsubscribe" — the webhook honours it via this parser. Twilio's
- * standard keyword set for stop; START/UNSTOP to opt back in. Only an
+ * to Unsubscribe" — the webhook honours it via this parser. Only an
  * exact (trimmed, case-insensitive) match counts — "please stop
  * texting" is a conversation, not a command.
+ *
+ * STOPWORDS.1 (Richard, 30 Sep: "unsubscribe should be the used
+ * terminology") — the opt-out words are UNSUBSCRIBE and STOP (+ STOP ALL /
+ * STOPALL) only. CANCEL, END and QUIT were dropped from Twilio's SMS set:
+ * a member who texts just "cancel" means a booking or a membership, and it
+ * silently unsubscribed them from WhatsApp marketing. Those words are now
+ * ordinary messages that reach Mia or staff. START/UNSTOP/SUBSCRIBE opt back in.
  */
+export const CONSENT_STOP_KEYWORDS = Object.freeze(['unsubscribe', 'stop', 'stop all', 'stopall'])
+export const CONSENT_START_KEYWORDS = Object.freeze(['start', 'unstop', 'subscribe'])
+
 export function parseConsentKeyword(text) {
   const t = String(text || '').trim().toLowerCase()
-  if (['stop', 'stopall', 'stop all', 'unsubscribe', 'cancel', 'end', 'quit'].includes(t)) return 'stop'
-  if (['start', 'unstop', 'subscribe'].includes(t)) return 'start'
+  if (CONSENT_STOP_KEYWORDS.includes(t)) return 'stop'
+  if (CONSENT_START_KEYWORDS.includes(t)) return 'start'
   return null
 }
 
 /**
- * Pick the contact an inbound message should link to when the sender's
- * phone matches several contact rows. Pure — used by the WhatsApp
- * webhook (COMMS-AUDIT 2026-07-10).
- *
- * Policy: prefer a contact in the RECEIVING number's location (each
- * WhatsApp number belongs to one location; a member of that gym texting
- * its number must land on their record there, not on a same-phone
- * contact at another location). Only when no in-location match exists
- * fall back to a cross-location match — the caller passes the list
- * deterministically ordered (oldest contact first) so the fallback is
- * stable rather than Postgres row order.
+ * ORGCONTACTS.3 — which of the contacts sharing the sender's phone an inbound
+ * message is FROM (several can: a ClassPass placeholder and the real account,
+ * a parent and a child). In order:
+ *   1. the match with an ACTIVE contact_studios row at a candidate studio
+ *      (the studios the receiving number is switched on at, plus its home),
+ *      by latest last_seen_at across its rows at candidates; a tie goes to
+ *      the match whose primary studio is a candidate (primaryFirst), then
+ *      the lower id;
+ *   2. else the match whose primary studio (location_id) is a candidate —
+ *      the COMMS-AUDIT 2026-07-10 rule (a member of that gym texting its
+ *      number lands on their record there);
+ *   3. else the oldest: the caller passes the list ordered oldest first, so
+ *      the fallback is stable rather than Postgres row order.
+ * studiosByContact is Map contact id → rows ({ location_id, status,
+ * last_seen_at }) from studiosOfContacts, or null when the read failed (then
+ * tier 1 is skipped). Pure.
  *
  * @param {Array<{id: string, location_id: string}>|null} matches
- * @param {string|null} preferredLocationId  the receiving number's location
+ * @param {{ candidateLocationIds?: string[], studiosByContact?: Map|null, primaryFirst?: boolean }} opts
  * @returns {object|null}
  */
-export function pickInboundContact(matches, preferredLocationId) {
+export function pickInboundContact(matches, { candidateLocationIds = [], studiosByContact = null, primaryFirst = true } = {}) {
   if (!Array.isArray(matches) || matches.length === 0) return null
-  if (preferredLocationId) {
-    const inLocation = matches.find((m) => m?.location_id === preferredLocationId)
-    if (inLocation) return inLocation
+  const candidates = new Set((candidateLocationIds || []).filter(Boolean))
+  const primaryAtCandidate = (m) => !!m?.location_id && candidates.has(m.location_id)
+  const seen = (v) => (v ? Date.parse(v) || 0 : 0)
+
+  if (studiosByContact instanceof Map && candidates.size) {
+    let best = null
+    for (const m of matches) {
+      const active = (studiosByContact.get(m?.id) || []).filter((r) => r?.status === 'active' && candidates.has(r.location_id))
+      if (!active.length) continue
+      const score = Math.max(...active.map((r) => seen(r.last_seen_at)))
+      const entry = { m, score, primary: primaryFirst && primaryAtCandidate(m) ? 1 : 0, id: String(m.id) }
+      if (!best
+        || entry.score > best.score
+        || (entry.score === best.score && entry.primary > best.primary)
+        || (entry.score === best.score && entry.primary === best.primary && entry.id < best.id)) best = entry
+    }
+    if (best) return best.m
   }
+
+  const inLocation = matches.find(primaryAtCandidate)
+  if (inLocation) return inLocation
   return matches[0]
 }
 
@@ -2014,34 +2175,96 @@ export async function getOrCreateConversation(db, contact, locationId) {
   // thread. Key on wa_phone to match the constraint.
   const waPhone = contact.wa_phone
   if (waPhone) {
-    const { data: existing } = await db.from('whatsapp_conversations')
-      .select('id, contact_id')
-      .eq('location_id', locationId)
-      .eq('wa_phone', waPhone)
-      .maybeSingle()
-    if (existing) {
-      // Backfill contact_id if the row was created for an unknown sender.
-      if (!existing.contact_id && contact.id) {
-        await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', existing.id)
-      }
-      return existing.id
+    const findAt = async (loc) => {
+      const { data } = await db.from('whatsapp_conversations')
+        .select('id, contact_id, whatsapp_number_id')
+        .eq('location_id', loc)
+        .eq('wa_phone', waPhone)
+        .maybeSingle()
+      return data
     }
+    // The number switched on at the sending studio (WAORGNUMBER.1: the link
+    // default first, else the newest switch-on, whatever its home): the stamp
+    // replies resolve (R3/R4). The resolver throws on a failed read; a lost
+    // stamp is logged, never thrown.
+    const sendingNumberId = async () => {
+      try {
+        return (await getLocationWhatsAppNumberConfig(locationId))?.id || null
+      } catch (e) {
+        console.error('[whatsapp] getOrCreateConversation: sending number lookup failed', locationId, e?.message || String(e))
+        return null
+      }
+    }
+    const linkContact = async (row) => {
+      // Backfill contact_id if the row was created for an unknown sender.
+      if (!row.contact_id && contact.id) {
+        const { error: linkErr } = await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', row.id)
+        if (linkErr) console.error('[whatsapp] getOrCreateConversation: contact_id backfill failed', row.id, linkErr.message)
+      }
+      return row.id
+    }
+
+    // WAORGNUMBER.5 (R3) — an existing thread at the sending studio replies from
+    // its stamp, so one with no stamp, or a stamp that is no longer switched on
+    // (or active) at this studio, gets the studio's number. A stamp still in use
+    // here is kept (the customer wrote to it). One read for a stamped thread
+    // (this runs per broadcast / drip recipient), the resolver only when the
+    // stamp must change. A failed read keeps what is there, logged; a lost
+    // stamp is logged, never thrown.
+    const usableHere = async (numberId) => {
+      const { data: links, error: linkErr } = await db.from('location_whatsapp_numbers')
+        .select('whatsapp_number_id, whatsapp_numbers!inner(id)')
+        .eq('location_id', locationId)
+        .eq('whatsapp_number_id', numberId)
+        .eq('whatsapp_numbers.is_active', true)
+        .limit(1)
+      if (linkErr) throw linkErr
+      return Boolean(links?.length)
+    }
+    const restamp = async (row) => {
+      if (row.whatsapp_number_id) {
+        let usable
+        try {
+          usable = await usableHere(row.whatsapp_number_id)
+        } catch (e) {
+          console.error('[whatsapp] getOrCreateConversation: stamp check failed; keeping the stamp', row.id, e?.message || String(e))
+          return
+        }
+        if (usable) return
+      }
+      const numberId = await sendingNumberId()
+      if (!numberId || row.whatsapp_number_id === numberId) return
+      let q = db.from('whatsapp_conversations').update({ whatsapp_number_id: numberId }).eq('id', row.id)
+      q = row.whatsapp_number_id ? q.eq('whatsapp_number_id', row.whatsapp_number_id) : q.is('whatsapp_number_id', null)
+      const { error: stampErr } = await q
+      if (stampErr) console.error('[whatsapp] getOrCreateConversation: number stamp on the thread failed', row.id, stampErr.message)
+    }
+
+    const existing = await findAt(locationId)
+    if (existing) {
+      await restamp(existing)
+      return linkContact(existing)
+    }
+
+    // A new thread files at the sending studio (R3) and is stamped with the
+    // number it sends from, so replies resolve it (R4).
+    const stamp = await sendingNumberId()
 
     const { data: created, error } = await db.from('whatsapp_conversations').insert({
       location_id: locationId,
       contact_id: contact.id,
       wa_phone: waPhone,
       status: 'active',
+      ...(stamp ? { whatsapp_number_id: stamp } : {}),
     }).select('id').single()
     if (!error && created) return created.id
 
     // Lost a race with the inbound webhook (or another send) on the same
     // wa_phone — the unique constraint rejected us; re-read the winner.
-    const { data: raced } = await db.from('whatsapp_conversations')
-      .select('id')
-      .eq('location_id', locationId)
-      .eq('wa_phone', waPhone)
-      .maybeSingle()
+    const raced = await findAt(locationId)
+    // WAORGNUMBER.4 — say why when there is no thread at all (the staff routes
+    // answer a bare "Could not open a conversation").
+    if (!raced) console.error('[whatsapp] getOrCreateConversation: insert failed and no thread to adopt', locationId, error?.message || 'no row')
     return raced?.id
   }
 

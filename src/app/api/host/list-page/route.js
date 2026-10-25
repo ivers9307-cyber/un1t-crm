@@ -1,6 +1,6 @@
 // GET/PATCH /api/host/list-page — the host's own /h/[slug] page copy
-// (HOST-GROWTH.7, mig 460). Host session; PATCH updates only the four copy
-// columns for session.host.id (empty string → NULL → default copy on the
+// (HOST-GROWTH.7, mig 460; branding + events copy since HOST-EVENTS-PAGE.1,
+// mig 707). Host session; PATCH updates only these columns for session.host.id (empty string → NULL → default copy on the
 // public page). Partial updates: only supplied keys are written.
 
 import { NextResponse } from 'next/server'
@@ -12,14 +12,22 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const COLS = 'slug, list_headline, list_blurb, list_button_label, list_success_message'
+const COLS = 'slug, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb'
 
 const field = (max) => z.string().trim().max(max).optional()
+// HOST-EVENTS-PAGE.1 — branding + events copy (mig 707). The hero is a
+// pasted https URL (same as the event form's URL field); the accent must be
+// #rrggbb (the column CHECK agrees). '' clears either.
+const emptyOr = (schema) => z.union([z.literal(''), schema])
 const ListPageSchema = z.object({
   list_headline: field(120),
   list_blurb: field(500),
   list_button_label: field(40),
   list_success_message: field(500),
+  events_headline: field(120),
+  events_blurb: field(500),
+  hero_image_url: emptyOr(z.string().trim().url().max(2000).regex(/^https?:\/\//i, 'https URL')).optional(),
+  accent_hex: emptyOr(z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, '#rrggbb')).optional(),
 }).strict()
 
 export async function GET() {

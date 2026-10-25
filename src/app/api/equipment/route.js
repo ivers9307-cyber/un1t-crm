@@ -13,7 +13,7 @@ import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { listEquipment, insertEquipment, getType, getSettings } from '@/lib/equipment-db'
 import { firstDueOn, EQUIPMENT_STATUS } from '@/lib/equipment'
-import { dublinTodayStr } from '@/lib/dublin-time'
+import { todayStrIn, zoneOfLocation } from '@/lib/location-time'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -74,7 +74,8 @@ export const POST = withAuth(
       )
     }
     const nextDueOn = firstDueOn({
-      today: dublinTodayStr(),
+      // TZ.8b — the studio's day (withAuth's locationId is the active studio).
+      today: todayStrIn(zoneOfLocation(user.activeLocation)),
       inspectionDayOfWeek: settings.inspection_day_of_week,
       explicitFirstDue: input.firstDueOn || null,
     })

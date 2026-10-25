@@ -8,7 +8,7 @@
 // Pure classification/addressing helpers live in @shared/whatsapp-media;
 // this module is the IO that depends on the network, Storage and the DB.
 
-import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
+import { getLocationWhatsAppNumberConfig, getConversationNumberConfig, META_API_URL } from './whatsapp-config'
 import {
   WHATSAPP_MEDIA_BUCKET,
   resolveMediaExternalId,
@@ -47,9 +47,14 @@ export async function ensureMediaRehosted(db, message) {
   const externalId = resolveMediaExternalId(message)
   if (!externalId || !message.location_id) return null
 
+  // WACONFIGFALLBACK.1 — the message's location's OWN number, never another
+  // studio's by accident: the thread's number while it is switched on at the
+  // message's studio (the one Meta delivered it to), else the studio's
+  // default. None → null (the inbox's graceful gap).
   let config
   try {
-    config = await getWhatsAppConfig(message.location_id)
+    config = (message.conversation_id && await getConversationNumberConfig(message.location_id, message.conversation_id))
+      || await getLocationWhatsAppNumberConfig(message.location_id)
   } catch {
     return null
   }

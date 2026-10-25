@@ -30,6 +30,7 @@
 //      the gym's brand on a CCF Autos contract — the exact failure
 //      this helper exists to prevent. `organizations.name` IS
 //      populated for all three, so it goes ahead of the literal.
+//      W1.S1a removed that literal altogether (see below).
 //
 //   3. A countersignature label is part of the DOCUMENT, not page
 //      chrome, so it must be FROZEN, not resolved live on every
@@ -39,13 +40,18 @@
 //   org_settings.legal_entity_name (+ legal_trading_name)
 //     -> operator-configured brand (company_settings / org_settings)
 //     -> organizations.name
-//     -> 'UN1T'   (only reachable when even the org row is unreadable)
+//     -> ''   (only reachable when even the org row is unreadable)
+//
+// W1.S1a (SaaS Wave 1, the literal sweep) dropped the old last resort, a
+// fixed gym wordmark (the plan's appendix row contracting-entity.js:48,
+// "drop"). W1.B1 had already removed the brand resolver's own literal, so
+// that one only fired when the database was unreadable or absent, and in
+// that state it asserted ONE gym as the contracting party on every other
+// organisation's document: the precise failure this module exists to stop.
+// The floor is now the organisation's own name; past it the label is
+// honestly empty rather than wrong.
 
 import { getLocationBranding } from './location-branding.js'
-
-// Mirrors location-branding.js's own default so the pure function can
-// be used without a branding lookup.
-const DEFAULT_BRAND = 'UN1T'
 
 // The literal every contract issued BEFORE LEGALENT.1 was issued and
 // signed under. It is retired for new documents, but a document that
@@ -66,7 +72,8 @@ export const LEGACY_COUNTERSIGNATURE_ENTITY = 'UN1T Dublin Ltd'
  *                                               the brand resolver only had its
  *                                               own literal default to offer
  * @param {string|null} [opts.organizationName]  organizations.name
- * @returns {string} always a non-empty string
+ * @returns {string} '' only when nothing at all is known (W1.S1a: never a
+ *   fixed gym's name)
  */
 export function contractingEntityLabel({
   legalEntityName,
@@ -84,7 +91,7 @@ export function contractingEntityLabel({
     }
     return entity
   }
-  return brand || org || DEFAULT_BRAND
+  return brand || org || ''
 }
 
 /**
@@ -125,9 +132,10 @@ export function contractCountersignatureLabel(contract) {
  * Resolve the contracting entity for a NEW contract (issue time), a
  * contract email footer, or any other live surface.
  *
- * Never throws and never returns an empty label — a settings miss on a
- * contract surface must degrade to a weaker claim, not blank the party
- * name on a document someone is about to sign.
+ * Never throws. A settings miss on a contract surface degrades to a weaker
+ * claim (the configured brand, then the organisation's own name); the label
+ * is empty only when even the organisation row is unreadable, because past
+ * that point any name would be a guess about who is contracting (W1.S1a).
  *
  * @param {object|null} db a supabase-js client (service role)
  * @param {object} [opts]
@@ -141,19 +149,21 @@ export async function getContractingEntity(db, { organizationId = null, location
   if (!resolvedBranding) {
     resolvedBranding = await getLocationBranding(db, locationId)
   }
-  const companyName = resolvedBranding?.companyName || DEFAULT_BRAND
+  const resolvedName = String(resolvedBranding?.companyName ?? '').trim()
+  // W1.S1a — the wordmark is whatever the brand chain resolved; '' when it
+  // resolved nothing (no fixed gym name stands in).
+  const companyName = resolvedName
 
-  // Only an OPERATOR-CONFIGURED brand may stand in for the entity.
-  // getLocationBranding returns its own 'UN1T' literal when nothing is
-  // set, and that literal is the gym's brand — passing it through here
-  // is how another org's contract would end up countersigned "For
-  // UN1T". `companyNameConfigured` says which it is; the `??` arm
-  // keeps a pre-resolved branding object from an older caller (no such
-  // field) working by inferring it.
+  // Only an OPERATOR-CONFIGURED brand may stand in for the entity. Since
+  // W1.B1 getLocationBranding ends in the LOCATION'S NAME when nobody set
+  // a brand — a label, not a claim — and `companyNameConfigured` says
+  // which tier answered, so the flag is read and the string is never
+  // compared against a literal. The `??` arm keeps a pre-resolved
+  // branding object from an older caller (no such field) working: with
+  // no literal left in the resolver, a non-empty name there is configured.
   const configuredBrand = (
-    resolvedBranding?.companyNameConfigured
-    ?? (Boolean(companyName) && companyName !== DEFAULT_BRAND)
-  ) ? companyName : null
+    resolvedBranding?.companyNameConfigured ?? Boolean(resolvedName)
+  ) ? resolvedName : null
 
   let entityName = null
   let tradingName = null
@@ -208,4 +218,37 @@ export async function getContractingEntity(db, { organizationId = null, location
     companyName,
     organizationName,
   }
+}
+
+/**
+ * CONTRACTS-PDF.2 — the countersignature label for the ARCHIVED PDF.
+ *
+ * Same answer as contractCountersignatureLabel() for every contract issued
+ * since LEGALENT.1 (the frozen `legal_entity_name` wins). The difference is
+ * the legacy case: a contract issued before LEGALENT.1 carries no frozen
+ * entity, but its frozen variable map does name the employer the BODY was
+ * rendered with (`variables_data.employer_name`, e.g. the party clause's
+ * "Champ fitness LTD"). The web pages keep rendering the retired literal
+ * for those rows (an executed document keeps what it said on screen), but
+ * the PDF is the copy that leaves the building (a WRC inspection pack, the
+ * confirmation emails), and a countersignature that names the body's own
+ * employer is the right label for it; the retired literal appears in none
+ * of those bodies. Richard's call, 20 Oct 2026, rebuilding Mark Doyle's
+ * copy for the inspection.
+ *
+ * Order: frozen legal_entity_name -> frozen employer_name -> the legacy
+ * literal. Both the sign route and the backfill POST render through
+ * renderAndStoreSignedContractPdf (src/lib/contract-pdf-store.js), which
+ * reads this helper, so the two copies cannot name different parties.
+ *
+ * @param {object|null} contract a contracts row (needs `variables_data`)
+ * @returns {string} always a non-empty string
+ */
+export function contractPdfCountersignatureLabel(contract) {
+  const vars = contract?.variables_data
+  const frozenEntity = typeof vars?.legal_entity_name === 'string' ? vars.legal_entity_name.trim() : ''
+  if (frozenEntity) return frozenEntity
+  const employer = typeof vars?.employer_name === 'string' ? vars.employer_name.trim() : ''
+  if (employer) return employer
+  return contractCountersignatureLabel(contract)
 }

@@ -9,7 +9,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentHost } from '@/lib/host-auth'
-import { HostEventSchema, hostEventDefaults, deriveSlug, ensureAnchorLocation } from '@/lib/host-events'
+import { HostEventSchema, hostEventDefaults, ensureAnchorLocation } from '@/lib/host-events'
+import { eventSlug, uniqueEventSlug } from '@/lib/event-slug'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,17 +50,16 @@ export async function POST(request) {
 
   const locationId = await ensureAnchorLocation(db, host)
 
-  // HOST-APPROVALS.1 — slug clash check must be GLOBAL: /event/[slug] and
-  // /api/public/events/[slug] resolve with no location filter, so a slug
-  // that collides with ANY event 404s both ("no race event", live
-  // 2026-07-28 — the host's new event duplicated a staff-created
-  // Stillorgan event's slug and the per-location check saw no clash).
-  let slug = deriveSlug(input.name)
-  for (let n = 2; ; n++) {
-    const { data: clash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
-    if (!clash) break
-    slug = `${deriveSlug(input.name)}-${n}`
-  }
+  // EVENT-SLUG.1 — /event/hatch-oct18-1100: venue + date + session time.
+  // Globally unique (mig 451: /event/[slug] resolves with no location
+  // filter, so the probe is global too — HOST-APPROVALS.1); a
+  // same-place-same-time clash takes -2, -3…
+  const slug = await uniqueEventSlug(db, eventSlug({
+    place: input.venue_name,
+    date: input.race_date,
+    time: input.session_start_time,
+    name: input.name,
+  }))
 
   const defaults = hostEventDefaults()
   const { data: event, error } = await db

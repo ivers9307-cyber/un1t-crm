@@ -53,6 +53,7 @@ function versionRows() {
 
 const ownerA = () => ({
   id: 'owner-a', isMaster: false, role: 'owner',
+  orgAdminOrgIds: [ORG_A], // C18 ORGROLE.1: contracts are for org admins
   rolesByLocation: { [LOC_A1]: 'owner' },
   locations: [{ id: LOC_A1, organization_id: ORG_A }],
 })

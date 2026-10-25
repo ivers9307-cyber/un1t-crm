@@ -6,11 +6,15 @@
 // affected location. Zero registrations or zero qualifying visits = clean
 // no-op; the canary is structurally incapable of firing on an empty room.
 //
+// D4 (Richard, 11 Oct 2026): this is a cross-tenant ops canary, so its days
+// and weeks are the PLATFORM's (PLATFORM_TZ = Europe/Dublin), whatever zone
+// each studio runs in.
+//
 // Weekly (Sunday runs, Dublin): the attribution scorecard for the week just
 // ending — attributed sessions vs the freeze target, who claimed, what is
 // still landing anonymous — mailed via the same ops-alert rail.
 
-import { dublinDayRangeMs, dublinWeekStartMs, dublinDateKey, dublinAddDays } from '@/lib/dublin-time'
+import { dayRangeMsIn, weekStartMsIn, dateKeyIn, addDaysIn, PLATFORM_TZ } from '@/lib/location-time'
 import { findAttributionBreaks, assessFreezeGate, FREEZE_TARGET_PER_WEEK } from '@/lib/hr-attribution-health'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logInfo, logWarn } from '@/lib/log'
@@ -23,7 +27,7 @@ const ROW_CAP = 1000
 
 /** Sunday in Dublin — the weekly report covers Mon..Sun and runs as the week ends. */
 export function isDublinSunday(nowMs) {
-  const key = dublinDateKey(nowMs)
+  const key = dateKeyIn(nowMs, PLATFORM_TZ) // D4: PLATFORM_TZ
   const [y, m, d] = key.split('-').map(Number)
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 0
 }
@@ -42,8 +46,8 @@ async function runDailyCanary(db, { nowMs, dry }) {
   const registrations = await loadActiveRegistrations(db)
   if (registrations.length === 0) return { checked: 0, breaks: [], skipped: 'no-registrations' }
 
-  const todayKey = dublinDateKey(nowMs)
-  const { startMs, endMs } = dublinDayRangeMs(todayKey, todayKey)
+  const todayKey = dateKeyIn(nowMs, PLATFORM_TZ) // D4: PLATFORM_TZ
+  const { startMs, endMs } = dayRangeMsIn(todayKey, todayKey, PLATFORM_TZ)
   const startIso = new Date(startMs).toISOString()
   const endIso = new Date(endMs).toISOString()
 
@@ -114,7 +118,9 @@ async function countWeek(db, weekStartMs, weekEndMs) {
   const attributedRows = (sessions || []).filter((s) => s.contact_id != null)
   const { count: samples } = await db
     .from('hr_samples')
-    .select('id', { count: 'exact', head: true })
+    // SELECTCOLS.1 — hr_samples has no `id`: its PK is (session_id, recorded_at)
+    // (mig 110). A head-count needs no column list at all.
+    .select('*', { count: 'exact', head: true })
     .gte('recorded_at', startIso)
     .lt('recorded_at', endIso)
 
@@ -139,8 +145,8 @@ async function countWeek(db, weekStartMs, weekEndMs) {
 async function runWeeklyReport(db, { nowMs, dry }) {
   // The report runs on Sunday evening, so "this week" = the Monday just gone
   // through now; "last week" = the seven days before that Monday.
-  const weekStartMs = dublinWeekStartMs(nowMs)
-  const prevWeekStartMs = dublinWeekStartMs(weekStartMs - 1)
+  const weekStartMs = weekStartMsIn(nowMs, PLATFORM_TZ) // D4: PLATFORM_TZ
+  const prevWeekStartMs = weekStartMsIn(weekStartMs - 1, PLATFORM_TZ)
   const current = await countWeek(db, weekStartMs, nowMs)
   const previous = await countWeek(db, prevWeekStartMs, weekStartMs)
 
@@ -160,7 +166,7 @@ async function runWeeklyReport(db, { nowMs, dry }) {
     if (orgId && !orgs.has(orgId)) orgs.set(orgId, b.location_id)
   }
 
-  const weekLabel = `${dublinDateKey(weekStartMs)} – ${dublinAddDays(dublinDateKey(weekStartMs), 6)}`
+  const weekLabel = `${dateKeyIn(weekStartMs, PLATFORM_TZ)} – ${addDaysIn(dateKeyIn(weekStartMs, PLATFORM_TZ), 6, PLATFORM_TZ)}`
   for (const [organizationId, locationId] of orgs) {
     await sendOpsAlert({
       organizationId,

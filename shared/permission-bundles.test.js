@@ -90,6 +90,14 @@ describe('completeness — every WEB + MOBILE key is classified exactly once', (
   })
 })
 
+// UN1TBOOK.11 — class_roster lives with class_timer in bundle_members.
+describe('class_roster bundle home', () => {
+  it('is owned by bundle_members alone, like class_timer', () => {
+    expect(KEY_BUNDLES.class_roster).toEqual(['bundle_members'])
+    expect(KEY_BUNDLES.class_roster).toEqual(KEY_BUNDLES.class_timer)
+  })
+})
+
 // BUNDLES.5 final-review fix 1 — restructured: EXEMPT_KEYS is still one
 // literal list (the drift guard below is unchanged), but the TWO
 // halves that make it up are no longer symmetric in how the bundle

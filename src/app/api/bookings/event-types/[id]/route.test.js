@@ -1,16 +1,14 @@
 // SAAS-12 — GET/PUT/DELETE /api/bookings/event-types/[id]
 // (requireApiKeyOrManager dual-auth route). assertRowInOrg only scopes
-// per-org API keys (it no-ops when orgId is null — the legacy-key and
-// cookie paths), so before the fix a manager cookie session could
+// per-org API keys (it no-ops when orgId is null — the cookie path), so before the fix a manager cookie session could
 // read/edit/soft-delete ANY tenant's event type by id. The route now
 // adds a cookie-path location guard (404, not 403 — detail route). The
-// per-org-key path stays gated by assertRowInOrg and the legacy global
-// key stays unscoped by design. api-auth + validate are real; only
-// supabase/getCurrentUser are faked.
+// per-org-key path stays gated by assertRowInOrg, and (APIKEYS.4) the
+// retired shared integration key is refused. api-auth + validate are real; only supabase/getCurrentUser are faked.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  makeFakeDb, twoOrgFixture, GLOBAL_KEY, ORG1_KEY,
+  makeFakeDb, twoOrgFixture, RETIRED_SHARED_KEY, ORG1_KEY,
 } from '@/lib/api-auth.test-helpers.js'
 
 let db
@@ -56,10 +54,11 @@ const managerAt = (...locationIds) => ({
   role: 'manager',
   isMaster: false,
   locations: locationIds.map((id) => ({ id, organization_id: 'org-1' })),
+  // ROLESWEEP.2 — the role is judged per location (hasRoleAtLocation).
+  rolesByLocation: Object.fromEntries(locationIds.map((id) => [id, 'manager'])),
 })
 
 beforeEach(() => {
-  vi.stubEnv('CRM_API_KEY', GLOBAL_KEY)
   getCurrentUser.mockResolvedValue(null)
   seed()
 })
@@ -97,6 +96,57 @@ describe('event-types/[id] — cookie/manager path (SAAS-12)', () => {
     expect(etype('e1').name).toBe('Renamed')
   })
 
+  // EVENTTYPERLS.1 — the booking-type form now saves through this PUT, and it
+  // sends the mig 077 confirmation columns. zod strips unknown keys, so before
+  // the shared schema they were dropped SILENTLY (a 200 that saved nothing).
+  it('PUT persists the confirmation fields the form sends', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', {
+      name: 'Bootcamp',
+      confirmation_enabled: true,
+      confirmation_channels: ['email'],
+      confirmation_email_template_id: null,
+      confirmation_email_subject: 'See you at the studio',
+    }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1')).toMatchObject({
+      confirmation_enabled: true,
+      confirmation_channels: ['email'],
+      confirmation_email_subject: 'See you at the studio',
+      slug: 'bootcamp',
+    })
+  })
+
+  // TWILIO-RETIRE.1 — 'sms' is still admitted by the DB CHECK (history), but
+  // the route refuses to write it: the channel no longer sends.
+  it('PUT refuses the retired sms confirmation channel (400, row untouched)', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { confirmation_channels: ['sms'] }), props('e1'))
+    expect(res.status).toBe(400)
+    expect(etype('e1').confirmation_channels).toBeUndefined()
+  })
+
+  it('PUT refuses a confirmation channel the DB check would refuse (400, row untouched)', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { confirmation_channels: ['push'] }), props('e1'))
+    expect(res.status).toBe(400)
+    expect(etype('e1').confirmation_channels).toBeUndefined()
+  })
+
+  // EVENTCONFIRM-WA.1 (mig 666) — WhatsApp is a confirmation channel, with the
+  // template the operator picked.
+  it('PUT persists a WhatsApp confirmation and its template', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const TPL = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const res = await PUT(cookiePut('e1', {
+      confirmation_enabled: true,
+      confirmation_channels: ['whatsapp'],
+      confirmation_whatsapp_template_id: TPL,
+    }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1')).toMatchObject({ confirmation_channels: ['whatsapp'], confirmation_whatsapp_template_id: TPL })
+  })
+
   it('DELETE a foreign-location event type → 404, row not soft-deleted', async () => {
     getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
     const res = await DELETE(cookieDelete('e2'), props('e2'))
@@ -112,7 +162,7 @@ describe('event-types/[id] — cookie/manager path (SAAS-12)', () => {
   })
 })
 
-describe('event-types/[id] — API-key paths unchanged (SAAS-3)', () => {
+describe('event-types/[id] — API-key paths (SAAS-3 per-org keys; APIKEYS.4 retired shared key)', () => {
   it('per-org key targeting a foreign event type → 404 (assertRowInOrg)', async () => {
     const res = await GET(keyGet('e2', ORG1_KEY), props('e2'))
     expect(res.status).toBe(404)
@@ -125,10 +175,43 @@ describe('event-types/[id] — API-key paths unchanged (SAAS-3)', () => {
     expect(body.data.id).toBe('e1')
   })
 
-  it('legacy global key stays unscoped — reads any tenant\'s event type', async () => {
-    const res = await GET(keyGet('e2', GLOBAL_KEY), props('e2'))
+  it('the retired shared key → 401, nothing read (APIKEYS.4)', async () => {
+    const res = await GET(keyGet('e1', RETIRED_SHARED_KEY), props('e1'))
+    expect(res.status).toBe(401)
+    expect(JSON.stringify(await res.json())).not.toContain('e1')
+  })
+})
+
+// ETSLUG.1 — the form sends the name on every save; the public address moves
+// only when the name changes, and a new name never collides.
+describe('PUT /api/bookings/event-types/[id] — the public slug (ETSLUG.1)', () => {
+  it('a save with an unchanged name leaves a suffixed address alone', async () => {
+    etype('e1').slug = 'bootcamp-loc-1a'
+    tables.event_types.push({ id: 'e3', location_id: 'loc-2a', name: 'Bootcamp', slug: 'bootcamp', active: true })
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { name: 'Bootcamp', duration_minutes: 45 }), props('e1'))
     expect(res.status).toBe(200)
-    const body = await res.json()
-    expect(body.data.id).toBe('e2')
+    expect(etype('e1')).toMatchObject({ slug: 'bootcamp-loc-1a', duration_minutes: 45 })
+  })
+
+  it('a rename to a name another studio holds picks a free address instead of failing', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { name: 'Yoga' }), props('e1'))
+    expect(res.status).toBe(200)
+    expect(etype('e1').slug).toBe('yoga-2')
+    expect(etype('e2').slug).toBe('yoga')
+  })
+
+  it('a rename to a free name takes the plain address', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    expect((await PUT(cookiePut('e1', { name: 'Strength Club' }), props('e1'))).status).toBe(200)
+    expect(etype('e1').slug).toBe('strength-club')
+  })
+
+  it('an explicit slug another type holds → 409, row untouched', async () => {
+    getCurrentUser.mockResolvedValue(managerAt('loc-1a'))
+    const res = await PUT(cookiePut('e1', { slug: 'yoga' }), props('e1'))
+    expect(res.status).toBe(409)
+    expect(etype('e1').slug).toBe('bootcamp')
   })
 })

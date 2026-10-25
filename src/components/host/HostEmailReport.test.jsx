@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 import HostEmailReport, {
   statTiles, filterRecipients, FILTERS, outcomeChipClass, formatWhen,
   resendLabel, resendConfirmCopy, reminderLabel, reminderConfirmCopy, pausedCopy,
@@ -81,7 +82,8 @@ describe('reminder + paused helpers (HOST-EMAILS.2)', () => {
     expect(reminderConfirmCopy(1, null)).toBe("Create a reminder draft for the 1 person who didn't open this email? You can edit it before sending.")
   })
   it('pausedCopy', () => {
-    expect(pausedCopy('sender_not_verified')).toBe('Paused. Sending is not enabled yet. Ask UN1T.')
+    expect(pausedCopy('sender_not_verified', 'Gym A')).toBe('Paused. Sending is not enabled yet. Ask Gym A.')
+    expect(pausedCopy('sender_not_verified')).toBe(`Paused. Sending is not enabled yet. Ask ${PLATFORM_NAME}.`)
     expect(pausedCopy(null)).toBe('')
   })
 })
@@ -153,12 +155,12 @@ describe('HostEmailReport (render)', () => {
     })
     render(<HostEmailReport campaignId="c1" />)
     expect(await screen.findByText('Counts are unavailable right now. The recipient list below is still complete.')).toBeTruthy()
-    expect(screen.queryByText('Nothing delivered yet. If this persists, contact UN1T.')).toBeNull()
+    expect(screen.queryByText(/Nothing delivered yet/)).toBeNull()
     // No scheduled_for on this fixture, so no "Scheduled for" bit renders.
     expect(screen.queryByText(/Scheduled for/)).toBeNull()
   })
 
-  it('scheduled_for renders "Scheduled for <dublinScheduleLabel>"', async () => {
+  it('scheduled_for renders "Scheduled for <scheduleLabelIn>"', async () => {
     mockFetchOnce({
       ok: true,
       status: 200,
@@ -228,8 +230,34 @@ describe('HostEmailReport (render)', () => {
         },
       }),
     })
+    render(<HostEmailReport campaignId="c1" brandName="Pulse Gym" />)
+    expect(await screen.findByText('Nothing delivered yet. If this persists, contact Pulse Gym.')).toBeTruthy()
+  })
+
+  // W1.S1c — the stale-delivery hint names the host's organisation (the page
+  // resolves it), and floors on the platform name, never a literal gym.
+  it('floors the stale-delivery contact on the platform name when no brand is passed', async () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString()
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          campaign: {
+            id: 'c1',
+            subject: 'Race day info',
+            status: 'sent',
+            audience_kind: 'all',
+            sent_at: twoHoursAgo,
+            stats: { sent: 5, delivered: 0, opened: 0, clicked: 0, bounced: 0, complained: 0, unsubscribed: 0, failed: 0 },
+          },
+          recipients: [],
+        },
+      }),
+    })
     render(<HostEmailReport campaignId="c1" />)
-    expect(await screen.findByText('Nothing delivered yet. If this persists, contact UN1T.')).toBeTruthy()
+    expect(await screen.findByText(`Nothing delivered yet. If this persists, contact ${PLATFORM_NAME}.`)).toBeTruthy()
   })
 
   it('a paused sending campaign shows the paused line instead of "Still sending"', async () => {

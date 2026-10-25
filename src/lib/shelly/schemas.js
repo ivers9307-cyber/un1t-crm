@@ -92,9 +92,8 @@ export const MAX_OVERRIDE_HOURS = 48
 
 // Applied by the CONNECTION route, and ONLY when a key is actually supplied
 // (see ShellyConnectionPut — a blank key on re-paste keeps the stored one, so
-// a .min() here would make "change only the server" impossible). mig 562's
-// key_hint CHECK needs >= 4 characters; 16 is the realistic floor for a real
-// Shelly Cloud auth key, and it is what stops a typo being stored as a
+// a .min() here would make "change only the server" impossible). 16 is the
+// realistic floor for a real Shelly Cloud auth key, and it is what stops a typo being stored as a
 // credential that then fails forever with an unreadable cloud error.
 export const MIN_AUTH_KEY_LENGTH = 16
 
@@ -146,8 +145,8 @@ export const ShellyClassRule = z.object({
 
 // Connect / re-paste. `auth_key` is OPTIONAL and has NO minimum: an operator
 // re-pasting the server host of an already-connected studio must not have to
-// re-type a credential the UI never shows them (it renders "••••abcd" from
-// key_hint). Absent or blank => the route keeps the stored key; supplied =>
+// re-type a credential the UI never shows them (it shows only that a key is
+// stored). Absent or blank => the route keeps the stored key; supplied =>
 // the route applies MIN_AUTH_KEY_LENGTH. The 512 cap is a body-size guard, not
 // a format claim — the key is never parsed, only sent.
 //
@@ -226,7 +225,7 @@ export const ShellyDevicePatch = z.object({
 // now", which is why `until` is optional — it is meaningless without a state
 // to hold. The route bounds `until` by MAX_OVERRIDE_HOURS.
 //
-// `until` NORMALISES AT THE INPUT EDGE. /api routes take Bearer (n8n) and
+// `until` NORMALISES AT THE INPUT EDGE. /api routes take Bearer API-key and
 // mobile JWT callers as well as the web UI, and an offset form
 // ('…T18:00:00+01:00') is a perfectly ordinary ISO instant for them to send —
 // refusing it would be a 400 an operator cannot debug. The transform pins it

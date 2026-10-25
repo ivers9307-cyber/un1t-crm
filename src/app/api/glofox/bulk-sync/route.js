@@ -43,6 +43,7 @@
 //   Comfortable under Vercel's timeout.
 
 import { NextResponse } from 'next/server'
+import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
@@ -118,6 +119,10 @@ export async function POST(request) {
 
   const db = createServerClient()
   const creds = await glofoxCredentialsForLocation(db, locationId)
+  // REGISTRYREAD.1b: a failed settings read is not "not configured".
+  if (creds.readError) {
+    return NextResponse.json({ ok: false, code: GLOFOX_SETTINGS_UNREADABLE, error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }, { status: 503 })
+  }
   if (!creds.branchId || !creds.apiKey || !creds.apiToken) {
     return NextResponse.json({
       ok: false,
@@ -255,11 +260,13 @@ export async function POST(request) {
       const result = dryRun
         ? await previewMemberSync(db, locationId, lead, { creds, membershipCache })
         : await applyMemberSync(db, locationId, lead, { creds, membershipCache })
-      summary[result.action] = (summary[result.action] || 0) + 1
+      // GLOFOXSIBLING.1 — a result carrying `error` did not do its action.
+      const action = result.error ? 'error' : result.action
+      summary[action] = (summary[action] || 0) + 1
       processed.push({
         glofox_member_id: memberId,
         name,
-        action: result.action,
+        action,
         contact_id: result.contact_id || null,
         deal: result.deal || null,
         interactions: result.interactions || null,

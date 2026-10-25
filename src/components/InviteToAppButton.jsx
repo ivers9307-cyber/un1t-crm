@@ -5,7 +5,9 @@
 //
 // Two visual states:
 //   - Not yet linked    → "Invite to App"
-//   - Already linked    → "Resend sign-in link" (subtle secondary)
+//   - Already linked    → "Send sign-in email" (subtle secondary): emails a
+//     link to the app's sign-in page (APPINVITE.1; a server-minted magic link
+//     cannot complete the app's PKCE sign-in)
 //
 // We don't expose any of the auth complexity (existing-user fallback,
 // link expiry, etc.) — the route handler does the right thing.
@@ -46,7 +48,7 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
     }
   }
 
-  const label = hasUserAccount ? 'Resend sign-in link' : 'Invite to App'
+  const label = hasUserAccount ? 'Send sign-in email' : 'Invite to App'
   const Icon = result?.ok ? Check : Smartphone
 
   // Two visual variants. Both pin solid bg + white text against the
@@ -67,7 +69,7 @@ export default function InviteToAppButton({ contactId, hasUserAccount }) {
         disabled={busy}
         className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition shadow-sm ${variantClasses} disabled:opacity-50 disabled:cursor-not-allowed`}
         title={hasUserAccount
-          ? 'Sends a fresh sign-in link to the member by email.'
+          ? `Emails the member a link to sign in at ${MEMBER_APP_HOST}.`
           : `Sends a magic-link invite by email so the member can sign in to ${MEMBER_APP_HOST}.`}
       >
         <Icon size={14} />

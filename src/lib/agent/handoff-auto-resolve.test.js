@@ -26,6 +26,14 @@ describe('resolveAutoResolveHours', () => {
     expect(resolveAutoResolveHours({ auto_resolve_after_reply_hours: 4, auto_resolve_stale_hours: 0 }))
       .toEqual({ afterReplyHours: 4, staleHours: 0 })
   })
+  // MIAORG.1 T2-A — null / blank is UNSET (the default), never the 0 that
+  // disables a case: Number(null) is 0.
+  it('null / blank is unset, never 0 (disabled)', () => {
+    expect(resolveAutoResolveHours({ auto_resolve_after_reply_hours: null, auto_resolve_stale_hours: null }))
+      .toEqual({ afterReplyHours: 8, staleHours: 48 })
+    expect(resolveAutoResolveHours({ auto_resolve_after_reply_hours: '', auto_resolve_stale_hours: ' ' }))
+      .toEqual({ afterReplyHours: 8, staleHours: 48 })
+  })
   it('clamps junk to the defaults', () => {
     expect(resolveAutoResolveHours({ auto_resolve_after_reply_hours: 'soon', auto_resolve_stale_hours: -3 }))
       .toEqual({ afterReplyHours: 8, staleHours: 0 })
@@ -109,7 +117,7 @@ describe('runHandoffAutoResolve', () => {
         const finish = () => {
           if (state.op === 'update') return { data: null, error: null }
           if (table === 'locations') {
-            return { data: [{ id: 'loc-1', name: 'Stillorgan', settings: { customer_agent: { enabled: true } } }], error: null }
+            return { data: [{ id: 'loc-1', name: 'Stillorgan', organization_id: null, settings: { customer_agent: { enabled: true } } }], error: null }
           }
           if (table === 'whatsapp_conversations') return { data: convs, error: null }
           if (table === 'instagram_conversations') return { data: [], error: null }
@@ -119,7 +127,7 @@ describe('runHandoffAutoResolve', () => {
         const b = {
           select: () => b,
           update: (patch) => { state.op = 'update'; updates.push({ table, patch }); return b },
-          eq: () => b, not: () => b, is: () => b, lt: () => b, gte: () => b,
+          eq: () => b, not: () => b, or: () => b, is: () => b, lt: () => b, gte: () => b,
           order: () => b, limit: () => b,
           then: (res, rej) => Promise.resolve(finish()).then(res, rej),
         }

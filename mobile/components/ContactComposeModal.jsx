@@ -1,17 +1,16 @@
 // MOBILE-CONTACT-SEND.1 — channel composer modal for the contact card.
 //
-// Routes the SMS / WhatsApp / Email actions through the platform's
-// linked services (Twilio / WhatsApp Cloud API / Postmark) so the
-// message comes from the company, not the staffer's personal phone.
-// Replaces the old sms: / wa.me / mailto: deep-links.
+// Routes the WhatsApp / Email actions through the platform's linked
+// services (WhatsApp Cloud API / Postmark) so the message comes from the
+// company, not the staffer's personal phone. Replaces the old wa.me /
+// mailto: deep-links. (The SMS action left with Twilio, TWILIO-RETIRE.1.)
 //
 //   • whatsapp → reuses <ContactComposer> (24h-window free text +
 //                approved-template picker).
-//   • sms      → a text box → POST /api/contacts/[id]/sms (Twilio).
 //   • email    → subject + body. MOBILE-MAILPARITY.1 — the web card's
 //                PROFILE-MAIL.1 branch, ported: with a usable studio account
 //                at the CONTACT'S location the send IS a Mail compose
-//                (POST /api/email/tickets/compose, mailbox_id + the contact's
+//                (POST /api/email/mail/compose, mailbox_id + the contact's
 //                address), filed as a conversation the reply threads back
 //                into; only with none does it fall back to the company
 //                sender (POST /api/contacts/[id]/email), which is what the
@@ -25,13 +24,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import ContactComposer from './ContactComposer'
-import { sendContactSms, sendContactEmail } from '../lib/messaging-api'
-import { listMail, composeEmail, fetchSignatureContexts } from '../lib/email-api'
-import { defaultMailboxId, mailboxDisplay, mailboxLocationId } from '../lib/mail-compose'
+import { sendContactEmail } from '../lib/messaging-api'
+import { listMail, composeEmail } from '../lib/email-api'
+import { defaultMailboxId, mailboxDisplay } from '../lib/mail-compose'
 import { resolveContactEmailSend, contactEmailFooter, mailboxesFromListResult, MAILBOXES_UNAVAILABLE } from '../lib/mail-sender'
-import { resolveSignatureHint } from '../lib/signature-hint'
 
-const TITLES = { sms: 'Text', whatsapp: 'WhatsApp', email: 'Email' }
+const TITLES = { whatsapp: 'WhatsApp', email: 'Email' }
 
 export default function ContactComposeModal({
   visible, channel, contactId, contactName, onClose,
@@ -73,9 +71,6 @@ export default function ContactComposeModal({
               {channel === 'whatsapp' && contactId ? (
                 <ContactComposer contactId={contactId} contactName={contactName} onSent={onClose} />
               ) : null}
-              {channel === 'sms' && contactId ? (
-                <SmsForm contactId={contactId} contactName={contactName} onSent={onClose} />
-              ) : null}
               {channel === 'email' && contactId ? (
                 <EmailForm
                   contactId={contactId}
@@ -90,51 +85,6 @@ export default function ContactComposeModal({
         </KeyboardAvoidingView>
       </View>
     </Modal>
-  )
-}
-
-function SmsForm({ contactId, contactName, onSent }) {
-  const [text, setText] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState(null)
-  const [flash, setFlash] = useState(null)
-
-  async function send() {
-    if (!text.trim() || sending) return
-    setSending(true)
-    setError(null)
-    const res = await sendContactSms(contactId, { body: text.trim() })
-    setSending(false)
-    if (!res.success) { setError(res.error || 'Send failed'); return }
-    setFlash('SMS sent')
-    setText('')
-    setTimeout(() => onSent?.(), 800)
-  }
-
-  return (
-    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
-      <TextInput
-        value={text}
-        onChangeText={setText}
-        multiline
-        placeholder={`Text ${contactName || 'the contact'}…`}
-        placeholderTextColor="#94A3B8"
-        className="text-base text-un1t-text min-h-[88px]"
-        textAlignVertical="top"
-      />
-      <Text className="text-[11px] text-un1t-muted mt-1">{text.length} characters</Text>
-      <Pressable
-        onPress={send}
-        disabled={!text.trim() || sending}
-        accessibilityRole="button"
-        accessibilityLabel="Send SMS"
-        className={`mt-2 py-2.5 rounded-lg items-center ${text.trim() && !sending ? 'bg-un1t-text' : 'bg-un1t-border'}`}
-      >
-        {sending ? <ActivityIndicator /> : <Text className="text-un1t-bg font-semibold text-sm">Send SMS</Text>}
-      </Pressable>
-      {!!flash && <Text className="text-xs text-green-700 mt-2">{flash}</Text>}
-      {!!error && <Text className="text-xs text-red-500 mt-2">{error}</Text>}
-    </View>
   )
 }
 
@@ -167,7 +117,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
   const [mailboxes, setMailboxes] = useState(null)
   const [mailboxId, setMailboxId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [signatureContexts, setSignatureContexts] = useState([])
   useEffect(() => {
     if (!contactLocationId || !contactEmail) return
     let alive = true
@@ -177,10 +126,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
       setMailboxes(boxes)
       setMailboxId(Array.isArray(boxes) ? defaultMailboxId(boxes) : null)
     }).catch(() => { if (alive) setMailboxes(MAILBOXES_UNAVAILABLE) })
-    // Cosmetic preview of the sign-off the compose route appends; [] on any
-    // failure (fetchSignatureContexts' own posture), which simply hides it.
-    // api() cannot reject today; the catch is symmetry with the call above.
-    fetchSignatureContexts().then(rows => { if (alive) setSignatureContexts(rows) }).catch(() => {})
     return () => { alive = false }
   }, [contactLocationId, contactEmail])
 
@@ -190,12 +135,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
   // The list is in flight: no send may leave until it answers, because the
   // path it takes is not yet known. Never true when there is nothing to await.
   const awaitingAccounts = route.path === 'awaiting'
-  // Only on the Mail path: the company-sender fallback appends nothing, and
-  // absence is the truth there (web MAILFIX-SIGTRUTH.1).
-  const signatureHint = route.path === 'mail'
-    ? resolveSignatureHint(signatureContexts, mailboxLocationId(mailboxes, mailboxId) || contactLocationId)
-    : null
-
   async function send() {
     if (!ready || sending) return
     // The path is re-resolved at tap time from the same inputs the footer
@@ -242,19 +181,6 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
         className="text-base text-un1t-text min-h-[120px] mt-3"
         textAlignVertical="top"
       />
-      {signatureHint ? (
-        <View className="mt-2 rounded-lg border border-dashed border-un1t-border px-3 py-2">
-          <Text className="text-[10px] font-bold uppercase tracking-wider text-un1t-muted">
-            Added automatically
-          </Text>
-          {signatureHint.body ? (
-            <Text className="mt-1 text-xs text-un1t-subtle">{signatureHint.body}</Text>
-          ) : null}
-          {signatureHint.suffix ? (
-            <Text className="mt-1 text-[10px] text-un1t-muted">{signatureHint.suffix}</Text>
-          ) : null}
-        </View>
-      ) : null}
       {/* From — the address the member hears from, or the company wording.
           Tappable only when there is a choice to make. */}
       <Pressable

@@ -23,10 +23,31 @@ import {
   permissionsSchema, audienceFilterSchema,
   passwordSchema, tenantDomainBrandConfigSchema,
   giversEnquirySchema,
+  Un1tOnlineConnectSchema,
+  orgWhatsAppNumberCreateSchema, orgWhatsAppEmbeddedSignupSchema,
+  studioWhatsAppNumberSwitchSchema,
+  studioPurposeTemplateSchema,
+  studioConsentCopySchema,
+  studioBlastSignoffSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
+import { PLATFORM_NAME } from './brand-name.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 import { WindowBase } from '@/lib/schedule/windows'
+import { AvailabilityPutSchema } from '@/lib/availability-server'
+import {
+  QualificationRecordCreateSchema, QualificationRecordPatchSchema,
+  QualificationTypeCreateSchema, QualificationTypePatchSchema, TemplateQualificationsPutSchema,
+} from '@/lib/qualifications-schemas'
+import { ROSTER_CHANGE_LOG_MAX_ROWS } from '@/lib/roster-change-format'
+// OPENAPI-EVENTS.1 — the event create/update bodies, the handlers' own objects.
+import { EventCreateFields, EventUpdateFields } from '@/lib/event-save-schemas'
+import { ENTRY_POLICY_DEFAULTS, ENTRY_POLICY_HOURS_MAX } from '@/lib/entry-policy'
+import {
+  CampaignCreateSchema as CampaignCreateSessionSchema,
+  CampaignContentSchema as CampaignContentSessionSchema,
+  CampaignScheduleSchema as CampaignScheduleSessionSchema,
+} from '@/lib/campaign-session-schemas'
 // SHELLY-UI.9 — the /api/shelly/* request vocabulary. Aliased on import so
 // the .openapi()-decorated re-derivations below can carry the canonical
 // names; see the Shelly block for why .extend({}) is required.
@@ -75,7 +96,8 @@ const ContactCreate = z.object({
   phone: phone.optional().nullable(),
   label: z.string().max(100).nullable().optional(),
   glofox_member_id: z.string().max(100).nullable().optional(),
-  trial_credits_remaining: z.number().int().min(0).max(100).optional(),
+  trial_credits_remaining: z.number().int().min(0).max(100).optional()
+    .describe('Omitted = no credit count (null) until Glofox links the contact and sets it (C145). No default.'),
   lead_source: leadSourceSchema.optional(),
   lead_created_at: z.string().datetime().optional(),
   location_id: uuidLike.optional(),
@@ -152,11 +174,15 @@ const TimeOffRequest = z.object({
   end_date: isoDate,
   reason: z.string().max(2000).nullable().optional(),
   location_id: uuidLike.optional(),
+  // LEAVE.5 — record leave for a colleague (approvers only; created approved).
+  profile_id: uuidLike.optional(),
 }).openapi('TimeOffRequest')
 
 const TimeOffReview = z.object({
   status: timeOffStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
+  // LEAVECANCEL.1 — the reason sent with `cancelled` on your own approved leave.
+  cancel_request_note: z.string().max(2000).nullable().optional(),
 }).openapi('TimeOffReview')
 
 const SwapCreate = z.object({
@@ -169,6 +195,7 @@ const SwapCreate = z.object({
 const SwapReview = z.object({
   status: swapStatusSchema,
   review_note: z.string().max(2000).nullable().optional(),
+  confirm_conflicts: z.boolean().optional().openapi({ description: 'Approve even though the incoming coach is on approved leave or already on an overlapping shift that day (SWAPS.2). Only read on status=approved.' }),
 }).openapi('SwapReview')
 
 const CampaignCreate = z.object({
@@ -190,6 +217,12 @@ const CampaignCreate = z.object({
   ab_wait_hours: z.number().int().min(1).max(24).nullable().optional()
     .openapi({ description: 'Hours to wait before auto-picking the winner by open rate (default 4)' }),
 }).openapi('CampaignCreate')
+
+// MEMBERWRITESWEEP.1e — the campaign editor's session routes (schemas from
+// src/lib/campaign-session-schemas.js, the ones the routes validate with).
+const SessionCampaignCreate = CampaignCreateSessionSchema.extend({}).openapi('SessionCampaignCreate')
+const SessionCampaignContent = CampaignContentSessionSchema.extend({}).openapi('SessionCampaignContent')
+const SessionCampaignSchedule = CampaignScheduleSessionSchema.extend({}).openapi('SessionCampaignSchedule')
 
 // GAPS-P8 — copy assist input. Deliberately narrow: the operator's own brief
 // and their own draft, nothing about the audience or its contacts.
@@ -213,8 +246,9 @@ const ScheduledReport = z.object({
   day_of_month: z.number().int().min(1).max(31).nullable().optional(),
   deliver_email: z.boolean().optional(),
   email_recipients: z.array(email).optional(),
-  deliver_notification: z.boolean().optional(),
+  deliver_notification: z.boolean().optional().describe('REPORTS.2 — no longer offered: true is refused with 400. Omit it.'),
   parameters: z.record(z.string(), z.unknown()).optional(),
+  confirm_external: z.boolean().optional().describe('REPORTS.2 — staff_cost only: confirms that recipient addresses matching no staff profile are intended external recipients.'),
 }).openapi('ScheduledReport')
 
 // ============================================================================
@@ -224,10 +258,9 @@ registry.registerComponent('securitySchemes', 'BearerAuth', {
   type: 'http',
   scheme: 'bearer',
   description:
-    'API key for n8n / external integrations, sent as `Authorization: Bearer <token>`. ' +
-    'Two kinds are accepted (SAAS-3): a per-organization key (`unitk_…`, issued at ' +
-    '/settings/api-keys) whose queries are scoped to the key\'s organization, or the ' +
-    'legacy shared CRM_API_KEY (unscoped, system-admin behaviour).',
+    'API key for external integrations, sent as `Authorization: Bearer <token>`: a ' +
+    'per-organization key (`unitk_…`, issued at /settings/api-keys) whose queries are ' +
+    'scoped to the key\'s organization.',
 })
 registry.registerComponent('securitySchemes', 'CookieAuth', {
   type: 'apiKey',
@@ -245,7 +278,7 @@ registry.registerComponent('securitySchemes', 'MetaSignature', {
 })
 registry.registerComponent('securitySchemes', 'WebhookToken', {
   type: 'apiKey', in: 'header', name: 'X-Webhook-Token',
-  description: 'Shared-secret / signature header. Postmark, UniFi and InBody use `X-Webhook-Token`; Twilio uses `X-Twilio-Signature`; Revolut uses `Revolut-Signature`; Xero uses `X-Xero-Signature`. Tokenised receivers (`invoices-inbound`, `sequence`) instead authenticate via the path token.',
+  description: 'Shared-secret / signature header. Postmark, UniFi and InBody use `X-Webhook-Token`; Revolut uses `Revolut-Signature`; Xero uses `X-Xero-Signature`. Tokenised receivers (`invoices-inbound`, `sequence`) instead authenticate via the path token.',
 })
 registry.registerComponent('securitySchemes', 'BridgeAuth', {
   type: 'http', scheme: 'bearer',
@@ -303,7 +336,7 @@ registry.registerPath({
   path: '/api/unsubscribe/host/{token}',
   tags: ['Public'],
   summary: 'One-click unsubscribe from a host\'s marketing list (RFC 8058)',
-  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — UN1T marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing. Unlike the sibling `/api/unsubscribe/{token}` (which redirects to a non-destructive preference centre), that landing page performs the unsubscribe on the GET itself.',
+  description: 'Anonymous. `token` is the HMAC host-unsubscribe token from a host campaign footer (pins host + contact). Writes a per-host suppression only — the organisation\'s marketing consent is untouched (HOST-CONSENT.1). Body ignored. A repeat click is a 200 no-op. Invalid tokens spend a per-IP budget. A GET on this same path (a mail client rendering the List-Unsubscribe URL as a link) 302-redirects to the `/unsubscribe/host/{token}` landing page instead of 405ing. Unlike the sibling `/api/unsubscribe/{token}` (which redirects to a non-destructive preference centre), that landing page performs the unsubscribe on the GET itself.',
   request: { params: z.object({ token: z.string().min(1) }) },
   responses: {
     200: { description: 'Unsubscribed from the host (or already unsubscribed)' },
@@ -402,6 +435,91 @@ registry.registerPath({
   },
 })
 
+// TRIALSTUDIO.6 — the /trial purchase body (the route's own Zod schema is the authority).
+const TrialPurchaseStart = z.object({
+  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan').openapi({ description: 'The studio. Absent means stillorgan (a page loaded before the studio choice).' }),
+  first_name: z.string().min(1).max(120),
+  last_name: z.string().min(1).max(120),
+  email: z.string().email().max(320),
+  phone: z.string().min(1).max(50),
+  consent: z.literal(true),
+  attribution: z.record(z.string(), z.string()).optional(),
+  lead_event_id: z.string().optional(),
+  visit: z.object({ referrer: z.string().optional(), landing_path: z.string().optional() }).optional(),
+  terms_accepted: z.boolean().optional().openapi({ description: 'Hatch only: the un1t.online terms and waiver tick; required (true) when the studio\'s un1t.online writes are on.' }),
+}).openapi('TrialPurchaseStart')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases',
+  tags: ['Public'],
+  summary: 'Start a paid trial purchase (PAIDTRIAL.1, TRIALSTUDIO.6, the /trial page)',
+  request: { body: { content: { 'application/json': { schema: TrialPurchaseStart } } } },
+  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\' (required), first_name, last_name, email, phone, consent: true, attribution?, lead_event_id?, visit?, terms_accepted?: boolean }. The product comes from the chosen studio\'s paid_trial landing block; the price is the block\'s (Hatch: the mirrored un1t.online product\'s), never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead) against the chosen studio. Stillorgan: a buyer with a trial history is refused before any row or payment (200 { success: false, code: \'trial_used\', error, help: { cta_label } }); otherwise inserts an awaiting_payment trial_purchases row and opens the Revolut payment, returning { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. Hatch: no CRM charge; 400 terms_required (with the terms payload) without terms_accepted when the studio\'s un1t.online writes are on; an active member is refused before any un1t.online call (200 code active_member); otherwise inserts the row, finds or creates the un1t.online account and returns { purchaseId, redirect_url (un1t.online\'s hosted checkout, returned once, never stored), amount_cents, currency, product_name }. A refused or unclear un1t.online answer files the row for a call and answers 200 { success: false, code: \'help_filed\', error }.',
+  responses: {
+    200: { description: 'Checkout opened (Stillorgan checkout / Hatch redirect_url), or a refusal state: trial_used, active_member, help_filed' },
+    400: { description: 'Validation failed (including an unknown studio), not_configured, payments_unavailable or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Lead capture or purchase row insert failed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Provider checkout could not be opened (Stillorgan)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: studio config, location, contact or eligibility read unreadable, or un1t.online busy (the row is marked failed); try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/trial-purchases/help',
+  tags: ['Public'],
+  summary: 'Ask for a call instead of buying a trial (TRIALSTUDIO.5, the /trial page "I need help" button)',
+  description: 'Anonymous. Rate-limited to 5 per studio per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\', first_name, last_name, email, phone }. Used when the buyer was refused before paying (Stillorgan trial history, Hatch active membership). Matches or creates the contact, re-runs the studio\'s eligibility read for the reasons, files one help_requested trial_purchases row (a Needs a call card; a second press reuses the open one) and alerts staff. No payment is taken. Returns { message, purchaseId }. 400 unknown_studio or not_configured.',
+  responses: {
+    200: { description: 'Help request filed (or the open one reused)' },
+    400: { description: 'Validation failed, unknown_studio or not_configured', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Landing row, contact or eligibility read unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/trial-purchases/{id}',
+  tags: ['Public'],
+  summary: 'Status of one paid trial purchase (checkout and confirming polls)',
+  description: 'Anonymous, display-safe. state: pending | paid (money in, grant in flight) | granted (the Glofox plan is on the account) | failed. Re-checks the provider while pending (capped at 20 per purchase per 5 min); a settled payment releases the row and nudges the trial-purchases worker.',
+  responses: {
+    200: { description: 'Status returned' },
+    404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/donate',
+  tags: ['Public'],
+  summary: 'Start a card donation on a public event page (CHARITY.5)',
+  description: 'Anonymous. Rate-limited to 10 per slug per IP per 15 min. Body { amount_cents, name, email, message?, marketing_opt_in?, attribution? }. The event comes from the slug (published and active; registration state is irrelevant, so a closed or full event still takes a gift). The amount is the donor\'s but bounded by the event\'s own charity settings: min/max, or its preset list when custom amounts are off. Inserts an awaiting_payment donations row (contact left null until the paid side effects link it) and opens the provider payment. Returns { donation: { id, amount_cents, currency, checkout: { provider, token, url, connectedAccountId } } }. 400 invalid_amount (outside the event\'s bounds), not_enabled (the Charity day switch is off) or payments_unavailable; 502 checkout_failed (the row is marked failed); 500 unavailable (the insert failed).',
+  responses: {
+    200: { description: 'Donation row created and checkout opened' },
+    400: { description: 'Validation failed, invalid_amount, not_enabled or payments_unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or unpublished event', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'unavailable: the donation row could not be created', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'checkout_failed: the provider checkout could not be opened', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/donations/{id}',
+  tags: ['Public'],
+  summary: 'Status of one donation (checkout and return-page polls)',
+  description: 'Anonymous, display-safe: no donor field (name, email, message) is ever returned. state: pending | paid | failed | refunded. Re-checks the provider while pending (capped at 100 per donation per 5 min). Every observation of a paid row runs the stamp-keyed side effects (contact, tag, consent, timeline note, receipt), so this poll also recovers a donor whose webhook never landed; in the first 60 s after paid_at only the observer that flipped the row sends the receipt. While the payment can still be completed the response carries the checkout block.',
+  responses: {
+    200: { description: 'Status returned: { id, state, paid, amount_cents, currency, match_multiplier, checkout }' },
+    404: { description: 'Unknown donation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'get',
   path: '/api/public/offer-purchases/{id}',
@@ -426,6 +544,22 @@ registry.registerPath({
     403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Purchase is not paid', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/trial-purchases/{id}/review',
+  tags: ['Approvals'],
+  summary: 'Retry or hand-resolve a paid trial purchase whose Glofox grant failed, or close a Needs-a-call help request (PAIDTRIAL.2, TRIALSTUDIO.8)',
+  description: "Session auth + the approvals_offer_purchases grant, judged at the purchase's studio; ids outside the caller's studios return 404. Body { action: 'retry' | 'resolve' | 'handled' }. handled closes a help_requested row (nobody paid; the buyer asked for a call) with no email. retry puts a needs_review row back in the queue (the write-ahead grant marker is kept, so a purchase Glofox never answered is never bought twice); resolve marks it granted by hand and emails the buyer.",
+  request: { body: { content: { 'application/json': { schema: z.object({ action: z.enum(['retry', 'resolve', 'handled']) }) } } } },
+  responses: {
+    200: { description: '{ status } (queued or granted), or { already: true }' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not paid (retry/resolve), or the row is not in a state this action applies to (queued/processing; handled on anything but help_requested)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -495,15 +629,132 @@ registry.registerPath({
   },
 })
 
+// C134 WEBBOOKINGWRITES.1 — the /bookings pill and bell, off the browser client.
+const bookingWriteErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
 registry.registerPath({
-  method: 'get',
-  path: '/api/public/challenges/{locationId}',
-  tags: ['Public'],
-  summary: 'Public challenge board for a location',
-  request: { params: z.object({ locationId: uuidLike }) },
+  method: 'post',
+  path: '/api/bookings/{id}/status',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark a booking confirmed, completed or no-show',
+  description: "The web bookings permission at the booking's studio (its location_id, else its booking type's); membership first (404). Cancelling is POST /api/bookings/{id}/cancel; a cancelled booking is not re-opened (409). The write is a compare-and-swap on the status it was judged against (409 if it changed).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['confirmed', 'completed', 'no_show']) }) } } },
+  },
   responses: {
-    200: { description: 'Challenge board', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicChallengesResponse') } } },
-    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: 'Changed', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, status: z.string() }) }) } } },
+    400: bookingWriteErr('Validation failed (cancelled is not accepted here)'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
+    404: bookingWriteErr('No such booking, or not at a studio of yours'),
+    409: bookingWriteErr('The booking is cancelled, or changed while you were looking at it'),
+    500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+// BOOKINGOUTCOME.1 — "Mark all as showed" on /bookings?filter=needs_outcome.
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/outcomes',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record an outcome (showed or no-show) on many bookings at once',
+  description: "Each booking is judged like POST /api/bookings/{id}/status: membership at its studio (its location_id, else its booking type's; a miss is skipped as not_found) and the web bookings permission there (forbidden). Only a booking still 'confirmed' whose end (booking_date + end_time, a wall clock in its studio's zone) has passed is accepted; the rest are skipped with a reason (not_confirmed, not_ended, bad_time). The write is one compare-and-swap on status 'confirmed'; an accepted booking that changed underneath is skipped as changed.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      booking_ids: z.array(uuidLike).min(1).max(200),
+      status: z.enum(['completed', 'no_show']),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Per-id results', content: { 'application/json': { schema: z.object({
+      success: z.literal(true),
+      data: z.object({
+        updated: z.array(uuidLike),
+        skipped: z.array(z.object({
+          id: uuidLike,
+          reason: z.enum(['not_found', 'forbidden', 'not_confirmed', 'not_ended', 'bad_time', 'changed']),
+        })),
+      }),
+    }) } } },
+    400: bookingWriteErr('Validation failed (1 to 200 ids; status completed or no_show)'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at any studio'),
+    500: bookingWriteErr('The bookings or a studio time zone could not be read, or the write failed'),
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/bookings/{id}/skip-reminder',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: "Skip (or re-enable) one booking's reminders",
+  description: "Sets bookings.skip_reminder (mig 075). The web bookings permission at the booking's studio (its location_id, else its booking type's); membership first (404).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ skip_reminder: z.boolean() }) } } },
+  },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, skip_reminder: z.boolean() }) }) } } },
+    400: bookingWriteErr('Validation failed'),
+    401: bookingWriteErr('Unauthorized'),
+    403: bookingWriteErr('No web bookings permission at the booking\'s studio (or at any studio)'),
+    404: bookingWriteErr('No such booking, or not at a studio of yours'),
+    500: bookingWriteErr('The booking could not be read or written'),
+  },
+})
+
+// C148 ACTWRITEGATEWEB.1 — the web task writes, off the browser client.
+const taskWriteErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const TASK_RULE = "Judged on the WEB rule at the task's studio: the web Tasks permission (`activities`) AND Contacts (web or phone) there; the phone Tasks / Pipeline keys do not count. Browser session only; the API-key surface is /api/tasks."
+registry.registerPath({
+  method: 'post',
+  path: '/api/activities/tasks',
+  tags: ['Tasks'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a task from the web',
+  description: `${TASK_RULE} Membership of location_id first (403). A contact_id must be a contact AT that studio (404 otherwise); an assignee_id must work there (400). kind, status and source are set by the route (task, todo, crm).`,
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      subject: z.string().min(1).max(500),
+      type: z.string().max(50).optional(),
+      note: z.string().max(20000).nullable().optional(),
+      due_date: z.string().nullable().optional().openapi({ example: '2026-10-09' }),
+      due_time: z.string().nullable().optional().openapi({ example: '09:30' }),
+      assignee_id: uuidLike.nullable().optional(),
+      priority: z.enum(['low', 'medium', 'high', 'urgent']).nullable().optional(),
+      project: z.string().max(100).nullable().optional(),
+      contact_id: uuidLike.nullable().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Created (the row, with its contact and assignee)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike }).passthrough() }) } } },
+    400: taskWriteErr('Validation failed, or the assignee does not work at this studio'),
+    401: taskWriteErr('Unauthorized'),
+    403: taskWriteErr('No web Tasks permission anywhere; not a member of the studio; or no Tasks / Contacts permission there'),
+    404: taskWriteErr('The contact does not exist or is not at this studio'),
+    500: taskWriteErr('The contact or assignee could not be read, or the task could not be written'),
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/activities/tasks/{id}/status',
+  tags: ['Tasks'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change a task's status",
+  description: `${TASK_RULE} The task's own studio, never the active one; membership first (404). Only kind='task' rows.`,
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['todo', 'in_progress', 'done', 'cancelled']) }) } } },
+  },
+  responses: {
+    200: { description: 'Changed', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ id: uuidLike, status: z.string() }) }) } } },
+    400: taskWriteErr('Validation failed'),
+    401: taskWriteErr('Unauthorized'),
+    403: taskWriteErr("No web Tasks permission anywhere, or no Tasks / Contacts permission at the task's studio"),
+    404: taskWriteErr('No such task, or not at a studio of yours'),
+    500: taskWriteErr('The task could not be read or written'),
   },
 })
 
@@ -534,15 +785,20 @@ registry.registerPath({
             email: email,
             phone: z.string().max(50).optional(),
             team_name: z.string().max(200).optional(),
+            waitlist_token: z.string().max(1000).optional().openapi({ description: 'EVENT-WAITLIST.1: the claim token from a waitlist offer link (?wl=); marks that waitlist row claimed once the registration exists. Never changes the answer.' }),
+            find_team: z.boolean().optional().openapi({ description: 'ENTRYPOLICY.1 (capacity, every mode): a wave\'s load counts confirmed entries and unpaid (pending_payment) ones still inside the event\'s unpaid_hold_hours (default 48 h; race_events.entry_policy); an older unpaid entry holds nothing and is never resumed by a re-book (its checkout is not reused even if still open; the row is cleared and a fresh registration made, as a dead checkout is), while a payment that completed meanwhile still confirms it. FINDTEAM.3: register one person as a team of one looking for a team; team_size is forced to 1 and team_name is ignored (the team is named "<name> (looking for a team)"); members must be empty (members non-empty -> 400). 400 find_team_unavailable on a non-race kind, 400 find_team_disabled when the event has the option off. A solo takes no team slot in teams capacity mode. FINDTEAM.8: deduped by person, not by team name: this contact already confirmed or placed on the event -> 409 already_registered; their own checkout still live -> the resume answer (payment.resumed); every new solo gets a team row of its own, suffixed " 2", " 3", … on a name clash. A captain re-registering a team whose entry is placed -> 409 already_registered (a placed row is never deleted). FINDTEAM.9: a refused or abandoned solo attempt discards the team row it made (never one a registration still points at), so attempts do not use up the suffixes; a captain re-book never stale-deletes a team entry that solos were placed into (409 already_registered whatever its own status; an unreadable count is a 500).' }),
           }).openapi('EventRegisterBody'),
         },
       },
     },
   },
   responses: {
-    200: { description: 'Registration confirmed' },
+    200: { description: 'Registration confirmed, or an existing live checkout resumed (payment.resumed)' },
     400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'members_only_unverified', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_registered (a confirmed or placed entry, or a team entry solos were placed into) or wave_full', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'payment_init_failed: the registration is rolled back (a solo\'s team row with it)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -612,6 +868,724 @@ registry.registerPath({
   responses: {
     200: { description: 'Registration status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventRegistrationStatus') } } },
     404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-MOVE.6 — the person who booked an entry manages it from the signed
+// link in their confirmation email (/event/entry/{token}). The token is the
+// only credential: a bad, expired or forged one is a 404, never 401/403.
+const EntryManageToken = z.string().min(10).openapi({ description: 'Signed entry-manage token (HMAC, 90-day TTL) from the confirmation or moved email' })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/entry/{token}',
+  tags: ['Public'],
+  summary: 'The token holder\'s event entry, and whether they may change its date',
+  description: 'Anonymous; the token is the credential. Public entry shape (names only, no emails, phones or check-in codes) plus `can_move`, `move_blocked_reason` (unpaid, cancelled, placed in a team, checked in, past, or ENTRYPOLICY.1: the event\'s date-change switch is off or the entrant is inside the hours-before cutoff, in the operator\'s own words), `date_change_pending`, `date_change_failed` (a paid change was refused; shown until staff move or refund it), `placed_into` (FINDTEAM.8: for a solo staff placed into a team, `{ team_name, wave: { start_time, label } }`; null otherwise) and ENTRYPOLICY.1 `lapsed` / `lapsed_message` / `register_url` (an unpaid entry past the event\'s unpaid_hold_hours: it no longer holds a place and is never resumed; the row stays). The event\'s `entry_policy` itself is never returned. A pending date-change payment is refreshed from the provider first. Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: EntryManageToken }) },
+  responses: {
+    200: { description: 'The entry', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntrySummary') } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/entry/{token}/move-options',
+  tags: ['Public'],
+  summary: 'Dates and times the token holder may move their entry to',
+  description: 'Anonymous; the token is the credential. Same eligibility as the staff picker (same payee, published, upcoming, the entry size accepted) at a studio of the entry\'s own organisation (fails closed when that cannot be read) but only times with room are listed and NO capacity or count is ever returned; a time\'s room counts confirmed entries and unpaid ones still inside the target event\'s unpaid_hold_hours (ENTRYPOLICY.1). Each option carries `price_difference_cents` and `price_note`. A blocked entry (status, check-in, past, or the event\'s entry policy: date changes off / inside the cutoff) answers `can_move: false`, its reason and no options. Rate limited with the summary: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: EntryManageToken }) },
+  responses: {
+    200: { description: 'The options', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveOptions') } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The options could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/entry/{token}/move',
+  tags: ['Public'],
+  summary: 'The token holder moves their entry to another date (pays the difference first when dearer)',
+  description: 'Anonymous; the token is the credential. Only a confirmed, unchecked entry on an upcoming event whose entry policy allows a customer date change (ENTRYPOLICY.1: 400 `disabled` when the event\'s switch is off, 400 `cutoff` inside the hours-before cutoff counted back from the entrant\'s wave start, both with the operator\'s own `message`); the same rules as staff, never forced. Equal or cheaper: moved at once as actor `customer`, new tickets emailed, nothing refunded → `{ moved: true, registration, notified }`. Dearer: a price-difference payment carrying the pending move is minted and the move lands when it is paid → `{ moved: false, pay_url }`, where pay_url ends `#back=<this token>` so the checkout can return to the entry page. Targets are fenced to the entry\'s organisation. An immediate move closes any open dearer link on the entry. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes.',
+  request: {
+    params: z.object({ token: EntryManageToken }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+    }).openapi('PublicEntryMoveRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved, or a pay URL for the difference', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEntryMoveResult') } } },
+    400: { description: 'A rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Bad or expired link, or the entry is gone', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'That time is full (no numbers), the entry changed, already paid, or the host cannot take payments', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read or write failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'The payment provider did not start the payment', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// BOOKINGSELF.1 — the person who booked cancels or reschedules their own
+// booking from the {{manage_url}} link (/book/manage/{token}). The token is
+// the only credential: a bad, expired or forged one is a 404, never 401/403.
+const BookingManageToken = z.string().min(10).openapi({ description: 'Signed booking-manage token (HMAC, kind booking_manage, 90-day TTL) from the booking confirmation or reminder email' })
+const bookingManageErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/booking-manage/{token}',
+  tags: ['Public'],
+  summary: 'The token holder\'s booking, and whether they may cancel or reschedule it',
+  description: 'Anonymous; the token is the credential. Booking type name, studio name and address, date and time as stored (the studio zone, named in `timezone`), never an email or a phone; plus `can_cancel`, `can_reschedule` (confirmed, more than 2 hours before the start on the studio clock; reschedule also needs the type live), `blocked_reason`, `reschedule_note` and `available_days` (days with a free slot of the same type, its own slot not counted; null when unreadable). Rate limited: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: BookingManageToken }) },
+  responses: {
+    200: { description: 'The booking', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicManagedBooking') } } },
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    429: bookingManageErr('Rate limited'),
+    500: bookingManageErr('The booking or its studio zone could not be read'),
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/booking-manage/{token}/slots',
+  tags: ['Public'],
+  summary: 'Free times on a date for rescheduling the token holder\'s booking',
+  description: 'Anonymous; the token is the credential. The public widget\'s slot rules for the same booking type, the holder\'s own booking not counted as taken. Times only, never a count. Only while the booking can be rescheduled (else the refusal). Rate limited with the summary: 60 per IP per 5 minutes.',
+  request: { params: z.object({ token: BookingManageToken }), query: z.object({ date: isoDate }) },
+  responses: {
+    200: { description: 'The times', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicManagedBookingSlots') } } },
+    400: bookingManageErr('Missing or malformed date'),
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    409: bookingManageErr('Cancelled, too late to change, or the type cannot be booked online'),
+    429: bookingManageErr('Rate limited'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/booking-manage/{token}/cancel',
+  tags: ['Public'],
+  summary: 'The token holder cancels their booking',
+  description: 'Anonymous; the token is the credential. Only a confirmed booking, until 2 hours before its start (studio clock). Compare-and-swap on status; the status trigger writes the contact timeline line. Nothing new is sent to the customer. Every refusal carries `error` and a customer `message`. Rate limited: 10 per IP per 15 minutes (shared with reschedule).',
+  request: { params: z.object({ token: BookingManageToken }) },
+  responses: {
+    200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicManagedBookingCancelResult') } } },
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    409: bookingManageErr('Already cancelled, too late to change online, or changed meanwhile'),
+    429: bookingManageErr('Rate limited'),
+    500: bookingManageErr('A read or write failed; nothing changed'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/booking-manage/{token}/reschedule',
+  tags: ['Public'],
+  summary: 'The token holder moves their booking to another slot of the same type',
+  description: 'Anonymous; the token is the credential. Only a confirmed booking, until 2 hours before its current start (studio clock), on a live type. The new slot is re-judged by the same check /api/public/book runs (availability window, duration + buffer grid, max_advance_days, the studio today, blocked times, other bookings), failing closed. Compare-and-swap on the row as read; then its reminder sends are cleared (reminders fire again for the new time), a timeline line goes on the contact and the type\'s own confirmation is sent again. Rate limited: 10 per IP per 15 minutes (shared with cancel).',
+  request: {
+    params: z.object({ token: BookingManageToken }),
+    body: { content: { 'application/json': { schema: z.object({
+      booking_date: isoDate,
+      start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
+    }).openapi('PublicBookingRescheduleRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicBookingRescheduleResult') } } },
+    400: bookingManageErr('Same time as now, or a bad body'),
+    404: bookingManageErr('Bad or expired link, or the booking is gone'),
+    409: bookingManageErr('Cancelled, too late, the type cannot be booked online, the slot is taken, or changed meanwhile'),
+    429: bookingManageErr('Rate limited'),
+    500: bookingManageErr('A read or write failed; nothing changed'),
+  },
+})
+
+// ============================================================================
+// OPENAPI-EVENTS.1 — the event itself: list, create, read, update, retire.
+// The create and update bodies are the handlers' own Zod objects, imported
+// from src/lib/event-save-schemas.js (the two route files re-export them as
+// CreateSchema / UpdateSchema), so a field added there reaches the spec with
+// no change here. Only the cross-field rules (superRefine) and what the
+// handler does AFTER validation are written out, in the descriptions.
+// `.extend({})` for the same reason as the Shelly block: the raw exports are
+// built before extendZodWithOpenApi runs, so they carry no `.openapi`.
+// ============================================================================
+
+const EventCreate = EventCreateFields.extend({}).openapi('EventCreate', {
+  description:
+    'POST /api/events body. Rules the schema adds across fields: every `kind` but lead_gen needs `race_date` and at least one wave; lead_gen (a no-date data-capture form) takes neither. '
+    + '`charity` (CHARITY.9) is the charity-day donation settings: name, heading, blurb, presets_cents, custom_allowed, min_cents, max_cents, match_multiplier (1..5), match_label, goal_cents, show_total, include_entries, consent_label, the thank-you and receipt copy, video_url (YouTube or Instagram) or video_file_url (uploaded through the event form); every key optional, a missing key is the default. '
+    + '`find_team` (FINDTEAM.6) is the "Find me a team" switch and copy: enabled, label, blurb, confirmation_paragraph, placed_subject, placed_intro. '
+    + `\`entry_policy\` (ENTRYPOLICY.1) is what a customer may do with their own entry and how long an unpaid entry keeps its place: self_cancel_enabled (default ${ENTRY_POLICY_DEFAULTS.self_cancel_enabled}), self_reschedule_enabled (default ${ENTRY_POLICY_DEFAULTS.self_reschedule_enabled}), cutoff_hours (0..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.cutoff_hours}; hours before the entrant's start, on the studio's clock, that self-service closes; 0 = no cutoff), unpaid_hold_hours (1..${ENTRY_POLICY_HOURS_MAX}, default ${ENTRY_POLICY_DEFAULTS.unpaid_hold_hours}; a pending_payment entry holds its place that long), and the operator copy cutoff_message, disabled_message, lapsed_message ({{hours}} and {{event_name}} are filled in). Every key optional; null or omitted = the defaults.`,
+})
+
+const EventUpdate = EventUpdateFields.extend({}).openapi('EventUpdate', {
+  description:
+    'PUT /api/events/{id} body. Every key optional: omitted = left as it is, null clears a nullable column. '
+    + 'Rule the schema adds across fields (CHARITY.12): `charity_enabled: true` sent with a `charity` whose name is blank is refused (nothing is written). '
+    + '`waves`, when sent, is the whole new wave set (at least one): a row with a known `id` updates that wave, a row without one is inserted, and an existing wave not in the set is deleted (registrations that pointed at it keep their place with no wave). '
+    + '`charity`, `find_team` and `entry_policy` take the same shapes as on create.',
+})
+
+const EventListRow = z.object({
+  id: uuidLike,
+  name: z.string(),
+  slug: z.string(),
+  kind: z.string().openapi({ description: 'race | workshop | seminar | open_day | masterclass | lead_gen' }),
+  race_date: z.string().nullable(),
+  start_time: z.string().nullable(),
+  active: z.boolean(),
+  shared: z.boolean(),
+  hosted_by: z.string().nullable().openapi({ description: "The payment host's name, or null for an internal event" }),
+  signup_summary: z.string().openapi({ description: 'Rendered server-side from the confirmed registrations and the capacity (teams or people)' }),
+  is_upcoming: z.boolean().openapi({ description: "Judged on the event's own studio day (TZ.9), so the client does no date maths" }),
+}).openapi('EventListRow')
+
+const EventDetail = z.object({}).passthrough().openapi('EventDetail', {
+  description:
+    'The race_events row as the handler selects it: id, location_id, name, slug, description, race_date, kind, staff_required, registration_opens_at/closes_at, allowed_team_sizes, active, created_at, updated_at, '
+    + 'member_pricing_enabled, member_fee_cents, non_member_fee_cents, members_only, payment_currency, tv_logos, shared, host_id, hero_image_url, accent_hex, the confirmation/reminder/moved/gap/waitlist email subject and intro copy, the two email template ids, sending_location_id, charity_enabled, charity, find_team, entry_policy, '
+    + 'plus `waves` (id, start_time, capacity, label, display_order) and `registrations` (id, status, race_started_at, race_finished_at, registered_at, wave_id, team_composition, active_payment_id, and `teams` with its `team_members`).',
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Every event at a studio, shaped for the events browse list (staff with races at that studio)",
+  description:
+    'Session auth, then the `races` permission at any studio (403). `?location_id` (default: the active studio) must be a studio the caller belongs to (403), with `races` resolved AT that studio (403): no manager role is needed, this is the front-of-house list (door staff on the phone), unlike GET /api/races. '
+    + "Lists that studio's own events plus any sibling studio's event flagged `shared` (same organisation). For ADMIN_ROLES (master, owner, manager) at the active studio with `races` there, the organisation's HOST events are added too: they live on a per-host anchor location no staff member belongs to, so the active studio is the only judgement for them. "
+    + 'Rows come upcoming first (nearest date first), then past (most recent first), each stamped `is_upcoming` and a rendered `signup_summary`. No studio to list (no `location_id` and no active studio) answers an empty list.',
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: {
+    200: { description: 'The ordered rows', content: { 'application/json': { schema: SuccessResponse(z.array(EventListRow)) } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission at that studio, or a studio the caller does not belong to', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Create an event with its waves (staff with races at body.location_id; a payment host needs manager access)',
+  description:
+    'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the caller must belong to `location_id` (403 Forbidden) and hold `races` there (403). Any role may create an internal event; sending `host_id` (the payee, paid through Stripe Connect) needs ADMIN_ROLES (master, owner, manager) at that studio (403). '
+    + "Referential checks run before the insert, each a 400 carrying the code as `error`: `invalid_host` (host_id must be an event_hosts row in the studio's organisation), `invalid_template` (confirmation_email_template_id / reminder_email_template_id must be email_templates rows at that studio), `invalid_sending_location` (sending_location_id must be a non-anchor studio in the same organisation). "
+    + 'The public URL slug is derived from the studio, the date and the earliest wave (studio-oct17-1030, suffixed -2, -3 on a clash) unless `slug` is sent, which answers 409 when another event already uses it (slugs are global: the public /event/[slug] page has no studio filter). '
+    + 'Written when omitted: kind race, capacity_mode teams, staff_required 1, allowed_team_sizes [1, 2, 4] (sorted when sent), active true, payment_currency EUR, charity_enabled false; member_fee_cents is kept only when member_pricing_enabled is true. `charity`, `find_team` and `entry_policy` are stored as sent (null or omitted = the defaults). '
+    + 'Waves are inserted sorted by start_time (display_order defaults to that order); two waves on one start time answer 409 `duplicate_wave_time` and the event row is rolled back, so a 409 leaves nothing behind. Answers 201 with the row and its `waves` (an empty array for lead_gen).',
+  request: { body: { content: { 'application/json': { schema: EventCreate } } } },
+  responses: {
+    201: { description: 'Created: the race_events row with `waves`', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    400: { description: 'Validation failed (`issues`), invalid_host, invalid_template, invalid_sending_location, or the insert failed (the database message)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission at the studio, a studio the caller does not belong to, or a payment host set without manager access', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The slug is already used by another event (duplicate_slug), or two waves share a start time (duplicate_wave_time; nothing created)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "One event with its waves and registrations (staff with races at the event's studio)",
+  description:
+    "Session auth, then `races` at any studio (403). The event must be at a studio the caller belongs to, with `races` resolved at the event's studio (403); an event the caller cannot see is a 404, never a 403, so ids cannot be enumerated. "
+    + "One exception (HOST-EDIT.1): a HOST event lives on the host's anchor location, so ADMIN_ROLES (master, owner, manager) at the active studio whose organisation owns the host may read it, with `races` judged at the active studio.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The event', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Update an event and, when sent, replace its waves (staff with races at the event's studio; payee and studio changes need manager access)",
+  description:
+    'Session auth → `races` at any studio (403) → body validated (400 with `issues`) → the same visibility rule as GET: 404 for an event at a studio the caller cannot see, with `races` judged at the event\'s studio (403), and the HOST-EDIT.1 exception for org admins on a host event. '
+    + "Two gates sit on top of `races`: changing `host_id` (assigning, switching or clearing the payee: it routes ticket money) needs ADMIN_ROLES (master, owner, manager) at the event's studio (403; an unchanged host_id passes); `location_id` (EVENT-OWNER.1, moving the event to another studio) is judged by judgeEventOwnerChange: ADMIN_ROLES at both studios with races on at the target (403), the same organisation (400 invalid_location), never a host's event (400) and never onto a host anchor, and a move drops a stored email template pointer the body did not replace, since templates are per studio. "
+    + 'Referential 400s as on create (`invalid_host`, `invalid_template`, `invalid_sending_location`), judged against the target studio when moving. '
+    + 'Scalars are patched as one update (a failed write is a 400 with the database message); then `waves`, when sent, is diffed and applied: update by id, insert the rest, delete the waves left out (their registrations keep their place with wave_id null); two waves on one start time answer 409 `duplicate_wave_time`. Answers the event re-read as GET returns it.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EventUpdate } } },
+  },
+  responses: {
+    200: { description: 'The updated event, re-read with its waves and registrations', content: { 'application/json': { schema: SuccessResponse(EventDetail) } } },
+    400: { description: 'Validation failed (`issues`), invalid_host, invalid_template, invalid_sending_location, invalid_location, a move of a host\'s event, or a failed write (the database message)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio, a payee change without manager access, or a move without manager access at both studios", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, at a studio the caller cannot see, or (on a move) a target studio that does not exist', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Two waves share a start time (duplicate_wave_time)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'On a move, the studios could not be read; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/events/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Retire an event: active=false, registrations kept (staff, manager+ with races at the event's studio)",
+  description:
+    'Soft delete: sets `active` false so the registrations stay as history; no row is removed. Session auth, then MANAGER_ROLES (master, owner, manager, head_coach) and `races` at any studio (403), then membership of the event\'s studio (an event the caller cannot see is a 404) and the same role and permission resolved AT that studio (403). No host-event exception on this method. Answers `{ success: true }` with no data.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Retired', content: { 'application/json': { schema: z.object({ success: z.literal(true) }).openapi('EventRetired') } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Manager role or races permission missing at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-MOVE.1 — staff move an event entry (a race_registrations row) to
+// another event, possibly at another studio. Money never moves.
+registry.registerPath({
+  method: 'get',
+  path: '/api/event-registrations/{id}/move-targets',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Events an entry may move to, with per-wave spots and the price gap (staff, manager+ with races at the source studio)',
+  description:
+    'Targets are the same payee, published and upcoming, and only at studios where the caller holds `races` and a manager role. ' +
+    'Shows capacity, so it is never public.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Entry, source and targets', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveTargets') } } },
+    403: { description: 'No races permission or manager role at the source studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed: the entry or the events could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/event-registrations/{id}/move',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Move an entry to another event; never moves money (staff, manager+ with races at both studios)',
+  description:
+    'Every refusal carries `error` (the code) and `message` (plain English). ' +
+    '404 not_found, 409 wave_full (with `spots_left`; resend with `force: true`) or conflict, 500 load_failed / write_failed, 400 any other rule.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+      notify: z.boolean().optional().openapi({ description: 'Email the lead the new tickets (default true)' }),
+      note: z.string().max(1000).nullable().optional().openapi({ description: 'Internal note' }),
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }).openapi('EntryMoveRequest') } } },
+  },
+  responses: {
+    200: { description: 'Moved', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveResult') } } },
+    400: { description: 'A rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the source or target studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Entry or target event not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// FINDTEAM.8 — the cancel, edit and delete routes for a registration, with the
+// refusals the "placed" status added.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/cancel',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Cancel a race/event registration (staff, manager+ at the event\'s studio)',
+  description: 'Idempotent (a cancelled row answers already_cancelled). Refunds are a human decision. 409 `not_active` for a placed solo\'s row (status `placed`): it holds their payment and placement record. FINDTEAM.9: 409 `has_placed_solos` (with `placed_count`, the same body as the registration DELETE) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet). Mia\'s cancel and the approvals route go through the same lib call and inherit both refusals.',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Cancelled', content: { 'application/json': { schema: z.object({ success: z.boolean(), already_cancelled: z.boolean() }).openapi('RegistrationCancelResult') } } },
+    403: { description: 'Not a manager at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team; `placed_count`)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The cancel, or the placed-entrants check, failed; nothing was cancelled', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Move a registration to another wave of its event, or set its status (staff, races at the event\'s studio)',
+  description: 'The status enum takes pending_payment, confirmed, cancelled, no_show (never `placed`). 409 `not_active` for a placed solo\'s row.',
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      wave_id: z.string().uuid().optional(),
+      status: z.enum(['pending_payment', 'confirmed', 'cancelled', 'no_show']).optional(),
+    }).openapi('EventRegistrationUpdate') } } },
+  },
+  responses: {
+    200: { description: 'Applied (or unchanged)' },
+    400: { description: 'A bad body, or a wave not on this event', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active: the row is a placed solo', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/event-registrations/{id}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Delete a registration (staff, races at the event\'s studio)',
+  description: '409 `not_active` for a placed solo\'s row; 409 `has_placed_solos` (with `placed_count`) for a team entry that solos were placed into: un-place them first (there is no un-place tool yet).',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: 'Deleted' },
+    404: { description: 'Not found, or a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_active (a placed solo) or has_placed_solos (solos were placed into this team)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The placed-entrants check failed; nothing was deleted', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// FINDTEAM.5 — staff place a "Find me a team" solo into a team, or pair solos
+// into a new one. Both are service-role routes gated on `races` + a manager
+// role at the event's studio; neither reads race_events.find_team.
+registry.registerPath({
+  method: 'post',
+  path: '/api/registrations/{id}/place',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Place a solo looking for a team into an existing team (staff, manager+ with races at the event\'s studio)',
+  description:
+    'Write order: the solo\'s member row is copied onto the target team, the team size and the target entry\'s team composition are set from a fresh read of the team\'s members, ' +
+    'then the solo flips to status `placed` with `placed_into_registration_id`, `placed_at` and `placed_by`. Payments stay on the solo\'s own row. ' +
+    'FINDTEAM.8: when the flip matches no row (placed concurrently), the member row this call added is deleted and size/composition re-set, then 409 already_placed (500 write_failed with stage `rollback` if that clean-up fails). ' +
+    'The placed person is emailed best-effort (the placement stands whatever the email does). ' +
+    'Every refusal carries `error` (the code) and `message` (plain English): 404 not_found / wrong_event (or an id the caller cannot see), ' +
+    '409 not_paid / already_placed / not_solo / target_not_live / no_member_row, 500 load_failed / write_failed (with `stage` once a write has started).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      team_registration_id: uuidLike, // the confirmed team entry, on the same event, that the solo joins
+    }).openapi('PlaceSoloRequest') } } },
+  },
+  responses: {
+    200: { description: 'Placed', content: { 'application/json': { schema: z.object({ success: z.boolean(), data: z.object({ placed: z.boolean() }) }).openapi('PlaceSoloResult') } } },
+    400: { description: 'A bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found / wrong_event, or a registration at a studio the caller cannot see', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_paid, already_placed, not_solo, target_not_live or no_member_row', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed (a partial write is possible: reload and check the teams)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/pair-solos',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Pair two or more solos into a new team (staff, manager+ with races at the event\'s studio)',
+  description:
+    'Two to eight ids, all confirmed solos (looking for a team, not yet placed) of this event. The wave is `wave_id`, or the solos\' common wave (400 mixed_waves otherwise; 400 invalid_wave for a wave not on the event). ' +
+    'In teams capacity mode the new team takes a slot, checked with the shared capacity rule: 409 wave_full (with `code` and `spots_left`) unless `force: true`. ' +
+    'A team-name clash retries once with " (2)", then 409 team_name_taken. The first solo becomes captain; the new registration is confirmed in that wave with `team_composition` from the solos\' member flags and the first solo\'s own marketing consent. ' +
+    'Each solo then flips to `placed`, and everyone placed is emailed best-effort. ' +
+    'Every refusal carries `error` (the code) and `message`: 400 too_few / mixed_waves / invalid_wave, 404 not_found (with `ids`), ' +
+    '409 not_paid / already_placed / not_solo / no_member_row / team_name_taken / wave_full, 500 load_failed / write_failed (with `stage`; a partial flip carries `registration_id` and the `ids` still queued).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      registration_ids: z.array(uuidLike).min(2).max(8).openapi({ description: 'The solos to pair; the first becomes captain' }),
+      team_name: z.string().min(1).max(80),
+      wave_id: uuidLike.nullable().optional(), // the new team's wave (default: the solos' common wave)
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }).openapi('PairSolosRequest') } } },
+  },
+  responses: {
+    200: { description: 'Paired', content: { 'application/json': { schema: z.object({ success: z.boolean(), data: z.object({ registration_id: uuidLike }) }).openapi('PairSolosResult') } } },
+    400: { description: 'A bad body, too_few, mixed_waves or invalid_wave', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No races permission or manager role at the event\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found (or at a studio the caller cannot see), or a registration not on it', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A solo in the wrong state, team_name_taken, or wave_full (resend with force)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-MOVE.3 — staff record that a move's price difference was collected
+// or waived. Records a decision; never moves money.
+registry.registerPath({
+  method: 'post',
+  path: '/api/event-registrations/{id}/moves/{moveId}/settle',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Mark a moved entry's price difference collected or waived; never moves money (staff, manager+ with races at the entry's current studio)",
+  description:
+    'Idempotent: a settled move answers 200 with `unchanged: true`, and the write is a compare-and-set, so the first answer stands. ' +
+    '400 no_gap when the move left nothing to settle; 404 when the move is missing or not this entry\'s.',
+  request: {
+    params: z.object({ id: uuidLike, moveId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      how: z.enum(['collected', 'waived']),
+    }).openapi('EntryMoveSettleRequest') } } },
+  },
+  responses: {
+    200: { description: '{ unchanged, move } — the settled move row', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveSettleResult') } } },
+    400: { description: 'A bad body, or no_gap', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission or manager role at the entry's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Entry or move not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-MOVE.5 — a payment link for a moved entry's price difference.
+registry.registerPath({
+  method: 'post',
+  path: '/api/event-registrations/{id}/moves/{moveId}/gap-link',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Get (and optionally email) a payment link for a moved entry's price difference (staff, manager+ with races at the entry's current studio)",
+  description:
+    'Mints a race_payments row of kind move_gap through the event\'s payment provider, or reuses the pending one for the move. ' +
+    'Paying it marks the difference collected. With `email: true` the link is also emailed to the payer; the answer says whether it went (`emailed`), and a minted link answers 200 either way. ' +
+    '400 no_gap / no_email; 409 already_settled / host_not_ready; 502 provider_failed.',
+  request: {
+    params: z.object({ id: uuidLike, moveId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      email: z.boolean().optional(),
+    }).openapi('EntryMoveGapLinkRequest') } } },
+  },
+  responses: {
+    200: { description: '{ payment_id, url, reused, emailed }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EntryMoveGapLinkResult') } } },
+    400: { description: 'A bad body, no_gap, or no_email', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission or manager role at the entry's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Entry or move not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'already_settled, or host_not_ready', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'provider_failed: the payment provider did not create the link', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-MOVE.2 — a host moves one of their own entries to another of their
+// OWN events. Same lib and shapes as the staff routes above.
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/registrations/{id}/move-targets',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Events a host's entry may move to: the host's own published, upcoming events, with per-wave spots and the price gap",
+  description:
+    'Host session (getCurrentHost). The entry must sit on one of the session host\'s events (404 otherwise). ' +
+    'Targets are limited to the host\'s own events. Shows capacity, so it is never public.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Entry, source and targets', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not on this host's events", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "load_failed: the entry, the host's events or the targets could not be read", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/registrations/{id}/move',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Move a host's own entry to another of the host's own events; never moves money",
+  description:
+    'Host session. The entry must sit on one of the session host\'s events (404 otherwise) and the target must be another of them (404 not_found). ' +
+    'An entry awaiting payment is refused with `pending_payment` (400) before the body is read: a host cannot collect or waive money. ' +
+    'Every refusal carries `error` (the code) and `message` (plain English). ' +
+    '409 wave_full (with `spots_left`; resend with `force: true`) or conflict, 500 load_failed / write_failed, 400 any other rule. ' +
+    'Recorded with actor_type host (the admin is named under view-as).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      target_event_id: uuidLike,
+      target_wave_id: uuidLike.nullable().optional(),
+      notify: z.boolean().optional().openapi({ description: 'Email the lead the new tickets (default true)' }),
+      note: z.string().max(1000).nullable().optional().openapi({ description: 'Internal note' }),
+      force: z.boolean().optional().openapi({ description: 'Skip the wave_full check (default false)' }),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Moved', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'pending_payment, a rule refused the move, or a bad body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Entry or target event not found, or not this host's", content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'wave_full (resend with force) or conflict (the entry changed mid-move)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EVENT-WAITLIST.1 — the waitlist for a sold-out event (mig 713). The public
+// join answers only "you're on the list"; the count and the list are staff and
+// host data.
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/waitlist',
+  tags: ['Public'],
+  summary: 'Join the waitlist of a sold-out event',
+  description:
+    'Rate-limited 5 per 15 minutes per slug + IP. Refused when the event is not public (404), past (409 past), not taking signups (409 closed) ' +
+    'or has room in any time (409 has_room: book directly). One row per event + email; joining again refreshes it. Never answers a count or any capacity.',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().min(1).max(200),
+      email: email,
+      phone: z.string().max(50).nullable().optional(),
+      headcount: z.number().int().min(1).max(50).optional().openapi({ description: 'Group size (one of the event\'s allowed team sizes)' }),
+      consent: z.boolean().optional().openapi({ description: 'Marketing consent checkbox, as on the register form' }),
+    }).openapi('EventWaitlistJoinBody') } } },
+  },
+  responses: {
+    200: { description: '{ id } of the waitlist row', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Validation failed, or a group size the event does not offer', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'has_room, past or closed', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed or write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}/donations',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "An event's card donations, totals and charity settings (staff, races at the event's studio; CHARITY.10)",
+  description: 'Session auth + the races permission at the event\'s location; an event at a studio the caller cannot see is a 404. Rows newest first (every row, awaiting_payment included however old: staff reconcile them), each with paid_at_label rendered in the event location\'s zone and matched_cents (amount x the multiplier snapshotted at paid; 0 until paid). Returns { donations, totals, currency, settings: { name, match_multiplier, include_entries } }. `?format=csv` streams the hand-over file for the charity: paid_at, name, email, amount, matched, status, message (UTF-8 with BOM).',
+  request: { params: z.object({ id: uuidLike }), query: z.object({ format: z.enum(['csv']).optional() }) },
+  responses: {
+    200: { description: '{ donations, totals, currency, settings }, or text/csv with ?format=csv', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDonations') } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/donations/{donationId}/refunded',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Record that a donation was refunded in the provider dashboard (staff, manager+ with races at the event's studio)",
+  description: 'Record-only: moves no money. Flips a paid donation to refunded and stamps refunded_at and refunded_by. Revolut never reports a refund, so this is how one is recorded; Stripe refunds arrive on charge.refunded. 404 when the donation is not on this event; 409 not_paid when the row is not paid (including a lost race with another refund click).',
+  request: { params: z.object({ id: uuidLike, donationId: uuidLike }) },
+  responses: {
+    200: { description: '{ changed }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event or donation not found, or the donation is on another event', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'not_paid: only a paid donation can be marked as refunded', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/video/signed-upload',
+  tags: ['Events'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Mint a signed Storage upload for the charity-day video (staff with races at the event's studio)",
+  description: 'CHARITY.14. Body { content_type: video/mp4 | video/webm | video/quicktime }. Returns { path, token, url }: the browser PUTs the bytes straight to the public branding bucket under race-video/<event id>/ (bypassing the ~4.5MB function body cap; the bucket enforces its 200MB limit), then saves `url` as charity.video_file_url on the event. 400 for any other type; 404 for an unknown event or one at a studio the caller lacks.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ path, token, url }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    400: { description: 'Unsupported video type, or Storage refused to mint the URL', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "No races permission at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found or at another studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/events/{id}/waitlist',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "An event's waitlist and how many are still waiting (staff, manager+ with races at the event's studio)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ rows, waiting }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlist') } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/events/{id}/waitlist/{rowId}',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Take someone off an event's waitlist (status removed; staff, manager+ with races at the event's studio)",
+  request: { params: z.object({ id: uuidLike, rowId: uuidLike }) },
+  responses: {
+    200: { description: 'The removed row', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event or row not found, or the row is on another event', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/events/{id}/waitlist/offer',
+  tags: ['Races'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Run the waitlist offer round for this event now (staff, manager+ with races at the event's studio)",
+  description: 'Forced: if any time has room, everyone still on the list is offered again at once, even if offered in the last 24 h (the cron keeps the 24 h rule). Email; WhatsApp when the studio has an APPROVED offer template (its pick for the event_waitlist_offer purpose, else one named event_waitlist_offer). Answers the round counts; no_room 1 = every time is full, nobody offered.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventWaitlistOfferResult') } } },
+    403: { description: "No races permission or manager role at the event's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (or at a studio the caller cannot see)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/events/{id}/waitlist',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "The waitlist of one of the host's own events and how many are still waiting (read-only)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ rows, waiting }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/host/events/{id}/waitlist/offer',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Run the waitlist offer round now for one of the host's own events (forced past the 24 h rule: everyone on the list is offered again)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ events, offered, expired, skipped, failed, no_room }', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized: no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: "Not found, or not this host's event", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'load_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -714,18 +1688,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/public/live/{locationId}',
-  tags: ['Public'],
-  summary: 'Public live / TV state feed for a location',
-  request: { params: z.object({ locationId: uuidLike }) },
-  responses: {
-    200: { description: 'Live state', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicLiveState') } } },
-    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'get',
   path: '/api/public/tv/{token}/content',
   tags: ['Public'],
   summary: 'TV content for a paired display',
@@ -786,7 +1748,7 @@ registry.registerPath({
   tags: ['Webhooks (Inbound)'],
   security: [{ GlofoxHmac: [] }],
   summary: 'Inbound Glofox events',
-  description: 'Glofox → CRM. HMAC-SHA256 verified against the per-location webhook secret (resolved by branchId). Idempotent via glofox_webhook_events.event_id.',
+  description: 'Glofox → CRM. HMAC-SHA256 verified against the per-location webhook secret (resolved by branchId). Each processed delivery is recorded in glofox_webhook_attempts; glofox_webhook_events keeps the latest event per Glofox entity (event_id is the entity id, Payload.id).',
   request: { body: { content: { 'application/json': { schema: GlofoxEvent } } } },
   responses: {
     200: { description: 'Accepted (and processed unless dark-launched)' },
@@ -1080,28 +2042,33 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/webhooks/strava',
+  path: '/api/webhooks/strava/{token}',
   tags: ['Webhooks (Inbound)'],
   security: [],
   summary: 'Strava subscription validation',
-  description: 'Strava subscription validation (echoes `hub.challenge`).',
+  description: 'Strava subscription validation (echoes `hub.challenge`). `token` is the STRAVA_WEBHOOK_URL_TOKEN path secret (W0.10); a wrong path token is a 403 like a wrong `hub.verify_token`.',
+  request: { params: z.object({ token: z.string() }) },
   responses: {
     200: { description: 'Challenge echoed' },
-    403: { description: 'Verify token mismatch' },
+    403: { description: 'Path token or verify token mismatch' },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/webhooks/strava',
+  path: '/api/webhooks/strava/{token}',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Strava activity events',
-  description: 'Strava → CRM. Carries activity create/update/delete events.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } } },
+  description: 'Strava → CRM. Carries activity create/update/delete events. Strava does not sign webhook POSTs, so the `token` path segment (STRAVA_WEBHOOK_URL_TOKEN, constant-time compare) IS the credential (W0.10); a wrong token is a 404 so the route cannot be probed. Rate-limited per IP.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } },
+  },
   responses: {
     200: { description: 'Accepted' },
-    401: { description: 'Verify-token mismatch', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Wrong or missing path token', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1184,16 +2151,28 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut/donations',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Revolut donations webhook verification',
+  description: 'Configuration ping (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
   method: 'post',
-  path: '/api/webhooks/twilio/status',
+  path: '/api/webhooks/revolut/donations',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
-  summary: 'Twilio SMS delivery status',
-  description: 'Twilio → CRM. Carries SMS delivery status callbacks (delivered/failed/undelivered).',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('TwilioStatusEvent') } } } },
+  summary: 'Revolut event-page donation payment events (CHARITY.7)',
+  description: 'Revolut Merchant → CRM. Separate webhook endpoint for card donations; register it in the Revolut dashboard. Verified with REVOLUT_DONATION_WEBHOOK_SECRET, falling back to REVOLUT_WEBHOOK_SECRET. Deduped per event:order. The order is re-read from Revolut and the donation marked, then the stamp-keyed paid side effects run on every observation of a paid row. Answers 200 for anything unrecognised (unknown order, empty body). Deferred paths (a provider read, an event read, a mark or re-read that throws) release the dedupe claim and answer 200 { deferred } so a dashboard resend is processed; the route never 500s after the claim.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutDonationEvent') } } } },
   responses: {
-    200: { description: 'Accepted' },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: 'Accepted (processed, deduped, deferred or skipped)' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1235,7 +2214,7 @@ registry.registerPath({
 // Email inbox conversations (cookie auth) — EMAIL-INBOX.1, now RETIRED.
 //
 // EMAIL-CONV-STOP.1 (2026-08-07): all four operations answer **410 Gone** and
-// touch no data. Superseded by /api/email/tickets* (mig 482). The routes still
+// touch no data. Superseded by /api/email/mail* (mig 482). The routes still
 // exist only so installed mobile builds on frozen OTA lanes get an actionable
 // error rather than a 404 they cannot tell apart from a network failure.
 //
@@ -1268,7 +2247,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED — email conversation + message thread (410 Gone)',
-  description: 'Retired by EMAIL-CONV-STOP.1. Was the conversation and its recent messages (and reset unread_count); now returns 410 Gone and reads nothing. Use GET /api/email/tickets/{id}.',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the conversation and its recent messages (and reset unread_count); now returns 410 Gone and reads nothing. Use GET /api/email/mail/{id}.',
   request: {
     params: z.object({ id: uuidLike }),
   },
@@ -1295,7 +2274,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'RETIRED — reply to an email conversation (410 Gone)',
-  description: 'Retired by EMAIL-CONV-STOP.1. Was a plain-text operator reply on Postmark’s transactional stream; now returns 410 Gone and never reaches Postmark. Use POST /api/email/tickets/{id}/reply.',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was a plain-text operator reply on Postmark’s transactional stream; now returns 410 Gone and never reaches Postmark. Use POST /api/email/mail/{id}/reply.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), subject: z.string().max(500).optional() }).openapi('EmailInboxReply') } } },
@@ -1370,7 +2349,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Other conversations from the same sender',
   description:
-    'MAIL-REFINE.1 — feeds the thread\u2019s "N other open conversations" nudge and the merge picker. Access is the detail route\u2019s then the list\u2019s: the anchor goes through loadTicketForUser (404 on every refusal) and candidates are scoped to the caller\u2019s visible mailboxes, so relatedness never widens access. Sender match is case-insensitive EQUALITY via escaped ilike (a stored `%` must not relate the whole domain). Returns up to 10 unmerged same-sender threads newest first, plus `open_count` — a TRUE uncapped count of the live ones, so the nudge never understates. `message_count` is best-effort (null when the bounded scan cannot say, never 0). \ud83d\udd34 A failed lookup is a 500, never an empty list \u2014 "no duplicates" is an answer the operator acts on. Merging itself is POST /api/email/tickets/{id}/merge (unchanged).',
+    'MAIL-REFINE.1 — feeds the thread\u2019s "N other open conversations" nudge and the merge picker. Access is the detail route\u2019s then the list\u2019s: the anchor goes through loadConversationForUser (404 on every refusal) and candidates are scoped to the caller\u2019s visible mailboxes, so relatedness never widens access. Sender match is case-insensitive EQUALITY via escaped ilike (a stored `%` must not relate the whole domain). Returns up to 10 unmerged same-sender threads newest first, plus `open_count` — a TRUE uncapped count of the live ones, so the nudge never understates. `message_count` is best-effort (null when the bounded scan cannot say, never 0). \ud83d\udd34 A failed lookup is a 500, never an empty list \u2014 "no duplicates" is an answer the operator acts on. Merging itself is POST /api/email/mail/{id}/merge (unchanged).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ related: [{ id, subject, status, last_message_at, requester_name, message_count }], open_count }' },
@@ -1427,7 +2406,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Mark one conversation as spam, or release it (Not spam)',
   description:
-    'Flips `email_tickets.is_spam` (mig 584) — a flag ORTHOGONAL to `status`, never a fifth lifecycle value, so a quarantined conversation keeps whatever status the bump machinery gave it and is simply excluded from every Mail view but Spam. `{ spam: true }` quarantines: spam_flagged_at = now (the 30-day purge clock runs from the operator\u2019s decision), spam_verdict_source = operator, and NOBODY is notified. `{ spam: false }` RELEASES and fires what the webhook withheld at ingest — the staff push (maybeNotifyInboundEmail with the ticket\u2019s own facts, preUnreadCount 0) and the unread mirror (unread_count set to the number of unseen inbound messages, the seen route\u2019s own derivation) — both best-effort and logged, never failing the release. Idempotent by the UPDATE\u2019s own transition filter (`.eq(is_spam, !spam)`): a conversation already in the requested state, or one another operator just moved, is answered without a write and without a ping (`notified: false`). The spam_score recorded at ingest is never touched. Gates are loadTicketForUser\u2019s (location access, `email_inbox` at the TICKET\u2019s location, per-mailbox grant); every refusal is a 404.',
+    'Flips `email_tickets.is_spam` (mig 584) — a flag ORTHOGONAL to `status`, never a fifth lifecycle value, so a quarantined conversation keeps whatever status the bump machinery gave it and is simply excluded from every Mail view but Spam. `{ spam: true }` quarantines: spam_flagged_at = now (the 30-day purge clock runs from the operator\u2019s decision), spam_verdict_source = operator, and NOBODY is notified. `{ spam: false }` RELEASES and fires what the webhook withheld at ingest — the staff push (maybeNotifyInboundEmail with the ticket\u2019s own facts, preUnreadCount 0) and the unread mirror (unread_count set to the number of unseen inbound messages, the seen route\u2019s own derivation) — both best-effort and logged, never failing the release. Idempotent by the UPDATE\u2019s own transition filter (`.eq(is_spam, !spam)`): a conversation already in the requested state, or one another operator just moved, is answered without a write and without a ping (`notified: false`). The spam_score recorded at ingest is never touched. Gates are loadConversationForUser\u2019s (location access, `email_inbox` at the TICKET\u2019s location, per-mailbox grant); every refusal is a 404.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ spam: z.boolean() }).openapi('MailSpamVerdict') } } },
@@ -1468,11 +2447,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/email/tickets/{id}',
+  path: '/api/email/mail/{id}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Ticket + its message thread',
-  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all, over_cap, empty } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. EMAIL-PARTICIPANTS.4: `to` is the union of the WHOLE thread (minus the studio’s own addresses and anyone removed via PATCH /participants), not the latest message; over_cap:true means that set exceeds the 25-recipient cap and the reply route will refuse to send; empty:true means every participant has been excluded and there is nobody left to reply to. Both are refusals the composer should surface BEFORE the operator types, not send-time surprises. bcc_emails is STAFF-ONLY: this route is behind the ticket gate (location + email_inbox at that location + a grant on the ticket mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
+  summary: 'Conversation + its message thread',
+  description: 'Returns the conversation (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all, over_cap, empty } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. EMAIL-PARTICIPANTS.4: `to` is the union of the WHOLE thread (minus the studio’s own addresses and anyone removed via PATCH /participants), not the latest message; over_cap:true means that set exceeds the 25-recipient cap and the reply route will refuse to send; empty:true means every participant has been excluded and there is nobody left to reply to. Both are refusals the composer should surface BEFORE the operator types, not send-time surprises. bcc_emails is STAFF-ONLY: this route is behind the conversation gate (location + email_inbox at that location + a grant on the conversation mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the conversation is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket, messages }' },
@@ -1482,11 +2461,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/reply',
+  path: '/api/email/mail/{id}/reply',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Reply to a ticket, or add an internal note',
-  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change) and MUST carry no recipients and no files — a note with to/cc/bcc or attachments is a 400. Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched. EMAIL-PARTICIPANTS.5 — THE RECIPIENT SET IS DERIVED, NOT CHOSEN, AND IT IS THE WHOLE THREAD: the server sends to every participant the conversation accumulated — the From + To + Cc of EVERY non-note, non-forward message on the ticket, unioned — minus the studio's own addresses and minus anyone an operator removed via PATCH /api/email/tickets/{id}/participants. It is deliberately NOT the latest message: deriving from that let whoever wrote last silently redefine the audience, and on 2026-08-12 it dropped the shared mailbox that had opened a thread out of the answer to its own question. A one-person set is a Reply and a wider one is a Reply All, with no way to express the difference on the wire. That set can now be EMPTY (every participant removed) or OVER THE CAP (more than 25 derived participants) — each is a 400 with NOTHING SENT, never a silent truncation and never a send to a set the operator did not choose. GET /api/email/tickets/{id} answers the same two flags as reply_recipients.over_cap / .empty, so the composer can say so before the operator types. `to`/`cc`/`bcc` in the body ADD people on top of the derived set; there is deliberately no way to remove one HERE — removal is the participants route, where it is a visible act with an undo. bcc_emails of earlier messages is NEVER read back as a recipient. All three lists are deduped case-insensitively across each other (To beats Cc beats Bcc) and capped at 25 addresses COMBINED. Bcc goes out in Postmark's own Bcc field, so no recipient sees it. Response carries { recipients: { to, cc, bcc }, mode }. EMAIL-OUTBOUND-ATTACH.1: `attachments` carries REFERENCES to files already uploaded via /api/email/attachments/upload-sign, never bytes — the platform rejects a body over ~4.5 MB before this handler runs. They are read back out of Storage and size-checked BEFORE the send (7 MB of raw file bytes per email, from Postmark's 10 MB post-base64 ceiling), so an oversized or unreadable set is a 400 with nothing sent and nothing written — the thread never shows a reply claiming files that did not go.",
+  summary: 'Reply to a conversation, or add an internal note',
+  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change) and MUST carry no recipients and no files — a note with to/cc/bcc or attachments is a 400. Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the conversation's own mailbox; the conversation then moves to pending and stamps first_response_at if unset. A failed send leaves the conversation untouched. EMAIL-PARTICIPANTS.5 — THE RECIPIENT SET IS DERIVED, NOT CHOSEN, AND IT IS THE WHOLE THREAD: the server sends to every participant the conversation accumulated — the From + To + Cc of EVERY non-note, non-forward message on the conversation, unioned — minus the studio's own addresses and minus anyone an operator removed via PATCH /api/email/mail/{id}/participants. It is deliberately NOT the latest message: deriving from that let whoever wrote last silently redefine the audience, and on 2026-08-12 it dropped the shared mailbox that had opened a thread out of the answer to its own question. A one-person set is a Reply and a wider one is a Reply All, with no way to express the difference on the wire. That set can now be EMPTY (every participant removed) or OVER THE CAP (more than 25 derived participants) — each is a 400 with NOTHING SENT, never a silent truncation and never a send to a set the operator did not choose. GET /api/email/mail/{id} answers the same two flags as reply_recipients.over_cap / .empty, so the composer can say so before the operator types. `to`/`cc`/`bcc` in the body ADD people on top of the derived set; there is deliberately no way to remove one HERE — removal is the participants route, where it is a visible act with an undo. bcc_emails of earlier messages is NEVER read back as a recipient. All three lists are deduped case-insensitively across each other (To beats Cc beats Bcc) and capped at 25 addresses COMBINED. Bcc goes out in Postmark's own Bcc field, so no recipient sees it. Response carries { recipients: { to, cc, bcc }, mode }. EMAIL-OUTBOUND-ATTACH.1: `attachments` carries REFERENCES to files already uploaded via /api/email/attachments/upload-sign, never bytes — the platform rejects a body over ~4.5 MB before this handler runs. They are read back out of Storage and size-checked BEFORE the send (7 MB of raw file bytes per email, from Postmark's 10 MB post-base64 ceiling), so an oversized or unreadable set is a 400 with nothing sent and nothing written — the thread never shows a reply claiming files that did not go.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1510,18 +2489,18 @@ registry.registerPath({
   },
 })
 
-// EMAIL-FORWARD.1 (mig 501) — pass one message on the ticket to a third party.
+// EMAIL-FORWARD.1 (mig 501) — pass one message on the conversation to a third party.
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/link-contact',
+  path: '/api/email/mail/{id}/link-contact',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Link (or create) the contact for a ticket\u2019s sender',
-  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves ticket.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is globally unique on contacts). Idempotent: a ticket that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the ticket\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadTicketForUser like every ticket write: 404, never 403, for a ticket that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
+  summary: 'Link (or create) the contact for a conversation\u2019s sender',
+  description: 'EMAIL-CONTACT-CHIP.2 \u2014 resolves conversation.requester_email to a contact via findOrCreateRaceContact (restrictToOrg: true, the LEADCAP.1 create-or-link helper \u2014 email is unique per organisation on contacts, mig 712). Idempotent: a conversation that already carries contact_id answers 200 with that contact rather than erroring or re-linking. Backfills contact_id onto the conversation\u2019s own messages that have none, mirroring what the inbound webhook denormalises at ingest. Gated through loadConversationForUser like every conversation write: 404, never 403, for a conversation that does not exist, is at a location the caller cannot reach, is on a mailbox they cannot see, or is at a location where they lack email_inbox.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Linked (or already-linked) contact: { id, name, first_name, email, pipeline_stage_slug }' },
-    400: { description: 'Ticket has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Conversation has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Contact resolution or a write failed \u2014 nothing changed, or a cosmetic mirror missed', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -1529,11 +2508,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/forward',
+  path: '/api/email/mail/{id}/forward',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Forward one message on a ticket to somebody else',
-  description: "Sends `message_id` (a message on THIS ticket) to addresses the operator types, and files the result as an OUTBOUND message on the SAME ticket carrying forwarded_message_id — the record of 'we sent this to the accountant' belongs with the correspondence it is about, and the recipient's reply threads back onto this ticket through the ordinary inbound path. THE TICKET IS DELIBERATELY NOT MOVED: no status change, no last_message_at, no first_response_at, because `needs_reply` is (open AND inbound last message) and stamping an outbound one would drop a ticket the member is still waiting on out of the queue. AN INTERNAL NOTE CANNOT BE FORWARDED — 400, since a note was never sent to anyone and mailing staff-only commentary to a third party under the studio's address is the worst thing this surface could do. RECIPIENTS ARE TYPED, NEVER DERIVED (the opposite of a reply): nothing on this route reads bcc_emails off stored correspondence, and the quoted header block is a closed list of five — From, Date, Subject, To, Cc — so a forward reveals exactly what it would have had the original's Bcc never been typed. The shared model still applies: deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), the studio's own addresses excluded from all three, 25 addresses combined, Bcc in Postmark's own Bcc field only. THE BODY IS PLAIN TEXT: text_body is quoted and HTML-escaped, and the original's html_body never reaches the wire — re-sending a stranger's markup under our own DKIM signature is how forwarding launders a phish, and our sanitiser's permissiveness is bought by the sandboxed iframe the thread renders into, which a recipient's mail client is not. `attachment_ids` chooses which of the ORIGINAL'S files ride along; they are read from the bytes already in the bucket (nothing is copied to a new key), the forwarded rows point at the same storage_path with forwarded_from_id set, and the mailbox quota is not charged twice. A file with no stored bytes, an id from another message, an unreadable object, or a set past the 7 MB outbound ceiling is a 400 with NOTHING SENT — files are never silently dropped. No email_sends row is written (a forward goes to a third party, not to the member). Every address is written to audit_events under the sender's name.",
+  summary: 'Forward one message on a conversation to somebody else',
+  description: "Sends `message_id` (a message on THIS conversation) to addresses the operator types, and files the result as an OUTBOUND message on the SAME conversation carrying forwarded_message_id — the record of 'we sent this to the accountant' belongs with the correspondence it is about, and the recipient's reply threads back onto this conversation through the ordinary inbound path. THE TICKET IS DELIBERATELY NOT MOVED: no status change, no last_message_at, no first_response_at, because `needs_reply` is (open AND inbound last message) and stamping an outbound one would drop a conversation the member is still waiting on out of the queue. AN INTERNAL NOTE CANNOT BE FORWARDED — 400, since a note was never sent to anyone and mailing staff-only commentary to a third party under the studio's address is the worst thing this surface could do. RECIPIENTS ARE TYPED, NEVER DERIVED (the opposite of a reply): nothing on this route reads bcc_emails off stored correspondence, and the quoted header block is a closed list of five — From, Date, Subject, To, Cc — so a forward reveals exactly what it would have had the original's Bcc never been typed. The shared model still applies: deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), the studio's own addresses excluded from all three, 25 addresses combined, Bcc in Postmark's own Bcc field only. THE BODY IS PLAIN TEXT: text_body is quoted and HTML-escaped, and the original's html_body never reaches the wire — re-sending a stranger's markup under our own DKIM signature is how forwarding launders a phish, and our sanitiser's permissiveness is bought by the sandboxed iframe the thread renders into, which a recipient's mail client is not. `attachment_ids` chooses which of the ORIGINAL'S files ride along; they are read from the bytes already in the bucket (nothing is copied to a new key), the forwarded rows point at the same storage_path with forwarded_from_id set, and the mailbox quota is not charged twice. A file with no stored bytes, an id from another message, an unreadable object, or a set past the 7 MB outbound ceiling is a 400 with NOTHING SENT — files are never silently dropped. No email_sends row is written (a forward goes to a third party, not to the member). Every address is written to audit_events under the sender's name.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1548,7 +2527,7 @@ registry.registerPath({
   responses: {
     200: { description: '{ message, message_id, recipients, forwarded_message_id, attachment_count }' },
     400: { description: 'Invalid body, an internal note, no usable recipient, an unforwardable file, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Ticket not accessible, or the message is not on this ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not accessible, or the message is not on this conversation', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A pre-send lookup failed (nothing sent), or the forward went out but could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'The ticketing Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -1559,11 +2538,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'patch',
-  path: '/api/email/tickets/{id}/participants',
+  path: '/api/email/mail/{id}/participants',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Take an address off a ticket’s reply audience, or put it back',
-  description: 'EMAIL-PARTICIPANTS.6 — the only writer of email_tickets.excluded_participants (mig 534). The audience itself is NOT stored: it is derived from the thread on every read, so it cannot drift from the mail that actually arrived; only the operator’s subtractions are kept, and the reply route applies them on its next send with no other moving part. Addresses are stored NORMALISED (lowercased, angle-brackets stripped) so a case variant cannot dodge an exclusion later — and `restore` matches the same way, so an exclusion can always be lifted by whoever is looking at it. Set semantics: re-removing an already-excluded address is a no-op, not a duplicate. An address named in BOTH lists ends up removed. An address the server cannot parse is a 400 with NOTHING written — a typo in this column would be a permanent exclusion matching nobody. Gated through loadTicketForUser like every ticket write: 404, never 403, for a ticket that is missing, at a foreign location, or on a mailbox the caller cannot see.',
+  summary: 'Take an address off a conversation’s reply audience, or put it back',
+  description: 'EMAIL-PARTICIPANTS.6 — the only writer of email_tickets.excluded_participants (mig 534). The audience itself is NOT stored: it is derived from the thread on every read, so it cannot drift from the mail that actually arrived; only the operator’s subtractions are kept, and the reply route applies them on its next send with no other moving part. Addresses are stored NORMALISED (lowercased, angle-brackets stripped) so a case variant cannot dodge an exclusion later — and `restore` matches the same way, so an exclusion can always be lifted by whoever is looking at it. Set semantics: re-removing an already-excluded address is a no-op, not a duplicate. An address named in BOTH lists ends up removed. An address the server cannot parse is a 400 with NOTHING written — a typo in this column would be a permanent exclusion matching nobody. Gated through loadConversationForUser like every conversation write: 404, never 403, for a conversation that is missing, at a foreign location, or on a mailbox the caller cannot see.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({
@@ -1581,46 +2560,46 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/merge',
+  path: '/api/email/mail/{id}/merge',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Fold this ticket into another one',
-  description: 'EMAIL-MERGE.4 (mig 536) — two tickets that are really one conversation, joined so a correspondent cannot be answered twice. The ticket in the path is the SOURCE and becomes a tombstone: `closed` PLUS merged_into_id, deliberately not a fifth status value, hidden from every list and count by one shared scope. Its messages are REPARENTED onto the target — that is the mechanism, not the bookkeeping, because the inbound webhook threads replies on email_inbox_messages.ticket_id, so the survivor becomes the live thread and a later reply lands there. Every moved row is stamped merged_from_ticket_id so DELETE restores exactly those and nothing else. The target absorbs the summed unread_count, the EARLIER first_response_at and the newer message’s preview. BOTH tickets go through the same gate as every other ticket route, so a missing ticket, a foreign location, a missing email_inbox key at the ticket’s location and a mailbox the caller cannot see are all 404 — as are a self-merge, a cross-location merge, a ticket already merged, and a ticket on EITHER side that has itself ALREADY ABSORBED a merge (any message carrying merged_from_ticket_id) — chains are refused so the undo stays exact, since merging a survivor onward would re-stamp the rows it absorbed and strand the earlier merge; unmerge first, then merge onward. The tombstone RETAINS its unread_count: it is a counter rather than a property of the messages, so it cannot be re-derived, and it is the record of what the survivor absorbed — inert while merged, since tombstones are hidden from the list and the badge and nothing sums the column. There is no transaction: the messages move first, the target updates second, the tombstone is stamped LAST — conditionally, on the source not already being merged, so two operators merging one ticket into different targets cannot both stamp it (the loser gets 409). An interrupted merge leaves a visibly empty but LIVE source that re-running finishes, never a hidden ticket whose mail never moved; re-running does add the source’s unread to the survivor a second time, a badge that clears the moment the ticket is opened. Attachments key on message_id and ride along untouched; email_storage_usage is NOT adjusted, because merging moves no bytes. Writes an audit_events row (business / email_ticket.merged) naming both tickets and how many messages moved — the ticket rows alone cannot tell the story, since the undo nulls merged_by.',
+  summary: 'Fold this conversation into another one',
+  description: 'EMAIL-MERGE.4 (mig 536) — two conversations that are really one conversation, joined so a correspondent cannot be answered twice. The conversation in the path is the SOURCE and becomes a tombstone: `closed` PLUS merged_into_id, deliberately not a fifth status value, hidden from every list and count by one shared scope. Its messages are REPARENTED onto the target — that is the mechanism, not the bookkeeping, because the inbound webhook threads replies on email_inbox_messages.email_tickets, so the survivor becomes the live thread and a later reply lands there. Every moved row is stamped email_tickets so DELETE restores exactly those and nothing else. The target absorbs the summed unread_count, the EARLIER first_response_at and the newer message’s preview. BOTH conversations go through the same gate as every other conversation route, so a missing conversation, a foreign location, a missing email_inbox key at the conversation’s location and a mailbox the caller cannot see are all 404 — as are a self-merge, a cross-location merge, a conversation already merged, and a conversation on EITHER side that has itself ALREADY ABSORBED a merge (any message carrying email_tickets) — chains are refused so the undo stays exact, since merging a survivor onward would re-stamp the rows it absorbed and strand the earlier merge; unmerge first, then merge onward. The tombstone RETAINS its unread_count: it is a counter rather than a property of the messages, so it cannot be re-derived, and it is the record of what the survivor absorbed — inert while merged, since tombstones are hidden from the list and the badge and nothing sums the column. There is no transaction: the messages move first, the target updates second, the tombstone is stamped LAST — conditionally, on the source not already being merged, so two operators merging one conversation into different targets cannot both stamp it (the loser gets 409). An interrupted merge leaves a visibly empty but LIVE source that re-running finishes, never a hidden conversation whose mail never moved; re-running does add the source’s unread to the survivor a second time, a badge that clears the moment the conversation is opened. Attachments key on message_id and ride along untouched; email_storage_usage is NOT adjusted, because merging moves no bytes. Writes an audit_events row (business / email_ticket.merged) naming both conversations and how many messages moved — the conversation rows alone cannot tell the story, since the undo nulls merged_by.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ into: uuidLike }).openapi('EmailTicketMerge') } } },
   },
   responses: {
-    200: { description: '{ ticket_id, merged_into_id }' },
+    200: { description: '{ email_tickets, merged_into_id }' },
     400: { description: 'No target given, or one that is not UUID-shaped', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Either ticket missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Somebody else merged this ticket first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Either conversation missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else merged this conversation first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'delete',
-  path: '/api/email/tickets/{id}/merge',
+  path: '/api/email/mail/{id}/merge',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Undo a merge',
-  description: 'EMAIL-MERGE.4 — the exact reverse, on the TOMBSTONE’s id. Moves back only the messages stamped merged_from_ticket_id = this ticket, clearing the stamp, then clears merged_into_id / merged_at / merged_by; a ticket that was never merged is a 404. Keyed on the stamp rather than on the survivor’s ticket_id, so a survivor that had its own correspondence — or had absorbed an earlier merge — does not hand it to the wrong ticket. It is a real undo, not just a move: once the rows are back, BOTH tickets have their denormalised fields REBUILT from the messages that now sit on them (last-message trio and first_response_at, skipping internal notes and forwards, clocked on created_at because an inbound sent_at is the sender’s own Date header), and the survivor gives back exactly the unread_count the tombstone retained, clamped at zero. Left alone the survivor would keep advertising a last message that has left it — a preview and a queue sort key it does not own. Same ordering discipline as the merge: the messages move back first and the pointer clears LAST, so a failed undo leaves a tombstone that can simply be unmerged again (a retried undo subtracts the unread twice, a badge that clears when the ticket is opened). BOTH tickets go through the same gate as the merge did — this route takes messages OFF the survivor and rewrites its counters, so gating only the tombstone would let a caller reshape a ticket they cannot see. Writes an audit_events row (business / email_ticket.unmerged): once merged_into_id / merged_at / merged_by are cleared the rows carry no trace that the correspondence was ever moved, so that event is the only surviving record of it. The source stays `closed`; reopening it is the status route’s job, since merging is not a status decision.',
+  description: 'EMAIL-MERGE.4 — the exact reverse, on the TOMBSTONE’s id. Moves back only the messages stamped merged_from_ticket_id = this conversation, clearing the stamp, then clears merged_into_id / merged_at / merged_by; a conversation that was never merged is a 404. Keyed on the stamp rather than on the survivor’s merged_from_ticket_id, so a survivor that had its own correspondence — or had absorbed an earlier merge — does not hand it to the wrong conversation. It is a real undo, not just a move: once the rows are back, BOTH conversations have their denormalised fields REBUILT from the messages that now sit on them (last-message trio and first_response_at, skipping internal notes and forwards, clocked on created_at because an inbound sent_at is the sender’s own Date header), and the survivor gives back exactly the unread_count the tombstone retained, clamped at zero. Left alone the survivor would keep advertising a last message that has left it — a preview and a queue sort key it does not own. Same ordering discipline as the merge: the messages move back first and the pointer clears LAST, so a failed undo leaves a tombstone that can simply be unmerged again (a retried undo subtracts the unread twice, a badge that clears when the conversation is opened). BOTH conversations go through the same gate as the merge did — this route takes messages OFF the survivor and rewrites its counters, so gating only the tombstone would let a caller reshape a conversation they cannot see. Writes an audit_events row (business / email_ticket.merged): once merged_into_id / merged_at / merged_by are cleared the rows carry no trace that the correspondence was ever moved, so that event is the only surviving record of it. The source stays `closed`; reopening it is the status route’s job, since merging is not a status decision.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket_id }' },
-    404: { description: 'Not found / not accessible, or not a merged ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible, or not a merged conversation', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/compose',
+  path: '/api/email/mail/compose',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Start a new ticket by emailing someone',
-  description: "A new email IS a ticket whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary ticket (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a ticket queued for an email that did not go. EMAIL-CC.1 — to[0] is the PRIMARY recipient: it is what requester_email records, what the contact link resolves against and what email_sends logs. Cc/Bcc are deduped case-insensitively against To and each other (To beats Cc beats Bcc), the studio's own mailbox addresses are stripped from all three (cc'ing one would file a phantom inbound ticket), and the combined total is capped at 25. Every address on a composed email was typed by a person, so the whole set is written to audit_events under the sender's name.",
+  summary: 'Start a new conversation by emailing someone',
+  description: "A new email IS a conversation whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary conversation (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a conversation queued for an email that did not go. EMAIL-CC.1 — to[0] is the PRIMARY recipient: it is what requester_email records, what the contact link resolves against and what email_sends logs. Cc/Bcc are deduped case-insensitively against To and each other (To beats Cc beats Bcc), the studio's own mailbox addresses are stripped from all three (cc'ing one would file a phantom inbound conversation), and the combined total is capped at 25. Every address on a composed email was typed by a person, so the whole set is written to audit_events under the sender's name.",
   request: {
     body: { content: { 'application/json': { schema: z.object({
       mailbox_id: uuidLike,
@@ -1647,16 +2626,16 @@ registry.registerPath({
     400: { description: 'Invalid body, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Mailbox missing, inactive, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Sent, but the ticket/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Sent, but the conversation/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 registry.registerPath({
   method: 'post',
-  path: '/api/email/tickets/{id}/read',
+  path: '/api/email/mail/{id}/read',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Mark a ticket read',
+  summary: 'Mark a conversation read',
   description: 'Zeroes unread_count and nothing else (updated_at deliberately does not move). Its own endpoint so the detail GET stays free of writes.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
@@ -1668,11 +2647,226 @@ registry.registerPath({
 // ── Attachments + storage quota — EMAIL-ATTACH.1 (mig 496) ──────────────────
 registry.registerPath({
   method: 'get',
-  path: '/api/email/tickets/{id}/attachments/{attachmentId}',
+  path: '/api/email/mail/{id}/attachments/{attachmentId}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Short-lived signed URL for one stored attachment',
-  description: "The email-attachments bucket is private, so this is the only way a client sees the bytes; the URL expires in 5 minutes. Access is the TICKET's access (location + the mailbox the ticket arrived at) PLUS a check that the attachment belongs to THIS ticket — without that pairing check, any ticket the caller can open would unlock any attachment id in the estate. 404 — never 403 — for a missing attachment, one on another ticket, and one whose bytes were never stored (the body then names the skipped_reason so staff can ask for a resend). storage_path is never returned.",
+  description: "The email-attachments bucket is private, so this is the only way a client sees the bytes; the URL expires in 5 minutes. Access is the TICKET's access (location + the mailbox the conversation arrived at) PLUS a check that the attachment belongs to THIS conversation — without that pairing check, any conversation the caller can open would unlock any attachment id in the estate. 404 — never 403 — for a missing attachment, one on another conversation, and one whose bytes were never stored (the body then names the skipped_reason so staff can ask for a resend). storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/mail/{id}/attachments/{attachmentId}/preview',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Short-lived signed INLINE URL for one stored attachment',
+  description: "EMAIL-ATTACH-PREVIEW.1 — the same object as the route above, signed WITHOUT the download flag so the browser renders it instead of saving it. Two routes rather than one route with a ?disposition= parameter, deliberately: the disposition must never be something a request asserts, and neither route accepts a Storage option of any kind. Identical gate (the conversation's access plus the attachment-belongs-to-this-conversation pairing check) and identical 5-minute TTL. Mints a URL ONLY for an allow-list of types that are safe AND universally renderable — image/jpeg, image/png, image/gif, image/webp, application/pdf — enforced here and again in the signer. Everything else is 404 with preview_kind null, which the UI renders as 'download instead', never as an error: image/svg+xml is scriptable markup from an unauthenticated stranger and never gets an inline handle; image/heic and image/heif are what iPhones send and no mainstream browser can decode them; Word/Excel/PowerPoint have no native renderer and are NOT sent to any third-party viewer. storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, preview_kind, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored / no preview for this type', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ── MAIL-RENAME.1 — deprecated /api/email/tickets/* shims ───────────────────
+// One-line re-exports of the /api/email/mail/* handlers above, kept for the
+// staff-app bundle still in the field. Documented separately so the spec
+// still shows the path an old client hits, without duplicating the handler's
+// own request/response detail. Removed once the shim sweep confirms nothing
+// calls them any more.
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use GET /api/email/mail/{id}',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use GET /api/email/mail/{id}. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket, messages }' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/reply',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/reply',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/reply. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      text: z.string().min(1).max(10000),
+      internal: z.boolean().optional(),
+      to: z.array(z.string().email()).max(25).optional(),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Note written / reply sent' },
+    400: { description: 'Invalid body, no recipient, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/link-contact',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/link-contact',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/link-contact. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Linked (or already-linked) contact: { id, name, first_name, email, pipeline_stage_slug }' },
+    400: { description: 'Conversation has no requester_email to link from', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Contact resolution or a write failed — nothing changed, or a cosmetic mirror missed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/forward',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/forward',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/forward. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      message_id: uuidLike,
+      to: z.array(z.string().email()).min(1).max(25),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      note: z.string().max(10000).optional(),
+      attachment_ids: z.array(uuidLike).max(10).optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ message, message_id, recipients, forwarded_message_id, attachment_count }' },
+    400: { description: 'Invalid body, an internal note, no usable recipient, an unforwardable file, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not accessible, or the message is not on this conversation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A pre-send lookup failed (nothing sent), or the forward went out but could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The email-sending Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/email/tickets/{id}/participants',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use PATCH /api/email/mail/{id}/participants',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use PATCH /api/email/mail/{id}/participants. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      remove: z.array(z.string()).max(25).optional(),
+      restore: z.array(z.string()).max(25).optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ excluded_participants } — the full list after the change', content: { 'application/json': { schema: SuccessResponse(z.object({ excluded_participants: z.array(z.string()) })) } } },
+    400: { description: 'Neither list given, or an address the server cannot use', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The update failed — nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/merge',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/merge. Removed in the shim sweep.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ into: uuidLike }) } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, merged_into_id }' },
+    400: { description: 'No target given, or one that is not UUID-shaped', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Either conversation missing or not accessible, or the pair cannot be merged', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else merged this conversation first — its pointer was not overwritten', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/email/tickets/{id}/merge',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use DELETE /api/email/mail/{id}/merge',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use DELETE /api/email/mail/{id}/merge. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket_id }' },
+    404: { description: 'Not found / not accessible, or not a merged conversation', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A step failed — the response says which, and re-running finishes the job', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/compose',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/compose',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/compose. Removed in the shim sweep.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      mailbox_id: uuidLike,
+      to: z.union([z.string().email(), z.array(z.string().email()).max(25).min(1)]),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      subject: z.string().min(1).max(200),
+      text: z.string().min(1).max(10000),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, ticket, message, message_id }' },
+    400: { description: 'Invalid body, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Mailbox missing, inactive, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Sent, but the conversation/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/read',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use POST /api/email/mail/{id}/read',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use POST /api/email/mail/{id}/read. Removed in the shim sweep.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Marked read' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/attachments/{attachmentId}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'DEPRECATED SHIM — use GET /api/email/mail/{id}/attachments/{attachmentId}',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use GET /api/email/mail/{id}/attachments/{attachmentId}. Removed in the shim sweep.',
   request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
   responses: {
     200: { description: '{ url, filename, mime_type, size_bytes, expires_in }' },
@@ -1686,8 +2880,8 @@ registry.registerPath({
   path: '/api/email/tickets/{id}/attachments/{attachmentId}/preview',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Short-lived signed INLINE URL for one stored attachment',
-  description: "EMAIL-ATTACH-PREVIEW.1 — the same object as the route above, signed WITHOUT the download flag so the browser renders it instead of saving it. Two routes rather than one route with a ?disposition= parameter, deliberately: the disposition must never be something a request asserts, and neither route accepts a Storage option of any kind. Identical gate (the ticket's access plus the attachment-belongs-to-this-ticket pairing check) and identical 5-minute TTL. Mints a URL ONLY for an allow-list of types that are safe AND universally renderable — image/jpeg, image/png, image/gif, image/webp, application/pdf — enforced here and again in the signer. Everything else is 404 with preview_kind null, which the UI renders as 'download instead', never as an error: image/svg+xml is scriptable markup from an unauthenticated stranger and never gets an inline handle; image/heic and image/heif are what iPhones send and no mainstream browser can decode them; Word/Excel/PowerPoint have no native renderer and are NOT sent to any third-party viewer. storage_path is never returned.",
+  summary: 'DEPRECATED SHIM — use GET /api/email/mail/{id}/attachments/{attachmentId}/preview',
+  description: 'MAIL-RENAME.1 — a shim for the staff-app bundle still in the field; use GET /api/email/mail/{id}/attachments/{attachmentId}/preview. Removed in the shim sweep.',
   request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
   responses: {
     200: { description: '{ url, preview_kind, filename, mime_type, size_bytes, expires_in }' },
@@ -2130,6 +3324,38 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/mobile/contacts/crossover-ids',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Crossover contact ids for the phone directory (fallback)',
+  description: 'The active studio\'s crossover contact ids (a contact_studios row here whose primary studio is elsewhere), capped at 100. Ids only: the phone reads the rows through RLS. Since ORGCONTACTS.5 the phone directory searches through /api/mobile/contacts/search and uses this list only when that route fails. Gated on the mobile `contacts` permission at the active studio (x-active-location). An empty list on a failed lookup.',
+  responses: {
+    200: { description: 'Crossover ids', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ ids: z.array(z.string()) }) }).openapi('MobileCrossoverIdsResponse') } } },
+    400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/contacts/search',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Phone directory search at the active studio',
+  description: 'ORGCONTACTS.5 — the phone directory\'s search over public.studio_contacts at the active studio (x-active-location): every contact with a relationship here, one row per linked person, no id cap. `q` (each whitespace token must match name, email, first or last name; a token with 4+ digits also matches phone / wa_phone) and `limit` (default 40, max 100). Newest first with no term, by name with one. Gated on the mobile `contacts` permission. A failed read is a 500 and the phone falls back to its own RLS read.',
+  request: { query: z.object({ q: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).optional() }) },
+  responses: {
+    200: { description: 'Directory rows', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ contacts: z.array(z.object({}).passthrough()) }) }).openapi('MobileContactSearchResponse') } } },
+    400: { description: 'No active location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No mobile contacts permission', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/mobile/radar',
   tags: ['Mobile'],
   security: [{ CookieAuth: [] }],
@@ -2257,7 +3483,7 @@ registry.registerPath({
   },
 })
 
-// Contacts (Bearer auth — used by n8n)
+// Contacts (Bearer auth — per-org API keys)
 registry.registerPath({
   method: 'get',
   path: '/api/contacts',
@@ -2289,8 +3515,10 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: ContactCreate } } } },
   responses: {
     200: { description: 'Contact created', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
-    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, location_id missing (cookie callers and per-organisation keys), or the insert failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized, or (cookie caller) not Manager+ at location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Per-organisation API key: location_id is not in your organisation. Cookie caller: not a member of location_id.', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2306,12 +3534,16 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Contact updated', content: { 'application/json': { schema: SuccessResponse(Contact) } } },
-    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, or the update failed (generic message; the database error is logged, never echoed)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such contact (or a malformed id), or (cookie caller) not Manager+ at its location; per-organisation keys: not in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A contact with this email already exists in your organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The contact could not be read just now; nothing was changed. Retry.', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 // DELBLOCK.1 — DELETE /api/contacts/{id}. Cookie path only (destructive
-// deletes stay off the n8n API-key surface), Manager+ at the contact's
+// deletes stay off the API-key surface), Manager+ at the contact's
 // location. Registered here for the first time because of the 409 below.
 const ContactDeleteBlocker = z.object({
   table: z.string(),
@@ -2391,6 +3623,33 @@ registry.registerPath({
   },
 })
 
+// ORGCONTACTS.4 (decision 4) — change a contact's primary studio.
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/primary-studio',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change the contact's primary studio to another studio the person has a relationship with (the primary studio's admins, an organisation admin, or a master)",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ location_id: uuidLike }).openapi('ContactPrimaryStudioBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'The primary studio (moved, or unchanged when it already was the target)', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ location_id: uuidLike }) }) } } },
+    400: { description: 'Validation error, no_relationship (no contact_studios row at the target) or other_organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Forbidden — the primary studio's admins, an organisation admin, or a master", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The relationship read failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'delete',
   path: '/api/contacts/{id}/link',
@@ -2450,8 +3709,45 @@ registry.registerPath({
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — channel permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'WhatsApp window closed and no usable template (window_expired, needs_template), or no WhatsApp number is connected at the contact location (WACONFIGFALLBACK.1; checked before a thread or link is created)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "Link could not be issued, or the location's WhatsApp number could not be looked up", content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Delivery failed (link revoked)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// MIAHATCH.6 — the payment links Mia has sent a contact, for the contact page's
+// "Payment link sent" chip. Cookie only. Six columns, never the checkout URL or a
+// token; limited to studios where the caller holds Contacts; a contact the caller
+// cannot see is a 404.
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/mia-purchase-intents',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: "Mia's payment-link intents for a contact (no checkout URL, no token)",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Intents at the viewer\'s studios, newest first',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            data: z.array(z.object({
+              id: z.string(),
+              location_id: z.string(),
+              product_title: z.string().nullable(),
+              status: z.enum(['link_sent', 'paid', 'booked', 'book_failed', 'no_class', 'expired', 'refused']),
+              created_at: z.string(),
+              expires_at: z.string(),
+            })),
+          }),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found (or not visible to the caller)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Intents could not be read', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2813,7 +4109,7 @@ registry.registerPath({
             composer_templates: z.array(z.object({
               name: z.string(), language: z.string(), bodyText: z.string(), sendable: z.boolean(),
             })).optional(),
-            permissions: z.object({ whatsapp: z.boolean(), sms: z.boolean(), email: z.boolean() }).optional(),
+            permissions: z.object({ whatsapp: z.boolean(), email: z.boolean(), kudos: z.boolean() }).optional(),
           }).openapi('ContactCommandCentreBundle'),
         },
       },
@@ -2947,6 +4243,377 @@ registry.registerPath({
   },
 })
 
+// WhatsApp message templates (cookie auth). WATPLPUT.1 — the six
+// /api/whatsapp/templates* route files were never registered. Meta owns a
+// template's review state and, once submitted, its content: those fields
+// change only through the webhook, ?sync=true and resubmit.
+const WaTemplateCategory = z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION'])
+const WaTemplateRow = z.object({
+  id: uuidLike,
+  location_id: uuidLike.nullable(),
+  name: z.string(),
+  meta_template_id: z.string().nullable(),
+  language: z.string(),
+  category: WaTemplateCategory,
+  components: z.array(z.unknown()),
+  status: z.string().openapi({ description: "Meta's review state (APPROVED, PENDING, REJECTED, PAUSED, …); 'draft' = never submitted. Written only by the template webhook, ?sync=true and resubmit." }),
+  rejection_reason: z.string().nullable(),
+  quality_rating: z.string().nullable(),
+  display_group: z.string().nullable(),
+  header_media_url: z.string().nullable(),
+}).passthrough().openapi('WaTemplate')
+const WaTemplateHeaderMedia = {
+  header_media_handle: z.string().max(4000).nullable().optional(),
+  header_media_url: z.string().url().max(2000).nullable().optional(),
+  header_media_path: z.string().max(500).nullable().optional(),
+}
+const waErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List a location's WhatsApp templates (optionally refreshing from Meta)",
+  description: "Lists the cached templates for location_id (else every location the caller belongs to). sync=true first refreshes the cache from the location's OWN number's WABA (never the global env number); the cache is served whether or not that worked, and sync_error (present only when sync was asked for; null = it worked) is the only signal the rows may be stale. status filters, e.g. APPROVED for send pickers. Membership.",
+  request: { query: z.object({ location_id: uuidLike.optional(), sync: z.enum(['true']).optional(), status: z.string().optional() }) },
+  responses: {
+    200: { description: 'Templates', content: { 'application/json': { schema: z.object({ success: z.literal(true), templates: z.array(WaTemplateRow), sync_error: z.string().nullable().optional() }) } } },
+    401: waErr('Unauthorized'),
+    403: waErr('location_id is not one of your locations'),
+    500: waErr('The template list could not be read'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a WhatsApp template and submit it to Meta for review',
+  description: "Submits on the location's own WABA (body location_id, else the active studio), then saves the row with Meta's id and status. MANAGER_ROLES (master, owner, manager, head coach) and the whatsapp permission at that location (WATPLROLE.1, GATES-3).",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().min(1).max(200),
+      category: WaTemplateCategory.optional(),
+      language: z.string().max(20).optional(),
+      components: z.array(z.unknown()),
+      parameter_format: z.enum(['POSITIONAL', 'NAMED']).optional(),
+      example_values: z.unknown().optional(),
+      location_id: uuidLike.optional(),
+      ...WaTemplateHeaderMedia,
+      display_group: z.string().max(100).nullable().optional(),
+    }).openapi('WaTemplateCreate') } } },
+  },
+  responses: {
+    200: { description: 'Submitted to Meta and saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
+    400: waErr('Validation failed, a malformed button, or Meta refused the template'),
+    401: waErr('Unauthorized'),
+    403: waErr('Not a member of the location, or not MANAGER_ROLES with whatsapp there; nothing sent to Meta'),
+    409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
+    500: waErr("The location's number could not be looked up; nothing sent to Meta"),
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/templates/{id}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Read one WhatsApp template and its Meta event history',
+  description: 'The row plus up to 50 whatsapp_template_events (status, quality and category changes Meta reported), newest first. Membership at the template\'s location; another location\'s template answers 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Template and events', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow, events: z.array(z.object({ kind: z.string(), from_value: z.string().nullable(), to_value: z.string().nullable(), reason: z.string().nullable(), created_at: z.string() })) }) } } },
+    401: waErr('Unauthorized'),
+    404: waErr('Not found, or not at one of your locations'),
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/whatsapp/templates/{id}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Edit a WhatsApp template's local fields",
+  description: "No Meta call. display_group (the picker grouping) saves in every state for any member. Any other field needs MANAGER_ROLES and the whatsapp permission at the template's location (WATPLROLE.1, GATES-3) and is accepted only while the template is a draft (never submitted to Meta); once submitted, content changes go through POST /api/whatsapp/templates/{id}/resubmit (REJECTED or PAUSED) or a new template (WATPLPUT.1). status, rejection_reason, quality_rating and meta_template_id are Meta's and are refused in every state. Checks run 404 → 400 → 403 → 409.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().max(200).optional(),
+      category: WaTemplateCategory.optional(),
+      components: z.array(z.unknown()).optional(),
+      example_values: z.unknown().optional(),
+      display_group: z.string().max(100).nullable().optional(),
+      ...WaTemplateHeaderMedia,
+    }).openapi('WaTemplateUpdate') } } },
+  },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
+    400: waErr('Validation failed; includes a body carrying status, rejection_reason, quality_rating or meta_template_id (set by Meta, never by this route); issues names the field; nothing written'),
+    401: waErr('Unauthorized'),
+    403: waErr('A field other than display_group, and the caller is not MANAGER_ROLES with whatsapp at the template\'s location; nothing written'),
+    404: waErr('Not found, or not at one of your locations'),
+    409: waErr('The template is with Meta, so its name, category, components, example values and header media are locked: use Edit & resubmit (REJECTED/PAUSED) or a new template; issues lists the locked fields; nothing written'),
+    500: waErr('The update failed'),
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/whatsapp/templates/{id}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a WhatsApp template at Meta and locally',
+  description: "Deletes by NAME on the template's own location's WABA (a Meta error is logged, not returned), then the row. A location with no number skips Meta. MANAGER_ROLES and the whatsapp permission at the template's location (WATPLROLE.1, GATES-3).",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted' },
+    401: waErr('Unauthorized'),
+    403: waErr('Not MANAGER_ROLES with whatsapp at the template\'s location; nothing deleted'),
+    404: waErr('Not found, or not at one of your locations'),
+    500: waErr("The location's number could not be looked up (row kept so a retry still reaches Meta), or the row delete failed"),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates/{id}/resubmit',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit a rejected or paused WhatsApp template at Meta and put it back into review',
+  description: "REJECTED or PAUSED only, with a Meta id. Sends category + components to Meta on the template's own number, then saves them locally with status PENDING and no rejection reason; Meta's verdict arrives later on the template webhook. MANAGER_ROLES and the whatsapp permission at the template's location (GATES-3). A new header file (header_media_url/path/handle, WATPLRESUBMEDIA.1) is stored with it, judged like an upload: a path the sign route minted in this template's studio folder of the whatsapp-templates bucket, of the header's type, at the URL the bucket serves for it; media identical to what the row stores is not re-judged.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ category: WaTemplateCategory.optional(), components: z.array(z.unknown()), header_media_handle: z.string().max(4000).nullable().optional(), header_media_url: z.string().url().max(2000).nullable().optional(), header_media_path: z.string().max(500).nullable().optional() }).openapi('WaTemplateResubmit') } } },
+  },
+  responses: {
+    200: { description: 'Resubmitted; now PENDING', content: { 'application/json': { schema: z.object({ success: z.literal(true), template: WaTemplateRow }) } } },
+    400: waErr('Not REJECTED/PAUSED, no Meta id, validation failed, a malformed button, header media that is not a minted file of the right type in this studio\'s folder, or Meta refused the edit'),
+    401: waErr('Unauthorized'),
+    403: waErr('Not MANAGER_ROLES with whatsapp at the template\'s location; nothing sent to Meta'),
+    404: waErr('Not found, or not at one of your locations'),
+    409: waErr('No WhatsApp number is connected at this location; nothing sent to Meta'),
+    500: waErr("The template or the location's number could not be read; nothing sent to Meta"),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates/upload-media/sign',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Sign a direct-to-storage upload for template header media',
+  description: "Step 1 of 2. Checks the file against Meta's media caps, mints a path in the location's folder of the public whatsapp-templates bucket and returns a signed-upload token; the browser uploads the bytes straight to storage (they never transit Vercel). MANAGER_ROLES plus the whatsapp permission at location_id (else the active studio), or master/owner there; no studio is a 403.",
+  request: { body: { content: { 'application/json': { schema: z.object({ format: z.string().min(1), mime: z.string().min(1), size: z.number().int().positive(), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaSign') } } } },
+  responses: {
+    200: { description: 'Upload path and token', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string() }) } } },
+    400: waErr("Validation failed, or the file breaks Meta's type/size caps"),
+    401: waErr('Unauthorised'),
+    403: waErr('Not a member of the location'),
+    500: waErr('The signed upload URL could not be created'),
+  },
+})
+
+// TVUPLOAD.1 (C93) — the phone's TV image upload, direct to Storage.
+const tvErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const TvUploadKind = z.enum(['content', 'template'])
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tv-displays/upload/sign',
+  tags: ['TV displays'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Sign a direct-to-storage upload for a TV image',
+  description: "Step 1 of 2 (TVUPLOAD.1). Checks the declared type and size against the tv-content bucket's limits (src/lib/tv-media.js), mints <location>/<uuid>.<ext> (a push image) or <location>/templates/<uuid>.<ext> (a template base image) and returns a signed-upload token; the phone uploads the bytes straight to storage. tv_displays (web or mobile) at location_id (else the active studio), after membership.",
+  request: { body: { content: { 'application/json': { schema: z.object({ kind: TvUploadKind.default('content'), location_id: uuidLike.optional(), file_name: z.string().max(300).optional(), mime: z.string().min(1).max(100), size: z.number().int().positive() }).openapi('TvUploadSign') } } } },
+  responses: {
+    200: { description: 'Upload path and token', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string() }) } } },
+    400: tvErr('Validation failed, no location, or the image breaks the type/size limits'),
+    401: tvErr('Unauthorized'),
+    403: tvErr('Not a member of the location, or no tv_displays permission there'),
+    500: tvErr('The signed upload URL could not be created'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tv-displays/upload/finalise',
+  tags: ['TV displays'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Confirm a TV image uploaded against a signed slot',
+  description: 'Step 2 of 2 (TVUPLOAD.1). The path must be a slot minted for this location and kind; the size and type are read back from storage and checked against the bucket limits (an object that breaks them is removed). Returns the path to store as tv_content.source_ref or tv_templates.base_image_path. Same gate as the sign step.',
+  request: { body: { content: { 'application/json': { schema: z.object({ kind: TvUploadKind.default('content'), location_id: uuidLike.optional(), path: z.string().min(1).max(500) }).openapi('TvUploadFinalise') } } } },
+  responses: {
+    200: { description: 'Stored and within the limits', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string() }) } } },
+    400: tvErr('Validation failed, a path not minted for this location and kind, an upload that never arrived, or a stored image that breaks the limits'),
+    401: tvErr('Unauthorized'),
+    403: tvErr('Not a member of the location, or no tv_displays permission there'),
+    500: tvErr('Storage could not be read'),
+  },
+})
+
+// MEMBERWRITESWEEP.1f — the TV admin's session routes (web /tv-displays and
+// the staff phone). They replace direct tv_displays / tv_content /
+// tv_templates reads and writes from client sessions, which mig 685 (1g)
+// closes. Gate: tv_displays (web OR mobile) at the TV's or template's own
+// studio, after membership (404 outside the caller's studios).
+const tvGateResponses = {
+  401: tvErr('Unauthorized'),
+  403: tvErr('No tv_displays permission (web or mobile) at that studio'),
+  404: tvErr('Not found, or outside your studios'),
+}
+const TvContentSchema = z.object({
+  tv_display_id: uuidLike, source_type: z.string(), source_ref: z.string(), label: z.string().nullable(),
+  template_values: z.record(z.string(), z.unknown()).nullable(), pushed_at: z.string(),
+}).openapi('TvContent')
+const TvDisplaySchema = z.object({
+  id: uuidLike, label: z.string(), token: z.string(), active: z.boolean(), rotation: z.number().int(),
+  location_id: uuidLike, created_at: z.string(), content: TvContentSchema.nullable(),
+}).openapi('TvDisplay')
+const TvTemplateSchema = z.object({
+  id: uuidLike, name: z.string(), base_image_path: z.string(), zones: z.array(z.record(z.string(), z.unknown())), location_id: uuidLike,
+}).openapi('TvTemplate')
+const TvTemplateBody = z.object({ name: z.string().min(1).max(120), base_image_path: z.string().min(1).max(500), zones: z.array(z.record(z.string(), z.unknown())).max(100).optional() })
+const tvOk = (description, schema) => ({ description, content: { 'application/json': { schema: z.object({ success: z.literal(true), ...(schema ? { data: schema } : {}) }) } } })
+const tvSecurity = [{ CookieAuth: [] }, { BearerAuth: [] }]
+const tvId = z.object({ id: uuidLike })
+
+registry.registerPath({
+  method: 'get', path: '/api/admin/tv-displays', tags: ['TV displays'], security: tvSecurity,
+  summary: "A studio's TVs, each with what it is showing",
+  description: 'Oldest first; `content` is the TV\'s one tv_content row, or null when idle. location_id defaults to the active studio.',
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: { 200: tvOk('TVs', z.array(TvDisplaySchema)), 400: tvErr('No location'), 500: tvErr('The TVs or their content could not be read'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'post', path: '/api/admin/tv-displays', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Register a TV at a studio (its cast token is generated)',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike, label: z.string().min(1).max(80) }).openapi('TvRegister') } } } },
+  responses: { 200: tvOk('Registered', TvDisplaySchema), 400: tvErr('Validation failed'), 409: tvErr('A TV with that label is already registered at the studio'), 500: tvErr('Insert failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'patch', path: '/api/admin/tv-displays/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Set how a TV is hung (rotation 0, 90, 180 or 270)',
+  request: { params: tvId, body: { content: { 'application/json': { schema: z.object({ rotation: z.number().int() }).openapi('TvRotation') } } } },
+  responses: { 200: tvOk('Saved'), 400: tvErr('Rotation must be 0, 90, 180 or 270'), 500: tvErr('Update failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/admin/tv-displays/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Delete a TV (its cast URL stops working)',
+  request: { params: tvId },
+  responses: { 200: tvOk('Deleted'), 500: tvErr('Delete failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'put', path: '/api/admin/tv-displays/{id}/content', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Push a URL, a photo or a template to a TV',
+  description: 'pushed_at, pushed_by and triggered_by come from the session. A URL must be http(s); a photo must be in the TV studio\'s tv-content folder; a template must be one of the TV\'s studio, with template_values an object (null for the other two).',
+  request: { params: tvId, body: { content: { 'application/json': { schema: z.object({ source_type: z.enum(['url', 'storage', 'template']), source_ref: z.string().min(1).max(2048), label: z.string().max(200).nullable().optional(), template_values: z.record(z.string(), z.unknown()).optional() }).openapi('TvPush') } } } },
+  responses: { 200: tvOk('Pushed', TvContentSchema), 400: tvErr('Validation failed, or a push the cast page may not show'), 500: tvErr('Upsert or template read failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/admin/tv-displays/{id}/content', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Clear a TV back to its idle screen',
+  request: { params: tvId },
+  responses: { 200: tvOk('Cleared'), 500: tvErr('Delete failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'get', path: '/api/admin/tv-templates', tags: ['TV displays'], security: tvSecurity,
+  summary: "A studio's TV templates, by name",
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: { 200: tvOk('Templates', z.array(TvTemplateSchema)), 400: tvErr('No location'), 500: tvErr('Read failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'post', path: '/api/admin/tv-templates', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Create a TV template',
+  description: 'created_by is the caller. The base image must sit under <location_id>/templates/ (where the upload routes put it).',
+  request: { body: { content: { 'application/json': { schema: TvTemplateBody.extend({ location_id: uuidLike }).openapi('TvTemplateCreate') } } } },
+  responses: { 200: tvOk('Created', TvTemplateSchema), 400: tvErr('Validation failed, or a base image outside the studio templates folder'), 409: tvErr('A template with that name exists at the studio'), 500: tvErr('Insert failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'get', path: '/api/admin/tv-templates/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'One TV template (with its studio)',
+  request: { params: tvId },
+  responses: { 200: tvOk('Template', TvTemplateSchema), 500: tvErr('Read failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'put', path: '/api/admin/tv-templates/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Save a TV template',
+  description: "A changed base image must sit under the TEMPLATE's studio's templates folder (C118); an unchanged one is kept.",
+  request: { params: tvId, body: { content: { 'application/json': { schema: TvTemplateBody.openapi('TvTemplateSave') } } } },
+  responses: { 200: tvOk('Saved', TvTemplateSchema), 400: tvErr("Validation failed, or a new base image outside the template's studio"), 409: tvErr('A template with that name exists at the studio'), 500: tvErr('Update failed'), ...tvGateResponses },
+})
+registry.registerPath({
+  method: 'delete', path: '/api/admin/tv-templates/{id}', tags: ['TV displays'], security: tvSecurity,
+  summary: 'Delete a TV template (a TV showing it falls back to idle)',
+  request: { params: tvId },
+  responses: { 200: tvOk('Deleted'), 500: tvErr('Delete failed'), ...tvGateResponses },
+})
+
+// CARDOCUPLOAD.1 (C124) — the car Documents picker's upload, direct to Storage.
+const carDocErr = (description) => ({ description, content: { 'application/json': { schema: ErrorResponse } } })
+const CarDocType = z.string().min(1).max(64).openapi({ description: 'A car document type key (src/lib/cars.js ALL_DOCUMENT_TYPES)' })
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/cars/{id}/documents/sign',
+  tags: ['Cars'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Sign a direct-to-storage upload for a car document',
+  description: "Step 1 of 2 (CARDOCUPLOAD.1). The multipart POST /api/cars/{id}/documents is capped at ~4.5 MB by Vercel; this lets the browser put up to 25 MiB straight into the private car-documents bucket. Checks the doc type and the declared size and type against the bucket's limits (src/lib/car-document-media.js: 25 MiB; PDF, JPEG, PNG, GIF, WebP, HEIC, HEIF; aliases normalised); an unlabelled file (no type or application/octet-stream) is judged by head, its first bytes in base64. Mints <car>/<doc_type>/<uuid>.<ext> and returns a signed-upload token plus content_type, the type to upload the bytes as (the bucket checks it). car_processing at the car's studio, after membership (the multipart route's gate).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ doc_type: CarDocType, file_name: z.string().min(1).max(300), mime: z.string().max(200).default(''), size: z.number().int(), head: z.string().max(344).optional() }).openapi('CarDocumentSign') } } },
+  },
+  responses: {
+    200: { description: 'Upload path, token and the type to upload as', content: { 'application/json': { schema: z.object({ success: z.literal(true), path: z.string(), token: z.string(), content_type: z.string() }) } } },
+    400: carDocErr('Validation failed, an unknown doc_type, an empty file or one over 25 MiB, or a type the bucket does not take'),
+    401: carDocErr('Unauthorized'),
+    403: carDocErr("No car_processing permission at the car's studio"),
+    404: carDocErr('No such car, or not at one of your studios'),
+    500: carDocErr('The car could not be read, or the signed upload URL could not be created'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/cars/{id}/documents/finalise',
+  tags: ['Cars'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record a car document uploaded against a signed slot',
+  description: "Step 2 of 2 (CARDOCUPLOAD.1). The path must be a slot sign minted for this car and doc type, not yet recorded (else 409). The size and Content-Type are read back from storage; the declared mime is judged as the multipart route judges a file's type (an unlabelled one by the stored bytes) and must match the stored Content-Type. An object that breaks a rule is removed. A good one becomes the multipart route's car_documents row and auto-enters the bookkeeper queue (queue_warning if that failed). Same gate as the sign step.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ doc_type: CarDocType, path: z.string().min(1).max(500), file_name: z.string().min(1).max(300), mime: z.string().max(200).default(''), notes: z.string().max(2000).nullable().optional() }).openapi('CarDocumentFinalise') } } },
+  },
+  responses: {
+    201: { description: 'Recorded', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.record(z.string(), z.unknown()), queue_warning: z.string().optional() }) } } },
+    400: carDocErr('Validation failed, a path not minted for this car and doc type, an upload that never arrived, or a stored file that breaks the size/type rules (removed)'),
+    401: carDocErr('Unauthorized'),
+    403: carDocErr("No car_processing permission at the car's studio"),
+    404: carDocErr('No such car, or not at one of your studios'),
+    409: carDocErr('This slot is already recorded (a replay, or the loser of two concurrent calls: the unique storage_path, mig 693; the file is kept)'),
+    500: carDocErr('The car, the stored file or the duplicate check could not be read, or the row insert failed (the file is removed)'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/templates/upload-media',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Finalise a template header-media upload and get a Meta upload handle',
+  description: "Step 2 of 2. Takes the minted path (the studio's folder only), re-checks the REAL size (an oversize object is deleted), and pushes it to Meta's resumable upload with the location's own number for the header_handle a submission needs. A Meta failure is soft: 200 with handle null and meta_error. Multipart bodies (pre-fix tabs) get a 400 asking for a refresh. MANAGER_ROLES plus the whatsapp permission at location_id (else the active studio), or master/owner there; no studio is a 403.",
+  request: { body: { content: { 'application/json': { schema: z.object({ path: z.string().min(1).max(300), format: z.string().min(1), mime: z.string().min(1), file_name: z.string().min(1).max(300), location_id: uuidLike.optional() }).openapi('WaTemplateMediaFinalise') } } } },
+  responses: {
+    200: { description: 'Stored; handle is null when Meta refused (meta_error says why)', content: { 'application/json': { schema: z.object({ success: z.literal(true), handle: z.string().nullable(), url: z.string(), path: z.string(), file_name: z.string(), file_size: z.number().int(), meta_error: z.string().nullable() }) } } },
+    400: waErr("Validation failed, a multipart body, a path not minted for this location, or the file breaks Meta's caps"),
+    401: waErr('Unauthorised'),
+    403: waErr('Not a member of the location'),
+    404: waErr('The uploaded file is not in storage; upload again'),
+  },
+})
+
 // WhatsApp chat openers — Meta conversational components (cookie auth)
 registry.registerPath({
   method: 'post',
@@ -2954,7 +4621,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Configure WhatsApp chat openers (welcome event + ice breakers)',
-  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation.",
+  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation. Master, or owner at the location; applied only to the location's own active number, never the global env number. WAORGNUMBER.4: the openers belong to the number, shared by every studio that switched it on, so at a studio that is not the number's home only an organisation admin may change them (403 otherwise, before Meta).",
   request: {
     body: {
       content: {
@@ -2970,9 +4637,13 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Chat openers updated at Meta and mirrored locally' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this location (WAROLE.1), and an organisation admin when the location is not the number\'s home studio (WAORGNUMBER.4); nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WAROLE.1): the openers are never applied to the global env number; nothing is sent to Meta', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta conversational_automation call failed', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "The location's number could not be looked up (nothing sent to Meta), or: applied at Meta, but the locations.settings mirror could not be read or written (applied_at_meta: true); nothing else changed. Save again.", content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3003,6 +4674,7 @@ registry.registerPath({
     200: { description: 'Card sets for the location', content: { 'application/json': { schema: z.object({ success: z.literal(true), sets: z.array(WaCardSet) }) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the location settings (never answered as an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3012,7 +4684,7 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: "Replace a location's WhatsApp card sets",
-  description: 'Replaces the whole locations.settings.wa_card_sets array (ids minted client-side). Meta requires consistent button config across carousel cards, so each set must have links on all cards or none.',
+  description: 'Replaces the whole locations.settings.wa_card_sets array (ids minted client-side). Meta requires consistent button config across carousel cards, so each set must have links on all cards or none. Master, or owner at the location; the GET stays open to every member.',
   request: {
     body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike, sets: z.array(WaCardSet).max(20) }).openapi('WaCardSetsPut') } } },
   },
@@ -3020,7 +4692,70 @@ registry.registerPath({
     200: { description: 'Card sets saved' },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this location (WAROLE.1); nothing written', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WASTUDIOPICK.1 — /api/whatsapp/studio-picker
+const WaStudioPickerSettings = z.object({
+  listed: z.boolean(),
+  label: z.string().max(20),
+  keywords: z.array(z.string().min(1).max(40)).max(10),
+  enabled: z.boolean(),
+  question: z.string().max(1024),
+  has_number: z.boolean(),
+  default_question: z.string(),
+}).openapi('WaStudioPickerSettings')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/studio-picker',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Read a studio's WhatsApp studio-picker settings",
+  description: "How a studio appears in the picker an unrecognised sender is asked (listed, button label, keywords), and, where the studio owns a WhatsApp number, whether that number asks the question and its wording. Stored on locations.settings.wa_studio_picker. Any member of the studio may read it.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: 'Picker settings with defaults applied', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaStudioPickerSettings }) } } },
+    400: { description: 'location_id is required', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the settings or the studio numbers (never answered as defaults)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/whatsapp/studio-picker',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Save a studio's WhatsApp studio-picker settings",
+  description: "Replaces the locations.settings.wa_studio_picker slice only (other settings are kept). enabled and question are accepted only when the studio has an active WhatsApp number, otherwise 400. Master, or owner at the studio.",
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            listed: z.boolean(),
+            label: z.string().max(20).optional(),
+            keywords: z.array(z.string().min(1).max(40)).max(10).optional(),
+            enabled: z.boolean().optional(),
+            question: z.string().max(1024).optional(),
+          }).openapi('WaStudioPickerPut'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Settings saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaStudioPickerSettings }) } } },
+    400: { description: 'Validation failed, or enabled/question sent for a studio with no WhatsApp number', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master or owner role required at this studio; nothing written', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable, settings_write_failed, or the studio numbers could not be read', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3039,6 +4774,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Carousel sent' },
     404: { description: 'Conversation or card set not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta carousel call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3055,9 +4791,11 @@ registry.registerPath({
     params: z.object({ id: uuidLike }),
   },
   responses: {
-    200: { description: 'Flow sent' },
+    200: { description: 'Flow sent. A `warnings` array is present when Meta accepted the Flow but the thread row could not be saved (FLOWTOKENDEDUP.1)' },
     400: { description: 'No contact linked, or no Flow configured for the location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The conversation or the location settings could not be read; nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3077,7 +4815,60 @@ registry.registerPath({
   responses: {
     200: { description: 'Block state updated' },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta block call failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.4 (R7) — blast sign-off at a studio new to a shared number
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/broadcasts/{id}/sign-off',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Sign off a draft or scheduled WhatsApp broadcast (organisation admins)',
+  description: "Stamps whatsapp_broadcasts.signed_off_by / signed_off_at (mig 748); sends nothing. While the studio's locations.settings.whatsapp_blast_signoff_until is in the future, a broadcast there goes out only once signed off: a non-admin's send, schedule or resume of an unsigned one answers 403 \"Blasts at {studio} need sign-off from an organisation admin until {date}.\", an org admin's signs it off, and anyone else's change to its template, variables, header or audience clears the sign-off. Master or an org admin of the studio's organisation only.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Signed off', content: { 'application/json': { schema: z.object({ success: z.literal(true), broadcast: z.object({ id: uuidLike, signed_off_by: uuidLike, signed_off_at: z.string() }) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an organisation admin of the studio, or WhatsApp is off', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Broadcast not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not a draft or scheduled broadcast, or it changed meanwhile', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: "The broadcast's studio could not be read", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAHOMESTUDIO.1 — move a WhatsApp thread to another studio of the same organisation
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/conversations/{id}/move',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List the studios a WhatsApp conversation can move to',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The caller’s other studios in the conversation’s organisation, each { id, name, whatsapp }: whatsapp=false when the studio has no active number switched on (a move there is refused)' },
+    500: { description: 'A studio or number read failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/move',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Move (or merge) a WhatsApp conversation into another studio of the same organisation',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike }).openapi('WaMoveConversation') } } },
+  },
+  responses: {
+    200: { description: 'Moved; merged=true when it joined an existing thread there' },
+    400: { description: 'Same studio, or a studio in another organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation or target studio not found for the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The target studio has no WhatsApp number switched on (WAMOVENUMBER.1), or the customer already has a thread there that could not be merged automatically', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The move failed; nothing changed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3096,6 +4887,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Reaction sent' },
     404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No WhatsApp number is connected at this location (WACONFIGFALLBACK.1): nothing is sent from any other number', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Meta reaction call failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3179,29 +4971,306 @@ registry.registerPath({
   path: '/api/locations/{id}/whatsapp/embedded-signup',
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
-  summary: 'Exchange an Embedded Signup code and connect the WABA/number to this location',
-  description: "Orchestrates code→business-token exchange, an ownership check against whatsapp_numbers (a number already connected to a different location 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional number registration, then upsert into whatsapp_numbers. Nothing persists unless every Meta call succeeded — safe to re-run with a fresh code. mode='cloud_api' (default) supplies phone_number_id from the ES session and registers the number; mode='coexistence' omits phone_number_id (resolved server-side from the WABA) and skips registration — the number is already live on the WhatsApp Business app. Master-or-owner gated, matching the numbers CRUD route.",
+  summary: 'RETIRED: Embedded Signup now runs at the organisation',
+  description: "WAORGNUMBER.1: a number belongs to the organisation, so connecting one is POST /api/organizations/{id}/whatsapp/embedded-signup. This route answers 410 { success:false, error, moved_to:'/settings/integrations-hub?manage=whatsapp-numbers' } to a signed-in caller.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    410: { description: 'Moved to the organisation (moved_to: /settings/integrations-hub?manage=whatsapp-numbers)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.1 (R8, Task 6) — a studio switches the organisation's numbers on and off
+const WaStudioNumber = z.object({
+  id: uuidLike,
+  label: z.string(),
+  display_phone: z.string().nullable(),
+  is_active: z.boolean(),
+  on: z.boolean(),
+  is_default: z.boolean(),
+}).openapi('WaStudioNumber')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List the organisation's WhatsApp numbers as this studio sees them",
+  description: 'Every number of the studio\'s organisation with on (switched on at this studio) and is_default (this studio\'s default). No token or other credential is returned.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Numbers', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ numbers: z.array(WaStudioNumber) }) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Switch an organisation number on or off at this studio",
+  description: "Owner, manager or master at THIS studio (403 otherwise). The number must belong to the studio's organisation (404 otherwise). isDefault:true (with on:true) makes it the studio default, clearing the previous default first. Switching off the default promotes the newest remaining number; switching off the last one is allowed: the studio stops sending.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioWhatsAppNumberSwitchSchema } } } },
+  responses: {
+    200: { description: 'The studio\'s numbers after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ numbers: z.array(WaStudioNumber) }) }) } } },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such number in this studio\'s organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ORGCONTACTS.0 (WAORGNUMBER R7) — the studio's blast sign-off window
+const WaBlastSignoff = z.object({
+  until: z.string().nullable().openapi({ description: "The last day (studio calendar, 'YYYY-MM-DD') broadcasts at this studio need an organisation admin's sign-off; null = no window" }),
+  can_edit: z.boolean(),
+}).openapi('WaBlastSignoff')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/blast-signoff',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "The studio's blast sign-off window",
+  description: "locations.settings.whatsapp_blast_signoff_until as a plain date, or null. can_edit is true for a master or an organisation admin of the studio's organisation.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The window', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaBlastSignoff }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/blast-signoff',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set or clear the studio's blast sign-off window",
+  description: "Master or an organisation admin of the studio's organisation only (403 otherwise: the window exists to bind managers). until is a calendar day on the studio's clock; null clears the window. Other settings keys are kept.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioBlastSignoffSchema } } } },
+  responses: {
+    200: { description: 'The window after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaBlastSignoff }) } } },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master or organisation admin required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.2 (R5) — the templates a studio's automatic WhatsApp messages use
+const WaPurposeTemplates = z.object({
+  selected: z.object({
+    class_confirmed: uuidLike.nullable(),
+    consult_confirmed: uuidLike.nullable(),
+    event_waitlist_offer: uuidLike.nullable(),
+    meta_ad_welcome: uuidLike.nullable(),
+  }),
+  can_edit: z.boolean(),
+}).openapi('WaPurposeTemplates')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/purpose-templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "The templates this studio's automatic WhatsApp messages use",
+  description: "Per purpose (class_confirmed, consult_confirmed, event_waitlist_offer, meta_ad_welcome): the whatsapp_templates id the studio picked, or null (the sender then uses its default template name at the studio). can_edit is true for an owner, manager or master at this studio.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The picks', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaPurposeTemplates }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/purpose-templates',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Choose the template an automatic WhatsApp message uses at this studio",
+  description: "Owner, manager or master AT THIS STUDIO (403 otherwise). templateId must be one of this studio's own APPROVED templates in a category the purpose allows (UTILITY for the booking confirmations and the waitlist offer; MARKETING or UTILITY for the ad welcome), else 400. null clears the pick. Merged into locations.settings.whatsapp_purpose_templates without touching other settings.",
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioPurposeTemplateSchema } } } },
+  responses: {
+    200: { description: 'The picks after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaPurposeTemplates }) } } },
+    400: { description: 'Invalid body, or the template is not this studio\'s, not approved, or the wrong category', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.3 (R6) — the studio's STOP / START acknowledgement copy
+const WaConsentCopyPair = z.object({ stop_ack: z.string().nullable(), start_ack: z.string().nullable() })
+const WaConsentCopy = z.object({
+  copy: WaConsentCopyPair,
+  defaults: z.object({ stop_ack: z.string(), start_ack: z.string() }),
+  studio_name: z.string().nullable(),
+  can_edit: z.boolean(),
+}).openapi('WaConsentCopy')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/consent-copy',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The reply a customer gets for STOP / START in a WhatsApp thread at this studio',
+  description: 'copy: the studio\'s saved text for each reply, or null (the default is used). defaults: the default text. {studio} in either is replaced with studio_name when sent. can_edit is true for an owner, manager or master at this studio.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The copy', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaConsentCopy }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/whatsapp/consent-copy',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change the STOP / START replies at this studio',
+  description: 'Owner, manager or master AT THIS STUDIO (403 otherwise). Each field is the reply text (at most 500 characters), or blank/null for the default. Merged into locations.settings.whatsapp_consent_copy without touching other settings.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: studioConsentCopySchema } } } },
+  responses: {
+    200: { description: 'The copy after the change', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: WaConsentCopy }) } } },
+    400: { description: 'Invalid body (a reply over 500 characters)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner, manager or master at this studio required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WAORGNUMBER.1 (R8) — the organisation's WhatsApp numbers (org-admin or master; cookie auth)
+const WaOrgNumberPublic = WaNumberPublic.extend({
+  history_sync_status: z.string().nullable(),
+  history_sync_started_at: z.string().nullable(),
+  coex_link_status: z.string().nullable(),
+  coex_offboarded_at: z.string().nullable(),
+}).openapi('WaOrgNumberPublic')
+
+const orgNumbersParams = z.object({ id: uuidLike })
+const orgNumberParams = z.object({ id: uuidLike, numberId: uuidLike })
+const orgAdminResponses = {
+  401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Forbidden — master or organisation admin role required', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/organizations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List the organisation's WhatsApp numbers",
+  description: "Every number of the organisation. The access token is returned only as the fixed mask (access_token_redacted); location_id is the number's home studio.",
+  request: { params: orgNumbersParams },
+  responses: {
+    200: { description: 'Numbers', content: { 'application/json': { schema: z.object({ success: z.literal(true), numbers: z.array(WaOrgNumberPublic) }) } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/organizations/{id}/whatsapp/numbers',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a WhatsApp number to the organisation',
+  description: "home_location_id must be a studio of this organisation (400 otherwise; the database does not refuse another organisation's studio). The number is switched on at its home studio by the database (mig 743's AFTER INSERT trigger: default only when that studio has none); the route never inserts the link row.",
+  request: { params: orgNumbersParams, body: { content: { 'application/json': { schema: orgWhatsAppNumberCreateSchema } } } },
+  responses: {
+    200: { description: 'Number added', content: { 'application/json': { schema: z.object({ success: z.literal(true), number: WaOrgNumberPublic }) } } },
+    400: { description: 'Invalid body, or the home studio is not a studio of this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'phone_number_id (globally unique) or label already in use', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/organizations/{id}/whatsapp/numbers/{numberId}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Edit one of the organisation's WhatsApp numbers",
+  description: "Any subset of the fields. A token is written only when fresh (a mask or blank echoed back is dropped). home_location_id moves the home studio and must be a studio of this organisation (400 otherwise); it does not touch the per-studio switch-on rows. Another organisation's number is a 404.",
   request: {
-    params: z.object({ id: uuidLike }),
+    params: orgNumberParams,
     body: {
       content: {
         'application/json': {
           schema: z.object({
-            mode: z.enum(['cloud_api', 'coexistence']).default('cloud_api'),
-            code: z.string().min(1),
-            waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
-            phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
-          }).openapi('WaEmbeddedSignupExchange'),
+            label: z.string().min(1).max(120).optional(),
+            phone_number_id: z.string().min(1).max(64).optional(),
+            access_token: z.string().min(20).max(2000).optional(),
+            business_account_id: z.string().max(64).nullable().optional(),
+            app_id: z.string().max(64).nullable().optional(),
+            display_phone: z.string().max(32).nullable().optional(),
+            source: z.enum(['cloud_api', 'coexistence']).optional(),
+            is_active: z.boolean().optional(),
+            home_location_id: uuidLike.optional(),
+          }).openapi('WaOrgNumberPatch'),
         },
       },
     },
   },
   responses: {
-    200: { description: 'WABA/number connected to this location', content: { 'application/json': { schema: SuccessResponse(WaNumberPublic) } } },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — location not in your assignments, or master/owner role required', content: { 'application/json': { schema: ErrorResponse } } },
-    409: { description: 'Number already connected to a different location, or a concurrent connect/label collision', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'A Meta call failed (code exchange, WABA subscription, or number registration)', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: 'Number updated', content: { 'application/json': { schema: z.object({ success: z.literal(true), number: WaOrgNumberPublic }) } } },
+    400: { description: 'Invalid body, or the home studio is not a studio of this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Number not found in this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Phone number ID or label already in use', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/organizations/{id}/whatsapp/numbers/{numberId}',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Remove one of the organisation's WhatsApp numbers",
+  description: "Hard delete; the number's per-studio switch-on rows cascade. Another organisation's number is a 404.",
+  request: { params: orgNumberParams },
+  responses: {
+    200: { description: 'Removed', content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } } },
+    404: { description: 'Number not found in this organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/organizations/{id}/whatsapp/embedded-signup',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Embedded Signup launch config (app_id, config_id, configured)',
+  description: 'Launch config for the "Connect with WhatsApp" button. Reports configured:false instead of throwing when WHATSAPP_APP_ID / WHATSAPP_ES_CONFIG_ID are unset.',
+  request: { params: orgNumbersParams },
+  responses: {
+    200: { description: 'Launch config', content: { 'application/json': { schema: SuccessResponse(WaEmbeddedSignupConfig) } } },
+    ...orgAdminResponses,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/organizations/{id}/whatsapp/embedded-signup',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Exchange an Embedded Signup code and connect the WABA/number to the organisation',
+  description: "Code→business-token exchange, an ownership check against whatsapp_numbers (a number held by a different organisation 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional registration (cloud_api only), then upsert. Nothing persists unless every Meta call succeeded. A number the organisation already holds is refreshed in place and keeps its home studio; a NEW number needs home_location_id (a studio of this organisation, 400 otherwise, checked before any Meta call) and is switched on there by the database. mode='coexistence' omits phone_number_id (resolved from the WABA) and skips registration.",
+  request: { params: orgNumbersParams, body: { content: { 'application/json': { schema: orgWhatsAppEmbeddedSignupSchema } } } },
+  responses: {
+    200: { description: 'WABA/number connected', content: { 'application/json': { schema: SuccessResponse(WaOrgNumberPublic) } } },
+    400: { description: 'Missing or invalid home studio, or no phone_number_id', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Number held by a different organisation, or a concurrent connect/label collision', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'A Meta call failed (code exchange, WABA subscription, probe or registration)', content: { 'application/json': { schema: ErrorResponse } } },
+    ...orgAdminResponses,
   },
 })
 
@@ -3242,11 +5311,11 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Staff app versions, devices and geofence permission',
-  description: 'Every active staff profile with their registered devices, the target app version derived from the non-stale fleet, and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Requires the settings permission.',
+  description: 'Every active staff profile in the caller\'s ACTIVE organisation (a master: the whole estate) with their registered devices, the target app version derived from the non-stale fleet of the whole estate (one app binary), and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   responses: {
     200: { description: 'Fleet payload — { target_version, staff[] }' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3256,7 +5325,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Push an update reminder to staff on an outdated app build',
-  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Requires the settings permission.',
+  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Only staff in the caller\'s ACTIVE organisation can be nudged (a master: anyone); any other id is ignored like an unknown one. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   request: {
     body: {
       content: {
@@ -3523,12 +5592,38 @@ registry.registerPath({
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
   summary: 'Re-sync channel_connections registry rows from the location\'s legacy config (admin)',
-  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, twilio_alpha_sender_id, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 419 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
+  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 419 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Per-platform sync results' },
     403: { description: 'Forbidden — admin role at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Glofox sibling-studio repair (GLOFOXSIBLING.1)
+registry.registerPath({
+  method: 'post',
+  path: '/api/glofox/crossover-backfill',
+  tags: ['Glofox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Find (and optionally link) Glofox members whose contact lives at a sibling studio',
+  description: 'GLOFOXSIBLING.1 — master only. Reads one page of the studio\'s Glofox members and lists those with no contact at the studio whose one contact lives at another studio of the same organisation (contacts are unique per email per organisation, mig 712, so the old sync could not create them). dry_run (default true) only reads; dry_run:false runs the member sync for up to 25 of the page\'s candidates, which links each one (a contact_studios row with source glofox since mig 768, plus the studio\'s preferences row). Ids only in the response.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      page: z.number().int().min(1).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+      dry_run: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { dry_run, page, has_more, scanned, candidates: [{ glofox_member_id, contact_id, home_location_id, how }], conflicts, errors, applied, left_on_page } }' },
+    400: { description: 'Invalid body, or Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Master only', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The studio\'s contacts could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now; retry', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3539,12 +5634,76 @@ registry.registerPath({
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
   summary: 'Trainer ids seen in the Glofox timetable + their resolved names',
-  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master/owner/manager only.',
+  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master, or owner/manager AT this location (judged at the path id, not the active studio).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ trainers: [{ id, name, source, classes }], windowDays }' },
     400: { description: 'Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'class_occurrences_read_failed — the timetable read failed (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now (a transient read failure, not "not configured"); retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Glofox membership catalogue for the trial-membership picker (GLOFOX3.1)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/glofox-memberships',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The Glofox membership catalogue (memberships + plans) at this location',
+  description: 'GLOFOX3.1 — the studio\'s Glofox memberships with their plans, read live from the Glofox API. Powers the trial-membership picker in the Glofox settings tab and the landing-page settings form. Master, or owner/manager AT this location (judged at the path id, not the active studio). Returns { memberships, count }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ memberships: [{ _id, name, plans: [...] }], count }' },
+    400: { description: 'glofox_not_configured — Glofox credentials not set on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'glofox_request_failed — the Glofox API call failed', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'glofox_settings_unreadable: the studio\'s Glofox settings could not be read just now (a transient read failure, not "not configured"); retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UniFi Access user list for the staff-form picker (mig 120)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/unifi-users',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Every UniFi Access user at this location\'s controller',
+  description: 'The full UniFi Access user list at the studio\'s controller (names, emails, employee numbers, NFC card counts), for linking a staff profile to its UniFi user on the staff edit page. Sensitive: master, or owner/manager AT this location (judged at the path id, not the active studio). Returns { users, count }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ users: [{ id, full_name, user_email, employee_number, status, nfc_count }], count }' },
+    400: { description: 'unifi_not_configured — UniFi Access not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id), or location_not_found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'location_read_failed — the location could not be read (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'unifi_request_failed — the controller call failed (or the controller\'s own status)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UniFi Access door list for the staff-form door picker (mig 182)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/unifi-doors',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Every door at this location\'s UniFi Access controller',
+  description: 'The studio\'s UniFi Access doors, normalised to { id, name } and sorted by name, for the per-location remote-unlock door picker on the staff edit page. Master, or owner/manager AT this location (judged at the path id, not the active studio). Returns { doors, count }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ doors: [{ id, name }], count }' },
+    400: { description: 'unifi_not_configured — UniFi Access not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'unauthenticated — no session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or manager at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of this location (indistinguishable from a missing id), or location_not_found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'location_read_failed — the location could not be read (logged)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'unifi_request_failed — the controller call failed (or the controller\'s own status)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3588,12 +5747,12 @@ registry.registerPath({
   path: '/api/contracts/{id}/resend',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Resend the contract-issued notification email (master/owner only)',
+  summary: 'Resend the contract-issued notification email (organisation admins only)',
   description: "Re-fires sendContractIssuedEmail plus the issue route's push block for a contract still at issued/viewed. Never mutates the contract row — a pure notification replay. Org-scoped like revoke (404 not 403 for a foreign-org id, non-enumerable); 409 once the contract has moved past issued/viewed (signed/declined/revoked).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Resent (warning present if the email itself failed)' },
-    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Organisation admins only (a master, or an org_admin grant)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Contract is not in issued/viewed status', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3605,12 +5764,12 @@ registry.registerPath({
   path: '/api/contracts/{id}/send',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Send a draft contract to its recipient (master/owner only)',
+  summary: 'Send a draft contract to its recipient (organisation admins only)',
   description: "Flips a draft to issued (issued_at reset to the send time — the draft's own issued_at is just its creation timestamp, since the column is NOT NULL) and fires notifyContractIssued (email + push) — the recipient's very first notification, since a draft never emailed or pushed anyone. Org-scoped like resend/revoke (404 not 403 for a foreign-org id, non-enumerable); 409 for any status other than draft.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Sent (warning present if the email itself failed)' },
-    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Organisation admins only (a master, or an org_admin grant)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Contract is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3622,12 +5781,12 @@ registry.registerPath({
   path: '/api/contracts/{id}/discard',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Discard a draft contract (master/owner only)',
+  summary: 'Discard a draft contract (organisation admins only)',
   description: "Revokes a draft with NO recipient notification (they never knew it existed). Non-draft contracts must go through /revoke instead, which does email the recipient. Org-scoped (404 not 403 for a foreign-org id, non-enumerable); 409 for any status other than draft.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: "Discarded (status -> revoked, revoked_reason 'Draft discarded')" },
-    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Organisation admins only (a master, or an org_admin grant)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Contract is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3639,13 +5798,31 @@ registry.registerPath({
   path: '/api/contracts/{id}/pdf',
   tags: ['Contracts'],
   security: [{ CookieAuth: [] }],
-  summary: 'Download the dual-signed contract PDF (recipient, master, or org owner)',
-  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an owner of the contract's organization; everyone else gets 404 so ids stay non-enumerable. Also 404 when signed_pdf_path is null (unsigned, or sign-time generation degraded to a warning).",
+  summary: 'Download the dual-signed contract PDF (recipient, or an admin of its organisation)',
+  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an organisation admin (org_admin grant) of the contract's organization; everyone else gets 404 so ids stay non-enumerable. A SIGNED contract with no stored PDF (signed before CONTRACTS-PDF.1, or sign-time generation degraded to a warning) answers a JSON 409 `code: 'pdf_missing'` (`canGenerate` says whether the caller may POST); an unsigned contract with no PDF is 404.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     302: { description: 'Redirect to the short-lived signed download URL' },
-    404: { description: 'Not found (incl. cross-tenant ids and contracts with no stored PDF)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (incl. cross-tenant ids and unsigned contracts with no stored PDF)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "Signed, but no PDF stored yet (`code: 'pdf_missing'`); generate it with POST", content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Signed-URL mint failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONTRACTS-PDF.2 — rebuild the PDF for a contract signed before it was stored
+registry.registerPath({
+  method: 'post',
+  path: '/api/contracts/{id}/pdf',
+  tags: ['Contracts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate and store the dual-signed PDF for an already-signed contract (organisation admins only)',
+  description: "Renders the PDF from the signed record (body_rendered, issuer_signature/issued_at, signature_value/signed_at/signed_ip, template name, studio brand and clock) exactly as the sign route does (shared renderAndStoreSignedContractPdf), uploads it to contracts/<id>/signed.pdf and writes signed_pdf_path. For the contracts signed before CONTRACTS-PDF.1. Master or an org_admin of the contract's organization; everyone else (the recipient included) and a foreign id get 404, the GET's posture. 409 `code: 'not_signed'` for any status but signed. Idempotent: a contract that already has a PDF answers 200 with `generated: false` and is never re-rendered.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ id, signed_pdf_path, generated } — generated:false when a PDF was already on file' },
+    404: { description: 'Not found (incl. cross-tenant ids and non-admin callers)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: "Contract is not signed (`code: 'not_signed'`)", content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Render or storage failed; nothing recorded', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3669,8 +5846,8 @@ registry.registerPath({
   path: '/api/settings/org-usage',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Org month-to-date usage + hard caps (admin roles)',
-  description: 'Live AI spend and email sends (cap-relevant, mig 421 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. ?organization_id targets another org (master only).',
+  summary: 'Org month-to-date usage + hard caps (organisation admins only)',
+  description: 'Live AI spend and email sends (cap-relevant, mig 421 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. Organisation admins only (a master, or an org_admin grant; C18). ?organization_id targets another org the caller administers (a master: any; a foreign org answers 404).',
   responses: {
     200: { description: 'Usage summary' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
@@ -3682,7 +5859,7 @@ registry.registerPath({
   path: '/api/settings/org-usage',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Set/clear the org hard caps (owner-of-org or master)',
+  summary: 'Set/clear the org hard caps (organisation admins only)',
   description: 'ai_hard_cap_cents (Mia pauses at cap) and email_hard_cap_sends (campaign starts refused at cap). null clears a cap; both default to no cap.',
   request: {
     body: {
@@ -3699,7 +5876,51 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Caps saved' },
-    403: { description: 'Forbidden — owner of the org or master', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// MIAORG.1 Task 4 — Mia's organisation defaults (org_settings.customer_agent, mig 729)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/customer-agent/org',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mia organisation defaults (masters and organisation admins only)',
+  description: 'The organisation layer every studio resolves under its own settings (DEFAULTS <- org <- studio; studio-only keys such as enabled, test_mode, booking_mode and the booking/membership links are never inherited). Returns { organization, settings (the layer over the defaults, studio-only keys left out), raw (the stored layer, null when none), defaults, studios: [{ id, name, sets, mia_on }] } for every active studio of the organisation; `sets` lists the setting paths that studio stores itself, so the editor can say which studios use each organisation value. ?organization_id targets another organisation the caller administers (a master: any). Anyone else, or a foreign organisation, is a 404.',
+  request: { query: z.object({ organization_id: uuidLike.optional() }) },
+  responses: {
+    200: { description: 'Organisation defaults' },
+    404: { description: 'Not an admin of that organisation, or no such organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/settings/customer-agent/org',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save Mia organisation defaults, or start them from a studio (masters and organisation admins only)',
+  description: 'Either { settings, overridden? }: stores only the fields the organisation sets (overridden; defaults to every non-null value sent). A studio-only key or quiet_hours.off (a studio\'s "no quiet hours") is a 400; quiet_hours.tz is never stored, so each studio reads organisation quiet hours on its own clock. Or { copy_from_location_id }: that studio\'s own inheritable values (present and non-null) overwrite the matching organisation fields and the rest are kept; the studio must belong to the organisation (404 otherwise) and is never changed. Upserts org_settings.customer_agent only (no other column is written). Answers the same shape as the GET.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional(),
+            settings: z.record(z.string(), z.unknown()).optional(),
+            overridden: z.array(z.string()).optional(),
+            copy_from_location_id: uuidLike.optional(),
+          }).openapi('MiaOrgDefaultsPut'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Saved; the new organisation layer' },
+    400: { description: 'Invalid body, or a studio-only key', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not an admin of that organisation, or the studio is not in it', content: { 'application/json': { schema: ErrorResponse } } },
+    422: { description: 'The source studio holds a value the organisation layer cannot take', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -3709,11 +5930,11 @@ registry.registerPath({
   path: '/api/settings/billing',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Tenant billing & usage assembler (owner of the org or master)',
-  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Plus the org\'s recent wallet top-up VAT invoices (INTEG-C2b: last 24 across all the org\'s locations, newest first). Orgs with zero active tier pinnings get pinned:false and empty locations/invoices lists. ?organization_id targets another org (master only; a foreign org answers 404, not 403).',
+  summary: 'Tenant billing & usage assembler (organisation admins only)',
+  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Plus the org\'s recent wallet top-up VAT invoices (INTEG-C2b: last 24 across all the org\'s locations, newest first). Orgs with zero active tier pinnings get pinned:false and empty locations/invoices lists. ?organization_id targets another org the caller administers (a master: any; a foreign org answers 404, not 403).',
   responses: {
     200: { description: 'Billing page data' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3723,7 +5944,7 @@ registry.registerPath({
   path: '/api/settings/billing/auto-topup',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Configure wallet auto-top-up (owner of the org or master)',
+  summary: 'Configure wallet auto-top-up (organisation admins only)',
   description: 'Writes the three DORMANT wallets.auto_topup_* config columns only (never balance_cents — wallet_apply stays the only balance write path). Takes effect when the Stripe card top-up leg ships. A foreign/unknown location answers 404, not 403.',
   request: {
     body: {
@@ -3741,7 +5962,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Auto-top-up config saved' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3753,7 +5974,7 @@ registry.registerPath({
   path: '/api/settings/billing/topup',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Start a Stripe wallet top-up (owner of the org or master)',
+  summary: 'Start a Stripe wallet top-up (organisation admins only)',
   description: 'Creates a pending TU-serial VAT invoice row and a hosted Stripe Checkout Session (plain platform charge — no Connect params) for a FIXED denomination (2500/5000/10000/25000 cents ex-VAT; 23% Irish VAT added on top at checkout). Requires an ACTIVE tier pinning on the location — unpinned locations (every location today) answer 400. Fulfilment (invoice paid + wallet_apply credit + VAT-invoice email) happens on the dedicated /api/webhooks/stripe-wallet endpoint, never on the redirect. A foreign/unknown location answers 404, not 403.',
   request: {
     body: {
@@ -3771,7 +5992,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Checkout created — { checkout_url, invoice_id, number }' },
     400: { description: 'Invalid denomination, or the location has no active platform plan', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Stripe checkout could not be created', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3784,12 +6005,13 @@ registry.registerPath({
   path: '/api/settings/email-domain',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Tenant email sending-domain status (owner of the org or master)',
-  description: 'Redacted status for the caller\'s org: sending domain, the DNS records to add (DKIM TXT + Return-Path CNAME), per-record verified booleans, lifecycle status, and addon_active/account_configured flags for the UI gate. The Postmark SERVER TOKEN is never included. ?organization_id targets another org (master only; a foreign org answers 404, not 403). 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  summary: 'Tenant email sending-domain status (organisation admins only)',
+  description: 'Redacted status for the caller\'s org: sending domain, the DNS records to add (DKIM TXT + Return-Path CNAME), per-record verified booleans, lifecycle status, and addon_active/account_configured flags for the UI gate. The Postmark SERVER TOKEN is never included. ?organization_id targets another org the caller administers (a master: any; a foreign org answers 404, not 403). 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
   responses: {
     200: { description: 'Redacted email-domain status' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the stored sending-domain state just now; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -3799,8 +6021,8 @@ registry.registerPath({
   path: '/api/settings/email-domain',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Provision the org\'s Postmark server + sending domain (owner of the org or master)',
-  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  summary: 'Provision the org\'s Postmark server + sending domain (organisation admins only)',
+  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset. A failed read of the stored state answers 502 and creates nothing. When Postmark answers "Domain already exists" (domains are account-level), a platform master adopts the existing account domain if no other organisation holds it; anyone else gets a 409.',
   request: {
     body: {
       content: {
@@ -3818,8 +6040,9 @@ registry.registerPath({
   responses: {
     200: { description: 'Provisioned — redacted status + DNS records' },
     400: { description: 'Invalid sending domain', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — owners/master only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The domain is already a Domain in the platform\'s Postmark account and this caller may not adopt it (not a platform master, or another organisation holds it) — use a subdomain', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark could not provision the server/domain', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3830,7 +6053,7 @@ registry.registerPath({
   path: '/api/settings/email-domain/verify',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Re-check the org\'s sending-domain DNS and go live (owner of the org or master)',
+  summary: 'Re-check the org\'s sending-domain DNS and go live (organisation admins only)',
   description: 'Asks Postmark to re-verify DKIM + Return-Path; when both verify, flips the status to live. Idempotent. Operates on an already-provisioned row (409 if none). A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
   request: {
     body: {
@@ -3845,9 +6068,10 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Re-checked — redacted status + DNS records' },
-    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'No sending domain provisioned yet', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read the stored sending-domain state just now; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Postmark could not read the domain', content: { 'application/json': { schema: ErrorResponse } } },
     503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -3872,7 +6096,7 @@ registry.registerPath({
             address: z.string().max(300).nullish(),
             phone: z.string().max(50).nullish(),
             email: z.string().email().nullish(),
-            timezone: z.string().max(64).optional(),
+            timezone: z.string().max(64).optional().openapi({ description: 'TZ.2: the studio\'s IANA timezone (any zone, e.g. Europe/Dublin, America/New_York), stored in its canonical spelling. Fixed offsets (+05:30, Etc/GMT-5, UTC+1) and unknown names are refused with 400. Omitted = Europe/Dublin; the CRM forms always send the zone the creator chose. Changed later only through the service role (no client UPDATE since mig 719).' }),
             country: z.string().length(2).optional(),
             active: z.boolean().optional(),
             monthly_contractor_budget_eur: z.number().min(0).nullish(),
@@ -3889,6 +6113,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Location created and seeded' },
+    400: { description: 'Validation failed (e.g. a timezone that is not an IANA zone, or a fixed offset)', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master only', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Slug already exists', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Location created but seeding failed (safe to re-run)', content: { 'application/json': { schema: ErrorResponse } } },
@@ -3933,7 +6158,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Send-time quiet window for a location',
-  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00 Europe/Dublin). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
+  description: 'Returns { enabled, start_hour, end_hour, default_start_hour, default_end_hour, can_edit, timezone } (company_settings.send_quiet_hours_*, mig 514; defaults enabled=true, 21:00 to 08:00). The hours are the location\'s wall clock; `timezone` is its IANA zone (locations.timezone, TZ.4). ADVISORY on every MANUAL path: the composers warn when a send would land inside the window and offer the next slot outside it, and nothing an operator sends by hand is clamped, deferred or blocked. One automated reader DEFERS (SEQ-QUIET.1): the sequence runner falls back to this window for a sequence that has no send_window of its own, since no operator is watching a cron tick to read a warning. A sequence-level send_window still wins outright and the two are never merged. A location with no company_settings row returns the defaults rather than 404.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current quiet-hours setting' },
@@ -3947,7 +6172,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Save the send-time quiet window (owner or master)',
-  description: 'Hours are 0-23, Europe/Dublin wall clock. The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
+  description: 'Hours are 0-23, the location\'s wall clock (its locations.timezone). The window is half-open [start, end): start_hour > end_hour wraps past midnight (the default 21 to 8 does). start_hour must differ from end_hour — switch enabled off instead of setting a zero-length window.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ enabled: z.boolean(), start_hour: z.number().int().min(0).max(23), end_hour: z.number().int().min(0).max(23) }).openapi('SendQuietHoursSave') } } },
@@ -3999,7 +6224,7 @@ registry.registerPath({
   tags: ['Communications'],
   security: [{ CookieAuth: [] }],
   summary: 'Inbound spam threshold for a location',
-  description: 'Returns { enabled, threshold, default_threshold, can_edit } (company_settings.email_spam_filter_enabled / email_spam_threshold, mig 584; defaults enabled=true, 5.0 — SpamAssassin\u2019s own required_score). The inbound webhook quarantines an email whose Postmark SpamScore (fallback: the X-Spam-Score / X-Spam-Status headers) is AT OR ABOVE this threshold: the ticket is created but flagged is_spam — no staff push, no unread/badge count, shown only on Mail\u2019s Spam view — until Not spam releases it or the 30-day purge (/api/cron/purge-spam-tickets) deletes it. FAIL OPEN everywhere: no readable score is never spam, a disabled filter quarantines nothing (the score is still recorded), and an unreadable threshold falls back to the default rather than to 0. A location with no company_settings row returns the defaults rather than 404. can_edit is the PUT gate\u2019s own answer, so the card never offers a Save the server refuses.',
+  description: 'Returns { enabled, threshold, default_threshold, can_edit } (company_settings.email_spam_filter_enabled / email_spam_threshold, mig 584; defaults enabled=true, 5.0 — SpamAssassin\u2019s own required_score). The inbound webhook quarantines an email whose Postmark SpamScore (fallback: the X-Spam-Score / X-Spam-Status headers) is AT OR ABOVE this threshold: the conversation is created but flagged is_spam — no staff push, no unread/badge count, shown only on Mail\u2019s Spam view — until Not spam releases it or the 30-day purge (/api/cron/purge-spam-tickets) deletes it. FAIL OPEN everywhere: no readable score is never spam, a disabled filter quarantines nothing (the score is still recorded), and an unreadable threshold falls back to the default rather than to 0. A location with no company_settings row returns the defaults rather than 404. can_edit is the PUT gate\u2019s own answer, so the card never offers a Save the server refuses.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current spam-filter setting' },
@@ -4025,6 +6250,24 @@ registry.registerPath({
   },
 })
 
+// Attendance report (ATTENDREPORT.1)
+registry.registerPath({
+  method: 'get',
+  path: '/api/attendance',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Attendance report for the active studio (attendance_reports)',
+  description: "One row per live shift assignment at the caller's active studio with a block date in [from, to]: the coach, the rostered times (scheduled_start/scheduled_end), the start and end the coach was given (effective_start/effective_end: a manager's adjusted time, else the rostered one; start_adjusted when the start differs, end_adjusted when the end does, end_next_day when the effective end is at or before the effective start), the recorded arrival (shift_assignments.arrived_at only; an adjusted time is never an arrival), arrival_inferred (already on site from a back-to-back shift, measured on the rostered times like the published-vs-now view), status on_time | late | pending | no_show and minutes_late, both measured from the effective start and end (60-second grace; a carried arrival is judged on this shift's effective start too, and keeps its minutes_late when it reads late, else null), and sources. from and to default to the 14 days before today and today in Europe/Dublin; both must be real dates, to on or after from, at most 366 days. Every row is read (paged). warnings contains 'sources_unavailable' when the attendance-event sources could not be read: the rows are complete and each stamped row still carries its own arrival source.",
+  request: { query: z.object({ from: isoDate.optional(), to: isoDate.optional(), profile_id: uuidLike.optional() }) },
+  responses: {
+    200: { description: '{ success, rows, summary: { total, on_time, late, no_show, pending }, warnings, location: { id, name, timezone } }' },
+    400: { description: 'from or to not a real date, to before from, more than 366 days, or a malformed profile_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: attendance_reports is not enabled for your role at the active studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'The active studio was not found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The report could not be read (never answered as an empty report)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',
@@ -4042,7 +6285,7 @@ registry.registerPath({
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Mobile geofence-entry check-in (stamps own shift)',
-  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt | impersonation_ignored.',
+  description: 'Called by the mobile background geofence task on region ENTER. Records the caller\'s arrival on shift_assignments.arrived_at (mig 609) — never on start_time_override, the manager-set paid window (mig 099). Matches a shift up to 45 minutes before its scheduled start, or any time while it is running; a ping within 60 minutes of a shift the coach already arrived for is treated as a re-entry and stamps nothing. Dedups region flaps to one geofence event per profile+location per 10 minutes, and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt | impersonation_ignored.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,
@@ -4100,10 +6343,611 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'List scheduled shifts',
-  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.)",
+  description: "Returns shifts for the caller's locations, optionally filtered by location_id, start_date, end_date, profile_id. Each row is judged against the caller's role at THAT row's location: where the caller is not owner/manager/head_coach, draft shifts are omitted and the row is slimmed — the assignee profile carries id, full_name, avatar_url and role only (no email), and notes / partial_reason are null on colleagues' rows. On the caller's own row there, notes is that assignment's own note only, never the shift block's manager notes (COACHNOTES.1); the coach-facing block text is briefing, on every row. A manager at the row's studio gets notes = the assignment's note, else the block's. (The legacy create / update / delete shift endpoints were retired — use the block-based assignment routes.) Each row also carries open_swap_status: 'pending' or 'awaiting_approval' when the CALLER has an open swap request on that shift of their own, otherwise null (never set on a colleague's row). Each row also carries arrival (ARRIVALSHOW.1): on the CALLER's own rows an object { at, at_local, at_local_date, source, carried, tracked, starts_at, ends_at, as_of } — at is shift_assignments.arrived_at (never the manager-set paid-window override); carried = on site from an earlier back-to-back shift that day at the same studio (the attendance report's rule), or a stamp at the same instant as the stamp on any earlier-starting shift of the caller's that day, at any studio (mig 610's duplicate_orphan); tracked = the studio's geofence is on and the caller is not exempt (null when unknown), and always false for a shift before 2026-09-25 (ARRIVAL_TRACKING_FROM); starts_at/ends_at = the shift's effective window; as_of = the server clock at the read (the phone judges any absence against the earlier of its own clock and as_of). null on colleagues' rows and whenever the arrival read failed. The arrival facts are read only when the query has include=arrival (a comma list; the phone's Schedule tab Me view sends it); without it every row carries arrival: null and no arrival read is made.",
   responses: {
     200: { description: 'Shifts' },
+    400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD; `<name>: not a real date`); both given with end_date before start_date, or more than 92 days apart (RANGEVALID.1; one bound or none is not span-checked); or the read failed', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// COPYMODES.1 — copy a roster week / month forward, as a carbon copy or from
+// the templates.
+const CopyModeField = z.enum(['exact', 'template']).default('exact').openapi({
+  description: "'exact' (default; a missing mode means exact): every live source assignment lands with the times it actually had, its notes and partial_reason, and every staffed source block is ensured on the target, and an empty one where its template runs on the target weekday — a block that has to be created takes the source block's times and min/max coaches. 'template': the same coaches go onto the same template slot at the template's defined times (an override is written only where the target block was hand-edited away from them), with no notes or partial_reason; a coach on a template that is now inactive, or no longer runs that weekday, is skipped and counted.",
+})
+const CopyShiftsResponse = z.object({
+  success: z.literal(true),
+  copied: z.number().int().openapi({ description: 'Assignments actually inserted. A coach already on the target is never overwritten (COPYFIX.1), so a re-run reports 0.' }),
+  skipped: z.number().int().optional().openapi({ description: 'Live source assignments not copied (no matching target day, an inactive / off-day template in template mode, a slot a manager deleted in the target period, the coach has approved leave that day, or the coach no longer works at the target studio). Includes skipped_removed, skipped_on_leave and skipped_not_at_studio.' }),
+  skipped_not_at_studio: z.number().int().optional().openapi({ description: 'STAFFDELETE.1 — the part of skipped whose coach no longer works at the target studio: no profile_locations row there, deactivated, or permanently deleted. Past shifts are kept on a permanent delete, so a copy would otherwise re-roster the deleted person.' }),
+  skipped_removed: z.number().int().optional().openapi({ description: 'SLOTREMOVAL.1 — the part of skipped that landed on a slot a manager deleted (shift_block_removals). A deleted slot is not re-created by a copy in either mode; add it back with POST /api/schedule/blocks first.' }),
+  skipped_on_leave: z.number().int().optional().openapi({ description: 'COPYLEAVE.1 — the part of skipped whose coach has APPROVED time off (any type) covering the target date. Pending leave does not skip. Leave is matched by person, wherever it was filed. In exact mode the slot itself is still created, so it shows as a staffing gap.' }),
+  mode: z.enum(['exact', 'template']),
+}).openapi('CopyShiftsResponse')
+
+// DATECHECK.1 — the calendar's block feed and the studio overview strip,
+// registered for their date refusals.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/blocks',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List shift slots with their assignments (the schedule calendar feed)',
+  description: "Each shift_blocks row with its template and assignments, optionally bounded by start_date / end_date (YYYY-MM-DD, inclusive, on block_date; absent or empty = no bound) at location_id, or across the caller's studios. Where the caller is not a manager at the block's studio, draft blocks are omitted and capacity, block notes and assignment notes / partial_reason are stripped. When both bounds are given, end_date must be on or after start_date and at most 92 days after it (the calendar asks for at most 42).",
+  responses: {
+    200: { description: 'Blocks with template and assignments' },
+    400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD), e.g. 2026-02-30 (`<name>: not a real date`); both given with end_date before start_date, or more than 92 days apart (RANGEVALID.1); or the read failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'location_id outside the caller’s assignments', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/overview',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Per-day staffing demand against supply for one studio (manager-only)',
+  description: 'For each day from..to (YYYY-MM-DD, inclusive, at most 60 days): demand from scheduled events and Calendly templates, supply from scheduled staff minus approved leave, and a red / amber / green load. Needs a manager role and the schedule feature at location_id.',
+  responses: {
+    200: { description: 'One summary per day' },
+    400: { description: 'from / to missing, malformed or not a real calendar date (e.g. 2026-02-30), to before from, or a range over 60 days', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at location_id, or the schedule feature is off there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// SLOTREMOVAL.1 — manual slot create/delete. A deleted slot is remembered in
+// shift_block_removals so the nightly horizon generator and roster copies
+// don't bring it back; a manual create is the undo.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/blocks',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a shift slot for a template on one date (manager-only)',
+  description: 'Creates one shift_blocks row for (location_id, template_id, block_date); times and capacity default from the template. A date inside an already-published roster joins that roster. Also clears any removal recorded for that slot by DELETE /api/schedule/blocks/{id}, so the nightly schedule and roster copies treat it as a normal slot again. If clearing the removal fails the block is still created and the response carries a warning. For an admin template (SHIFTTYPE.1, mig 628) the slot\'s minimum is always 0; an explicit non-zero min_coaches is refused with 400 `admin_has_no_minimum`.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: z.string(),
+      template_id: z.string(),
+      block_date: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date (2026-02-30 is refused with a 400)' }),
+      start_time: z.string().optional(),
+      end_time: z.string().optional(),
+      max_coaches: z.number().int().optional(),
+      min_coaches: z.number().int().optional(),
+      notes: z.string().nullable().optional(),
+    }).openapi('ScheduleBlockCreateRequest') } } },
+  },
+  responses: {
+    201: { description: 'Slot created; `warning` is present when its earlier removal could not be cleared' },
+    400: { description: 'Validation error, unknown template, or a minimum on an admin template (admin_has_no_minimum)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A slot already exists for this template on this date', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/blocks/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete one shift slot (manager-only)',
+  description: "Deletes a shift_blocks row and its assignments, and records the removal (shift_block_removals) so the nightly schedule and roster copies do not recreate that template's slot on that date. POST /api/schedule/blocks for the same template and date restores it. To stop a slot every week, deactivate the template instead. If recording the removal fails the slot is still deleted and the response carries a warning that it may come back overnight.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Slot deleted; `warning` is present when the removal could not be recorded', content: { 'application/json': { schema: z.object({ success: z.literal(true), warning: z.string().optional() }) } } },
+    400: { description: 'The delete failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at the slot\'s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Slot not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/blocks/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit one shift: times, minimum and maximum coaches, and the coach briefing (manager-only)',
+  description: "BLOCKEDIT.1. Every field optional; omitted = unchanged; briefing null or blank clears it (at most 500 characters; mig 629). Refuses: end not after start (400 end_not_after_start), minimum above maximum (400 min_above_max), a minimum on an admin shift (400 admin_has_no_minimum), a maximum below the live coaches already on it (409 below_assigned, unless allow_below_assigned: true, which saves with a warning), a coach whose own hours would end at or before they start (409 coach_window_invalid, naming them), a shift changed by someone else since the editor opened it (409 block_changed; send `expected`), and a shift dated before today without confirm_past: true (409 past_shift). A coach's own start/end override equal to the shift's OLD time moves with it; any other override stays and is listed in kept_overrides with a warning. On a PUBLISHED roster the edit writes a change-log row, and each coach whose own hours moved gets a time_changed row; the */5 push cron tells them once, only inside staff quiet hours (07:00-22:00 at the studio). `notice.when` is 'shortly' (told within minutes), 'morning' (quiet hours now: told from 07:00), 'too_late' (quiet hours now, and a start, old or new, before 07:30 on the first morning a notice can go out: ring the coaches), or 'past' (the shift is already over, an earlier date or ended today: logged, never messaged). Coaches moved onto a time that overlaps another of their shifts at any studio of the organisation are listed in `overlaps` (a warning, never a refusal). Nothing is logged or sent for a draft. Manager role AT the shift's studio; a shift outside the caller's studios is a 404.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      start_time: z.string().optional(),
+      end_time: z.string().optional(),
+      min_coaches: z.number().int().optional(),
+      max_coaches: z.number().int().optional(),
+      briefing: z.string().nullable().optional(),
+      allow_below_assigned: z.boolean().optional(),
+      confirm_past: z.boolean().optional(),
+      expected: z.object({ start_time: z.string(), end_time: z.string(), min_coaches: z.number().int(), max_coaches: z.number().int() }).optional()
+        .describe('The values the editor opened with; a stored value that differs is 409 block_changed'),
+    }) } } },
+  },
+  responses: {
+    200: { description: 'Saved (or `unchanged: true`); `notice`, `kept_overrides` and `warning` when they apply' },
+    400: { description: 'Validation error or a rule above', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "Forbidden — needs a manager role at the shift's studio", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Shift not found (or the id is not UUID-shaped)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'below_assigned, coach_window_invalid, past_shift, or block_changed (including a stale `expected`)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The shift could not be read; retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/shifts/copy-week',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy a roster week into another week (manager-only)',
+  description: 'Copies source_start (a Monday) + 6 days onto target_start, weekday for weekday. Insert-only: coaches already on the target keep their times. Coaches copied onto an already-published week are change-logged and notified after the response (NOTIFY.1) — also on a 400 from a write that failed part-way, for the coaches that did land. Cancelled assignments are never copied; everything copied is inserted as scheduled.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: z.string(),
+      source_start: z.string().openapi({ description: 'YYYY-MM-DD (Monday)' }),
+      target_start: z.string().openapi({ description: 'YYYY-MM-DD (Monday)' }),
+      mode: CopyModeField,
+    }).openapi('CopyWeekRequest') } } },
+  },
+  responses: {
+    201: { description: 'Copied', content: { 'application/json': { schema: CopyShiftsResponse } } },
+    400: { description: 'Validation error, or the read/write failed (writes are batched, so some coaches may have landed; re-running is safe)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No shifts in the source week', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Deleted-slot records or approved leave could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/shifts/copy-month',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy a roster month into another month (manager-only)',
+  description: "Both dates must be the 1st of a month. Exact mode maps each day to the same day-of-month (31 Jan into Feb is skipped). Template mode maps the Nth weekday to the Nth weekday (first Monday to first Monday) so coaches stay on the same template slot; a 5th weekday the target month lacks is skipped. Insert-only, as copy-week. copied 0 with skipped > 0 means every source coach was skipped.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: z.string(),
+      source_month_start: z.string().openapi({ description: 'YYYY-MM-01' }),
+      target_month_start: z.string().openapi({ description: 'YYYY-MM-01' }),
+      mode: CopyModeField,
+    }).openapi('CopyMonthRequest') } } },
+  },
+  responses: {
+    201: { description: 'Copied', content: { 'application/json': { schema: CopyShiftsResponse } } },
+    400: { description: 'Validation error, dates not the 1st, or the read/write failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No shifts in the source month', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Deleted-slot records or approved leave could not be read; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// TPLCLONE.1 — copy shift templates between two studios of ONE organisation.
+const TemplateCloneItem = z.object({
+  id: z.string().optional().openapi({ description: 'The new template id. Absent on a dry run.' }),
+  source_id: z.string(),
+  name: z.string(),
+  start_time: z.string(),
+  end_time: z.string(),
+  days_of_week: z.array(z.string()).openapi({ description: 'The weekdays the COPY runs on: empty unless copy_weekdays was true.' }),
+  source_days_of_week: z.array(z.string()).openapi({ description: 'The weekdays the source template runs on, copied or not.' }),
+})
+const TemplateCloneResponse = z.object({
+  success: z.literal(true),
+  data: z.object({
+    dry_run: z.boolean(),
+    created: z.array(TemplateCloneItem).openapi({ description: 'What was created, or on a dry run what would be.' }),
+    skipped: z.array(z.object({
+      source_id: z.string(),
+      name: z.string().nullable().openapi({ description: 'Null for not_found: an id that is not a template of the source studio is never answered with a name.' }),
+      reason: z.enum(['name_exists', 'duplicate_in_source', 'inactive', 'not_found']),
+    })),
+    generated_blocks: z.number().int().openapi({ description: 'Empty shift slots added over the next 8 weeks for copied templates with weekdays (always 0 without copy_weekdays).' }),
+  }),
+  warning: z.string().optional().openapi({ description: 'The templates were copied but the calendar could not be filled for some; the nightly schedule run adds them.' }),
+}).openapi('TemplateCloneResponse')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/templates/clone',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Copy shift templates from another studio in the same organisation (manager at both)',
+  description: 'Copies shift templates from from_location_id into to_location_id (the two must differ). Both studios must belong to the same organisation (403 otherwise, a master included) and the caller needs a manager role (owner, manager or head coach, or master) at BOTH. Only active templates are copied; template_ids narrows the copy, and an inactive one named there comes back skipped `inactive`, an id that is not a template of the source studio `not_found`. Copied: name, times, colour, role label, minimum and maximum coaches, and, only with copy_weekdays: true, the weekdays. Without copy_weekdays (the default) each copy has no weekdays, so it puts nothing on the calendar and the target studio\'s roster alerts are unchanged. The copies are active and ordered after the target\'s existing templates, in the source order. A name the target already has (any case, active or not) is skipped `name_exists`, as is one the target gained while the copy ran; a second source template of the same name is skipped `duplicate_in_source`. The insert is one statement: all or nothing. dry_run answers the same lists and writes nothing. With copy_weekdays, a copied template with weekdays gets its next 8 weeks of empty shifts at once, as creating one does; if that fails the copy stands, the answer carries `warning`, and the nightly schedule run adds them.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      from_location_id: uuidLike,
+      // Plain uuidLike: it is built in validate.js before extendZodWithOpenApi
+      // runs, so it has no .openapi(). "Must differ" is in the description above.
+      to_location_id: uuidLike,
+      template_ids: z.array(uuidLike).min(1).max(200).optional().openapi({ description: 'Source template ids to copy. Omitted: every active template at the source.' }),
+      copy_weekdays: z.boolean().optional().openapi({ description: 'Also copy the weekdays each template repeats on (default false). True fills the next 8 weeks at the target with empty shifts to staff.' }),
+      dry_run: z.boolean().optional().openapi({ description: 'Answer what would be created and skipped; write nothing.' }),
+    }).openapi('TemplateCloneRequest') } } },
+  },
+  responses: {
+    200: { description: 'Dry run, or nothing left to create (created is empty)', content: { 'application/json': { schema: TemplateCloneResponse } } },
+    201: { description: 'Copied', content: { 'application/json': { schema: TemplateCloneResponse } } },
+    400: { description: 'Validation error (including copying a studio onto itself)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a member of both studios, not a manager at both, or the studios are in different organisations', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'A studio no longer exists', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The studios or templates could not be read, or the insert failed; nothing was copied', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ROSTER-FIX.6c — the FTE weekly-hours panel's arithmetic, moved off the
+// browser. The panel prints hours, never money, so the payload carries hours
+// and the rates stay on the server.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/week-cost',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'FTE hours against contract for one week (owner/manager/master see the rows)',
+  description: "Per-coach allocated hours, contracted hours and overtime for the Mon-Sun week containing week_start, plus week totals, and contract_visible: true. Gate: master, owner, manager or head_coach AT location_id, and assertLocationAccess (a location outside the caller's assignments is a 403). CONTRACTVIS.1: every figure is measured against a contract, so only owner, manager or master at location_id get rows; a head coach gets 200 with contract_visible false, coaches [] and zero totals, and nothing is computed. The response carries NO rate, salary or euro figure. week_start may be any day inside the target week; it is snapped to that week's Monday.",
+  responses: {
+    200: { description: 'Per-coach hours + week totals' },
+    400: { description: 'Missing or malformed location_id / week_start, or week_start is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// LIEU.1 — the time-in-lieu ledger (staff_lieu_credits, mig 761): hours
+// banked for Sunday work (time and a third) and public holidays worked (base
+// time), FTE only, credited nightly by /api/cron/lieu-credits; a manager
+// records lieu taken or a manual credit here.
+const LieuEntryBody = z.object({
+  profile_id: z.string().uuid(),
+  location_id: z.string().uuid(),
+  source: z.enum(['manual', 'taken']).describe("'manual' adds a credit; 'taken' records lieu time taken (stored negative)"),
+  hours: z.number().gt(0).max(500).describe('Always positive on the wire'),
+  credit_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('A real YYYY-MM-DD; its year is the allowance year the entry counts in'),
+  note: z.string().min(1).max(500),
+})
+registry.register('LieuEntryBody', LieuEntryBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/allowances/lieu',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "One person's time-in-lieu ledger and balance for a year (hours)",
+  description: "Query: profile_id (default the caller), year (default the active studio's current year). Returns credited_hours, taken_hours, balance_hours and the year's entries (source sunday_worked | public_holiday_worked | manual | taken, hours, worked_hours, multiplier, holiday_name, note). Own ledger for anyone; another person's only for a manager at one of that person's studios (a profile outside the caller's studios is a 404). GET /api/schedule/allowances also carries the same balance as `lieu`.",
+  responses: {
+    200: { description: 'Balance + entries' },
+    400: { description: 'Malformed year', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — not a manager at any of the profile\'s studios', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Profile not in scope', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/allowances/lieu',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record lieu time taken, or a manual lieu credit, with a note',
+  description: "Master, owner or manager AT location_id (hasRoleAtLocation + assertLocationAccess); the profile must belong to that studio (404 otherwise). 'taken' is refused with 409 when it exceeds the running balance on credit_date. The automatic Sunday / public-holiday credits are the nightly sweep's record and cannot be written here.",
+  request: { body: { content: { 'application/json': { schema: LieuEntryBody } } } },
+  responses: {
+    201: { description: 'The entry' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Profile not at that studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'More than the banked balance', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/allowances/lieu',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a manual or taken lieu entry',
+  description: 'Query: id (uuid). Master, owner or manager AT the entry\'s studio; a row outside the caller\'s studios is a 404. An automatic credit (sunday_worked / public_holiday_worked) is 409: add a manual entry with a note instead.',
+  responses: {
+    200: { description: 'Removed' },
+    400: { description: 'id missing or not a uuid', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'An automatic credit cannot be removed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+const PayrollSettingsBody = z.object({
+  sunday_multiplier: z.number().min(1).max(3).nullable().describe('null = back to the default (4/3, time and a third)'),
+})
+registry.register('PayrollSettingsBody', PayrollSettingsBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/payroll',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's Sunday time-in-lieu multiplier",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  description: 'Any member of the studio may read: { sunday_multiplier (effective), default_sunday_multiplier, is_default, min, max, can_edit }. Stored at locations.settings.payroll.sunday_multiplier.',
+  responses: {
+    200: { description: 'The rule' },
+    403: { description: 'Not a member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/payroll',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set a studio's Sunday time-in-lieu multiplier (owner / master at the studio)",
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: PayrollSettingsBody } } } },
+  description: 'Membership first (assertLocationAccess), then master or owner AT the studio. The settings jsonb is merged; null removes the override.',
+  responses: {
+    200: { description: 'The rule after the write' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
+// only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/contractor-spend',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Contractor spend against the monthly budget for one studio (studio totals only)',
+  description: "Query: location_id (uuid) and reference_date (a real YYYY-MM-DD Dublin date inside the target month). Returns the month's studio totals: monthStartIso, monthEndIso, contractorCostEur (PUBLISHED shifts, priced by whoever holds them at their hourly rate; admin shifts excluded), unpublishedContractorCostEur (drafts and shifts no roster owns yet), projectedContractorCostEur (the two together), monthlyBudgetEur (null = not set), remainingEur, overBudget, projectedOverBudget and utilisationPct. No per-person figure, name, rate or id. Gate: master, owner, manager or head_coach AT location_id, and membership of that location for everyone but a master (a location outside a non-master's assignments is a 403). FTECOSTVIS.1: fteImplicitCostEur (published FTE hours × salary / 52 / contracted hours, context only; it never counts against the budget) is returned only to an owner, manager or master AT location_id; a head coach gets 200 with every other key and no fteImplicitCostEur.",
+  responses: {
+    200: { description: 'Studio spend totals for the month' },
+    400: { description: 'Missing or malformed location_id / reference_date, or reference_date is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed; no figure is returned (never EUR 0)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CHANGELOG.1 — the human-facing read of roster_change_log (mig 236).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/change-log',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edits made to published rosters in a period (manager-only)',
+  description: "Query: location_id (uuid), from and to (YYYY-MM-DD, inclusive, matched on the SHIFT date, at most 92 days). Returns the roster_change_log rows for that studio, newest first: action (assigned | unassigned | time_changed), the coach's name, who made the change, the shift's date, times and name, self_change (the coach made the change themselves), `details` (whitelisted by key AND value: how it happened, an allow-listed reason, the old/new times; never a free-form writer field), created_at, and notified_at (null = the coach has not been told yet; the next re-publish tells them. A stamp is not always a message: see stampMeansTold in roster-change-format.js). Only edits to an ALREADY-PUBLISHED roster are logged, so a draft week is empty by design. Manager-only (master, owner, manager, head_coach) at location_id, scoped by assertLocationAccess: a studio outside the caller's assignments is a 403. Names and times only, never pay. `truncated` is true when more than " + ROSTER_CHANGE_LOG_MAX_ROWS.toLocaleString('en-IE') + " rows matched.",
+  responses: {
+    200: { description: '{ success, data: { changes, truncated } }' },
+    400: { description: 'Missing or malformed location_id / from / to, a from or to that is not a real calendar date, to before from, or a range over 92 days', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The change log could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// RUNWAY.1 — is the next week coming up built and published? One studio.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/runway',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Roster runway for one studio (manager-only)',
+  description: "The first Mon-Sun week, out of the two that start after today, whose Monday is 1 to 10 days away and that is not ready: some shift has no live coach, or some shift is not on a published roster. The current week is never reported (the Today staffing card and the schedule banner cover it). `runway` is null when every week inside the horizon is ready, and for a studio with no active shift template. severity is 'red' at 1 to 5 days and 'amber' at 6 to 10. Counts cover that week's shifts only. Manager-only (master, owner, manager, head_coach AT location_id) and scoped by assertLocationAccess: whether a week is published is not coach information. Drives the mobile Studio dashboard chip; the web Today page reads the same function server-side.",
+  responses: {
+    200: { description: '{ runway: null | { weekStart, daysAway, severity, blocks, staffed, underMin, published, unstaffed, unpublished } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The roster read failed (never reported as "ready")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// AVAIL.1 — coach availability (mig 630). Own read/replace, and a manager's
+// read of a studio's members for a date range.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/availability',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "A coach's availability: your own, or a studio's (manager)",
+  description: "Without location_id: the caller's own unavailability as { weekly, dated } (weekly: weekday mon..sun + all_day or start_time/end_time HH:MM; dated: start_date..end_date + the same, optional note). Dated rules that ended before today (Dublin) are history and not returned. With location_id + start_date + end_date (real dates, at most 92 days): every active member of that studio's weekly rules and the dated rules overlapping the range, as flat rows with id and profile_id. The studio read is manager-only (master, owner, manager, head_coach AT location_id) and scoped by assertLocationAccess. Notes are the coach's own words and are shown to managers. Advisory data: nothing in the API refuses an assignment because of it.",
+  responses: {
+    200: { description: '{ success, data }' },
+    400: { description: 'Malformed location_id, a date that is not real, end before start, or a range over 92 days', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed (never answered as "nobody is unavailable")', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/availability',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Replace your own availability',
+  description: "Replaces the caller's weekly rules and their dated rules that have not ended, atomically. No approval. A save that changes something tells the owner, managers and head coaches at every studio the caller belongs to (one push per save, 07:00-22:00 studio time; outside it, at 07:00). A save identical to what is stored changes nothing and tells nobody (data.changed false). Notes are the coach's own words and are shown to those managers (the studio read and the roster). A dated rule that has already started may be sent back unchanged, with its note edited, or with only its end date moved: the days already gone stay as history and the rule continues from today (20-30 Sep with its end moved to the 27th, saved on the 25th, becomes history 20-24 plus 25-27; an end moved to before today ends it from today). A dated rule that ended before today and is sent back as stored is ignored (history). Any other started rule (a new one, a moved start, a changed window) is refused ('Start today or later'), as is a new rule that has already ended. 400 issues use validateBody's { path, message } shape; paths index the SORTED lists.",
+  request: { body: { content: { 'application/json': { schema: AvailabilityPutSchema } } } },
+  responses: {
+    200: { description: '{ success, data: { changed, weekly, dated } }' },
+    400: { description: 'Invalid body or rule (end not after start, not a real date, a date that has passed, over the limits)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The save failed; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// QUALS.1 — staff qualifications with expiry (mig 635).
+registry.registerPath({
+  method: 'get',
+  path: '/api/qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Qualifications at one studio: everyone (owner or manager) or your own",
+  description: "QUALS.1. location_id must be a studio the caller belongs to. An owner or manager AT that studio (masters bypass) gets audience 'manager': every current member (deactivated and permanently deleted people are never listed), A-Z, each with their records in the studio's organisation. Anyone else gets audience 'self': their own records, read-only. Always returns the organisation's catalogue (types, archived ones flagged active: false), today (Dublin) and can_edit_types (owner at the studio, or master). A record: { id, qualification_type_id, issued_on, expires_on (null = does not expire), note, updated_at }. Status (valid, expiring within 30 days, expired, not on record) is computed by the client from today with shared/qualifications.js.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { audience, today, organization_id, can_edit_types, types, people: [{ profile_id, full_name, records }] } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never answered as an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record a qualification for someone',
+  description: "QUALS.1. The caller must be an owner or manager (masters bypass) at a studio the person currently belongs to, in the type's organisation; otherwise 404 (the person and the type are never confirmed). One record per person per type (409 if one exists: edit it). expires_on null or absent = does not expire. A blank note is stored as null. The type must not be archived (400).",
+  request: { body: { content: { 'application/json': { schema: QualificationRecordCreateSchema } } } },
+  responses: {
+    201: { description: '{ success, data: record }' },
+    400: { description: 'Invalid body (a date that is not real, expiry before issue, note over 300) or an archived type', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner or manager anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown type, or a person the caller may not manage', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The person already has a record of that type', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/qualifications/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Change a qualification record's dates or note",
+  description: 'QUALS.1. Same authority as POST, judged on the record. The dates are judged as they will be after the change (a new expiry before the stored issue date is a 400). The type and the person are fixed.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: QualificationRecordPatchSchema } } } },
+  responses: {
+    200: { description: '{ success, data: record }' },
+    400: { description: 'Nothing to change, or impossible dates', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner or manager anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such record, or not one the caller may manage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/qualifications/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a qualification record',
+  description: 'QUALS.1. Same authority as POST, judged on the record.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { id, deleted: true } }' },
+    403: { description: 'Not an owner or manager anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such record, or not one the caller may manage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/qualifications/types',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Add a qualification type to your organisation's list",
+  description: "QUALS.1. Owners (and masters) at location_id; the type belongs to that studio's organisation. Names are one line, 1-60 characters, unique per organisation ignoring case (409).",
+  request: { body: { content: { 'application/json': { schema: QualificationTypeCreateSchema } } } },
+  responses: {
+    201: { description: '{ success, data: type }' },
+    400: { description: 'Invalid name', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or not an owner there', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A type with that name exists', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/qualifications/types/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Rename, archive or restore a qualification type',
+  description: 'QUALS.1. Owners (and masters) of the type\'s organisation. Archiving (active: false) keeps every record and requirement; archived types are left out of the owner digest and the picker advisory. Types are never deleted.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: QualificationTypePatchSchema } } } },
+  responses: {
+    200: { description: '{ success, data: type }' },
+    400: { description: 'Nothing to change, or an invalid name', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner anywhere', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such type, or not in an organisation you own a studio of', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A type with that name exists', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/template-qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The qualifications each shift template at a studio asks for',
+  description: "QUALS.1. Advisory: the ranked coach picker badges a coach with no current record of a required type on the shift's date; nothing refuses an assignment. Manager roles (master, owner, manager, head_coach) AT location_id. Returns the organisation's catalogue and { [template_id]: [type_id] }.",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { types, requirements } }' },
+    400: { description: 'Missing or malformed location_id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Studio outside your assignments, or no manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/template-qualifications',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: "Replace one shift template's required qualifications (advisory)",
+  description: "QUALS.1. Advisory only: requirements badge the coach picker and never refuse an assignment. At most 5 types, all in the template's organisation (400 otherwise; the database refuses another organisation's type too). A newly added type must not be archived; an archived type already required may stay. Manager roles AT the template's studio (404 outside it, 403 for a member who is not a manager there).",
+  request: { body: { content: { 'application/json': { schema: TemplateQualificationsPutSchema } } } },
+  responses: {
+    200: { description: '{ success, data: { template_id, qualification_type_ids, added, removed } }' },
+    400: { description: 'Invalid body, too many types, an unknown or archived type', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No manager role at the template\'s studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such template, or not at a studio the caller belongs to', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// GRID.1 — the coach-by-day grid's read (Schedule → Week → Coaches).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/grid',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach-by-day grid for one week (manager-only)',
+  description: "GRID.1. Query: location_id (uuid) and start_date (any day of the target Mon-Sun week; snapped to its Monday). Returns members: the studio's team (profile_locations, active and not deleted) plus anyone holding a live shift at the studio that week (member: false), each with profile_id, full_name, employment_type and, only when contract_visible is true, contracted_hours (employees only, else null). contract_visible is true for owner, manager and master AT location_id; for a head coach it is false and no member carries a contracted_hours key (the column is not read); and shifts: every live shift those people have from the Sunday before to the Monday after, at this studio and at the other studios of the SAME organisation (never another organisation), with block_id, block_date, the block, override and template times, the template name and kind (class | admin), location_name and here. cross_studio_checked is false when the other studios could not be read; the shifts are then this studio's only. Hours and times only: no rate, salary, cost or euro figure is read or returned. Manager-only (master, owner, manager, head_coach AT location_id), scoped by assertLocationAccess: a studio outside the caller's assignments is a 403.",
+  request: { query: z.object({ location_id: uuidLike, start_date: z.string() }) },
+  responses: {
+    200: { description: '{ week_start, week_end, contract_visible, members: [...], shifts: [...], cross_studio_checked }' },
+    400: { description: 'Missing or malformed location_id / start_date, or start_date is not a real calendar date', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at that location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The grid could not be read (never answered as an empty grid)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CANDIDATES.1 — ranked candidates for one block (every coach picker).
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/blocks/{id}/candidates',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Ranked coaches who could take one shift (advisory)',
+  description: "CANDIDATES.1. Every rosterable member of the block's studio (active, a member there, not live on the block), ranked: tier (ready, advisory = under 11h rest or over 48h in the week for an employee, unavailable = an AVAIL.1 rule touching the shift, blocked = approved leave or already working then at ANY studio of the organisation), then on site that day, then an employee under their contracted hours by share of it, then everyone else by fewest rostered hours Mon-Sun, then name. Advisory only: POST /api/schedule/blocks/{id}/assignments and POST /api/schedule/swaps never consult it. Two audiences, decided by the server: `manager` (MANAGER_ROLES at the block's studio, or master) gets each candidate's { profile_id, full_name, role, rank, tier, reason, free, busy, on_leave { label, start_date, end_date }, unavailable { summary, detail }, on_site { start, end, name, gap_minutes }, week_minutes, contracted_hours (employees only, and only for an owner, manager or master caller: a head coach gets no such key and the ranking uses fewest hours), rest_gap, week_over }; `colleague` (a coach live on the block, asking for cover; the block's roster must be published) gets { profile_id, full_name, role, rank, tier, reason, free } only, ranked on free alone and judged on published shifts only. Times are Dublin wall clock; windows are effective (override, then block, then template). A fact that could not be read is null and `checked.<facet>` is false (shifts, cross_studio, leave, availability, contract). Hours only: never a rate, salary or cost.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ audience, block_id, candidates (by rank), checked, untimed } (untimed = shifts with no usable times, not counted)' },
+    400: { description: 'Malformed block id, or (the coach on it) a shift whose roster is not published yet', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: "A member of the block's studio who neither manages there nor is live on the block", content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Block not found (or not at a studio the caller belongs to)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: "The block or the studio's member list could not be read", content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/time-off',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List time-off requests, or preview what a request would cost the caller',
+  description: "Default: time-off requests, scoped per studio role — a non-manager sees only their own; a manager sees leave filed at, or taken by members of, the studios they manage. Filters: location_id, start_date, end_date, status (pending excludes expired; expired asks for exactly those), profile_id (managers), with_clashes=1. Each row carries `approved_locked_to_owner` (LEAVEGUARD.1): true on a colleague's APPROVED leave whose requester is manager-tier at a studio it belongs to (or an org admin of its organisation) when the caller is not an owner there nor a master, or whose requester is a master when the caller is not another master, so PUT /api/schedule/time-off/{id} would refuse to cancel, reject or reopen it. With preview=1&type=&start_date=&end_date=[&location_id=] (LEAVEPHONE.1) it answers a different question, for the CALLER only: data.days { total, segments[{ year, start_date, end_date, days }] } is exactly what POST would charge at the studio POST would file at — location_id, else the active studio (holiday = Mon-Fri minus the studio country's bank holidays minus that studio's closures; other types = calendar days; one segment per year; total 0 where POST would answer 'No working days'), and data.clashes[{ id, block_date, start_time, end_time, template_name, location_name }] are the caller's own published, live shifts in the range from today on, at any studio, with effective times. profile_id is ignored in preview mode and unpublished rosters are never included. Preview does not judge the balance, overlap or employment gate; POST does.",
+  responses: {
+    200: { description: 'Array of requests; or, with preview=1, { type, start_date, end_date, days, clashes }' },
+    400: { description: 'start_date or end_date is not a real calendar date (YYYY-MM-DD; the list answers `<name>: not a real date`); for the list, both given with end_date before start_date or more than 366 days apart (RANGEVALID.1); or, with preview=1, an unknown type, missing dates, an inverted range, a span over a year, or no studio to file against', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'location_id outside the caller’s assignments', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'preview=1 and the holiday list or the roster could not be read (fails closed)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4112,9 +6956,17 @@ registry.registerPath({
   path: '/api/schedule/time-off',
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
-  summary: 'Submit a time-off request',
+  summary: 'Submit a time-off request, or record one for a colleague',
+  description: "Without profile_id: the caller's own request, created pending; everyone holding the time-off approval permission at the studio it is filed at and at every studio the caller belongs to is notified. With profile_id (someone else): the caller must hold that permission at the target studio and the person must belong to it; the request is created approved with created_by set and the response carries `clashes` (live shifts the person is still rostered on). AVAIL.3: `unavailable` is refused for everyone (400, before any read): saying when you cannot work is PUT /api/schedule/availability, self-declared with no approval. Contractors and casual staff have no leave types to file (400). Holiday is checked against the balance on every request: the allowance row, or the contract entitlement when none exists yet. A holiday is charged for working days only: Mon-Fri, excluding the national bank holidays of the studio's country and that studio's own closures (GET /api/locations/{id}/holidays); other leave types count calendar days. A holiday made up entirely of such days is refused (400, no working days).",
   request: { body: { content: { 'application/json': { schema: TimeOffRequest } } } },
-  responses: { 201: { description: 'Request submitted' } },
+  responses: {
+    201: { description: 'Request submitted (or recorded and approved)' },
+    400: { description: 'Invalid dates, no studio to file against (no location_id and no active studio), type unavailable (moved to availability, AVAIL.3), no working days, contractor leave type, or insufficient holiday balance', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Recording for a colleague without time-off approval at that studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'The colleague is not on that studio’s staff', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Overlaps an existing pending or approved request', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read the decision depends on failed (employment type, overlap probe, balance, or the studio\'s holiday list); nothing was created', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 registry.registerPath({
@@ -4123,11 +6975,250 @@ registry.registerPath({
   tags: ['Schedule'],
   security: [{ CookieAuth: [] }],
   summary: 'Approve, reject, or cancel a time-off request',
+  description: 'Deciding needs the time-off approval permission at the studio the request was filed at or at any studio the requester belongs to. Approving refuses a pending request whose end_date has passed (409, expired), and a contractor leave type other than unavailable (400; a pending unavailable request filed before AVAIL.3 can still be decided). An approval response carries `clashes`: live shifts, from today, that the person is still rostered on at any studio. Nothing is unassigned; see POST /api/schedule/time-off/{id}/unassign-clashes. LEAVECANCEL.1: the only status a caller may send for their OWN request is `cancelled`. On their own PENDING request that cancels it. On their own APPROVED request it is refused for a plain coach (403), cancels directly for a master, and for manager-tier staff (owner, manager, head coach at a studio the request belongs to) it does NOT cancel: it records a request for an owner to cancel it and answers `{ success, data, cancellation: "requested" }` with the leave still approved (`already_requested: true` when one was already waiting; cancel_request_note is the optional reason). An owner needs a DIFFERENT owner; with no other owner at those studios (a sole owner, or a studio with none) the request goes to the platform admins instead. 409 when the leave has already ended, when nobody else could decide it (no other owner and no platform admin), or when an owner declined the same leave less than 24 hours ago (`retry_after`). Decided by POST /api/schedule/time-off/{id}/cancel-request. Any status change made through this PUT to a row that carries a cancellation request clears that request in the same write (it was about the state the leave was in), guarded on the status that was read: 409 if the leave changed a moment ago, and 409 `This leave was already cancelled.` when an owner has already approved its cancellation. LEAVEGUARD.1: moving someone else\'s APPROVED leave to rejected, cancelled or pending, when that person is manager-tier (owner, manager or head coach at a studio the request belongs to, or org admin of its organisation), needs an OWNER at one of those studios who is not the requester, or a master; when that person is a master, it needs another master. Anyone else gets 403. Plain staff leave and pending leave are unchanged. Every status write is guarded on the status that was read: 409 if the leave changed a moment ago.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: TimeOffReview } } },
   },
-  responses: { 200: { description: 'Request updated' } },
+  responses: {
+    200: { description: 'Request updated, or (own approved leave, manager tier) the cancellation was requested and the leave is still approved' },
+    403: { description: 'Deciding your own request, a status other than cancelled on your own request, no time-off approval permission, or (LEAVEGUARD.1) taking a manager-tier colleague\'s approved leave out of force without being an owner there or a master (a master\'s: without being another master)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, a malformed id, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Expired pending request; own approved leave that has ended, has nobody else to approve its cancellation, or was declined under 24h ago; or the leave changed / was already cancelled a moment ago', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'LEAVECANCEL.1: asking an owner to cancel approved leave while mig 624 is not applied; nothing was changed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// LEAVECANCEL.1 — a manager cancelling their OWN APPROVED leave needs an
+// owner's approval. The PUT above records the ask; these decide or withdraw it.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/time-off/{id}/cancel-request',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Approve or decline a request to cancel approved leave',
+  description: 'Role-based by the owner\'s rule, NOT the time-off approval permission: the caller must be an OWNER at the studio the leave was filed at or at any studio the requester belongs to, or a master, and never the requester. Until this lands the leave is still approved and in force. approve sets status=cancelled and the decision in ONE guarded update (a holiday\'s days are refunded by the allowance trigger); reject stamps the decision and the leave stays approved. The requester is notified either way. 409 when there is no open request (never asked, withdrawn, already decided by someone else a moment ago, or the leave has ended).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ decision: z.enum(['approve', 'reject']), note: z.string().max(2000).nullable().optional() }) } } },
+  },
+  responses: {
+    200: { description: '{ success, data, cancellation: "approved" | "rejected" }' },
+    403: { description: 'The caller can see the request but is the requester, or is not an owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No open cancellation request on this leave', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/time-off/{id}/cancel-request',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Withdraw your own request to cancel approved leave',
+  description: 'Only the person whose leave it is. Clears the request; the leave stays approved. Nobody is notified. 409 when there is nothing to withdraw or an owner decided it a moment ago.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data, cancellation: "withdrawn" }' },
+    403: { description: 'The caller can see the request but did not make it', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found, or not at a studio the caller manages', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No cancellation request to withdraw', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/time-off/{id}/unassign-clashes',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Take a person on approved leave off the shifts it clashes with',
+  description: 'The explicit follow-up to an approval. The caller must be able to decide the request (404 otherwise) and it must be approved (409). Each clashing shift is removed only where the caller is a manager at that shift’s studio (others are returned as skipped), through the same path as DELETE /api/schedule/assignments/{id}: change log on a published roster and a notification to the coach. assignment_ids limits removal to the shifts the approver was shown.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ assignment_ids: z.array(uuidLike).optional() }) } } },
+  },
+  responses: {
+    200: { description: '{ removed, already_removed, skipped, failed }. already_removed = shifts another request had already taken off (a double submit); not failures.' },
+    404: { description: 'Not found, or not decidable by the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The leave is not approved; or every shift changed since it was shown (`code: changed`: refresh and try again)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Nothing was removed and at least one delete failed for a server reason', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ROSTER-FIX.3 (D2, D3) — the assignment detail route sets a shift's PAID
+// window, and Richard's call (2026-09-09) is that a manager sets it: a coach
+// cannot adjust their own hours, and cannot drop themselves off a shift.
+registry.registerPath({
+  method: 'put',
+  path: '/api/schedule/assignments/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Adjust a shift assignment (manager-only)',
+  description: "Sets or clears the partial-shift start/end overrides, the reason, notes or status on one shift_assignments row. Manager-only (master, owner, manager, head_coach): the paid window is a manager's to set, so a coach editing their own assignment gets 403. A non-master manager is scoped to their own locations; an assignment at another location returns 404. A successful override change pushes the affected coach.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Assignment updated' },
+    403: { description: 'Forbidden — only a manager can change shift hours', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/assignments/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a coach from a shift (manager-only)',
+  description: 'Deletes one shift_assignments row. Manager-only (master, owner, manager, head_coach): a coach cannot remove themselves from a shift — they post a swap request instead (POST /api/schedule/swaps), which a manager approves. A non-master manager is scoped to their own locations; an assignment at another location returns 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Assignment removed. A repeat of a removal another request already carried out (a double submit) is also 200, with `data.already_removed: true`; nothing is logged or sent twice.' },
+    403: { description: 'Forbidden — ask for a swap to drop this shift', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The shift changed hands since it was read (`code: changed`): refresh and try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// REPLACE.1a — hand one assignment to another coach in one action.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/assignments/{id}/replace',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Replace the coach on a shift (manager-only)',
+  description: "Moves one shift_assignments row from its coach to `profile_id` in a single guarded update: overrides, partial reason, arrival stamp and notes are cleared, status becomes scheduled. Manager at the shift's studio only (404 outside it, 403 for a non-manager there). Refused once the shift has started (studio clock) or the coach has arrived, for a coach who is not a rosterable member of the studio, or who is already on it. Approved leave or another shift that day answers 409 `swap_conflicts` with the sentences unless `confirm_conflicts: true`. Open swaps on the shift are closed. On a published roster: two change-log rows (via replace) and one notice to each coach, sent now inside 07:00-22:00 studio time and from 07:00 otherwise; `data.notice` is now, morning or none (draft).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ profile_id: uuidLike, confirm_conflicts: z.boolean().optional() }) } } },
+  },
+  responses: {
+    200: { description: 'Replaced; `data.notice` says when the coaches are told' },
+    400: { description: 'Not a member of this studio, not rosterable, or the same coach', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — a manager at this studio only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Assignment not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Started, arrived, already on the shift, changed meanwhile, or `swap_conflicts` (confirm to proceed)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// REPLACE.1b — "Offer to team".
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/blocks/{id}/offer',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Offer an unfilled shift to the team (manager-only)',
+  description: "Creates an open offer for a published shift that is today or later, has not started (studio clock) and still needs a coach: a class shift below its minimum (at least 1), or an empty admin shift. One open offer per shift. Manager at the shift's studio only (404 outside it, 403 for a non-manager there). Every coach at the studio who is free then (not on approved leave, not on another shift in the organisation, not unavailable) is pushed, inside 07:00-22:00 studio time (from 07:00 otherwise); the offer is visible at once. `data.notice` is now or morning.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    201: { description: 'Offered; `data.offer_id` and `data.notice`' },
+    403: { description: 'Forbidden — a manager at this studio only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Shift not found, or at a location you do not own', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: '`code` not_published, past, started, staffed or already_offered', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/offers',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Open shift offers at a studio',
+  description: "Default: the offers the caller could take (free, not on leave, not unavailable, not already on the shift), when/what/where only: never counts or minimums. `view=manage` (a manager at the studio): the period's open offers with `notice_state` (sent, nobody, sending, morning, failed) and `broadcast_count`.",
+  request: { query: z.object({ location_id: uuidLike, view: z.enum(['manage']).optional(), start_date: z.string().optional(), end_date: z.string().optional() }) },
+  responses: {
+    200: { description: 'Offers' },
+    400: { description: 'No studio; a date the calendar does not have; or start_date and end_date both given with end_date before start_date or more than 92 days apart (RANGEVALID.1)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not your studio, or manage view without a manager role there', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/offers/{id}/claim',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Claim an offered shift',
+  description: 'First to claim gets it (claim_shift_offer locks the shift, then the offer). The caller must belong to the studio (404 otherwise), and must not be on approved leave that day or on another PUBLISHED shift at that time (checked again inside the database, per claimant, so two overlapping claims cannot both win); unavailability and draft shifts do not block a claim. The managers are told who took it (07:00-22:00 studio time).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: "Claimed; the shift is on the caller's roster" },
+    403: { description: 'Not on the staff of this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Taken, withdrawn, filled, started, or the caller is on leave / another shift / already on it; or someone was changing the shift at that same moment (`code: try_again`: try again)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The leave / shift check could not be read; try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/schedule/offers/{id}',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Withdraw a shift offer (manager-only)',
+  description: "Closes an open offer as withdrawn. Manager at the offer's studio only (404 outside it, 403 for a non-manager there). Nobody is notified.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Withdrawn' },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Offer not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already closed, or changed meanwhile', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// BUDGETAPPROVE.1 — approve re-projects the budget and reports whether it moved.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/rosters/{id}/approve',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Approve and publish a draft roster',
+  description: "Publishes a draft roster that was submitted over the location's monthly contractor budget. The permission is resolved at the ROSTER's location, never the caller's active studio. Approval re-runs the budget projection across every calendar month the period touches and stores the fresh figures on the roster; a changed number never refuses the approval. The response carries `impact` (with the per-month `months` breakdown), `projection_changed`, and, when it changed, `previous_projection` and `current_projection`. A projection that fails is reported as `projection_error` and the approval proceeds on the stored figures.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Draft approved and published (a `warning` names a partial success)' },
+    403: { description: 'Forbidden — needs the rosters approval permission at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Roster not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Roster is not a draft, or it overlaps a published roster', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/rosters/{id}/reject',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reject a draft roster',
+  description: "Turns down a draft roster that was published over the location's monthly contractor budget. Same permission gate as approve. The draft row is DELETED (blocks are only tagged with a roster on publish, so nothing references it) and the manager who submitted it is notified with the optional note.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ note: z.string().max(2000).nullable().optional() }).openapi('RosterReject') } } },
+  },
+  responses: {
+    200: { description: 'Draft rejected and deleted' },
+    403: { description: 'Forbidden — needs the rosters approval permission at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Roster not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Roster is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// SNAPSHOT.1 — a roster as published (mig 634 snapshot), as rostered now, and
+// as arrived. Manager-only; advisory.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/rosters/{id}/compare',
+  tags: ['Schedule'],
+  security: [{ CookieAuth: [] }],
+  summary: 'A published roster as published, as rostered now, and as arrived (manager-only)',
+  description: "Compares the snapshot written when this roster was published (roster_publish_snapshots, mig 634; one per publish, immutable, taken after the publish tagged its blocks) with the live shift blocks and assignments, and with arrival stamps (shift_assignments.arrived_at, carried onto a back-to-back shift as the attendance report does). Query: from and to (optional real YYYY-MM-DD dates, the period on screen, clipped to the published period); against (optional snapshot id at the same studio whose period overlaps this roster's published dates, to compare with another publish of the period, such as the first; other dates answer 409). Returns roster, window, baseline (snapshot_id, roster_id, published_at, period, published_by_name), publishes (the snapshots at the studio of this roster's published dates, narrowed to the window, newest first, at most 20 plus the baseline, which is always listed), blocks (per shift: published and current times and minimum/maximum, change unchanged | moved | added | removed, staffing_changed, briefing_change added | changed | removed | null (the snapshot keeps a fingerprint of BLOCKEDIT.1's briefing, never the text); per coach: name, published and current windows, change, arrived_at, arrived_local, arrival_inferred, ended, no_show_candidate) and totals (published and current shifts and wall-clock hours, hours_delta, counts per change, ended, arrived, no_show_candidates). no_show_candidate is ADVISORY (an ended shift with no arrival stamp; stamps exist for a minority of shifts) and nothing alerts anyone. A roster with no snapshot answers 200 with baseline null and missing_reason 'before_snapshots' (published before the studio's first snapshot, snapshots_began_at says when that was; there is no backfill) or 'not_saved' (the write failed at the time and was logged); a baseline whose dates miss the window asked answers baseline set, window null, totals null and missing_reason 'outside_window', never an empty comparison. Manager-only (master, owner, manager, head_coach AT the roster's studio): an outsider gets 404, a member without the role there 403. Names, times, hours and arrival stamps only, never a rate or a cost.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({ from: isoDate.optional(), to: isoDate.optional(), against: uuidLike.optional() }),
+  },
+  responses: {
+    200: { description: '{ success, data: { roster, window, baseline, missing_reason, snapshots_began_at, publishes, blocks, totals } }' },
+    400: { description: 'from or to not a real date, to before from, or a malformed against id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — needs a manager role at the roster\'s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Roster not found (or at a studio outside your assignments), or the against snapshot is not at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'The roster is a draft (nothing was published), or the against snapshot covers none of this roster\'s published dates', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The comparison could not be read (never answered as an empty comparison)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 registry.registerPath({
@@ -4150,7 +7241,10 @@ registry.registerPath({
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: SwapReview } } },
   },
-  responses: { 200: { description: 'Swap updated' } },
+  responses: {
+    200: { description: 'Swap updated. A claim / accept also carries `warnings` (the claiming coach\'s leave or same-day clashes; advisory).' },
+    409: { description: 'Refused: the swap changed, a coach is already on that shift, or (code `swap_conflicts`) an approval has leave / clash conflicts; resend with confirm_conflicts to approve anyway.' },
+  },
 })
 
 // Marketing
@@ -4160,6 +7254,7 @@ registry.registerPath({
   tags: ['Marketing'],
   security: [{ BearerAuth: [] }, { CookieAuth: [] }],
   summary: 'Create an email campaign (draft)',
+  description: 'FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
   request: { body: { content: { 'application/json': { schema: CampaignCreate } } } },
   responses: { 200: { description: 'Campaign created' } },
 })
@@ -4193,6 +7288,96 @@ registry.registerPath({
     400: { description: 'Invalid campaign id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'No email permission at the campaign location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Campaign not found or not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// MEMBERWRITESWEEP.1e — the campaign editor's session routes. They replace
+// CampaignEditor/CampaignDetail's browser-direct writes on `campaigns`, which
+// mig 684 closes to every client session. Gate: `email` at the campaign's
+// studio (404 for a campaign outside the caller's studios).
+const CampaignConflict = ErrorResponse.extend({ data: z.object({ status: z.string().nullable() }).optional() })
+const campaignGateResponses = {
+  401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'No email permission at the campaign location', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Campaign not found or not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+}
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a draft email campaign (campaign editor)',
+  description: 'created_by is the caller and status is draft; neither is read from the body. FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
+  request: { body: { content: { 'application/json': { schema: SessionCampaignCreate } } } },
+  responses: {
+    200: { description: 'Draft created: { id, status, location_id }' },
+    400: { description: 'Invalid body or audience filter', content: { 'application/json': { schema: ErrorResponse } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'get',
+  path: '/api/communications/campaigns/{id}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send progress of a campaign (status, total_sent, total_recipients, cancel_requested_at)',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: { 200: { description: 'Progress' }, ...campaignGateResponses },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/communications/campaigns/{id}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the content of a draft or scheduled campaign',
+  description: 'Writes only the content fields sent; never created_by, status, scheduled_at or location_id. FROMDOMAIN: any valid from_email is stored as given, but it is SENT only when its domain equals the org\'s verified sending domain (a live tenant email domain; exact, case-insensitive, a subdomain does not match); otherwise the email goes out from the resolved sender (the org\'s verified From, or the platform address before one). When the body carries a from_email the response adds from_address: { requested, sends_as, on_verified_domain, verified_domain }.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: SessionCampaignContent } } } },
+  responses: {
+    200: { description: 'Saved' },
+    400: { description: 'Invalid body or audience filter', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Content locked (queued or later), or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/communications/campaigns/{id}',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a draft or scheduled campaign',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Deleted' },
+    409: { description: 'Sending, sent or otherwise a record; or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns/{id}/schedule',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Schedule a campaign to send at a future time',
+  description: 'The send route\'s rules: status draft, scheduled or failed; a subject and a body are required.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: SessionCampaignSchedule } } } },
+  responses: {
+    200: { description: 'Scheduled: { status, scheduled_at }' },
+    400: { description: 'scheduled_at missing, unreadable or not in the future; no subject; no body', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not schedulable in its status, or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/communications/campaigns/{id}/stop',
+  tags: ['Marketing'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Stop a campaign: unschedule a scheduled one, or request a cancel of a queued or sending one',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Stopped: { status, cancel_requested_at }' },
+    409: { description: 'Nothing to stop in its status, or the status changed', content: { 'application/json': { schema: CampaignConflict } } },
+    ...campaignGateResponses,
   },
 })
 
@@ -4323,7 +7508,7 @@ registry.registerPath({
     + 'deliverability gate — which is the only honest answer for a sequence, whose audience is a continuing '
     + 'condition rather than a recipient list (SEQEXIT.1). WITH a channel the will-receive number comes from that '
     + "channel's own SEND builder, so the count, the preview and the send resolve one query path by construction. "
-    + 'Response shape differs per channel and this is deliberate: for email and SMS, `count` is the will-receive '
+    + 'Response shape differs per channel and this is deliberate: for email, `count` is the will-receive '
     + 'number and `matched` the filter-only total; for WhatsApp, `count` is the match set and `reachable` the '
     + 'will-receive number. `excluded` breaks down WHY contacts fell out — the reasons are INDEPENDENT counts that '
     + 'may overlap, so never sum them; the true excluded total is matched minus will-receive. An invalid filter '
@@ -4336,7 +7521,7 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             audience_filter: audienceFilterSchema.optional(),
-            channel: z.enum(['sms', 'whatsapp', 'email']).optional()
+            channel: z.enum(['whatsapp', 'email']).optional()
               .describe('Omit for a channel-agnostic match count (the sequence case).'),
           }).openapi('AudienceCountRequest'),
         },
@@ -4348,8 +7533,8 @@ registry.registerPath({
       description: 'Audience counts',
       content: { 'application/json': { schema: z.object({
         success: z.literal(true),
-        count: z.number().int().describe('Will-receive for email/SMS; the match set for WhatsApp and for no channel.'),
-        matched: z.number().int().optional().describe('Filter-only total (email + SMS branches).'),
+        count: z.number().int().describe('Will-receive for email; the match set for WhatsApp and for no channel.'),
+        matched: z.number().int().optional().describe('Filter-only total (email branch).'),
         reachable: z.number().int().optional().describe('Will-receive total (WhatsApp branch).'),
         suppressed: z.number().int().optional().describe('Back-compat top-level key, email only.'),
         excluded: z.record(z.string(), z.number().int()).optional()
@@ -4383,7 +7568,7 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             audience_filter: audienceFilterSchema.optional(),
-            channel: z.enum(['sms', 'whatsapp', 'email']).optional(),
+            channel: z.enum(['whatsapp', 'email']).optional(),
             limit: z.number().int().positive().optional().describe('Clamped to the 200-row maximum.'),
             offset: z.number().int().min(0).optional(),
           }).openapi('AudiencePreviewRequest'),
@@ -4404,7 +7589,7 @@ registry.registerPath({
         total: z.number().int(),
         offset: z.number().int(),
         limit: z.number().int(),
-        channel: z.enum(['sms', 'whatsapp', 'email']).nullable(),
+        channel: z.enum(['whatsapp', 'email']).nullable(),
         basis: z.enum(['will_receive', 'matching']),
       }).openapi('AudiencePreview')) } },
     },
@@ -4482,14 +7667,97 @@ registry.registerPath({
 })
 
 // Schedule reports
+// DATECHECK.1 — run one report now. The period is checked before anything is
+// read: real dates, end on or after start, at most 366 days inclusive.
+registry.registerPath({
+  method: 'post',
+  path: '/api/schedule/reports',
+  tags: ['Schedule', 'Reports'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate a report for a period now (manager+)',
+  description: 'Runs report_type over period_start..period_end (inclusive) at location_id (default: the active studio) and stores the result in the report history. staff_cost (pay rates) and utilisation (each colleague\'s contracted hours; CONTRACTVIS.1) are owner/manager/master only at that studio.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    report_type: z.string().openapi({ description: 'One of the report types the Reporting tab offers (e.g. staff_hours, staff_cost, roster_coverage, time_off_summary)' }),
+    period_start: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date' }),
+    period_end: z.string().openapi({ description: 'YYYY-MM-DD, a real calendar date, on or after period_start, at most 366 days after it inclusive' }),
+    location_id: z.string().optional(),
+  }).openapi('ScheduleReportRunRequest') } } } },
+  responses: {
+    201: { description: 'Report generated and stored' },
+    400: { description: 'A period date is not a real calendar date (e.g. 2026-02-30), period_end is before period_start, the period is longer than 366 days, or the report failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at the location, or a head coach asking for staff_cost', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WRCPACK.1 — the Workplace Relations Commission inspection pack.
+registry.registerPath({
+  method: 'get',
+  path: '/api/schedule/reports/wrc-pack',
+  tags: ['Schedule', 'Reports'],
+  security: [{ CookieAuth: [] }],
+  summary: 'WRC inspection pack for an organisation (owner tier)',
+  description: "For one organisation (every studio) and a period (from/to, default the 12 months ending today at the active studio, inclusive; real dates, to on or after from, at most 366 days), the records a Workplace Relations Commission inspection asks for. format=json (default) answers { organization_id, period, allowance_year, locations, staff, shifts }; format=csv streams one CSV as an attachment: file=staff (default) is one row per person who held a studio membership in the organisation or worked a non-cancelled shift in the period (name, email, status incl. 'deleted <date>' for a permanently deleted profile, employment type, membership roles or the role at deletion, studios, first and last rostered date, contracted hours per week (FTE), hourly rate (a contractor's rate, else salary ÷ 52 ÷ contracted hours), rostered shifts and hours (the paid window: override → block → template, shiftHours), Sunday shifts and hours (block date is a Sunday), weeks over contract and overtime hours above it (Mon–Sun weeks, FTE only), holiday / sick / other leave days taken (approved requests, days charged inside the period; an edge-crossing holiday is recounted on working days minus the studio's non-working dates), the holiday allowance row for the year of `to`, whether a signed contract exists and when, and the current Employee Handbook version with whether a policy view exists for them); file=shifts is one row per shift assignment in the period, cancelled ones included and flagged (date, weekday, Sunday flag, staff, studio, shift name, rostered and adjusted start/end, hours, arrival stamp in studio time, status). Former staff are included on purpose. Every read is paged; a failed read is a 500, never an empty pack. Access: master, an org admin of the organisation, or an owner at one of its studios; a manager or head coach gets 403, and so does an organisation the caller cannot reach.",
+  request: { query: z.object({
+    organization_id: uuidLike.optional(),
+    from: isoDate.optional(),
+    to: isoDate.optional(),
+    format: z.enum(['json', 'csv']).optional(),
+    file: z.enum(['staff', 'shifts']).optional(),
+  }) },
+  responses: {
+    200: { description: 'JSON pack, or a text/csv attachment named wrc-<file>-<from>-to-<to>.csv' },
+    400: { description: 'A bad organization_id, from or to not a real date, to before from, more than 366 days, or an unknown format / file', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master, an org admin of the organisation or an owner at one of its studios; or an organisation outside the caller\'s memberships', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never answered as an empty pack)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/schedule/reports/scheduled',
   tags: ['Schedule', 'Reports'],
   security: [{ CookieAuth: [] }],
   summary: 'Schedule a recurring report (manager+)',
+  description: 'STAFFCOST.1 — staff_cost carries pay rates and cost, and (CONTRACTVIS.1) utilisation carries each colleague\'s contracted hours, so both are owner/manager/master only at the schedule\'s location (a head coach gets 403). When the cron emails either report, any recipient address belonging to a staff profile without that role at the location is withheld.',
   request: { body: { content: { 'application/json': { schema: ScheduledReport } } } },
-  responses: { 201: { description: 'Schedule created' } },
+  responses: {
+    201: { description: 'Schedule created' },
+    400: { description: 'deliver_notification true, or a staff_cost recipient who is staff without an owner/manager role at the location', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a manager at the location, or a head coach scheduling staff_cost', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'staff_cost: recipient addresses outside the team need confirm_external: true (listed in external_recipients)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/schedule/reports/scheduled',
+  tags: ['Schedule', 'Reports'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Pause, resume or edit a scheduled report (manager+)',
+  description: 'REPORTS.2 — gated like create, at the schedule\'s location: a schedule the caller may not see (or a deleted one) is 404; changing report_type to staff_cost without an owner/manager role there is 403. Resuming, or changing frequency/day, recomputes next_run_at. Changing report_type, deliver_email or email_recipients re-runs the staff_cost recipient rule (400 / 409 as on create); addresses confirmed on an earlier save stay confirmed.',
+  request: {
+    query: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      paused: z.boolean().optional(),
+      report_type: reportTypeSchema.optional(),
+      report_name: z.string().min(1).max(200).optional(),
+      frequency: reportFrequencySchema.optional(),
+      day_of_week: z.number().int().min(0).max(6).nullable().optional(),
+      day_of_month: z.number().int().min(1).max(31).nullable().optional(),
+      deliver_email: z.boolean().optional(),
+      email_recipients: z.array(email).optional(),
+      confirm_external: z.boolean().optional(),
+    }).openapi('ScheduledReportPatch') } } },
+  },
+  responses: {
+    200: { description: 'Schedule updated' },
+    400: { description: 'Nothing to change, deliver_notification true, or a refused staff recipient', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Changing to a report type the caller may not schedule', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such schedule, deleted, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'External recipients need confirm_external: true', content: { 'application/json': { schema: ErrorResponse } } },
+  },
 })
 
 // Automations
@@ -4507,7 +7775,9 @@ registry.registerPath({
           schema: z.object({
             location_id: uuidLike,
             enabled: z.boolean(),
-            config: z.record(z.string(), z.unknown()).optional(),
+            // W0.12 — device_ids must all be ac_devices rows at location_id
+            // (400 unknown_device otherwise); other keys are per-automation.
+            config: z.object({ device_ids: z.array(uuidLike).max(50).optional() }).passthrough().optional(),
           }).openapi('AutomationToggle'),
         },
       },
@@ -4594,6 +7864,8 @@ registry.registerPath({
       content: { 'application/json': { schema: z.object({ success: z.literal(true), discarded: z.literal(true) }).openapi('SequenceDraftDiscarded') } },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    // SEQROUTEGATE.1 — email or WhatsApp permission at the sequence's studio.
+    403: { description: 'Email or WhatsApp permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Sequence not found (or no access)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -4611,7 +7883,7 @@ registry.registerPath({
     + "exit_reason='manual_exit' and next_step_at=null, so the scheduler never picks it up again. "
     + 'IRREVERSIBLE — there is no un-exit; re-entry means enrolling the contact again. '
     + 'Bounded honesty: the scheduler ticks every ~5 minutes and may already be mid-step for this '
-    + 'enrolment, so a step already handed to the email/WhatsApp/SMS provider will still be delivered. '
+    + 'enrolment, so a step already handed to the email/WhatsApp provider will still be delivered. '
     + 'This makes the database state correct; it does not recall a send in flight. '
     + 'Requires the email permission and access to the parent sequence’s location.',
   request: { params: z.object({ id: uuidLike, enrollmentId: uuidLike }) },
@@ -4629,9 +7901,10 @@ registry.registerPath({
       },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Email permission required, or the sequence is outside the caller’s locations', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Sequence or enrolment not found (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Email permission required at the sequence’s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence or enrolment not found, or the sequence is at a studio the caller does not belong to (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'The enrolment is no longer active or paused — already exited or completed. Benign (a double-click or a cron race), not a failure.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A database read or write failed (a failed sequence read is logged and is never reported as not found)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4653,9 +7926,10 @@ registry.registerPath({
   responses: {
     200: { description: 'Resumed', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, status: z.literal('active') }).openapi('SequenceEnrollmentResumed')) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Email permission required, or the sequence is outside the caller’s locations', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Sequence or enrolment not found', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Email permission required at the sequence’s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence or enrolment not found, or the sequence is at a studio the caller does not belong to (404 not 403, so ids cannot be enumerated)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'The enrolment is no longer paused — a double-click or a concurrent resume.', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A database read or write failed (a failed sequence read is logged and is never reported as not found)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -4755,15 +8029,24 @@ const SonosFavorite = z.object({
 const SonosControlBody = z.object({
   schedule_id: z.string().optional(),
   group_id: z.string().min(1).max(128).optional(),
+  // WIDGET.1 — a bare Sonos player id (RINCON_XXXXXXXX) from GET
+  // /api/widget/devices. Not a uuid, so bounded like group_id rather than
+  // uuid-checked. Player ids are permanent (sonos/groups.js:28), unlike
+  // group ids, so this is what a widget stores at configuration time.
+  player_id: z.string().min(1).max(128).optional(),
   action: z.enum([
     'volume_up', 'volume_down', 'set_volume',
     'play', 'pause', 'skip_next', 'skip_previous', 'load_favorite',
   ]),
   value: z.union([z.number(), z.string()]).optional(),
 }).openapi('SonosControlBody', {
-  description: 'Exactly one of schedule_id or group_id (neither or both is a 400). schedule_id is a uuid; '
-    + 'group_id is an opaque Sonos group id (RINCON_…:N, ≤128 chars — NOT a uuid) from GET /api/sonos/household, '
-    + 'and group ids are ephemeral — a stale one answers code: regrouped, so refetch the household and retry. '
+  description: 'Exactly one of schedule_id, group_id or player_id (none, or more than one, is a 400). '
+    + 'schedule_id is a uuid; group_id is an opaque Sonos group id (RINCON_…:N, ≤128 chars — NOT a uuid) from '
+    + 'GET /api/sonos/household, and group ids are ephemeral — a stale one answers code: regrouped, so refetch '
+    + 'the household and retry. player_id is a bare Sonos player id (RINCON_XXXXXXXX, ≤128 chars — also NOT a '
+    + 'uuid) from GET /api/widget/devices; player ids are permanent, so an id absent from the current household '
+    + 'answers code: not_found rather than regrouped — this is the addressing mode a widget button uses, since '
+    + 'it has no schedule row and stores one player id at configuration time. '
     + 'value is read per action: volume_up/volume_down take an optional step size (default 5, '
     + 'range 1-100, sign ignored — direction lives in the action name); set_volume takes a required integer '
     + '0-100; load_favorite takes a required non-empty favorite id. play/pause/skip_next/skip_previous '
@@ -5001,13 +8284,20 @@ registry.registerPath({
   method: 'post',
   path: '/api/sonos/control',
   tags: ['Automations'],
-  security: [{ CookieAuth: [] }],
-  summary: 'Immediate live control of a schedule\'s or group\'s speakers — volume, transport, favourite (device_control)',
+  // WIDGET.1 — also accepts an iOS widget device token (BearerAuth).
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Immediate live control of a schedule\'s, group\'s or player\'s speakers — volume, transport, favourite (device_control)',
   description:
     'SONOSGRP.2: the body addresses exactly one of schedule_id (uuid, resolved to groups via the '
     + 'location-scoped schedule row) or group_id (an opaque Sonos group id from GET /api/sonos/household — '
     + 'no DB row is read). Group ids are ephemeral: a stale one answers code: regrouped, so refetch the '
     + 'household and retry. '
+    + 'WIDGET.1: or player_id, a bare permanent Sonos player id (RINCON_XXXXXXXX) from GET '
+    + '/api/widget/devices — also no DB row is read, and it is resolved to its current group with the same '
+    + 'resolveGroupIds() helper the schedule path uses. Unlike group_id, an id absent from the household '
+    + 'answers code: not_found (404), not regrouped, because player ids do not go stale the way group ids do. '
+    + 'This is the addressing mode a widget button uses: it has no schedule and stores one player id at '
+    + 'configuration time, so a single request can act without first resolving the household. '
     + 'SONOSLIVE.3/4: writes nothing to sonos_schedules, deliberately — the schedule only acts at window '
     + 'boundaries, so a live change simply persists until the next one; there is no suppression or '
     + 'reconciliation to invent here. Works even while the schedule is disabled or overridden, on purpose: '
@@ -5023,10 +8313,10 @@ registry.registerPath({
       description: 'Applied to every resolved group',
       content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(z.string()) }).openapi('SonosControlResponse') } },
     },
-    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body (including neither or both of schedule_id/group_id) or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    400: { description: 'Two distinct shapes. An unknown action or an unusable value for a known action comes back from dispatch and carries code: invalid. A malformed body (including zero, or more than one, of schedule_id/group_id/player_id) or a caller with no active location is rejected by the guards that run BEFORE dispatch and carries no code at all — which is why code is optional on this schema.', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'schedule_id only: malformed (no code), not found, or not at your active location (code: not_found). group_id never 404s — a stale one is a 409 code: regrouped', content: { 'application/json': { schema: SonosControlErrorResponse } } },
+    404: { description: 'schedule_id: malformed (no code), not found, or not at your active location (code: not_found). player_id: also code: not_found, when the id is absent from the current household. group_id never 404s — a stale one is a 409 code: regrouped', content: { 'application/json': { schema: SonosControlErrorResponse } } },
     409: {
       description: 'The current state blocks this action — code distinguishes which: not_connected (Sonos '
         + 'is not connected), no_group (none of this schedule\'s speakers are online), fixed_volume (these '
@@ -5108,7 +8398,7 @@ const ShellyConnectionPut = ShellyConnectionPutRaw.extend({}).openapi('ShellyCon
   description:
     'server is the account API host from the Shelly app (e.g. shelly-103-eu.shelly.cloud); a pasted URL is '
     + 'normalised to its hostname server-side and a bad one comes back as the helper\'s own copy, not a zod '
-    + 'message. auth_key is WRITE-ONLY and optional: the UI never renders the stored key (only key_hint), so an '
+    + 'message. auth_key is WRITE-ONLY and optional: the UI never renders the stored key or any character of it, so an '
     + 'absent or blank auth_key KEEPS the stored one and only a fresh value overwrites it — which is what makes '
     + '"change only the server" possible. A supplied key shorter than ' + MIN_AUTH_KEY_LENGTH + ' characters is a '
     + '400. Unknown keys are REJECTED rather than dropped: on a two-field body where one field is a credential, '
@@ -5146,7 +8436,7 @@ const ShellyToggleBody = ShellyToggleBodyRaw.extend({}).openapi('ShellyToggleBod
   description:
     '"on"/"off" force the relay and write an override; "auto" clears the override and re-runs the schedule '
     + 'immediately — which is why until is optional, since it is meaningless without a state to hold. until '
-    + 'accepts any ISO instant INCLUDING an offset form (Bearer/n8n and mobile JWT callers send those) and is '
+    + 'accepts any ISO instant INCLUDING an offset form (Bearer API-key and mobile JWT callers send those) and is '
     + 'normalised to UTC-Z at the input edge. It defaults to the LOCATION\'s next local midnight, and is bounded '
     + 'by the request\'s own clock rather than by this schema: an instant already past is a 400, and so is '
     + 'anything more than ' + MAX_OVERRIDE_HOURS + ' hours out (further than that is a schedule, not a manual '
@@ -5291,7 +8581,6 @@ const ShellyErrorResponse = ErrorResponse.extend({
 
 const ShellyConnectionPublic = z.object({
   host: z.string().nullable(),
-  key_hint: z.string().nullable(),
   has_auth_key: z.boolean(),
   status: z.enum(['connected', 'action_needed', 'error']).nullable(),
   last_ok_at: z.string().datetime().nullable(),
@@ -5301,9 +8590,9 @@ const ShellyConnectionPublic = z.object({
   description: 'The ONLY connection shape any route returns (publicConnectionView, src/lib/shelly/connections.js), '
     + 'and an allowlist rather than the row minus a few fields. auth_key never appears — and neither does '
     + 'auth_key_fingerprint, which is as sensitive for this purpose: it is a sha256 OF the key, so publishing it '
-    + 'would turn "is this the account?" into an offline check anyone holding a candidate key could run. key_hint '
-    + 'is the last four characters, for rendering "••••abcd", and has_auth_key is DERIVED from it so the field can '
-    + 'never claim a key this projection has no evidence of. status: "connected" = the last tick had at least one '
+    + 'would turn "is this the account?" into an offline check anyone holding a candidate key could run. No '
+    + 'character of the key is ever returned (SECRETTAILS.1): has_auth_key says only that one is stored, and a '
+    + 'stored row always holds one (auth_key NOT NULL, fingerprint CHECK). status: "connected" = the last tick had at least one '
     + '2xx; "action_needed" = the key was rejected or the host is invalid, and an owner must re-paste; "error" = '
     + 'every call failed for a NON-auth reason (network/429/5xx), which the UI phrases as retrying rather than as '
     + 'broken — a single blip parks the connection for five minutes and nothing needs fixing.',
@@ -5502,7 +8791,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5525,7 +8814,7 @@ registry.registerPath({
   method: 'put',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5580,7 +8869,7 @@ registry.registerPath({
   method: 'delete',
   path: '/api/shelly/connection',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5604,7 +8893,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/discover',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5638,7 +8927,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/devices',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5663,7 +8952,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5718,7 +9007,7 @@ registry.registerPath({
   method: 'patch',
   path: '/api/shelly/devices/{id}',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5750,7 +9039,7 @@ registry.registerPath({
   method: 'delete',
   path: '/api/shelly/devices/{id}',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5779,7 +9068,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices/{id}/toggle',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5824,7 +9113,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/devices/{id}/run-now',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5855,7 +9144,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/shelly/devices/{id}/energy',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5884,7 +9173,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/refresh',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5913,7 +9202,7 @@ registry.registerPath({
   method: 'post',
   path: '/api/shelly/sync-names',
   tags: ['Automations'],
-  // Bearer as well as the session cookie: /api routes take the n8n key and a
+  // Bearer as well as the session cookie: /api routes take a per-org API key and a
   // mobile JWT, and the toggle body's `until` explicitly normalises the offset
   // forms those callers send — documenting cookie-only would have contradicted
   // the schema one screen up.
@@ -5963,12 +9252,40 @@ registry.registerPath({
             available_straps: z.array(z.record(z.string(), z.unknown())),
             roster: z.array(z.record(z.string(), z.unknown())),
             occurrence: z.record(z.string(), z.unknown()).nullable(),
+            has_bridge: z.boolean(),
             test_mode_until: z.string().nullable(),
           }).openapi('LiveState'),
         },
       },
     },
     403: { description: 'Location not in scope, or studio_management not held there', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/live/{locationId}/roster',
+  tags: ['Live HR'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Who is booked into the class running now, labels only (class_roster)',
+  // UN1TBOOK.12 (kept out of the string: the literal sweep forbids the brand in served text)
+  description: 'The roster half of /api/live/{locationId} under its own `class_roster` permission, resolved at the target location: no heart-rate sessions, no straps, no door control. Cancelled bookings are skipped; ATTENDED and NO_SHOW members are listed. Each roster entry is `{ label, booked }` only: no heart-rate, strap or session fields are ever returned, and there is no `has_bridge` (the full /api/live/{locationId} route keeps it).',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: {
+      description: 'The live occurrence (or null) and its roster labels',
+      content: {
+        'application/json': {
+          schema: z.object({
+            ok: z.literal(true),
+            occurrence: z.record(z.string(), z.unknown()).nullable(),
+            roster: z.array(z.object({ label: z.string(), booked: z.boolean() })),
+          }).openapi('LiveRoster'),
+        },
+      },
+    },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Location not in scope, or class_roster not held there', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -6191,7 +9508,7 @@ registry.registerPath({
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
   summary: 'Runs & health for the receipt-coverage feature',
-  description: 'Recent recon runs (pulls + weekly reports), hunt-inbox health, the two cron heartbeats with staleness, and 7-day LLM spend vs the hunt budget. Requires the accounting_hub permission.',
+  description: 'Recent recon runs (the active studio\'s pulls + the estate weekly reports), the active studio\'s hunt-inbox health, the two cron heartbeats with staleness, the active studio\'s 7-day LLM spend, and `budget` { weeklyUsd, exhausted } for the ONE hunt budget all studios share. A master also gets `spend7dUsdAll`. Requires the accounting_hub permission.',
   responses: {
     200: { description: 'Runs, mailboxes, heartbeats, spend', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
@@ -6257,12 +9574,12 @@ registry.registerPath({
   path: '/api/accounting/event-fees',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
-  summary: 'Org-wide event booking fees (per-ticket fee UN1T earned on host events)',
-  description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Requires the accounting_hub permission.',
+  summary: `Org-wide event booking fees (per-ticket fee ${PLATFORM_NAME} earned on host events)`,
+  description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Organisation admins of the active organisation only (a master, or an org_admin grant; C18).',
   responses: {
     200: { description: 'Total + per-host + per-month fee rollup', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
     400: { description: 'No active organization', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -6414,11 +9731,28 @@ registry.registerPath({
   tags: ['Dashboard'],
   security: [{ CookieAuth: [] }],
   summary: 'Business dashboard blocks as JSON',
-  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
+  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). W1.M3c: `membership_source` ({ source, state: none|configured|unconfigured|unknown, label, missing?, provides_memberships, can_manage }) rides alongside the blocks; the phone shows a state card instead of the KPI row and membership section when the state is not configured (a failed state read is unknown, never none). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
   responses: {
     200: { description: 'Dashboard blocks', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BusinessDashboardResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing dashboard_business permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/dashboard/studio-contacts',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Studio dashboard contact numbers for one studio',
+  description: 'CONTACTREADSCOPE.1a — new leads this week (joined_at since the Europe/Dublin Monday), the funnel by pipeline_stage_slug and the contact total, for the phone Studio dashboard. Requires dashboard_studio AT location_id (not Contacts: these are counts). Scoped by assertLocationAccess. A failed read is a logged 500, never zeros or a partial funnel. Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app).',
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: 'Contact numbers: { newLeadsThisWeek, funnel, totalContacts, membership_source } (W1.M3c: the studio membership-source state, server-judged)', content: { 'application/json': { schema: z.object({}).passthrough().openapi('StudioContactNumbersResponse') } } },
+    400: { description: 'location_id missing or malformed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No access to the studio, or no dashboard_studio there', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The read failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -6461,15 +9795,216 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
-  path: '/api/home-queue/count',
-  tags: ['Dashboard'],
+  path: '/api/approvals/count',
+  tags: ['Approvals'],
   security: [{ CookieAuth: [] }],
-  summary: 'Count of needs-attention items across approvals + tickets + inbox (nav badge)',
-  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polls (the per-source badge routes it used to poll — /api/approvals/count, /api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count — are deleted). EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED tickets mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure, so the badge poller keeps its last good number instead of overwriting it with a wrong "nothing to do".',
+  summary: 'Count of pending approvals visible to the caller (sidebar badge)',
+  description: 'NAV-BADGE.1 — the Approvals sidebar badge. Delegates to getPendingApprovalsCount, which fans out over the twelve registered approvals providers and gates each with isProviderVisible — an EITHER/OR: eight carry their own approvals_* permissionKey and gate on hasPermission() plus the category-bundle check, while the other four (invoices-queue, issues, host-events, and LEAVECANCEL.1\'s time-off-cancellations, which is owner-or-master by ROLE) declare no permissionKey at all and gate entirely on their own isVisible(). It then scopes to the caller\'s CURRENT ACTIVE location for eleven of the twelve; host_events is the one organisation-wide provider. The number is therefore definitionally what GET /api/approvals/pending would render for the same caller. No permission gate and no active-location requirement on the route itself: a session with no approver authority gets a quiet 0 rather than a 403, which is cheap because isProviderVisible runs before each provider\'s query. Known limitation: a provider that throws is scored 0 by getPendingApprovalsCount, so one broken provider silently under-counts.',
   responses: {
     200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
     401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
-    500: { description: 'Tickets mailbox-visibility lookup failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/home-queue/count',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Count of needs-attention items across approvals + mail + inbox, by source (nav badge + widget)',
+  description: 'Cheap sum of the same three TRUE counts GET /api/home-queue reports — no approval items, ticket subjects or conversation contacts are ever fetched. Every per-source gate mirrors the equivalent count route exactly; a session ineligible for a source contributes 0 for it, the same posture as /api/whatsapp/unread-count. HOME.3\'s sidebar retirement task made this the ONE count endpoint Sidebar.jsx polled at the time. NAV-BADGE.1 later restored /api/approvals/count as Approvals\' own poller, and the sidebar no longer polls THIS endpoint at all — the other four per-source badge routes it used to poll (/api/issues/count, /api/churn-radar/count, /api/lead-radar/count, /api/hosts/pending-events/count) are still deleted. WIDGET.1: the iOS "What Needs Me" home-screen widget is now its only caller, which is why the response carries `bySource` (approvals/mail/inbox individually) rather than just the bare sum the sidebar used to poll, why its approvals number is the PHONE-surface count (LEAVECANCEL.1: an approvals category the phone cannot open, today only time_off_cancellations, is left out so the widget never shows a number above an empty phone list; GET /api/approvals/count, the web badge, still counts it), and why the route accepts a third credential — a studio-scoped widget device token (Bearer; minted by POST /api/widget/tokens, verified in src/lib/widget-auth.js) — alongside the session cookie and a mobile Supabase JWT; a token carries exactly one location, so the widget for Hatch cannot read Stillorgan\'s numbers. EMAIL-TICKET-CLEANUP.2 is the one exception to "always 200 with a number": a FAILED mail (tickets) mailbox-visibility lookup 500s rather than silently answering a lower, confidently-wrong number — the same posture /api/email/mail/count takes on the identical failure.',
+  responses: {
+    200: {
+      description: '{ count, bySource: { approvals, mail, inbox }, degraded }',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            count: z.number(),
+            bySource: z.object({
+              approvals: z.number(),
+              mail: z.number(),
+              inbox: z.number(),
+            }),
+            degraded: z.array(z.enum(['approvals', 'mail', 'inbox'])),
+          })).openapi('HomeQueueCountResponse'),
+        },
+      },
+    },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mail (tickets) mailbox-visibility lookup failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// WIDGET.1 — the iOS home-screen widget: its configuration picker and the
+// per-device credentials it authenticates with. See src/lib/widget-auth.js
+// and src/lib/widget-token.js for the mechanism; GET /api/home-queue/count
+// just above is the fourth route a widget token can call.
+// ============================================================================
+
+const WidgetDevice = z.object({
+  kind: z.enum(['door', 'ac', 'plug', 'speaker']),
+  id: z.string(),
+  label: z.string(),
+}).openapi('WidgetDevice')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/widget/devices',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "Devices the caller may control at their active location, for the widget's config picker",
+  description: 'Composes four sources, each gated EXACTLY as its own control route already gates it — never a fresh decision — so the picker can never offer a button the control action would go on to refuse: doors (studio_management, filtered through the UNIFI-DOORS-SCOPE per-user allowlist via listAllowedDoors, never a raw device list), AC units (studio_management, filtered through the AC-ROLE.1 allowlist), Shelly plugs and Sonos speakers (both device_control). Speakers are Sonos PLAYERS, never groups — player ids are permanent, group ids are ephemeral, and a widget stores its configured device id permanently. `degraded` lists kinds whose live call (UniFi, Sonos) failed; a studio that has simply never linked UniFi or Sonos reports an empty list for that kind instead, since that is a configuration state, not a failure. Accepts the same three credentials as GET /api/home-queue/count, including a studio-scoped widget device token.',
+  responses: {
+    200: {
+      description: '{ devices: [{ kind, id, label }], degraded }',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            devices: z.array(WidgetDevice),
+            degraded: z.array(z.enum(['door', 'ac', 'plug', 'speaker'])),
+          })).openapi('WidgetDevicesResponse'),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const WidgetToken = z.object({
+  id: uuidLike,
+  device_label: z.string().nullable(),
+  created_at: z.string(),
+  last_used_at: z.string().nullable(),
+}).openapi('WidgetToken')
+
+const WidgetTokenMintBody = z.object({
+  device_label: z.string().trim().min(1).max(60).optional(),
+}).openapi('WidgetTokenMintBody')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/widget/tokens',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "A profile's live widget device tokens",
+  description: 'Live (unrevoked) widget credentials for one profile — id, device_label, created_at, last_used_at only; token_hash never leaves the DB, so the lookup key for a live credential can never be reconstructed from a response. Defaults to the caller\'s own profile_id. Listing someone else\'s requires staff_management; without it this answers an empty list rather than a 403 or an error — the same "don\'t confirm what you can\'t see" posture as this repo\'s 404-not-403 detail routes. Session-only, deliberately: no widget token may call this route (or the sibling mint/revoke routes below) — a credential that could enumerate or renew itself would survive the revocation it exists to be subject to.',
+  request: { query: z.object({ profile_id: uuidLike.optional().openapi({ description: "Defaults to the caller's own profile; another profile's tokens require staff_management" }) }) },
+  responses: {
+    200: { description: '{ tokens: [...] }', content: { 'application/json': { schema: SuccessResponse(z.object({ tokens: z.array(WidgetToken) })).openapi('WidgetTokensResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/widget/tokens',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Mint a new per-device widget token',
+  description: 'Scoped to the caller and their active location. Returns the plaintext token exactly once, here, at mint time — only its sha256 (token_hash) is ever stored (mig 607) — so a client that loses it before writing it into the widget\'s App Group cannot recover it; minting a replacement is the only way back. Session-only, same posture as GET above.',
+  request: { body: { content: { 'application/json': { schema: WidgetTokenMintBody } } } },
+  responses: {
+    200: { description: '{ id, token } — token is shown exactly once and never again', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike, token: z.string() })).openapi('WidgetTokenMintResponse') } } },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/widget/tokens/{id}',
+  tags: ['Widget'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Revoke one widget device token',
+  description: 'Stamps revoked_at rather than deleting — the row is the audit trail for every door, AC unit, plug and speaker that token could once reach. Own token: always allowed. Someone else\'s: staff_management only. 404, never 403, when the id does not exist OR belongs to another profile and the caller lacks staff_management — a distinct 403 would confirm the id is real, the same enumeration this repo\'s 404-not-403 detail routes avoid throughout (see /api/equipment/{id}). Session-only, same posture as the sibling list/mint route above.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Revoked', content: { 'application/json': { schema: z.object({ success: z.literal(true) }).openapi('WidgetTokenRevokeResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or another profile\'s token without staff_management)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// ICSFEED.1 — per-person calendar subscription (mig 632)
+// ============================================================================
+// The feed is anonymous by design (calendar apps hold no session); the rcf_
+// token in the path is the credential. Management is session-only and acts on
+// the caller's own link; no id parameter exists.
+
+const CalendarFeedStatus = z.object({
+  active: z.boolean(),
+  created_at: z.string().nullable(),
+  rotated_at: z.string().nullable(),
+  last_fetched_at: z.string().nullable(),
+}).openapi('CalendarFeedStatus')
+
+const CalendarFeedLinks = z.object({
+  url: z.string().openapi({ description: 'https feed URL. Shown ONCE: only its sha256 is stored (mig 632).' }),
+  webcal_url: z.string().openapi({ description: 'webcal:// form: Apple Calendar and Outlook open a subscribe dialog.' }),
+  google_url: z.string().openapi({ description: "Google Calendar's add-by-URL page for this feed." }),
+  replaced: z.boolean(),
+}).openapi('CalendarFeedLinks')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/calendar-feed/{file}',
+  tags: ['Public'],
+  summary: "A person's own published shifts as an iCalendar feed",
+  description:
+    'Anonymous; `file` is `<rcf_ token>.ics` (the suffix is optional). RFC 5545, times in UTC. Contains the token holder\'s OWN published, not-cancelled shifts at every studio they are rostered at, across organisations if they work in more than one (their own diary, deliberately not narrowed to one organisation), Dublin today −14 to +56 days: template name · studio, the studio address, stable UIDs per assignment, SEQUENCE raised by any edit. No colleague, note or pay. ' +
+    'One 404 for every refusal (not a token, unknown, replaced, turned off, or the person is deactivated or deleted). 429 per token (never per IP). 503 on a read failure, never an empty 200, because a subscribed calendar replaces its whole copy. Public on the CRM hosts only.',
+  request: { params: z.object({ file: z.string().openapi({ description: '`<token>.ics`' }) }) },
+  responses: {
+    200: { description: 'iCalendar body', content: { 'text/calendar': { schema: z.string() } } },
+    404: { description: 'Not found (every refusal)' },
+    429: { description: 'Rate limited (per token)' },
+    503: { description: 'Temporarily unavailable; Retry-After: 900' },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "The caller's calendar link status",
+  description: 'Never the URL: only its hash is stored, so it cannot be shown again. `last_fetched_at` is stamped at most every 15 minutes.',
+  responses: {
+    200: { description: 'Status', content: { 'application/json': { schema: SuccessResponse(CalendarFeedStatus) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Make (or replace) the caller\'s calendar link',
+  description: 'Returns the links ONCE (Cache-Control: no-store). An existing link without `replace: true` is 409 `feed_exists`; `replace: true` swaps it in one statement (the old link stops at once). Refused (403) while a master is viewing as someone.',
+  request: { body: { content: { 'application/json': { schema: z.object({ replace: z.boolean().optional() }).strict().openapi('CalendarFeedIssueBody') } } } },
+  responses: {
+    200: { description: 'The links, shown once', content: { 'application/json': { schema: SuccessResponse(CalendarFeedLinks) } } },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A link already exists (feed_exists)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/me/calendar-feed',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Turn the caller\'s calendar link off',
+  description: 'Idempotent: `revoked` says whether there was one. Refused (403) while a master is viewing as someone.',
+  responses: {
+    200: { description: '{ revoked }', content: { 'application/json': { schema: SuccessResponse(z.object({ revoked: z.boolean() })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -6682,10 +10217,10 @@ registry.registerPath({
   path: '/api/integrations/hub',
   tags: ['Settings'],
   security: [{ CookieAuth: [] }],
-  summary: 'Integrations hub card states (owner+/master)',
+  summary: 'Integrations hub card states (owner+/master; billing strip organisation admins only)',
   description:
     'Assembled connection state for the caller\'s locations, powering /settings/integrations-hub: ' +
-    'channel_connections registry rows (glofox/unifi/sensibo/thinq/twilio_sender/bca/instagram, ' +
+    'channel_connections registry rows (glofox/unifi/sensibo/thinq/bca/instagram, ' +
     'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
     'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
     '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
@@ -6698,8 +10233,12 @@ registry.registerPath({
     'with an ACTIVE tier pinning in location_plans it carries plan {name, effectiveFrom, priceCents, addons}, ' +
     'wallet {balanceCents, periodStart, expiresOn = last day of the current Dublin month, lapseWarning} and ' +
     'per-meter MTD usage vs allowance with overage cents drawn from the wallet ledger; ' +
-    'unpinned locations (all of them today) return { locationId, plan: null }. ' +
+    'unpinned locations return { locationId, plan: null }. C141 ORGROLE.2: rows exist only for locations of an organisation ' +
+    'the caller administers (a master: every location); a studio owner without an org_admin grant gets `billing: []`. ' +
     'Secrets are never returned — no token columns are selected. ' +
+    'HUBREAD.1: a row whose underlying read FAILED carries status `unknown` (never `not_connected` or ' +
+    '`connected`) and offers no action; each failed read adds ONE `attention` entry with `unreadable: true`. ' +
+    '`billing` rows carry `unreadable: true` when the plan reads failed. ' +
     'B4 access: master sees every location; owner/org-admin (SAAS-4) sees ONLY their own ' +
     'organisation(s)\' locations (payload hard-scoped via getOwnerOrganizationIds → ' +
     '.in(organization_id)); managers/head_coach/staff get 403.',
@@ -6710,10 +10249,41 @@ registry.registerPath({
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not an owner/org-admin/master account', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The locations read failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
-// ZOOMOPS.1 — Zoom contact sync operator surface: /settings/integrations/zoom-contacts
+// INTEGONE.1 — the hub Manage drawer's per-location context.
+registry.registerPath({
+  method: 'get',
+  path: '/api/integrations/hub/locations/{id}',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Integrations hub drawer context for one location (owner at the location, or master)',
+  description:
+    'Read-only. What the hub\'s Manage drawer needs to host a location\'s full integration tab: ' +
+    '`location` (the location row shaped by toClientLocation: AC credentials replaced by has_sensibo_key / ' +
+    'has_thinq_pat, every other credential masked, bca_config intact), `xeroConnection` (the xero_connections ' +
+    'row or null), `xeroReadFailed` (CHANNELREAD.1: a failed read is never "not connected"), `sampleBcaCar` ' +
+    '(one car for the BCA template preview when bca_submit is on, else null), `membershipSource` ' +
+    '({ source, state: none | configured | unconfigured | unknown, missing? }), `hasUn1tOnlineConnection` ' +
+    '(an active un1t_online connection exists; a failed count reads true) and `viewer` ' +
+    '({ isMaster, isOwnerOrMaster, ownsWhatsAppHere, canSwitchWhatsApp, canManageNumbers }, judged at this location). ' +
+    'Access: a member of the location who is owner there (an organisation admin\'s synthetic owner role counts) ' +
+    'or a master. Anyone else, and a location that does not exist, gets 404.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'The drawer context',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubLocationContextResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such location, or not owner there / master', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location row could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ZOOMOPS.1 — Zoom contact sync operator surface: the hub's Zoom view, /settings/integrations-hub?view=zoom
 registry.registerPath({
   method: 'post',
   path: '/api/integrations/zoom-contacts/run',
@@ -6768,16 +10338,16 @@ registry.registerPath({
   summary: 'Save a location integration inline (write-only secrets)',
   description:
     'Service-role save behind the Integrations-hub Manage drawer for the providers stored on the ' +
-    '`locations` row: glofox, twilio, unifi, ac (Sensibo + LG ThinQ creds only), bca. ' +
+    '`locations` row: glofox, unifi, ac (Sensibo + LG ThinQ creds only), bca. ' +
     'Secrets are WRITE-ONLY — a blank or masked-echo secret KEEPS the stored value, a fresh value ' +
     'overwrites, non-secret fields set normally (src/lib/integration-secret-merge.js). The whole ' +
     'slice is NEVER collapsed to null on a blank save (the Glofox null-collapse guard), so a no-op ' +
     'save can\'t wipe a live connection. JSONB slices are read-merge-write (sibling slices untouched); ' +
-    'channel_connections is re-synced IN-HANDLER via syncConnectionFromLegacy. Role gate: glofox/twilio = ' +
+    'channel_connections is re-synced IN-HANDLER via syncConnectionFromLegacy. Role gate: glofox = ' +
     'ADMIN_ROLES; unifi/ac/bca = master-only. Plus assertLocationAccess. The response is a MASKED echo ' +
     '(has_* booleans + non-secret values) — a token is never returned.',
   request: {
-    params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'twilio', 'unifi', 'ac', 'bca']) }),
+    params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'unifi', 'ac', 'bca']) }),
     body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('IntegrationSaveBody') } } },
   },
   responses: {
@@ -6798,12 +10368,292 @@ registry.registerPath({
     'Explicit disconnect for the same providers: clears the legacy `locations` slice and, via ' +
     'syncConnectionFromLegacy, DEACTIVATES the channel_connections registry row (is_active=false). ' +
     'Deactivate — never a hard delete, and no provider-side revoke. Same role/location gate as PUT.',
-  request: { params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'twilio', 'unifi', 'ac', 'bca']) }) },
+  request: { params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'unifi', 'ac', 'bca']) }) },
   responses: {
     200: { description: 'Disconnected (deactivated)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — role/location gate', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown provider or location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// W1.M2 — the per-location membership source (locations.membership_source,
+// mig 717). The only DIRECT writer of the column; the Glofox connect/
+// disconnect flip in PUT/DELETE …/integrations/glofox is the other, owner/
+// master only.
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/membership-source',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set which system is the membership source at a location (owner or master)',
+  description:
+    'Writes locations.membership_source (mig 717: none | glofox | un1t). The Zod enum admits every CHECK value, ' +
+    'but a key with NO registered provider module (today `un1t`, the home-grown source still to land) answers ' +
+    '400 with code `not_available_yet` and writes nothing — the registry in src/lib/membership/source.js decides, ' +
+    'not the CHECK. Gate: membership (404, a detail route never confirms an id) then owner-or-master AT the ' +
+    'target location (403 for a manager). Switching to `none` never deletes a credential: when an active glofox ' +
+    'channel_connections row exists the response carries `warning: "glofox_credentials_kept"` (Disconnect in the ' +
+    'Integrations hub is the explicit path). Selecting the value already set is a no-op 200. Every real change ' +
+    'writes an audit_events row (location.membership_source_changed). The only DIRECT writer of the column; the other ' +
+    'is the Glofox connect/disconnect flip: an OWNER or MASTER saving complete Glofox credentials through ' +
+    'PUT /api/locations/{id}/integrations/glofox selects it when the studio is on `none`, and their DELETE there clears it ' +
+    '(a manager may still save or delete the credentials, which never moves the column). ' +
+    'Response data is membershipSourceState(): { source, state: none|configured|unconfigured|unknown, missing?, readError?, previous }.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ membership_source: z.enum(['none', 'glofox', 'un1t', 'un1t_online']) }).openapi('MembershipSourceSave') } } },
+  },
+  responses: {
+    200: { description: 'Saved (or already set) — the resolved membership-source state, plus `warning` when Glofox credentials were kept', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Not a CHECK value, or `not_available_yet` (no provider registered for that key)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// MIAHATCH.4 (Task 14) — what Mia can sell at a un1t.online studio (mig 752).
+const MiaOfferItem = z.object({
+  id: uuidLike,
+  un1t_product_row_id: uuidLike,
+  title: z.string().nullable(),
+  price_cents: z.number().int().nullable(),
+  interval: z.string().nullable(),
+  visibility: z.string().nullable(),
+  private: z.boolean(),
+  blurb: z.string(),
+  sort_order: z.number().int(),
+  inactive: z.boolean(),
+}).openapi('MiaOffer')
+const MiaOfferProduct = z.object({
+  id: uuidLike,
+  title: z.string().nullable(),
+  price_cents: z.number().int(),
+  interval: z.string().nullable(),
+  private: z.boolean(),
+}).openapi('MiaOfferProduct')
+const MiaOffersData = z.object({ offers: z.array(MiaOfferItem), products: z.array(MiaOfferProduct) }).openapi('MiaOffersData')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/mia-offers',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The products Mia can sell at a un1t.online studio, and the products that can be added',
+  description:
+    '`offers` is the studio\'s saved list in order, each flagged `inactive` when its product has gone inactive or free ' +
+    '(Mia skips it) and `private` for a members-only product. `products` is what can be added: active, price above zero, ' +
+    'at this studio, private ones included and flagged. Any member of the studio may read. A location the caller is not ' +
+    'at is 404 (a detail route never confirms an id); a studio that is not on un1t.online is 400.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The offer list and the addable products', content: { 'application/json': { schema: SuccessResponse(MiaOffersData) } } },
+    400: { description: 'The studio is not on un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A read failed (never an empty list)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/mia-offers',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Replace the products Mia can sell at a un1t.online studio (owner or master)',
+  description:
+    'Body `{ offers: [{ un1t_product_row_id, blurb }] }`; array order is the order Mia offers them, a blurb is at most 140 ' +
+    'characters (blank = none), a product may be listed once, at most 50. Every product must be at this studio, active and ' +
+    'priced above zero, else 400 `{ error: "product_not_sellable", product_id }` and nothing is written; a private product is ' +
+    'allowed. The save updates the rows that stay, inserts the new ones and only then deletes the rest, so a failure part-way ' +
+    'never leaves the studio with no offers. Gate: membership (404), then `canEditMiaSettings` at the target (owner, or master; ' +
+    '403 otherwise), then validation; a studio not on un1t.online is 400. Returns the same data as GET.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      offers: z.array(z.object({ un1t_product_row_id: uuidLike, blurb: z.string().max(140).optional() })).max(50),
+    }).openapi('MiaOffersSave') } } },
+  },
+  responses: {
+    200: { description: 'Saved: the offer list and the addable products', content: { 'application/json': { schema: SuccessResponse(MiaOffersData) } } },
+    400: { description: 'Invalid body, `product_not_sellable`, or the studio is not on un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A write failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UN1TSYNC.7 — Hatch Street's un1t.online connection (migs 726, channel_connections
+// platform 'un1t_online'). Owner/master AT the location on every method; the
+// token is write-only and appears in no response.
+const Un1tOnlineStatus = z.object({
+  connected: z.boolean(),
+  status: z.enum(['connected', 'action_needed', 'error', 'not_connected']),
+  studio_title: z.string().nullable().optional(),
+  token_name: z.string().nullable().optional(),
+  permissions_count: z.number().int().optional(),
+  has_write_permissions: z.boolean().optional(),
+  expires_at: z.string().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+  last_ok_at: z.string().nullable().optional(),
+  last_run: z.object({
+    status: z.enum(['running', 'ok', 'error']),
+    started_at: z.string(),
+    finished_at: z.string().nullable(),
+    duration_ms: z.number().int().nullable(),
+    first_error: z.string().nullable(),
+    counts: z.object({}).passthrough(),
+  }).nullable(),
+}).openapi('Un1tOnlineStatus')
+
+const Un1tOnlineGate = {
+  401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Masked un1t.online connection status and the last sync run (owner or master)',
+  description:
+    'Studio title, token name, permission count, `has_write_permissions` (any permission ending :create, :update or :delete), ' +
+    'token expiry, last error and the newest un1t_sync_runs row (status, times, pulled/contacts/memberships counts). ' +
+    'The token is never returned. Gate: membership (404) then owner-or-master AT the location (403).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Masked connection status', content: { 'application/json': { schema: SuccessResponse(Un1tOnlineStatus) } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Connect or replace the un1t.online API token (owner or master)',
+  description:
+    'Checks the token against un1t.online (GET /api-token) before writing anything: `token_rejected` (400) when it refuses it, ' +
+    '`browser_token` (400) when the token has allowed origins, `un1t_unreachable` (502) when un1t.online cannot be asked. ' +
+    'On success the active channel_connections row (platform un1t_online) is updated or created with the token, studio id, ' +
+    'expiry and { token_id, token_name, studio_title, permissions }, and a studio whose membership_source is `none` moves to ' +
+    '`un1t_online` (audited). A studio on any other source is left alone. The response carries `warning: "write_permissions"` ' +
+    'when the token can change data on un1t.online. The token is never echoed.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: Un1tOnlineConnectSchema.extend({}).openapi('Un1tOnlineConnect') } } },
+  },
+  responses: {
+    200: { description: 'Connected: the masked status, plus `warning` when the token can write', content: { 'application/json': { schema: SuccessResponse(Un1tOnlineStatus.passthrough()) } } },
+    400: { description: 'Malformed body, `token_rejected` or `browser_token`', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: '`un1t_unreachable`: un1t.online could not be asked', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Disconnect un1t.online (owner or master)',
+  description:
+    'Deactivates the channel_connections row and blanks its token. Never touches locations.membership_source (the ' +
+    'Membership source card owns it) and never deletes synced data. Disconnecting when nothing is connected is a 200.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ disconnected: true }', content: { 'application/json': { schema: SuccessResponse(z.object({ disconnected: z.boolean() })) } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/un1t-online/sync',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Run the un1t.online sync now for one location (owner or master)',
+  description:
+    'Runs the same full pull as the */15 cron for this location (maxDuration 120 s). A run that did not go through ' +
+    '(in_progress: another run for this location is in flight; auth, studio_mismatch, api, truncated, db, not_connected) ' +
+    'is still a 200 with `data.ok: false` and `data.reason`.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ok, reason?, counts, runId }', content: { 'application/json': { schema: SuccessResponse(z.object({ ok: z.boolean(), reason: z.string().optional(), counts: z.object({}).passthrough(), runId: z.string().nullable() })) } } },
+    500: { description: 'The sync threw unexpectedly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tOnlineGate,
+  },
+})
+
+// TZ.3 — changing an existing location's timezone (D2 = A: owners and master,
+// any time, after the preflight counts and a typed-name confirm). The only
+// writer of locations.timezone after creation (mig 719 revoked the client UPDATE).
+const TimezonePreflightCounts = z.object({
+  bookings: z.number().int().nullable(),
+  shift_blocks: z.number().int().nullable(),
+  race_events: z.number().int().nullable(),
+  hyrox_blocks: z.number().int().nullable(),
+  pending_enrolments: z.number().int().nullable(),
+  sonos_schedules: z.number().int().nullable(),
+  shelly_devices: z.number().int().nullable(),
+  drip_broadcasts: z.number().int().nullable(),
+}).openapi('TimezonePreflightCounts')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/timezone',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Preflight for changing a location\'s timezone (owner or master)',
+  description:
+    'Counts what has future wall-clock meaning at the location, judged against TODAY IN ITS CURRENT ZONE: future ' +
+    'bookings and shift blocks, upcoming race events, running Hyrox blocks, pending sequence steps (active enrolments ' +
+    'with next_step_at in the future), enabled Sonos schedules, scheduled Shelly devices, and scheduled or sending ' +
+    'WhatsApp drip broadcasts. A count that could not be read is null and named in `unknown` (never 0). ' +
+    '`hasFutureData` is true if any count is above 0, false only if every count answered 0, else null. Nothing is ' +
+    'refused for having future data (D2 = A). Gate: membership (404) then owner-or-master AT the location (403).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ location: { id, name, timezone }, today, future, unknown, hasFutureData }', content: { 'application/json': { schema: SuccessResponse(z.object({ future: TimezonePreflightCounts }).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location could not be read', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/timezone',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Change a location\'s timezone (owner or master, typed-name confirm)',
+  description:
+    'Sets locations.timezone to a canonical IANA zone (canonicalZone; fixed offsets and unknown names are 400 ' +
+    '`invalid_timezone`, as is the mig 719 trigger refusing it, 22023). `confirm_name` must be the location\'s name ' +
+    '(surrounding spaces ignored, case-sensitive) or 400 `confirm_mismatch`. The same zone in any spelling is a no-op ' +
+    '200 (`changed: false`): nothing written or logged. A change: wall-clock rows keep their LOCAL meaning (09:00 stays ' +
+    '09:00 in the new zone); stored instants and calendar keys are not rewritten; pending sequence steps are re-clamped ' +
+    'by the next scheduler pass; unfinished WhatsApp broadcasts whose send_window_tz is the OLD zone follow the new one ' +
+    '(ones set to another zone are listed in `broadcasts.kept`; a failed follow is `warning: "broadcasts_not_followed"`, ' +
+    'never an undo); the instance zone cache is dropped; one audit_events row (location.timezone_changed) records from, ' +
+    'to and the preflight counts. Gate: membership (404) then owner-or-master AT the location (403).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ timezone: z.string().max(64), confirm_name: z.string().max(200) }).openapi('LocationTimezoneChange') } } },
+  },
+  responses: {
+    200: { description: '{ timezone, previous, changed, future?, unknown?, broadcasts?: { followed, kept } }, plus `warning` when broadcasts did not follow', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Invalid body, `invalid_timezone`, or `confirm_mismatch`', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden: owner or master at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not one of the caller\'s locations, or no such location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'The location could not be read or written', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -6969,20 +10819,20 @@ registry.registerPath({
   path: '/api/account/overview',
   tags: ['Account'],
   security: [{ CookieAuth: [] }, { BearerAuth: [] }],
-  summary: 'Org portfolio roll-up (owner-of-org + master)',
+  summary: 'Org portfolio roll-up (organisation admins only)',
   description:
     'Read-only ACCOUNT-tier roll-up across an organization\'s studios: org-level KPIs ' +
     '(members, bookings last 7 days, high-risk members) plus a per-studio breakdown with an ' +
     'attention signal (open approvals + Glofox-connected). Org-scoped: master may pass ' +
-    '?organization_id (defaults to their active org); an owner is constrained to the orgs they own ' +
-    'and a foreign/unknown org answers 404 (not 403). Managers/staff → 403.',
+    '?organization_id (defaults to their active org); an org admin (org_admin grant) is constrained to the orgs they ' +
+    'administer and a foreign/unknown org answers 404 (not 403). Anyone else (an owner at a studio included, C141) → 403.',
   request: {
     query: z.object({ organization_id: uuidLike.optional() }),
   },
   responses: {
     200: { description: 'Org portfolio roll-up', content: { 'application/json': { schema: z.object({}).passthrough().openapi('AccountOverviewResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Not an account-tier operator (manager / staff)', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an organisation admin (owner at a studio, manager, staff)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Organisation not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -7145,6 +10995,8 @@ const HyroxSettingsUpdate = z.object({
   charter: z.string().max(8000).nullish(),
   house_style: z.string().max(8000).nullish(),
   style_examples: z.array(HyroxExampleEntry).max(MAX_STORED_EXAMPLES).optional(),
+  known_example_ids: z.array(z.string().max(64)).max(200).optional()
+    .describe('Every example id the page has seen. A stored example whose id is not listed (starred after the page loaded) is kept; omit it and style_examples replaces the stored list.'),
 }).openapi('HyroxSettingsUpdate')
 
 registry.registerPath({
@@ -7154,14 +11006,16 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Operator editor for the Hyrox charter, house style, and style examples',
   description:
-    'Read-modify-write onto locations.settings.hyrox — merges into the sibling settings keys, never ' +
-    'clobbers them. Collection-style write (location_id in the body): missing the per-location ' +
+    'Merges one key (locations.settings.hyrox) via mergeLocationSettings: sibling settings keys are ' +
+    'never clobbered, and a failed read writes nothing (500). Collection-style write (location_id in the body): missing the per-location ' +
     'approvals_hyrox_sessions grant answers 403 (not the detail-routes\' 404 IDOR posture).',
   request: { body: { content: { 'application/json': { schema: HyroxSettingsUpdate } } } },
   responses: {
     200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSettingsUpdateResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — no approvals_hyrox_sessions grant at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found (nothing was written)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -7173,13 +11027,14 @@ registry.registerPath({
   summary: 'Save a generated Hyrox session as a house-style example ("star as style example")',
   description:
     'Renders the session server-side via sessionToExampleText and appends it to locations.settings.hyrox.style_examples ' +
-    '(dedupe by session id, capped at MAX_STORED_EXAMPLES). Detail route: a missing session or missing ' +
+    '(dedupe by session id, capped at MAX_STORED_EXAMPLES); a new entry is returned as data.example. Detail route: a missing session or missing ' +
     'per-location approvals_hyrox_sessions grant both answer 404 (IDOR posture).',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Example added (or already saved)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxExemplarResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (missing session, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'settings_unreadable (the location settings could not be read, so nothing was written) or settings_write_failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -7193,6 +11048,10 @@ const HostListPageCopy = z.object({
   list_blurb: z.string().max(500).nullable().optional(),
   list_button_label: z.string().max(40).nullable().optional(),
   list_success_message: z.string().max(500).nullable().optional(),
+  events_headline: z.string().max(120).nullable().optional(),
+  events_blurb: z.string().max(500).nullable().optional(),
+  hero_image_url: z.string().max(2000).nullable().optional(),
+  accent_hex: z.string().max(7).nullable().optional(),
 }).openapi('HostListPageCopy')
 
 const HostListPageUpdate = z.object({
@@ -7200,6 +11059,10 @@ const HostListPageUpdate = z.object({
   list_blurb: z.string().max(500).optional(),
   list_button_label: z.string().max(40).optional(),
   list_success_message: z.string().max(500).optional(),
+  events_headline: z.string().max(120).optional(),
+  events_blurb: z.string().max(500).optional(),
+  hero_image_url: z.string().max(2000).optional(),
+  accent_hex: z.string().max(7).optional(),
 }).openapi('HostListPageUpdate')
 
 const HostSendTestBody = z.object({
@@ -7245,7 +11108,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: "The report page's data for one host campaign (HOST-METRICS.1)",
   description:
-    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros. HOST-EMAILS.2 — `paused_reason` (a `sending` campaign the queue has halted, from the same hostSendBlockReason predicate as the list route), `non_openers_count` (how many a reminder draft would reach right now, resolveHostRecipients with `nonOpenersOf`, null on a resolver failure, both null for a non-`sent` campaign), and top-level `links` (one row per clicked URL from host_campaign_clicks, mig 594, aggregated with a per-person count, sorted by clicks descending with the unsubscribe link always last).",
+    "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Returns the campaign (with its host_campaign_stats() counts, mig 590) and every host_campaign_sends row for it, each carrying a DERIVED outcome (host-campaign-outcome.js: precedence over the raw timestamps, so a late Delivery event can never regress a recorded Open) plus its outcome_at and, for a failed row, host-facing failure_copy. `failed_reason`/postmark ids are the queue's own bookkeeping — the response omits postmark_message_id (provider ids stay server-side) but keeps failed_reason since failure_copy is derived from it. A stats-rpc hiccup never fails this route: `stats` is null when the stats function is unavailable, and the page shows counts as unavailable rather than zeros. HOST-EMAILS.2 — `paused_reason` (a `sending` campaign the queue has halted, from the same hostSendBlockReason predicate as the list route), `non_openers_count` (how many a reminder draft would reach right now, resolveHostRecipients with `nonOpenersOf`, null on a resolver failure, both null for a non-`sent` campaign), and top-level `links` (one row per clicked URL from host_campaign_clicks, mig 772, aggregated with a per-person count, sorted by clicks descending with the unsubscribe link always last).",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: {
@@ -7291,9 +11154,9 @@ registry.registerPath({
   path: '/api/hosts/{id}/backfill-campaign-events',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
-  summary: 'Backfill host campaign outcomes from Postmark (Manager+, org-scoped)',
+  summary: 'Backfill host campaign outcomes from Postmark (organisation admins only, org-scoped)',
   description:
-    "Manager+ session; the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts. `errors` is per-item, not a count — the run collects one entry per failed step ({ message_id?, stage?, error }) and continues rather than aborting.",
+    "Organisation admin of the active organisation (a master, or an org_admin grant; C18); the host must belong to the caller's active organization (404 otherwise, so ids stay un-enumerable). Asks Postmark's Messages API for this host's outbound activity over the last 45 days (its full retention window) and applies any Delivery/Open/Click/Bounce/SpamComplaint/SubscriptionChange events onto the matching host_campaign_sends rows — for sends that predate the mig 590 columns, or whose webhook events were missed. Dry-run by default (counts only, writes nothing); pass ?dry=0 to persist. Runnable from Settings → Hosts. `errors` is per-item, not a count — the run collects one entry per failed step ({ message_id?, stage?, error }) and continues rather than aborting.",
   request: { params: z.object({ id: uuidLike }), query: z.object({ dry: z.string().optional().describe("Pass '0' to persist; any other value (or omitted) stays dry-run.") }) },
   responses: {
     200: {
@@ -7411,7 +11274,7 @@ registry.registerPath({
   tags: ['Host Portal'],
   security: [{ CookieAuth: [] }],
   summary: 'Delete a draft or scheduled host campaign (HOST-EMAILS.2)',
-  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Compare-and-set delete: only a `draft` or `scheduled` row goes. A `sent`/`sending` campaign 409s — its send rows and clicks are the record of what actually went out, and mig 594's host_campaigns_block_sent_delete trigger refuses it at the database too, so this can never be bypassed by a stale read.",
+  description: "Host session; the campaign must belong to the session host (404 otherwise, so ids stay un-enumerable). Compare-and-set delete: only a `draft` or `scheduled` row goes. A `sent`/`sending` campaign 409s — its send rows and clicks are the record of what actually went out, and mig 772's host_campaigns_block_sent_delete trigger refuses it at the database too, so this can never be bypassed by a stale read.",
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Deleted', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike })) } } },
@@ -7804,11 +11667,24 @@ registry.registerPath({
   tags: ['Equipment Maintenance'],
   security: [{ CookieAuth: [] }],
   summary: 'Submit a completed inspection (equipment_inspect)',
-  description: 'Ordering is load-bearing server-side: the fault issue (with photos) is created FIRST, then the inspection is marked submitted and the asset rolled forward — a failed issue insert leaves the inspection in draft so the inspector can retry with ticks intact. An all-pass run raises no issue; a run with any fail raises exactly one issues row carrying equipment_id and — when takeOutOfService is set — takes the asset off the floor until that issue resolves. Photos upload only here, never on the draft, since the storage path is namespaced by the issue id.',
+  description: 'Ordering is load-bearing server-side: the fault issue (with photos) is created FIRST, then the inspection is marked submitted and the asset rolled forward — a failed issue insert leaves the inspection in draft so the inspector can retry with ticks intact. An all-pass run raises no issue; a run with any fail raises exactly one issues row carrying equipment_id and — when takeOutOfService is set — takes the asset off the floor until that issue resolves. TWO BODY SHAPES (MOBILE-UPLOAD.1): send `application/json` with `photos: [{ path, file_name, size, mime }]` after uploading each photo direct-to-storage against a slot from POST /api/issues/upload-sign — a path must be a slot minted for the caller\'s own location, unclaimed by another report and present in the bucket, and its size/type are read back off Storage rather than trusted from the body. The multipart shape (bytes inline) still works for clients that predate that, but a multipart file part has not reached this route from a phone since Expo SDK 57 and could never carry 3 x 10 MB past Vercel\'s ~4.5 MB body cap. Photos upload only here, never on the draft. An all-pass run drops any photo the device had already uploaded, since nothing will reference it.',
   request: {
     params: z.object({ id: uuidLike }),
     body: {
       content: {
+        'application/json': {
+          schema: z.object({
+            results:          z.record(z.any()).openapi({ description: '{ [itemId]: { state, note?, at, by } } — the full local results map, submitted alongside the individual PATCH ticks' }),
+            note:             z.string().optional().openapi({ description: 'Overall note, appended to the fault report if any check failed' }),
+            takeOutOfService: z.boolean().optional().openapi({ description: 'Ignored server-side unless at least one item failed' }),
+            photos: z.array(z.object({
+              path:      z.string().openapi({ description: 'Storage path from POST /api/issues/upload-sign — must be a slot minted for this location' }),
+              file_name: z.string().optional(),
+              size:      z.number().optional().openapi({ description: 'Advisory only — the stored object\'s real size is used' }),
+              mime:      z.string().optional().openapi({ description: 'Advisory only — the stored object\'s real type is used' }),
+            })).max(3).optional(),
+          }).openapi('EquipmentInspectionSubmitJsonBody'),
+        },
         'multipart/form-data': {
           schema: z.object({
             results:          z.string().openapi({ description: 'JSON-encoded { [itemId]: { state, note?, at, by } } — the full local results map, submitted alongside the individual PATCH ticks' }),
@@ -7824,7 +11700,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Submitted — the inspection row, the raised issueId (if any), nextDueOn, and whether the asset was taken out of service', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionSubmitResponse') } } },
-    400: { description: 'Unmarked items (a `missing` array is included), malformed results JSON, a rejected photo, or an invalid inspection interval on the type', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Unmarked items (a `missing` array is included), malformed results, a rejected photo (`photo_bad_path`, `photo_already_used`, `photo_missing`, `photo_too_large`, `photo_bad_type`), or an invalid inspection interval on the type', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'This inspection has already been submitted', content: { 'application/json': { schema: ErrorResponse } } },
@@ -7849,6 +11725,117 @@ registry.registerPath({
   responses: {
     200: { description: 'A page of submitted inspections, newest first, with total for pagination', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionLogResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UN1TWRITE.12 — the un1t.online write settings (master only).
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/un1t-online',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set the un1t.online write settings (master only)',
+  description:
+    'Sets locations.settings.un1t_online.writes_enabled and/or trial_product_id through mergeLocationSettings, keeping ' +
+    'every other settings key. trial_product_id must be an active, free, one-time un1t.online product at this studio ' +
+    '(null clears it). An unreadable settings row is a 503 and nothing is written. A master GET of the same path also ' +
+    'carries `write`: the switch, the trial product choices and the token\'s missing write permissions.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      writes_enabled: z.boolean().optional(), trial_product_id: z.string().nullable().optional(),
+      // UN1TWRITE.24 — funnel_enabled needs writes on (400 "Turn writes on first.").
+      funnel_enabled: z.boolean().optional(), hidden_class_keywords: z.string().optional(),
+      un1t_sends_welcome: z.boolean().optional(), un1t_welcome_sets_login: z.boolean().optional(), un1t_sends_booking_confirmation: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ write: { writes_enabled, trial_product_id } }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Nothing to change, or not a free one-time product at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Settings or products unreadable; nothing written', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UN1TWRITE.13 — the master-only MIA TEST route over the un1t.online write primitives.
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/un1t-online/test-account',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Run one un1t.online write for the MIA TEST contact (master only)',
+  description:
+    'For the live verification run. op create | forgot_password | trial | trial_skip_eligibility | book | cancel | checkout, ' +
+    'origin test_account, the master as actor, every write gate still applies. The contact must be in the studio\'s ' +
+    'organisation (404) and named MIA TEST in any case (403); create needs terms_confirmed: true. The answer never carries ' +
+    'a password or un1t.online\'s create body; a checkout URL is returned to the master and logged nowhere. forgot_password ' +
+    'allows up to 3 resets per person per 30 minutes; past that it is refused reset_limit with next_allowed_at.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      op: z.enum(['create', 'forgot_password', 'trial', 'trial_skip_eligibility', 'book', 'cancel', 'checkout']),
+      location_id: uuidLike, contact_id: uuidLike,
+      event_id: z.string().optional(), booking_id: z.string().optional(), product_id: z.string().optional(),
+      success_url: z.string().optional(), cancel_url: z.string().optional(), idempotency_key: z.string().optional(),
+      terms_confirmed: z.boolean().optional(),
+    }) } } },
+  },
+  responses: {
+    200: { description: '{ verdict | outcome, code, message, un1t_user_id?, booking_id?, checkout_url?, free?, next_allowed_at?, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Bad body, terms not confirmed, or no un1t.online account linked', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master, or not the MIA TEST contact', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Studio or contact not found in the same organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A checkout refusal', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// UN1TWRITE.14 — the staff un1t.online class list, book and cancel.
+const Un1tStaffGate = {
+  400: { description: 'Writes off at the studio, or the contact has no un1t.online account there', content: { 'application/json': { schema: ErrorResponse } } },
+  401: { description: 'Unauthorised', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'No access to the booking studio', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Contact not in the studio\'s organisation (or, on cancel, not their booking)', content: { 'application/json': { schema: ErrorResponse } } },
+  503: { description: 'Settings or mirror unreadable; nothing sent', content: { 'application/json': { schema: ErrorResponse } } },
+}
+registry.registerPath({
+  method: 'get',
+  path: '/api/un1t-online/classes',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: un1t.online classes, credits and upcoming bookings for a contact',
+  description: 'Scheduled classes at the booking studio in the next 14 days (spots left for staff, community classes labelled), the contact\'s credits from the mirror and their upcoming bookings there. Access is judged on the booking studio.',
+  request: { query: z.object({ location_id: uuidLike, contact_id: uuidLike }) },
+  responses: { 200: { description: '{ classes, credits, upcoming, spots_note }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } }, ...Un1tStaffGate },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/un1t-online/classes/book',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: book a contact into a un1t.online class',
+  description: 'The book primitive with origin staff. done 200 (already booked is success); refused 409 with un1t.online\'s words; budget spent 429; unclear 502. maxDuration 120.',
+  request: { body: { content: { 'application/json': { schema: z.object({ contact_id: uuidLike, location_id: uuidLike, event_id: z.string() }) } } } },
+  responses: {
+    200: { description: '{ un1t_booking_id, already_booked, message, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    409: { description: 'un1t.online refused (its words), a permission missing, or an attempt in flight', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tStaffGate,
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/un1t-online/classes/cancel',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: cancel a contact\'s un1t.online booking',
+  description: 'The booking must be this contact\'s at this studio in the mirror (404 otherwise). The cancel primitive with origin staff, an empty body. Same answers as book. maxDuration 120.',
+  request: { body: { content: { 'application/json': { schema: z.object({ contact_id: uuidLike, location_id: uuidLike, booking_id: z.string() }) } } } },
+  responses: {
+    200: { description: '{ un1t_booking_id, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    409: { description: 'un1t.online refused (its words), already happened, or an attempt in flight', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tStaffGate,
   },
 })
 
@@ -7883,9 +11870,8 @@ function buildSpec() {
       version: '1.1.0',
       description:
         'HTTP API for the Repset gym CRM. Most endpoints accept either a Supabase ' +
-        'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
-        'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
-        'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +
+        'session cookie (browser) or a Bearer token for external integrations — ' +
+        'a per-organization `unitk_…` API key (org-scoped). Mutating endpoints validate request bodies via Zod schemas; ' +
         'invalid input returns 400 with structured `issues` array.' +
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },

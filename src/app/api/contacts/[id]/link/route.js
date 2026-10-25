@@ -11,9 +11,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { canViewContact } from '@/lib/contact-crossovers'
 import {
   createGroup,
   addToGroup,
@@ -41,7 +42,7 @@ export async function POST(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'contact_linking')) {
+  if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -50,7 +51,7 @@ export async function POST(request, props) {
   // Load the primary contact ([id])
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, location_id, name')
+    .select('id, location_id, organization_id, name')
     .eq('id', id)
     .single()
 
@@ -60,6 +61,10 @@ export async function POST(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `contact_linking` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'contact_linking')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const url = new URL(request.url)
   const action = url.searchParams.get('action')
@@ -85,7 +90,7 @@ export async function POST(request, props) {
   // Load the other contact
   const { data: otherContact, error: otherErr } = await db
     .from('contacts')
-    .select('id, location_id, name')
+    .select('id, location_id, organization_id, name')
     .eq('id', otherContactId)
     .single()
 
@@ -93,10 +98,22 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  // Cross-location guard
-  if (otherContact.location_id !== contact.location_id) {
+  // ORGCONTACTS.4 — the other contact must be one the caller can SEE: a
+  // contact with a relationship at a studio where they hold Contacts (the
+  // contacts_select rule, canViewContact). Answered as a missing contact so a
+  // guessed id learns nothing. The same-studio rule this replaces used to
+  // cover it by construction.
+  if (!(await canViewContact(db, user, otherContact))) {
+    return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
+  }
+
+  // The fence is the ORGANISATION (a person is one contact per organisation,
+  // mig 712; a group links their accounts across its studios, mig 767). Two
+  // studios of one organisation link; two organisations never do, and a row
+  // with no organisation cannot be proven to be the same one.
+  if (!contact.organization_id || otherContact.organization_id !== contact.organization_id) {
     return NextResponse.json(
-      { success: false, error: 'Cannot link contacts in different locations' },
+      { success: false, error: 'Cannot link contacts in different organisations' },
       { status: 400 }
     )
   }
@@ -177,7 +194,7 @@ export async function DELETE(request, props) {
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
-  if (!hasPermission(user, 'contact_linking')) {
+  if (!hasPermissionAtAnyLocation(user, 'contact_linking')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -196,6 +213,10 @@ export async function DELETE(request, props) {
 
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+  // ROLESWEEP.1c — `contact_linking` judged at the contact's location, not the active studio.
+  if (!hasPermissionForLocation(user, contact.location_id, 'contact_linking')) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
 
   const pg = await getPersonGroup(db, id)
   if (!pg) {

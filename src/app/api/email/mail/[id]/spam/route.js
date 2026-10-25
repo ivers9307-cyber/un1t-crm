@@ -3,8 +3,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { loadTicketForUser, stampMailRow } from '../../_helpers'
-import { loadOwnAddresses } from '../../../tickets/_helpers'
+import { loadConversationForUser, stampMailRow } from '../../_helpers'
+import { loadOwnAddresses } from '../../_conversation'
 import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { logError } from '@/lib/log'
 
@@ -39,7 +39,7 @@ const MESSAGE_LIMIT = 500
 //   • maybeNotifyInboundEmail with the TICKET'S facts (requester, subject, the
 //     last preview) and preUnreadCount 0 — this release IS the moment the
 //     conversation becomes unseen. The fan-out's own gates (email_inbox at the
-//     ticket's location, mailbox grant or elevated, own-address suppression)
+//     conversation's location, mailbox grant or elevated, own-address suppression)
 //     apply unchanged; it never throws and never fails the request.
 //
 // "MARK AS SPAM" IS THE REVERSE, MINUS NOTIFICATIONS. Nobody is pinged about
@@ -53,7 +53,7 @@ const MESSAGE_LIMIT = 500
 // notify: PostgREST returns the rows it changed, and zero rows means the
 // other click won.
 //
-// ALL THE GATES ARE loadTicketForUser's: location access, the `email_inbox`
+// ALL THE GATES ARE loadConversationForUser's: location access, the `email_inbox`
 // key at the TICKET's location, and the per-mailbox grant. Every refusal is
 // the same 404.
 export async function POST(request, props) {
@@ -66,13 +66,13 @@ export async function POST(request, props) {
   const { spam } = validation.data
 
   const db = createServerClient()
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadConversationForUser(db, user, params.id)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
+  const { conversation } = loaded
 
   // Already there — nothing to write, nobody to tell.
-  if ((ticket.is_spam === true) === spam) {
-    return NextResponse.json({ success: true, data: { conversation: shape(ticket), notified: false } })
+  if ((conversation.is_spam === true) === spam) {
+    return NextResponse.json({ success: true, data: { conversation: shape(conversation), notified: false } })
   }
 
   const now = new Date().toISOString()
@@ -84,7 +84,7 @@ export async function POST(request, props) {
   // the answer, and zero rows is a legitimate one (the race above).
   const { data: changed, error } = await db.from('email_tickets')
     .update(patch)
-    .eq('id', ticket.id)
+    .eq('id', conversation.id)
     .eq('is_spam', !spam)
     .select('*')
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -95,7 +95,7 @@ export async function POST(request, props) {
     // stands (the other write's), and do not notify: the winner did.
     return NextResponse.json({
       success: true,
-      data: { conversation: shape({ ...ticket, ...patch }), notified: false },
+      data: { conversation: shape({ ...conversation, ...patch }), notified: false },
     })
   }
 
@@ -122,33 +122,33 @@ function shape(row) {
  *
  * @returns {Promise<boolean>} whether the push fan-out was invoked
  */
-async function releaseNotifications(db, ticket) {
+async function releaseNotifications(db, conversation) {
   // ── unread mirror ──────────────────────────────────────────────────
   try {
     const { data: unseen, error: unseenErr } = await db.from('email_inbox_messages')
       .select('id')
-      .eq('ticket_id', ticket.id)
+      .eq('ticket_id', conversation.id)
       .eq('direction', 'inbound')
       .is('seen_at', null)
       .limit(MESSAGE_LIMIT)
     if (unseenErr) {
-      logError('mail/spam', 'unread mirror read failed on release (conversation still released)', { ticketId: ticket.id, error: unseenErr })
+      logError('mail/spam', 'unread mirror read failed on release (conversation still released)', { conversationId: conversation.id, error: unseenErr })
     } else {
       const { error: mirrorErr } = await db.from('email_tickets')
         .update({ unread_count: (unseen || []).length })
-        .eq('id', ticket.id)
+        .eq('id', conversation.id)
         .select('id')
       if (mirrorErr) {
-        logError('mail/spam', 'unread mirror write failed on release (conversation still released)', { ticketId: ticket.id, error: mirrorErr })
+        logError('mail/spam', 'unread mirror write failed on release (conversation still released)', { conversationId: conversation.id, error: mirrorErr })
       }
     }
   } catch (err) {
-    logError('mail/spam', 'unread mirror threw on release (conversation still released)', { ticketId: ticket.id, err })
+    logError('mail/spam', 'unread mirror threw on release (conversation still released)', { conversationId: conversation.id, err })
   }
 
   // ── the push the webhook skipped ───────────────────────────────────
   // A compose-born thread nobody ever wrote back to has nothing to announce.
-  if (ticket.has_inbound === false) return false
+  if (conversation.has_inbound === false) return false
   try {
     // Own-address suppression, same list the reply/compose paths use. A failed
     // read degrades to "no suppression" rather than "no push": the requester
@@ -157,21 +157,21 @@ async function releaseNotifications(db, ticket) {
     const own = await loadOwnAddresses(db)
     const ownAddresses = own.addresses || []
     await maybeNotifyInboundEmail(db, {
-      locationId: ticket.location_id,
-      ticketId: ticket.id,
-      ticketMailboxId: ticket.mailbox_id ?? null,
-      fromEmail: ticket.requester_email,
+      locationId: conversation.location_id,
+      conversationId: conversation.id,
+      conversationMailboxId: conversation.mailbox_id ?? null,
+      fromEmail: conversation.requester_email,
       ownAddresses,
-      requesterName: ticket.requester_name,
-      subject: ticket.subject,
-      preview: ticket.last_message_preview,
+      requesterName: conversation.requester_name,
+      subject: conversation.subject,
+      preview: conversation.last_message_preview,
       // This release is the event that makes the conversation unseen.
       preUnreadCount: 0,
-      assignedTo: ticket.assigned_to ?? null,
+      assignedTo: conversation.assigned_to ?? null,
     })
     return true
   } catch (err) {
-    logError('mail/spam', 'release push failed (conversation still released)', { ticketId: ticket.id, err })
+    logError('mail/spam', 'release push failed (conversation still released)', { conversationId: conversation.id, err })
     return false
   }
 }

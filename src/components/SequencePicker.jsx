@@ -35,6 +35,12 @@ const TRIGGER_META = {
   tag_added:        { label: 'Tag',             icon: Tag,            cls: 'bg-pink-500/20 text-pink-700' },
 }
 
+// SEQPAGEGATE.1: the enrol route answers a missing sequence and another
+// studio's with the same 404 'Not found'. To the operator that means the
+// automation was deleted (or moved) since the list loaded; say so, in plain
+// words (no em-dash). Checked before parsing, so a non-JSON 404 reads the same.
+export const SEQUENCE_GONE_MESSAGE = 'This automation no longer exists.'
+
 export default function SequencePicker({ contactIds, locationId, variant = 'popover', onClose, onSuccess }) {
   const [sequences, setSequences] = useState(null)
   const [loadError, setLoadError] = useState(null)
@@ -90,6 +96,10 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contact_ids: contactIds, source_ref: 'ui', dry_run: true }),
       })
+      if (res.status === 404) {
+        setResult({ error: SEQUENCE_GONE_MESSAGE })
+        return
+      }
       const json = await res.json()
       if (!json.success) {
         setResult({ error: json.error || 'Preview failed' })
@@ -116,6 +126,10 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contact_ids: contactIds, source_ref: 'ui' }),
       })
+      if (res.status === 404) {
+        setResult({ error: SEQUENCE_GONE_MESSAGE })
+        return
+      }
       const json = await res.json()
       if (!json.success) {
         setResult({ error: json.error || 'Enrol failed' })

@@ -195,7 +195,7 @@ async function runZoomContactSyncBody({ db, dry, limit, force }) {
   // /api/integrations/zoom-contacts/run) because it carries real member
   // numbers; adding a second list of numbers to this envelope would reopen
   // exactly that leak. Which contacts these are is answered per-row on
-  // /settings/integrations/zoom-contacts, from buildDesiredContacts' own
+  // the hub's Zoom view (/settings/integrations-hub?view=zoom), from buildDesiredContacts' own
   // rejects report.
   const withheld = {
     invalid: (desiredRes.invalid || new Set()).size,

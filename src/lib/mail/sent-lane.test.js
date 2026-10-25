@@ -3,7 +3,7 @@
 // THE PROPERTIES THIS FILE EXISTS FOR
 //
 // 1. IT FINDS THE RIGHT THREAD, BY EITHER HEADER. A reply sent from Gmail
-//    carries In-Reply-To and References, and both must land on the ticket the
+//    carries In-Reply-To and References, and both must land on the conversation the
 //    member's mail opened — otherwise the whole phase does nothing.
 //
 // 2. IT NEVER FILES THE SAME REPLY TWICE, AND IT NEVER FILES OUR OWN. Both are
@@ -13,7 +13,7 @@
 //    deleted.
 //
 // 3. IT NEVER INVENTS A TICKET. A Sent message with no thread is somebody
-//    else's conversation; conjuring a ticket for it is noise an operator has to
+//    else's conversation; conjuring a conversation for it is noise an operator has to
 //    clear. `db.inserts` staying free of an email_tickets row is the contract.
 //
 // 4. IT ANSWERS THE MEMBER WITHOUT SHOUTING AT STAFF. needs-reply clears,
@@ -51,7 +51,7 @@ const INBOUND_RFC = 'member-opening-1@mail.example'
 
 /* ────────────────────────── the fake database ────────────────────────── */
 //
-// Deliberately local rather than the shared ticket-route fake: mig 574's index
+// Deliberately local rather than the shared conversation-route fake: mig 574's index
 // is the entire subject of this file, and the shared fake's UNIQUE_KEYS map
 // (which this phase does not own) knows nothing about it. It is modelled here,
 // scoped to (ticket_id, rfc_message_id) and partial on rfc_message_id — the
@@ -142,7 +142,7 @@ function makeDb({ messages = [], tickets = [], errors = {} } = {}) {
 
 /* ───────────────────────────── fixtures ──────────────────────────────── */
 
-const ticketRow = (over = {}) => ({
+const conversationRow = (over = {}) => ({
   id: TICKET,
   location_id: LOC,
   contact_id: 'c0000000-0000-4000-8000-000000000001',
@@ -209,8 +209,8 @@ const file = (db, over = {}) => fileClientSentReply(db, {
 })
 
 const messageInserts = (db) => db.inserts.filter(i => i.table === 'email_inbox_messages')
-const ticketInserts = (db) => db.inserts.filter(i => i.table === 'email_tickets')
-const ticketUpdates = (db) => db.updates.filter(u => u.table === 'email_tickets')
+const conversationInserts = (db) => db.inserts.filter(i => i.table === 'email_tickets')
+const conversationUpdates = (db) => db.updates.filter(u => u.table === 'email_tickets')
 
 let warn
 let error
@@ -222,18 +222,18 @@ beforeEach(() => {
 /* ─────────────────────────────── tests ───────────────────────────────── */
 
 describe('fileClientSentReply — threading', () => {
-  it('threads onto the ticket named by In-Reply-To', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+  it('threads onto the conversation named by In-Reply-To', async () => {
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await file(db)
 
-    expect(res).toMatchObject({ ok: true, outcome: 'filed', ticketId: TICKET })
+    expect(res).toMatchObject({ ok: true, outcome: 'filed', conversationId: TICKET })
     expect(messageInserts(db)).toHaveLength(1)
     expect(messageInserts(db)[0].payload.ticket_id).toBe(TICKET)
   })
 
-  it('threads onto the ticket named by References when there is no In-Reply-To', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+  it('threads onto the conversation named by References when there is no In-Reply-To', async () => {
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await file(db, {
       payload: sentPayload({
@@ -242,25 +242,25 @@ describe('fileClientSentReply — threading', () => {
       }),
     })
 
-    expect(res).toMatchObject({ ok: true, outcome: 'filed', ticketId: TICKET })
+    expect(res).toMatchObject({ ok: true, outcome: 'filed', conversationId: TICKET })
     expect(messageInserts(db)[0].payload.ticket_id).toBe(TICKET)
   })
 
   it('threads on postmark_message_id too — a reply to one of our Postmark-era sends', async () => {
     const db = makeDb({
       messages: [inboundRow({ rfc_message_id: null, postmark_message_id: 'pm-uuid-1' })],
-      tickets: [ticketRow()],
+      tickets: [conversationRow()],
     })
 
     const res = await file(db, { payload: sentPayload({ inReplyTo: '<pm-uuid-1>' }) })
 
-    expect(res).toMatchObject({ ok: true, outcome: 'filed', ticketId: TICKET })
+    expect(res).toMatchObject({ ok: true, outcome: 'filed', conversationId: TICKET })
   })
 
   it('is scoped to the mailbox location — a thread at another studio is not ours', async () => {
     const db = makeDb({
       messages: [inboundRow({ location_id: OTHER_LOC })],
-      tickets: [ticketRow({ location_id: OTHER_LOC })],
+      tickets: [conversationRow({ location_id: OTHER_LOC })],
     })
 
     const res = await file(db)
@@ -274,7 +274,7 @@ describe('fileClientSentReply — threading', () => {
     // would rewrite it. The fake has no .or() at all, so a regression here is a
     // TypeError rather than a silent filter rewrite — this asserts the shape
     // that keeps it that way.
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db, {
       payload: sentPayload({ inReplyTo: `<${INBOUND_RFC}> weird) chars ,and,commas` }),
@@ -287,7 +287,7 @@ describe('fileClientSentReply — threading', () => {
 
 describe('fileClientSentReply — the row it writes', () => {
   it('writes an outbound mail_client row with no author and no postmark id', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db)
 
@@ -310,7 +310,7 @@ describe('fileClientSentReply — the row it writes', () => {
     // is built on this column. A bracketed value matches nothing, so the index
     // would silently protect nothing. This exact bug shipped once in the send
     // path.
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db, { payload: sentPayload({ messageId: 'reply-abc@mail.gmail.com' }) })
 
@@ -320,7 +320,7 @@ describe('fileClientSentReply — the row it writes', () => {
   })
 
   it('carries the body, subject, recipients and threading headers through', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db, {
       payload: sentPayload({ references: `<${INBOUND_RFC}>`, text: 'Moved you to Friday.' }),
@@ -339,7 +339,7 @@ describe('fileClientSentReply — the row it writes', () => {
   })
 
   it('files an HTML-only reply with plain text derived from the markup', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db, { payload: sentPayload({ text: '', html: '<p>Moved you to Friday.</p>' }) })
 
@@ -349,7 +349,7 @@ describe('fileClientSentReply — the row it writes', () => {
   })
 
   it('files a message with no Message-ID rather than dropping the answer', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await file(db, { payload: sentPayload({ messageId: null }) })
 
@@ -360,7 +360,7 @@ describe('fileClientSentReply — the row it writes', () => {
 })
 
 describe('fileClientSentReply — dedupe (mig 574)', () => {
-  it('🔴 skips OUR OWN SMTP send: the reply route already wrote that rfc id on that ticket', async () => {
+  it('🔴 skips OUR OWN SMTP send: the reply route already wrote that rfc id on that conversation', async () => {
     // No "is this ours?" comparison exists anywhere in the lane. The send path
     // wrote the row; the Sent copy simply collides.
     const ourSend = {
@@ -374,8 +374,8 @@ describe('fileClientSentReply — dedupe (mig 574)', () => {
     }
     const db = makeDb({
       messages: [inboundRow(), ourSend],
-      // The reply route already advanced this ticket at send time.
-      tickets: [ticketRow({
+      // The reply route already advanced this conversation at send time.
+      tickets: [conversationRow({
         status: 'pending',
         last_message_at: '2026-08-26T08:59:00.000Z',
         last_message_direction: 'outbound',
@@ -387,35 +387,35 @@ describe('fileClientSentReply — dedupe (mig 574)', () => {
       payload: sentPayload({ messageId: 'crm-send-1@un1t.com', date: '2026-08-26T08:59:00.000Z' }),
     })
 
-    expect(res).toEqual({ ok: true, outcome: 'duplicate', ticketId: TICKET })
+    expect(res).toEqual({ ok: true, outcome: 'duplicate', conversationId: TICKET })
     // One insert ATTEMPTED, none accepted — the state still holds the single row.
     expect(db._state.email_inbox_messages.filter(m => m.rfc_message_id === 'crm-send-1@un1t.com'))
       .toHaveLength(1)
-    // And the ticket the reply route already bumped is left exactly alone.
-    expect(ticketUpdates(db)).toHaveLength(0)
+    // And the conversation the reply route already bumped is left exactly alone.
+    expect(conversationUpdates(db)).toHaveLength(0)
   })
 
   it('🔴 dedupes a re-poll of the same message', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const first = await file(db)
     const second = await file(db)
 
     expect(first).toMatchObject({ ok: true, outcome: 'filed' })
-    expect(second).toEqual({ ok: true, outcome: 'duplicate', ticketId: TICKET })
+    expect(second).toEqual({ ok: true, outcome: 'duplicate', conversationId: TICKET })
     expect(db._state.email_inbox_messages.filter(m => m.source === 'mail_client')).toHaveLength(1)
   })
 
   it('🔴 the index is PER TICKET, not global — a second mailbox on the same thread still files', async () => {
     // The connector deliberately files one copy per connected mailbox. A global
     // unique on rfc_message_id would refuse this insert, silently, and the
-    // second studio's copy of the reply would never appear on its own ticket.
+    // second studio's copy of the reply would never appear on its own conversation.
     const OTHER_TICKET = 't0000000-0000-4000-8000-000000000002'
     const db = makeDb({
       messages: [
         inboundRow(),
         inboundRow({ id: 'm-inbound-2', ticket_id: OTHER_TICKET, rfc_message_id: 'member-opening-2@mail.example' }),
-        // The same reply, already filed on the FIRST ticket.
+        // The same reply, already filed on the FIRST conversation.
         {
           id: 'm-sent-1',
           ticket_id: TICKET,
@@ -426,7 +426,7 @@ describe('fileClientSentReply — dedupe (mig 574)', () => {
           created_at: '2026-08-26T09:00:00.000Z',
         },
       ],
-      tickets: [ticketRow(), ticketRow({ id: OTHER_TICKET })],
+      tickets: [conversationRow(), conversationRow({ id: OTHER_TICKET })],
     })
 
     const res = await file(db, {
@@ -436,15 +436,15 @@ describe('fileClientSentReply — dedupe (mig 574)', () => {
       }),
     })
 
-    expect(res).toMatchObject({ ok: true, outcome: 'filed', ticketId: OTHER_TICKET })
+    expect(res).toMatchObject({ ok: true, outcome: 'filed', conversationId: OTHER_TICKET })
     expect(db._state.email_inbox_messages
       .filter(m => m.rfc_message_id === 'shared-reply@mail.gmail.com')).toHaveLength(2)
   })
 
-  it('finishes the ticket bump a crashed earlier attempt never reached', async () => {
+  it('finishes the conversation bump a crashed earlier attempt never reached', async () => {
     // The insert landed, the bump did not (a transient DB fault → ok:false →
     // the poller held its cursor). The retry must not answer a bare
-    // `duplicate`, or the ticket keeps saying "needs reply" with the answer
+    // `duplicate`, or the conversation keeps saying "needs reply" with the answer
     // sitting inside it — this phase's own bug, reintroduced by its error path.
     const db = makeDb({
       messages: [
@@ -459,32 +459,32 @@ describe('fileClientSentReply — dedupe (mig 574)', () => {
           created_at: '2026-08-26T09:00:00.000Z',
         },
       ],
-      tickets: [ticketRow()],
+      tickets: [conversationRow()],
     })
 
     const res = await file(db)
 
-    expect(res).toEqual({ ok: true, outcome: 'duplicate', ticketId: TICKET })
-    expect(ticketUpdates(db)).toHaveLength(1)
-    expect(ticketUpdates(db)[0].payload).toMatchObject({ last_message_direction: 'outbound' })
+    expect(res).toEqual({ ok: true, outcome: 'duplicate', conversationId: TICKET })
+    expect(conversationUpdates(db)).toHaveLength(1)
+    expect(conversationUpdates(db)[0].payload).toMatchObject({ last_message_direction: 'outbound' })
   })
 })
 
 describe('fileClientSentReply — the orphan rule', () => {
-  it('🔴 no thread ⇒ orphan, and NO ticket is created', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+  it('🔴 no thread ⇒ orphan, and NO conversation is created', async () => {
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await file(db, { payload: sentPayload({ inReplyTo: '<never-seen@elsewhere.test>' }) })
 
     expect(res).toEqual({ ok: true, outcome: 'orphan' })
-    expect(ticketInserts(db)).toHaveLength(0)
+    expect(conversationInserts(db)).toHaveLength(0)
     expect(messageInserts(db)).toHaveLength(0)
     expect(db.inserts).toHaveLength(0)
     expect(warn).toHaveBeenCalled()
   })
 
-  it('a message with no threading headers at all is an orphan, not a new ticket', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+  it('a message with no threading headers at all is an orphan, not a new conversation', async () => {
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await file(db, { payload: sentPayload({ inReplyTo: null, references: null }) })
 
@@ -492,7 +492,7 @@ describe('fileClientSentReply — the orphan rule', () => {
     expect(db.inserts).toHaveLength(0)
   })
 
-  it('a thread pointing at a ticket that no longer exists is an orphan', async () => {
+  it('a thread pointing at a conversation that no longer exists is an orphan', async () => {
     const db = makeDb({ messages: [inboundRow()], tickets: [] })
 
     const res = await file(db)
@@ -502,26 +502,26 @@ describe('fileClientSentReply — the orphan rule', () => {
   })
 })
 
-describe('fileClientSentReply — the ticket bump', () => {
+describe('fileClientSentReply — the conversation bump', () => {
   it('🔴 clears needs-reply: open + inbound becomes open + outbound', async () => {
     // needs_reply IS the predicate `status = 'open' AND
     // last_message_direction = 'inbound'` (scopeToNeedsReply), so flipping the
     // direction is the whole of the clear.
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db)
 
-    const ticket = db._state.email_tickets[0]
-    expect(ticket.last_message_direction).toBe('outbound')
-    expect(ticket.status).toBe('open')
-    expect(ticket.last_message_at).toBe('2026-08-26T09:00:00.000Z')
-    expect(ticket.last_message_preview).toBe('No problem — I have moved you to Friday 6pm.')
+    const conversation = db._state.email_tickets[0]
+    expect(conversation.last_message_direction).toBe('outbound')
+    expect(conversation.status).toBe('open')
+    expect(conversation.last_message_at).toBe('2026-08-26T09:00:00.000Z')
+    expect(conversation.last_message_preview).toBe('No problem — I have moved you to Friday 6pm.')
   })
 
-  it('🔴 does NOT touch status — a closed ticket stays closed', async () => {
+  it('🔴 does NOT touch status — a closed conversation stays closed', async () => {
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow({ status: 'closed', closed_at: '2026-08-26T08:30:00.000Z' })],
+      tickets: [conversationRow({ status: 'closed', closed_at: '2026-08-26T08:30:00.000Z' })],
     })
 
     const res = await file(db)
@@ -529,7 +529,7 @@ describe('fileClientSentReply — the ticket bump', () => {
     expect(res).toMatchObject({ ok: true, outcome: 'filed' })
     expect(db._state.email_tickets[0].status).toBe('closed')
     expect(db._state.email_tickets[0].closed_at).toBe('2026-08-26T08:30:00.000Z')
-    for (const update of ticketUpdates(db)) {
+    for (const update of conversationUpdates(db)) {
       expect(update.payload).not.toHaveProperty('status')
       expect(update.payload).not.toHaveProperty('closed_at')
       expect(update.payload).not.toHaveProperty('solved_at')
@@ -537,19 +537,19 @@ describe('fileClientSentReply — the ticket bump', () => {
   })
 
   it('🔴 does NOT increment unread_count — a staff reply is not a member reply', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow({ unread_count: 2 })] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow({ unread_count: 2 })] })
 
     await file(db)
 
     expect(db._state.email_tickets[0].unread_count).toBe(2)
     expect(db.rpcs).toHaveLength(0)
-    for (const update of ticketUpdates(db)) {
+    for (const update of conversationUpdates(db)) {
       expect(update.payload).not.toHaveProperty('unread_count')
     }
   })
 
   it('stamps first_response_at when this is the first outbound message', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow({ first_response_at: null })] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow({ first_response_at: null })] })
 
     await file(db)
 
@@ -559,7 +559,7 @@ describe('fileClientSentReply — the ticket bump', () => {
   it('leaves an existing first_response_at alone', async () => {
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow({ first_response_at: '2026-08-20T10:00:00.000Z' })],
+      tickets: [conversationRow({ first_response_at: '2026-08-20T10:00:00.000Z' })],
     })
 
     await file(db)
@@ -569,11 +569,11 @@ describe('fileClientSentReply — the ticket bump', () => {
 
   it('🔴 does NOT clear needs-reply when the member has written again since', async () => {
     // The poller runs up to five minutes behind. Blindly stamping 'outbound'
-    // here would drop a ticket the member IS waiting on out of the queue —
+    // here would drop a conversation the member IS waiting on out of the queue —
     // the double-reply failure this phase exists to prevent, inverted.
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow({
+      tickets: [conversationRow({
         last_message_at: '2026-08-26T09:02:00.000Z',
         last_message_direction: 'inbound',
         last_message_preview: 'Actually, can we make it Saturday?',
@@ -585,14 +585,14 @@ describe('fileClientSentReply — the ticket bump', () => {
     expect(res).toMatchObject({ ok: true, outcome: 'filed' })
     // The reply is on the record …
     expect(messageInserts(db)).toHaveLength(1)
-    // … and the ticket still says the member is waiting.
-    const ticket = db._state.email_tickets[0]
-    expect(ticket.last_message_direction).toBe('inbound')
-    expect(ticket.last_message_preview).toBe('Actually, can we make it Saturday?')
+    // … and the conversation still says the member is waiting.
+    const conversation = db._state.email_tickets[0]
+    expect(conversation.last_message_direction).toBe('inbound')
+    expect(conversation.last_message_preview).toBe('Actually, can we make it Saturday?')
   })
 
   it('does not push the queue sort key into the future on a skewed client clock', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     await file(db, { payload: sentPayload({ date: '2099-01-01T00:00:00.000Z' }) })
 
@@ -605,7 +605,7 @@ describe('fileClientSentReply — faults are verdicts, never throws', () => {
   it('returns ok:false when the threading lookup fails', async () => {
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow()],
+      tickets: [conversationRow()],
       errors: { email_inbox_messages: { code: '42703', message: 'column does not exist' } },
     })
 
@@ -616,10 +616,10 @@ describe('fileClientSentReply — faults are verdicts, never throws', () => {
     expect(res.error).toMatchObject({ code: '42703' })
   })
 
-  it('returns ok:false when the ticket lookup fails', async () => {
+  it('returns ok:false when the conversation lookup fails', async () => {
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow()],
+      tickets: [conversationRow()],
       errors: { 'email_tickets.select': { code: '08006', message: 'connection failure' } },
     })
 
@@ -631,7 +631,7 @@ describe('fileClientSentReply — faults are verdicts, never throws', () => {
   it('returns ok:false when the message insert fails for any reason but 23505', async () => {
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow()],
+      tickets: [conversationRow()],
       errors: { 'email_inbox_messages.insert': { code: '23503', message: 'foreign key violation' } },
     })
 
@@ -641,10 +641,10 @@ describe('fileClientSentReply — faults are verdicts, never throws', () => {
     expect(error).toHaveBeenCalled()
   })
 
-  it('returns ok:false when the ticket bump fails, so the caller does not advance', async () => {
+  it('returns ok:false when the conversation bump fails, so the caller does not advance', async () => {
     const db = makeDb({
       messages: [inboundRow()],
-      tickets: [ticketRow()],
+      tickets: [conversationRow()],
       errors: { 'email_tickets.update': { code: '40001', message: 'serialization failure' } },
     })
 
@@ -665,7 +665,7 @@ describe('fileClientSentReply — faults are verdicts, never throws', () => {
   })
 
   it('refuses to run unscoped: a mailbox with no location_id is a fault, not a guess', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await fileClientSentReply(db, {
       mailbox: { id: MAILBOX.id, address: MAILBOX.address },
@@ -678,7 +678,7 @@ describe('fileClientSentReply — faults are verdicts, never throws', () => {
   })
 
   it('files without a from_email rather than refusing, when the mailbox address is unusable', async () => {
-    const db = makeDb({ messages: [inboundRow()], tickets: [ticketRow()] })
+    const db = makeDb({ messages: [inboundRow()], tickets: [conversationRow()] })
 
     const res = await file(db, { mailbox: { ...MAILBOX, address: 'not an address' } })
 

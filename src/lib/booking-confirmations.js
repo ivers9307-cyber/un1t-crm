@@ -1,11 +1,13 @@
 // Booking confirmation send (mig 077).
 //
 // Fires once at booking creation time, not on a cron. Same
-// channel gates as the reminder runner (email_administrative /
-// sms_administrative opt-out, sms_status, no-phone, no-email),
-// same merge-tag set, same per-location alpha sender ID.
+// channel gates as the reminder runner (email_administrative
+// opt-out, no-email) and the same merge-tag set. Channels: email
+// and WhatsApp (EVENTCONFIRM-WA.1, mig 666 — an approved template
+// chosen per event type). The SMS channel was retired with Twilio
+// (TWILIO-RETIRE.1), so a legacy 'sms' entry is skipped.
 //
-// Best-effort: a Postmark / Twilio hiccup never breaks the
+// Best-effort: a Postmark / Meta hiccup never breaks the
 // customer's "Booking confirmed!" response. Errors land in the
 // server logs and the customer sees the on-page confirmation;
 // the operator can re-send manually or rely on the reminder
@@ -16,34 +18,39 @@
 // not tasks).
 
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
-import { sendLocationSms, TwilioError } from './twilio'
 import { logTransactionalWalletState } from './wallet-enforcement'
 import { logWarn } from './log'
-import { overlayConnections } from '@/lib/connection-registry'
-import { transactionalEmailSuppression, transactionalSmsSuppression } from '@/lib/transactional-consent'
+import { getLocationBranding } from './location-branding'
+import { transactionalEmailSuppression, transactionalWhatsappSuppression } from '@/lib/transactional-consent'
+import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
+import { bookingManageUrl } from '@/lib/booking-manage-tokens'
+import { resolveCustomerBaseUrl } from '@/lib/tenant-host'
 
 // BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
-// stored as Dublin-local wall-clock values without timezone semantics.
+// stored as studio-local wall-clock values without timezone semantics
+// (the booking's location zone; Europe/Dublin for every UN1T studio).
 // The old implementation did `new Date(\`${dateStr}T${timeStr}Z\`)` —
 // the trailing `Z` parsed the time as UTC, then
 // formatWeekdayShortDateTimeInTZ rendered it in Europe/Dublin which
-// in BST (May→Oct) is UTC+1 — adding an hour. 17:00 booking → SMS
+// in BST (May→Oct) is UTC+1 — adding an hour. 17:00 booking → message
 // said 18:00. Don't go through Date at all for the clock time;
 // derive only the weekday/date label from a Date and append the
 // stored time string verbatim.
 //
 // Exported so the cancellation email (bookings/[id]/cancel) and the
-// reminder runner (event-reminders) render Dublin wall-clock the same
+// reminder runner (event-reminders) render the wall clock the same
 // way instead of each re-deriving the (previously buggy) Date-Z parse.
+// Zone-free (TZ.7): the date and the time are both printed as stored.
 export function fmtBookingTime(dateStr, timeStr) {
   if (!dateStr) return ''
   const timePart = String(timeStr || '').slice(0, 5)  // "17:00"
-  // Use noon UTC on the booking date to derive the weekday label —
-  // any same-day UTC instant is fine here since we're only rendering
-  // the weekday + day + month in Europe/Dublin (no time involved).
+  // Use noon UTC on the booking date to derive the weekday label, read
+  // in UTC: that is the same calendar day, so the label is the stored
+  // date's own weekday + day + month in any studio's zone (no time
+  // involved). Byte-identical to the Europe/Dublin rendering it replaced.
   try {
     const dayLabel = new Intl.DateTimeFormat('en-IE', {
-      timeZone: 'Europe/Dublin',
+      timeZone: 'UTC',
       weekday: 'short',
       day: 'numeric',
       month: 'short',
@@ -54,12 +61,53 @@ export function fmtBookingTime(dateStr, timeStr) {
   }
 }
 
-function applyMergeTagsWithExtras(html, contact, extras) {
+/**
+ * W1.S1a — the location merge tags a booking email resolves: {{location_name}}
+ * (the sending location's own name) and {{company_name}} (its configured
+ * brand: company_settings -> org_settings -> locations.name). The template
+ * editor offers both; before this they rendered blank on booking
+ * confirmations and event reminders. getLocationBranding never throws.
+ * Shared with event-reminders.js.
+ * @param {object} db
+ * @param {string|null} locationId  the event type's location (the sender)
+ * @returns {Promise<{ location_name: string, company_name: string }>}
+ */
+export async function bookingLocationMergeExtras(db, locationId) {
+  const { locationName, companyName } = await getLocationBranding(db, locationId)
+  return { location_name: locationName || '', company_name: companyName || '' }
+}
+
+/**
+ * BOOKINGSELF.1 — {{manage_url}}: the booking's own page (/book/manage/<token>)
+ * where the customer can cancel or reschedule, minted on the booking
+ * location's customer host. '' when it cannot be built (no signing key, no
+ * app URL): the email still goes out, the tag renders empty. Never throws.
+ * WhatsApp confirmations cannot carry it: their bodies are fixed, approved
+ * Meta templates. Shared with event-reminders.js.
+ * @param {object} db
+ * @param {string} bookingId
+ * @param {string|null} locationId  the event type's location
+ * @returns {Promise<string>}
+ */
+export async function bookingManageMergeUrl(db, bookingId, locationId) {
+  try {
+    const baseUrl = await resolveCustomerBaseUrl(db, locationId || null)
+    return bookingManageUrl(bookingId, { baseUrl }) || ''
+  } catch (e) {
+    logWarn('booking-confirmation', 'manage link not built; {{manage_url}} renders empty', { bookingId, err: e })
+    return bookingManageUrl(bookingId) || ''
+  }
+}
+
+// Exported for event-reminders.js, which renders the same tag set.
+export function applyMergeTagsWithExtras(html, contact, extras) {
   let out = applyMergeTags(html, contact, {
     location_name: extras.location_name || '',
+    company_name: extras.company_name || '',
   })
   out = out.replaceAll('{{event_name}}', extras.event_name || '')
   out = out.replaceAll('{{event_time}}', extras.event_time || '')
+  out = out.replaceAll('{{manage_url}}', extras.manage_url || '')
   return out
 }
 
@@ -87,12 +135,12 @@ export async function sendBookingConfirmation(db, bookingId) {
         id, name, location_id,
         confirmation_enabled, confirmation_channels,
         confirmation_email_template_id, confirmation_email_subject,
-        confirmation_sms_body
+        confirmation_whatsapp_template_id
       ),
       contacts (
-        first_name, last_name, name, email, phone,
-        email_status, sms_status,
-        contact_preferences ( email_administrative, sms_administrative )
+        id, first_name, last_name, name, email, phone, wa_phone,
+        email_status, wa_status,
+        contact_preferences ( email_administrative, whatsapp_administrative )
       )
     `)
     .eq('id', bookingId)
@@ -119,7 +167,7 @@ export async function sendBookingConfirmation(db, bookingId) {
     locationId: ev.location_id,
     emailTemplateId: ev.confirmation_email_template_id,
     emailSubject: ev.confirmation_email_subject,
-    smsBody: ev.confirmation_sms_body,
+    whatsappTemplateId: ev.confirmation_whatsapp_template_id,
   }
 
   // INTEG-C3 — transactional sends are NEVER blocked by billing: this
@@ -132,7 +180,7 @@ export async function sendBookingConfirmation(db, bookingId) {
     try {
       let outcome
       if (channel === 'email') outcome = await sendEmailConfirmation(db, booking, ctx)
-      else if (channel === 'sms') outcome = await sendSmsConfirmation(db, booking, ctx)
+      else if (channel === 'whatsapp') outcome = await sendWhatsappConfirmation(db, booking, ctx)
       else outcome = { status: 'skipped', reason: `unsupported_channel:${channel}` }
 
       if (outcome.status === 'sent') result.sent.push(channel)
@@ -181,8 +229,10 @@ async function sendEmailConfirmation(db, booking, ctx) {
   }
 
   const extras = {
+    ...(await bookingLocationMergeExtras(db, ctx.locationId)),
     event_name: ctx.eventName,
     event_time: fmtBookingTime(booking.booking_date, booking.start_time),
+    manage_url: await bookingManageMergeUrl(db, booking.id, ctx.locationId),
   }
 
   const rawSubject =
@@ -201,65 +251,47 @@ async function sendEmailConfirmation(db, booking, ctx) {
   return { status: 'sent' }
 }
 
-async function sendSmsConfirmation(db, booking, ctx) {
-  if (!ctx.smsBody) {
-    throw new Error('Confirmation channel=sms but no body configured on the event type')
-  }
+// EVENTCONFIRM-WA.1 — the WhatsApp leg. A booking arrives from a web form,
+// so there is no 24h window: it has to be an APPROVED template (UTILITY, since
+// Meta refuses MARKETING on transactional paths). The operator picks it per
+// event type; its body variables fill positionally — {{1}} first name,
+// {{2}} day + time, {{3}} event name — and a template with fewer variables
+// just takes the first N. The send itself (feature gate, phone
+// normalisation, APPROVED check, wa_phone backfill, inbox log) is the /start
+// funnel's helper, so the two paths cannot drift.
+async function sendWhatsappConfirmation(db, booking, ctx) {
+  if (!ctx.whatsappTemplateId) return { status: 'skipped', reason: 'no_template_configured' }
 
   const c = booking.contacts
-  // EVENT-CONSENT.1 — shared definition (sms_status + sms_administrative).
-  const suppression = transactionalSmsSuppression(c)
+  if (!c?.id) return { status: 'skipped', reason: 'no_contact' }
+  const suppression = transactionalWhatsappSuppression(c)
   if (suppression) return { status: 'skipped', reason: suppression }
 
-  const phone = booking.contacts?.phone || booking.customer_phone
-  if (!phone) return { status: 'skipped', reason: 'no_phone_number' }
+  const { data: tpl, error: tplErr } = await db
+    .from('whatsapp_templates')
+    .select('name, status, components')
+    .eq('id', ctx.whatsappTemplateId)
+    .eq('location_id', ctx.locationId)
+    .maybeSingle()
+  if (tplErr) throw new Error(`template read failed: ${tplErr.message}`)
+  if (!tpl) return { status: 'skipped', reason: 'template_not_found' }
 
-  let { data: location } = await db
-    .from('locations')
-    .select('id, name, twilio_alpha_sender_id')
-    .eq('id', ctx.locationId)
-    .single()
-  if (!location) {
-    throw new Error('Event location not found — cannot resolve SMS sender.')
-  }
-  // INTEG-A2 dual-read: registry twilio_sender row first.
-  location = await overlayConnections(db, location, ['twilio_sender'])
+  const body = (tpl.components || []).find((x) => x?.type === 'BODY')
+  const varCount = new Set(String(body?.text || '').match(/\{\{\d+\}\}/g) || []).size
+  const firstName = c.first_name || (c.name ? c.name.split(' ')[0] : '') || booking.customer_name?.split(' ')[0] || 'there'
+  const params = [firstName, fmtBookingTime(booking.booking_date, booking.start_time), ctx.eventName || '']
+    .slice(0, varCount)
 
-  const mergeContact = booking.contacts || {
-    name: booking.customer_name,
-    first_name: booking.customer_name?.split(' ')[0],
-    email: booking.customer_email,
-    phone: booking.customer_phone,
-  }
-
-  const extras = {
-    event_name: ctx.eventName,
-    event_time: fmtBookingTime(booking.booking_date, booking.start_time),
-    location_name: location.name || '',
-  }
-
-  const renderedBody = applyMergeTagsWithExtras(ctx.smsBody, mergeContact, extras)
-
-  try {
-    await sendLocationSms({ location, to: phone, body: renderedBody })
-  } catch (e) {
-    const msg = e instanceof TwilioError
-      ? `Twilio ${e.code || e.status || ''}: ${e.message}`.trim()
-      : (e?.message || 'SMS send failed')
-    throw new Error(msg)
-  }
-
-  // Activity timeline entry — mirrors the reminder pattern.
-  if (booking.contact_id) {
-    await db.from('activities').insert({
-      contact_id: booking.contact_id,
-      location_id: ctx.locationId,
-      type: 'sms_sent',
-      kind: 'event',
-      subject: `Booking confirmation: ${ctx.eventName}`,
-      note: renderedBody,
-    })
-  }
-
-  return { status: 'sent' }
+  const res = await maybeSendBookingWhatsappConfirm({
+    db,
+    locationId: ctx.locationId,
+    contact: { id: c.id, first_name: c.first_name, name: c.name, phone: c.wa_phone || c.phone || booking.customer_phone, wa_phone: c.wa_phone },
+    templateName: tpl.name,
+    bodyParams: params,
+  })
+  if (res.sent) return { status: 'sent' }
+  // The helper swallows its own send errors and reports them as a reason; a
+  // failed SEND is a failure, every other reason is a skip (nothing to send).
+  if (res.reason === 'send_failed') throw new Error('WhatsApp send failed')
+  return { status: 'skipped', reason: res.reason }
 }

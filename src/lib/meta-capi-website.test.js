@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion } from './meta-capi.js'
+// WAORGNUMBER.1 — the WhatsApp token comes from the number switched on at the
+// studio (getLocationWhatsAppNumberConfig); the fakes feed it from their
+// `whatsapp_numbers` state entry.
+const numberHolder = vi.hoisted(() => ({ row: null, error: null }))
+vi.mock('./whatsapp-config', () => ({
+  getLocationWhatsAppNumberConfig: vi.fn(async () => {
+    if (numberHolder.error) throw numberHolder.error
+    return numberHolder.row ? { token: numberHolder.row.access_token, businessAccountId: numberHolder.row.business_account_id || null } : null
+  }),
+}))
+import { getLocationWhatsAppNumberConfig } from './whatsapp-config'
+import { normalizeEmailForMeta, normalizePhoneForMeta, sha256Hex, buildWebsiteEvent, sendWebsiteConversion, fbcFromFbclid, normalizeNameForMeta, fbpIfValid } from './meta-capi.js'
 
 describe('normalizeEmailForMeta', () => {
   it('trims and lowercases', () => {
@@ -47,6 +58,8 @@ describe('buildWebsiteEvent', () => {
       user_data: {
         em: [sha256Hex('test@example.com')],
         ph: [sha256Hex('353871234567')],
+        // MATCHQUALITY.1 — an Irish phone implies the country, nothing else does.
+        country: [sha256Hex('ie')],
       },
       custom_data: { content_name: 'FUS1ON' },
     })
@@ -69,10 +82,24 @@ describe('buildWebsiteEvent', () => {
     expect(ev.event_id).toBeUndefined()
     expect(ev.custom_data).toBeUndefined()
   })
+
+  // PURCHASEVALUE.1 — a Purchase carries the money and the order.
+  it('carries value, currency, order_id and content_type when given, and none of them when not', () => {
+    const ev = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', contentName: 'The 14 Day Reset', value: 39, currency: 'eur', orderId: 'tp1', contentType: 'product' })
+    expect(ev.custom_data).toEqual({ content_name: 'The 14 Day Reset', value: 39, currency: 'EUR', order_id: 'tp1', content_type: 'product' })
+    const lead = buildWebsiteEvent({ eventName: 'Lead', eventTime: 1, email: 'a@b.com', contentName: 'The 14 Day Reset' })
+    expect(lead.custom_data).toEqual({ content_name: 'The 14 Day Reset' })
+    const free = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', value: 0 })
+    expect(free.custom_data).toEqual({ value: 0, currency: 'EUR' })
+    const bad = buildWebsiteEvent({ eventName: 'Purchase', eventTime: 1, email: 'a@b.com', value: Number.NaN })
+    expect(bad.custom_data).toBeUndefined()
+  })
 })
 
 // Minimal chainable fake supabase client resolving selects from `state`.
 function fakeDb(state) {
+  numberHolder.row = state.whatsapp_numbers ?? null
+  numberHolder.error = null
   function builder(table) {
     const b = {
       select() { return b },
@@ -131,7 +158,7 @@ describe('sendWebsiteConversion', () => {
       whatsapp_numbers: { access_token: 'tok1', business_account_id: 'waba1' },
     })
     const r = await sendWebsiteConversion(db, args)
-    expect(r).toEqual({ sent: true })
+    expect(r).toMatchObject({ sent: true })
     expect(global.fetch).toHaveBeenCalledTimes(1)
     const [url, opts] = global.fetch.mock.calls[0]
     expect(url).toBe('https://graph.facebook.com/v21.0/ds1/events')
@@ -167,3 +194,125 @@ describe('sendWebsiteConversion', () => {
     expect(r).toEqual({ sent: false, reason: 'exception' })
   })
 })
+
+// METADATASET.1 — a dataset's own token, and the click/browser details.
+describe('fbcFromFbclid', () => {
+  it('builds Meta\'s click id value from the landing URL\'s fbclid', () => {
+    expect(fbcFromFbclid('IwAR0abc-DEF_123', 1700000000000)).toBe('fb.1.1700000000000.IwAR0abc-DEF_123')
+  })
+  it('is null for anything that is not a plausible fbclid', () => {
+    for (const bad of ['', '  ', null, undefined, 42, 'has space', 'a<script>', 'x'.repeat(501)]) {
+      expect(fbcFromFbclid(bad, 1)).toBeNull()
+    }
+  })
+})
+
+describe('buildWebsiteEvent — click and browser details', () => {
+  const base = { eventName: 'Lead', eventTime: 1, email: 'a@b.ie' }
+  it('adds fbc, client IP and user agent unhashed when given', () => {
+    const ev = buildWebsiteEvent({ ...base, fbc: 'fb.1.1.abc', clientIp: '203.0.113.9', userAgent: 'Mozilla/5.0 Test' })
+    expect(ev.user_data).toMatchObject({ fbc: 'fb.1.1.abc', client_ip_address: '203.0.113.9', client_user_agent: 'Mozilla/5.0 Test' })
+  })
+  it('leaves them out when absent, null or the rate limiter\'s "unknown"', () => {
+    const ev = buildWebsiteEvent({ ...base, fbc: null, clientIp: 'unknown', userAgent: undefined })
+    expect(Object.keys(ev.user_data)).toEqual(['em'])
+  })
+})
+
+describe('sendWebsiteConversion — the dataset\'s own token', () => {
+  beforeEach(() => { global.fetch = vi.fn() })
+  afterEach(() => { vi.restoreAllMocks() })
+  const args = { locationId: 'loc1', eventName: 'Lead', email: 'a@b.ie', phone: '0871234567', eventId: 'classlead-1' }
+
+  function tracedDb(state) {
+    numberHolder.row = state.whatsapp_numbers ?? null
+    numberHolder.error = null
+    const tables = []
+    function builder(table) {
+      tables.push(table)
+      const b = { select: () => b, eq: () => b, is: () => b, limit: () => b, maybeSingle: () => Promise.resolve({ data: state[table] ?? null }) }
+      return b
+    }
+    return { from: builder, tables }
+  }
+
+  it('a location with its own token and NO WhatsApp number still sends (Hatch Street)', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds-hatch', capi_access_token: 'SYNTH-OWN-TOKEN' } } }, whatsapp_numbers: null })
+    const r = await sendWebsiteConversion(db, { ...args, fbc: 'fb.1.1.abc', clientIp: '203.0.113.9', userAgent: 'UA' })
+    expect(r).toMatchObject({ sent: true })
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://graph.facebook.com/v21.0/ds-hatch/events')
+    const body = JSON.parse(opts.body)
+    expect(body.access_token).toBe('SYNTH-OWN-TOKEN')
+    expect(body.data[0].user_data).toMatchObject({ fbc: 'fb.1.1.abc', client_ip_address: '203.0.113.9', client_user_agent: 'UA' })
+    // The WhatsApp number is not even read when the dataset has its own token.
+    expect(db.tables).toEqual(['locations'])
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+  })
+
+  it('a failed number lookup with no token of its own is no_token, logged (never thrown)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds1' } } }, whatsapp_numbers: { access_token: 'WA-TOKEN' } })
+    numberHolder.error = new Error('boom')
+    expect(await sendWebsiteConversion(db, args)).toEqual({ sent: false, reason: 'no_token' })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('its own token wins over the WhatsApp number token', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    const db = tracedDb({
+      locations: { settings: { meta_ads: { dataset_id: 'ds1', capi_access_token: 'SYNTH-OWN-TOKEN' } } },
+      whatsapp_numbers: { access_token: 'WA-TOKEN' },
+    })
+    await sendWebsiteConversion(db, args)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).access_token).toBe('SYNTH-OWN-TOKEN')
+  })
+
+  it('pin: with no token of its own, the WhatsApp number token is used exactly as before', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    const db = tracedDb({ locations: { settings: { meta_ads: { dataset_id: 'ds1' } } }, whatsapp_numbers: { access_token: 'WA-TOKEN' } })
+    await sendWebsiteConversion(db, args)
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).access_token).toBe('WA-TOKEN')
+    // WAORGNUMBER.1 — the number switched on at the studio, not a row read by the studio's id.
+    expect(db.tables).toEqual(['locations'])
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith('loc1')
+  })
+})
+
+describe('MATCHQUALITY.1 — more identifiers on the website event', () => {
+  const base = { eventName: 'Lead', eventTime: 1, email: 'sam@example.com', phone: '0871234567' }
+  it('normalises names the way Meta wants: lower-case, punctuation gone, letters and spaces kept', () => {
+    expect(normalizeNameForMeta("  Seán O'Brien-Murphy ")).toBe('seán obrienmurphy')
+    expect(normalizeNameForMeta('Sam 2')).toBe('sam')
+    expect(normalizeNameForMeta('!!!')).toBeNull()
+    expect(normalizeNameForMeta(null)).toBeNull()
+  })
+  it('accepts only the documented _fbp shape', () => {
+    expect(fbpIfValid('fb.1.1759600000000.1234567890')).toBe('fb.1.1759600000000.1234567890')
+    expect(fbpIfValid('fb.1.abc.1')).toBeNull()
+    expect(fbpIfValid('<script>')).toBeNull()
+    expect(fbpIfValid(undefined)).toBeNull()
+  })
+  it('hashes first name, last name, country (from an Irish phone) and our contact id; fbp unhashed', () => {
+    const ev = buildWebsiteEvent({ ...base, firstName: 'Sam', lastName: 'Byrne', externalId: 'c1', fbp: 'fb.1.1759600000000.1234567890' })
+    expect(ev.user_data.fn).toEqual([sha256Hex('sam')])
+    expect(ev.user_data.ln).toEqual([sha256Hex('byrne')])
+    expect(ev.user_data.country).toEqual([sha256Hex('ie')])
+    expect(ev.user_data.external_id).toEqual([sha256Hex('c1')])
+    expect(ev.user_data.fbp).toBe('fb.1.1759600000000.1234567890')
+  })
+  it('never guesses a country from a non-Irish phone, and leaves every new field out when absent', () => {
+    const ev = buildWebsiteEvent({ ...base, phone: '+44 7700 900123' })
+    expect(ev.user_data.country).toBeUndefined()
+    expect(ev.user_data.fn).toBeUndefined()
+    expect(ev.user_data.ln).toBeUndefined()
+    expect(ev.user_data.external_id).toBeUndefined()
+    expect(ev.user_data.fbp).toBeUndefined()
+  })
+  it('a junk fbp is dropped, never forwarded', () => {
+    const ev = buildWebsiteEvent({ ...base, fbp: 'javascript:alert(1)' })
+    expect(ev.user_data.fbp).toBeUndefined()
+  })
+})
+

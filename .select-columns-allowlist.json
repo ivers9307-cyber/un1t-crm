@@ -1,0 +1,17 @@
+{
+  "_readme": [
+    "Accepted phantom-column findings for `npm run check:select-columns` (SELECTCOLS.1).",
+    "An entry means: the checker cannot see that this column is real, we have VERIFIED it against the live schema, and here is when we will re-check.",
+    "Empty is the healthy state. Correct the column name, or add the column in a forward-only migration, before reaching for this file.",
+    "",
+    "Entry shape (all five fields required):",
+    "  file     repo-relative path exactly as the checker prints it, e.g. \"src/lib/sequences/enrol.js\"",
+    "  table    the table named in .from()",
+    "  column   the column the checker could not find",
+    "  reason   HOW you know it exists. Name the migration or say you read information_schema.columns on the live project. 'looks fine' is not a reason.",
+    "  expires  YYYY-MM-DD. Past this date the gate FAILS until someone re-decides. Keep it short — a quarter at most.",
+    "",
+    "Entries cannot rot: an expired entry fails exactly like an unlisted column."
+  ],
+  "entries": []
+}

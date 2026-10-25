@@ -20,7 +20,7 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { ChevronLeft, Zap, Mail, MessageSquare, Phone, Clock, GitBranch, Tag, ClipboardList, Webhook } from 'lucide-react'
+import { ChevronLeft, Zap, Mail, MessageSquare, Clock, GitBranch, Tag, ClipboardList, Webhook } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { SEQUENCE_TEMPLATES, TEMPLATE_CATEGORIES } from '@/lib/sequence-templates'
@@ -57,7 +57,6 @@ const triggerLabels = {
 // here; unknown types fall through to a generic chip.
 const stepMeta = {
   email:         { icon: Mail,          label: 'Email' },
-  sms:           { icon: Phone,         label: 'SMS' },
   whatsapp:      { icon: MessageSquare, label: 'WhatsApp' },
   wait:          { icon: Clock,         label: 'Wait' },
   branch:        { icon: GitBranch,     label: 'Branch' },
@@ -77,7 +76,7 @@ export default async function AutomationRecipesGallery() {
   // who can manage email sequences can install recipes.
   // SEC-AUTOMATION-BUILDER-GATE.1 — this used to redirect to
   // /communications, but that route's own layout gates on
-  // email/whatsapp/sms/email_inbox and bounces to '/' when none are
+  // email/whatsapp/email_inbox and bounces to '/' when none are
   // held, so a non-email holder here would double-bounce through a
   // page they can't use anyway. Flattened to redirect straight home.
   if (!hasPermission(user, 'email')) redirect('/')

@@ -3,7 +3,7 @@
 // HOST-MASTER.7 — one-off relocation of pre-HOST-MASTER host leads. Contacts
 // created by host signups/registrations before HOST-MASTER live at the host's
 // hidden `is_host_anchor` location, invisible to the operator's normal
-// location-scoped views. This walks every anchor location and MOVES its
+// location-scoped views. This walks the anchor locations and MOVES their
 // contacts to the owning org's master location (`organizations.master_location_id`,
 // mig 464), stamping `automations_exempt = true`.
 //
@@ -17,6 +17,11 @@
 // re-running is always safe and finds nothing to do.
 //
 // DRY-RUN BY DEFAULT: writes only with ?dry=0. Master/owner only.
+//
+// TENANTSCOPE.1 — an owner runs it for THEIR organisation only: the ACTIVE
+// studio's organisation, where the gate below judged them owner. A master
+// keeps the estate-wide run. Unscoped, any organisation's owner could move
+// another organisation's contacts and read their ids back.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -34,12 +39,22 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
+  // null = every organisation (a master's run).
+  let organizationIds = null
+  if (!user.isMaster) {
+    const organizationId = user.activeOrganization?.id || null
+    if (!organizationId) {
+      return NextResponse.json({ success: false, error: 'No active organisation' }, { status: 400 })
+    }
+    organizationIds = [organizationId]
+  }
+
   // Anything other than an explicit ?dry=0 stays a dry run.
   const dryRun = new URL(request.url).searchParams.get('dry') !== '0'
 
   const db = createServerClient()
   try {
-    const summary = await runHostLeadMigration(db, { dryRun })
+    const summary = await runHostLeadMigration(db, { dryRun, organizationIds })
     return NextResponse.json({ success: true, data: summary })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })

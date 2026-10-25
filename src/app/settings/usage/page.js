@@ -8,15 +8,14 @@
 // rollup rows refresh at 02:40 UTC, so the per-location split can lag
 // a day; the cap numbers are always live.
 //
-// Auth: ADMIN_ROLES view (usage is an operations number); the caps
-// form itself is owner/master (an ownership decision) — the client
-// component hides the save affordance otherwise, and the PUT route
-// enforces it server-side regardless.
+// Auth (C18 ORGROLE.1, Richard 1 Oct 2026): an organisation admin of the
+// active org (master or an org_admin grant) for the view and the caps form
+// alike, the /api/settings/org-usage rule. It used to be ADMIN_ROLES +
+// `settings` to view and owner/master at the active studio to edit.
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { ADMIN_ROLES } from '@/lib/schemas'
+import { isActiveOrgAdmin } from '@/lib/org-admin'
 import { getOrgUsageSummary } from '@/lib/usage-summary'
 import { redirect } from 'next/navigation'
 import { Gauge } from 'lucide-react'
@@ -40,14 +39,15 @@ function fmtQty(meter, m) {
 export default async function UsageSettingsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!ADMIN_ROLES.includes(user.role) || !hasPermission(user, 'settings')) redirect('/settings')
+  if (!isActiveOrgAdmin(user)) redirect('/settings')
 
   const orgId = user.activeOrganization?.id
   if (!orgId) redirect('/settings')
 
   const db = createServerClient()
   const summary = await getOrgUsageSummary(db, orgId)
-  const canEditCaps = user.role === 'owner' || user.role === 'master'
+  // The page's own gate is the caps PUT's rule, so whoever sees it may edit.
+  const canEditCaps = true
 
   const aiCap = summary.caps.ai_hard_cap_cents
   const emailCap = summary.caps.email_hard_cap_sends

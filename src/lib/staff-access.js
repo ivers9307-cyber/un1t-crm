@@ -8,6 +8,7 @@
 //       - Master: can edit everyone (incl. other masters, themselves)
 //       - Owner:  can NOT edit themselves
 //                 can NOT edit any profile whose `role === 'owner'`
+//                 can NOT edit any profile whose `role === 'master'`
 //                 can edit manager / head_coach / staff AT A LOCATION
 //                 THE CALLER OWNS
 //       - Anyone else: cannot use the staff editor at all (the
@@ -38,6 +39,8 @@
 // shape) and a `target` (profile row with at least `id` and `role`).
 // All page guards + UI hides should call these instead of reinventing
 // the rule each time.
+
+import { hasRoleAtAnyLocation } from './role-at-location'
 
 /**
  * Map a profile_locations row from the API into the shape the
@@ -108,6 +111,12 @@ export function canEditStaffMember(caller, target) {
   // Owner editing another owner — denied. Master is the only role
   // that can promote/demote owner-level assignments.
   if (target.role === 'owner') return false
+  // ACTIVEUSER.1 (review R2-S1) — …and never a MASTER. The header has always
+  // said an owner edits "manager / head_coach / staff", but only `owner` was
+  // refused, so a master who holds a row at the owner's studio passed. Editing
+  // includes deactivating, which now bans the login; mig 080 only guards the
+  // LAST active master, and the UniFi revoke runs before that refusal.
+  if (target.role === 'master') return false
   // …and the caller must be an OWNER AT one of the target's locations —
   // not merely an owner somewhere. rolesByLocation is the per-location
   // truth; `caller.role` is the ACTIVE-location role and answers a
@@ -151,7 +160,10 @@ export function canEditStaffMember(caller, target) {
 export function canOverrideStaffPassword(caller, target) {
   if (!caller || !target) return false
   if (caller.isMaster || caller.role === 'master') return true
-  if (caller.role !== 'owner') return false
+  // ROLESWEEP.1c — owner SOMEWHERE (a coarse pre-check); canEditStaffMember
+  // below requires owner AT one of the target's locations. `caller.role` is
+  // the ACTIVE studio's role and refused an owner at B whose active studio is A.
+  if (!hasRoleAtAnyLocation(caller, ['owner'])) return false
   // Only a master may reset another master's password.
   if (target.role === 'master') return false
   // Reuse the staff-editor rule — blocks owner→self, owner→peer-owner, and

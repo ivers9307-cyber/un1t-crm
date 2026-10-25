@@ -5,6 +5,10 @@
 // REPSET-P6.S2 — base comes from the shared extra.apiBaseUrl resolution in
 // lib/api.js (EXPO_PUBLIC_API_BASE_URL override, canonical repset default).
 import { authHeaders, API_BASE } from './api'
+import { readPickedFiles, resolvePhotoMime, uploadToSlots, withTimeout } from './upload-slots'
+
+export const ISSUE_PHOTO_BUCKET = 'issue-photos'
+export const MAX_ISSUE_PHOTOS = 3
 
 /**
  * List the signed-in user's own issue submissions (newest first).
@@ -25,28 +29,46 @@ export async function getMyIssue(id) {
 }
 
 /**
- * Submit a new issue. `photos` is an array of
- * { uri, name, mimeType } from expo-image-picker. Pass up to 3.
+ * Submit a new issue. `photos` is an array of { uri, name, mimeType }
+ * from expo-image-picker, up to 3. `locationId` is the studio the screen
+ * named to the reporter ("the owners at X will be notified") — pass it, or
+ * the server files the report wherever the profile's default lands.
+ *
+ * REPORT-ISSUE.3 — three-step direct-to-storage flow (lib/upload-slots.js):
+ * sign a slot per photo, push the bytes device → Storage, then finalise
+ * with the paths. It replaced a single multipart POST carrying the bytes
+ * inline, which stopped leaving the device at Expo SDK 57 and — with
+ * nothing here catching the rejection — left the screen's spinner running
+ * forever. This function therefore NEVER throws: the screen can only clear
+ * its spinner if the promise settles. The multipart route still exists
+ * server-side for bundles that predate this.
  */
-export async function submitIssue({ description, photos = [] }) {
-  const headers = await authHeaders()
-  const fd = new FormData()
-  fd.append('description', description)
-  photos.slice(0, 3).forEach((p, i) => {
-    fd.append(`photo_${i}`, {
-      uri: p.uri,
-      name: p.name || `photo-${i + 1}.jpg`,
-      type: p.mimeType || 'image/jpeg',
+export async function submitIssue({ description, photos = [], locationId } = {}) {
+  try {
+    const picked = (Array.isArray(photos) ? photos : []).slice(0, MAX_ISSUE_PHOTOS)
+    const read = await readPickedFiles(picked, { resolveMime: resolvePhotoMime, label: 'photo' })
+    if (!read.ok) return { success: false, error: read.error }
+
+    const up = await uploadToSlots({
+      signUrl: '/api/issues/upload-sign',
+      bucket: ISSUE_PHOTO_BUCKET,
+      files: read.files,
+      locationId,
     })
-  })
-  // NB: do NOT set Content-Type — RN's fetch sets the multipart
-  // boundary automatically. Setting it explicitly breaks the request.
-  const res = await fetch(`${API_BASE}/api/issues`, {
-    method: 'POST',
-    headers,
-    body: fd,
-  })
-  return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+    if (!up.ok) return { success: false, error: up.error }
+
+    const headers = await authHeaders({ locationId, json: true })
+    const res = await withTimeout(fetch(`${API_BASE}/api/issues`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ description, photos: up.uploaded }),
+    }), 'Sending the report')
+    return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+  } catch (err) {
+    // The last line of defence. A throw from here is a spinner that never
+    // stops, so there is no failure this may re-raise.
+    return { success: false, error: `Network error: ${err?.message || err}` }
+  }
 }
 
 /**

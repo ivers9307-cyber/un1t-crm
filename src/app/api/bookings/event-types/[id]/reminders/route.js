@@ -21,7 +21,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 
@@ -35,10 +35,10 @@ const ReminderSchema = z.object({
   // too for callers who already speak the storage unit.
   hours_before: z.number().min(0).max(24 * 30).optional(),
   minutes_before: z.number().int().min(0).max(60 * 24 * 30).optional(),
-  channels: z.array(z.enum(['email', 'sms'])).min(1),
+  // TWILIO-RETIRE.1 — email only; the DB CHECK still admits 'sms' for history.
+  channels: z.array(z.enum(['email'])).min(1),
   email_template_id: uuidLike.nullable().optional(),
   email_subject: z.string().max(500).nullable().optional(),
-  sms_body: z.string().max(1600).nullable().optional(),
   display_order: z.number().int().min(0).max(1000).optional(),
   active: z.boolean().optional(),
 }).refine(r => r.hours_before != null || r.minutes_before != null, {
@@ -49,7 +49,7 @@ const PutSchema = z.object({
   reminders: z.array(ReminderSchema).max(20),
 })
 
-async function authoriseEventTypeWrite(db, user, eventTypeId) {
+async function authoriseEventTypeWrite(db, user, eventTypeId, roleRefusal = 'Forbidden') {
   const { data: et } = await db
     .from('event_types')
     .select('id, location_id')
@@ -58,9 +58,12 @@ async function authoriseEventTypeWrite(db, user, eventTypeId) {
   if (!et) return { error: 'Event type not found', status: 404 }
 
   if (user.role !== 'master') {
-    if (!MANAGER_ROLES.includes(user.role)) return { error: 'Forbidden', status: 403 }
     const userLocationIds = getUserLocationIds(user)
     if (!userLocationIds.includes(et.location_id)) return { error: 'Forbidden', status: 403 }
+    // ROLESWEEP.1b — MANAGER_ROLES judged at the event type's location, not
+    // the caller's active studio. It used to run before membership, with the
+    // same 403; the body is each verb's old role refusal (roleRefusal).
+    if (!hasRoleAtLocation(user, et.location_id, MANAGER_ROLES)) return { error: roleRefusal, status: 403 }
   }
   return { eventType: et }
 }
@@ -88,7 +91,8 @@ export async function GET(_request, props) {
 export async function PUT(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  // ROLESWEEP.1b — coarse pre-check; authoriseEventTypeWrite judges the target.
+  if (!user || !hasRoleAtAnyLocation(user, MANAGER_ROLES)) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
@@ -96,7 +100,9 @@ export async function PUT(request, props) {
   if (!validation.ok) return validation.response
 
   const db = createServerClient()
-  const auth = await authoriseEventTypeWrite(db, user, params.id)
+  // PUT's role refusal was always the pre-check's 'Unauthorized' (the
+  // helper's role check could not fire after it), so it keeps that body.
+  const auth = await authoriseEventTypeWrite(db, user, params.id, 'Unauthorized')
   if (auth.error) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
 
   const incoming = validation.data.reminders.map((r, i) => ({

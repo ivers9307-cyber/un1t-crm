@@ -13,6 +13,7 @@ import { Plus, FileText, Mail, MessageCircle } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
+import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import WhatsappTemplatesList from '@/components/WhatsappTemplatesList'
 
 export const dynamic = 'force-dynamic'
@@ -34,6 +35,11 @@ export default async function TemplatesListPage(props) {
 
   const db = createServerClient()
   const locationId = user.activeLocation?.id
+  // WATPLROLE.1 — creating, resubmitting and deleting a WhatsApp template
+  // decide MANAGER_ROLES at the location (the routes' rule); this list is the
+  // active studio's, so that is where it is judged. Nobody else is offered them.
+  // GATES-3 (b) — the routes' one rule: MANAGER_ROLES AND `whatsapp` there.
+  const canManageWaTemplates = canWhatsapp && canManageWaTemplatesAt(user, locationId)
 
   const [emailRes] = await Promise.all([
     canEmail && (channel === 'all' || channel === 'email')
@@ -63,7 +69,7 @@ export default async function TemplatesListPage(props) {
               <Plus size={14} /> Email
             </Link>
           )}
-          {canWhatsapp && (
+          {canManageWaTemplates && (
             <Link
               href="/communications/templates/whatsapp/new"
               className="flex items-center gap-2 bg-un1t-text text-un1t-bg text-sm font-medium px-3 py-2 rounded-lg hover:bg-un1t-accent transition-colors"
@@ -132,7 +138,7 @@ export default async function TemplatesListPage(props) {
             </h3>
           )}
           <div className="bg-un1t-surface border border-un1t-border rounded-2xl">
-            <WhatsappTemplatesList locationId={locationId} />
+            <WhatsappTemplatesList locationId={locationId} canManage={canManageWaTemplates} />
           </div>
         </section>
       )}

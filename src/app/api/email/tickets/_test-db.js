@@ -1,11 +1,11 @@
-// Test double for the service-role client, shared by the ticket route tests.
+// Test double for the service-role client, shared by the conversation route tests.
 // (The legacy /api/email/conversations tests next door no longer need it —
 // EMAIL-CONV-STOP.1 retired those routes to 410 Gone, and their tests now
 // assert that no client is ever created.)
 //
 // It honours eq / in / is / not / or / ilike / order / limit rather than
 // no-opping them, because the property under test IS a filter: "a coach
-// granted studio@ must not see accounts@ tickets" is only proven if the
+// granted studio@ must not see accounts@ conversations" is only proven if the
 // route's own .in('mailbox_id', …) actually excludes rows. A permissive fake
 // would pass those tests with the gate deleted.
 //
@@ -111,6 +111,9 @@ const TABLE_KEYS = {
   // cron deletes from (mig 315 / mig 158).
   webhook_dead_letter: 'deadLetters',
   postmark_webhook_queue: 'webhookQueue',
+  // WEBHOOKAUDIT.1 — the Glofox delivery history (mig 649), purged by the
+  // same retention cron.
+  glofox_webhook_attempts: 'glofoxAttempts',
   // audit_events is DELIBERATELY ABSENT, same reasoning as email_conversations:
   // logAuditEvent() builds its own client (which the tests point at this fake),
   // so its inserts land on db.inserts — assertable — without polluting a read.
@@ -136,6 +139,8 @@ export function makeDb(state = {}) {
     attachments: [], storageUsage: [], objects: new Map(), storageErrors: {},
     // WEBHOOK-RETENTION.1
     deadLetters: [], webhookQueue: [],
+    // WEBHOOKAUDIT.1
+    glofoxAttempts: [],
     errors: {},
     ...state,
   }
@@ -235,7 +240,7 @@ export function makeDb(state = {}) {
     // rows; a fake that dropped the options would have answered `{ data: rows }`
     // with `count` undefined, so the nav-badge route's `count || 0` would read
     // 0 for every input and every assertion about the badge — including "a
-    // coach must not be counted accounts@ tickets" — would pass with the
+    // coach must not be counted accounts@ conversations" — would pass with the
     // mailbox scope deleted. Exactly the permissive-fake trap this file's
     // header warns about.
     const wantsCount = !!b._selectOptions?.count

@@ -11,15 +11,20 @@
 // dragged to move and corner-dragged to resize; the side panel
 // edits the selected zone's text + styling.
 //
-// All writes go direct via the browser Supabase client — RLS on
-// tv_templates is location-scoped (migration 190), same as the
-// rest of /admin/tv-displays.
+// MEMBERWRITESWEEP.1f — saves go through POST/PUT /api/admin/tv-templates*
+// (src/lib/tv-admin-client.js): tv_displays at the template's studio,
+// created_by from the session. They used to be browser-direct writes on
+// tv_templates under the membership policy (mig 190); mig 685 closes the
+// table to client sessions. A base image is uploaded at the TEMPLATE's own
+// studio (C118), so editing another studio's template keeps its image in
+// that studio's folder, where the save route requires it.
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { X, Plus, Trash2, Upload, AlertCircle, Image as ImageIcon, Type } from 'lucide-react'
 import { useFitText, segmentStyle } from '@/components/TemplateCanvas'
 import { resolveZone, textSegments } from '@/lib/tv-template'
 import { tvFontFamily } from '@/components/tv-font'
+import { tvRequest, tvAdminPaths } from '@/lib/tv-admin-client'
 
 const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
 
@@ -55,8 +60,10 @@ function newZone() {
   }
 }
 
-export default function TemplateEditor({ template, locationId, currentUserId, db, onClose, onSaved }) {
+export default function TemplateEditor({ template, locationId, onClose, onSaved }) {
   const isEdit = !!template
+  // C118 — the template's own studio, not the page's active one.
+  const studioId = template?.location_id || locationId
   const [name, setName] = useState(template?.name || '')
   const [baseImagePath, setBaseImagePath] = useState(template?.base_image_path || null)
   const [zones, setZones] = useState(
@@ -91,7 +98,7 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
       const fd = new FormData()
       fd.append('file', file)
       fd.append('kind', 'template')
-      fd.append('location_id', locationId)
+      fd.append('location_id', studioId)
       const res = await fetch('/api/admin/tv-displays/upload', { method: 'POST', body: fd })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) throw new Error(json.error || 'Upload failed.')
@@ -109,27 +116,11 @@ export default function TemplateEditor({ template, locationId, currentUserId, db
     if (!baseImagePath) { setError('Upload a base image first.'); return }
     setBusy(true)
     try {
-      if (isEdit) {
-        const { error: e } = await db.from('tv_templates')
-          .update({
-            name: name.trim(),
-            base_image_path: baseImagePath,
-            zones,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', template.id)
-        if (e) throw new Error(e.message)
-      } else {
-        const { error: e } = await db.from('tv_templates')
-          .insert({
-            location_id: locationId,
-            name: name.trim(),
-            base_image_path: baseImagePath,
-            zones,
-            created_by: currentUserId,
-          })
-        if (e) throw new Error(e.message)
-      }
+      const fields = { name: name.trim(), base_image_path: baseImagePath, zones }
+      const r = isEdit
+        ? await tvRequest(tvAdminPaths.template(template.id), { method: 'PUT', body: fields })
+        : await tvRequest(tvAdminPaths.createTemplate(), { method: 'POST', body: { location_id: studioId, ...fields } })
+      if (!r.ok) throw new Error(r.error)
       await onSaved()
       onClose()
     } catch (err) {
