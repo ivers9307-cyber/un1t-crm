@@ -98,7 +98,6 @@ export const UN1T_LISTS = Object.freeze([
   '/bookings',
 ])
 
-const MEMBERSHIP_SOURCE = 'un1t_online_api'
 const PLATFORM = 'un1t_online'
 const CHUNK = 200
 const PAGE = 1000
@@ -467,11 +466,9 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
     // 7. Memberships.
     const membership = await reconcileMemberships(db, {
       locationId,
-      organizationId,
       subscriptions: mapped.un1t_subscriptions,
       contactIdOf,
       resolverErrors: resolved.errors || [],
-      nowIso,
     })
     counts.memberships = membership.counts
     if (membership.error) {
@@ -571,11 +568,12 @@ async function measureHistory(db, { locationId, mapped, nowIso }) {
 }
 
 /**
- * Step 7. Returns { counts, error } where error is a message or null.
- * first_seen_at is never in the upsert payload, so its column default sets it
- * on insert only and a re-activation keeps the original date.
+ * Step 7. Decides who is a member here and whose membership ends; it writes
+ * nothing (7a writes the relationship rows, 7b the membership facts). Returns
+ * { counts, error, memberContactIds, endedContactIds, plan, activePlanByContact },
+ * error a message or null.
  */
-async function reconcileMemberships(db, { locationId, organizationId, subscriptions, contactIdOf, resolverErrors, nowIso }) {
+async function reconcileMemberships(db, { locationId, subscriptions, contactIdOf, resolverErrors }) {
   const counts = { active: 0, ended: 0, skipped_no_contact: 0 }
   // ORGCONTACTS.1 — who this run holds as a member here, and whose
   // membership it ended (contact ids), for the contact_studios dual-write.
