@@ -47,7 +47,7 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { listAllowedDoors } from '@/lib/studio-doors'
-import { getSonosConfig, withFreshToken, sonosGetGroups } from '@/lib/sonos/client'
+import { getSonosConfig, withFreshToken, sonosGetGroups, isHouseholdGone } from '@/lib/sonos/client'
 import { mapGroups } from '@/lib/sonos/groups'
 import { resolveAcAllowlist, filterAcDevices } from '@shared/permissions'
 
@@ -138,6 +138,8 @@ async function fetchSpeakerSource(db, locationId) {
   const tok = await withFreshToken(db, locationId, cfg)
   if (!tok.ok) return [] // not_connected / db_error / refresh_failed — a config state for THIS studio, not this call failing
   const groupsRes = await sonosGetGroups(tok.token, tok.householdId)
+  // A deleted/re-created household is a configuration state for THIS studio (re-link needed), like not_connected above.
+  if (!groupsRes.ok && isHouseholdGone(groupsRes.statusCode)) return []
   if (!groupsRes.ok) {
     throw new Error(`speaker: groups fetch failed (status ${groupsRes.statusCode})`)
   }

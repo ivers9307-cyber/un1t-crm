@@ -44,6 +44,7 @@ vi.mock('@/lib/unifi-access', async () => {
   return { ...actual, listDoors: vi.fn() }
 })
 vi.mock('@/lib/sonos/client', () => ({
+  isHouseholdGone: (c) => c === 410 || c === 404,
   getSonosConfig: vi.fn(),
   withFreshToken: vi.fn(),
   sonosGetGroups: vi.fn(),
@@ -240,6 +241,28 @@ describe('GET /api/widget/devices', () => {
     expect(kinds).not.toContain('speaker')
     // The other device_control-gated source is unaffected.
     expect(kinds).toContain('plug')
+  })
+
+  it('treats a gone Sonos household (410) as a normal empty result, not a degraded source', async () => {
+    gate({ studio_management: true, device_control: true })
+    sonosGetGroups.mockResolvedValue({ ok: false, statusCode: 410, body: null })
+
+    const res = await GET(req())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.data.degraded).toEqual([])
+    expect(body.data.devices.map((d) => d.kind)).not.toContain('speaker')
+  })
+
+  it('still degrades the speaker source on a 503 from Sonos', async () => {
+    gate({ studio_management: true, device_control: true })
+    sonosGetGroups.mockResolvedValue({ ok: false, statusCode: 503, body: null })
+
+    const res = await GET(req())
+    const body = await res.json()
+
+    expect(body.data.degraded).toEqual(['speaker'])
   })
 
   it('security: door entries are the allowlist-intersected ones from listAllowedDoors, never raw listDoors', async () => {

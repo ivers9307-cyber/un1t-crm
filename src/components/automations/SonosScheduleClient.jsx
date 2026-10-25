@@ -465,7 +465,10 @@ function NotConnectedPanel({ reason }) {
 
   const detail = {
     refresh_failed: "Sonos revoked or expired this studio's connection. Reconnect to restore control.",
+    household_gone: "The Sonos household this studio was linked to no longer exists on Sonos's side (the system was reset or set up again), so its speakers can't be reached. Reconnect to link the current one.",
   }[reason] || "This studio hasn't connected a Sonos system yet."
+
+  const buttonLabel = reason === 'refresh_failed' || reason === 'household_gone' ? 'Reconnect Sonos' : 'Connect Sonos'
 
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
@@ -478,7 +481,7 @@ function NotConnectedPanel({ reason }) {
         href="/api/sonos/connect"
         className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded bg-un1t-text text-un1t-bg"
       >
-        <ExternalLink size={12} /> Connect Sonos
+        <ExternalLink size={12} /> {buttonLabel}
       </a>
     </div>
   )

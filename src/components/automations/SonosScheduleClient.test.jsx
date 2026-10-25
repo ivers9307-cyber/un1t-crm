@@ -75,3 +75,27 @@ describe('SonosScheduleClient — a failed connection read (CHANNELREAD.1)', () 
     expect(await screen.findByRole('link', { name: /Connect Sonos/ })).toBeTruthy()
   })
 })
+
+describe('SonosScheduleClient — a gone household (410)', () => {
+  it('household_gone offers Reconnect Sonos and not the "isn\'t answering" notice', async () => {
+    mockHousehold({ success: true, connected: false, reason: 'household_gone', statusCode: 410 })
+    render(<SonosScheduleClient locationName="Test Studio" />)
+    const link = await screen.findByRole('link', { name: /Reconnect Sonos/ })
+    expect(link.getAttribute('href')).toBe('/api/sonos/connect')
+    expect(screen.getByText(/no longer exists on Sonos/)).toBeTruthy()
+    expect(screen.queryByText(/isn.t answering/)).toBeNull()
+  })
+
+  it('refresh_failed also reads Reconnect Sonos', async () => {
+    mockHousehold({ success: true, connected: false, reason: 'refresh_failed' })
+    render(<SonosScheduleClient locationName="Test Studio" />)
+    expect(await screen.findByRole('link', { name: /Reconnect Sonos/ })).toBeTruthy()
+  })
+
+  it('an unreachable 503 still shows the notice and no Connect button', async () => {
+    mockHousehold({ success: true, connected: true, reachable: false, statusCode: 503 })
+    render(<SonosScheduleClient locationName="Test Studio" />)
+    expect(await screen.findByText(/isn.t answering/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Connect Sonos|Reconnect Sonos/ })).toBeNull()
+  })
+})
