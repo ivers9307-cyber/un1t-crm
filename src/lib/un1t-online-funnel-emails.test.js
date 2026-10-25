@@ -108,3 +108,50 @@ describe('fallbacks', () => {
     expect(sent().htmlBody).not.toMatch(/ {2}/)
   })
 })
+
+// Final-review F2 — a /trial buyer at Hatch Street whose un1t.online account
+// the CRM created: nothing is booked, so never the class funnel's copy.
+describe("sendUn1tAccountEmail kind 'trial_purchase'", () => {
+  const trial = { locationId: 'loc-1', contact, studioName: 'Hatch Street', kind: 'trial_purchase', productName: 'The UN1T Trial' }
+
+  it('renders the paid_trial defaults: the product, never "booked in" or a class token', async () => {
+    const r = await sendUn1tAccountEmail({}, { ...trial, copy: null })
+    expect(r).toEqual({ sent: true, channel: 'email' })
+    const e = sent()
+    expect(e.subject).toBe('Your trial is on your un1t.online account')
+    expect(e.htmlBody).toContain('Hi Jane, thanks for buying The UN1T Trial at Hatch Street.')
+    expect(e.htmlBody).toContain('set your password')
+    for (const text of [e.subject, e.htmlBody]) {
+      expect(text).not.toMatch(/booked in/i)
+      expect(text).not.toContain('{class_name}')
+      expect(text).not.toMatch(/\{[a-z_]+\}/)
+      expect(text).not.toMatch(/10 minutes early/)
+    }
+    expect(e.replyTo).toBe('hatch-inbox@example.test')
+    expect(e.tag).toBe('trial_purchase_account')
+    expect(loadTransactionalConsent).toHaveBeenCalledWith({}, 'c-1')
+  })
+
+  it("the studio's own copy wins; a class_funnel block's copy is never used", async () => {
+    await sendUn1tAccountEmail({}, {
+      ...trial,
+      blocks: [{ type: 'class_funnel', account_email_subject: 'You are booked in at {studio_name}' }],
+      copy: { subject: '{product_name} for {first_name}', body: 'Enjoy {product_name} at {studio_name}, {first_name}. {class_name}' },
+    })
+    const e = sent()
+    expect(e.subject).toBe('The UN1T Trial for Jane')
+    expect(e.htmlBody).toContain('Enjoy The UN1T Trial at Hatch Street, Jane.')
+    expect(e.htmlBody).not.toMatch(/booked in|your class|\{class_name\}/)
+  })
+
+  it('goes through the same consent gate', async () => {
+    transactionalEmailSuppression.mockReturnValueOnce('bounced')
+    expect(await sendUn1tAccountEmail({}, { ...trial })).toEqual({ sent: false, channel: 'email', reason: 'email_blocked' })
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+  })
+
+  it('any other kind is the class funnel email', async () => {
+    await sendUn1tAccountEmail({}, { ...base, blocks: [], kind: 'something_else' })
+    expect(sent().subject).toBe('You are booked in at Hatch Street')
+  })
+})

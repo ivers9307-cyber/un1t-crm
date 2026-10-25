@@ -49,6 +49,8 @@ export const INVOICE_ANALYSIS_QUEUE_PARALLELISM = 2
 // swept by /api/cron/process-class-bookings). Plain publish — bookings
 // arrive one at a time, no parallelism bound needed.
 export const CLASS_BOOKINGS_WORKER_PATH = '/api/webhooks/qstash/class-bookings'
+// PAIDTRIAL.1 — the paid trial purchases worker (same claim CAS shape).
+export const TRIAL_PURCHASES_WORKER_PATH = '/api/webhooks/qstash/trial-purchases'
 // QSTASH.8 — worker for host campaign sends (swept by
 // /api/cron/send-host-campaigns). First BULK job on the pattern: the
 // message is a campaign-level { campaignId, link }, NOT a per-row { id }

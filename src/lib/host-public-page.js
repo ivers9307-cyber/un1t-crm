@@ -46,3 +46,31 @@ export function hostPageCopy(host) {
 export function hostPageEvents(rows, today) {
   return orderEventsForBrowse(rows, today).upcoming
 }
+
+/** Social previews for either host page. `path` is the full public page URL;
+ * `page` is 'events' or 'join'; events arrive upcoming and nearest-first.
+ */
+export function hostPageMetadata({ host, events, orgName, path, page }) {
+  const join = page === 'join'
+  const headline = join ? host.list_headline : host.events_headline
+  const title = headline
+    ? `${headline} — ${host.name}`
+    : `${host.name} — ${join ? 'join the list' : 'upcoming events'}`
+  const description = (join ? null : host.events_blurb) || host.list_blurb || (join
+    ? `Get emails about ${host.name}'s events. Unsubscribe anytime.`
+    : `Book ${host.name}'s upcoming events.`)
+  const { heroUrl } = pickHostBranding(host, events)
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      siteName: orgName,
+      type: 'website',
+      url: path,
+      ...(heroUrl ? { images: [{ url: heroUrl }] } : {}),
+    },
+    twitter: { card: 'summary_large_image' },
+  }
+}

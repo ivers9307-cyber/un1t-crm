@@ -490,7 +490,38 @@ export async function findStageIdBySlug(db, pipelineId, stageSlug) {
  *     trial_credits_remaining, recent_bookings, converted_at, pack_customer_at }
  * @param {string?} contactName       fallback for deals.title on create
  */
-export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null) {
+export const SIBLING_STUDIO_NO_ACTIVITY = 'sibling_studio_no_activity'
+
+/**
+ * CROSSOVERDEAL.1 — has this person actually done anything at the Glofox
+ * studio the sync is running for? Judged on the studio's own Glofox read
+ * (the classifier snapshot: attendance and bookings from this studio's
+ * bookings fetch, this studio's membership status, the conversion and pack
+ * stamps only the Glofox sync writes). A sibling-studio contact (GLOFOXSIBLING.1,
+ * home at Hatch Street) whose Stillorgan Glofox account is only a race entry
+ * or an untouched trial has none of these, and gets NO deal on Stillorgan's
+ * board: 12 Hatch clients landed in Stillorgan's New Leads / Dormant columns
+ * the night the crossover link shipped (19 Oct 2026) and were cold-called as
+ * Stillorgan leads. A sibling contact who trained, booked, paid or bought a
+ * pack here is a Stillorgan prospect too and keeps their deal.
+ */
+export function hasActivityAtStudio(snapshot = {}) {
+  const s = snapshot || {}
+  if (s.last_attended_at) return true
+  if ((Number(s.total_attended_30d) || 0) > 0 || (Number(s.total_attended_7d) || 0) > 0) return true
+  if (Array.isArray(s.recent_bookings) && s.recent_bookings.length > 0) return true
+  if (s.converted_at || s.pack_customer_at) return true
+  if (MEMBER_STATUSES.has(String(s.glofox_membership_status || '').toLowerCase())) return true
+  return false
+}
+
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.noCreate]  CROSSOVERDEAL.1 — move or leave an existing
+ *   deal as usual, but never CREATE one: answers
+ *   { action: 'skipped', reason: 'sibling_studio_no_activity' } instead.
+ */
+export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null, opts = {}) {
   if (!db || !locationId || !contactId) {
     return { action: 'error', error: 'missing arguments' }
   }
@@ -512,6 +543,13 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   const pipelineId = primary.id
 
   const existing = await getOpenDealWithStage(db, contactId, pipelineId)
+
+  if (!existing && opts?.noCreate) {
+    // CROSSOVERDEAL.1 — a sibling-studio contact with nothing done at this
+    // studio: no deal on this studio's board. (A deal that already exists,
+    // from a class booking here or a person's hand, still moves above.)
+    return { action: 'skipped', reason: SIBLING_STUDIO_NO_ACTIVITY, deal_id: null, stage_slug: targetSlug }
+  }
 
   if (!existing) {
     // CREATE path — first time this contact has had a deal.
@@ -1764,7 +1802,7 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   // recently-active, paid-up member is wrongly demoted to dormant — flapping
   // against pipeline-reclassify (the nightly cron), which classifies off the
   // SAME persisted columns. The two classifiers must consume the same source.
-  const proposedStageSlug = classifyContact({
+  const previewSnapshot = {
     glofox_membership_status: mapped.glofox_membership_status,
     glofox_membership_state: mapped.glofox_membership_state ?? existingRow?.glofox_membership_state ?? null,
     glofox_membership_expiry: mapped.glofox_membership_expiry ?? existingRow?.glofox_membership_expiry ?? null,
@@ -1788,7 +1826,8 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     pipeline_dismissed_at: existingRow?.pipeline_dismissed_at ?? null,
     // GYMPASS.2 — off-funnel gympass pile; mapped value or persisted fallback.
     gympass_member_id: mapped.gympass_member_id ?? existingRow?.gympass_member_id ?? null,
-  })
+  }
+  const proposedStageSlug = classifyContact(previewSnapshot)
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
   if (byGlofox && byEmail && byGlofox.id !== byEmail.id) {
@@ -1954,6 +1993,10 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
   let dealAction
   if (!pipelineId) {
     dealAction = { action: 'leave', deal_id: null, stage_slug: null, reason: 'no enabled derived primary board at this location' }
+  } else if (!openDeal && crossover && !hasActivityAtStudio(previewSnapshot)) {
+    // CROSSOVERDEAL.1 — a sibling-studio contact who has done nothing at this
+    // studio gets no deal here; apply refuses the create the same way.
+    dealAction = { action: 'skipped', reason: SIBLING_STUDIO_NO_ACTIVITY, stage_slug: proposedStageSlug }
   } else if (!openDeal) {
     // No deal yet → backfill at the classifier's target.
     dealAction = { action: 'create', stage_slug: proposedStageSlug }
@@ -2265,9 +2308,15 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // pipeline-reclassify input, so the two writers converge).
         gympass_member_id: m.gympass_member_id ?? ex.gympass_member_id ?? null,
       }
+      // CROSSOVERDEAL.1 — the contact lives at a sibling studio: a deal on
+      // THIS studio's board only when the snapshot (this studio's Glofox
+      // read) shows them trained, booked, paying or holding a pack here. An
+      // existing deal still moves; a create is refused.
+      const siblingIdle = !!preview.crossover && !hasActivityAtStudio(contactSnapshot)
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,
         m.name || null,
+        { noCreate: siblingIdle },
       )
     } catch (e) {
       dealResult = { action: 'error', error: e?.message || 'deal write threw' }

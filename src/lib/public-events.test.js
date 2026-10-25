@@ -53,6 +53,20 @@ describe('isEventSoldOut', () => {
     expect(isEventSoldOut([wave('w1', null)], [], 'teams')).toBe(false)
     expect(isEventSoldOut([], [], 'teams')).toBe(false)
   })
+  // FINDTEAM.8 (I4) — a solo still looking for a team is a person, not a team.
+  it('teams mode: solos looking for a team do not sell a wave out', () => {
+    const solo = { ...reg('w1'), looking_for_team: true }
+    expect(isEventSoldOut([wave('w1', 2)], [reg('w1'), solo, solo], 'teams')).toBe(false)
+    expect(isEventSoldOut([wave('w1', 2)], [reg('w1'), reg('w1'), solo], 'teams')).toBe(true)
+  })
+  it('people mode: a solo counts as one person', () => {
+    const solo = { ...reg('w1'), looking_for_team: true }
+    expect(isEventSoldOut([wave('w1', 3)], [reg('w1', 2), solo], 'people')).toBe(true)
+  })
+  it('a placed row never counts', () => {
+    expect(isEventSoldOut([wave('w1', 1)], [{ ...reg('w1'), status: 'placed', looking_for_team: true }], 'teams')).toBe(false)
+    expect(isEventSoldOut([wave('w1', 1)], [{ ...reg('w1'), status: 'placed', looking_for_team: true }], 'people')).toBe(false)
+  })
 })
 
 describe('toBrowseCard', () => {

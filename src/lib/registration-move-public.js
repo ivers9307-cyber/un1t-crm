@@ -10,12 +10,16 @@
 //     empty an event is). Mia's list_event_move_options (EVENT-MOVE.7,
 //     shapeMoveOptionsForAgent) re-words this output: one mapper, one rule.
 //   - entryMoveBlock: why an entry cannot be moved by its holder (unpaid,
-//     cancelled, checked in, past), as a code and a plain sentence.
+//     cancelled, checked in, past, or the event's entry policy: reschedule
+//     switched off, or inside the hours-before cutoff; ENTRYPOLICY.1), as a
+//     code and a plain sentence (the policy's is the operator's own copy).
 //   - the customer copy and HTTP status for every refusal. Staff copy
 //     (MOVE_ERROR_MESSAGES) talks to an operator ("collect payment", "force");
 //     this talks to the person who booked. Low-key, no dashes, no emoji.
 //
 // Spec: docs/superpowers/specs/2026-10-08-event-entry-move-design.md
+
+import { selfServiceBlock } from './entry-policy'
 
 function money(cents, currency = 'EUR') {
   const major = (Math.abs(Number(cents) || 0) / 100).toFixed(2)
@@ -80,6 +84,8 @@ export function publicMoveOptions(targets, headcount) {
 const MESSAGES = Object.freeze({
   not_found: 'This link is not valid any more.',
   not_active: 'This entry is no longer active, so its date cannot be changed.',
+  // FINDTEAM.8 (I5) — a solo staff placed into a team runs at the team's time.
+  placed: "You've been placed in a team, so your team's time applies; contact the studio to change it.",
   pending_payment: 'This entry is still waiting for payment. Once it is paid you can change the date here.',
   checked_in: 'This entry has already been checked in, so its date cannot be changed.',
   event_past: 'This event has already happened, so its date cannot be changed.',
@@ -98,6 +104,9 @@ const MESSAGES = Object.freeze({
   host_not_ready: 'Online payment is not available for this event right now. Please get in touch with us.',
   provider_failed: 'The payment could not be started. Please try again.',
   already_settled: 'This change has already been paid for. Reload the page to see your entry.',
+  // ENTRYPOLICY.1 — fallbacks only: the block carries the operator's own copy.
+  disabled: 'Changes to this entry are handled by the team. Get in touch with the studio.',
+  cutoff: 'Changes to this entry have closed. Get in touch with the studio.',
 })
 
 /** The customer's sentence for a refusal code. */
@@ -121,18 +130,28 @@ export const CUSTOMER_MOVE_STATUS = Object.freeze({
 /**
  * Why the token holder cannot move this entry, or null when they can.
  * Checks what the move rules check about the SOURCE (status, check-in,
- * raced) plus the one they do not: a past event.
+ * raced) plus the ones they do not: a past event, and the event's entry
+ * policy (ENTRYPOLICY.1: the reschedule switch and the hours-before cutoff,
+ * judged at `nowMs` on the studio's clock `zone`; omit both to skip it, as
+ * the staff paths do).
  *
- * @param {{ registration: object, checkinCount: number, today: string }} args  today = YYYY-MM-DD, Europe/Dublin
+ * @param {{ registration: object, checkinCount: number, today: string, nowMs?: number|null, zone?: string|null }} args
+ *   today = YYYY-MM-DD at the event's studio; registration.race carries
+ *   race_date, name and entry_policy, registration.wave the start_time
  * @returns {{ code: string, message: string } | null}
  */
-export function entryMoveBlock({ registration, checkinCount = 0, today }) {
+export function entryMoveBlock({ registration, checkinCount = 0, today, nowMs = null, zone = null }) {
   const block = (code) => ({ code, message: customerMoveMessage(code) })
   if (!registration) return block('not_found')
   if (registration.status === 'pending_payment') return block('pending_payment')
+  if (registration.status === 'placed') return block('placed')
   if (registration.status !== 'confirmed') return block('not_active')
   if ((Number(checkinCount) || 0) > 0 || registration.race_started_at || registration.race_finished_at) return block('checked_in')
   const date = registration.race?.race_date ? String(registration.race.race_date).slice(0, 10) : null
   if (!date || (today && date < today)) return block('event_past')
+  if (nowMs !== null && nowMs !== undefined) {
+    const policy = selfServiceBlock({ event: registration.race, wave: registration.wave || null, nowMs, zone: zone || undefined, action: 'reschedule' })
+    if (policy) return policy
+  }
   return null
 }

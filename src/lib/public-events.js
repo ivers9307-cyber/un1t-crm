@@ -4,6 +4,7 @@
 // only a boolean leaves).
 import { eventKindLabel } from '@shared/events'
 import { formatInZone, DEFAULT_TZ } from '@shared/zoned-time'
+import { loadForMode } from './event-signups'
 
 const EUR = (cents) => {
   const n = (Number(cents) || 0) / 100
@@ -40,20 +41,17 @@ export function eventPriceLabel(e) {
 
 /** Mirrors the public route: full = ≥1 capped wave, no uncapped wave, every
  *  capped wave full. people mode counts team sizes; teams mode counts regs.
- *  Only CONFIRMED registrations consume capacity. */
+ *  Only CONFIRMED registrations consume capacity (the paid, live subset; a
+ *  placed solo is not one). FINDTEAM.8 (I4): the load is `loadForMode`, so in
+ *  teams mode a solo still looking for a team is a person, not a team, and
+ *  never sells a wave out; the callers' embeds must select `looking_for_team`. */
 export function isEventSoldOut(waves, registrations, capacityMode) {
   const capped = (waves || []).filter((w) => w.capacity != null)
   if (capped.length === 0) return false
   if ((waves || []).some((w) => w.capacity == null)) return false // an uncapped wave absorbs
   const mode = capacityMode === 'people' ? 'people' : 'teams'
-  const confirmed = (registrations || []).filter((r) => r.status === 'confirmed')
-  return capped.every((w) => {
-    const inWave = confirmed.filter((r) => r.wave_id === w.id)
-    const used = mode === 'people'
-      ? inWave.reduce((sum, r) => sum + (Number(r.team?.size) || 1), 0)
-      : inWave.length
-    return used >= w.capacity
-  })
+  const regs = registrations || []
+  return capped.every((w) => loadForMode(regs.filter((r) => r.wave_id === w.id), mode) >= w.capacity)
 }
 
 /** Earliest wave start ("HH:MM:SS" from Postgres TIME, or "HH:MM") → "11:00".

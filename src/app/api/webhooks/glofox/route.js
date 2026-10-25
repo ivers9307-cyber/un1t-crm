@@ -55,6 +55,7 @@ import { applyMemberSync } from '@/lib/glofox-sync'
 import { findGlofoxCrossoverContact } from '@/lib/glofox-crossover'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { buildGlofoxWebhookAttempt, recordGlofoxWebhookAttempt } from '@/lib/glofox-webhook-attempts'
+import { sendTrialScheduleFollowup, sendTrialSubscribeFollowup } from '@/lib/trial-purchase-meta-followups'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -473,6 +474,25 @@ export async function POST(request) {
       }
     }
 
+    // 6d. TRIALFOLLOWUP.1 — a paid-trial buyer's first class booking is a
+    // Schedule to Meta, and a membership after the trial is a Subscribe with
+    // its price. Both once per purchase, both best-effort, both only when the
+    // contact has a granted paid trial in the window (no-op for everyone else).
+    let trialFollowup = null
+    if (evUpper === 'BOOKING_CREATED' || evUpper === 'COURSE_BOOKING_CREATED') {
+      try {
+        trialFollowup = await sendTrialScheduleFollowup(db, { contactId: contact.id, locationId: creds.locationId, booking: payload?.Payload })
+      } catch (e) {
+        logWarn('glofox-webhook', 'trial schedule follow-up threw', { err: e?.message, contact_id: contact.id })
+      }
+    } else if (evUpper === 'MEMBERSHIP_CREATED') {
+      try {
+        trialFollowup = await sendTrialSubscribeFollowup(db, { contactId: contact.id, locationId: creds.locationId, membership: payload?.Payload })
+      } catch (e) {
+        logWarn('glofox-webhook', 'trial subscribe follow-up threw', { err: e?.message, contact_id: contact.id })
+      }
+    }
+
     // 7. Apply each tag using the same re-activate-or-insert pattern
     // as the apply_tag step in steps.js.
     const appliedTags = []
@@ -572,6 +592,8 @@ export async function POST(request) {
       dunning: dunningResult, member_sync: memberSyncResult,
       // GLOFOXSIBLING.1 — how a sibling studio's contact was matched, if it was.
       crossover: crossoverHow,
+      // TRIALFOLLOWUP.1 — the Schedule / Subscribe outcome, when one applied.
+      trial_followup: trialFollowup,
     }, null)
     return NextResponse.json({
       success: true,

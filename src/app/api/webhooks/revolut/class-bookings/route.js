@@ -25,7 +25,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
-import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
+import { resolveTrialPurchaseByRef, markTrialPurchasePaymentStatus } from '@/lib/trial-purchase-payments'
+import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logWarn } from '@/lib/log'
 
@@ -70,6 +71,27 @@ export async function POST(request) {
 
   const row = await resolveClassBookingPaymentByRef(db, orderId)
   if (!row) {
+    // PAIDTRIAL.1 — the same Revolut endpoint settles paid trial purchases
+    // (one merchant account, one webhook URL; no dashboard change). Same
+    // getOrder → mark → nudge shape, keyed on trial_purchases.
+    const trial = await resolveTrialPurchaseByRef(db, orderId)
+    if (trial) {
+      let order
+      try { order = await getOrder(orderId) } catch (e) {
+        logWarn('trialbuy-webhook', `getOrder failed for ${orderId}`, { err: e })
+        return NextResponse.json({ success: true, deferred: true })
+      }
+      if (!order) return NextResponse.json({ success: true, skipped: 'order_missing' })
+      const { released } = await markTrialPurchasePaymentStatus({
+        db, purchase: trial,
+        providerState: String(order.state || '').toLowerCase(),
+        providerAmount: Number.isFinite(order.amount) ? order.amount : null,
+      })
+      if (released) {
+        try { await publishQueuePush({ path: TRIAL_PURCHASES_WORKER_PATH, body: { id: trial.id }, deduplicationId: `trial-purchase-${trial.id}` }) } catch { /* queue is the guarantee */ }
+      }
+      return NextResponse.json({ success: true, released, domain: 'trial_purchase' })
+    }
     // Could be a misrouted webhook from another Revolut flow, or a
     // stale id. Return 200 so Revolut moves on.
     logWarn('classbook-webhook', `no class_booking_requests row for order ${orderId}`, { event })

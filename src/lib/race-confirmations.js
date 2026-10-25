@@ -19,7 +19,7 @@ import { sendTransactionalEmail } from './postmark'
 import { eventDateLong } from './event-day'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
-import { buildEventEmailShell, resolveEventEmail, resolveEventBrand } from './event-email'
+import { buildEventEmailShell, resolveEventEmail, resolveEventBrand, applyEventMergeTags } from './event-email'
 import { resolveEventCommsLocation, pickAudienceVenueName } from './event-comms-location'
 import { checkTransactionalConsent } from './transactional-consent'
 import { logError } from './log'
@@ -28,6 +28,7 @@ import { isRaceKind } from '@shared/events'
 import { entryLeadEmail, GAP_PAYMENT_KIND } from './registration-entry'
 import { entryManageUrl } from './entry-manage-tokens'
 import { resolveCustomerBaseUrl } from './tenant-host'
+import { resolveFindTeamSettings } from './find-team'
 
 // The stored calendar day, in words. TZ.9: zone-free (event-day.js), so the
 // studio's own day in every zone; the same text as the old Dublin rendering.
@@ -46,6 +47,13 @@ function fmtMoney(cents, currency = 'EUR') {
 function fmtWaveTime(t) {
   if (!t || typeof t !== 'string') return ''
   return t.slice(0, 5) // "09:30:00" → "09:30"
+}
+
+// FINDTEAM.3 — the "we'll put you with a team" paragraph under the intro; ''
+// when the ctx carries none, so the default output stays byte-identical.
+function findTeamParagraphHtml(text) {
+  const t = typeof text === 'string' ? text.trim() : ''
+  return t ? `<p style="margin:12px 0 0;font-size:14px;line-height:1.6">${escapeHtml(t)}</p>` : ''
 }
 
 /**
@@ -111,10 +119,11 @@ export async function sendRaceConfirmations({ db, paymentId }) {
         venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
+        find_team,
         locations:location_id ( id, name, is_host_anchor, organization_id )
       ),
       registration:race_registration_id (
-        id, wave_id,
+        id, wave_id, looking_for_team,
         wave:wave_id ( id, start_time, label ),
         teams:team_id ( id, name, size,
           team_members ( id, name, role, is_member ) )
@@ -233,6 +242,12 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     manageUrl: entryManageUrl(reg?.id || payment.race_registration_id || null, {
       baseUrl: await resolveCustomerBaseUrl(db, race?.location_id || null),
     }),
+    // FINDTEAM.3 — a solo who booked "find me a team" gets one extra paragraph
+    // saying a team is coming. Left off the ctx entirely otherwise, so the
+    // default email is unchanged for everyone else.
+    ...(reg?.looking_for_team
+      ? { findTeamParagraph: resolveFindTeamSettings(race).confirmation_paragraph }
+      : {}),
   }
 
   // Email — only if not already sent.
@@ -395,7 +410,7 @@ export function buildConfirmationDefaults(ctx) {
   return {
     subject: `${ctx.raceName}: you're in!`,
     heading: `You're registered, ${escapeHtml(ctx.captainFirstName || 'team captain')}.`,
-    introHtml: `Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.`,
+    introHtml: `Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.${findTeamParagraphHtml(ctx.findTeamParagraph)}`,
     infoRows,
     afterInfoHtml,
     memberQrs,
@@ -703,6 +718,152 @@ export async function sendRegistrationMovedEmail(db, { registrationId, moveId })
     result.failed.push('email:duplicate_send')
     logError('race-confirmations', 'a concurrent invocation had already stamped this move; the entrant received a DUPLICATE moved email', { registrationId, moveId })
   }
+  return result
+}
+
+// ─── FINDTEAM.5 — "You're on a team": a solo entrant has been placed ─────
+//
+// Sent once per placement by the two staff routes (place, pair-solos); there
+// is no send-once column, so a route that runs once sends once. The operator
+// copy lives in race_events.find_team (placed_subject / placed_intro, with
+// FIND_TEAM_DEFAULTS behind them) rather than in placed_email_* columns: it is
+// handed to resolveEventEmail as placed_email_subject / placed_email_intro on
+// a race-like object, so the intro lands in the grey box exactly as every
+// other kind's operator intro does. No template override (no
+// placed_email_template_id) and no QR block: the solo's own QR still works,
+// and at the door it is redirected to the team they joined (FINDTEAM.8, the
+// check-in routes follow placed_into_registration_id; src/lib/placed-checkin.js).
+
+const PLACED_REGISTRATION_COLUMNS = `
+  id, status, contact_id, race_event_id, placed_into_registration_id,
+  contact:contact_id ( id, first_name, last_name, email, phone ),
+  teams:team_id ( id, team_members ( id, name, role, email ) ),
+  placed_into:placed_into_registration_id ( id, wave:wave_id ( start_time, label ), teams:team_id ( name ) ),
+  race:race_event_id (
+    id, name, slug, kind, race_date, location_id, host_id, sending_location_id,
+    venue_name, accent_hex, hero_image_url, find_team,
+    locations:location_id ( id, name, is_host_anchor, organization_id )
+  )
+`
+
+/**
+ * Default shell slots for the placed email. The subject is the event's
+ * placed_subject (defaults included) with merge tags applied; resolveEventEmail
+ * applies the same copy again when it is set, so the two agree.
+ * @param {{ raceName, raceDateLabel, waveLabel, waveRowLabel, isRace, locationName,
+ *   teamName, firstName, brand, placedSubject, contact, extras }} ctx
+ */
+export function buildPlacedDefaults(ctx) {
+  const who = escapeHtml(ctx.firstName || 'there')
+  const team = `<strong>${escapeHtml(ctx.teamName || 'your team')}</strong>`
+  const race = `<strong>${escapeHtml(ctx.raceName)}</strong>`
+  const row = (label, value, first = false) => value
+    ? `<tr><td style="padding:8px 0;color:#666${first ? ';width:120px' : ''}">${label}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(value)}</td></tr>`
+    : ''
+  const infoRows = [
+    `    ${row('Event', ctx.raceName, true)}`,
+    `    ${row('Date', ctx.raceDateLabel)}`,
+    ctx.waveLabel ? `    ${row(ctx.waveRowLabel || 'Wave', ctx.waveLabel)}` : '',
+    `    ${row('Team', ctx.teamName)}`,
+    ctx.locationName ? `    ${row('Where', ctx.locationName)}` : '',
+  ].filter(Boolean).join('\n')
+  const subject = applyEventMergeTags(ctx.placedSubject || '', ctx.contact || {}, ctx.extras || {})
+  return {
+    subject: subject || `You're on a team for ${ctx.raceName}`,
+    heading: `You're on a team, ${who}.`,
+    introHtml: `You're with team ${team} for ${race}. The details are below.`,
+    infoRows,
+    afterInfoHtml: '',
+    memberQrs: [],
+    footerHtml: ctx.isRace
+      ? `<strong>What's next:</strong> arrive 10-15 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before.`
+      : `<strong>What's next:</strong> arrive 10-15 minutes before your start. Bring water and a towel. We'll send a reminder the day before.`,
+    locationName: ctx.locationName || '',
+    brand: String(ctx.brand || '').trim(),
+  }
+}
+
+/**
+ * Tell a placed solo entrant which team they are on. `registrationId` is the
+ * SOLO row (status 'placed'). Best-effort: never throws for an expected
+ * failure; reports it on the result and logs it.
+ * @param {{ db: object, registrationId: string }} args
+ * @returns {Promise<{ sent: string[], skipped: string[], failed: string[] }>}
+ */
+export async function sendPlacedEmail({ db, registrationId }) {
+  const result = { sent: [], skipped: [], failed: [] }
+
+  const { data: reg, error: regErr } = await db
+    .from('race_registrations')
+    .select(PLACED_REGISTRATION_COLUMNS)
+    .eq('id', registrationId)
+    .maybeSingle()
+  if (regErr || !reg) {
+    result.failed.push(`load:${regErr?.message || 'registration_not_found'}`)
+    logError('race-confirmations', 'placed email: registration unreadable; nothing sent', { err: regErr, registrationId })
+    return result
+  }
+  if (reg.status !== 'placed' || !reg.placed_into) {
+    result.skipped.push('not_placed')
+    return result
+  }
+
+  const race = reg.race || {}
+  const contact = reg.contact || {}
+  const toEmail = entryLeadEmail({ registration: reg, payment: null })
+  if (!toEmail) {
+    logError('race-confirmations', 'placed email: no address for the placed entrant', { registrationId })
+    result.skipped.push('email:no_email')
+    return result
+  }
+
+  // Same fallback as sendRaceConfirmations: a resolver failure never costs the email.
+  let commsLocation = null
+  try {
+    commsLocation = await resolveEventCommsLocation(db, { location_id: race.location_id, host_id: race.host_id, sending_location_id: race.sending_location_id })
+  } catch (e) {
+    logError('race-confirmations', 'placed email: comms location resolver threw; sending from the event location', { err: e, registrationId })
+  }
+  const commsLocationId = commsLocation?.id || race.location_id || null
+
+  // ADMINISTRATIVE + unrecoverable: nothing re-runs this after the placement.
+  const gate = await checkTransactionalConsent({
+    db, contactId: reg.contact_id, channel: 'email', module: 'race-confirmations', meta: { registrationId, kind: 'placed' }, unrecoverable: true,
+  })
+  if (!gate.allowed) { result.skipped.push(`email:${gate.reason}`); return result }
+
+  const settings = resolveFindTeamSettings(race)
+  const members = reg.teams?.team_members || []
+  const firstName = contact.first_name || (members.find((m) => m.role === 'captain')?.name || members[0]?.name || '').split(' ')[0] || ''
+  // The TEAM's wave: the solo joins the team wherever it runs.
+  const waveLabel = waveText(reg.placed_into.wave)
+  const ctx = {
+    raceName: race.name || 'Your event',
+    raceDateLabel: fmtRaceDate(race.race_date),
+    waveLabel,
+    waveRowLabel: timeRowLabel(race.kind),
+    isRace: isRaceKind(race.kind),
+    locationName: pickAudienceVenueName({ venueName: race.venue_name, eventLocation: race.locations }),
+    teamName: reg.placed_into.teams?.name || '',
+    firstName,
+    brand: await resolveEventBrand(db, {}, commsLocationId),
+    placedSubject: settings.placed_subject,
+  }
+  const mergeContact = { first_name: firstName, name: [contact.first_name, contact.last_name].filter(Boolean).join(' '), email: toEmail, phone: contact.phone || '' }
+  const extras = { event_name: ctx.raceName, team_name: ctx.teamName, when: ctx.waveLabel || ctx.raceDateLabel, location: ctx.locationName, first_name: firstName }
+  ctx.contact = mergeContact
+  ctx.extras = extras
+  const placedRace = { ...race, placed_email_subject: settings.placed_subject, placed_email_intro: settings.placed_intro }
+
+  try {
+    const { subject, htmlBody } = await resolveEventEmail({ db, kind: 'placed', race: placedRace, contact: mergeContact, extras, defaults: buildPlacedDefaults(ctx), brandLocationId: commsLocationId })
+    await sendTransactionalEmail({ to: toEmail, subject, htmlBody, contactId: reg.contact_id || null, locationId: commsLocationId, tag: 'event-placed' })
+  } catch (e) {
+    result.failed.push(`email:${e?.message || 'failed'}`)
+    logError('race-confirmations', 'placed email failed to send; the entrant does not know their team', { err: e, registrationId })
+    return result
+  }
+  result.sent.push('email')
   return result
 }
 

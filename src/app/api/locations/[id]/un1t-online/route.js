@@ -146,6 +146,15 @@ export async function GET(request, props) {
   } catch {
     data.writes_enabled = false
   }
+  // The paid-trial block editor's product picker: product titles and prices
+  // are not sensitive, so any owner or master who can open this gets the list.
+  // Advisory, like the run summary: a thrown read is an empty list.
+  try {
+    data.paid_products = await paidProducts(db, g.locationId)
+  } catch (err) {
+    logError(LOG, 'paid products failed', { locationId: g.locationId, code: err?.code ?? err?.name ?? 'error' })
+    data.paid_products = []
+  }
   if (isMaster(g.user)) {
     // Advisory, like the run summary: the connection itself answered.
     try {
@@ -210,6 +219,34 @@ async function trialProducts(db, locationId) {
     .map((p) => ({ un1t_id: String(p.un1t_id), title: p.title || String(p.un1t_id) }))
     .sort((a, b) => a.title.localeCompare(b.title))
   return { rows, error: null }
+}
+
+// The paid-trial block's product picker: active ONE-OFF products with a price
+// at this studio, by title. Never a recurring product: the /trial card says
+// "charged once; nothing renews" (paidTrialConfigFromBlocks refuses one too).
+// A failed read is an empty list, logged.
+async function paidProducts(db, locationId) {
+  const { data, error } = await db
+    .from('un1t_products')
+    .select('un1t_id, title, type, status, price_cents, currency')
+    .eq('location_id', locationId)
+    .eq('status', 'active')
+    .eq('type', 'one_time')
+    .gt('price_cents', 0)
+  if (error) {
+    logError(LOG, 'paid products read failed', { locationId, err: safeErr(error) })
+    return []
+  }
+  return (data || [])
+    .filter((p) => p.status === 'active' && p.type === 'one_time' && Number(p.price_cents) > 0 && p.un1t_id)
+    .map((p) => ({
+      un1t_id: String(p.un1t_id),
+      title: p.title || String(p.un1t_id),
+      price_cents: Number(p.price_cents),
+      currency: p.currency || 'EUR',
+      type: p.type || null,
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title))
 }
 
 async function writeSection(db, locationId) {

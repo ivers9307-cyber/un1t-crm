@@ -56,11 +56,17 @@ export async function GET(request) {
   // is the second half of the same guard, on the side that would actually run
   // the command. If they ever disagree, the device wins.
   if (!actionAppliesToRole(command.action, device.role)) {
-    await db.from('fleet_commands').update({
+    const { error: rejectError } = await db.from('fleet_commands').update({
       status: 'rejected',
       finished_at: now,
       error: `action does not apply to a ${device.role ?? 'roleless'} device`,
     }).eq('id', command.id)
+    // Best effort: the device is told there is nothing to do either way.
+    if (rejectError) {
+      logWarn('fleet-cmd', 'could not record a rejected command', {
+        device: device.device_name, id: command.id, err: rejectError,
+      })
+    }
     logWarn('fleet-cmd', 'rejected mismatched action', {
       device: device.device_name, role: device.role, action: command.action,
     })
@@ -70,7 +76,7 @@ export async function GET(request) {
   // Claim it. Conditional on still being `pending` so two agents racing (a
   // restart overlapping its predecessor) cannot both take the same row —
   // whoever loses updates zero rows and gets nothing to do.
-  const { data: claimed } = await db
+  const { data: claimed, error: claimError } = await db
     .from('fleet_commands')
     .update({ status: 'claimed', claimed_at: now })
     .eq('id', command.id)
@@ -78,6 +84,13 @@ export async function GET(request) {
     .select('id, action, expires_at')
     .maybeSingle()
 
+  // A failed claim reads as "nothing to do" (the command stays pending and the
+  // next poll retries it), but it must not read as a lost race: log it.
+  if (claimError) {
+    logWarn('fleet-cmd', 'failed to claim a command', {
+      device: device.device_name, id: command.id, err: claimError,
+    })
+  }
   if (!claimed) return NextResponse.json({ ok: true, command: null })
 
   logInfo('fleet-cmd', 'command claimed', {

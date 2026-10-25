@@ -16,13 +16,14 @@
 // (mig 707), falling back to the nearest event's hero.
 
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
 import HostListSignup from '@/components/HostListSignup'
 import HostPublicEvents from '@/components/host/HostPublicEvents'
 import { poppinsBody as poppins } from '@/fonts/poppins'
 import { getOrgBrandName } from '@/lib/location-branding'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
-import { pickHostBranding, hostPageCopy, hostPageEvents } from '@/lib/host-public-page'
+import { pickHostBranding, hostPageCopy, hostPageEvents, hostPageMetadata } from '@/lib/host-public-page'
 import { todayIsoIn } from '@shared/events'
 import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
@@ -35,7 +36,7 @@ export const dynamic = 'force-dynamic'
 const HOST_COLS = 'id, name, slug, organization_id, anchor_location_id, list_headline, list_blurb, list_button_label, list_success_message, hero_image_url, accent_hex, events_headline, events_blurb'
 
 // Public-safe SELECT. Embeds exist only for the sold-out boolean.
-const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, team:teams ( size ) )'
+const EVENT_COLS = 'slug, name, kind, race_date, start_time, venue_name, hero_image_url, accent_hex, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity, start_time ), registrations:race_registrations ( status, wave_id, looking_for_team, team:teams ( size ) )'
 
 // TZ.9 — a host's events live on its anchor location, so the page runs on
 // that studio's clock. This page is display-only: an unreadable zone falls
@@ -65,19 +66,38 @@ async function loadHostEvents(db, hostId, zone) {
 }
 
 export async function generateMetadata(props) {
-  const params = await props.params
   try {
+    const params = await props.params
     const db = createServerClient()
-    const { data } = await db
+    const { data: host, error } = await db
       .from('event_hosts')
-      .select('name, events_blurb, list_blurb')
+      .select('id, name, organization_id, anchor_location_id, hero_image_url, events_headline, events_blurb, list_blurb')
       .eq('slug', params.slug)
       .maybeSingle()
-    if (!data) return {}
-    return {
-      title: `${data.name} — upcoming events`,
-      description: data.events_blurb || data.list_blurb || `Book ${data.name}'s upcoming events.`,
+    if (error || !host) return {}
+    const zone = await hostZone(db, host)
+    let events = []
+    try {
+      const { data, error: eventsError } = await db
+        .from('race_events')
+        // Make host tenancy explicit for check:location-scoping, including staff-assigned events at other studios.
+        .select('hero_image_url, host:event_hosts!inner(organization_id)')
+        .eq('host_id', host.id)
+        .eq('host.organization_id', host.organization_id)
+        .eq('active', true)
+        .eq('status', 'published')
+        .gte('race_date', todayIsoIn(zone))
+        .order('race_date')
+        .order('start_time')
+      if (!eventsError) events = data || []
+    } catch (err) {
+      logWarn('host-public-metadata', 'event heroes unreadable; using host branding', { err, hostId: host.id })
     }
+    const orgName = await getOrgBrandName(db, host.organization_id)
+    const requestHeaders = await headers()
+    const origin = `${requestHeaders.get('x-forwarded-proto') || 'https'}://${requestHeaders.get('host')}`
+    const path = new URL(`/h/${encodeURIComponent(params.slug)}`, origin).href
+    return hostPageMetadata({ host, events, orgName, path, page: 'events' })
   } catch {
     return {}
   }
