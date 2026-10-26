@@ -298,3 +298,44 @@ describe('isStaleCustomerRefusal', () => {
     expect(isStaleCustomerRefusal(new Error('customer'))).toBe(false)
   })
 })
+
+describe('forgetRevolutCustomerForContact (contact erasure)', () => {
+  function erasureDb({ contact = { email: ' Ann@X.ie ' }, readError = null, deleteError = null } = {}) {
+    const deletes = []
+    return {
+      deletes,
+      from(table) {
+        const q = { table, filters: [] }
+        q.select = () => q
+        q.delete = () => { q.op = 'delete'; return q }
+        q.eq = (col, val) => { q.filters.push([col, val]); return q }
+        q.maybeSingle = async () => ({ data: readError ? null : contact, error: readError })
+        q.then = (res) => {
+          if (q.op === 'delete') deletes.push({ table, filters: q.filters })
+          return res({ data: null, error: q.op === 'delete' ? deleteError : null })
+        }
+        return q
+      },
+    }
+  }
+
+  it('deletes the mapping for the contact\'s normalised email', async () => {
+    const { forgetRevolutCustomerForContact } = await import('./revolut-customers')
+    const db = erasureDb()
+    await expect(forgetRevolutCustomerForContact(db, 'c1')).resolves.toBe(true)
+    expect(db.deletes).toEqual([{ table: 'revolut_customers', filters: [['email_norm', 'ann@x.ie']] }])
+  })
+
+  it('a contact with no email deletes nothing and reports nothing left behind', async () => {
+    const { forgetRevolutCustomerForContact } = await import('./revolut-customers')
+    const db = erasureDb({ contact: { email: null } })
+    await expect(forgetRevolutCustomerForContact(db, 'c1')).resolves.toBe(true)
+    expect(db.deletes).toHaveLength(0)
+  })
+
+  it('a failed read or delete never throws, and reports false', async () => {
+    const { forgetRevolutCustomerForContact } = await import('./revolut-customers')
+    await expect(forgetRevolutCustomerForContact(erasureDb({ readError: { message: 'down' } }), 'c1')).resolves.toBe(false)
+    await expect(forgetRevolutCustomerForContact(erasureDb({ deleteError: { message: 'denied' } }), 'c1')).resolves.toBe(false)
+  })
+})

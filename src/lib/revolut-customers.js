@@ -206,3 +206,33 @@ export async function createOrderReusingCustomer(db, order) {
     return createOrder({ ...rest, customer, idempotencyKey: retryIdempotencyKey(rest.idempotencyKey) })
   }
 }
+
+/**
+ * Contact erasure: forget the email → Revolut customer mapping for a deleted
+ * contact (every merchant). The row holds the email in clear and is not keyed
+ * to the contact, so the contact delete would otherwise leave it behind.
+ * Dropping it is always safe: the next order for that email creates one new
+ * Revolut customer. The customer record AT Revolut is Revolut's to hold.
+ * Best-effort, never throws: an erasure is never refused over this.
+ * @returns {Promise<boolean>} true when nothing is left behind
+ */
+export async function forgetRevolutCustomerForContact(db, contactId) {
+  try {
+    const { data: contact, error: readErr } = await db.from('contacts').select('email').eq('id', contactId).maybeSingle()
+    if (readErr) {
+      logWarn('revolut-customers', 'erasure: contact unreadable; Revolut customer mapping not checked', { contactId, err: readErr })
+      return false
+    }
+    const email = normaliseCustomerEmail(contact?.email)
+    if (!email) return true
+    const { error } = await db.from('revolut_customers').delete().eq('email_norm', email)
+    if (error) {
+      logWarn('revolut-customers', 'erasure: Revolut customer mapping not deleted', { contactId, err: error })
+      return false
+    }
+    return true
+  } catch (e) {
+    logWarn('revolut-customers', 'erasure: Revolut customer mapping step threw', { contactId, err: e })
+    return false
+  }
+}
