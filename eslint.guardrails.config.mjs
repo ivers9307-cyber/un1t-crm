@@ -518,6 +518,12 @@ const config = [
       'src/lib/screen-plan.js',
       'src/lib/screen-doorbell.js',
       'src/lib/fleet-screen-health.js',
+      // USAGE.1 — app usage: born clean. A silent failed write would show
+      // staff as unused (ingest) or freeze the report's totals (rollup).
+      'src/lib/app-usage/**',
+      'src/app/api/usage/**',
+      'src/app/api/admin/app-usage/**',
+      'src/app/api/cron/app-usage-rollup/**',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

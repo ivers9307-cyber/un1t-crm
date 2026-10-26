@@ -29,6 +29,7 @@ import {
   studioPurposeTemplateSchema,
   studioConsentCopySchema,
   studioBlastSignoffSchema,
+  usageEventsSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -12163,6 +12164,69 @@ registry.registerPath({
 import { unstable_cache } from 'next/cache'
 
 let cachedSpec = null
+
+// USAGE.1 — app usage: the staff trackers' ingest and the platform console's
+// master-only report (/admin/app-usage).
+registry.registerPath({
+  method: 'post',
+  path: '/api/usage/events',
+  tags: ['App usage'],
+  summary: 'Record one app usage batch (session + feature visits) from a staff phone or browser',
+  description: 'Session cookie or mobile Bearer JWT. Masters, view-as and support sessions answer recorded:false and write nothing. Times are clamped to the server clock; ids are client-minted so a re-send upserts.',
+  security: [{ CookieAuth: [] }],
+  request: { body: { content: { 'application/json': { schema: usageEventsSchema.openapi('UsageEventsBatch') } } } },
+  responses: {
+    200: { description: '{ recorded: true, visits } or { recorded: false, reason }' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Not recorded; the client keeps the batch and retries', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/app-usage',
+  tags: ['App usage'],
+  summary: 'App usage report: people or features for a range (master only)',
+  security: [{ CookieAuth: [] }],
+  request: {
+    query: z.object({
+      range: z.enum(['today', '7d', '30d', '90d', '12m']).optional(),
+      platform: z.enum(['all', 'phone', 'web']).optional(),
+      organization_id: uuidLike.optional(),
+      location_id: uuidLike.optional(),
+      view: z.enum(['people', 'features']).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Rows and totals' },
+    400: { description: 'Studio outside the chosen organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master (or viewing as someone)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/app-usage/{profileId}',
+  tags: ['App usage'],
+  summary: "One person's app usage by feature, and one day's session timeline (master only)",
+  security: [{ CookieAuth: [] }],
+  request: {
+    params: z.object({ profileId: uuidLike }),
+    query: z.object({
+      range: z.enum(['today', '7d', '30d', '90d', '12m']).optional(),
+      platform: z.enum(['all', 'phone', 'web']).optional(),
+      organization_id: uuidLike.optional(),
+      location_id: uuidLike.optional(),
+      day: isoDate.optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Feature rows, the timeline and whether the day is still within the 90-day detail window' },
+    403: { description: 'Not a master (or viewing as someone)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown person, or outside the chosen organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 function buildSpec() {
   const generator = new OpenApiGeneratorV31(registry.definitions)

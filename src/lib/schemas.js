@@ -11,6 +11,7 @@ import { isFreshSecret } from './integration-secret-merge'
 import { PURPOSE_KEYS } from './whatsapp-purpose-templates'
 import { CONSENT_COPY_MAX } from './whatsapp-consent-copy'
 import { MIA_OFFER_BLURB_MAX, MIA_OFFERS_MAX } from './agent/mia-offer-limits'
+import { isUsageFeature } from '@shared/usage-features'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -532,3 +533,25 @@ export const miaOffersPutSchema = z.object({
   (v) => new Set(v.offers.map((o) => o.un1t_product_row_id)).size === v.offers.length,
   { message: 'A product can be listed once.', path: ['offers'] },
 )
+
+// USAGE.1 — POST /api/usage/events: one session's batch from the phone or
+// web tracker (shared/usage-tracker.js). Times are the device's clock; the
+// route clamps them (src/lib/app-usage/ingest.js). Only feature keys from the
+// shared registry are accepted: a path or record id never reaches the table.
+export const USAGE_BATCH_MAX_VISITS = 200
+const usageInstant = z.string().datetime({ offset: true })
+export const usageEventsSchema = z.object({
+  session: z.object({
+    id: uuidLike,
+    platform: z.enum(['phone', 'web']),
+    app_version: z.string().trim().max(40).nullable().optional(),
+    started_at: usageInstant,
+    ended_at: usageInstant,
+  }),
+  visits: z.array(z.object({
+    id: uuidLike,
+    feature: z.string().refine(isUsageFeature, 'Unknown feature'),
+    started_at: usageInstant,
+    ended_at: usageInstant,
+  })).max(USAGE_BATCH_MAX_VISITS),
+})
