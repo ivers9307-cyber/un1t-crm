@@ -7,6 +7,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// REVPAY.1 — the Glofox push runs from after(); run it inline here.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, after: vi.fn((fn) => { fn() }) }
+})
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/revolut', () => ({ verifyWebhookSignature: vi.fn(), getOrder: vi.fn() }))
 vi.mock('@/lib/race-payments', () => ({
@@ -19,6 +24,7 @@ vi.mock('@/lib/race-confirmations', () => ({
 }))
 vi.mock('@/lib/webhook-events', () => ({
   recordWebhookEvent: vi.fn(async () => ({ seen: false })),
+  releaseWebhookEvent: vi.fn(async () => {}),
   WEBHOOK_PROVIDERS: { REVOLUT_RACE: 'revolut_race' },
 }))
 
@@ -27,7 +33,8 @@ import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
 import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
-import { recordWebhookEvent } from '@/lib/webhook-events'
+import { recordWebhookEvent, releaseWebhookEvent } from '@/lib/webhook-events'
+import { after } from 'next/server'
 
 // Minimal DB mock — only the fire-and-forget Glofox IIFE touches it, and it
 // bails early when the race_payments lookup returns null (no create_in_glofox).
@@ -86,21 +93,68 @@ describe('POST /api/webhooks/revolut/race-payments', () => {
     expect(getOrder).not.toHaveBeenCalled()
   })
 
-  it('unknown payment → 200 skipped, no getOrder, no mark', async () => {
+  it('unknown payment → 200 skipped, no dedupe claim, no getOrder, no mark (REVPAY.1)', async () => {
     resolveRacePaymentByProviderRef.mockResolvedValue(null)
     const res = await POST(makeRequest())
     const body = await res.json()
     expect(body.skipped).toBe('unknown_order')
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
     expect(getOrder).not.toHaveBeenCalled()
     expect(markRacePaymentStatus).not.toHaveBeenCalled()
   })
 
-  it('getOrder failure → 200 skipped, payment not marked', async () => {
+  it('resolves strictly, BEFORE claiming', async () => {
+    await POST(makeRequest())
+    expect(resolveRacePaymentByProviderRef).toHaveBeenCalledWith(expect.anything(), 'ord-9', { throwOnError: true })
+    expect(resolveRacePaymentByProviderRef.mock.invocationCallOrder[0])
+      .toBeLessThan(recordWebhookEvent.mock.invocationCallOrder[0])
+  })
+
+  it('a failed lookup defers with nothing claimed', async () => {
+    resolveRacePaymentByProviderRef.mockRejectedValue(new Error('db down'))
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).deferred).toBe(true)
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('getOrder failure → 200 deferred, claim RELEASED, payment not marked', async () => {
     getOrder.mockRejectedValue(new Error('revolut down'))
     const res = await POST(makeRequest())
     const body = await res.json()
-    expect(body.skipped).toBe('getorder_failed')
+    expect(body.deferred).toBe(true)
+    expect(releaseWebhookEvent).toHaveBeenCalledWith(expect.objectContaining({ provider: 'revolut_race', eventId: 'ORDER_COMPLETED:ord-9' }))
     expect(markRacePaymentStatus).not.toHaveBeenCalled()
+  })
+
+  it('a failed status write (mark returns error) → deferred, claim released, no confirmations', async () => {
+    markRacePaymentStatus.mockResolvedValue({ applied: null, state_changed: false, error: { message: 'down' } })
+    const res = await POST(makeRequest())
+    expect((await res.json()).deferred).toBe(true)
+    expect(releaseWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(sendRaceConfirmations).not.toHaveBeenCalled()
+  })
+
+  it('a thrown mark → deferred, claim released', async () => {
+    markRacePaymentStatus.mockRejectedValue(new Error('boom'))
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).deferred).toBe(true)
+    expect(releaseWebhookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('a successful mark never releases the claim, even when confirmations throw', async () => {
+    sendRaceConfirmations.mockRejectedValueOnce(new Error('postmark down'))
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('the Glofox push is scheduled through after() on a fresh entry completion', async () => {
+    await POST(makeRequest())
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(after).toHaveBeenCalledWith(expect.any(Function))
   })
 
   it('fresh completion → marks payment + fires confirmations once', async () => {
@@ -147,8 +201,9 @@ describe('POST /api/webhooks/revolut/race-payments — a move_gap payment (EVENT
     const from = vi.fn(() => { throw new Error('the Glofox push read the database') })
     createServerClient.mockReturnValue({ from })
     await POST(makeRequest())
-    await new Promise((r) => setTimeout(r, 0)) // let a fire-and-forget IIFE run, if there were one
+    await new Promise((r) => setTimeout(r, 0)) // let a deferred push run, if there were one
     expect(from).not.toHaveBeenCalled()
+    expect(after).not.toHaveBeenCalled()
   })
 
   it('an entry payment still runs the Glofox push read', async () => {

@@ -275,9 +275,9 @@ export async function createRacePayment({ db, race, registration, captain, prici
  * @param {SupabaseClient} db
  * @param {string} providerRef  Revolut order id (uuid string)
  */
-export async function resolveRacePaymentByProviderRef(db, providerRef) {
+export async function resolveRacePaymentByProviderRef(db, providerRef, { throwOnError = false } = {}) {
   if (!providerRef) return null
-  const { data } = await db
+  const { data, error } = await db
     .from('race_payments')
     .select(`
       *,
@@ -286,13 +286,18 @@ export async function resolveRacePaymentByProviderRef(db, providerRef) {
     `)
     .eq('payment_provider_ref', providerRef)
     .maybeSingle()
+  // REVPAY.1 — throwOnError: a failed read throws instead of reading as "no
+  // row", so the Revolut webhook can defer rather than drop the payment.
+  if (error && throwOnError) throw error
   return data || null
 }
 
 /**
  * Apply a state change driven by a Revolut webhook. Idempotent —
  * callers can fire this for every retry without double-completing.
- * Returns { applied: object|null, state_changed: boolean }.
+ * Returns { applied: object|null, state_changed: boolean, error? }. `error` is
+ * set only when the status write itself failed (REVPAY.1: the Revolut webhook
+ * defers on it instead of reading it as "nothing to do").
  *
  * @param {object} args
  * @param {SupabaseClient} args.db
@@ -358,7 +363,7 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
     .select('id')
   if (writeErr) {
     logError('race-payments', 'payment status write failed; nothing applied', { err: writeErr, paymentId: payment.id, from: payment.status, to: updates.status || null })
-    return { applied: null, state_changed: false }
+    return { applied: null, state_changed: false, error: writeErr }
   }
   if (!Array.isArray(written) || written.length === 0) {
     return { applied: null, state_changed: false }

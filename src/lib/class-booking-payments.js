@@ -84,18 +84,27 @@ export async function createClassBookingPayment({ db, request, location, amountC
   }
 }
 
-/** Webhook lookup: the row that owns this provider order. */
-export async function resolveClassBookingPaymentByRef(db, providerRef) {
+/**
+ * Webhook lookup: the row that owns this provider order.
+ * REVPAY.1 — `throwOnError`: a failed read throws instead of reading as "no
+ * row", so the Revolut webhook can defer rather than drop the payment.
+ */
+export async function resolveClassBookingPaymentByRef(db, providerRef, { throwOnError = false } = {}) {
   if (!providerRef) return null
-  const { data } = await db.from('class_booking_requests')
+  const { data, error } = await db.from('class_booking_requests')
     .select('*').eq('payment_provider_ref', providerRef).maybeSingle()
+  if (error && throwOnError) throw error
   return data || null
 }
 
 /**
  * Apply a provider state change. `providerState` is the adapter's lowercased
  * state ('completed'|'failed'|'cancelled'|'expired'|transient…).
- * Returns { released } — true when this call moved the booking to 'queued'.
+ * Returns { released } — true when this call moved the booking to 'queued' —
+ * plus `error` when the status write failed (REVPAY.1: it used to be a bare
+ * write, so a failed 'paid' read as released and the booking stayed held with
+ * the money taken). Returned, not thrown, so the poll route and the Stripe
+ * webhook behave as before; the Revolut webhook defers on it.
  */
 export async function markClassBookingPaymentStatus({ db, request, providerState, providerAmount }) {
   if (request?.payment_status === 'paid') return { released: false }
@@ -106,14 +115,16 @@ export async function markClassBookingPaymentStatus({ db, request, providerState
     const updates = { payment_status: 'paid' }
     if (Number.isFinite(providerAmount) && providerAmount !== request.amount_cents) updates.amount_cents = providerAmount
     if (request.status === 'awaiting_payment') updates.status = 'queued'
-    await db.from('class_booking_requests').update(updates).eq('id', request.id)
+    const { error } = await db.from('class_booking_requests').update(updates).eq('id', request.id)
+    if (error) return { released: false, error }
     return { released: updates.status === 'queued' }
   }
   if (state === 'failed' || state === 'cancelled' || state === 'expired') {
     const payment_status = state === 'cancelled' ? 'expired' : state
-    await db.from('class_booking_requests')
+    const { error } = await db.from('class_booking_requests')
       .update({ payment_status, status: 'payment_failed' })
       .eq('id', request.id)
+    if (error) return { released: false, error }
     return { released: false }
   }
   return { released: false }

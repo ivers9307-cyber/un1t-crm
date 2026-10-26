@@ -30,16 +30,18 @@ vi.mock('@/lib/contact-events', () => ({
 vi.mock('@/lib/sequences', () => ({ triggerSequencesForOrderStatus: vi.fn(async () => {}) }))
 vi.mock('@/lib/webhook-events', () => ({
   recordWebhookEvent: vi.fn(async () => ({ seen: false })),
+  releaseWebhookEvent: vi.fn(async () => {}),
   WEBHOOK_PROVIDERS: { REVOLUT: 'revolut' },
 }))
 
 import { POST, depositUpdateForOrder } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
-import { recordWebhookEvent } from '@/lib/webhook-events'
+import { recordWebhookEvent, releaseWebhookEvent } from '@/lib/webhook-events'
+import { syncOrderFromCarDeposit } from '@/lib/orders'
 
 // ── In-memory DB mock — records every update for assertions ──────────
-function makeDb({ car = null, contact = null } = {}) {
+function makeDb({ car = null, contact = null, carReadError = null, carWriteError = null } = {}) {
   const updates = []
   function from(table) {
     const b = { _op: 'select', _payload: null }
@@ -48,10 +50,12 @@ function makeDb({ car = null, contact = null } = {}) {
     b.insert = () => b
     b.eq = () => b
     b.ilike = () => b
-    b.maybeSingle = () => Promise.resolve({ data: table === 'cars' ? car : contact })
+    b.maybeSingle = () => Promise.resolve(table === 'cars' && carReadError
+      ? { data: null, error: carReadError }
+      : { data: table === 'cars' ? car : contact, error: null })
     b.then = (resolve) => {
       if (b._op === 'update') updates.push({ table, payload: b._payload })
-      return resolve({ data: null, error: null })
+      return resolve({ data: null, error: b._op === 'update' && table === 'cars' ? carWriteError : null })
     }
     return b
   }
@@ -153,7 +157,7 @@ describe('POST /api/webhooks/revolut', () => {
     expect(getOrder).not.toHaveBeenCalled()
   })
 
-  it('unknown order (no matching car) → 200 and no write', async () => {
+  it('unknown order (no matching car) → 200, no write, and NO dedupe claim (REVPAY.1)', async () => {
     const db = makeDb({ car: null })
     createServerClient.mockReturnValue(db)
     const res = await POST(makeRequest())
@@ -162,17 +166,51 @@ describe('POST /api/webhooks/revolut', () => {
     expect(body.skipped).toBe('unknown_order')
     expect(db._updates).toHaveLength(0)
     expect(getOrder).not.toHaveBeenCalled()
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
   })
 
-  it('getOrder failure → 200 and no write (lets Revolut retry)', async () => {
+  it('a failed cars lookup defers with nothing claimed', async () => {
+    const db = makeDb({ carReadError: { message: 'db down' } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).deferred).toBe(true)
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
+    expect(getOrder).not.toHaveBeenCalled()
+  })
+
+  it('getOrder failure → 200 deferred, no write, claim RELEASED so a resend is processed', async () => {
     const db = makeDb({ car: CAR })
     createServerClient.mockReturnValue(db)
     getOrder.mockRejectedValue(new Error('revolut down'))
     const res = await POST(makeRequest())
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.skipped).toBe('getorder_failed')
+    expect(body.deferred).toBe(true)
     expect(db._updates).toHaveLength(0)
+    expect(releaseWebhookEvent).toHaveBeenCalledWith(expect.objectContaining({ provider: 'revolut', eventId: 'ORDER_COMPLETED:ord-1' }))
+  })
+
+  it('a failed cars write → 200 deferred, claim released, no orders sync', async () => {
+    const db = makeDb({ car: CAR, carWriteError: { message: 'write failed' } })
+    createServerClient.mockReturnValue(db)
+    getOrder.mockResolvedValue({ state: 'completed', amount: 50000 })
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).deferred).toBe(true)
+    expect(releaseWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(syncOrderFromCarDeposit).not.toHaveBeenCalled()
+  })
+
+  it('a landed cars write never releases the claim, even when the orders sync throws', async () => {
+    const db = makeDb({ car: CAR })
+    createServerClient.mockReturnValue(db)
+    getOrder.mockResolvedValue({ state: 'completed', amount: 50000 })
+    syncOrderFromCarDeposit.mockRejectedValueOnce(new Error('orders down'))
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).applied.deposit_status).toBe('paid')
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
   })
 
   it('transient state (authorised) → 200 ignored, no write', async () => {

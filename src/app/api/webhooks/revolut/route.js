@@ -21,6 +21,14 @@
 //   (b) the order_id (looked up against cars.deposit_revolut_order_id)
 // Everything else (state, amount, etc) is fetched fresh via
 // getOrder() — payload metadata can be stale or omitted.
+//
+// REVPAY.1 — resolve FIRST, claim second: every endpoint on the merchant
+// account receives every order's events, so an order with no car answers 200
+// skipped with no dedupe row and no log line. After the claim, a deferral
+// (getOrder throws, the cars write fails) releases the claim and answers
+// 200 { deferred }, the donations route's pattern, so an ops resend from the
+// Revolut dashboard is processed rather than answered 'deduped'. The orders
+// sync, events and sequences after a write that landed never release it.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -28,11 +36,11 @@ import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
-import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
 import { pickContact } from '@/lib/email-inbox'
-import { logInfo } from '@/lib/log'
+import { logInfo, logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -90,24 +98,16 @@ export async function POST(request) {
   if (!orderId || !event) return NextResponse.json({ success: true })
 
   const db = createServerClient()
+  const eventId = `${event}:${orderId}`
 
-  // Idempotency (mig 107). Revolut sends ORDER_AUTHORISED then
-  // ORDER_COMPLETED for the same order; we want to process each
-  // event-state once, but a retry of either should short-circuit.
-  // Per-row guards still exist downstream — this is the chokepoint.
-  const dedup = await recordWebhookEvent({
-    db, provider: WEBHOOK_PROVIDERS.REVOLUT,
-    eventId: `${event}:${orderId}`,
-  })
-  if (dedup.seen) {
-    return NextResponse.json({ success: true, deduped: true })
-  }
   // REVOLUT.1 — buyer_email, deposit_revolut_order_id and
   // deposit_link_sent_at are read by the orders sync and the buyer-contact
   // branch below. buyer_email was missing from this select until REVOLUT.1,
   // so both were dead in production (syncOrderFromCarDeposit returns null
   // without it, and the `car.buyer_email` guard never passed).
-  const { data: car } = await db
+  // REVPAY.1 — resolved before the claim; a failed read defers (nothing is
+  // claimed yet) instead of reading as "not ours".
+  const { data: car, error: carReadErr } = await db
     .from('cars')
     .select(`
       id, location_id, deposit_token, deposit_status, deposit_paid_at,
@@ -118,12 +118,33 @@ export async function POST(request) {
     `)
     .eq('deposit_revolut_order_id', orderId)
     .maybeSingle()
+  if (carReadErr) {
+    logWarn('revolut-webhook', 'cars lookup failed; deferred', { err: carReadErr, orderId, event })
+    return NextResponse.json({ success: true, deferred: true })
+  }
   if (!car) {
-    // Webhook for an order we don't know about — could be a different
-    // app sharing the same merchant account, or stale. Return 200 so
-    // Revolut moves on.
-    console.warn(`[revolut-webhook] no car for order ${orderId} (event ${event})`)
+    // Another flow's order on the same merchant account (races, class
+    // bookings, offers, donations) or a stale id. Normal traffic, so no
+    // log; 200 so Revolut moves on.
     return NextResponse.json({ success: true, skipped: 'unknown_order' })
+  }
+
+  // Idempotency (mig 107). Revolut sends ORDER_AUTHORISED then
+  // ORDER_COMPLETED for the same order; we want to process each
+  // event-state once, but a retry of either should short-circuit.
+  // Per-row guards still exist downstream — this is the chokepoint.
+  const dedup = await recordWebhookEvent({
+    db, provider: WEBHOOK_PROVIDERS.REVOLUT,
+    eventId,
+  })
+  if (dedup.seen) {
+    return NextResponse.json({ success: true, deduped: true })
+  }
+
+  // Give the claim back and answer 200.
+  const defer = async () => {
+    await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.REVOLUT, eventId })
+    return NextResponse.json({ success: true, deferred: true })
   }
 
   // Fetch the live order — gives us authoritative state + actual
@@ -133,9 +154,8 @@ export async function POST(request) {
   try {
     order = await getOrder(orderId)
   } catch (e) {
-    console.warn(`[revolut-webhook] getOrder failed for ${orderId}: ${e.message}`)
-    // Don't 500 — let Revolut retry; the webhook itself was valid.
-    return NextResponse.json({ success: true, skipped: 'getorder_failed' })
+    logWarn('revolut-webhook', `getOrder failed for ${orderId}`, { err: e })
+    return await defer()
   }
   if (!order) return NextResponse.json({ success: true, skipped: 'order_missing' })
 
@@ -153,7 +173,13 @@ export async function POST(request) {
     return NextResponse.json({ success: true, ignored_state: state })
   }
   if (Object.keys(updates).length > 0) {
-    await db.from('cars').update(updates).eq('id', car.id)
+    // REVPAY.1 — was a bare write: a failure still ran the orders sync and the
+    // events as if the deposit were recorded, and the claim made it final.
+    const { error: carWriteErr } = await db.from('cars').update(updates).eq('id', car.id)
+    if (carWriteErr) {
+      logError('revolut-webhook', 'cars deposit write failed; deferred', { err: carWriteErr, carId: car.id, orderId, state })
+      return await defer()
+    }
   }
 
   // Project the cars deposit state into the generic orders ledger

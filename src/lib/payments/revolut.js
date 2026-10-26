@@ -52,9 +52,12 @@ export async function getPayment(providerRef) {
 
 /**
  * Refund (full or partial). Revolut mints a new refund order under the hood.
+ * `idempotencyKey` reaches Revolut as the Idempotency-Key header.
  * @returns {Promise<{ refundId: string|null }>}
  */
-export async function refundPayment(providerRef, { amountCents, currency, description }) {
-  const res = await revolutRefundOrder(providerRef, { amount: amountCents, currency, description })
+export async function refundPayment(providerRef, { amountCents, currency, description, idempotencyKey }) {
+  // REVPAY.1 — the key was accepted by the refund route and dropped here until
+  // now, so a retried staff refund could pay out twice.
+  const res = await revolutRefundOrder(providerRef, { amount: amountCents, currency, description, idempotencyKey })
   return { refundId: res?.id || null }
 }

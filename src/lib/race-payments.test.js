@@ -181,6 +181,19 @@ describe('markRacePaymentStatus', () => {
     expect(result.applied.status).toBe('abandoned')
   })
 
+  it('a failed status write returns its error (REVPAY.1: the webhook defers on it)', async () => {
+    const err = { message: 'write failed' }
+    const chain = { eq: () => chain, select: () => Promise.resolve({ data: null, error: err }) }
+    const db = { from: () => ({ update: () => chain }) }
+    const result = await markRacePaymentStatus({
+      db,
+      payment: { id: 'pay-1', status: 'pending', race_registration_id: 'reg-1', amount_cents: 5000 },
+      revolutState: 'completed',
+      revolutAmount: 5000,
+    })
+    expect(result).toEqual({ applied: null, state_changed: false, error: err })
+  })
+
   it('ignores transient states', async () => {
     const db = makeUpdateDb()
     const result = await markRacePaymentStatus({
