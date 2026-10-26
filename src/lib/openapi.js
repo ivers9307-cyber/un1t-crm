@@ -58,6 +58,12 @@ import {
   ShellyToggleBody as ShellyToggleBodyRaw,
   ShellyEnergyQuery as ShellyEnergyQueryRaw,
   ShellySyncNamesBody as ShellySyncNamesBodyRaw,
+  ShellyGroupCreate as ShellyGroupCreateRaw,
+  ShellyGroupPatch as ShellyGroupPatchRaw,
+  ShellyGroupMembers as ShellyGroupMembersRaw,
+  ShellyGroupToggle as ShellyGroupToggleRaw,
+  ShellyPreviewQuery as ShellyPreviewQueryRaw,
+  SHELLY_GROUP_ICONS,
   MAX_DEVICES_PER_LOCATION, MAX_FIXED_WINDOWS, MAX_OVERRIDE_HOURS, MIN_AUTH_KEY_LENGTH,
 } from '@/lib/shelly/schemas'
 
@@ -8524,6 +8530,8 @@ const ShellyDeviceState = z.object({
 const ShellyDevice = z.object({
   id: uuidLike,
   location_id: uuidLike,
+  // SHELLYGROUPS.5 (mig 776): the group this channel follows, or null.
+  group_id: uuidLike.nullable(),
   device_id: z.string(),
   channel: z.number().int(),
   name: z.string().nullable(),
@@ -8593,6 +8601,8 @@ const ShellyErrorResponse = ErrorResponse.extend({
     'unsupported', 'bad_channel', 'bad_host', 'bad_device',
     'no_schedule', 'disabled', 'occurrences', 'rate_limited',
     'unexpected_noop', 'device_refused',
+    // SHELLYGROUPS.5
+    'name_taken', 'group_limit', 'group_unavailable', 'member_overrides_not_cleared', 'partial', 'grouped',
     // pass-through client/engine failure tags (502s)
     'config', 'network', 'http', 'device',
     'invalid_ids', 'too_many_ids', 'bad_clock', 'unreachable',
@@ -9068,6 +9078,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id, an id at another location, or a row that was deleted between the read and the write — ALL THREE answer the identical body, which is what makes ids un-enumerable', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code `grouped`: the device is in a group, and the patch carries a schedule field (`enabled`, `schedule_mode`, `fixed_windows`, `class_rule`). The group\'s schedule governs it; change the group, or take the device out first. A rename is still allowed.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
@@ -9132,7 +9143,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id, an id at another location, or a row deleted mid-request — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
-    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "group_unavailable" (the device is in a group that could not be read; refused BEFORE the override is cleared) and code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     429: {
       description: 'TWO DIFFERENT BODIES AT THIS STATUS. On the on/off path it is the pending SUCCESS body — '
         + 'success:true, pending:true, code:"rate_limited" — because the override is saved and the cron will '
@@ -9170,7 +9181,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
-    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed); "device" (the plug did not take the command, e.g. DEVICE_OFFLINE — retry once it is back) or "device_refused" (a code waiting cannot fix, e.g. DEVICE_NOT_FOUND), both with Shelly\'s code in `shelly_code`', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "group_unavailable" (the device is in a group and the group could not be read — refused rather than run on the device\'s own schedule, which joining cleared); "no_schedule" (checked FIRST — there is nothing to apply; judged on the GROUP\'s schedule for a member); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed); "device" (the plug did not take the command, e.g. DEVICE_OFFLINE — retry once it is back) or "device_refused" (a code waiting cannot fix, e.g. DEVICE_NOT_FOUND), both with Shelly\'s code in `shelly_code`', content: { 'application/json': { schema: ShellyErrorResponse } } },
     429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'The device or connection read failed; code: "bad_device" (the row has no usable device id/channel — remove it and adopt it again); or code: "unexpected_noop", the unreachable case kept LOUD on purpose — the two 409s above take every state the forced planner can decline, so a no-op arriving here means the planner and this route disagree about what force means, and a cheerful applied:null would bury that under a green tick', content: { 'application/json': { schema: ShellyErrorResponse } } },
     502: { description: 'code "occurrences" (today\'s timetable could not be read — a class-mode device is refused rather than switched off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },
@@ -9266,6 +9277,263 @@ registry.registerPath({
     429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds. Nothing is written, for the same reason as the 409s.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
     502: { description: 'Shelly stopped answering mid-read (code carries the client\'s failure tag). The names already resolved ARE WRITTEN FIRST and the body carries the same counters as the 200 plus partial: true — a far end that may stay unreachable must not cost a completed batch its renames.', content: { 'application/json': { schema: ShellyErrorResponse.extend({ total: z.number().int().optional(), updated: z.number().int().optional(), unchanged: z.number().int().optional(), unresolved: z.number().int().optional(), write_failures: z.number().int().optional(), partial: z.literal(true).optional() }).openapi('ShellySyncNamesPartialError') } } },
+  },
+})
+
+// ============================================================================
+// Shelly groups (SHELLYGROUPS.5) — a named set of channels at one location,
+// scheduled and switched as one. Same permission, tag, envelope convention and
+// 404 rule as the device routes above; no route accepts a location_id.
+// ============================================================================
+
+const ShellyGroupCreate = ShellyGroupCreateRaw.extend({}).openapi('ShellyGroupCreate', {
+  description: 'Create a group. Only name is required; icon defaults to "bulb" and the schedule fields default to '
+    + 'mig 776\'s (enabled false, schedule_mode "none"), so a new group is inert. Names are unique per location '
+    + 'case-insensitively. Strict: an unknown key (a location_id included) is a 400.',
+})
+const ShellyGroupPatch = ShellyGroupPatchRaw.extend({}).openapi('ShellyGroupPatch', {
+  description: 'Every field optional, strict, and an empty body is a 400 ("Nothing to update"). The schedule fields '
+    + 'mean exactly what they mean on a device (ShellyDevicePatch): class_rule is { lead_min, lag_min, '
+    + 'merge_gap_min, days }. It is PARTIAL here: merged onto the stored rule, the merged rule validated (a 400 '
+    + 'names the field), with defaults 15 / 10 / 30 / every day for anything neither side has.',
+})
+const ShellyGroupMembers = ShellyGroupMembersRaw.extend({}).openapi('ShellyGroupMembers', {
+  description: 'The group\'s WHOLE membership, replacing what was there; [] empties it. At most '
+    + MAX_DEVICES_PER_LOCATION + ' ids, each listed once.',
+})
+const ShellyGroupToggle = ShellyGroupToggleRaw.extend({}).openapi('ShellyGroupToggle', {
+  description: 'Exactly the device toggle body (ShellyToggleBody): state on | off | auto, and an optional `until` '
+    + '(any ISO offset, normalised to UTC) bounded at ' + MAX_OVERRIDE_HOURS + ' hours. No `until` = the '
+    + 'location\'s next local midnight.',
+})
+const ShellyPreviewQuery = ShellyPreviewQueryRaw.extend({}).openapi('ShellyPreviewQuery', {
+  description: 'date: a real calendar date, YYYY-MM-DD, in the location\'s calendar; absent or blank = today there.',
+})
+
+const ShellyGroupNow = z.object({
+  on_count: z.number().int(),
+  member_count: z.number().int(),
+  mode: z.enum(['override', 'window', 'idle', 'none']),
+  until: z.string().datetime().nullable(),
+  next_on: z.string().datetime().nullable(),
+  windows_unread: z.literal(true).optional(),
+}).openapi('ShellyGroupNow', {
+  description: 'What the group is doing now (describeGroupNow). on_count counts members whose LAST READING says '
+    + 'output true — an unknown reading is not on. mode: "override" (a live group override; until = its end), '
+    + '"none" (disabled or no schedule), "window" (inside a resolved window; until = its end) or "idle" (next_on = '
+    + 'the next window today, or null). windows_unread: the timetable could not be read for a class-mode group, '
+    + 'so no times are claimed.',
+})
+
+const ShellyGroup = z.object({
+  id: uuidLike,
+  location_id: uuidLike,
+  name: z.string(),
+  icon: z.enum(SHELLY_GROUP_ICONS),
+  sort_order: z.number().int(),
+  enabled: z.boolean(),
+  schedule_mode: z.enum(['none', 'fixed', 'class']),
+  fixed_windows: z.array(ShellyWindow),
+  class_rule: z.object({
+    lead_min: z.number().int().optional(),
+    lag_min: z.number().int().optional(),
+    merge_gap_min: z.number().int().optional(),
+    days: z.array(z.number().int()).optional(),
+  }),
+  override: z.object({
+    state: z.enum(['on', 'off']),
+    until: z.string().datetime(),
+    set_by: uuidLike,
+    set_at: z.string().datetime(),
+  }).nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+}).openapi('ShellyGroup', {
+  description: 'One group — GROUP_COLUMNS (src/lib/shelly/effective.js) minus last_applied, the engine\'s '
+    + 'exactly-once bookkeeping. created_by is never returned.',
+})
+
+const ShellyGroupListed = ShellyGroup.extend({
+  device_ids: z.array(uuidLike),
+  now: ShellyGroupNow,
+}).openapi('ShellyGroupListed')
+
+const ShellyGroupToggleResponse = z.object({
+  success: z.literal(true),
+  applied: z.union([z.enum(['all', 'partial', 'none']), z.null()]),
+  pending_device_ids: z.array(uuidLike),
+  pending: z.literal(true).optional(),
+  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending', 'device_refused']).optional(),
+  kind: z.string().optional(),
+  message: z.string().optional(),
+  // Alongside code "device_refused": Shelly's own permanent error string.
+  shelly_code: z.string().optional(),
+  // On/off path, when not every member landed: why, per member. `permanent`
+  // true = Shelly refused it with a code waiting cannot fix (check the device
+  // in the Shelly app); false = it will follow once it answers.
+  pending_members: z.array(z.object({
+    device_id: uuidLike,
+    code: z.string(),
+    shelly_code: z.string().optional(),
+    permanent: z.boolean(),
+  })).optional(),
+  reason: z.enum(['disabled', 'no_schedule']).optional(),
+  results: z.array(z.object({
+    device_id: uuidLike,
+    applied: z.enum(['on', 'off']).nullable(),
+    reason: z.string().optional(),
+    code: z.string().optional(),
+    shelly_code: z.string().optional(),
+    permanent: z.boolean().optional(),
+  })).optional(),
+  holds_until_changed: z.boolean().optional(),
+  notice: z.string().optional(),
+  group: ShellyGroup,
+}).openapi('ShellyGroupToggleResponse')
+
+const groupErr = (description) => ({ description, content: { 'application/json': { schema: ShellyErrorResponse } } })
+const groupCommon = {
+  401: groupErr('Not signed in'),
+  403: groupErr('Missing device_control permission'),
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/groups',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'This location\'s Shelly groups, with members and what each is doing now (device_control)',
+  description: 'Sorted by sort_order, then name. `now` is resolved by the same engine call the cron makes for a '
+    + 'grouped device, for the location\'s day. A timetable that cannot be read does not fail the list: class-mode '
+    + 'groups carry windows_unread instead of an invented time.',
+  responses: {
+    200: { description: 'The groups', content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(ShellyGroupListed) }).openapi('ShellyGroupListResponse') } } },
+    400: groupErr('Caller has no active location'),
+    ...groupCommon,
+    500: groupErr('The groups or their members could not be read'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/groups',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Create a Shelly group (device_control)',
+  request: { body: { content: { 'application/json': { schema: ShellyGroupCreate } } } },
+  responses: {
+    201: { description: 'Created, with device_ids []', content: { 'application/json': { schema: z.object({ success: z.literal(true), group: ShellyGroup.extend({ device_ids: z.array(uuidLike) }) }).openapi('ShellyGroupCreateResponse') } } },
+    400: groupErr('Validation failed (unknown key, bad icon, blank name) or no active location'),
+    ...groupCommon,
+    409: groupErr('code: "name_taken" (another group at this location has that name in any case; also the answer to a raw unique violation) or "group_limit" (the location holds the most groups the reconcile serves)'),
+    500: groupErr('Database error'),
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/shelly/groups/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Rename a group, change its icon or order, or edit its schedule (device_control)',
+  description: 'Writes settings only; no relay moves. Switching a running schedule off (or to "none") leaves every '
+    + 'member as it is, and the response then carries a `notice` saying so.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupPatch } } } },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), group: ShellyGroup, notice: z.string().optional() }).openapi('ShellyGroupPatchResponse') } } },
+    400: groupErr('Validation failed or no active location'),
+    ...groupCommon,
+    404: groupErr('Malformed id, an id at another location, or a row deleted mid-request — one identical body'),
+    409: groupErr('code: "name_taken"'),
+    500: groupErr('Database error'),
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/shelly/groups/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Remove a group (device_control)',
+  description: 'Members are released by the foreign key (ON DELETE SET NULL) and keep their rows and energy '
+    + 'history. Nothing is switched: they fall back to their own schedule, which joining cleared, so they stay as '
+    + 'they are.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Removed', content: { 'application/json': { schema: z.object({ success: z.literal(true), message: z.string() }).openapi('ShellyGroupDeleteResponse') } } },
+    400: groupErr('No active location'),
+    ...groupCommon,
+    404: groupErr('Malformed id or an id at another location — one identical body'),
+    500: groupErr('Database error'),
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/shelly/groups/{id}/devices',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Set a group\'s membership (device_control)',
+  description: 'Every id must be a device at the caller\'s location, or the whole request is a 404 and nothing '
+    + 'changes. A device joining has its own schedule cleared (schedule_mode "none", no windows, empty class '
+    + 'rule; enabled kept) and follows the group\'s; a device moving from another group simply joins. A device '
+    + 'leaving gets group_id null and nothing else. No relay is commanded.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupMembers } } } },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), group: ShellyGroup, device_ids: z.array(uuidLike), joined: z.array(uuidLike), left: z.array(uuidLike) }).openapi('ShellyGroupMembersResponse') } } },
+    400: groupErr('Validation failed (duplicate or malformed id, over the cap) or no active location'),
+    ...groupCommon,
+    404: groupErr('The group, or ANY listed device, is malformed, at another location or does not exist — one identical body, and nothing written'),
+    500: groupErr('A read or write failed; code "partial" when the joins landed and the removals did not'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/groups/{id}/toggle',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Switch a whole group on or off for a while, or hand it back to its schedule — the group wins (device_control)',
+  description: 'Order: (1) the group override is written (intent, before any command); (2) every member\'s own '
+    + 'device override is cleared — if that write fails the request is a 500 and nothing is sent; (3) ONE '
+    + 'set/groups call over the members, switches and lights together (none at all for an empty group); (4) each '
+    + 'member that landed is stamped; (5) members that did not land are listed in pending_device_ids — the cron '
+    + 'applies the group override to them. "auto" clears the group override and the member overrides, then runs '
+    + 'each member through the group\'s schedule now, one at a time.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupToggle } } } },
+  responses: {
+    200: { description: 'applied "all" (every member moved, or the group is empty), "partial" (some members are pending — named in pending_device_ids) or "none" (the batch did not land; the override IS saved). Not-all answers carry `pending_members` (code, shelly_code, permanent). On "auto": the group schedule is planned once and sent as ONE batch; per-member `results`, or applied null with reason disabled / no_schedule for a group with nothing to go back to. holds_until_changed true means the group is unmanaged and `until` bounds the banner, not the relays.', content: { 'application/json': { schema: ShellyGroupToggleResponse } } },
+    400: groupErr('Validation failed, `until` already passed or more than ' + MAX_OVERRIDE_HOURS + ' hours out, or no active location'),
+    ...groupCommon,
+    404: groupErr('Malformed id or an id at another location — one identical body; nothing written'),
+    409: groupErr('code: "not_connected" — nothing written'),
+    429: { description: 'code "rate_limited" on the on/off path: the SUCCESS body (success:true, applied "none", pending) — the override is saved; back off rather than re-press', content: { 'application/json': { schema: ShellyGroupToggleResponse } } },
+    500: groupErr('A read failed, the group override write failed (nothing was switched), or code "member_overrides_not_cleared" (the group override is saved/cleared but members keep their own switch; nothing was sent)'),
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/preview',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'One day of the schedule: classes and each group\'s windows (device_control)',
+  description: 'Computed by the same engine call the cron makes (resolveServeWindows on each group for the '
+    + 'location\'s day, fixed windows including the previous evening\'s tail). The date must be within 60 days '
+    + 'of today. ignored_overrides lists groups with a live override the strip does not draw.',
+  request: { query: ShellyPreviewQuery },
+  responses: {
+    200: { description: 'The day', content: { 'application/json': { schema: z.object({
+      success: z.literal(true),
+      date: z.string(),
+      classes: z.array(z.object({ starts_at: z.string().datetime(), ends_at: z.string().datetime().nullable(), name: z.string().nullable() })),
+      groups: z.array(z.object({ id: uuidLike, windows: z.array(z.object({ on_at: z.string().datetime(), off_at: z.string().datetime() })) })),
+      ignored_overrides: z.array(uuidLike),
+    }).openapi('ShellyPreviewResponse') } } },
+    400: groupErr('A malformed or impossible date, a date more than 60 days away, or no active location'),
+    ...groupCommon,
+    500: groupErr('The groups could not be read'),
+    502: groupErr('code "occurrences" — the timetable for that day could not be read; never drawn as an empty day'),
   },
 })
 

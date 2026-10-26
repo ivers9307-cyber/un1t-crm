@@ -91,6 +91,9 @@ export const SHC_A1 = tid('5ca1')
 export const SHC_B1 = tid('5cb1')
 export const SHD_A1 = tid('5da1')
 export const SHD_B1 = tid('5db1')
+// SHELLYGROUPS.5 — one group per location, each holding that location's relay.
+export const SHG_A1 = tid('56a1')
+export const SHG_B1 = tid('56b1')
 
 // The credential and its sha256 fingerprint, per location. Both are FAKE and
 // both are deliberately distinctive, so a response that carries either shows
@@ -257,12 +260,29 @@ export function makeWorld() {
         linked_by: P_OWNER_B1, created_at: '2026-08-02T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
       },
     ],
+    // SHELLYGROUPS.5 (mig 776) — one group per location; each location's relay
+    // is a member of its own group (a group and its members share a location,
+    // trigger-enforced).
+    shelly_groups: [
+      {
+        id: SHG_A1, location_id: LOC_A1, name: 'A One Lights', icon: 'bulb', sort_order: 0,
+        enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '06:30', off: '21:00' }],
+        class_rule: {}, override: null, last_applied: null, created_by: P_OWNER_A1,
+        created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
+      },
+      {
+        id: SHG_B1, location_id: LOC_B1, name: 'B One Lights', icon: 'bulb', sort_order: 0,
+        enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '07:00', off: '20:00' }],
+        class_rule: {}, override: null, last_applied: null, created_by: P_OWNER_B1,
+        created_at: '2026-08-02T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
+      },
+    ],
     // One adopted relay channel each. (device_id, channel) is UNIQUE across
     // the WHOLE estate (mig 562), so the two device_ids differ — a fixture
     // that reused one would not be a state the database can hold.
     shelly_devices: [
       {
-        id: SHD_A1, location_id: LOC_A1, device_id: 'aa11bb22cc31', channel: 0,
+        id: SHD_A1, location_id: LOC_A1, group_id: SHG_A1, device_id: 'aa11bb22cc31', channel: 0,
         name: 'A One Heater', model: 'SNSW-001X16EU', gen: 2, zone: null,
         enabled: true, schedule_mode: 'fixed',
         fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '06:30', off: '21:00' }], class_rule: {},
@@ -272,7 +292,7 @@ export function makeWorld() {
         created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-23T09:00:00Z',
       },
       {
-        id: SHD_B1, location_id: LOC_B1, device_id: 'bb11cc22dd31', channel: 0,
+        id: SHD_B1, location_id: LOC_B1, group_id: SHG_B1, device_id: 'bb11cc22dd31', channel: 0,
         name: 'B One Heater', model: 'SNSW-001X16EU', gen: 2, zone: null,
         enabled: true, schedule_mode: 'fixed',
         fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '07:00', off: '20:00' }], class_rule: {},

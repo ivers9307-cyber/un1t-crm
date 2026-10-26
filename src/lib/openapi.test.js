@@ -223,6 +223,33 @@ describe('getOpenApiSpec', () => {
     )
   })
 
+  // SHELLYGROUPS.5 — the group routes and the day preview.
+  it('documents the Shelly group routes and the day preview', () => {
+    const expected = {
+      '/api/shelly/groups': ['get', 'post'],
+      '/api/shelly/groups/{id}': ['patch', 'delete'],
+      '/api/shelly/groups/{id}/devices': ['put'],
+      '/api/shelly/groups/{id}/toggle': ['post'],
+      '/api/shelly/preview': ['get'],
+    }
+    for (const [p, methods] of Object.entries(expected)) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+      for (const m of methods) {
+        const op = spec.paths[p][m]
+        expect(op, `${p} is not registered as ${m.toUpperCase()}`).toBeTruthy()
+        expect(op.tags).toContain('Automations')
+        expect(op.responses, `${m} ${p} must document its 403`).toHaveProperty('403')
+      }
+    }
+    expect(spec.paths['/api/shelly/groups'].post.responses['409'].description).toMatch(/name_taken/)
+    expect(spec.paths['/api/shelly/groups/{id}/toggle'].post.responses['200'].description).toMatch(/partial/)
+    expect(spec.components.schemas.ShellyGroupToggle.properties).toHaveProperty('until')
+    expect(spec.components.schemas.ShellyDevice.properties).toHaveProperty('group_id')
+    const codes = spec.components.schemas.ShellyErrorResponse.allOf[1].properties.code.enum
+    for (const c of ['name_taken', 'group_limit', 'group_unavailable', 'member_overrides_not_cleared']) expect(codes).toContain(c)
+    expect(spec.paths['/api/shelly/devices/{id}/run-now'].post.responses['409'].description).toMatch(/group_unavailable/)
+  })
+
   // SHELLY-UI.9b — three contract facts that are only visible in the
   // GENERATED document. Asserting them on the zod schema instead would pass
   // while the published JSON-Schema said something else, which is exactly how

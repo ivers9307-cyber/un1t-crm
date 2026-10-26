@@ -42,7 +42,7 @@ vi.mock('@/lib/shelly/reconcile', async (importOriginal) => {
 import { POST, HOLDS_NOTICE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { logWarn } from '@/lib/log'
 import { overrideKey } from '@/lib/shelly/plan'
@@ -50,8 +50,8 @@ import { AUTH_ERROR } from '@/lib/shelly/connections'
 import { MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import { nextLocalMidnightMs } from '@/lib/tz-time'
 import {
-  LOC_A, LOC_B, DEV_A, DEV_B, BAD_ID, OWNER_ID, OWNER_A, OWNER_NY, STAFF_A, SHELLY_ID, STORED_KEY,
-  deviceRow, connectionRow, fullState, makeDb, updatesTo, jsonReq, ctxFor,
+  LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_ID, OWNER_A, OWNER_NY, STAFF_A, SHELLY_ID, STORED_KEY,
+  deviceRow, groupRow, connectionRow, fullState, makeDb, updatesTo, jsonReq, ctxFor,
 } from '../../../shelly-routes.test-helpers.js'
 
 const NOW = Date.parse('2026-08-23T12:00:00.000Z')
@@ -186,7 +186,8 @@ describe('POST …/toggle — riding out the cron (SHELLYBUSY.1)', () => {
   it('builds its client with three 429 retries, so a press that lands on the cron read is not "busy"', async () => {
     const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
     expect(res.status).toBe(200)
-    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: 3 }))
+    expect(INTERACTIVE_429_RETRIES).toBe(3)
+    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: INTERACTIVE_429_RETRIES }))
   })
 })
 
@@ -556,5 +557,70 @@ describe('POST …/toggle — back to auto', () => {
     runNowForDevice.mockResolvedValue({ ok: true, noop: true })
     const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
     expect(body).toMatchObject({ applied: null, reason: 'disabled' })
+  })
+})
+
+// SHELLYGROUPS.5 — a device in a group. "Back to schedule" means back to the
+// GROUP's schedule (its own was cleared when it joined), so the group is read
+// first and handed to the engine; a group that cannot be read refuses BEFORE
+// the override is cleared, rather than running the device on an empty schedule
+// of its own.
+describe('POST …/toggle — a device in a group', () => {
+  const ov = { state: 'on', until: '2026-08-24T00:00:00.000Z', set_by: OWNER_ID, set_at: NOW_ISO }
+  const groupWorld = (groupOver = {}, groups = null) => {
+    const w = world({ group_id: GRP_A, enabled: false, schedule_mode: 'none', fixed_windows: [], override: ov })
+    w.rows.shelly_groups = groups ?? [groupRow({ enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [7], on: '07:00', off: '21:00' }], ...groupOver })]
+    return w
+  }
+
+  it('auto hands the engine the group, and the cleared device', async () => {
+    useDb(groupWorld())
+    runNowForDevice.mockResolvedValue({ ok: true, action: 'on', reason: 'run_now' })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ success: true, applied: 'on' })
+    const [, , device, deps] = runNowForDevice.mock.calls[0]
+    expect(device.override).toBeNull()
+    expect(deps.group).toMatchObject({ id: GRP_A, schedule_mode: 'fixed' })
+  })
+
+  it('auto with an unreadable group is 409 group_unavailable, and the override stays', async () => {
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    const res = await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('group_unavailable')
+    expect(rowA().override).toEqual(ov)
+    expect(runNowForDevice).not.toHaveBeenCalled()
+  })
+
+  it('a noop under a group with no schedule answers from the GROUP’s fields', async () => {
+    useDb(groupWorld({ enabled: false }))
+    runNowForDevice.mockResolvedValue({ ok: true, noop: true })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ applied: null, reason: 'disabled' })
+  })
+
+  it('on/off judges "holds until changed" on the group’s schedule', async () => {
+    useDb(groupWorld())
+    const managed = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(managed.holds_until_changed).toBe(false)
+    useDb(groupWorld({ schedule_mode: 'none' }))
+    useCloud()
+    const unmanaged = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(unmanaged.holds_until_changed).toBe(true)
+  })
+
+  it('on/off with an unreadable group still switches, but claims nothing about holding', async () => {
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    const applied = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(applied.status).toBe(200)
+    const body = await applied.json()
+    expect(body).toMatchObject({ applied: true, holds_until_changed: false })
+    expect(body).not.toHaveProperty('notice')
+
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    useCloud({ ok: false, kind: 'device', statusCode: 200 })
+    const pending = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(pending).toMatchObject({ pending: true, holds_until_changed: false })
+    expect(pending).not.toHaveProperty('notice')
   })
 })

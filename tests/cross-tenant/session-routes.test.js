@@ -76,7 +76,7 @@ import {
   STG_A1, STG_A2, STG_B1, STG_B2,
   TPL_A, TPL_B,
   ET_B1,
-  SHD_A1, SHD_B1,
+  SHD_A1, SHD_B1, SHG_A1, SHG_B1,
   SHELLY_KEY_A1, SHELLY_KEY_B1, SHELLY_FP_A1, SHELLY_FP_B1, SHELLY_HOST_A1, SHELLY_HOST_B1,
   P_STAFF_A1, P_MGR_A1, P_OWNER_A1, P_STAFF_A2, P_STAFF_B1, P_OWNER_B1, P_STAFF_B2,
 } from './fixture.js'
@@ -99,6 +99,16 @@ import * as eventTypeDetailRoute from '@/app/api/bookings/event-types/[id]/route
 import * as shellyConnectionRoute from '@/app/api/shelly/connection/route.js'
 import * as shellyDevicesRoute from '@/app/api/shelly/devices/route.js'
 import * as shellyDeviceDetailRoute from '@/app/api/shelly/devices/[id]/route.js'
+// SHELLYGROUPS.5 — the group routes. The list, PATCH, DELETE, membership PUT
+// and preview make no cloud call. The group TOGGLE does once it reaches its
+// members, so here it is exercised only on the paths that must stop before
+// any of that: a foreign group (404) and a caller without device_control
+// (403). Its cloud behaviour is pinned in its colocated route test.
+import * as shellyGroupsRoute from '@/app/api/shelly/groups/route.js'
+import * as shellyGroupDetailRoute from '@/app/api/shelly/groups/[id]/route.js'
+import * as shellyGroupDevicesRoute from '@/app/api/shelly/groups/[id]/devices/route.js'
+import * as shellyGroupToggleRoute from '@/app/api/shelly/groups/[id]/toggle/route.js'
+import * as shellyPreviewRoute from '@/app/api/shelly/preview/route.js'
 
 // A pristine second copy of the world, never handed to a route. The blocked
 // mutation cases below diff the live row against this to assert BYTE
@@ -357,7 +367,10 @@ const SESSION_SPECS = [
   {
     name: 'PATCH /api/shelly/devices/[id] (session device update)',
     call: (c) => shellyDeviceDetailRoute.PATCH(
-      makeReq(`/api/shelly/devices/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Plug', enabled: false } }),
+      // A rename only: SHD_A1 is in a group, and a grouped device's schedule
+      // fields (`enabled` included) answer 409 grouped (SHELLYGROUPS.5l), which
+      // would turn the positive control into a refusal.
+      makeReq(`/api/shelly/devices/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Plug' } }),
       propsOf({ id: c.id }),
     ),
     cases: [
@@ -416,6 +429,131 @@ const SESSION_SPECS = [
           expect(w.shelly_devices.some((r) => r.id === SHD_B1)).toBe(true)
         },
       },
+    ],
+  },
+  {
+    name: 'GET /api/shelly/groups (session group list)',
+    call: () => shellyGroupsRoute.GET(makeReq('/api/shelly/groups')),
+    ids: (json) => idsOf(json?.groups),
+    cases: [
+      {
+        title: 'manager at A1 sees only A1’s groups, with only A1’s members',
+        persona: 'managerA1', expectIds: [SHG_A1],
+        verify: ({ json }) => {
+          expect(json.groups[0].device_ids).toEqual([SHD_A1])
+          expect(JSON.stringify(json)).not.toContain(SHD_B1)
+        },
+      },
+      { title: 'owner at B1 sees only B1’s groups (mirror)', persona: 'ownerB1', expectIds: [SHG_B1] },
+      { title: 'staff at A1 holds no device_control and is refused (403)', persona: 'staffA1', expectStatus: 403 },
+    ],
+  },
+  {
+    name: 'PATCH /api/shelly/groups/[id] (session group update)',
+    call: (c) => shellyGroupDetailRoute.PATCH(
+      makeReq(`/api/shelly/groups/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Group', enabled: false } }),
+      propsOf({ id: c.id }),
+    ),
+    cases: [
+      {
+        title: 'owner of B patching an A1 group gets 404, the row is byte-identical, and no write was issued',
+        persona: 'ownerB1', id: SHG_A1, expectStatus: 404,
+        verify: ({ world: w, db: d, json }) => {
+          expect(JSON.stringify(w.shelly_groups.find((r) => r.id === SHG_A1))).toBe(pristineJson('shelly_groups', SHG_A1))
+          expect(d._writesTo('shelly_groups')).toHaveLength(0)
+          expect(json).toEqual({ success: false, error: 'Not found' })
+        },
+      },
+      { title: 'staff at A1 is refused (403) before any read', persona: 'staffA1', id: SHG_A1, expectStatus: 403 },
+      {
+        title: 'owner of A1 patching their own group succeeds (positive control)',
+        persona: 'ownerA1', id: SHG_A1,
+        verify: ({ world: w }) => {
+          expect(w.shelly_groups.find((r) => r.id === SHG_A1).name).toBe('Hacked Group')
+          expect(w.shelly_groups.find((r) => r.id === SHG_B1).name).toBe('B One Lights')
+        },
+      },
+    ],
+  },
+  {
+    name: 'DELETE /api/shelly/groups/[id] (session group delete)',
+    call: (c) => shellyGroupDetailRoute.DELETE(
+      makeReq(`/api/shelly/groups/${c.id}`, { method: 'DELETE' }),
+      propsOf({ id: c.id }),
+    ),
+    cases: [
+      {
+        title: 'owner of B deleting an A1 group gets 404 and the row survives byte-identical',
+        persona: 'ownerB1', id: SHG_A1, expectStatus: 404,
+        verify: ({ world: w, db: d }) => {
+          expect(JSON.stringify(w.shelly_groups.find((r) => r.id === SHG_A1))).toBe(pristineJson('shelly_groups', SHG_A1))
+          expect(d._writesTo('shelly_groups')).toHaveLength(0)
+        },
+      },
+    ],
+  },
+  {
+    name: 'PUT /api/shelly/groups/[id]/devices (session membership)',
+    call: (c) => shellyGroupDevicesRoute.PUT(
+      makeReq(`/api/shelly/groups/${c.id}/devices`, { method: 'PUT', body: { device_ids: c.deviceIds } }),
+      propsOf({ id: c.id }),
+    ),
+    cases: [
+      {
+        // Pulling another studio's relay into your own group would hand its
+        // schedule to you and clear its own.
+        title: 'owner of B adding an A1 device to B1’s group gets 404, and nothing is written',
+        persona: 'ownerB1', id: SHG_B1, deviceIds: [SHD_B1, SHD_A1], expectStatus: 404,
+        verify: ({ world: w, db: d }) => {
+          expect(JSON.stringify(w.shelly_devices.find((r) => r.id === SHD_A1))).toBe(pristineJson('shelly_devices', SHD_A1))
+          expect(d._writesTo('shelly_devices')).toHaveLength(0)
+        },
+      },
+      {
+        title: 'owner of B emptying A1’s group gets 404, and A1’s membership stands',
+        persona: 'ownerB1', id: SHG_A1, deviceIds: [], expectStatus: 404,
+        verify: ({ world: w, db: d }) => {
+          expect(w.shelly_devices.find((r) => r.id === SHD_A1).group_id).toBe(SHG_A1)
+          expect(d._writesTo('shelly_devices')).toHaveLength(0)
+        },
+      },
+      {
+        title: 'owner of A1 emptying their own group succeeds, and B1 is untouched (positive control)',
+        persona: 'ownerA1', id: SHG_A1, deviceIds: [],
+        verify: ({ world: w }) => {
+          expect(w.shelly_devices.find((r) => r.id === SHD_A1).group_id).toBeNull()
+          expect(w.shelly_devices.find((r) => r.id === SHD_B1).group_id).toBe(SHG_B1)
+        },
+      },
+    ],
+  },
+  {
+    name: 'POST /api/shelly/groups/[id]/toggle (session group switch)',
+    call: (c) => shellyGroupToggleRoute.POST(
+      makeReq(`/api/shelly/groups/${c.id}/toggle`, { method: 'POST', body: { state: 'off' } }),
+      propsOf({ id: c.id }),
+    ),
+    cases: [
+      {
+        title: 'owner of B switching A1’s group gets 404; no override, no member write',
+        persona: 'ownerB1', id: SHG_A1, expectStatus: 404,
+        verify: ({ world: w, db: d }) => {
+          expect(JSON.stringify(w.shelly_groups.find((r) => r.id === SHG_A1))).toBe(pristineJson('shelly_groups', SHG_A1))
+          expect(JSON.stringify(w.shelly_devices.find((r) => r.id === SHD_A1))).toBe(pristineJson('shelly_devices', SHD_A1))
+          expect(d._writesTo('shelly_groups')).toHaveLength(0)
+          expect(d._writesTo('shelly_devices')).toHaveLength(0)
+        },
+      },
+      { title: 'staff at A1 holds no device_control and is refused (403)', persona: 'staffA1', id: SHG_A1, expectStatus: 403 },
+    ],
+  },
+  {
+    name: 'GET /api/shelly/preview (session day preview)',
+    call: () => shellyPreviewRoute.GET(makeReq('/api/shelly/preview')),
+    ids: (json) => idsOf(json?.groups),
+    cases: [
+      { title: 'owner at A1 previews only A1’s groups', persona: 'ownerA1', expectIds: [SHG_A1] },
+      { title: 'owner at B1 previews only B1’s groups (mirror)', persona: 'ownerB1', expectIds: [SHG_B1] },
     ],
   },
   {

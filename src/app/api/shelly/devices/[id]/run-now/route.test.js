@@ -30,8 +30,8 @@ import { createServerClient } from '@/lib/supabase'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { AUTH_ERROR } from '@/lib/shelly/connections'
 import {
-  LOC_B, DEV_A, DEV_B, BAD_ID, OWNER_A, OWNER_NY, STAFF_A, STORED_KEY,
-  deviceRow, connectionRow, makeDb, selectsFrom, req, ctxFor,
+  LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_A, OWNER_NY, STAFF_A, STORED_KEY,
+  deviceRow, groupRow, connectionRow, makeDb, selectsFrom, req, ctxFor,
 } from '../../../shelly-routes.test-helpers.js'
 
 const runReq = () => req('http://localhost/api/shelly/devices/x/run-now')
@@ -222,5 +222,53 @@ describe('POST …/run-now — when it could not', () => {
     const body = await res.json()
     expect(body).toMatchObject({ code: 'network', kind: 'network' })
     expect(JSON.stringify(body)).not.toContain(STORED_KEY)
+  })
+})
+
+// SHELLYGROUPS.5 — a grouped device runs on its GROUP's schedule. Its own
+// schedule was cleared when it joined, so judging the refusals on its own row
+// would answer no_schedule for a device whose group is fully scheduled; and a
+// group that cannot be read is a refusal, never "run it on its own".
+describe('POST …/run-now — a device in a group', () => {
+  const groupWorld = (groupOver = {}, groups = null) => {
+    const w = world({ group_id: GRP_A, enabled: false, schedule_mode: 'none', fixed_windows: [] })
+    w.rows.shelly_groups = groups ?? [groupRow({ enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1], on: '07:00', off: '09:00' }], ...groupOver })]
+    return w
+  }
+
+  it('is judged on the group’s schedule and hands the engine the group', async () => {
+    useDb(groupWorld())
+    const res = await POST(runReq(), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    const [, , device, deps] = runNowForDevice.mock.calls[0]
+    expect(device.id).toBe(DEV_A)
+    expect(deps.group).toMatchObject({ id: GRP_A, schedule_mode: 'fixed' })
+  })
+
+  it('a group with its schedule switched off answers disabled', async () => {
+    useDb(groupWorld({ enabled: false }))
+    const res = await POST(runReq(), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('disabled')
+    expect(runNowForDevice).not.toHaveBeenCalled()
+  })
+
+  it('a group that cannot be read is 409 group_unavailable, and nothing runs', async () => {
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    const res = await POST(runReq(), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('group_unavailable')
+    expect(runNowForDevice).not.toHaveBeenCalled()
+  })
+
+  it('a group that is gone is the same refusal', async () => {
+    useDb(groupWorld({}, []))
+    expect((await (await POST(runReq(), ctxFor(DEV_A))).json()).code).toBe('group_unavailable')
+  })
+
+  it('an ungrouped device reads no group at all', async () => {
+    await POST(runReq(), ctxFor(DEV_A))
+    expect(selectsFrom(db, 'shelly_groups')).toEqual([])
+    expect(runNowForDevice.mock.calls[0][3]).toEqual({ group: null })
   })
 })
