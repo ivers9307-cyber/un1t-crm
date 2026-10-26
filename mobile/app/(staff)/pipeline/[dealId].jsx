@@ -233,7 +233,7 @@ export default function DealDetail() {
           style: marking ? 'destructive' : 'default',
           onPress: async () => {
             setColdSaving(true)
-            const res = await setPipelineCold(deal.contact_id, marking)
+            const res = await setPipelineCold(deal.contact_id, marking, deal.location_id)
             setColdSaving(false)
             if (!res.success) {
               Alert.alert('Couldn’t update', res.error || 'Could not update pipeline status')
@@ -310,7 +310,9 @@ export default function DealDetail() {
   // Same signal the web DealCard uses for the toggle label: the
   // classifier-maintained slug, not pipeline_dismissed_at (a stale
   // dismissal is auto-revoked once the lead trains again).
-  const isCold = contact?.pipeline_stage_slug === 'cold_lead'
+  // HATCHCOLD.2 — this deal's own stage first: the contact's slug is its
+  // home studio's, which differs for a deal on another studio's board.
+  const isCold = (deal.pipeline_stages?.slug ?? contact?.pipeline_stage_slug) === 'cold_lead'
   // WAITLIST-M.1 — a manual board only when we positively read one. Any
   // failure to resolve leaves this false, i.e. today's read-only screen.
   const manualBoard = board?.mode === 'manual' && boardStages.length > 0

@@ -627,7 +627,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       return { success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked, skipped_no_contact: 0 } }
     }
 
-    const [subs, txs, products, bookings, events, memberships, contactRows, ledger] = await Promise.all([
+    const [subs, txs, products, bookings, events, memberships, contactRows, ledger, studioDismissals] = await Promise.all([
       listFresh(db, locationId, 'un1t_subscriptions', PIPE_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_transactions', PIPE_TX_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
@@ -648,6 +648,15 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       // The board counts a trial only once it is done: a sent or unknown row is
       // not yet a trial the person has (eligibility is the stricter read).
       ledgerTrialsOrThrow(db, locationId, { stages: ['done'] }),
+      // HATCHCOLD.2 — Cold pressed on THIS board for contacts whose home is
+      // another studio (mig 777). A failed read fails the pass, like every
+      // read above: the board is never placed on a missing input.
+      selectAll((from, to) => db
+        .from('contact_pipeline_dismissals')
+        .select('contact_id, dismissed_at')
+        .eq('location_id', locationId)
+        .order('contact_id', { ascending: true })
+        .range(from, to), { pageSize: PAGE }),
     ])
 
     const clientsByContact = groupBy(linked, (c) => c.contact_id)
@@ -669,6 +678,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     const membershipsBy = groupBy(memberships, (m) => m.contact_id)
     const productsById = productsMap(products)
     const contactById = new Map(contactRows.map((c) => [c.id, c]))
+    const studioDismissalBy = new Map(studioDismissals.map((d) => [d.contact_id, d.dismissed_at]))
 
     const contacts = []
     const snapshots = new Map()
@@ -682,6 +692,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         client: mergeClients(theirClients),
         contact,
         locationId,
+        studioDismissedAt: studioDismissalBy.get(contactId) ?? null,
         freshSubs: subsBy.get(contactId) ?? [],
         transactions: txsBy.get(contactId) ?? [],
         productsById,

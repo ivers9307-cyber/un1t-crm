@@ -9,6 +9,7 @@ import { fetchUserCreditsResult, fetchMembershipResult, fetchUserBookings, fetch
 import { classifyContact } from './pipeline-classifier.js'
 import { upsertClassBookings } from './class-bookings.js'
 import { logWarn, logError } from './log.js'
+import { resolveStudioDismissal } from './studio-pipeline-dismissal.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
 import { findOpenDealForPipeline, findPrimaryPipeline } from './deal-lookup.js'
@@ -1251,7 +1252,7 @@ export async function findExistingContact(db, locationId, mapped) {
   // set: the funnel classifier counts attended classes from recent_bookings
   // and gates the Converted column on converted_at, and a LIST/skipBookings
   // sync doesn't recompute either.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, last_lead_source_at'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, last_lead_source_at, location_id'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -2294,6 +2295,14 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       // such field falls back to the persisted row (preview.existing, now
       // populated on the update path) before defaulting to null/0.
       const ex = preview.existing || {}
+      // HATCHCOLD.2 — a contact whose home is another studio is Cold HERE only
+      // through this studio's own contact_pipeline_dismissals row (mig 777);
+      // the contacts column is the home studio's Cold. An unreadable row
+      // leaves the deal where it is this sync (the throw lands in the catch
+      // below), rather than reviving a Cold lead.
+      const here = await resolveStudioDismissal(db, { ...ex, id: contactId }, locationId)
+      if (here.error) throw new Error(`studio dismissal read: ${here.error.message}`)
+      const dismissedHere = here.dismissedAt
       const contactSnapshot = {
         glofox_membership_status: m.glofox_membership_status,
         glofox_membership_state:  m.glofox_membership_state  ?? ex.glofox_membership_state  ?? null,
@@ -2323,7 +2332,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // FUNNEL.4 — operator Cold dismissal, from the persisted row (sync
         // never writes it). Keeps a cold lead cold across a webhook sync,
         // and lets a fresh attendance (last_attended_at newer) revive them.
-        pipeline_dismissed_at: ex.pipeline_dismissed_at ?? null,
+        pipeline_dismissed_at: dismissedHere,
         // GYMPASS.2 — a Gympass user is parked in the off-funnel gympass
         // pile by classifyContact. A LIST / detail-less sync leaves it off
         // `m`, so fall back to the persisted row (matches the nightly

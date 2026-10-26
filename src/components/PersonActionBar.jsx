@@ -47,6 +47,10 @@ export default function PersonActionBar({
   // FUNNEL.4 — when the 'cold' action is enabled, this drives the toggle
   // label: true → "Return to pipeline" (clear), false → "Mark as Cold".
   isCold = false,
+  // HATCHCOLD.2 — the studio of the board this bar is drawn on (card or
+  // drawer). Cold then applies on THAT board, also for a contact whose home is
+  // another studio. Unset (the contact page) = the contact's home studio.
+  boardLocationId = null,
   align = 'right',
   className = '',
 }) {
@@ -94,7 +98,7 @@ export default function PersonActionBar({
       const res = await fetch(`/api/contacts/${contactId}/pipeline-status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cold: !isCold }),
+        body: JSON.stringify({ cold: !isCold, ...(boardLocationId ? { location_id: boardLocationId } : {}) }),
       })
       if (!res.ok) {
         let msg = 'Could not update pipeline status'
