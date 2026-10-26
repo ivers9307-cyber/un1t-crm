@@ -788,3 +788,11 @@ export const GROUP_ICON_NAMES = Object.freeze({
 export function groupIconName(icon) {
   return GROUP_ICON_NAMES[icon] || GROUP_ICON_NAMES.plug
 }
+
+// SHELLYPHONECOLLAPSE.1 — a group card's members are collapsed by default
+// (Richard: "don't need to see the devices in the groups"); this is the
+// link that opens and closes them.
+export function memberToggleLabel(count, expanded) {
+  if (expanded) return 'Hide devices'
+  return `Show ${count} ${count === 1 ? 'device' : 'devices'}`
+}
