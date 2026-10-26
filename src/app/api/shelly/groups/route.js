@@ -73,12 +73,20 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
       .select('id, group_id, last_state')
       .eq('location_id', locationId)
       .in('group_id', groups.map((g) => g.id))
+      // A stable order, so the cap below drops the same rows every time.
+      .order('created_at')
       .limit(MAX_DEVICES_PER_LOCATION + 1)
     if (devError) {
       logError(MODULE, 'group member read failed', { locationId, error: devError.message })
       return bad('Could not load your groups', 500)
     }
-    for (const d of devs || []) membersBy.get(d.group_id)?.push(d)
+    let memberRows = devs || []
+    if (memberRows.length > MAX_DEVICES_PER_LOCATION) {
+      // The groups read's rule: cap + 1 tells "at the cap" from "dropped".
+      logWarn(MODULE, 'member cap exceeded, excess members hidden', { locationId, cap: MAX_DEVICES_PER_LOCATION })
+      memberRows = memberRows.slice(0, MAX_DEVICES_PER_LOCATION)
+    }
+    for (const d of memberRows) membersBy.get(d.group_id)?.push(d)
   }
 
   const tz = requestTz(user)

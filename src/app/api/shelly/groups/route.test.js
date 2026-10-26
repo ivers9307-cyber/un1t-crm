@@ -23,9 +23,11 @@ import { GET, POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MAX_GROUPS } from '@/lib/shelly/reconcile'
+import { MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
+import { logWarn } from '@/lib/log'
 import {
   LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, GRP_B, OWNER_A, STAFF_A, MANAGER_A,
-  deviceRow, groupRow, fullState, makeDb, insertsTo, jsonReq, req,
+  deviceRow, groupRow, fullState, makeDb, insertsTo, selectsFrom, jsonReq, req,
 } from '../shelly-routes.test-helpers.js'
 
 const URL = 'http://localhost/api/shelly/groups'
@@ -79,6 +81,17 @@ describe('GET /api/shelly/groups', () => {
     const body = await (await GET(req(URL, { method: 'GET' }))).json()
     expect(body.groups[0].device_ids.sort()).toEqual([DEV_A, 'd0000000-0000-4000-8000-0000000000a2'].sort())
     expect(body.groups[0].now).toMatchObject({ on_count: 1, member_count: 2, mode: 'none' })
+  })
+
+  it('reads members in a stable order, and warns (ids and counts only) when the cap is hit', async () => {
+    const devs = Array.from({ length: MAX_DEVICES_PER_LOCATION + 1 }, (_, i) =>
+      deviceRow({ id: `d0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, device_id: `aabbcc${String(i).padStart(6, '0')}`, group_id: GRP_A }))
+    useDb(world([groupRow()], devs))
+    await GET(req(URL, { method: 'GET' }))
+    const memberRead = selectsFrom(db, 'shelly_devices')[0]
+    expect(memberRead.orders.map(([c]) => c)).toEqual(['created_at'])
+    const call = logWarn.mock.calls.find(([, msg]) => /member cap exceeded/.test(msg))
+    expect(call?.[2]).toEqual({ locationId: LOC_A, cap: MAX_DEVICES_PER_LOCATION })
   })
 
   it('describes a fixed group inside its window from the location’s day', async () => {

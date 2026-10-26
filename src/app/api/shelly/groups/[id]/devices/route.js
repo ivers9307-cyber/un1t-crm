@@ -11,7 +11,12 @@
 //     windows, an empty class rule; `enabled` is kept). Spec: leaving a group
 //     must never revive a stale, invisible schedule — which is also why the
 //     device PATCH refuses a schedule edit on a grouped device (409
-//     `grouped`): a schedule written while grouped would be exactly that. A device moving from
+//     `grouped`): a schedule written while grouped would be exactly that.
+//     A joiner's own live device OVERRIDE is cleared too (group wins, Richard
+//     2026-10-26): a device override beats the group's in effectiveTarget, so
+//     a joiner keeping one would not follow the group it was just put in until
+//     the override ran out. A device already in the group is not re-joining
+//     and keeps whatever it has. A device moving from
 //     another group at the studio simply joins this one — a device is in at
 //     most one group.
 //  3. LEAVING writes group_id null and nothing else. No relay is commanded,
@@ -76,7 +81,7 @@ export const PUT = withAuth(
     if (joining.length) {
       const { error } = await db
         .from('shelly_devices')
-        .update({ group_id: group.id, schedule_mode: 'none', fixed_windows: [], class_rule: {}, updated_at: nowIso })
+        .update({ group_id: group.id, schedule_mode: 'none', fixed_windows: [], class_rule: {}, override: null, updated_at: nowIso })
         .in('id', joining)
         .eq('location_id', locationId)
       if (error) {

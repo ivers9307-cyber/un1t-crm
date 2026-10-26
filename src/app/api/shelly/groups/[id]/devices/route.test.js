@@ -88,6 +88,18 @@ describe('PUT /api/shelly/groups/[id]/devices', () => {
     expect(createShellyClient).not.toHaveBeenCalled()
   })
 
+  it('a JOINING device loses its own live override too — group wins, it follows the group at once', async () => {
+    const live = { state: 'on', until: '2099-01-01T00:00:00.000Z', set_by: 'x', set_at: '2026-08-23T11:00:00.000Z' }
+    db.rowsIn('shelly_devices').find((d) => d.id === DEV_A).override = live
+    db.rowsIn('shelly_devices').find((d) => d.id === DEV_A2).override = live
+    await PUT(putReq({ device_ids: [DEV_A, DEV_A2] }), ctxFor(GRP_A))
+    expect(dev(DEV_A).override).toBeNull()
+    // A member that was already in the group is not re-joining: untouched.
+    expect(dev(DEV_A2).override).toEqual(live)
+    const join = updatesTo(db, 'shelly_devices').find((u) => u.payload.group_id === GRP_A)
+    expect(join.payload.override).toBeNull()
+  })
+
   it('a device moving from another group at the studio joins this one', async () => {
     db.rowsIn('shelly_devices').find((d) => d.id === DEV_A).group_id = GRP_A2
     await PUT(putReq({ device_ids: [DEV_A, DEV_A2, DEV_A3] }), ctxFor(GRP_A))
