@@ -287,6 +287,19 @@ describe('Shelly group wrappers', () => {
     }
   })
 
+  it('countUnadoptedShelly({ fresh: true }) skips the cache and refills it (pull-to-refresh)', async () => {
+    global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }] })
+    expect(await countUnadoptedShelly('loc-1')).toBe(1)
+    global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }, { supported: true, adopted: null }] })
+    expect(await countUnadoptedShelly('loc-1')).toBe(1)
+    expect(global.fetch).toHaveBeenCalledTimes(0)
+    expect(await countUnadoptedShelly('loc-1', { fresh: true })).toBe(2)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    // The fresh answer is what the next ordinary call reads.
+    expect(await countUnadoptedShelly('loc-1')).toBe(2)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('countUnadoptedShelly never caches an unreadable list', async () => {
     global.fetch = okFetch({ success: false, error: 'x' }, 500)
     expect(await countUnadoptedShelly('loc-1')).toBeNull()

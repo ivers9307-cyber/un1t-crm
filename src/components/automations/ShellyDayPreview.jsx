@@ -22,7 +22,11 @@
 //
 // THE JOIN CAPTION NEVER CLAIMS A GAP IT DID NOT READ. When every class-mode
 // group shares one merge gap it is named; when they differ it is worded per
-// group.
+// group ("Gym lights: classes under 30 min apart stay on; Fans: under 15 min").
+//
+// ONE LABEL PER LANE. A group no schedule runs says "Never automatic" and
+// nothing else: its lane is empty whatever the override does, and two labels
+// in one lane drew on top of each other (SHELLYICONS.1).
 
 'use client'
 
@@ -108,7 +112,9 @@ export default function ShellyDayPreview({ groups = [], tz }) {
   const gaps = new Set(classGroups.map(gapOf))
   const joinCaption = gaps.size === 1
     ? `Classes under ${[...gaps][0]} min apart keep the lights on`
-    : `Classes closer together than a group's gap keep its lights on: ${classGroups.map((g) => `${g.name} ${gapOf(g)} min`).join(', ')}`
+    : classGroups.map((g, i) => (i === 0
+      ? `${g.name}: classes under ${gapOf(g)} min apart stay on`
+      : `${g.name}: under ${gapOf(g)} min`)).join('; ')
 
   const stepBtn = 'rounded px-2 py-1 text-sm text-un1t-muted hover:bg-un1t-surface hover:text-un1t-text disabled:opacity-40 disabled:hover:bg-transparent'
 
@@ -160,7 +166,7 @@ export default function ShellyDayPreview({ groups = [], tz }) {
                 return <div key={i} title={label} aria-label={`${g.name}: ${label}`} role="img" className="absolute inset-y-1 rounded-sm bg-green-500/10 ring-1 ring-green-600/60" style={{ left: `${p.left}%`, width: `${p.width}%` }} />
               })}
               {neverAutomatic(g) && <span className="absolute inset-0 flex items-center pl-2 text-[10px] text-un1t-subtle">Never automatic</span>}
-              {overrideHidden(g) && <span className="absolute inset-0 flex items-center justify-end pr-2 text-[10px] text-amber-700">Manual override not shown</span>}
+              {!neverAutomatic(g) && overrideHidden(g) && <span className="absolute inset-0 flex items-center justify-end pr-2 text-[10px] text-amber-700">Manual override not shown</span>}
             </Lane>
           ))}
 
