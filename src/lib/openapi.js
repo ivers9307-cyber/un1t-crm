@@ -9362,9 +9362,20 @@ const ShellyGroupToggleResponse = z.object({
   applied: z.union([z.enum(['all', 'partial', 'none']), z.null()]),
   pending_device_ids: z.array(uuidLike),
   pending: z.literal(true).optional(),
-  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending']).optional(),
+  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending', 'device_refused']).optional(),
   kind: z.string().optional(),
   message: z.string().optional(),
+  // Alongside code "device_refused": Shelly's own permanent error string.
+  shelly_code: z.string().optional(),
+  // On/off path, when not every member landed: why, per member. `permanent`
+  // true = Shelly refused it with a code waiting cannot fix (check the device
+  // in the Shelly app); false = it will follow once it answers.
+  pending_members: z.array(z.object({
+    device_id: uuidLike,
+    code: z.string(),
+    shelly_code: z.string().optional(),
+    permanent: z.boolean(),
+  })).optional(),
   reason: z.enum(['disabled', 'no_schedule']).optional(),
   results: z.array(z.object({
     device_id: uuidLike,
@@ -9372,6 +9383,7 @@ const ShellyGroupToggleResponse = z.object({
     reason: z.string().optional(),
     code: z.string().optional(),
     shelly_code: z.string().optional(),
+    permanent: z.boolean().optional(),
   })).optional(),
   holds_until_changed: z.boolean().optional(),
   notice: z.string().optional(),
@@ -9489,7 +9501,7 @@ registry.registerPath({
     + 'each member through the group\'s schedule now, one at a time.',
   request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupToggle } } } },
   responses: {
-    200: { description: 'applied "all" (every member moved, or the group is empty), "partial" (some members are pending — named in pending_device_ids) or "none" (the batch did not land; the override IS saved). On "auto": per-member `results`, or applied null with reason disabled / no_schedule for a group with nothing to go back to. holds_until_changed true means the group is unmanaged and `until` bounds the banner, not the relays.', content: { 'application/json': { schema: ShellyGroupToggleResponse } } },
+    200: { description: 'applied "all" (every member moved, or the group is empty), "partial" (some members are pending — named in pending_device_ids) or "none" (the batch did not land; the override IS saved). Not-all answers carry `pending_members` (code, shelly_code, permanent). On "auto": the group schedule is planned once and sent as ONE batch; per-member `results`, or applied null with reason disabled / no_schedule for a group with nothing to go back to. holds_until_changed true means the group is unmanaged and `until` bounds the banner, not the relays.', content: { 'application/json': { schema: ShellyGroupToggleResponse } } },
     400: groupErr('Validation failed, `until` already passed or more than ' + MAX_OVERRIDE_HOURS + ' hours out, or no active location'),
     ...groupCommon,
     404: groupErr('Malformed id or an id at another location — one identical body; nothing written'),
