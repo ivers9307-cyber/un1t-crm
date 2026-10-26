@@ -22,12 +22,15 @@
 // `bg-<c>-500/15 text-<c>-300`; host paths are exempt from the light-theme
 // -700 chip rule.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import {
   nextQuarterHour, isoToZonedInputs, zonedLocalToIso, scheduleLabelIn, scheduleZoneLabel, scheduleErrorCopy, TIME_OPTIONS,
 } from '@/lib/host-schedule-time'
+import HostEmailPreviewModal from './HostEmailPreviewModal.jsx'
 import { DEFAULT_TZ } from '@shared/zoned-time'
+import { PLATFORM_NAME } from '@/lib/brand-name'
 
 /**
  * Request body for a test send. A blank or cancelled prompt yields {} so the
@@ -59,15 +62,31 @@ export function statsLine(stats) {
  * words; anything sent keeps the stats line.
  * @param {object} c  campaign row from GET /api/host/emails
  * @param {string} [zone=DEFAULT_TZ]  the host's zone
+ * @param {string} [brandName=PLATFORM_NAME]  the host's organisation (W1.S1c)
  */
-export function rowSubline(c, zone = DEFAULT_TZ) {
+export function rowSubline(c, zone = DEFAULT_TZ, brandName = PLATFORM_NAME) {
   if (c.status === 'scheduled') return `Scheduled for ${scheduleLabelIn(c.scheduled_for, zone)}`
   if (c.status === 'draft') {
     return c.schedule_error
       ? `Not sent. ${scheduleErrorCopy(c.schedule_error)}. Schedule it again or send it now.`
       : 'Not sent yet'
   }
+  if (c.status === 'sending' && c.paused_reason) return `Paused. ${scheduleErrorCopy(c.paused_reason)}. Ask ${brandName}.`
   return statsLine(c.stats) || `${c.sent_count || 0}/${c.recipient_count ?? '—'} sent`
+}
+
+/** HOST-EMAILS.2 — fixed audience line for a reminder draft; '' otherwise. */
+export function audienceSummary(c, campaignsById) {
+  if (c?.audience_kind !== 'non_openers') return ''
+  const parent = campaignsById?.get(c.audience_campaign_id)
+  return parent?.subject ? `People who didn't open '${parent.subject}'` : "People who didn't open the original email"
+}
+
+/** The Send confirm text, per audience kind. */
+export function sendConfirmCopy(c, audienceLabelText, campaignsById) {
+  const typeNote = c?.email_type === 'utility' ? ' as a UTILITY email (reaches attendees regardless of marketing opt-in)' : ''
+  if (c?.audience_kind === 'non_openers') return `Send this email to ${audienceSummary(c, campaignsById).replace(/^People/, 'people')}${typeNote}?`
+  return `Send this email to ${audienceLabelText}${typeNote}?`
 }
 
 /**
@@ -79,6 +98,55 @@ export function rowSubline(c, zone = DEFAULT_TZ) {
  */
 export function schedulePanelDefaults(c, nowMs = Date.now(), zone = DEFAULT_TZ) {
   return (c?.scheduled_for && isoToZonedInputs(c.scheduled_for, zone)) || nextQuarterHour(nowMs, zone)
+}
+
+/**
+ * Which row actions a campaign's status permits: a `sending` row is mid-send
+ * and offers neither; `draft`/`scheduled` rows (still editable) offer both;
+ * anything else (`sent`, `failed`) offers Duplicate only — there's no draft
+ * left to delete.
+ * @param {string} status
+ */
+export function rowActions(status) {
+  if (status === 'sending') return { duplicate: false, delete: false }
+  if (status === 'draft' || status === 'scheduled') return { duplicate: true, delete: true }
+  return { duplicate: true, delete: false }
+}
+
+/**
+ * HOST-EMAILS.2 — the whole design-mode decision `editDraft` makes when a
+ * draft is opened, as one pure function so it can be tested (and so the
+ * text-only branch can never again forget to clear state the designed
+ * branch set).
+ *
+ * A designed draft ALWAYS opens in design mode. If the editor is up the
+ * design loads immediately (`loadNow`); if it is not, the design waits in
+ * `pendingDesign` and the composer says so. A draft with no design opens in
+ * text mode with everything design-shaped cleared — pending design included,
+ * because a stale pending design from a PREVIOUS draft would otherwise be
+ * loaded into this one the moment the designer initialised, and a save would
+ * then write the previous draft's design onto this one.
+ *
+ * @param {object|null} draft                   campaign row from GET /api/host/emails/[id]
+ * @param {object}      [opts]
+ * @param {boolean}     [opts.editorInited]     has window.unlayer.init() already run?
+ * @param {boolean}     [opts.unlayerReady]     is the Unlayer script up (window.unlayer present)?
+ * @param {string}      [opts.previousNotice]   current designerNotice ('' | 'loading' | 'failed')
+ * @returns {{ mode: 'design'|'text', pendingDesign: object|null, notice: ''|'loading'|'failed', hasDesign: boolean, loadNow: boolean }}
+ */
+export function designStateForDraft(draft, { editorInited = false, unlayerReady = false, previousNotice = '' } = {}) {
+  const design = draft?.design_json || null
+  if (!design) return { mode: 'text', pendingDesign: null, notice: '', hasDesign: false, loadNow: false }
+  const loadNow = Boolean(editorInited) && Boolean(unlayerReady)
+  return {
+    mode: 'design',
+    pendingDesign: loadNow ? null : design,
+    // A designer that already failed to load stays failed: telling the host
+    // it is "loading" when the script is never coming would be a lie.
+    notice: loadNow ? '' : (previousNotice === 'failed' ? 'failed' : 'loading'),
+    hasDesign: true,
+    loadNow,
+  }
 }
 
 const STATUS_CHIP = {
@@ -99,12 +167,14 @@ const STATUS_LABEL = {
 
 const UNLAYER_SRC = 'https://editor.unlayer.com/embed.js'
 const EDITOR_DIV_ID = 'host-email-designer'
+// How long to wait for the embed script before telling the host it failed.
+const UNLAYER_LOAD_TIMEOUT_MS = 15000
 
 /**
  * @param {{ zone?: string }} props  zone: the host's anchor studio zone, resolved
  *   by the page (TZ.9); the composer shows and picks times on that clock.
  */
-export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
+export default function HostEmails({ zone = DEFAULT_TZ, brandName = PLATFORM_NAME } = {}) {
   const [campaigns, setCampaigns] = useState(null) // null = loading
   const [audiences, setAudiences] = useState({ all_count: null, mailing_list_count: null, events: [] })
   const [subject, setSubject] = useState('')
@@ -127,6 +197,19 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const editorInited = useRef(false)
+  // HOST-EMAILS.2 — reminder-draft audience, "designed draft waits for the
+  // designer" state, preview-as-sent modal, and delete/duplicate row state.
+  const [audienceCampaignId, setAudienceCampaignId] = useState(null) // parent id when editing a reminder draft, else null
+  const pendingDesignRef = useRef(null)
+  const [designerNotice, setDesignerNotice] = useState('') // '' | 'loading' | 'failed'
+  const [designDropped, setDesignDropped] = useState(false)
+  const [hasDesign, setHasDesign] = useState(false) // does the draft being edited actually carry a design_json?
+  const [preview, setPreview] = useState(null) // { html, width } or null
+  const [previewBusy, setPreviewBusy] = useState(false)
+  const [rowBusyId, setRowBusyId] = useState(null) // delete/duplicate in flight
+  const searchParams = useSearchParams()
+
+  const campaignsById = useMemo(() => new Map((campaigns || []).map((c) => [c.id, c])), [campaigns])
 
   const load = useCallback(async () => {
     try {
@@ -148,6 +231,12 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
       .catch(() => {})
   }, [])
 
+  // HOST-EMAILS.2 — the reminder report page navigates here after creating
+  // a non-openers draft.
+  useEffect(() => {
+    if (searchParams?.get('notice') === 'reminder') setNotice('Reminder draft created. Edit it, test it, then send or schedule.')
+  }, [searchParams])
+
   // Load the Unlayer embed script once; fall back to plain text if it never
   // arrives (blocked network, script error) so the host can always write.
   useEffect(() => {
@@ -155,8 +244,18 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
     if (window.unlayer) { setUnlayerReady(true); return }
     const existing = document.querySelector(`script[src="${UNLAYER_SRC}"]`)
     const script = existing || document.createElement('script')
-    const onLoad = () => setUnlayerReady(true)
-    const onError = () => setMode('text')
+    let loaded = false
+    let timer
+    // A script that arrives AFTER the timeout already showed 'failed': take
+    // that notice back down, or it sits over a working editor (a parked
+    // design keeps 'loading' until the init effect loads it and clears it).
+    const onLoad = () => {
+      loaded = true
+      clearTimeout(timer)
+      setUnlayerReady(true)
+      setDesignerNotice((n) => (n === 'failed' ? (pendingDesignRef.current ? 'loading' : '') : n))
+    }
+    const onError = () => { clearTimeout(timer); setDesignerNotice('failed'); if (!pendingDesignRef.current) setMode('text') }
     script.addEventListener('load', onLoad)
     script.addEventListener('error', onError)
     if (!existing) {
@@ -164,7 +263,15 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
       script.async = true
       document.body.appendChild(script)
     }
+    // A tag that is ALREADY in the DOM has usually already fired its `load`
+    // event, and it will not fire again for this listener — so the designer
+    // would sit on "Loading the designer..." forever. Same shape if the
+    // network stalls the request. Give it a bounded wait, then say so.
+    timer = setTimeout(() => {
+      if (!loaded && !window.unlayer) setDesignerNotice('failed')
+    }, UNLAYER_LOAD_TIMEOUT_MS)
     return () => {
+      clearTimeout(timer)
       script.removeEventListener('load', onLoad)
       script.removeEventListener('error', onError)
     }
@@ -190,6 +297,20 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
       ],
     })
     editorInited.current = true
+    if (pendingDesignRef.current) {
+      try { window.unlayer.loadDesign(pendingDesignRef.current) } catch { /* stale design doc */ }
+      pendingDesignRef.current = null
+      setDesignerNotice('')
+    }
+  }, [unlayerReady, mode])
+
+  // The editor may already be initialised (from an earlier draft) by the
+  // time a new draft with a pending design is opened — load it then too.
+  useEffect(() => {
+    if (!unlayerReady || !editorInited.current || !window.unlayer || !pendingDesignRef.current) return
+    try { window.unlayer.loadDesign(pendingDesignRef.current) } catch { /* stale design doc */ }
+    pendingDesignRef.current = null
+    setDesignerNotice('')
   }, [unlayerReady, mode])
 
   function exportDesign() {
@@ -203,18 +324,42 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
     })
   }
 
+  // Wipe the designer canvas. Whenever the composer stops showing a design
+  // (new email, or a draft that has no design_json) the editor must be
+  // blanked, or the PREVIOUS draft's design stays on screen and a save
+  // exports it onto the draft now being edited.
+  function blankEditor() {
+    if (!editorInited.current || typeof window === 'undefined' || !window.unlayer) return
+    try {
+      if (typeof window.unlayer.loadBlankTemplate === 'function') window.unlayer.loadBlankTemplate()
+      else window.unlayer.loadDesign({ body: { rows: [] } })
+    } catch { /* leave whatever design is showing */ }
+  }
+
   function resetComposer() {
     setSubject('')
     setTextBody('')
     setAudienceEventId('')
     setEmailType('marketing')
     setEditingId(null)
-    if (editorInited.current && window.unlayer) {
-      try {
-        if (typeof window.unlayer.loadBlankTemplate === 'function') window.unlayer.loadBlankTemplate()
-        else window.unlayer.loadDesign({ body: { rows: [] } })
-      } catch { /* leave whatever design is showing */ }
-    }
+    pendingDesignRef.current = null
+    setDesignerNotice('')
+    setDesignDropped(false)
+    setHasDesign(false)
+    setAudienceCampaignId(null)
+    blankEditor()
+  }
+
+  // HOST-EMAILS.2 — deliberately drop a loaded/pending design and switch to
+  // plain text. "Edit as text instead" is the only way in: a designed draft
+  // always opens in design mode (Step 3f below).
+  function dropDesign() {
+    if (!window.confirm('This drops the saved design and keeps only the HTML.')) return
+    pendingDesignRef.current = null
+    setDesignerNotice('')
+    setDesignDropped(true)
+    setHasDesign(false)
+    setMode('text')
   }
 
   async function editDraft(id) {
@@ -233,13 +378,31 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
       setSubject(c.subject || '')
       setAudienceEventId(c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''))
       setEmailType(c.email_type === 'utility' ? 'utility' : 'marketing')
-      if (c.design_json && unlayerReady && window.unlayer) {
-        setMode('design')
-        try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc — editor keeps its current state */ }
-      } else {
-        setMode('text')
-        setTextBody(c.body_html || '')
+      setAudienceCampaignId(c.audience_kind === 'non_openers' ? c.audience_campaign_id || null : null)
+      setDesignDropped(false)
+      setTextBody(c.body_html || '')
+      // HOST-EMAILS.2 — one decision, in designStateForDraft (tested there).
+      // A designed draft ALWAYS opens in design mode: if the designer is not
+      // up yet the design waits in pendingDesignRef and loads the moment the
+      // editor initialises; text mode is only ever reached through "Edit as
+      // text instead", or by opening a draft that has no design at all.
+      const next = designStateForDraft(c, {
+        editorInited: editorInited.current,
+        unlayerReady: typeof window !== 'undefined' && Boolean(window.unlayer),
+        previousNotice: designerNotice,
+      })
+      setMode(next.mode)
+      setHasDesign(next.hasDesign)
+      if (next.loadNow) {
+        try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc */ }
+      } else if (!next.hasDesign) {
+        // No design on THIS draft: drop any design still parked for another
+        // one and clear the canvas, so nothing of the previous draft can be
+        // loaded in later or exported over this draft on save.
+        blankEditor()
       }
+      pendingDesignRef.current = next.pendingDesign
+      setDesignerNotice(next.notice)
       document.getElementById('host-email-subject')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } catch {
       setError('Could not open the draft.')
@@ -269,8 +432,9 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
         subject,
         body,
         design_json: designJson,
-        audience_kind: audienceEventId === '__mailing_list__' ? 'mailing_list' : (audienceEventId ? 'event' : 'all'),
-        audience_event_id: audienceEventId && audienceEventId !== '__mailing_list__' ? audienceEventId : null,
+        audience_kind: audienceCampaignId ? 'non_openers' : (audienceEventId === '__mailing_list__' ? 'mailing_list' : (audienceEventId ? 'event' : 'all')),
+        audience_event_id: audienceCampaignId ? null : (audienceEventId && audienceEventId !== '__mailing_list__' ? audienceEventId : null),
+        audience_campaign_id: audienceCampaignId,
         email_type: emailType,
       }
       const res = await fetch(editingId ? `/api/host/emails/${editingId}` : '/api/host/emails', {
@@ -341,14 +505,14 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
     }
   }
 
-  async function send(id, campaignAudienceId, campaignType) {
-    const typeNote = campaignType === 'utility' ? ' as a UTILITY email (reaches attendees regardless of marketing opt-in)' : ''
-    if (!window.confirm(`Send this email to ${audienceLabel(campaignAudienceId)}${typeNote}?`)) return
+  async function send(c) {
+    const audienceLabelText = audienceLabel(c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''))
+    if (!window.confirm(sendConfirmCopy(c, audienceLabelText, campaignsById))) return
     setError('')
     setNotice('')
-    setSendingId(id)
+    setSendingId(c.id)
     try {
-      const res = await fetch(`/api/host/emails/${id}/send`, { method: 'POST' })
+      const res = await fetch(`/api/host/emails/${c.id}/send`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) {
         // The 409 messages ("Daily send limit reached.", "No emailable
@@ -363,6 +527,76 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
       setError('Could not send the email.')
     } finally {
       setSendingId(null)
+    }
+  }
+
+  // HOST-EMAILS.2 — preview as sent: same HTML the recipient's inbox gets
+  // (unsubscribe footer included), rendered in a sandboxed iframe so nothing
+  // in the design can run script or navigate the host portal.
+  async function previewAsSent() {
+    setError('')
+    setPreviewBusy(true)
+    try {
+      let body = textBody
+      if (mode === 'design') {
+        const exported = await exportDesign()
+        body = exported.html || ''
+      }
+      if (!body.trim()) { setError('Add some content first.'); return }
+      const res = await fetch('/api/host/emails/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, body_html: body }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) { setError(json.error || 'Could not build the preview.'); return }
+      setPreview({ html: json.data.html, width: 375 })
+    } catch {
+      setError('Could not build the preview.')
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  const closePreview = useCallback(() => setPreview(null), [])
+  const setPreviewWidth = useCallback((width) => setPreview((p) => (p ? { ...p, width } : p)), [])
+
+  async function deleteCampaign(c) {
+    if (!window.confirm(`Delete "${c.subject}"? This cannot be undone.`)) return
+    setError('')
+    setNotice('')
+    setRowBusyId(c.id)
+    try {
+      const res = await fetch(`/api/host/emails/${c.id}`, { method: 'DELETE' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) { setError(json.error || 'Could not delete the email.'); await load(); return }
+      if (editingId === c.id) resetComposer()
+      setNotice('Email deleted.')
+      await load()
+    } catch {
+      // The request may have deleted the row before the network gave out, so
+      // never leave a phantom row on screen: re-read the list either way.
+      setError('Could not delete the email.')
+      await load()
+    } finally {
+      setRowBusyId(null)
+    }
+  }
+
+  async function duplicateCampaign(c) {
+    setError('')
+    setNotice('')
+    setRowBusyId(c.id)
+    try {
+      const res = await fetch(`/api/host/emails/${c.id}/duplicate`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) { setError(json.error || 'Could not duplicate the email.'); return }
+      setNotice(`Draft created: ${json.data?.subject || 'Copy'}.`)
+      await load()
+    } catch {
+      setError('Could not duplicate the email.')
+    } finally {
+      setRowBusyId(null)
     }
   }
 
@@ -501,24 +735,38 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
             </div>
             <div>
               <label htmlFor="host-email-audience" className="block text-xs text-white/50 mb-1">Send to</label>
-              <select
-                id="host-email-audience"
-                value={audienceEventId}
-                onChange={(e) => setAudienceEventId(e.target.value)}
-                className={input}
-              >
-                <option value="">
-                  Everyone{audiences.all_count != null ? ` (${audiences.all_count})` : ''}
-                </option>
-                <option value="__mailing_list__">
-                  Mailing list signups{audiences.mailing_list_count != null ? ` (${audiences.mailing_list_count})` : ''}
-                </option>
-                {audiences.events.map((ev) => (
-                  <option key={ev.id} value={ev.id}>
-                    Attended · {ev.name} — {ev.race_date} ({ev.count})
+              {audienceCampaignId ? (
+                <>
+                  <input
+                    type="text"
+                    id="host-email-audience"
+                    readOnly
+                    value={audienceSummary({ audience_kind: 'non_openers', audience_campaign_id: audienceCampaignId }, campaignsById)}
+                    aria-describedby="host-email-audience-note"
+                    className={input}
+                  />
+                  <p id="host-email-audience-note" className="text-[11px] text-white/40 mt-0.5">Resolved when you send: anyone who has opened since then is left out. Duplicate this email to pick a different audience.</p>
+                </>
+              ) : (
+                <select
+                  id="host-email-audience"
+                  value={audienceEventId}
+                  onChange={(e) => setAudienceEventId(e.target.value)}
+                  className={input}
+                >
+                  <option value="">
+                    Everyone{audiences.all_count != null ? ` (${audiences.all_count})` : ''}
                   </option>
-                ))}
-              </select>
+                  <option value="__mailing_list__">
+                    Mailing list signups{audiences.mailing_list_count != null ? ` (${audiences.mailing_list_count})` : ''}
+                  </option>
+                  {audiences.events.map((ev) => (
+                    <option key={ev.id} value={ev.id}>
+                      Attended · {ev.name} — {ev.race_date} ({ev.count})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -558,7 +806,7 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMode('text')}
+                  onClick={() => ((pendingDesignRef.current || (hasDesign && mode === 'design' && !designDropped)) ? dropDesign() : setMode('text'))}
                   className={`rounded px-2 py-0.5 ${mode === 'text' ? 'bg-white/15 text-white' : 'text-white/45 hover:text-white'}`}
                 >
                   Plain text
@@ -572,8 +820,13 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
                     container needs a DEFINITE height — min-height alone lets
                     the iframe collapse (squashed toolbar + dead space). */}
                 <div id={EDITOR_DIV_ID} style={{ height: 620 }}>
-                  {!unlayerReady && (
-                    <p className="text-white/40 text-sm p-4">Loading the designer…</p>
+                  {(!unlayerReady || designerNotice) && (
+                    <div className="p-4 text-sm text-white/60">
+                      <p>{designerNotice === 'failed' ? 'The designer could not load. Reload the page, or edit as text (this drops the design).' : 'Loading the designer…'}</p>
+                      {designerNotice !== '' && (
+                        <button type="button" onClick={dropDesign} className="mt-2 text-xs underline text-white/70 hover:text-white">Edit as text instead</button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -594,13 +847,18 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
               {' '}Personalise with variables: {'{{first_name}}'}, {'{{last_name}}'}, {'{{name}}'}, {'{{email}}'} — in the designer they&apos;re under the text toolbar&apos;s merge-tags menu.
             </p>
           </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50"
-          >
-            {busy ? 'Saving…' : editingId ? 'Save changes' : 'Save draft'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-lg bg-white text-black text-sm font-semibold px-4 py-2 hover:bg-white/90 disabled:opacity-50"
+            >
+              {busy ? 'Saving…' : editingId ? 'Save changes' : 'Save draft'}
+            </button>
+            <button type="button" onClick={previewAsSent} disabled={previewBusy} className={btnSecondary}>
+              {previewBusy ? 'Building…' : 'Preview as sent'}
+            </button>
+          </div>
         </form>
       </section>
 
@@ -614,6 +872,7 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
           <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
             {campaigns.map((c) => {
               const chip = STATUS_CHIP[c.status] || 'bg-white/10 text-white/70'
+              const actions = rowActions(c.status)
               return (
                 <li key={c.id} className="px-4 py-3">
                   <div className="flex items-center justify-between gap-4">
@@ -644,7 +903,10 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
                         )}
                       </p>
                       <p className="text-xs text-white/45 mt-0.5">
-                        {rowSubline(c, zone)}
+                        {rowSubline(c, zone, brandName)}
+                        {c.audience_kind === 'non_openers' && (
+                          <span className="text-white/35"> · {audienceSummary(c, campaignsById)}</span>
+                        )}
                         {c.status !== 'scheduled' && (
                           <>
                             {' · '}
@@ -653,73 +915,100 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
                         )}
                       </p>
                     </div>
-                    {c.status === 'draft' && (
-                      <div className="shrink-0 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => editDraft(c.id)}
-                          disabled={loadingDraftId === c.id}
-                          className={btnSecondary}
-                        >
-                          {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => sendTest(c.id)}
-                          disabled={testingId === c.id}
-                          className={btnSecondary}
-                        >
-                          {testingId === c.id ? 'Sending…' : 'Test'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                          aria-expanded={schedulingId === c.id}
-                          aria-controls={`schedule-panel-${c.id}`}
-                          className={btnSecondary}
-                        >
-                          Schedule
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => send(c.id, c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''), c.email_type)}
-                          disabled={sendingId === c.id}
-                          className={btnPrimary}
-                        >
-                          {sendingId === c.id ? 'Sending…' : 'Send'}
-                        </button>
-                      </div>
-                    )}
-                    {c.status === 'scheduled' && (
-                      <div className="shrink-0 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
-                          disabled={schedulingBusyId === c.id}
-                          aria-expanded={schedulingId === c.id}
-                          aria-controls={`schedule-panel-${c.id}`}
-                          className={btnSecondary}
-                        >
-                          Change time
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => editScheduled(c.id)}
-                          disabled={loadingDraftId === c.id || schedulingBusyId === c.id}
-                          className={btnSecondary}
-                        >
-                          {schedulingBusyId === c.id || loadingDraftId === c.id ? 'Opening…' : 'Edit'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => cancelSchedule(c.id)}
-                          disabled={schedulingBusyId === c.id}
-                          className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
-                        >
-                          {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
-                        </button>
-                      </div>
-                    )}
+                    <div className="shrink-0 flex items-center gap-3">
+                      {c.status === 'draft' && (
+                        <div className="shrink-0 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => editDraft(c.id)}
+                            disabled={loadingDraftId === c.id || rowBusyId === c.id}
+                            className={btnSecondary}
+                          >
+                            {loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => sendTest(c.id)}
+                            disabled={testingId === c.id || rowBusyId === c.id}
+                            className={btnSecondary}
+                          >
+                            {testingId === c.id ? 'Sending…' : 'Test'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                            disabled={rowBusyId === c.id}
+                            aria-expanded={schedulingId === c.id}
+                            aria-controls={`schedule-panel-${c.id}`}
+                            className={btnSecondary}
+                          >
+                            Schedule
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => send(c)}
+                            disabled={sendingId === c.id || rowBusyId === c.id}
+                            className={btnPrimary}
+                          >
+                            {sendingId === c.id ? 'Sending…' : 'Send'}
+                          </button>
+                        </div>
+                      )}
+                      {c.status === 'scheduled' && (
+                        <div className="shrink-0 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => (schedulingId === c.id ? setSchedulingId(null) : openSchedule(c))}
+                            disabled={schedulingBusyId === c.id || rowBusyId === c.id}
+                            aria-expanded={schedulingId === c.id}
+                            aria-controls={`schedule-panel-${c.id}`}
+                            className={btnSecondary}
+                          >
+                            Change time
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => editScheduled(c.id)}
+                            disabled={loadingDraftId === c.id || schedulingBusyId === c.id || rowBusyId === c.id}
+                            className={btnSecondary}
+                          >
+                            {schedulingBusyId === c.id || loadingDraftId === c.id ? 'Opening…' : 'Edit'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => cancelSchedule(c.id)}
+                            disabled={schedulingBusyId === c.id || rowBusyId === c.id}
+                            className="rounded-lg border border-red-400/40 text-red-300 text-xs font-semibold px-3 py-1.5 hover:border-red-300 disabled:opacity-50"
+                          >
+                            {schedulingBusyId === c.id ? 'Cancelling…' : 'Cancel'}
+                          </button>
+                        </div>
+                      )}
+                      {(actions.duplicate || actions.delete) && (
+                        <div className="shrink-0 flex items-center gap-2">
+                          {actions.duplicate && (
+                            <button
+                              type="button"
+                              onClick={() => duplicateCampaign(c)}
+                              disabled={rowBusyId === c.id}
+                              className="text-xs text-white/50 hover:text-white disabled:opacity-50"
+                            >
+                              {rowBusyId === c.id ? 'Duplicating…' : 'Duplicate'}
+                            </button>
+                          )}
+                          {actions.delete && (
+                            <button
+                              type="button"
+                              onClick={() => deleteCampaign(c)}
+                              disabled={rowBusyId === c.id}
+                              className="text-xs text-red-300/80 hover:text-red-300 disabled:opacity-50"
+                            >
+                              {rowBusyId === c.id ? 'Working…' : 'Delete'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {schedulingId === c.id && (c.status === 'draft' || c.status === 'scheduled') && (
                     <div
@@ -772,6 +1061,15 @@ export default function HostEmails({ zone = DEFAULT_TZ } = {}) {
           </ul>
         )}
       </section>
+
+      {preview && (
+        <HostEmailPreviewModal
+          html={preview.html}
+          width={preview.width}
+          onWidth={setPreviewWidth}
+          onClose={closePreview}
+        />
+      )}
     </div>
   )
 }

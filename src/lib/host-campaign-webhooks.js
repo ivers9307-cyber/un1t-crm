@@ -43,9 +43,15 @@
 //
 // Contract mirrors processPostmarkEvent: {ok:true} = processed, {ok:false,error}
 // = leave the queue row unprocessed so it retries (bounded by MAX_ATTEMPTS).
+//
+// HOST-EMAILS.2 — a redelivered Click event bumps click_count again (it has
+// no dedup, unlike opened_at above) while host_campaign_clicks dedupes on
+// (send_id, url, clicked_at), so the Clicks tile can read higher than the
+// row count in the report's Links table.
 
 import { revokeHostConsent } from './host-consent.js'
-import { bounceTypeFrom } from './host-campaign-outcome.js'
+import { bounceTypeFrom, clickUrlForStorage, clickInstant } from './host-campaign-outcome.js'
+import { logWarn } from './log.js'
 
 export function isHostCampaignEvent(body) {
   const id = body?.Metadata?.host_campaign_id
@@ -217,6 +223,26 @@ export async function processHostCampaignEvent(db, body) {
         // Clicks have no "first only" setting — click_count is a true count,
         // bumped unconditionally.
         await bump(db, row.id, 'click_count')
+        // HOST-EMAILS.2 — one row per click for the report's link breakdown.
+        // Best effort: a failed insert is logged, never fails the event.
+        // The link is stored through clickUrlForStorage (an unsubscribe
+        // click loses its per-recipient token) at a millisecond instant the
+        // backfill writes identically, so the two writers dedupe.
+        const clickedAt = clickInstant(body.ReceivedAt) || new Date().toISOString()
+        if (typeof body.OriginalLink === 'string' && body.OriginalLink) {
+          const { error: clickRowErr } = await db
+            .from('host_campaign_clicks')
+            .upsert({
+              host_id: hostId,
+              campaign_id: meta.host_campaign_id,
+              send_id: row.id,
+              contact_id: contactId,
+              url: clickUrlForStorage(body.OriginalLink),
+              clicked_at: clickedAt,
+              postmark_message_id: isValidMessageId(body.MessageID) ? body.MessageID : null,
+            }, { onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
+          if (clickRowErr) logWarn('host-campaign-webhooks', 'click row insert failed', { row_id: row.id, error: clickRowErr })
+        }
       }
       return { ok: true }
     }

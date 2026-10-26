@@ -94,6 +94,9 @@ export async function PATCH(request, props) {
   return NextResponse.json({ success: true, data })
 }
 
+const HOST_HAS_SENT_EMAIL =
+  "This host has sent emails, which are kept as the record of what went out, so the host can't be deleted."
+
 export async function DELETE(_request, props) {
   const params = await props.params
   const g = await gate()
@@ -106,7 +109,23 @@ export async function DELETE(_request, props) {
   // FK, no broken checkout. The host's own Stripe connected account is NOT
   // touched: it lives on Stripe and belongs to them, not us. We only drop our
   // row (the payee record + fee config).
+  //
+  // HOST-EMAILS.2 — host_campaigns.host_id cascades, and mig 593b's
+  // host_campaigns_block_sent_delete trigger refuses to delete any campaign
+  // that is not a draft or scheduled (its send rows and clicks are the record
+  // of what went out). So a host that has ever sent email cannot be deleted,
+  // by design: say so up front rather than let the cascade answer with the
+  // trigger's raw 500. The 23514 mapping covers a campaign that starts sending
+  // between this read and the delete.
+  const { count: sentCampaigns, error: sentErr } = await db
+    .from('host_campaigns')
+    .select('id', { count: 'exact', head: true })
+    .eq('host_id', host.id)
+    .not('status', 'in', '(draft,scheduled)')
+  if (sentErr) return NextResponse.json({ success: false, error: sentErr.message }, { status: 500 })
+  if (sentCampaigns > 0) return NextResponse.json({ success: false, error: HOST_HAS_SENT_EMAIL }, { status: 409 })
   const { error } = await db.from('event_hosts').delete().eq('id', host.id)
+  if (error?.code === '23514') return NextResponse.json({ success: false, error: HOST_HAS_SENT_EMAIL }, { status: 409 })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
 }

@@ -25,7 +25,7 @@ const HOST_ID = 'h-1'
 const ORG_ID = 'org-1'
 // An org admin of ORG_ID whose own role at the active studio is staff.
 const ORG_ADMIN = { role: 'staff', orgAdminOrgIds: [ORG_ID], activeOrganization: { id: ORG_ID } }
-const SUMMARY = { dry: true, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, errors: [] }
+const SUMMARY = { dry: true, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, clicks_seen: 0, clicks_written: 0, errors: [] }
 
 function makeRequest(qs = '') {
   return new Request(`http://localhost/api/hosts/${HOST_ID}/backfill-campaign-events${qs}`, { method: 'POST' })

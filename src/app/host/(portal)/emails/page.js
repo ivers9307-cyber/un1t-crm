@@ -3,11 +3,13 @@
 // (client) talks to /api/host/emails, where every send gate lives
 // (verified sender, daily cap, consent/suppression, CAS double-send guard).
 
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
+import { resolveHostOrgBrand } from '@/lib/host-org-brand'
 import HostEmails from '@/components/host/HostEmails'
 
 export const dynamic = 'force-dynamic'
@@ -31,6 +33,8 @@ export default async function HostEmailsPage() {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
   const zone = await hostScheduleZone(session.host.id)
+  // W1.S1c — a paused campaign tells the host to ask its organisation.
+  const brand = await resolveHostOrgBrand(createServerClient(), session.host)
 
   return (
     <div>
@@ -43,7 +47,9 @@ export default async function HostEmailsPage() {
         </p>
       </div>
 
-      <HostEmails zone={zone} />
+      <Suspense fallback={null}>
+        <HostEmails zone={zone} brandName={brand.name} />
+      </Suspense>
     </div>
   )
 }
