@@ -304,3 +304,99 @@ export const ShellyOverride = z.object({
   set_by: uuidLike,
   set_at: z.string().datetime(),
 })
+
+// ——— SHELLYGROUPS.5 — groups ————————————————————————————————————————————
+//
+// A group carries the SAME schedule vocabulary a device carries (mig 776's
+// header: the mig 562 column comments hold unchanged), so its fields are built
+// from the same parts — ShellyWindow, windowsOverlapIssue, ShellyClassRule —
+// rather than re-typed. Two copies of "what is a valid window" is how a group
+// and a device would eventually disagree about one.
+
+// mig 776's CHECK (icon IN (...)) — the five glyphs the UI draws.
+export const SHELLY_GROUP_ICONS = ['bulb', 'fan', 'tv', 'plug', 'droplet']
+// mig 776's CHECK (char_length(name) BETWEEN 1 AND 60).
+export const MAX_GROUP_NAME = 60
+// Display order is a small integer; the bound is a body-size guard.
+const MAX_SORT_ORDER = 10_000
+
+const groupName = z.string().trim()
+  .min(1, { message: 'Give the group a name' })
+  .max(MAX_GROUP_NAME, { message: `Keep the group name to ${MAX_GROUP_NAME} characters` })
+
+const groupFields = {
+  icon: z.enum(SHELLY_GROUP_ICONS),
+  sort_order: z.number().int().min(0).max(MAX_SORT_ORDER),
+  enabled: z.boolean(),
+  schedule_mode: z.enum(['none', 'fixed', 'class']),
+  fixed_windows: z.array(ShellyWindow).max(MAX_FIXED_WINDOWS).superRefine(windowsOverlapIssue),
+  class_rule: ShellyClassRule,
+}
+
+// Create. Only the name is required; the icon defaults here (and in the
+// column) to a bulb, and every schedule field falls to mig 776's defaults
+// (enabled false, mode none) when absent — a new group is inert until someone
+// gives it a schedule, the same rule an adopted device follows. `.strict()`:
+// an unknown key is a typo or a stale client, and NO body ever carries a
+// location_id — the route uses the session's.
+export const ShellyGroupCreate = z.object({
+  name: groupName,
+  icon: groupFields.icon.default('bulb'),
+  sort_order: groupFields.sort_order.optional(),
+  enabled: groupFields.enabled.optional(),
+  schedule_mode: groupFields.schedule_mode.optional(),
+  fixed_windows: groupFields.fixed_windows.optional(),
+  class_rule: groupFields.class_rule.optional(),
+}).strict()
+
+// PATCH: every field optional, strict, and an empty body is 'Nothing to
+// update' rather than a no-op UPDATE that reports success (the device rule).
+export const ShellyGroupPatch = z.object({
+  name: groupName.optional(),
+  icon: groupFields.icon.optional(),
+  sort_order: groupFields.sort_order.optional(),
+  enabled: groupFields.enabled.optional(),
+  schedule_mode: groupFields.schedule_mode.optional(),
+  fixed_windows: groupFields.fixed_windows.optional(),
+  class_rule: groupFields.class_rule.optional(),
+})
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' })
+
+// PUT …/devices: the group's WHOLE membership, replacing what was there. An
+// empty list empties the group. Capped at the location's device cap (a group
+// cannot hold more devices than the location can), and a duplicate id is
+// refused rather than silently collapsed: it is a client bug worth seeing.
+export const ShellyGroupMembers = z.object({
+  device_ids: z.array(uuidLike)
+    .max(MAX_DEVICES_PER_LOCATION, { message: `A group can hold at most ${MAX_DEVICES_PER_LOCATION} devices` })
+    .refine((ids) => new Set(ids.map((s) => String(s).toLowerCase())).size === ids.length, {
+      message: 'Each device can be listed once',
+    }),
+}).strict()
+
+// The group switch takes EXACTLY the device toggle's body: the same three
+// states, the same optional `until` normalised to UTC-Z at the edge, the same
+// presets on the client (until midnight = no `until`, 1 h / 3 h = an explicit
+// one) and the same MAX_OVERRIDE_HOURS bound applied by the route. One schema
+// object rather than a copy, so the two switches can never accept different
+// shapes.
+export const ShellyGroupToggle = ShellyToggleBody
+
+// GET /api/shelly/preview?date=YYYY-MM-DD. Absent or blank => the route uses
+// today in the location's zone (the ShellyEnergyQuery preprocess, same
+// reason). The date must be a REAL calendar day: '2026-02-30' matches the
+// pattern but the engine's day maths would throw on it, so it is checked by
+// round-tripping through UTC (a date-only value has no zone to get wrong).
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+const isRealDate = (s) => {
+  if (!DATE_ONLY.test(s)) return false
+  const d = new Date(`${s}T00:00:00.000Z`)
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+export const ShellyPreviewQuery = z.object({
+  date: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : v),
+    z.string().refine(isRealDate, { message: 'Pick a date as YYYY-MM-DD' }).optional(),
+  ),
+})

@@ -218,11 +218,8 @@ async function markConnection(db, conn, patch) {
 
 /**
  * Today's live class occurrences for one location, bounded to the LOCATION's
- * local day.
- *
- * The end bound is the next local midnight resolved in the zone, never
- * start + 24h: on a DST day the local day is 23 or 25 hours long, and a flat
- * +24h either drops the last class of the day or pulls in tomorrow's first one.
+ * local day. A thin wrapper over loadDayOccurrences for "the day `nowMs` falls
+ * on" — the cron and run-now both mean today.
  *
  * @returns {{ok: true, occurrences: Array} | {ok: false, error: string}}
  */
@@ -231,16 +228,39 @@ export async function loadTodayOccurrences(db, locationId, tz, nowMs) {
   // exported and PR 2's routes call it, so the clock is checked here rather
   // than trusting every future caller to have guarded first.
   if (!Number.isFinite(nowMs)) return { ok: false, error: 'unusable clock' }
-  const day = dayStrInTz(nowMs, tz)
-  const start = new Date(dayStartMsInTz(day, tz)).toISOString()
-  const end = new Date(dayStartMsInTz(addDaysISO(day, 1), tz)).toISOString()
+  return loadDayOccurrences(db, locationId, tz, dayStrInTz(nowMs, tz))
+}
+
+/**
+ * One LOCAL day's live class occurrences for one location (SHELLYGROUPS.5:
+ * the day preview asks for a date that is not today).
+ *
+ * The end bound is the next local midnight resolved in the zone, never
+ * start + 24h: on a DST day the local day is 23 or 25 hours long, and a flat
+ * +24h either drops the last class of the day or pulls in tomorrow's first one.
+ * `name` rides along for the preview's class lane; the engine ignores it.
+ *
+ * @param dayStr 'YYYY-MM-DD', the location's calendar day.
+ * @returns {{ok: true, occurrences: Array} | {ok: false, error: string}}
+ */
+export async function loadDayOccurrences(db, locationId, tz, dayStr) {
+  // strictDayStartMsIn answers null for a date that is not real (2026-02-30)
+  // or not a date at all. Refused here, before the query, so a caller can
+  // never bound a select by NaN.
+  const startMs = /^\d{4}-\d{2}-\d{2}$/.test(String(dayStr ?? '')) ? dayStartMsInTz(dayStr, tz) : null
+  const nextDay = startMs == null ? null : addDaysISO(dayStr, 1)
+  const endMs = nextDay == null ? null : dayStartMsInTz(nextDay, tz)
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return { ok: false, error: 'unusable day' }
+  const start = new Date(startMs).toISOString()
+  const end = new Date(endMs).toISOString()
   const { data, error } = await db
     .from('class_occurrences')
-    .select('starts_at, ends_at, cancelled_at')
+    .select('starts_at, ends_at, cancelled_at, name')
     .eq('location_id', locationId)
     .gte('starts_at', start)
     .lt('starts_at', end)
     .is('cancelled_at', null)
+    .order('starts_at')
     // cap + 1, like every other select in this file: "exactly at the cap" and
     // "the limit dropped the rest" are different facts, and only the sentinel
     // row makes them decidable. Without it a truncated timetable is silent, and
@@ -987,7 +1007,13 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
 
   let target = device
   if (group) {
-    if (group.location_id !== device.location_id) {
+    if (group.id !== device.group_id) {
+      // A group handed in for a device that does not follow it (a stale read,
+      // a caller bug) must not run the device on another group's schedule.
+      logWarn(MODULE, 'group is not the device’s own — ignored', {
+        locationId: conn?.location_id, deviceId: device.id, groupId: group.id, deviceGroupId: device.group_id ?? null,
+      })
+    } else if (group.location_id !== device.location_id) {
       logWarn(MODULE, 'group at another location — ignored', { locationId: conn?.location_id, deviceId: device.id, groupId: group.id })
     } else {
       target = effectiveTarget(device, group, nowMs)

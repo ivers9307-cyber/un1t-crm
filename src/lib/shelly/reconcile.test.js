@@ -5,6 +5,7 @@ import {
   refreshLocationState,
   runNowForDevice,
   loadTodayOccurrences,
+  loadDayOccurrences,
   MAX_CONNECTIONS,
   MAX_DEVICES,
   MAX_OCCURRENCES,
@@ -1062,7 +1063,8 @@ describe('planning', () => {
 
   // UN1TCLASS.3 — Hatch Street's timetable is projected from un1t.online with an
   // 'un1t:'-namespaced glofox_event_id and source_platform 'un1t_online'. The
-  // reader selects only starts_at/ends_at/cancelled_at, so the id and the source
+  // reader selects only starts_at/ends_at/cancelled_at (+ name, for the
+  // SHELLYGROUPS.5 preview lane; the engine ignores it), so the id and the source
   // must make no difference: this pins that a un1t row drives a class-mode window
   // exactly like a Glofox one, through the REAL loadTodayOccurrences.
   it('a un1t: occurrence drives the class-mode window like a Glofox one', async () => {
@@ -1091,8 +1093,8 @@ describe('planning', () => {
     // (a glofox-only or id-keyed reader would stop opening windows at Hatch).
     for (const { db } of [glofox, un1t]) {
       const q = db.reads.occurrenceCalls
-      expect(q.find((c) => c[0] === 'select')[1]).toEqual(['starts_at, ends_at, cancelled_at'])
-      const filters = q.filter((c) => !['select', 'limit'].includes(c[0])).map((c) => `${c[0]}:${c[1][0]}`)
+      expect(q.find((c) => c[0] === 'select')[1]).toEqual(['starts_at, ends_at, cancelled_at, name'])
+      const filters = q.filter((c) => !['select', 'limit', 'order'].includes(c[0])).map((c) => `${c[0]}:${c[1][0]}`)
       expect(filters.sort()).toEqual(['eq:location_id', 'gte:starts_at', 'is:cancelled_at', 'lt:starts_at'])
       expect(JSON.stringify(q)).not.toMatch(/source_platform|glofox_event_id/)
     }
@@ -1254,6 +1256,23 @@ describe('timezone', () => {
 })
 
 // ================================================================== occurrences
+
+describe('loadDayOccurrences', () => {
+  it('bounds the query to the GIVEN local day, start to next local midnight', async () => {
+    const db = makeDb({ occurrences: [] })
+    const out = await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', '2026-10-25')
+    expect(out).toEqual({ ok: true, occurrences: [] })
+    // 25 Oct 2026 is the Dublin DST end: a 25-hour local day, never ±24h.
+    expect(db.reads.occurrenceBounds).toEqual(['2026-10-24T23:00:00.000Z', '2026-10-26T00:00:00.000Z'])
+  })
+
+  it('refuses a malformed day before any query', async () => {
+    const db = makeDb({})
+    expect(await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', '2026-02-30')).toEqual({ ok: false, error: 'unusable day' })
+    expect(await loadDayOccurrences(db, 'loc-A', 'Europe/Dublin', 'junk')).toEqual({ ok: false, error: 'unusable day' })
+    expect(db.reads.fromCalls).toEqual([])
+  })
+})
 
 describe('loadTodayOccurrences', () => {
   it('bounds the query to the LOCATION day, not the UTC one', async () => {
@@ -1659,6 +1678,14 @@ describe('runNowForDevice with a group', () => {
     })
     expect(loadOccurrences).toHaveBeenCalledTimes(1)
     expect(out).toMatchObject({ ok: false, kind: 'occurrences' })
+  })
+
+  it('ignores a group that is not the device’s own (id mismatch), with ids only', async () => {
+    const { factory, calls } = makeClientFactory()
+    const out = await runNowForDevice(makeDb({}), conn(), member({ group_id: 'g2' }), { now: () => NOW, makeClient: factory, group: grp() })
+    expect(out).toEqual({ ok: true, noop: true })
+    expect(calls.setSwitch).toEqual([])
+    expect(warned('group is not the device’s own — ignored')[0][2]).toEqual({ locationId: 'loc-A', deviceId: 'd1', groupId: 'g1', deviceGroupId: 'g2' })
   })
 
   it('ignores a group at another location, with ids only', async () => {

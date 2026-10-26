@@ -23,6 +23,13 @@ import {
   ShellyEnergyQuery,
   ShellySyncNamesBody,
   ShellyOverride,
+  ShellyGroupCreate,
+  ShellyGroupPatch,
+  ShellyGroupMembers,
+  ShellyGroupToggle,
+  ShellyPreviewQuery,
+  SHELLY_GROUP_ICONS,
+  MAX_GROUP_NAME,
 } from './schemas'
 
 const win = (over = {}) => ({ days: [1], on: '09:00', off: '17:00', ...over })
@@ -590,5 +597,91 @@ describe('ShellyOverride', () => {
   it('rejects a set_by that is not uuid-shaped', () => {
     expect(ShellyOverride.safeParse({ ...valid, set_by: 'system' }).success).toBe(false)
     expect(ShellyOverride.safeParse({ ...valid, set_by: '' }).success).toBe(false)
+  })
+})
+
+// ================================================================== SHELLYGROUPS.5
+describe('ShellyGroupCreate', () => {
+  it('takes a name, defaults the icon, and trims', () => {
+    const r = ShellyGroupCreate.safeParse({ name: '  Gym floor ' })
+    expect(r.success).toBe(true)
+    expect(r.data).toEqual({ name: 'Gym floor', icon: 'bulb' })
+  })
+  it('refuses a blank or over-long name with operator copy', () => {
+    expect(issuesOf(ShellyGroupCreate.safeParse({ name: '  ' }))[0].message).toBe('Give the group a name')
+    expect(ShellyGroupCreate.safeParse({ name: rep(MAX_GROUP_NAME) }).success).toBe(true)
+    expect(ShellyGroupCreate.safeParse({ name: rep(MAX_GROUP_NAME + 1) }).success).toBe(false)
+  })
+  it('only knows the five icons', () => {
+    for (const icon of SHELLY_GROUP_ICONS) expect(ShellyGroupCreate.safeParse({ name: 'x', icon }).success).toBe(true)
+    expect(ShellyGroupCreate.safeParse({ name: 'x', icon: 'rocket' }).success).toBe(false)
+  })
+  it('is strict: an unknown key (or a location_id) is a 400, never dropped', () => {
+    expect(ShellyGroupCreate.safeParse({ name: 'x', location_id: 'a0000000-0000-0000-0000-000000000001' }).success).toBe(false)
+  })
+  it('accepts a schedule using the device vocabulary', () => {
+    const r = ShellyGroupCreate.safeParse({ name: 'x', enabled: true, schedule_mode: 'class', class_rule: {} })
+    expect(r.success).toBe(true)
+    expect(r.data.class_rule).toEqual({ lead_min: 15, lag_min: 10, merge_gap_min: 30, days: ALL_DAYS })
+  })
+})
+
+describe('ShellyGroupPatch', () => {
+  it('400s an empty patch', () => {
+    expect(issuesOf(ShellyGroupPatch.safeParse({}))[0].message).toBe('Nothing to update')
+  })
+  it('re-uses the window overlap check', () => {
+    const r = ShellyGroupPatch.safeParse({ fixed_windows: [win(), win({ on: '10:00', off: '12:00' })] })
+    expect(r.success).toBe(false)
+  })
+  it('takes sort_order and refuses a negative one', () => {
+    expect(ShellyGroupPatch.safeParse({ sort_order: 3 }).success).toBe(true)
+    expect(ShellyGroupPatch.safeParse({ sort_order: -1 }).success).toBe(false)
+  })
+  it('is strict', () => {
+    expect(ShellyGroupPatch.safeParse({ nmae: 'typo' }).success).toBe(false)
+  })
+})
+
+describe('ShellyGroupMembers', () => {
+  const A = 'd0000000-0000-4000-8000-00000000000a'
+  const B = 'd0000000-0000-4000-8000-00000000000b'
+  it('takes a list of ids, empty included (that empties the group)', () => {
+    expect(ShellyGroupMembers.safeParse({ device_ids: [A, B] }).success).toBe(true)
+    expect(ShellyGroupMembers.safeParse({ device_ids: [] }).success).toBe(true)
+  })
+  it('refuses duplicates, junk and more than the device cap', () => {
+    expect(ShellyGroupMembers.safeParse({ device_ids: [A, A] }).success).toBe(false)
+    expect(ShellyGroupMembers.safeParse({ device_ids: ['nope'] }).success).toBe(false)
+    const many = Array.from({ length: MAX_DEVICES_PER_LOCATION + 1 }, (_, i) => `d0000000-0000-4000-8000-${String(i).padStart(12, '0')}`)
+    expect(ShellyGroupMembers.safeParse({ device_ids: many }).success).toBe(false)
+  })
+  it('is strict', () => {
+    expect(ShellyGroupMembers.safeParse({ device_ids: [], extra: 1 }).success).toBe(false)
+  })
+})
+
+describe('ShellyGroupToggle', () => {
+  it('is the device toggle body: state, optional until normalised to Z', () => {
+    const r = ShellyGroupToggle.safeParse({ state: 'on', until: '2026-08-23T18:00:00+01:00' })
+    expect(r.data).toEqual({ state: 'on', until: '2026-08-23T17:00:00.000Z' })
+    expect(ShellyGroupToggle.safeParse({ state: 'auto' }).success).toBe(true)
+    expect(ShellyGroupToggle.safeParse({ state: 'toggle' }).success).toBe(false)
+    expect(ShellyGroupToggle.safeParse({ state: 'on', untill: 'x' }).success).toBe(false)
+  })
+})
+
+describe('ShellyPreviewQuery', () => {
+  it('absorbs an absent or blank date', () => {
+    expect(ShellyPreviewQuery.parse({ date: null })).toEqual({})
+    expect(ShellyPreviewQuery.parse({ date: '' })).toEqual({})
+  })
+  it('takes a real calendar date only', () => {
+    expect(ShellyPreviewQuery.parse({ date: '2026-10-31' })).toEqual({ date: '2026-10-31' })
+    for (const bad of ['2026-02-30', '2026-13-01', '31/10/2026', '2026-10-31T00:00', 'today']) {
+      const r = ShellyPreviewQuery.safeParse({ date: bad })
+      expect(r.success, bad).toBe(false)
+      expect(issuesOf(r)[0].message).toBe('Pick a date as YYYY-MM-DD')
+    }
   })
 })

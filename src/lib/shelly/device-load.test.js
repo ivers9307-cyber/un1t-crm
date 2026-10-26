@@ -55,7 +55,7 @@ describe('DEVICE_COLUMNS', () => {
   it('is an allowlist that never publishes adopted_by', () => {
     expect(DEVICE_COLUMNS).not.toContain('*')
     expect(DEVICE_COLUMNS).not.toContain('adopted_by')
-    for (const col of ['id', 'location_id', 'device_id', 'channel', 'enabled', 'schedule_mode', 'override', 'last_applied', 'last_state']) {
+    for (const col of ['id', 'location_id', 'device_id', 'channel', 'enabled', 'schedule_mode', 'override', 'last_applied', 'last_state', 'kind', 'group_id']) {
       expect(DEVICE_COLUMNS.split(',').map((s) => s.trim())).toContain(col)
     }
   })
