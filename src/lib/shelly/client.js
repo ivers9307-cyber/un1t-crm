@@ -181,6 +181,30 @@ function commandFailure(res) {
   }, res)
 }
 
+// SHELLYTIMERS.1 — the safety-net timer. Every set/ command accepts
+// `toggle_after` (seconds): after the delay the DEVICE flips itself to the
+// opposite of `on`, with no cloud and no cron involved. That is the whole
+// point: if this CRM dies with a room switched on, the plug still switches
+// itself off.
+//
+// Two refusals, both answered before any request is spent (`kind:
+// 'invalid_timer'`, statusCode 0 like every other caller-bug tag):
+//  • anything but a positive finite number of seconds (>= 1). A silently
+//    dropped timer is a safety net that is quietly absent, so it is refused
+//    rather than omitted. A fraction is rounded UP — never shorter than asked.
+//  • a timer on an OFF command. It would flip the relay back ON after the
+//    delay: an "off" that turns a room on later, which is never what a
+//    caller means.
+// Absent (undefined or null) means "no timer" and the body is byte-for-byte
+// what it was before this existed.
+const invalidTimer = () => ({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+function timerOf(opts, on) {
+  const t = opts && typeof opts === 'object' ? opts.toggleAfterSec : undefined
+  if (t === undefined || t === null) return { ok: true, field: {} }
+  if (typeof t !== 'number' || !Number.isFinite(t) || t < 1 || !on) return { ok: false }
+  return { ok: true, field: { toggle_after: Math.ceil(t) } }
+}
+
 // What an interactive press (the device toggle, the group switch) passes as
 // `max429Retries` (see below). One constant so the two switches cannot drift.
 export const INTERACTIVE_429_RETRIES = 3
@@ -205,8 +229,8 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
   let lastCallAt = -Infinity
 
   // NOTE ON `statusCode: 0` — it is OVERLOADED. It means "no HTTP exchange
-  // happened", and that covers network, config, too_many_ids, invalid_ids
-  // and the empty-list short-circuit. Callers MUST branch on `kind`; a
+  // happened", and that covers network, config, too_many_ids, invalid_ids,
+  // invalid_timer and the empty-list short-circuit. Callers MUST branch on `kind`; a
   // branch on statusCode alone reads a caller bug as a dropped line.
   const configFailure = () => ({ ok: false, kind: 'config', statusCode: 0 })
 
@@ -325,24 +349,32 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       }
       return res
     },
-    setSwitch: async (deviceId, channel, on) => {
-      const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on })
+    // `opts.toggleAfterSec` (optional): the safety-net timer — see timerOf.
+    setSwitch: async (deviceId, channel, on, opts) => {
+      const timer = timerOf(opts, !!on)
+      if (!timer.ok) return invalidTimer()
+      const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on, ...timer.field })
       return commandFailure(res) ?? res
     },
     // `on` ONLY — never brightness/mode/colour: a light keeps its own level.
-    setLight: async (deviceId, channel, on) => {
-      const res = await call('/v2/devices/api/set/light', { id: deviceId, channel: Number(channel) || 0, on: !!on })
+    setLight: async (deviceId, channel, on, opts) => {
+      const timer = timerOf(opts, !!on)
+      if (!timer.ok) return invalidTimer()
+      const res = await call('/v2/devices/api/set/light', { id: deviceId, channel: Number(channel) || 0, on: !!on, ...timer.field })
       return commandFailure(res) ?? res
     },
     // `groups` is a bare string[] (switch ids, the original shape) or
     // { switch?: string[], light?: string[] }. Empty kinds are dropped; if
-    // none remain no request is spent.
-    setGroups: async (groups, on) => {
+    // none remain no request is spent. One timer per call: it rides inside
+    // every kind's command, so callers batch by timer (reconcile.js).
+    setGroups: async (groups, on, opts) => {
+      const timer = timerOf(opts, !!on)
+      if (!timer.ok) return invalidTimer()
       const kinds = Array.isArray(groups) ? { switch: groups } : groups || {}
       const body = {}
       for (const kind of ['switch', 'light']) {
         const ids = kinds[kind]
-        if (Array.isArray(ids) && ids.length > 0) body[kind] = { ids, command: { on: !!on } }
+        if (Array.isArray(ids) && ids.length > 0) body[kind] = { ids, command: { on: !!on, ...timer.field } }
       }
       if (Object.keys(body).length === 0) return { ok: true, statusCode: 0, failed: {} }
       const res = await call('/v2/devices/api/set/groups', body)

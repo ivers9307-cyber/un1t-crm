@@ -562,3 +562,63 @@ describe('SECRETTAILS.1', () => {
     expect(shellyClient.keyHint).toBeUndefined()
   })
 })
+
+describe('SHELLYTIMERS.1 — toggle_after (the safety-net timer)', () => {
+  const ok = () => fetchStub([{ status: 200, body: '' }, { status: 200, body: '' }])
+
+  it('setSwitch and setLight add toggle_after only when a timer is given', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '' }, { status: 200, body: '' }, { status: 200, body: '' }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.setSwitch('a', 1, true, { toggleAfterSec: 5400 })
+    await c.setLight('b', 0, true, { toggleAfterSec: 60 })
+    await c.setSwitch('a', 1, true, {})
+    expect(JSON.parse(calls[0].init.body)).toEqual({ id: 'a', channel: 1, on: true, toggle_after: 5400 })
+    expect(JSON.parse(calls[1].init.body)).toEqual({ id: 'b', channel: 0, on: true, toggle_after: 60 })
+    expect(JSON.parse(calls[2].init.body)).toEqual({ id: 'a', channel: 1, on: true })
+  })
+
+  it('a fractional timer is rounded UP to whole seconds (never shorter than asked)', async () => {
+    const { fetchImpl, calls } = ok()
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.setSwitch('a', 0, true, { toggleAfterSec: 90.2 })
+    expect(JSON.parse(calls[0].init.body).toggle_after).toBe(91)
+  })
+
+  it('setGroups puts toggle_after inside every kind\'s command', async () => {
+    const { fetchImpl, calls } = ok()
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.setGroups({ switch: ['a_0'], light: ['b_0'] }, true, { toggleAfterSec: 1800 })
+    expect(JSON.parse(calls[0].init.body)).toEqual({
+      switch: { ids: ['a_0'], command: { on: true, toggle_after: 1800 } },
+      light: { ids: ['b_0'], command: { on: true, toggle_after: 1800 } },
+    })
+  })
+
+  it('a null or absent timer leaves every body exactly as before', async () => {
+    const { fetchImpl, calls } = ok()
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.setGroups(['a_0'], true, { toggleAfterSec: null })
+    await c.setLight('b', 0, false, undefined)
+    expect(JSON.parse(calls[0].init.body)).toEqual({ switch: { ids: ['a_0'], command: { on: true } } })
+    expect(JSON.parse(calls[1].init.body)).toEqual({ id: 'b', channel: 0, on: false })
+  })
+
+  it('refuses an unusable timer without spending a request (a caller bug, never silently dropped)', async () => {
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    for (const t of [0, -5, 0.5, NaN, Infinity, '600', {}]) {
+      expect(await c.setSwitch('a', 0, true, { toggleAfterSec: t })).toEqual({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+      expect(await c.setGroups(['a_0'], true, { toggleAfterSec: t })).toEqual({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+    }
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a timer on an OFF command: it would flip the relay back ON later', async () => {
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.setSwitch('a', 0, false, { toggleAfterSec: 600 })).toEqual({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+    expect(await c.setLight('a', 0, false, { toggleAfterSec: 600 })).toEqual({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+    expect(await c.setGroups(['a_0'], false, { toggleAfterSec: 600 })).toEqual({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+    expect(calls).toHaveLength(0)
+  })
+})
