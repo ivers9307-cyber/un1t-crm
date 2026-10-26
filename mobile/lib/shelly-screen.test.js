@@ -176,6 +176,14 @@ describe('groupToggleOutcome', () => {
       .toBe(`Saved. ${GROUP_HOLDS_TEXT}`)
   })
 
+  it('the route\'s full-stop-less GROUP_HOLDS_NOTICE still ends the composed sentence with one', () => {
+    const notice = 'No schedule is running this group, so its lights stay as you set them until you change them'
+    const json = { success: true, applied: 'all', holds_until_changed: true, notice }
+    expect(groupToggleOutcome(json, 'on', 2).text).toBe(`Switched on. ${notice}.`)
+    expect(groupToggleOutcome({ success: true, pending: true, applied: 'none', message: 'Saved.', holds_until_changed: true, notice }, 'off', 2).text)
+      .toBe(`Saved. ${notice}.`)
+  })
+
   it('a failure renders the route\'s sentence; a missing answer a human one', () => {
     expect(groupToggleOutcome({ success: false, error: 'Group not found' }, 'on', 2))
       .toEqual({ tone: 'error', text: 'Group not found', partial: null })

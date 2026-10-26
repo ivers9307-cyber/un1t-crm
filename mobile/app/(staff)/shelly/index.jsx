@@ -23,8 +23,9 @@
 //     `{ success: true, applied: false, pending: true }` when the override is
 //     saved and the relay has NOT moved. Painting the requested state there
 //     would show a plug as ON while it is physically off. The rate-limited
-//     shape of that body arrives with HTTP 429, which mobile's api() flattens
-//     — `isQueued` recovers it by status, see mobile/lib/shelly.js.
+//     shape of that body arrives with HTTP 429; api() passes a non-2xx body
+//     that carries our envelope through unchanged, so `pending: true` arrives
+//     intact and `isQueued` reads that field (mobile/lib/shelly.js).
 //
 //  3. ONLY `connected === false` DISABLES THE BUTTONS. An OFFLINE plug is
 //     still settable: the toggle route writes the override BEFORE it sends

@@ -528,7 +528,10 @@ export const GROUP_HOLDS_TEXT = 'No schedule runs this group — it stays as set
  */
 export function groupToggleOutcome(json, state, memberCount) {
   if (!json) return { tone: 'error', text: 'That did not work — try again', partial: null }
-  const holds = json.holds_until_changed ? (json.notice || GROUP_HOLDS_TEXT) : null
+  // The route's GROUP_HOLDS_NOTICE carries no full stop (the web shows it on
+  // its own); composed after "Switched on." it is a sentence and needs one.
+  const rawHolds = json.holds_until_changed ? String(json.notice || GROUP_HOLDS_TEXT).trim() : ''
+  const holds = rawHolds ? (/[.!?]$/.test(rawHolds) ? rawHolds : `${rawHolds}.`) : null
   const withHolds = (text) => (holds ? `${text} ${holds}` : text)
   if (json.pending === true || json.applied === 'partial') {
     const text = withHolds(json.message || 'Saved — the group will follow as soon as Shelly answers.')
