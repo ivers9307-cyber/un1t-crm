@@ -141,6 +141,17 @@ describe('createGapPayment — a new link', () => {
       applicationFeeCents: 0,
     }))
   })
+  it('REVPAY.7: a staff link names the payer and the move, and lives 7 days (it is emailed and reused while pending)', async () => {
+    await createGapPayment(args())
+    const a = createPayment.mock.calls[0][0]
+    expect(a).toEqual(expect.objectContaining({
+      merchantReference: 'gap:mv1',
+      statementDescriptorSuffix: 'PRICE DIFFERENCE',
+      expirePendingAfter: 'P7D',
+    }))
+    expect(a.customer.email).toEqual(expect.any(String))
+    expect(a.customer.fullName).toEqual(expect.any(String))
+  })
   it('a second link after an abandoned one uses a fresh idempotency key (Revolut would hand back the dead order)', async () => {
     const dead = { id: 'gp0', kind: 'move_gap', status: 'abandoned', registration_move_id: 'mv1', contact_email: 'aoife@x.ie', created_at: '2026-10-08T00:00:00Z' }
     await createGapPayment(args({ db: fakeDb({ payments: { data: [dead, ENTRY_PAY], error: null } }) }))
@@ -505,6 +516,13 @@ describe('createGapPayment — a pending move (customer, EVENT-MOVE.6)', () => {
       returnUrl: 'https://crm.test/event/entry/TOKEN',
       metadata: { race_event_id: 'e1', race_registration_id: 'r1', pending_move_target_event_id: 'e2', domain: 'un1t_race_gap' },
     }))
+  })
+  it('REVPAY.7: a customer date change keys its reference on the entry and takes the default (30 minute) expiry', async () => {
+    await createGapPayment(pmArgs())
+    const a = createPayment.mock.calls[0][0]
+    expect(a.merchantReference).toBe('gap:r1')
+    expect(a.statementDescriptorSuffix).toBe('PRICE DIFFERENCE')
+    expect('expirePendingAfter' in a).toBe(false)
   })
   it('stores only the four pending-move fields, whatever else the caller passed', async () => {
     const a = pmArgs({ pendingMove: { ...PM, force: true, price_gap_cents: 1 } })

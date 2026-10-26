@@ -50,6 +50,12 @@ export async function createClassBookingPayment({ db, request, location, amountC
     returnUrl: `${baseUrl}/class-pay/${request.id}`,
     metadata: { class_booking_request_id: request.id, domain: 'un1t_class_booking' },
     idempotencyKey: request.id,
+    // REVPAY.7 — buyer, our row id, and what was bought on the statement. The
+    // checkout is paid in-page right after the booking form, so the 30-minute
+    // default expiry applies (a lapsed order fails and the row ends terminal).
+    customer: { email: request.customer_email, fullName: request.customer_name },
+    merchantReference: `class:${request.id}`,
+    statementDescriptorSuffix: 'INTRO CLASS',
     connectedAccountId,
     applicationFeeCents: 0,
   })

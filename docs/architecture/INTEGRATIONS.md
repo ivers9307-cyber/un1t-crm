@@ -259,6 +259,14 @@ Used for car deposit payments. **All field names + enum values are verified agai
 
 **API version pinning.** Every request sends `Revolut-Api-Version: 2026-03-12` (configurable via `REVOLUT_API_VERSION`, default in `lib/revolut.js`). When updating to a newer version, **read the changelog AND the OpenAPI spec for that version's enum values** — Revolut has shifted enum casing between versions (e.g. `capture_mode` was upper-snake in older versions, lowercase in newer; the SDK token field renamed from `public_id` to `token`).
 
+**Version check, 26 Oct 2026 (REVPAY audit).** Newest published spec is `merchant-2026-08-17`. Against our pinned `2026-03-12` it has the same endpoints and the same webhook event list, so there is no reason to bump yet; re-check enum casing before any bump.
+
+**One merchant account for every flow.** All Revolut flows (CCF Autos car deposits and UN1T races, paid classes, trials, offers, donations) use the single `REVOLUT_API_KEY`, so their money settles into one Revolut Business account. That is the opposite of the Xero rule (one legal entity, one set of books). If CCF Autos and Champ Fitness Ltd are separate companies, car deposits need their own merchant key (per location, like Xero); until then this is a known, deliberate-or-not decision for the owner, not a code default to copy.
+
+**Order fields (REVPAY.7).** `createOrder` sends `customer` (email, full name), `merchant_order_data.reference` (`car:` / `race:` / `class:` / `trial:` / `offer:` / `donation:` / `gap:` + our row id), a sanitised `statement_descriptor_suffix` (≤19 chars, no `*`) and `expire_pending_after` (default `PT30M`; car deposits use the link's remaining life, race entries the unpaid hold, staff price-difference links 7 days). An expired order goes to `failed` and fires `ORDER_FAILED`. Revolut creates a NEW customer record for every order that carries `customer` without an id (spec), so the dashboard's customer list grows per order.
+
+**Disputes and the backstop.** Disputes arrive at `/api/webhooks/revolut/disputes` (REVPAY.4, `revolut_disputes`, ops alert). Lost or deferred order webhooks are settled by `/api/cron/revolut-reconcile` (REVPAY.3, every 15 min).
+
 **Spec-verified facts.** All values lowercase in the current pinned version:
 
 - `Order.state` enum: `pending`, `processing`, `authorised`, `completed`, `cancelled`, `failed`. **There is NO `refunded` order state** — refunds create a NEW order with `type='refund'` linked via `related_order_id`; the original order's state stays `completed`.

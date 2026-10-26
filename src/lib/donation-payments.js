@@ -91,6 +91,11 @@ export async function createDonationPayment({ db, donation, race, host, returnUr
     returnUrl,
     metadata: { donation_id: donation.id, domain: 'un1t_donation', race_event_id: race.id, location_id: race.location_id },
     idempotencyKey: donation.id,
+    // REVPAY.7 — donor, our row id, and what it was for. Paid in-page: the
+    // 30-minute default expiry applies.
+    customer: { email: donation.donor_email, fullName: donation.donor_name },
+    merchantReference: `donation:${donation.id}`,
+    statementDescriptorSuffix: 'DONATION',
     connectedAccountId,
     applicationFeeCents: 0,
   })

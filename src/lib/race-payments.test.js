@@ -104,6 +104,12 @@ describe('createRacePayment — paid entry', () => {
       amount: 5000,
       currency: 'EUR',
       idempotencyKey: 'reg-1',
+      // REVPAY.7: captain, registration id, event on the statement.
+      customer: { email: 'sarah@example.com', fullName: 'Sarah' },
+      merchantReference: 'race:reg-1',
+      statementDescriptorSuffix: 'Hyrox Sim',
+      // No entry_policy on this race: the 48 h default unpaid hold.
+      expirePendingAfter: 'PT48H',
     })
     // Idempotency key prevents double-charging on register-route retry.
     expect(r.checkout.free).toBe(false)

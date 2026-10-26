@@ -1,7 +1,13 @@
 // PAIDTRIAL.1 — the payment state machine releases a row exactly once and
 // never moves a settled or terminal row.
-import { describe, it, expect } from 'vitest'
-import { markTrialPurchasePaymentStatus, trialPurchaseDescription } from './trial-purchase-payments'
+import { describe, it, expect, vi } from 'vitest'
+
+const createPayment = vi.fn(async () => ({ providerRef: 'ord_1', checkoutToken: 'tok', checkoutUrl: 'https://pay/x' }))
+vi.mock('./payments', () => ({ paymentsFor: () => ({ createPayment }) }))
+vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: vi.fn(async () => 'https://crm.test') }))
+vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan' })) }))
+
+import { markTrialPurchasePaymentStatus, trialPurchaseDescription, createTrialPurchasePayment } from './trial-purchase-payments'
 
 function db() {
   const calls = []
@@ -59,5 +65,21 @@ describe('trialPurchaseDescription', () => {
   it('names the studio brand and the product, no dash', () => {
     expect(trialPurchaseDescription('UN1T Stillorgan', '2 Week Trial')).toBe('UN1T Stillorgan: 2 Week Trial')
     expect(trialPurchaseDescription('', '2 Week Trial')).toBe('2 Week Trial')
+  })
+})
+
+describe('createTrialPurchasePayment (REVPAY.7)', () => {
+  it('the order carries the buyer, trial:<id> and a TRIAL suffix, on the default expiry', async () => {
+    const client = { from: () => ({ update: () => ({ eq: async () => ({ error: null }) }) }) }
+    const purchase = { id: 'tp1', location_id: 'loc1', product_name: '2 Week Trial', customer_email: 'a@b.com', customer_name: 'A B' }
+    await createTrialPurchasePayment({ db: client, purchase, location: { id: 'loc1', settings: {} }, amountCents: 3900, currency: 'EUR' })
+    const args = createPayment.mock.calls[0][0]
+    expect(args).toEqual(expect.objectContaining({
+      customer: { email: 'a@b.com', fullName: 'A B' },
+      merchantReference: 'trial:tp1',
+      statementDescriptorSuffix: 'TRIAL',
+      idempotencyKey: 'tp1',
+    }))
+    expect('expirePendingAfter' in args).toBe(false)
   })
 })
