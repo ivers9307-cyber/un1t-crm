@@ -31,17 +31,18 @@ vi.mock('@/lib/shelly/reconcile', async (importOriginal) => {
   return { ...actual, runNowForDevice: vi.fn() }
 })
 
-import { POST } from './route.js'
+import { POST, maxDuration } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createShellyClient } from '@/lib/shelly/client'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { overrideKey } from '@/lib/shelly/plan'
 import { AUTH_ERROR } from '@/lib/shelly/connections'
+import { logWarn } from '@/lib/log'
 import { MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import {
   LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, GRP_B, BAD_ID, OWNER_ID, OWNER_A, OWNER_NY, STAFF_A,
-  deviceRow, groupRow, connectionRow, fullState, makeDb, updatesTo, jsonReq, ctxFor,
+  deviceRow, groupRow, connectionRow, fullState, makeDb, updatesTo, selectsFrom, jsonReq, ctxFor,
 } from '../../../shelly-routes.test-helpers.js'
 
 const NOW = Date.parse('2026-08-23T12:00:00.000Z')
@@ -216,12 +217,29 @@ describe('POST …/groups/[id]/toggle — on/off (group wins)', () => {
     expect(dev(DEV_A).override).toEqual(devOv)
   })
 
-  it('a failed member-override clear refuses before any command', async () => {
+  it('a failed member-override clear rolls the group override back and refuses before any command', async () => {
+    const prior = { state: 'off', until: '2026-08-23T23:00:00.000Z', set_by: OWNER_ID, set_at: '2026-08-23T10:00:00.000Z' }
+    useDb(world({ group: { override: prior } }))
     db.conf.updateError.shelly_devices = { message: 'pg down' }
     const res = await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
     expect(res.status).toBe(500)
     expect((await res.json()).code).toBe('member_overrides_not_cleared')
     expect(setGroups).not.toHaveBeenCalled()
+    // "Nothing was sent" stays true: the cron has no new group override to apply.
+    expect(grp().override).toEqual(prior)
+    const rollback = updatesTo(db, 'shelly_groups')[1]
+    expect(rollback.filters).toEqual({ id: GRP_A, location_id: LOC_A })
+  })
+
+  it('a failed rollback is still a 500, and is logged', async () => {
+    db.conf.updateError.shelly_devices = { message: 'pg down' }
+    // The first group write (the override) lands; the second (the rollback) fails.
+    db.conf.updateError.shelly_groups = () => (updatesTo(db, 'shelly_groups').length > 1 ? { message: 'pg gone' } : null)
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+    expect(res.status).toBe(500)
+    expect((await res.json()).code).toBe('member_overrides_not_cleared')
+    expect(setGroups).not.toHaveBeenCalled()
+    expect(logWarn.mock.calls.some(([, msg]) => /rollback failed/.test(msg))).toBe(true)
   })
 })
 
@@ -294,6 +312,38 @@ describe('POST …/groups/[id]/toggle — back to schedule', () => {
     expect(runNowForDevice).toHaveBeenCalledTimes(1)
     expect(body).toMatchObject({ applied: 'none', pending_device_ids: [DEV_A, DEV_A2] })
     expect(db.rowsIn('shelly_connections').find((c) => c.location_id === LOC_A).status).toBe('action_needed')
+  })
+
+  it('a class-mode group reads the timetable ONCE for all its members', async () => {
+    const members = [0, 1, 2].map((i) => deviceRow({ id: `d0000000-0000-4000-8000-00000000010${i}`, device_id: `aabbcc00010${i}`, group_id: GRP_A, schedule_mode: 'none', fixed_windows: [] }))
+    useDb(world({ members, group: { schedule_mode: 'class', fixed_windows: [], class_rule: { lead_min: 15, lag_min: 10, merge_gap_min: 30, days: [1, 2, 3, 4, 5, 6, 7] } } }))
+    db.rowsIn('class_occurrences').push({ location_id: LOC_A, starts_at: '2026-08-23T17:00:00.000Z', ends_at: '2026-08-23T18:00:00.000Z', cancelled_at: null, name: 'HIIT' })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))).json()
+    expect(body.applied).toBe('all')
+    expect(selectsFrom(db, 'class_occurrences')).toHaveLength(1)
+    expect(runNowForDevice).toHaveBeenCalledTimes(3)
+    for (const [, , , deps] of runNowForDevice.mock.calls) {
+      const got = await deps.loadOccurrences()
+      expect(got).toEqual({ ok: true, occurrences: [expect.objectContaining({ name: 'HIIT' })] })
+    }
+    expect(selectsFrom(db, 'class_occurrences')).toHaveLength(1)
+  })
+
+  it('a timetable that cannot be read for a class-mode group runs nothing and names every member', async () => {
+    useDb({ ...world({ group: { schedule_mode: 'class', fixed_windows: [], class_rule: {} } }), selectError: { class_occurrences: { message: 'pg down' } } })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))).json()
+    expect(runNowForDevice).not.toHaveBeenCalled()
+    expect(body).toMatchObject({ applied: 'none', pending_device_ids: [DEV_A, DEV_A2] })
+    expect(body.results.every((r) => r.code === 'occurrences')).toBe(true)
+  })
+
+  it('a fixed group reads no timetable', async () => {
+    await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+    expect(selectsFrom(db, 'class_occurrences')).toHaveLength(0)
+  })
+
+  it('declares a long enough budget for a sequential run', () => {
+    expect(maxDuration).toBe(120)
   })
 
   it('a group with no schedule clears and runs nothing', async () => {

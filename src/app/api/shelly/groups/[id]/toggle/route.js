@@ -17,7 +17,9 @@
 //      the location, error checked). If that fails we REFUSE before sending:
 //      a member keeping a live device override would be put back by the cron
 //      (device beats group), so the press would visibly not hold for it. The
-//      group override is already saved, which the copy says.
+//      group override from step 1 is ROLLED BACK to its previous value first
+//      (best-effort, checked, logged on failure), so "nothing was sent" stays
+//      true: otherwise the next tick would apply it to every member.
 //   3. ONE set/groups call over the members, switches and lights together.
 //      Zero members: no client is even built (Review Focus 1).
 //   4. each member that landed is stamped with overrideKey(groupOverride) —
@@ -32,7 +34,8 @@
 //      by absence).
 //
 // 'auto' clears the group override AND the member overrides, then runs each
-// member through runNowForDevice with the (cleared) group, SEQUENTIALLY and on
+// member through runNowForDevice with the (cleared) group — a class-mode
+// group's timetable read once and shared — SEQUENTIALLY and on
 // ONE shared client, because they share the account's 1 req/sec budget and the
 // client's pacing only spaces calls made through the same instance. A
 // rejected key or a bad host stops the run (nothing after it can land); the
@@ -51,13 +54,16 @@ import { DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-l
 import { loadGroup, publicGroup } from '@/lib/shelly/group-load'
 import { optimisticState } from '@/lib/shelly/optimistic-state'
 import { overrideKey } from '@/lib/shelly/plan'
-import { runNowForDevice, deviceKind } from '@/lib/shelly/reconcile'
+import { runNowForDevice, deviceKind, loadTodayOccurrences } from '@/lib/shelly/reconcile'
 import { ShellyGroupToggle, ShellyOverride, MAX_OVERRIDE_HOURS, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 import { groupId } from '@/lib/shelly/status'
 import { nextLocalMidnightMs } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+// 'auto' runs up to MAX_DEVICES_PER_LOCATION members one at a time on a
+// 1 req/sec account budget, so it needs more than the platform default.
+export const maxDuration = 120
 
 const MODULE = 'shelly-group-toggle'
 const HOUR_MS = 60 * 60 * 1000
@@ -169,18 +175,33 @@ export const POST = withAuth(
         .eq('location_id', locationId)
       if (clearError) {
         logError(MODULE, 'member override clear failed', { locationId, groupId: group.id, error: clearError.message })
+        // Roll step 1 back so "nothing was sent" stays true: a live group
+        // override left on the row would be applied by the next tick to every
+        // member without a device override of its own. Best-effort, checked.
+        const { error: rollbackError } = await db
+          .from('shelly_groups')
+          .update({ override: group.override ?? null, updated_at: nowIso })
+          .eq('id', group.id)
+          .eq('location_id', locationId)
+        if (rollbackError) {
+          logWarn(MODULE, 'group override rollback failed — the saved override stands', {
+            locationId, groupId: group.id, error: rollbackError.message,
+          })
+        }
         return bad(
           override
-            ? 'Saved for the group, but its devices keep their own switch settings — nothing was sent. Try again.'
-            : 'The group is back on its schedule, but its devices keep their own switch settings — try again.',
+            ? "Could not take over this group's devices — nothing was sent. Try again."
+            : 'Could not hand the group back to its schedule — nothing was changed. Try again.',
           500,
-          { code: 'member_overrides_not_cleared', group: publicGroup(savedGroup) },
+          { code: 'member_overrides_not_cleared', group: publicGroup(rollbackError ? savedGroup : group) },
         )
       }
     }
     const cleared = members.map((m) => ({ ...m, override: null }))
 
-    if (input.state === 'auto') return backToSchedule({ db, engineConn, locationId, group: savedGroup, members: cleared, unmanaged })
+    if (input.state === 'auto') {
+      return backToSchedule({ db, engineConn, locationId, group: savedGroup, members: cleared, unmanaged, tz: requestTz(user) })
+    }
 
     // ——— 3. one command over the members ————————————————————————————
     const on = override.state === 'on'
@@ -288,7 +309,7 @@ export const POST = withAuth(
  * 'auto', after both overrides are cleared: run each member through the
  * group's schedule now. Sequential, one shared client (see the header).
  */
-async function backToSchedule({ db, engineConn, locationId, group, members, unmanaged }) {
+async function backToSchedule({ db, engineConn, locationId, group, members, unmanaged, tz }) {
   if (!members.length) {
     return NextResponse.json({ success: true, applied: 'all', pending_device_ids: [], results: [], group: publicGroup(group) })
   }
@@ -306,6 +327,26 @@ async function backToSchedule({ db, engineConn, locationId, group, members, unma
     })
   }
 
+  // A class-mode group's timetable is read ONCE and handed to every member's
+  // run (runNowForDevice's loadOccurrences dep), not re-read per member. A
+  // read that fails runs nobody: every member would be refused the same way.
+  let loadOccurrences
+  if (group.schedule_mode === 'class') {
+    const occ = await loadTodayOccurrences(db, locationId, tz, Date.now())
+    if (!occ.ok) {
+      logWarn(MODULE, 'back-to-schedule: timetable unreadable — nothing run', { locationId, groupId: group.id, error: occ.error })
+      return NextResponse.json({
+        success: true,
+        applied: 'none',
+        pending_device_ids: members.map((m) => m.id),
+        results: members.map((m) => ({ device_id: m.id, applied: null, code: 'occurrences' })),
+        group: publicGroup(group),
+      })
+    }
+    const cached = { ok: true, occurrences: occ.occurrences }
+    loadOccurrences = async () => cached
+  }
+
   const shared = createShellyClient(engineConn)
   const makeClient = () => shared
   const results = []
@@ -315,7 +356,7 @@ async function backToSchedule({ db, engineConn, locationId, group, members, unma
       results.push({ device_id: m.id, applied: null, code: stopped })
       continue
     }
-    const r = await runNowForDevice(db, engineConn, m, { group, makeClient })
+    const r = await runNowForDevice(db, engineConn, m, { group, makeClient, ...(loadOccurrences ? { loadOccurrences } : {}) })
     if (r.ok && !r.noop) {
       results.push({ device_id: m.id, applied: r.action, reason: r.reason })
       continue
