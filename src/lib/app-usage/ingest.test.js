@@ -54,6 +54,28 @@ describe('clampBatch', () => {
   })
 })
 
+describe('clampBatch with the device clock', () => {
+  it('shifts a fast clock back by the gap between sent_at and server now', () => {
+    const skew = 10 * MIN
+    const b = batch({ start: NOW - 5 * MIN + skew, end: NOW + skew })
+    const out = clampBatch({ ...b, sent_at: iso(NOW + skew) }, NOW)
+    expect(out.session).toMatchObject({ started_at: iso(NOW - 5 * MIN), ended_at: iso(NOW) })
+    expect(out.visits[0]).toMatchObject({ started_at: iso(NOW - 5 * MIN), ended_at: iso(NOW) })
+  })
+
+  it('shifts a slow clock forward the same way', () => {
+    const b = batch({ start: NOW - 65 * MIN, end: NOW - 60 * MIN })
+    const out = clampBatch({ ...b, sent_at: iso(NOW - 60 * MIN) }, NOW)
+    expect(out.session.ended_at).toBe(iso(NOW))
+  })
+
+  it('ignores an absurd sent_at (more than 48 h out)', () => {
+    const b = batch()
+    const out = clampBatch({ ...b, sent_at: iso(NOW + 100 * H) }, NOW)
+    expect(out.session.ended_at).toBe(iso(NOW))
+  })
+})
+
 describe('shouldRecordFor', () => {
   const staff = { id: 'p1', profileRole: 'staff', isMaster: false }
   it('records an ordinary staff member', () => expect(shouldRecordFor(staff)).toBe(true))
@@ -63,14 +85,16 @@ describe('shouldRecordFor', () => {
   it('never records a support session', () => expect(shouldRecordFor({ ...staff, supportSession: { mode: 'read' } })).toBe(false))
 })
 
-function makeDb({ existing = null, readError = null, sessionError = null, visitError = null } = {}) {
+function makeDb({ existing = null, existingVisits = [], readError = null, sessionError = null, visitError = null } = {}) {
   const calls = []
   const db = {
     from(table) {
       const b = {
         select(cols) { calls.push(['select', table, cols]); return b },
         eq(col, val) { calls.push(['eq', table, col, val]); return b },
+        in(col, val) { calls.push(['in', table, col, val]); return b },
         maybeSingle() { return Promise.resolve({ data: existing, error: readError }) },
+        then(resolve) { return Promise.resolve({ data: existingVisits, error: null }).then(resolve) },
         upsert(rows, opts) {
           calls.push(['upsert', table, rows, opts])
           const error = table === 'app_usage_sessions' ? sessionError : visitError
@@ -122,6 +146,25 @@ describe('recordUsageBatch', () => {
     await expect(recordUsageBatch(args(makeDb({ readError: { code: 'X' } }).db))).rejects.toThrow()
     await expect(recordUsageBatch(args(makeDb({ sessionError: { code: 'X' } }).db))).rejects.toThrow()
     await expect(recordUsageBatch(args(makeDb({ visitError: { code: 'X' } }).db))).rejects.toThrow()
+  })
+
+  it('never moves a session or visit end backwards (a late, older batch)', async () => {
+    const later = iso(NOW + MIN)
+    const { db, calls } = makeDb({
+      existing: { profile_id: 'p1', location_id: 'loc1', ended_at: later },
+      existingVisits: [{ id: 'v1', ended_at: later }],
+    })
+    await recordUsageBatch({ ...args(db), nowMs: NOW + 2 * MIN })
+    const upserts = calls.filter((c) => c[0] === 'upsert')
+    expect(upserts[0][2].ended_at).toBe(later)
+    expect(upserts[1][2][0].ended_at).toBe(later)
+  })
+
+  it('refuses a visit id that already belongs to another session', async () => {
+    const { db, calls } = makeDb({ existingVisits: [{ id: 'v1', session_id: 'other', ended_at: iso(NOW) }] })
+    const res = await recordUsageBatch(args(db))
+    expect(res).toEqual({ recorded: true, visits: 0 })
+    expect(calls.filter((c) => c[0] === 'upsert').map((c) => c[1])).toEqual(['app_usage_sessions'])
   })
 
   it('skips the visit write when there are no visits', async () => {

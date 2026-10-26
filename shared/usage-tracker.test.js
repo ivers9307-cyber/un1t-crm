@@ -157,6 +157,28 @@ describe('flushUsage', () => {
     expect(t.pending().map((b) => b.session.id)).toEqual(['b'])
   })
 
+  it('stamps each send with the device clock at send time', async () => {
+    const t = tracker()
+    t.requeue({ session: { id: 'a' }, visits: [] })
+    const send = vi.fn(async () => 'ok')
+    await flushUsage(t, send, T0)
+    expect(send.mock.calls[0][0].sent_at).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/))
+    expect(t.pending()).toHaveLength(0)
+  })
+
+  it('a retried batch goes back ahead of one queued while it was in flight', async () => {
+    const t = tracker()
+    t.screen('contacts', T0)
+    let release
+    const send = vi.fn(() => new Promise((r) => { release = r }))
+    const flushing = flushUsage(t, send, T0 + 10_000)
+    t.pause(T0 + 20_000) // backgrounded mid-send: the final batch queues now
+    release('retry')
+    await flushing
+    const ends = t.pending().map((b) => b.session.ended_at)
+    expect(ends).toEqual([iso(T0 + 10_000), iso(T0 + 20_000)])
+  })
+
   it('drops a batch the server will never take', async () => {
     const t = tracker()
     t.requeue({ session: { id: 'a' }, visits: [] })

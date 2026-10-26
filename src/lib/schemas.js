@@ -554,4 +554,6 @@ export const usageEventsSchema = z.object({
     started_at: usageInstant,
     ended_at: usageInstant,
   })).max(USAGE_BATCH_MAX_VISITS),
+  // The device clock when the batch was sent (the route corrects skew by it).
+  sent_at: usageInstant.optional(),
 })

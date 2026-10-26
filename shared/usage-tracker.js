@@ -10,6 +10,7 @@
 //   resume(now)           back in use: a NEW session starts here
 //   drain(now)            the live session's batch so far, or null
 //   requeue(batch)        a batch to (re)send; at most 10 are kept
+//   requeueFront(batches) put failed batches back ahead of newer ones
 //   takePending()         empty the queue and return it, oldest first
 //
 // Ids are minted here (newId), so a batch that is re-sent after a network
@@ -97,9 +98,18 @@ export function createUsageTracker({
     if (feature) openVisit(feature, nowMs)
   }
 
+  const cap = () => {
+    if (pending.length > MAX_PENDING_BATCHES) pending = pending.slice(-MAX_PENDING_BATCHES)
+  }
   function requeue(b) {
     pending.push(b)
-    if (pending.length > MAX_PENDING_BATCHES) pending = pending.slice(-MAX_PENDING_BATCHES)
+    cap()
+  }
+  // Batches that failed to send go back AHEAD of anything queued while they
+  // were in flight, so one session's batches always land oldest first.
+  function requeueFront(batches) {
+    pending = [...batches, ...pending]
+    cap()
   }
 
   return {
@@ -140,6 +150,7 @@ export function createUsageTracker({
     },
 
     requeue,
+    requeueFront,
 
     pending() {
       return [...pending]
@@ -174,12 +185,14 @@ export async function flushUsage(tracker, send, nowMs) {
     for (let i = 0; i < queue.length; i++) {
       let outcome
       try {
-        outcome = await send(queue[i])
+        // The device clock at send time: the server shifts the batch by
+        // its own now minus this, so a fast or slow clock still lands right.
+        outcome = await send({ ...queue[i], sent_at: new Date().toISOString() })
       } catch {
         outcome = 'retry'
       }
       if (outcome === 'retry') {
-        for (const b of queue.slice(i)) tracker.requeue(b)
+        tracker.requeueFront(queue.slice(i))
         return
       }
     }
