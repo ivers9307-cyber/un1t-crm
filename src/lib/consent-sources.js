@@ -135,6 +135,9 @@ export const CONSENT_SOURCE_CATEGORY = Object.freeze({
   // BULK: a correction, so it must not move the NET LIST CHANGE headline —
   // the departure it records already happened, months earlier.
   unsub_click_recovery:           BULK,
+  // HOST-EMAILS.2 — an operator correction restoring a contact a link
+  // scanner opted out. Never an arrival: the person never asked to leave.
+  scanner_reversal:               BULK,
   // Already hand-excluded from a genuine-opt-out query by mig 488.
   leadcap1_scope_correction:      BULK,
 })

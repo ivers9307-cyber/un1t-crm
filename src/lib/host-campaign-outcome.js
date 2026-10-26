@@ -75,3 +75,38 @@ export const FAILURE_COPY = Object.freeze({
 export function failureCopy(reason) {
   return FAILURE_COPY[reason] || 'Could not be sent'
 }
+
+// HOST-EMAILS.2 — host_campaign_clicks keys. The footer's unsubscribe link is
+// `<base>/unsubscribe/host/<signed token>`, a DIFFERENT URL per recipient, and
+// the token is a credential (it opts that contact out). Postmark tracks the
+// footer anchor like any other link, so its Click carries the token. Every
+// writer stores the link through clickUrlForStorage, which cuts the token off,
+// so the table never holds one, the report groups every unsubscribe click on
+// one row, and nothing hands the host portal another person's opt-out link.
+const HOST_UNSUB_PATH = '/unsubscribe/host/'
+
+/** @param {string} url */
+export function isHostUnsubscribeUrl(url) {
+  return String(url || '').includes(HOST_UNSUB_PATH)
+}
+
+/** @param {string} url  a clicked link as Postmark reports it */
+export function clickUrlForStorage(url) {
+  const s = String(url || '')
+  const i = s.indexOf(HOST_UNSUB_PATH)
+  return i < 0 ? s : s.slice(0, i + HOST_UNSUB_PATH.length)
+}
+
+/**
+ * The click's instant, normalised to millisecond ISO, so the webhook (the
+ * event's ReceivedAt) and the backfill (the details timeline's ReceivedAt)
+ * write the SAME value for one click whatever precision or offset each
+ * spells it in, and the (send_id, url, clicked_at) unique index dedupes them.
+ * Null for a value that is not a time, so the caller can skip the row.
+ * @param {string} v
+ * @returns {string|null}
+ */
+export function clickInstant(v) {
+  const ms = typeof v === 'string' && v ? Date.parse(v) : NaN
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null
+}

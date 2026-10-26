@@ -187,6 +187,8 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       audienceEventId: null,
       mailingListOnly: true,
       emailType: 'marketing',
+      nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 
@@ -201,6 +203,8 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       audienceEventId: 'ev-1',
       mailingListOnly: false,
       emailType: 'marketing',
+      nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 
@@ -218,6 +222,8 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       audienceEventId: 'ev-legacy',
       mailingListOnly: false,
       emailType: 'marketing',
+      nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 
@@ -232,6 +238,8 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
       audienceEventId: null,
       mailingListOnly: false,
       emailType: 'marketing',
+      nonOpenersOf: null,
+      nonOpeners: false,
     })
   })
 })

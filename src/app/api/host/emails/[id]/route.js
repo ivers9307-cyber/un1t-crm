@@ -4,13 +4,18 @@
 // PATCH /api/host/emails/[id] — update a DRAFT campaign (subject / body /
 //       design / audience). CAS on status='draft' so a campaign that started
 //       sending can never be rewritten mid-flight. Same validation as create.
+//       HOST-EMAILS.2 — audience_kind 'non_openers' points the draft at a
+//       parent campaign (audience_campaign_id), resolved at send time.
+// DELETE /api/host/emails/[id] — HOST-EMAILS.2. Only a draft or scheduled
+//       email may go; a sent one is the record of what went out, and mig
+//       593b's trigger refuses it at the database too.
 // Tenancy: every query .eq('host_id', session.host.id) → 404, not 403.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
-import { designJsonTooBig, assertAudienceEventOwned } from '@/lib/host-campaign-draft'
+import { designJsonTooBig, assertAudienceEventOwned, reminderParentProblem } from '@/lib/host-campaign-draft'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,7 +26,8 @@ const CampaignUpdateSchema = z.object({
   body: z.string().min(1, 'Body is required').max(300000, 'Body is too long'),
   design_json: z.unknown().optional().nullable(),
   audience_event_id: z.string().regex(UUIDISH).optional().nullable(),
-  audience_kind: z.enum(['all', 'event', 'mailing_list']).optional(),
+  audience_kind: z.enum(['all', 'event', 'mailing_list', 'non_openers']).optional(),
+  audience_campaign_id: z.string().regex(UUIDISH).optional().nullable(),
   email_type: z.enum(['marketing', 'utility']).optional(),
 })
 
@@ -33,7 +39,7 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data, error } = await db
     .from('host_campaigns')
-    .select('id, subject, body_html, design_json, audience_kind, audience_event_id, email_type, status, recipient_count, sent_count, created_at, sent_at')
+    .select('id, subject, body_html, design_json, audience_kind, audience_event_id, audience_campaign_id, email_type, status, recipient_count, sent_count, created_at, sent_at')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
@@ -72,6 +78,28 @@ export async function PATCH(request, props) {
     if (audienceErr) return NextResponse.json({ success: false, error: audienceErr }, { status: 404 })
   }
 
+  // HOST-EMAILS.2 — 'non_openers' points this draft at a parent campaign
+  // (resolved at send time by resolveHostRecipients). The parent must be
+  // named, owned by this host, and a sent marketing email
+  // (reminderParentProblem), the same rule the reminder-draft route applies.
+  let audienceCampaignId = null
+  if (kind === 'non_openers') {
+    audienceCampaignId = parsed.data.audience_campaign_id || null
+    if (!audienceCampaignId) {
+      return NextResponse.json({ success: false, error: 'This reminder has no parent email.' }, { status: 400 })
+    }
+    const { data: parent, error: parentErr } = await db
+      .from('host_campaigns')
+      .select('id, status, email_type')
+      .eq('id', audienceCampaignId)
+      .eq('host_id', session.host.id)
+      .maybeSingle()
+    if (parentErr) return NextResponse.json({ success: false, error: parentErr.message }, { status: 500 })
+    if (!parent) return NextResponse.json({ success: false, error: 'Parent email not found.' }, { status: 404 })
+    const problem = reminderParentProblem(parent)
+    if (problem) return NextResponse.json({ success: false, error: problem }, { status: 409 })
+  }
+
   // CAS on draft — a concurrent send flipped it → 0 rows → 409.
   const { data: updated, error } = await db
     .from('host_campaigns')
@@ -81,6 +109,7 @@ export async function PATCH(request, props) {
       design_json: parsed.data.design_json ?? null,
       audience_kind: kind,
       audience_event_id: audienceEventId,
+      audience_campaign_id: audienceCampaignId,
       email_type: parsed.data.email_type === 'utility' ? 'utility' : 'marketing',
     })
     .eq('id', params.id)
@@ -90,6 +119,42 @@ export async function PATCH(request, props) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   if (!updated || updated.length === 0) {
     return NextResponse.json({ success: false, error: 'This email is no longer a draft.' }, { status: 409 })
+  }
+  return NextResponse.json({ success: true, data: { id: params.id } })
+}
+
+// DELETE /api/host/emails/[id] — HOST-EMAILS.2. Only a draft or a scheduled
+// email may go (CAS on status); a sent one is the record of what went out,
+// and mig 593b's trigger refuses it at the database too.
+export async function DELETE(_request, props) {
+  const params = await props.params
+  const session = await getCurrentHost()
+  if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  const db = createServerClient()
+  const { data: rows, error } = await db
+    .from('host_campaigns')
+    .delete()
+    .eq('id', params.id)
+    .eq('host_id', session.host.id)
+    .in('status', ['draft', 'scheduled'])
+    .select('id')
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (!rows || rows.length === 0) {
+    // Zero rows means either "not this host's / no such email" (404, so ids
+    // stay unenumerable) or "exists but is past scheduled" (409). Re-read,
+    // scoped to the host, to tell them apart.
+    const { data: existing, error: readErr } = await db
+      .from('host_campaigns')
+      .select('id')
+      .eq('id', params.id)
+      .eq('host_id', session.host.id)
+      .maybeSingle()
+    if (readErr) return NextResponse.json({ success: false, error: readErr.message }, { status: 500 })
+    if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    return NextResponse.json(
+      { success: false, error: "Only drafts and scheduled emails can be deleted. Anything that has started sending is kept as the record of what went out." },
+      { status: 409 },
+    )
   }
   return NextResponse.json({ success: true, data: { id: params.id } })
 }

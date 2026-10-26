@@ -10,13 +10,14 @@ import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchHostContactRows } from '@/lib/host-contact-list'
+import { failureCopy } from '@/lib/host-campaign-outcome'
 import { csvCell } from '@/lib/attendee-csv'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const BOM = '﻿'
-const HEADER = ['Name', 'Email', 'Source', 'Joined', 'Emailable']
+const HEADER = ['Name', 'Email', 'Source', 'Joined', 'Emailable', 'Reason']
 const SOURCE_LABEL = { event: 'Event', mailing_list: 'Mailing list' }
 
 export async function GET() {
@@ -34,6 +35,7 @@ export async function GET() {
         SOURCE_LABEL[r.source] || r.source || '',
         r.created_at || '',
         r.emailable ? 'Yes' : 'No',
+        r.emailable ? '' : failureCopy(r.emailable_reason),
       ])
     }
     const csv = lines.map((l) => l.map(csvCell).join(',')).join('\r\n')

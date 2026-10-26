@@ -3,21 +3,19 @@
 // proxy.js allowlists the '/unsubscribe/' prefix (startsWith, so this
 // subpath rides it) and AppShell PUBLIC_PATHS carries '/unsubscribe'.
 //
-// Server component — the token is the capability, the GET does the work:
-// verify the HMAC → load the host name → revoke via revokeHostConsent
-// (host_email_suppressions insert-once + a consent_log opt_out row;
-// re-clicking the link is a no-op) → push a Postmark suppression on the
-// host's own stream → confirmation copy. Suppression is PER-HOST: the
-// contact's UN1T marketing preferences and other hosts' lists are
-// deliberately untouched, and the copy says so. Anything invalid (bad
-// signature, unknown host, deleted contact) gets one generic invalid-link
-// page — no detail to probe.
+// HOST-EMAILS.2 — the GET writes NOTHING. On 7 Sep 2026 a university mail
+// scanner followed every link in a host email within seconds of delivery and
+// opted three people out. The button posts to the one-click route, which is
+// the single writer. Server component — the token is the capability, the
+// GET only verifies the HMAC and loads the host name to render either the
+// confirm button or, after a successful POST, the confirmation copy.
+// Suppression is PER-HOST: the contact's UN1T marketing preferences and
+// other hosts' lists are deliberately untouched, and the copy says so.
+// Anything invalid (bad signature, unknown host, deleted contact) gets one
+// generic invalid-link page — no detail to probe.
 
 import { verifyHostUnsubToken } from '@/lib/host-unsubscribe'
 import { createServerClient } from '@/lib/supabase'
-import { revokeHostConsent } from '@/lib/host-consent'
-import { suppressAtPostmark } from '@/lib/postmark-suppressions'
-import { hostServerToken } from '@/lib/postmark-server-for-location'
 import { logError } from '@/lib/log'
 import { headers } from 'next/headers'
 import { resolveGymSiteName } from '@/lib/default-site-name'
@@ -51,8 +49,14 @@ function InvalidLink() {
   )
 }
 
+// A Next.js searchParams value is a string for one occurrence of a key but
+// an array for a repeated one (e.g. ?done=1&done=2) — normalise before
+// comparing so a repeated/duped query param can't dodge the done/error checks.
+const first = (v) => (Array.isArray(v) ? v[0] : v)
+
 export default async function HostUnsubscribePage(props) {
   const params = await props.params
+  const sp = await props.searchParams
 
   let ids = null
   try {
@@ -67,49 +71,40 @@ export default async function HostUnsubscribePage(props) {
   const db = createServerClient()
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, postmark_stream_id, anchor_location_id')
+    .select('id, name')
     .eq('id', ids.hostId)
     .maybeSingle()
   if (!host) return <InvalidLink />
 
-  // HOST-CONSENT.1 — the ONE writer of a host opt-out. Per-host by design:
-  // UN1T marketing preferences and other hosts' lists are untouched.
-  const result = await revokeHostConsent(db, {
-    hostId: host.id, contactId: ids.contactId, source: 'host_unsubscribe_page',
-  })
-  if (!result.ok) {
-    // FK failure (deleted contact) or transient DB error — either way the
-    // suppression wasn't recorded, so don't claim it was.
-    logError('host-unsubscribe', 'suppression write failed', { err: result.error })
-    return <InvalidLink />
-  }
-
-  // Pushed on every click, not only when the row flipped: the consent-drift
-  // cron reconciles the UN1T broadcast stream only, so a repeat click is the
-  // one retry a failed host-stream push gets.
-  // Second refusal at Postmark on the host's own stream — best-effort.
-  // W1.E4 — on the server host mail goes out on (hostServerToken: null =
-  // global today, since host sends ride the global server).
-  if (host.postmark_stream_id) {
-    try {
-      const { data: contact } = await db.from('contacts').select('email').eq('id', ids.contactId).maybeSingle()
-      if (contact?.email) {
-        const serverToken = await hostServerToken(db, host)
-        await suppressAtPostmark(contact.email, { stream: host.postmark_stream_id, serverToken })
-      }
-    } catch (e) {
-      logError('host-unsubscribe', 'Postmark host-stream suppress threw', { err: e?.message || String(e) })
-    }
+  if (first(sp?.done) === '1') {
+    return (
+      <Shell>
+        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Unsubscribed</p>
+        <h1 className="mt-3 text-2xl font-bold">You&apos;re unsubscribed</h1>
+        <p className="mt-4 text-sm text-white/70">
+          You&apos;ll no longer receive emails from {host.name}. Your other email
+          preferences are unchanged.
+        </p>
+      </Shell>
+    )
   }
 
   return (
     <Shell>
-      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Unsubscribed</p>
-      <h1 className="mt-3 text-2xl font-bold">You&apos;re unsubscribed</h1>
+      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Unsubscribe</p>
+      <h1 className="mt-3 text-2xl font-bold">Stop emails from {host.name}?</h1>
       <p className="mt-4 text-sm text-white/70">
-        You&apos;ll no longer receive emails from {host.name}. Your other email
-        preferences are unchanged.
+        This only affects emails from {host.name}. Your other email preferences are unchanged.
       </p>
+      {first(sp?.error) === '1' && (
+        <p className="mt-4 text-sm text-red-300">That did not work. Please try again.</p>
+      )}
+      <form method="post" action={`/api/unsubscribe/host/${encodeURIComponent(params.token)}`} className="mt-6">
+        <input type="hidden" name="redirect" value="1" />
+        <button type="submit" className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-white/90">
+          Unsubscribe
+        </button>
+      </form>
     </Shell>
   )
 }

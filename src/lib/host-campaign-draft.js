@@ -7,7 +7,7 @@
 // handlers) and reused by the emails list route (GET + POST) and the
 // schedule/unschedule routes, so a column added to one response is added
 // to all of them.
-export const HOST_CAMPAIGN_LIST_COLUMNS = 'id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error'
+export const HOST_CAMPAIGN_LIST_COLUMNS = 'id, subject, status, audience_kind, audience_event_id, audience_campaign_id, email_type, recipient_count, sent_count, created_at, sent_at, scheduled_for, schedule_error'
 
 // The design document is host-authored JSON we store verbatim — cap its
 // serialized size so a hostile client can't balloon the row.
@@ -17,14 +17,42 @@ export function designJsonTooBig(designJson) {
 }
 
 // The audience event must be one of THIS host's events (404-shaped error
-// keeps ids unenumerable).
+// keeps ids unenumerable). A read error is a distinct failure — the caller
+// (PATCH) maps any non-null string here to a 404, so a query that actually
+// failed (not "no rows") must NOT read as "no such event"; keep the string
+// contract but make its text distinguishable ('Could not check the event.')
+// rather than silently swallowing `error` and reporting 'Event not found'.
 export async function assertAudienceEventOwned(db, hostId, audienceEventId) {
   if (!audienceEventId) return null
-  const { data } = await db
+  const { data, error } = await db
     .from('race_events')
     .select('id')
     .eq('id', audienceEventId)
     .eq('host_id', hostId)
     .maybeSingle()
+  if (error) return 'Could not check the event.'
   return data ? null : 'Event not found'
+}
+
+/**
+ * HOST-EMAILS.2 — why this campaign cannot be a reminder's parent, as host
+ * copy, or null when it can. One rule for the reminder-draft route, the
+ * PATCH that names a parent, the send-time resolver and the report's count:
+ *   - only a SENT email has recipients who could have not opened it;
+ *   - a UTILITY email rides the transactional stream with open and click
+ *     tracking OFF (postmark.js resolveTracking), so nobody on it ever
+ *     reads as having opened, and a "reminder to non-openers" would go to
+ *     everyone it reached.
+ * @param {{ status?: string, email_type?: string }|null} parent
+ * @returns {string|null}
+ */
+export function reminderParentProblem(parent) {
+  if (!parent || parent.status !== 'sent') return 'Only a sent email can have a reminder.'
+  if (parent.email_type === 'utility') return "Opens aren't tracked on utility emails, so there's no way to tell who didn't open it."
+  return null
+}
+
+/** HOST-EMAILS.2 — subject for a copied/reminder draft, capped at the column's 200. */
+export function copySubject(subject, prefix = 'Copy of ') {
+  return (prefix + (subject || '')).slice(0, 200)
 }

@@ -608,9 +608,25 @@ describe('fetchHostContactRows', () => {
     })
     const rows = await fetchHostContactRows(db, 'h1')
     expect(rows).toEqual([
-      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true },
-      { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true },
+      { contact_id: 'c1', name: 'Pat', email: 'c1@x.ie', source: 'event', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true, emailable_reason: null },
+      { contact_id: 'c2', name: 'Pat', email: 'c2@x.ie', source: 'mailing_list', created_at: '2026-07-01T10:00:00Z', marketing_consent: true, emailable: true, emailable_reason: null },
     ])
+  })
+
+  it('fetchHostContactRows carries emailable_reason (null when emailable)', async () => {
+    const db = fakeRowsDb({
+      memberships: [
+        membership('c1', { ...goodContact('c1'), email: 'bounced@x.ie', email_status: 'bounced' }),
+        membership('c2', { ...goodContact('c2'), email: 'ok@x.ie' }),
+      ],
+    })
+    const rows = await fetchHostContactRows(db, 'h1')
+    const blocked = rows.find((r) => r.email === 'bounced@x.ie')
+    const fine = rows.find((r) => r.email === 'ok@x.ie')
+    expect(blocked.emailable).toBe(false)
+    expect(blocked.emailable_reason).toBe('mailbox_blocked')
+    expect(fine.emailable).toBe(true)
+    expect(fine.emailable_reason).toBe(null)
   })
 
   it('HOST-CONSENT.1 — emailable follows host consent, not contacts.email_marketing', async () => {

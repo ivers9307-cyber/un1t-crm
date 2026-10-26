@@ -9,13 +9,23 @@
 // the button's number and the send can't disagree. Null (never 0) when the
 // helper fails, and null for any non-sent status; `resent_at` (mig 593)
 // rides along for the header.
+//
+// HOST-EMAILS.2 — three more fields: `paused_reason` (a 'sending' campaign
+// the queue has halted, from the same hostSendBlockReason predicate as the
+// list route); `non_openers_count` (how many a "Send a reminder" draft
+// would reach right now, from the same resolver the reminder-draft's send
+// uses — null, never 0, on a resolver failure); and top-level `links`, one
+// row per clicked URL from host_campaign_clicks (mig 593b), aggregated with
+// a per-person count and sorted clicks desc, the unsubscribe link last.
 
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { loadHostCampaignStats, ZERO_STATS } from '@/lib/host-campaign-stats'
-import { deriveOutcome, outcomeAt, failureCopy } from '@/lib/host-campaign-outcome'
-import { resolveMissedRecipients } from '@/lib/host-campaign-launch'
+import { deriveOutcome, outcomeAt, failureCopy, clickUrlForStorage, isHostUnsubscribeUrl } from '@/lib/host-campaign-outcome'
+import { resolveMissedRecipients, hostSendBlockReason } from '@/lib/host-campaign-launch'
+import { resolveHostRecipients } from '@/lib/host-campaign-email'
+import { reminderParentProblem } from '@/lib/host-campaign-draft'
 import { logError } from '@/lib/log'
 import { displayZoneFor } from '@/lib/display-zone'
 
@@ -54,12 +64,22 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data: campaign, error: campaignErr } = await db
     .from('host_campaigns')
-    .select('id, subject, status, email_type, audience_kind, audience_event_id, sent_at, resent_at, created_at, recipient_count, sent_count, scheduled_for')
+    .select('id, subject, status, email_type, audience_kind, audience_event_id, audience_campaign_id, sent_at, resent_at, created_at, recipient_count, sent_count, scheduled_for')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
   if (campaignErr) return NextResponse.json({ success: false, error: campaignErr.message }, { status: 500 })
   if (!campaign) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+
+  // HOST-EMAILS.2 — same host read + predicate as the list route, so a
+  // 'sending' campaign the queue has halted shows PAUSED here too.
+  const { data: hostRow, error: hostErr } = await db
+    .from('event_hosts')
+    .select('sender_domain_verified, sender_email, postmark_stream_id')
+    .eq('id', session.host.id)
+    .maybeSingle()
+  if (hostErr) return NextResponse.json({ success: false, error: hostErr.message }, { status: 500 })
+  const pausedReason = campaign.status === 'sending' ? hostSendBlockReason(hostRow, campaign) : null
 
   // Stats are NULL (not zeros) when the rpc fails: the page then says
   // "counts unavailable" instead of rendering confident zeros beside a full
@@ -74,6 +94,25 @@ export async function GET(_request, props) {
       missedCount = (await resolveMissedRecipients(db, { hostId: session.host.id, campaign })).missed.length
     } catch (err) {
       logError('host-campaigns', 'missed-count diff failed', { campaign_id: campaign.id, error: err?.message || String(err) })
+    }
+  }
+
+  // HOST-EMAILS.2 — how many a "Send a reminder" draft would reach right
+  // now: delivered-but-never-opened-or-clicked on THIS campaign, from the
+  // same resolver a reminder draft's send uses. Null (never 0) on failure,
+  // and null for any campaign that cannot have a reminder
+  // (reminderParentProblem: not sent, or a utility email, which is not
+  // open-tracked), so the report hides the button.
+  let nonOpenersCount = null
+  if (!reminderParentProblem(campaign)) {
+    try {
+      const nonOpeners = await resolveHostRecipients(db, session.host.id, {
+        nonOpenersOf: campaign.id,
+        emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing',
+      })
+      nonOpenersCount = nonOpeners.length
+    } catch (err) {
+      logError('host-campaigns', 'non-openers count failed', { campaign_id: campaign.id, error: err?.message || String(err) })
     }
   }
 
@@ -114,11 +153,47 @@ export async function GET(_request, props) {
     if (!page || page.length < PAGE) break
   }
 
+  // HOST-EMAILS.2 — one row per clicked URL from host_campaign_clicks (mig
+  // 593b), aggregated with a per-person count (contact_id, falling back to
+  // send_id for a click with no matched contact). Sorted clicks desc, the
+  // unsubscribe link always last regardless of its own click count.
+  const clicksByUrl = new Map()
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
+    const { data: page, error } = await db
+      .from('host_campaign_clicks')
+      .select('url, contact_id, send_id')
+      .eq('campaign_id', campaign.id)
+      .order('id')
+      .range(from, from + PAGE - 1)
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    for (const c of page || []) {
+      // Keyed through clickUrlForStorage too, so a row written before the
+      // writers cut the token still groups (and is returned) without it.
+      const url = clickUrlForStorage(c.url)
+      const agg = clicksByUrl.get(url) || { url, clicks: 0, people: new Set(), is_unsubscribe: isHostUnsubscribeUrl(url) }
+      agg.clicks += 1
+      agg.people.add(c.contact_id || c.send_id)
+      clicksByUrl.set(url, agg)
+    }
+    if (!page || page.length < PAGE) break
+  }
+  const links = [...clicksByUrl.values()]
+    .map((l) => ({ url: l.url, clicks: l.clicks, people: l.people.size, is_unsubscribe: l.is_unsubscribe }))
+    .sort((a, b) => (a.is_unsubscribe - b.is_unsubscribe) || (b.clicks - a.clicks) || a.url.localeCompare(b.url))
+
   // TZ.16 — the host's studio zone (its anchor location, where its events
   // live; the composer schedules in the same one, TZ.9), so the report shows
   // every stamp on the host's clock. Display only: an unreadable zone falls
   // back to the default, logged.
   const timezone = await hostDisplayZone(db, session.host.id)
 
-  return NextResponse.json({ success: true, data: { campaign: { ...campaign, stats, missed_count: missedCount }, recipients, timezone } })
+  return NextResponse.json({
+    success: true,
+    data: {
+      campaign: { ...campaign, stats, missed_count: missedCount, paused_reason: pausedReason, non_openers_count: nonOpenersCount },
+      recipients,
+      links,
+      timezone,
+    },
+  })
 }
