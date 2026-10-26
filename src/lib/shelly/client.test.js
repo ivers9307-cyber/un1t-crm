@@ -335,6 +335,44 @@ describe('createShellyClient', () => {
     expect(await c.setSwitch('a8032abe41fc', 0, false)).toMatchObject({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE' })
   })
 
+  it('setLight sends set/light with on ONLY', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '' }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.setLight('abc', 0, true)).toMatchObject({ ok: true })
+    expect(calls[0].url).toContain('/v2/devices/api/set/light?')
+    expect(JSON.parse(calls[0].init.body)).toEqual({ id: 'abc', channel: 0, on: true })
+  })
+
+  it('setLight: a 400 DEVICE_OFFLINE is a device failure', async () => {
+    const { fetchImpl } = fetchStub([{ status: 400, body: JSON.stringify({ error: 'DEVICE_OFFLINE' }) }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.setLight('abc', 0, false)).toMatchObject({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE' })
+  })
+
+  it('setGroups sends switch and light groups in one call and drops empty kinds', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '' }, { status: 200, body: '' }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.setGroups({ switch: ['a_0'], light: ['b_0'] }, true)
+    expect(JSON.parse(calls[0].init.body)).toEqual({ switch: { ids: ['a_0'], command: { on: true } }, light: { ids: ['b_0'], command: { on: true } } })
+    await c.setGroups({ switch: [], light: ['b_0'] }, false)
+    expect(JSON.parse(calls[1].init.body)).toEqual({ light: { ids: ['b_0'], command: { on: false } } })
+  })
+
+  it('setGroups still accepts a bare id array as switches', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 200, body: '' }])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    await c.setGroups(['a_0'], true)
+    expect(JSON.parse(calls[0].init.body)).toEqual({ switch: { ids: ['a_0'], command: { on: true } } })
+  })
+
+  it('setGroups with every kind empty spends no request', async () => {
+    const { fetchImpl, calls } = fetchStub([])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.setGroups({ switch: [], light: [] }, true)).toEqual({ ok: true, statusCode: 0, failed: {} })
+    expect(await c.setGroups([], true)).toEqual({ ok: true, statusCode: 0, failed: {} })
+    expect(calls).toHaveLength(0)
+  })
+
   it('setGroups sends the documented body and surfaces failedCommands', async () => {
     const { fetchImpl, calls } = fetchStub([{ status: 200, body: JSON.stringify({ failedCommands: { b_0: 'DEVICE_OFFLINE' } }) }])
     const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })

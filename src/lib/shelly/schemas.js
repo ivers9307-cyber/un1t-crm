@@ -187,6 +187,10 @@ export const ShellyAdoptBody = z.object({
     .regex(SHELLY_DEVICE_ID, { message: "That doesn't look like a Shelly device id" })
     .transform((s) => s.toLowerCase()),
   channel: z.number().int().min(0).max(7).default(0),
+  // SHELLYLIGHT.3 — a HINT, never the answer. The route stores the kind the
+  // live reading shows on this channel; the body only breaks a tie when the
+  // reading lists both a switch and a light there (or shows nothing at all).
+  kind: z.enum(['switch', 'light']).default('switch'),
   name: z.string().trim().min(1, { message: 'Give the device a name' }).max(80).optional(),
 }).strict()
 

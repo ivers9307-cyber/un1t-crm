@@ -77,9 +77,11 @@ function useDb(cfg) {
   createServerClient.mockReturnValue(db)
   return db
 }
+let setLight
 function useCloud(result = { ok: true, statusCode: 200 }) {
   setSwitch = vi.fn().mockResolvedValue(result)
-  createShellyClient.mockReturnValue({ setSwitch })
+  setLight = vi.fn().mockResolvedValue(result)
+  createShellyClient.mockReturnValue({ setSwitch, setLight })
   return setSwitch
 }
 const rowA = () => db.rowsIn('shelly_devices').find((r) => r.id === DEV_A)
@@ -202,6 +204,32 @@ describe('POST …/toggle — intent before command', () => {
     useDb(world({ channel: 2 }))
     await POST(toggleReq({ state: 'off' }), ctxFor(DEV_A))
     expect(setSwitch).toHaveBeenCalledWith(SHELLY_ID, 2, false)
+  })
+
+  // SHELLYLIGHT.3 — a light is a `light:N` component: set/switch would name
+  // something the dimmer does not have.
+  it('drives a kind:light device through setLight, never setSwitch', async () => {
+    useDb(world({ kind: 'light', channel: 1 }))
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(setLight).toHaveBeenCalledWith(SHELLY_ID, 1, true)
+    expect(setSwitch).not.toHaveBeenCalled()
+    expect(body.applied).toBe(true)
+  })
+
+  it('a light keeps its brightness in the optimistic last_state (set/light sends `on` only)', async () => {
+    useDb(world({ kind: 'light', last_state: { ...fullState(), brightness: 70 } }))
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(rowA().last_state).toMatchObject({ output: true, brightness: 70, source: 'manual', apower: null })
+  })
+
+  it('a never-read light lands brightness:null, and a switch never grows the key', async () => {
+    useDb(world({ kind: 'light' }))
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(rowA().last_state.brightness).toBeNull()
+    useDb(world())
+    useCloud()
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect('brightness' in rowA().last_state).toBe(false)
   })
 
   it('pins the location on the override write', async () => {

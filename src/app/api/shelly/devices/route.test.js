@@ -608,6 +608,56 @@ describe('POST /api/shelly/devices — what can be adopted', () => {
   })
 })
 
+// SHELLYLIGHT.3 — the kind stored is the kind the LIVE reading shows on that
+// channel. The body may only break a tie the reading leaves open.
+const rgbwItem = (over = {}) => ({
+  id: DEVICE_ID, online: true, gen: 2, code: 'SNPL-RGBW', settings: { name: 'Ceiling strip' },
+  status: { 'rgbw:0': { output: true, brightness: 55, apower: 9, aenergy: { total: 300 }, temperature: { tC: 40 }, source: 'cloud' } },
+  ...over,
+})
+
+describe('POST /api/shelly/devices — kind comes from the reading', () => {
+  it('adopts channel 0 of an rgbw device as a LIGHT even when the body says switch', async () => {
+    useCloud(getOk([rgbwItem()]))
+    const res = await POST(postReq({ device_id: DEVICE_ID, channel: 0, kind: 'switch' }))
+    expect(res.status).toBe(201)
+    const { payload } = db.calls.inserts[0]
+    expect(payload.kind).toBe('light')
+    expect(payload.last_state).toMatchObject({ online: true, output: true, brightness: 55, aenergy_wh: 300 })
+    expect((await res.json()).device.kind).toBe('light')
+  })
+
+  it('adopts a relay as a SWITCH even when the body says light', async () => {
+    const res = await POST(postReq({ device_id: DEVICE_ID, kind: 'light' }))
+    expect(res.status).toBe(201)
+    expect(db.calls.inserts[0].payload.kind).toBe('switch')
+    expect('brightness' in db.calls.inserts[0].payload.last_state).toBe(false)
+  })
+
+  it('lets the body pick only when the reading shows BOTH kinds on that channel', async () => {
+    const both = () => ({
+      id: DEVICE_ID, online: true, gen: 2, code: 'X',
+      status: { 'switch:0': { output: false }, 'light:0': { output: true, brightness: 20 } },
+    })
+    useCloud(getOk([both()]))
+    await POST(postReq({ device_id: DEVICE_ID, kind: 'light' }))
+    expect(db.calls.inserts[0].payload.kind).toBe('light')
+    expect(db.calls.inserts[0].payload.last_state.output).toBe(true)
+
+    useDb()
+    useCloud(getOk([both()]))
+    await POST(postReq({ device_id: DEVICE_ID }))
+    expect(db.calls.inserts[0].payload.kind).toBe('switch')
+    expect(db.calls.inserts[0].payload.last_state.output).toBe(false)
+  })
+
+  it('400s a kind that is neither switch nor light', async () => {
+    const res = await POST(postReq({ device_id: DEVICE_ID, kind: 'dimmer' }))
+    expect(res.status).toBe(400)
+    expect(db.calls.inserts).toEqual([])
+  })
+})
+
 describe('POST /api/shelly/devices — who already holds it', () => {
   it('409s adopted_here when this location already has the channel', async () => {
     useDb({ deviceRows: [deviceRow()] })

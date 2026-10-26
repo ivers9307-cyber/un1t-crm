@@ -95,8 +95,10 @@ const DURATIONS = [
 const placeholderName = (device) => `${device.model || 'Shelly'} · ${String(device.device_id || '').slice(-4)}`
 
 // The relay, as a word. The tri-state is the whole point — see rule 1.
-function outputLabel(output) {
-  if (output === true) return 'On'
+function outputLabel(output, brightness, kind) {
+  // A light says how bright it is; a switch never does, even if a stray
+  // brightness key rode in on its state.
+  if (output === true) return kind === 'light' && typeof brightness === 'number' ? `On · ${Math.round(brightness)}%` : 'On'
   if (output === false) return 'Off'
   return 'Unknown'
 }
@@ -402,7 +404,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
 
       {/* ——— what it is doing ————————————————————————————————————— */}
       <p className="text-xs text-un1t-subtle">
-        <span className="font-medium text-un1t-text">{outputLabel(state.output)}</span>
+        <span className="font-medium text-un1t-text">{outputLabel(state.output, state.brightness, device.kind)}</span>
         {' · '}
         {typeof state.apower === 'number' ? `${Math.round(state.apower)} W` : '—'}
         {state.at ? ` · ${formatRelative(state.at)}` : ''}

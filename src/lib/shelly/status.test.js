@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId,
+  normaliseGetItem, normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId,
   resolveDeviceName, nameShapeDiagnostic, rawItemsOf, rawItemId,
   normaliseDeviceListNames, deviceListShapeDiagnostic,
 } from './status'
@@ -22,7 +22,7 @@ describe('normaliseGetItems', () => {
   it('normalises a Plug S with every field, lowercasing the id', () => {
     const [d] = normaliseGetItems([plugS])
     expect(d).toMatchObject({ device_id: 'a8032abe41fc', online: true, gen: 2, model: 'SNPL-00112EU', name: 'Treadmill 1', supported: true })
-    expect(d.channels).toEqual([{ channel: 0, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in' }])
+    expect(d.channels).toEqual([{ kind: 'switch', brightness: null, channel: 0, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in' }])
   })
   it('expands a Pro 4PM into four channels', () => {
     const [d] = normaliseGetItems([pro4pm])
@@ -526,5 +526,61 @@ describe('deviceListShapeDiagnostic (SHELLY-NAMES.3) — keys only, never values
     expect(deviceListShapeDiagnostic({ isok: true, data: {} })).toMatchObject({ devicesType: 'undefined', entryCount: 0 })
     expect(deviceListShapeDiagnostic(null)).toMatchObject({ bodyKeys: [], dataKeys: [], devicesType: 'undefined', entryCount: 0 })
     expect(deviceListShapeDiagnostic({ data: { devices: [7] } })).toMatchObject({ devicesType: 'array', entryCount: 1, entryKeys: [] })
+  })
+})
+
+describe('light components (SHELLYLIGHT.1)', () => {
+  it('reads light:N components as lights with brightness', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: {
+      'light:0': { output: true, brightness: 40, apower: 12.5, aenergy: { total: 3 } },
+      'light:1': { output: false, brightness: 100 } } })
+    expect(r.supported).toBe(true)
+    expect(r.channels).toEqual([
+      expect.objectContaining({ kind: 'light', channel: 0, output: true, brightness: 40, apower: 12.5, aenergy_wh: 3 }),
+      expect.objectContaining({ kind: 'light', channel: 1, output: false, brightness: 100, apower: null }),
+    ])
+  })
+  it('reads rgb:0 and rgbw:0 profiles as a single light on channel 0', () => {
+    for (const key of ['rgb:0', 'rgbw:0']) {
+      const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { [key]: { output: true, brightness: 70 } } })
+      expect(r.channels).toEqual([expect.objectContaining({ kind: 'light', channel: 0, output: true, brightness: 70 })])
+    }
+  })
+  it('keeps one row when a device reports both rgb:0 and rgbw:0 (rgbw wins)', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: {
+      'rgb:0': { output: false, brightness: 10 }, 'rgbw:0': { output: true, brightness: 90 } } })
+    expect(r.channels).toEqual([expect.objectContaining({ kind: 'light', channel: 0, output: true, brightness: 90 })])
+  })
+  it('lists switches and lights together', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'switch:0': { output: true }, 'light:0': { output: false, brightness: 5 } } })
+    expect(r.channels.map((c) => c.kind).sort()).toEqual(['light', 'switch'])
+  })
+  it('a switch channel carries kind switch and brightness null', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 3, online: 1, status: { 'switch:0': { output: true } } })
+    expect(r.channels[0]).toMatchObject({ kind: 'switch', brightness: null })
+  })
+  it('an absent brightness is null, not 0', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'light:0': { output: true, brightness: null } } })
+    expect(r.channels[0].brightness).toBeNull()
+  })
+  it('discovery offers the RGBW PM (light only) as supported, one row per light', () => {
+    const rows = normaliseAllStatus({ data: { devices_status: { abc: { _dev_info: { gen: 2, code: 'SNDC-0D4P10WW' }, 'rgbw:0': { output: false } } } } })
+    expect(rows).toEqual([expect.objectContaining({ device_id: 'abc', channel: 0, kind: 'light', supported: true })])
+  })
+  it('stateFromReading matches on kind too, and keeps brightness', () => {
+    const reading = { online: true, channels: [{ kind: 'light', channel: 0, output: true, brightness: 55, apower: null, aenergy_wh: null, temperature_c: null, source: 'cloud' }] }
+    expect(stateFromReading(null, reading, 0, 'T', 'light')).toMatchObject({ online: true, output: true, brightness: 55 })
+    expect(stateFromReading(null, reading, 0, 'T', 'switch')).toMatchObject({ online: true, output: null })
+  })
+  it('a switch last_state carries no brightness; an offline light keeps its last one', () => {
+    const sw = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'switch:0': { output: true } } })
+    expect(stateFromReading(null, sw, 0, 'T')).not.toHaveProperty('brightness')
+    const off = { online: false, channels: [] }
+    expect(stateFromReading({ brightness: 33, output: true }, off, 0, 'T', 'light')).toMatchObject({ online: false, output: true, brightness: 33 })
+  })
+  it('a brightness change alone is a state change', () => {
+    const a = { online: true, output: true, brightness: 40, apower: null, aenergy_wh: null, temperature_c: null, source: 'cloud', at: '2026-01-01T00:00:00Z' }
+    expect(stateChanged(a, { ...a, brightness: 41 })).toBe(true)
+    expect(stateChanged(a, { ...a })).toBe(false)
   })
 })

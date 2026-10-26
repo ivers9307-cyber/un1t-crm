@@ -65,6 +65,29 @@ function routes(handler) {
 beforeEach(() => { vi.clearAllMocks() })
 afterEach(() => { cleanup(); delete global.fetch })
 
+describe('ShellyDeviceCard — a light', () => {
+  const light = (stateOver) => managed({ kind: 'light', last_state: state({ output: true, brightness: 55, ...stateOver }) })
+
+  it('shows On · 55% and renders no slider', () => {
+    render(<ShellyDeviceCard device={light()} connected glofoxConnected />)
+    expect(screen.getByText('On · 55%', { selector: 'span' })).toBeTruthy()
+    expect(screen.queryByRole('slider')).toBeNull()
+  })
+
+  it('shows plain On when brightness is null, and Off when off', () => {
+    const { unmount } = render(<ShellyDeviceCard device={light({ brightness: null })} connected glofoxConnected />)
+    expect(screen.getByText('On', { selector: 'span' })).toBeTruthy()
+    unmount()
+    render(<ShellyDeviceCard device={light({ output: false })} connected glofoxConnected />)
+    expect(screen.getByText('Off', { selector: 'span' })).toBeTruthy()
+  })
+
+  it('a switch with a stray brightness key never prints a percentage', () => {
+    render(<ShellyDeviceCard device={managed({ last_state: state({ brightness: 55 }) })} connected glofoxConnected />)
+    expect(screen.queryByText(/55%/)).toBeNull()
+  })
+})
+
 describe('ShellyDeviceCard — what it is doing', () => {
   it('renders "Unknown" for output:null, never "Off"', () => {
     render(<ShellyDeviceCard device={managed({ last_state: state({ output: null, apower: null }) })} connected glofoxConnected />)
