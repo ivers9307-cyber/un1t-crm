@@ -200,6 +200,60 @@ describe('groupToggleOutcome', () => {
       .toBe(`Saved. ${notice}.`)
   })
 
+  describe('pending members are worded by their own code, named', () => {
+    const names = { a: 'Front light', b: 'Back light' }
+    const nameOf = (id) => names[id] || 'a device'
+    const body = (pending_members, over = {}) => ({
+      success: true, applied: 'partial', pending: true, code: 'pending', message: 'Route words.',
+      pending_device_ids: pending_members.map((p) => p.device_id), pending_members, ...over,
+    })
+
+    it('an offline member will follow when it is back online', () => {
+      const json = body([{ device_id: 'b', code: 'device', shelly_code: 'DEVICE_OFFLINE', permanent: false }])
+      expect(groupToggleOutcome(json, 'on', 2, nameOf)).toEqual({
+        tone: 'warn',
+        text: 'Switched on for 1 of 2. Back light did not answer — it will follow when it is back online.',
+        partial: { on: 1, count: 2 },
+      })
+    })
+
+    it('a permanent refusal says Shelly refused it, and never promises it will follow', () => {
+      const json = body([{ device_id: 'b', code: 'device', shelly_code: 'BAD_CHANNEL', permanent: true }])
+      const { text } = groupToggleOutcome(json, 'off', 2, nameOf)
+      expect(text).toBe('Switched off for 1 of 2. Shelly refused Back light — check it in the Shelly app.')
+      expect(text).not.toMatch(/back online/)
+    })
+
+    it('unverified and bad_device members are "couldn\'t confirm"', () => {
+      const json = body([
+        { device_id: 'a', code: 'unverified', permanent: false },
+        { device_id: 'b', code: 'bad_device', permanent: false },
+      ], { applied: 'none' })
+      expect(groupToggleOutcome(json, 'on', 2, nameOf).text)
+        .toBe("Saved. Nothing has moved yet. Couldn't confirm Front light and Back light.")
+    })
+
+    it('an account-wide failure is said once, pointed at the web CRM', () => {
+      const json = body([
+        { device_id: 'a', code: 'auth', permanent: false },
+        { device_id: 'b', code: 'auth', permanent: false },
+      ], { applied: 'none', code: 'key_rejected' })
+      expect(groupToggleOutcome(json, 'on', 2, nameOf).text)
+        .toBe('Saved. Nothing has moved yet. Shelly rejected the stored key — re-paste it on the web CRM.')
+    })
+
+    it('the unmanaged notice still rides along', () => {
+      const json = body([{ device_id: 'b', code: 'device', permanent: false }], { holds_until_changed: true })
+      expect(groupToggleOutcome(json, 'on', 2, nameOf).text).toMatch(new RegExp(`back online\\. ${GROUP_HOLDS_TEXT}$`))
+    })
+
+    it('with no name lookup a member is "a device"; with no pending_members the route\'s message stands', () => {
+      const json = body([{ device_id: 'b', code: 'device', permanent: false }])
+      expect(groupToggleOutcome(json, 'on', 2).text).toContain('a device did not answer')
+      expect(groupToggleOutcome({ ...json, pending_members: undefined }, 'on', 2, nameOf).text).toBe('Route words.')
+    })
+  })
+
   it('a failure renders the route\'s sentence; a missing answer a human one', () => {
     expect(groupToggleOutcome({ success: false, error: 'Group not found' }, 'on', 2))
       .toEqual({ tone: 'error', text: 'Group not found', partial: null })

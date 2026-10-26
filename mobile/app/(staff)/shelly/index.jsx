@@ -255,7 +255,7 @@ function GroupCard({ group, members, devices, connected, zone, busy, note, parti
           busy={busy}
           accessibilityLabel={sw.accessibilityLabel}
           accessibilityValue={sw.accessibilityValue}
-          onPress={() => onToggle(group, sw.nextState, members.length || Number(group?.now?.member_count) || 0)}
+          onPress={() => onToggle(group, sw.nextState, members.length || Number(group?.now?.member_count) || 0, members)}
         />
       </View>
       {offerAuto && (
@@ -501,14 +501,24 @@ export default function ShellyScreen() {
     return () => { active = false }
   }, [allowed, locationId, zone]))
 
+  // A pull also re-asks the unadopted count past its 5-minute cache: the
+  // operator asked for "now" (they may have just added a plug in the Shelly
+  // app). Best-effort, like the focus read; a studio flip mid-read drops it.
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
+    const loc = locationId
+    const unadoptedRead = allowed && loc
+      ? countUnadoptedShelly(loc, { fresh: true })
+        .then((n) => { if (loc === currentLocationRef.current) setUnadopted(n) })
+        .catch(() => { if (loc === currentLocationRef.current) setUnadopted(null) })
+      : null
     try {
       await load(() => true, { clearPartials: true })
+      await unadoptedRead
     } finally {
       setRefreshing(false)
     }
-  }, [load])
+  }, [load, allowed, locationId])
 
   // try/finally, not a bare await: whatever happens above, the row must not be
   // left spinning. (Since MOBILE-SESSION.1 a failed token refresh answers an
@@ -555,13 +565,14 @@ export default function ShellyScreen() {
   // painted: the note is the route's message, a partial paints its amber
   // count, and the reload repaints from the server's counts — so nothing here
   // asserts the requested state.
-  const toggleGroup = useCallback(async (group, state, memberCount) => {
+  const toggleGroup = useCallback(async (group, state, memberCount, members) => {
     const key = `group:${group.id}`
     setBusyGroupIds((prev) => withId(prev, group.id, true))
     setNote(key, null)
+    const names = new Map((members || []).map((d) => [d.id, plugDisplayName(d)]))
     try {
       const json = await toggleShellyGroup(group.id, { state }, locationId)
-      const out = groupToggleOutcome(json, state, memberCount)
+      const out = groupToggleOutcome(json, state, memberCount, (id) => names.get(id) || 'a device')
       setPartials((prev) => {
         const next = { ...prev }
         if (out.partial) next[group.id] = out.partial
