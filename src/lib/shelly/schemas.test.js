@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resolveDayWindows } from '@/lib/schedule/desired-state'
+import { resolveDayWindows, DEFAULT_MERGE_GAP_MIN as ENGINE_MERGE_GAP_MIN } from '@/lib/schedule/desired-state'
 import { MAX_DEVICES } from './reconcile'
 import { normaliseShellyHost } from './client'
 import {
@@ -12,6 +12,8 @@ import {
   MAX_CLASS_LEAD_LAG_MIN,
   DEFAULT_LEAD_MIN,
   DEFAULT_LAG_MIN,
+  DEFAULT_MERGE_GAP_MIN,
+  ALL_DAYS,
   ShellyWindow,
   ShellyClassRule,
   ShellyConnectionPut,
@@ -144,7 +146,10 @@ describe('ShellyWindow', () => {
 
 describe('ShellyClassRule', () => {
   it('defaults to the engine fallbacks, not zero', () => {
-    expect(ShellyClassRule.parse({})).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN })
+    expect(ShellyClassRule.parse({})).toEqual({ lead_min: 15, lag_min: 10, merge_gap_min: 30, days: [1, 2, 3, 4, 5, 6, 7] })
+    expect(ShellyClassRule.parse({})).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: ALL_DAYS })
+    expect(DEFAULT_MERGE_GAP_MIN).toBe(30)
+    expect(DEFAULT_MERGE_GAP_MIN).toBe(ENGINE_MERGE_GAP_MIN)
     expect(DEFAULT_LEAD_MIN).toBe(15)
     expect(DEFAULT_LAG_MIN).toBe(10)
   })
@@ -168,8 +173,39 @@ describe('ShellyClassRule', () => {
     expect(defaulted[0].off_at).toBe(Date.parse('2026-08-24T10:10:00.000Z'))
   })
 
+  it('merge_gap_min is bounded 0..180 and an int', () => {
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 0 }).success).toBe(true)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 180 }).success).toBe(true)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 181 }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: -1 }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 1.5 }).success).toBe(false)
+  })
+
+  it('days: refuses empty with a human message, out-of-range, and duplicates', () => {
+    const empty = ShellyClassRule.safeParse({ days: [] })
+    expect(empty.success).toBe(false)
+    expect(empty.error.issues[0].message).toBe('Pick at least one day')
+    expect(ShellyClassRule.safeParse({ days: [8] }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ days: [0] }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ days: [1, 1] }).success).toBe(false)
+    expect(ShellyClassRule.parse({ days: [1, 3] }).days).toEqual([1, 3])
+  })
+
+  it('a default-parsed rule resolves the same windows as an absent one, with several classes and days', () => {
+    const occurrences = [
+      { starts_at: '2026-08-24T06:00:00.000Z', ends_at: '2026-08-24T06:45:00.000Z' },
+      { starts_at: '2026-08-24T07:10:00.000Z', ends_at: '2026-08-24T08:00:00.000Z' },
+      { starts_at: '2026-08-24T17:00:00.000Z', ends_at: '2026-08-24T18:00:00.000Z' },
+    ]
+    const base = { enabled: true, schedule_mode: 'class' }
+    const absent = resolveDayWindows(base, '2026-08-24', occurrences)
+    const defaulted = resolveDayWindows({ ...base, class_rule: ShellyClassRule.parse({}) }, '2026-08-24', occurrences)
+    expect(defaulted).toEqual(absent)
+    expect(absent).toHaveLength(2)
+  })
+
   it('accepts an explicit zero — an operator who wants no lead gets no lead', () => {
-    expect(ShellyClassRule.parse({ lead_min: 0, lag_min: 0 })).toEqual({ lead_min: 0, lag_min: 0 })
+    expect(ShellyClassRule.parse({ lead_min: 0, lag_min: 0 })).toEqual({ lead_min: 0, lag_min: 0, merge_gap_min: 30, days: ALL_DAYS })
   })
 
   it('bounds lead and lag at both edges', () => {
@@ -393,7 +429,7 @@ describe('ShellyDevicePatch', () => {
   it('applies the class-rule defaults through the patch', () => {
     const r = ShellyDevicePatch.safeParse({ schedule_mode: 'class', class_rule: {} })
     expect(r.success).toBe(true)
-    expect(r.data.class_rule).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN })
+    expect(r.data.class_rule).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: ALL_DAYS })
   })
 
   it('rejects an out-of-range class rule through the patch, at the nested path', () => {

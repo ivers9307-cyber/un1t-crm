@@ -102,7 +102,7 @@ export const MIN_AUTH_KEY_LENGTH = 16
 export const MAX_CLASS_LEAD_LAG_MIN = 180
 
 // The engine's own fallbacks, from src/lib/schedule/desired-state.js
-// (DEFAULT_LEAD_MIN / DEFAULT_LAG_MIN) and mig 562's class_rule column comment
+// (DEFAULT_LEAD_MIN / DEFAULT_LAG_MIN / DEFAULT_MERGE_GAP_MIN) and mig 562's class_rule column comment
 // ("defaults 15/10"). They are RE-TYPED, not imported, because this module must
 // stay import-light (see the header) — desired-state.js does not export them
 // and pulls in the timezone helpers. schemas.test.js pins the mirror by running
@@ -112,6 +112,8 @@ export const MAX_CLASS_LEAD_LAG_MIN = 180
 // minutes.
 export const DEFAULT_LEAD_MIN = 15
 export const DEFAULT_LAG_MIN = 10
+export const DEFAULT_MERGE_GAP_MIN = 30
+export const ALL_DAYS = [1, 2, 3, 4, 5, 6, 7]
 
 // One recurring on/off window: WindowBase with the same-boundary rule applied
 // last (Shelly uses the bare shape, so there is nothing to .extend() first).
@@ -127,9 +129,11 @@ export const ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY.check, {
   message: NOT_SAME_BOUNDARY.message,
 })
 
-// schedule_mode 'class' follows the LOCATION-WIDE timetable: on `lead_min`
-// before the day's first class starts, off `lag_min` after the last one ends
-// (resolveDayWindows). Those two field names are the only thing the engine
+// schedule_mode 'class' follows the LOCATION-WIDE timetable: one window per
+// class, on `lead_min` before it starts and off `lag_min` after it ends;
+// windows whose gap is <= `merge_gap_min` are joined into one, and only
+// classes starting on a weekday in `days` (ISO 1=Mon..7=Sun, local) count
+// (resolveDayWindows). Those four field names are the only thing the engine
 // reads out of class_rule — anything else stored here is inert.
 //
 // The defaults MATCH THE ENGINE rather than being 0: mig 562 defaults the
@@ -141,6 +145,11 @@ export const ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY.check, {
 export const ShellyClassRule = z.object({
   lead_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_LEAD_MIN),
   lag_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_LAG_MIN),
+  merge_gap_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_MERGE_GAP_MIN),
+  days: z.array(z.number().int().min(1).max(7))
+    .min(1, 'Pick at least one day')
+    .refine((d) => new Set(d).size === d.length, { message: 'Days must be unique' })
+    .default(ALL_DAYS),
 })
 
 // Connect / re-paste. `auth_key` is OPTIONAL and has NO minimum: an operator
