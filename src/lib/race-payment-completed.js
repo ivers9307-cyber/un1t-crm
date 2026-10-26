@@ -16,7 +16,7 @@
 
 import { sendRaceConfirmations, sendGapPaidEmail } from './race-confirmations'
 import { GAP_PAYMENT_KIND } from './registration-entry'
-import { logWarn } from './log'
+import { logWarn, logError } from './log'
 
 /**
  * GLOFOX3.3 (mig 145). Post-payment Glofox push for opted-in events. Race
@@ -101,7 +101,7 @@ export async function runRacePaymentCompletedEffects({ db, payment, applied }) {
     try {
       confirmations = await sendGapPaidEmail({ db, paymentId: payment.id })
     } catch (e) {
-      console.warn(`[revolut-race-webhook] gap receipt failed for ${payment.id}: ${e.message}`)
+      logError('race-payment-completed', 'gap receipt failed', { err: e, paymentId: payment.id })
       confirmations = { failed: [`unhandled:${e.message}`] }
     }
     return { confirmations, glofoxPush: null }
@@ -110,7 +110,7 @@ export async function runRacePaymentCompletedEffects({ db, payment, applied }) {
   try {
     confirmations = await sendRaceConfirmations({ db, paymentId: payment.id })
   } catch (e) {
-    console.warn(`[revolut-race-webhook] confirmations failed for ${payment.id}: ${e.message}`)
+    logError('race-payment-completed', 'entry confirmations failed', { err: e, paymentId: payment.id })
     confirmations = { failed: [`unhandled:${e.message}`] }
   }
   const glofoxPush = () => pushRacePaymentTeamToGlofox(db, payment.id)
