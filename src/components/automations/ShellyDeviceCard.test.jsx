@@ -684,3 +684,39 @@ describe('ShellyDeviceCard — energy is lazy', () => {
     expect(String(global.fetch.mock.calls[0][0])).toContain('/api/shelly/devices/row-1/energy?days=30')
   })
 })
+
+// SHELLYGROUPS.8 — a device in a group follows the GROUP's schedule; its own
+// schedule fields are refused by the route (409 `grouped`), so the card does
+// not offer them.
+describe('ShellyDeviceCard — a grouped device', () => {
+  const studio = { id: 'g1', name: 'Studio lights', enabled: true, schedule_mode: 'fixed' }
+  // The device's own columns say "unmanaged": they are not what runs it.
+  const grouped = (over = {}) => unmanaged({ group_id: 'g1', ...over })
+
+  it('says which group it follows, with no schedule editor and no "Schedule on"', () => {
+    render(<ShellyDeviceCard device={grouped()} group={studio} connected glofoxConnected />)
+    expect(screen.getByText('Follows Studio lights')).toBeTruthy()
+    expect(screen.queryByText('Schedule on')).toBeNull()
+    expect(screen.queryByLabelText('Fixed hours')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Save schedule/ })).toBeNull()
+  })
+
+  it('keeps its own on/off switch and the energy chart', () => {
+    render(<ShellyDeviceCard device={grouped()} group={studio} connected glofoxConnected />)
+    expect(screen.getByRole('button', { name: 'On' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Off' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Energy/ })).toBeTruthy()
+  })
+
+  it('is managed by its GROUP: the duration presets show and the unmanaged hint does not', () => {
+    render(<ShellyDeviceCard device={grouped()} group={studio} connected glofoxConnected />)
+    expect(screen.getByLabelText('How long')).toBeTruthy()
+    expect(screen.queryByText(/No schedule runs this plug/)).toBeNull()
+  })
+
+  it('a group not loaded yet still hides the editor and says "Follows its group"', () => {
+    render(<ShellyDeviceCard device={grouped()} connected glofoxConnected />)
+    expect(screen.getByText('Follows its group')).toBeTruthy()
+    expect(screen.queryByText('Schedule on')).toBeNull()
+  })
+})

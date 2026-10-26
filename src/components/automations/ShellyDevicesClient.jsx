@@ -28,6 +28,21 @@
 //              did not.
 //   a status   'connected' | 'action_needed' | 'error' — the real thing.
 //
+// SHELLYGROUPS.8 — THE PAGE IS GROUPS FIRST. Top to bottom: the toolbar, the
+// "N devices on your Shelly account aren't set up here" banner, "New group",
+// the group cards (sort_order, then name), the day preview, the devices that
+// are in no group, the devices that are (collapsed: their group's card is the
+// control), and then the Shelly account and Find devices panels.
+//
+//   GET /api/shelly/groups is the third read of the 30 s poll, under the same
+//   last-good rule: a failed groups read keeps the cards on screen.
+//
+//   GET /api/shelly/discover is read ONCE per page open, the first time the
+//   connection is live — never on the poll. It walks the whole Shelly account
+//   on the shared 1 req/sec budget. A failed read just hides the banner: it is
+//   a nudge, not a claim. The count is relay rows with `supported === true`
+//   and `adopted == null`, less any this session has since adopted.
+//
 // Which source wins: /api/shelly/connection is authoritative WHEN IT
 // SUCCEEDS. Until it ever has, the devices payload's `connection_status` is
 // the only answer available — and it is allowed to say 'unknown', which is
@@ -36,12 +51,15 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, RefreshCw, Tag } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronRight, Plus, RefreshCw, Tag } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
 import ShellyConnectionPanel from './ShellyConnectionPanel'
 import ShellyDiscoverPanel from './ShellyDiscoverPanel'
 import ShellyDeviceCard from './ShellyDeviceCard'
+import ShellyGroupCard from './ShellyGroupCard'
+import ShellyDayPreview from './ShellyDayPreview'
+import { MAX_GROUP_NAME } from '@/lib/shelly/schemas'
 
 const POLL_MS = 30_000
 // The refresh route spends the shared 1 req/sec Shelly account budget on
@@ -105,12 +123,37 @@ export function syncNamesSummary({
   }
 }
 
+const NAME_TAKEN_COPY = 'A group with that name already exists'
+
+const byOrderThenName = (a, b) =>
+  (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.name || '').localeCompare(String(b.name || ''))
+
+/**
+ * How many relay rows on the account could be adopted here and are not:
+ * `supported === true` (null is "unknown", not a nudge) and `adopted == null`,
+ * less any adopted this session since discover was read.
+ */
+export function unadoptedCount(rows, adoptedIds) {
+  return (Array.isArray(rows) ? rows : []).filter((r) => r?.supported === true
+    && r.adopted == null
+    && !adoptedIds?.has?.(`${r.device_id}_${r.channel}`)).length
+}
+
 const MSG_TONE = { error: 'text-red-700', warn: 'text-amber-700', ok: 'text-un1t-subtle' }
 
 export default function ShellyDevicesClient({ locationName, locationTz, glofoxConnected, glofoxUnknown = false, canManageConnection }) {
   // Last GOOD payloads. Null means "has never loaded", NOT "empty".
   const [conn, setConn] = useState(null)
   const [dev, setDev] = useState(null)
+  const [groups, setGroups] = useState(null)
+  // Discover rows, read once (see the header). null = not read, or the read failed.
+  const [discovered, setDiscovered] = useState(null)
+  const discoverRan = useRef(false)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [createError, setCreateError] = useState(null)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [showGrouped, setShowGrouped] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshError, setRefreshError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -153,9 +196,10 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
     // it on, and the next tick silently corrects it. Last-issued wins, never
     // last-arrived.
     const seq = ++seqRef.current
-    const [c, d] = await Promise.all([
+    const [c, d, g] = await Promise.all([
       fetchJson('/api/shelly/connection'),
       fetchJson('/api/shelly/devices'),
+      fetchJson('/api/shelly/groups'),
     ])
     // Stale, or the component is gone: drop the whole payload rather than
     // setState half of it.
@@ -180,6 +224,11 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
         // not connected), which is what the route means by omitting it.
         connection_status: d.json.connection_status ?? null,
       })
+    } else {
+      failed = true
+    }
+    if (g.ok && g.json?.success !== false) {
+      setGroups(Array.isArray(g.json?.groups) ? g.json.groups : [])
     } else {
       failed = true
     }
@@ -259,6 +308,44 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
     await load()
   }
 
+  // Discover ONCE per page open, the first time the connection is live.
+  const liveNow = (conn ? conn.connection?.status : dev?.connection_status) === 'connected'
+  useEffect(() => {
+    if (!liveNow || discoverRan.current) return
+    discoverRan.current = true
+    fetchJson('/api/shelly/discover').then((res) => {
+      if (!liveRef.current) return
+      if (res.ok && res.json?.success !== false && Array.isArray(res.json?.devices)) setDiscovered(res.json.devices)
+    })
+  }, [liveNow])
+
+  async function createGroup(e) {
+    e?.preventDefault?.()
+    const name = newName.trim()
+    if (!name) {
+      setCreateError('Give the group a name')
+      return
+    }
+    setCreateBusy(true)
+    setCreateError(null)
+    const res = await fetchJson('/api/shelly/groups', jsonBody('POST', { name }))
+    if (!liveRef.current) return
+    setCreateBusy(false)
+    if (!res.ok || res.json?.success === false) {
+      setCreateError(res.json?.code === 'name_taken' ? NAME_TAKEN_COPY : errorText(res.json, 'Could not create the group'))
+      return
+    }
+    // On screen at once; the reload that follows replaces it with the
+    // server's row (and its `now`). The load ticket drops any older poll.
+    const created = res.json?.group
+    if (created?.id) {
+      setGroups((prev) => [...(prev || []).filter((x) => x.id !== created.id), created])
+    }
+    setCreating(false)
+    setNewName('')
+    await load()
+  }
+
   // ——— what state is the connection in? ————————————————————————————
   // `undefined` = neither read has ever succeeded (still loading, or both
   // failed). It is NOT null: null is the confident "never connected" that
@@ -278,13 +365,31 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
   const devices = dev?.devices || []
   const deviceCount = conn && conn.device_count !== null ? conn.device_count : (dev ? devices.length : null)
   const adoptedIds = new Set(devices.map((d) => `${d.device_id}_${d.channel}`))
+  const groupList = [...(groups || [])].sort(byOrderThenName)
+  const groupById = new Map(groupList.map((g) => [g.id, g]))
+  const ungrouped = devices.filter((d) => !d.group_id)
+  const groupedDevices = devices.filter((d) => d.group_id)
+  const missing = discovered ? unadoptedCount(discovered, adoptedIds) : 0
 
   if (loading && !conn && !dev) {
     return <p className="text-sm text-un1t-subtle">Loading {locationName || 'your studio'}&rsquo;s plugs…</p>
   }
 
+  const deviceCard = (d) => (
+    <ShellyDeviceCard
+      key={d.id}
+      device={d}
+      group={d.group_id ? groupById.get(d.group_id) || null : null}
+      connected={connected}
+      locationTz={locationTz}
+      glofoxConnected={glofoxConnected}
+      glofoxUnknown={glofoxUnknown}
+      onChanged={load}
+    />
+  )
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* ONE "retrying" line, never two. When the connection itself is the
           thing we could not read, the card below says so in the words that
           name what is unknown — a generic "couldn't refresh" stacked on top of
@@ -295,6 +400,200 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
         </p>
       )}
 
+      {/* ——— toolbar ——————————————————————————————————————————————— */}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-un1t-text">
+            Lights and plugs{locationName ? ` · ${locationName}` : ''}
+          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            {refreshMsg && (
+              <span className={`text-xs ${MSG_TONE[refreshMsg.tone] || MSG_TONE.ok}`} role="status">
+                {refreshMsg.text}
+              </span>
+            )}
+            {/* Gated on a LIVE connection, exactly like Find devices: this is
+                an account-wide cloud read, and offering it against a
+                connection we know is unusable buys a 409 the operator cannot
+                act on from here. `connected` is null (not false) when it is
+                our own read that failed, so an unreadable connection hides the
+                button rather than claiming the account is broken. Nothing to
+                name without plugs. */}
+            {connected === true && devices.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={Tag}
+                loading={syncing}
+                disabled={syncCooling}
+                aria-expanded={syncOpen}
+                title={syncCooling ? 'Just synced — give it a few seconds' : undefined}
+                onClick={() => setSyncOpen((v) => !v)}
+              >
+                Use Shelly names
+              </Button>
+            )}
+            {devices.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={RefreshCw}
+                loading={refreshing}
+                disabled={cooling}
+                title={cooling ? 'Just refreshed — give it a few seconds' : undefined}
+                onClick={doRefresh}
+              >
+                Refresh
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* TWO CHOICES, both spelled out — the destructive one says what it
+            destroys in its own label. There is no undo: the replaced name is
+            not kept anywhere. */}
+        {syncOpen && connected === true && devices.length > 0 && (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-md border border-un1t-border bg-un1t-surface p-2"
+            role="group"
+            aria-label="Use Shelly names"
+          >
+            <span className="text-xs text-un1t-subtle">Copy the names from your Shelly app to:</span>
+            <Button size="sm" variant="secondary" onClick={() => doSyncNames(false)}>
+              Only unnamed plugs
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => doSyncNames(true)}>
+              All plugs — replaces names typed here
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSyncOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* ——— the nudge: devices on the account not set up here ——————————— */}
+      {connected === true && missing > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+          <p className="text-sm text-amber-700">
+            {missing} {missing === 1 ? 'device' : 'devices'} on your Shelly account {missing === 1 ? 'isn’t' : 'aren’t'} set up here
+          </p>
+          <a href="#shelly-discover" className="text-sm font-medium text-amber-700 underline">
+            Set them up
+          </a>
+        </div>
+      )}
+
+      {/* ——— groups ———————————————————————————————————————————————— */}
+      {status !== null && (
+        <section className="space-y-3" aria-labelledby="shelly-groups-heading">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="shelly-groups-heading" className="text-sm font-semibold text-un1t-text">Groups</h2>
+            {!creating && (
+              <Button size="sm" variant="secondary" icon={Plus} onClick={() => { setCreating(true); setCreateError(null) }}>
+                New group
+              </Button>
+            )}
+          </div>
+
+          {creating && (
+            <form onSubmit={createGroup} className="space-y-1 rounded-md border border-un1t-border bg-un1t-surface p-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={newName}
+                  maxLength={MAX_GROUP_NAME}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setCreating(false); setNewName(''); setCreateError(null) } }}
+                  placeholder="Studio lights"
+                  aria-label="New group name"
+                  className="min-w-0 flex-1 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-sm text-un1t-text"
+                />
+                <Button size="sm" variant="primary" type="submit" loading={createBusy}>Create group</Button>
+                <Button size="sm" variant="ghost" type="button" onClick={() => { setCreating(false); setNewName(''); setCreateError(null) }}>
+                  Cancel
+                </Button>
+              </div>
+              {createError && <p className="text-xs text-red-700" role="alert">{createError}</p>}
+            </form>
+          )}
+
+          {groups !== null && groupList.length === 0 && !creating && (
+            <p className="text-sm text-un1t-subtle">
+              No groups yet. A group switches several lights together and runs them on one schedule.
+            </p>
+          )}
+
+          {groupList.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {groupList.map((g) => (
+                <ShellyGroupCard
+                  key={g.id}
+                  group={g}
+                  devices={devices}
+                  groups={groupList}
+                  connected={connected}
+                  locationTz={locationTz}
+                  glofoxConnected={glofoxConnected}
+                  glofoxUnknown={glofoxUnknown}
+                  onChanged={load}
+                />
+              ))}
+            </div>
+          )}
+
+          {groupList.length > 0 && <ShellyDayPreview groups={groupList} tz={locationTz} />}
+        </section>
+      )}
+
+      {/* ——— devices in no group ——————————————————————————————————— */}
+      {/* Not drawn for a studio with no connection: there is nothing to list,
+          and the Connect form below is the only thing to do. */}
+      {(devices.length > 0 || (dev && status !== null)) && (
+      <section className="space-y-3" aria-labelledby="shelly-ungrouped-heading">
+        <h2 id="shelly-ungrouped-heading" className="text-sm font-semibold text-un1t-text">Not in a group</h2>
+
+        {/* `dev` guards the CLAIM: "no plugs" is a fact about the studio, and
+            we only have it when the devices read succeeded. */}
+        {devices.length === 0 && dev && status !== null && (
+          <p className="text-sm text-un1t-subtle">
+            No plugs adopted yet{connected === true ? ' — use Find devices below.' : '.'}
+          </p>
+        )}
+        {devices.length > 0 && ungrouped.length === 0 && (
+          <p className="text-sm text-un1t-subtle">Every device is in a group.</p>
+        )}
+
+        {ungrouped.length > 0 && (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {ungrouped.map(deviceCard)}
+          </div>
+        )}
+      </section>
+      )}
+
+      {/* ——— devices in a group: their group's card is the control, so these
+          stay folded until asked for (rename, energy, one plug on its own). */}
+      {groupedDevices.length > 0 && (
+        <section className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setShowGrouped((v) => !v)}
+            aria-expanded={showGrouped}
+            className="inline-flex items-center gap-1 text-sm font-semibold text-un1t-text"
+          >
+            {showGrouped ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+            Devices in groups ({groupedDevices.length})
+          </button>
+          {showGrouped && (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {groupedDevices.map(deviceCard)}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ——— the account ———————————————————————————————————————————— */}
       <section className="space-y-4">
         {/* Keeps the heading order h1 → h2 → h3: the two panels below are
             Cards, and Card titles render as h3. */}
@@ -312,103 +611,11 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
             onDisconnected={load}
           />
         )}
-
-        {connected === true && <ShellyDiscoverPanel adoptedIds={adoptedIds} onAdopted={load} />}
-      </section>
-
-      <section className="space-y-4">
-        {devices.length > 0 && (
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-un1t-text">
-                Plugs{locationName ? ` · ${locationName}` : ''}
-              </h2>
-              <div className="flex flex-wrap items-center gap-2">
-                {refreshMsg && (
-                  <span className={`text-xs ${MSG_TONE[refreshMsg.tone] || MSG_TONE.ok}`} role="status">
-                    {refreshMsg.text}
-                  </span>
-                )}
-                {/* Gated on a LIVE connection, exactly like Find devices above:
-                    this is an account-wide cloud read, and offering it against
-                    a connection we know is unusable buys a 409 the operator
-                    cannot act on from here. `connected` is null (not false)
-                    when it is our own read that failed, so an unreadable
-                    connection hides the button rather than claiming the
-                    account is broken. */}
-                {connected === true && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    icon={Tag}
-                    loading={syncing}
-                    disabled={syncCooling}
-                    aria-expanded={syncOpen}
-                    title={syncCooling ? 'Just synced — give it a few seconds' : undefined}
-                    onClick={() => setSyncOpen((v) => !v)}
-                  >
-                    Use Shelly names
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  icon={RefreshCw}
-                  loading={refreshing}
-                  disabled={cooling}
-                  title={cooling ? 'Just refreshed — give it a few seconds' : undefined}
-                  onClick={doRefresh}
-                >
-                  Refresh
-                </Button>
-              </div>
-            </div>
-
-            {/* TWO CHOICES, both spelled out — the destructive one says what it
-                destroys in its own label. There is no undo: the replaced name
-                is not kept anywhere. */}
-            {syncOpen && connected === true && (
-              <div
-                className="flex flex-wrap items-center gap-2 rounded-md border border-un1t-border bg-un1t-surface p-2"
-                role="group"
-                aria-label="Use Shelly names"
-              >
-                <span className="text-xs text-un1t-subtle">Copy the names from your Shelly app to:</span>
-                <Button size="sm" variant="secondary" onClick={() => doSyncNames(false)}>
-                  Only unnamed plugs
-                </Button>
-                <Button size="sm" variant="danger" onClick={() => doSyncNames(true)}>
-                  All plugs — replaces names typed here
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setSyncOpen(false)}>
-                  Cancel
-                </Button>
-              </div>
-            )}
+        {connected === true && (
+          <div id="shelly-discover" className="scroll-mt-4">
+            <ShellyDiscoverPanel adoptedIds={adoptedIds} onAdopted={load} />
           </div>
         )}
-
-        {/* `dev` guards the CLAIM: "no plugs" is a fact about the studio, and
-            we only have it when the devices read succeeded. */}
-        {devices.length === 0 && dev && status !== null && (
-          <p className="text-sm text-un1t-subtle">
-            No plugs adopted yet{connected === true ? ' — use Find devices above.' : '.'}
-          </p>
-        )}
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {devices.map((d) => (
-            <ShellyDeviceCard
-              key={d.id}
-              device={d}
-              connected={connected}
-              locationTz={locationTz}
-              glofoxConnected={glofoxConnected}
-              glofoxUnknown={glofoxUnknown}
-              onChanged={load}
-            />
-          ))}
-        </div>
       </section>
     </div>
   )
