@@ -90,6 +90,11 @@ import { AUTH_ERROR, HOST_ERROR } from './connections'
 
 const MODULE = 'shelly-reconcile'
 
+// A row's component kind (mig 775). Anything but 'light' is a switch: every row
+// adopted before the column existed is a relay, and the column's CHECK admits
+// only the two values, so the fallback only ever covers a row read without it.
+export const deviceKind = (d) => (d?.kind === 'light' ? 'light' : 'switch')
+
 // The spec's estate ceiling. Both selects ask for cap + 1 so "exactly at the
 // cap" can be told from "the limit silently dropped the rest" — the same
 // distinction sonos/reconcile.js warns about, made decidable rather than
@@ -349,7 +354,7 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
       // readings.get() may be undefined — the account answered and did not
       // mention this device, which stateFromReading reads as offline while
       // KEEPING the last known measurements.
-      const next = stateFromReading(d.last_state, readings.get(key), d.channel, nowIso)
+      const next = stateFromReading(d.last_state, readings.get(key), d.channel, nowIso, deviceKind(d))
       if (!stateChanged(d.last_state, next)) continue
       const { error } = await db
         .from('shelly_devices')
@@ -541,7 +546,11 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       // row holds a frozen counter, and differencing it books zero consumption
       // over a gap we never measured.
       if (!reading?.online) continue
-      const channel = (Array.isArray(reading.channels) ? reading.channels : []).find((c) => c?.channel === d.channel)
+      // Channel AND kind (SHELLYLIGHT.3): `light:0` and `switch:0` are
+      // different components, and a row must only ever sample its own.
+      const kind = deviceKind(d)
+      const channel = (Array.isArray(reading.channels) ? reading.channels : [])
+        .find((c) => c?.channel === d.channel && (c?.kind ?? 'switch') === kind)
       const total = channel?.aenergy_wh
       // Not a metering channel, or the measurement was momentarily absent.
       // status.js already guarantees null-or-finite here; the test is explicit
@@ -600,6 +609,10 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   // Two calls at most per location: every opening device in one setGroups, every
   // closing device in another. `on` first — a window that opens and one that
   // closes in the same tick should light the room before it darkens the other.
+  // Each call carries both kinds (SHELLYLIGHT.3): `{ switch: [...], light: [...] }`
+  // in ONE request, so a studio with lights still spends one slot per direction.
+  // failedCommands keys stay `<id>_<channel>` for both kinds, and a switch and
+  // a light never share an id and channel (mig 775), so one gid set reads both.
   for (const on of [true, false]) {
     const wanted = plans.filter((p) => p.action === (on ? 'on' : 'off'))
     if (!wanted.length) continue
@@ -632,7 +645,10 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
 
     attempted = true
-    const res = await client.setGroups(batch.map((x) => x.gid), on)
+    const res = await client.setGroups({
+      switch: batch.filter((x) => deviceKind(x.device) === 'switch').map((x) => x.gid),
+      light: batch.filter((x) => deviceKind(x.device) === 'light').map((x) => x.gid),
+    }, on)
     // Symmetric with the read path: a retried success and an outright 429 are
     // the same signal about the account's budget, counted once either way.
     if (res.retried || (!res.ok && res.kind === 'rate_limited')) counters.rateLimited++
@@ -886,7 +902,11 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   if (!plan) return { ok: true, noop: true }
 
   const client = makeClient(conn, { sleep, now })
-  const res = await client.setSwitch(device.device_id, device.channel, plan.action === 'on')
+  // A light is addressed through set/light; set/switch would name a component
+  // the device does not have.
+  const res = deviceKind(device) === 'light'
+    ? await client.setLight(device.device_id, device.channel, plan.action === 'on')
+    : await client.setSwitch(device.device_id, device.channel, plan.action === 'on')
   if (!res.ok) {
     return { ok: false, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, permanent: res.permanent === true }
   }

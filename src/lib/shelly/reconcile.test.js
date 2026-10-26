@@ -83,6 +83,22 @@ const item = (id, chans = [{ channel: 0 }], online = true) => ({
   }])),
 })
 
+// A v2 `get` item for a dimmer: `light:N` components, with brightness.
+const lightItem = (id, chans = [{ channel: 0 }], online = true) => ({
+  id,
+  online: online ? 1 : 0,
+  gen: 3,
+  code: 'S3DM-0010WW',
+  status: Object.fromEntries(chans.map((c) => [`light:${c.channel}`, {
+    output: c.output ?? true,
+    brightness: c.brightness ?? 60,
+    apower: c.apower ?? 8,
+    aenergy: { total: c.total ?? 500 },
+    temperature: { tC: c.tC ?? 30 },
+    source: 'cloud',
+  }])),
+})
+
 const okGet = (ids) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id)) })
 
 // The last_state that okGet's default item produces, one minute ago — inside
@@ -187,7 +203,7 @@ const stampsOf = (db) => db.writes.deviceUpdates.filter((w) => 'last_applied' in
 // ---------------------------------------------------------------- fake client
 
 function makeClientFactory(script = {}) {
-  const calls = { get: [], setGroups: [], setSwitch: [] }
+  const calls = { get: [], setGroups: [], setSwitch: [], setLight: [] }
   let inFlight = 0
   let maxInFlight = 0
   const gate = async () => {
@@ -204,8 +220,14 @@ function makeClientFactory(script = {}) {
         await gate()
         return script.get ? script.get({ ids, loc, n: calls.get.length }) : okGet(ids)
       }),
-      setGroups: vi.fn(async (gids, on) => {
-        calls.setGroups.push({ loc, gids: [...gids], on })
+      // `groups` is the client's own two shapes: a bare string[] (switches) or
+      // { switch?, light? }. `gids` flattens them (switches first) so the older
+      // assertions keep reading one list; `groups` keeps the split for the
+      // light tests.
+      setGroups: vi.fn(async (groups, on) => {
+        const g = Array.isArray(groups) ? { switch: groups } : (groups || {})
+        const gids = [...(g.switch || []), ...(g.light || [])]
+        calls.setGroups.push({ loc, gids, groups: { switch: [...(g.switch || [])], light: [...(g.light || [])] }, on })
         await gate()
         return script.setGroups ? script.setGroups({ gids, on, loc }) : { ok: true, statusCode: 200, failed: {} }
       }),
@@ -213,6 +235,11 @@ function makeClientFactory(script = {}) {
         calls.setSwitch.push({ loc, id, ch, on })
         await gate()
         return script.setSwitch ? script.setSwitch({ id, ch, on }) : { ok: true, statusCode: 200, body: {} }
+      }),
+      setLight: vi.fn(async (id, ch, on) => {
+        calls.setLight.push({ loc, id, ch, on })
+        await gate()
+        return script.setLight ? script.setLight({ id, ch, on }) : { ok: true, statusCode: 200, body: {} }
       }),
     }
   })
@@ -456,6 +483,17 @@ describe('reads', () => {
     expect(new Set(calls.get.flatMap((c) => c.ids)).size).toBe(12)
   })
 
+  // SHELLYLIGHT.3 — a light's reading is found by kind, so its brightness
+  // reaches last_state; a switch row's last_state shape is unchanged.
+  it("writes a light's brightness into last_state", async () => {
+    const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => lightItem(id, [{ channel: 0, brightness: 42 }])) }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'lt', device_id: 'mac1', kind: 'light', schedule_mode: 'none' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    const [w] = stateWritesOf(db)
+    expect(w.id).toBe('lt')
+    expect(w.patch.last_state).toMatchObject({ online: true, output: true, brightness: 42, apower: 8, aenergy_wh: 500 })
+  })
+
   it('writes last_state only when it actually changed', async () => {
     const db = makeDb({
       connections: [conn()],
@@ -653,6 +691,38 @@ describe('commands', () => {
     expect(stampsOf(db).map((w) => w.patch.last_applied.reason)).toEqual(['window_open', 'window_open'])
   })
 
+  // SHELLYLIGHT.3 — a light rides the SAME call as the switches opening with
+  // it: one setGroups per direction per location, split by kind, and both
+  // stamped off the one success.
+  it('sends a switch and a light opening together as ONE split setGroups, and stamps both', async () => {
+    const { factory, calls } = makeClientFactory({
+      get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => (id === 'l' ? lightItem(id) : item(id))) }),
+    })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'sw', device_id: 's' }), dev({ id: 'lt', device_id: 'l', kind: 'light' })],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(calls.setGroups).toHaveLength(1)
+    expect(calls.setGroups[0]).toMatchObject({ on: true, groups: { switch: ['s_0'], light: ['l_0'] } })
+    expect(calls.setSwitch).toEqual([])
+    expect(calls.setLight).toEqual([])
+    expect(stampsOf(db).map((w) => w.id).sort()).toEqual(['lt', 'sw'])
+    expect(out).toMatchObject({ planned: 2, applied: 2, failed: 0 })
+  })
+
+  it('never stamps a light the API listed in failedCommands, and stamps the switch beside it', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: true, statusCode: 200, failed: { l_0: 'DEVICE_OFFLINE' } }) })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'sw', device_id: 's' }), dev({ id: 'lt', device_id: 'l', kind: 'light' })],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(stampsOf(db).map((w) => w.id)).toEqual(['sw'])
+    expect(out).toMatchObject({ applied: 1, failed: 1 })
+  })
+
   it('opens before it closes, one call each', async () => {
     const { factory, calls } = makeClientFactory()
     const db = makeDb({
@@ -770,6 +840,37 @@ describe('energy roll', () => {
 
   // energy.js only banks a gap into today while the caller still hands it the
   // last row — the load WINDOW is that promise's reach.
+  // SHELLYLIGHT.3 — a metering light (Plus Dimmer, RGBW PM) books energy
+  // exactly as a relay does. The energy step matches the reading on channel
+  // AND kind, so the light row finds its `light:0` component.
+  it('rolls a light with aenergy into shelly_energy_daily exactly like a relay', async () => {
+    const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => lightItem(id, [{ channel: 0, total: 1500 }])) }) })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'lt', device_id: 'mac1', kind: 'light', schedule_mode: 'none' })],
+      energy: [{ device_id: 'lt', location_id: 'loc-A', day: '2026-07-06', wh_start: '1000.000', wh_last: '1400.000', wh_total: '400.000', samples: 5, resets: 0, first_sample_at: iso(NOW - HOUR), last_sample_at: iso(NOW - 60_000) }],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(db.writes.energyUpserts).toHaveLength(1)
+    expect(db.writes.energyUpserts[0].rows[0]).toMatchObject({
+      device_id: 'lt', location_id: 'loc-A', day: '2026-07-06', wh_last: 1500, wh_total: 500, samples: 6,
+    })
+    expect(out.energyWrites).toBe(1)
+  })
+
+  // The other half of "channel AND kind": a switch row never borrows a light
+  // component's counter that happens to share its channel number.
+  it('never samples a switch row off a light component on the same channel', async () => {
+    const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => lightItem(id, [{ channel: 0, total: 1500 }])) }) })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [dev({ id: 'sw', device_id: 'mac1', schedule_mode: 'none' })],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(db.writes.energyUpserts).toEqual([])
+    expect(out.energyWrites).toBe(0)
+  })
+
   it('carries a row five days old (the lookback window includes it)', async () => {
     const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0, total: 1500 }])) }) })
     const db = makeDb({
@@ -1204,6 +1305,17 @@ describe('runNowForDevice', () => {
 
     expect(out).toEqual({ ok: true, action: 'on', reason: 'run_now' })
     expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true }])
+    expect(db.writes.deviceUpdates[0].patch.last_applied).toMatchObject({ action: 'on', reason: 'run_now' })
+  })
+
+  it('drives a light through setLight, never setSwitch, and stamps the run', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({})
+    const out = await runNowForDevice(db, conn(), dev({ device_id: 'mac1', kind: 'light' }), { now: () => NOW, makeClient: factory })
+
+    expect(out).toEqual({ ok: true, action: 'on', reason: 'run_now' })
+    expect(calls.setLight).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true }])
+    expect(calls.setSwitch).toEqual([])
     expect(db.writes.deviceUpdates[0].patch.last_applied).toMatchObject({ action: 'on', reason: 'run_now' })
   })
 
