@@ -8,7 +8,10 @@
 //
 // A device in another group is listed with that group's name: ticking it moves
 // it here (a device is in at most one group), and the operator should see that
-// it is leaving somewhere. Leaving commands nothing; the device stays as it is.
+// it is leaving somewhere. Leaving commands nothing; the device stays as it is,
+// with no schedule of its own — and that, too, is said BEFORE Save
+// (LEAVE_WARNING), because a light that silently stops following the group's
+// hours reads as a broken schedule a week later.
 
 'use client'
 
@@ -18,7 +21,10 @@ import { Button } from '@/components/ui'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
 
 export const JOIN_WARNING =
-  "These plugs will follow this group's schedule. Their own schedule and any manual switch are cleared."
+  "These devices will follow this group's schedule. Their own schedule and any manual switch are cleared."
+
+export const LEAVE_WARNING =
+  'Removed devices stay as they are now, with no schedule, until you switch them.'
 
 const deviceLabel = (d) => d.name || `${d.model || 'Shelly'} · ${String(d.device_id || '').slice(-4)}`
 
@@ -85,6 +91,12 @@ export default function ShellyGroupMembersEditor({ group, devices = [], groups =
       {joining.length > 0 && (
         <p className="flex items-start gap-1 text-xs text-amber-700">
           <AlertCircle size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> {JOIN_WARNING}
+        </p>
+      )}
+
+      {leaving.length > 0 && (
+        <p className="flex items-start gap-1 text-xs text-amber-700">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> {LEAVE_WARNING}
         </p>
       )}
 

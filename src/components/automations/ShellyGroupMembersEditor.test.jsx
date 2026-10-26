@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import ShellyGroupMembersEditor, { JOIN_WARNING } from './ShellyGroupMembersEditor.jsx'
+import ShellyGroupMembersEditor, { JOIN_WARNING, LEAVE_WARNING } from './ShellyGroupMembersEditor.jsx'
 
 const group = { id: 'g1', name: 'Studio lights', device_ids: ['d1'] }
 const devices = [
@@ -30,15 +30,15 @@ describe('ShellyGroupMembersEditor', () => {
     expect(screen.getByText('In Fans')).toBeTruthy()
   })
 
-  it('warns "These plugs will follow this group\'s schedule" before saving a joiner', async () => {
+  it('warns "These devices will follow this group\'s schedule" before saving a joiner', async () => {
     global.fetch.mockResolvedValue(answer(200, { success: true, device_ids: ['d1', 'd2'] }))
     const onSaved = vi.fn()
     render(<ShellyGroupMembersEditor group={group} devices={devices} groups={groups} onSaved={onSaved} onCancel={vi.fn()} />)
-    expect(screen.queryByText(/These plugs will follow this group's schedule/)).toBeNull()
+    expect(screen.queryByText(/These devices will follow this group's schedule/)).toBeNull()
     fireEvent.click(screen.getByLabelText(/Back light/))
     // Shown BEFORE anything is sent.
-    expect(screen.getByText(/These plugs will follow this group's schedule/)).toBeTruthy()
-    expect(JOIN_WARNING).toMatch(/^These plugs will follow this group's schedule/)
+    expect(screen.getByText(/These devices will follow this group's schedule/)).toBeTruthy()
+    expect(JOIN_WARNING).toMatch(/^These devices will follow this group's schedule/)
     expect(global.fetch).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Save devices' }))
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
@@ -52,7 +52,7 @@ describe('ShellyGroupMembersEditor', () => {
     global.fetch.mockResolvedValue(answer(200, { success: true, device_ids: [] }))
     render(<ShellyGroupMembersEditor group={group} devices={devices} groups={groups} onSaved={vi.fn()} onCancel={vi.fn()} />)
     fireEvent.click(screen.getByLabelText(/Front light/))
-    expect(screen.queryByText(/These plugs will follow/)).toBeNull()
+    expect(screen.queryByText(/These devices will follow/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Save devices' }))
     await waitFor(() => expect(global.fetch).toHaveBeenCalled())
     expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ device_ids: [] })
@@ -80,5 +80,17 @@ describe('ShellyGroupMembersEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onCancel).toHaveBeenCalled()
     expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('says before Save that a removed device stays as it is now, with no schedule', () => {
+    render(<ShellyGroupMembersEditor group={group} devices={devices} groups={groups} onSaved={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.queryByText(LEAVE_WARNING)).toBeNull()
+    fireEvent.click(screen.getByLabelText(/Front light/))
+    expect(screen.getByText(LEAVE_WARNING)).toBeTruthy()
+    expect(LEAVE_WARNING).toBe('Removed devices stay as they are now, with no schedule, until you switch them.')
+    expect(global.fetch).not.toHaveBeenCalled()
+    // Ticking it back takes the warning away.
+    fireEvent.click(screen.getByLabelText(/Front light/))
+    expect(screen.queryByText(LEAVE_WARNING)).toBeNull()
   })
 })

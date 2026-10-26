@@ -13,7 +13,7 @@
 // credential that is working perfectly. So every load REPLACES state only on
 // success, and a failure adds a subordinate line and changes nothing else.
 //
-// AND IT NEVER CLAIMS ANYTHING IT DID NOT READ. "No plugs adopted yet" is a
+// AND IT NEVER CLAIMS ANYTHING IT DID NOT READ. "No devices adopted yet" is a
 // statement about the studio's hardware, so it is made only when the devices
 // read actually succeeded (`dev` is non-null). Rendering it off a failed read
 // would tell an operator their plugs are gone because our database hiccuped.
@@ -557,7 +557,7 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
             we only have it when the devices read succeeded. */}
         {devices.length === 0 && dev && status !== null && (
           <p className="text-sm text-un1t-subtle">
-            No plugs adopted yet{connected === true ? ' — use Find devices below.' : '.'}
+            No devices adopted yet{connected === true ? ' — use Find devices below.' : '.'}
           </p>
         )}
         {devices.length > 0 && ungrouped.length === 0 && (

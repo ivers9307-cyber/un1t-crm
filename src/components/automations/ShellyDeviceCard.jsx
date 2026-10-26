@@ -468,7 +468,7 @@ export default function ShellyDeviceCard({ device, group = null, connected, loca
       </div>
       {!managed && !grouped && <p className="text-xs text-un1t-subtle">{UNMANAGED_HINT}</p>}
       {!managed && grouped && group && (
-        <p className="text-xs text-un1t-subtle">No schedule runs {group.name} — this plug stays as you set it until you change it.</p>
+        <p className="text-xs text-un1t-subtle">No schedule runs {group.name} — this device stays as you set it until you change it.</p>
       )}
 
       {result && (

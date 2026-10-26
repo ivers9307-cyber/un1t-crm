@@ -714,6 +714,11 @@ describe('ShellyDeviceCard — a grouped device', () => {
     expect(screen.queryByText(/No schedule runs this plug/)).toBeNull()
   })
 
+  it('a member of a group no schedule runs says the DEVICE stays as set (not "plug")', () => {
+    render(<ShellyDeviceCard device={grouped()} group={{ ...studio, enabled: false, schedule_mode: 'none' }} connected glofoxConnected />)
+    expect(screen.getByText('No schedule runs Studio lights — this device stays as you set it until you change it.')).toBeTruthy()
+  })
+
   it('a group not loaded yet still hides the editor and says "Follows its group"', () => {
     render(<ShellyDeviceCard device={grouped()} connected glofoxConnected />)
     expect(screen.getByText('Follows its group')).toBeTruthy()

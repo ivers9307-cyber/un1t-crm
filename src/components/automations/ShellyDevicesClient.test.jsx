@@ -188,22 +188,22 @@ describe('ShellyDevicesClient — a failed poll keeps the last good render', () 
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
     await waitFor(() => expect(screen.getByText('Couldn’t read the Shelly connection — retrying')).toBeTruthy())
     expect(screen.queryByRole('button', { name: /^Connect$/ })).toBeNull()
-    // "No plugs adopted yet" is a statement about the STUDIO. We did not read
+    // "No devices adopted yet" is a statement about the STUDIO. We did not read
     // the devices, so we are not entitled to make it.
-    expect(screen.queryByText(/No plugs adopted yet/)).toBeNull()
+    expect(screen.queryByText(/No devices adopted yet/)).toBeNull()
   })
 
   it('claims "no plugs" only once the devices read has actually succeeded', async () => {
     script([[okConn(), okDevices({ devices: [] })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
-    await waitFor(() => expect(screen.getByText(/No plugs adopted yet/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/No devices adopted yet/)).toBeTruthy())
   })
 
   it('a devices read that fails while the connection reads fine makes no claim either', async () => {
     script([[okConn(), json(500, { success: false, error: 'Could not load your Shelly devices' })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
     await waitFor(() => expect(screen.getByText('Couldn’t refresh — retrying')).toBeTruthy())
-    expect(screen.queryByText(/No plugs adopted yet/)).toBeNull()
+    expect(screen.queryByText(/No devices adopted yet/)).toBeNull()
     // The connection panel is unaffected — that read worked.
     expect(screen.getByText('Connected')).toBeTruthy()
   })
@@ -433,7 +433,7 @@ describe('ShellyDevicesClient — Use Shelly names', () => {
   it('is hidden when the studio has no plugs — there is nothing to name', async () => {
     script([[okConn(), okDevices({ devices: [] })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
-    await waitFor(() => expect(screen.getByText(/No plugs adopted yet/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/No devices adopted yet/)).toBeTruthy())
     expect(screen.queryByRole('button', { name: /Use Shelly names/ })).toBeNull()
   })
 
