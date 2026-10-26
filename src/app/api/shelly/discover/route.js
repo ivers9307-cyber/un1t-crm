@@ -153,6 +153,9 @@ export const GET = withAuth({ permission: 'device_control' }, async ({ user, db,
       // adopted"), null is "the device told us nothing yet" (status.js rule 2)
       // and must not render as a dead end.
       supported: r.supported,
+      // 'switch' | 'light' — the normaliser's own word, passed back so the
+      // adopt call can store the kind the live reading showed.
+      kind: r.kind || 'switch',
       adopted: null,
     }
     if (r.reason) row.reason = r.reason

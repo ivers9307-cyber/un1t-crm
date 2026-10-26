@@ -23,6 +23,7 @@ const row = (over = {}) => ({
   gen: 2,
   online: true,
   supported: true,
+  kind: 'switch',
   adopted: null,
   ...over,
 })
@@ -129,7 +130,7 @@ describe('ShellyDiscoverPanel — one chip per adopted value', () => {
 })
 
 describe('ShellyDiscoverPanel — adopting', () => {
-  it('POSTs { device_id, channel } and tells the parent', async () => {
+  it('POSTs { device_id, channel, kind } and tells the parent', async () => {
     let sent = null
     let calls = 0
     global.fetch = vi.fn(async (url, init = {}) => {
@@ -147,7 +148,7 @@ describe('ShellyDiscoverPanel — adopting', () => {
     expect(sent).toEqual({
       url: '/api/shelly/devices',
       method: 'POST',
-      body: { device_id: 'aabbccddeeff', channel: 2 },
+      body: { device_id: 'aabbccddeeff', channel: 2, kind: 'switch' },
     })
     expect(calls).toBe(2)
   })
@@ -211,5 +212,27 @@ describe('ShellyDiscoverPanel — discovery failures', () => {
     render(<ShellyDiscoverPanel adoptedIds={new Set()} />)
     fireEvent.click(screen.getByRole('button', { name: /Find devices/ }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Could not read your Shelly account'))
+  })
+})
+
+describe('ShellyDiscoverPanel — lights', () => {
+  it('an rgbw row is adoptable, labelled Light, with no unsupported chip', async () => {
+    await find([row({ kind: 'light', model: 'S3PM-001PCEU16', name: 'Sign' })])
+    expect(screen.getByRole('button', { name: 'Adopt' }).disabled).toBe(false)
+    expect(screen.queryByText('Not supported yet')).toBeNull()
+    expect(screen.getByText('Light')).toBeTruthy()
+  })
+
+  it('adopting a light sends kind:light', async () => {
+    let sent = null
+    global.fetch = vi.fn(async (url, init = {}) => {
+      if (String(url).includes('/discover')) return discovery([row({ kind: 'light' })])
+      sent = JSON.parse(init.body)
+      return json(201, { success: true, device: { id: 'row-1' } })
+    })
+    render(<ShellyDiscoverPanel adoptedIds={new Set()} onAdopted={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Find devices/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Adopt' }))
+    await waitFor(() => expect(sent).toEqual({ device_id: 'aabbccddeeff', channel: 0, kind: 'light' }))
   })
 })

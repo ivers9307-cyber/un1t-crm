@@ -8441,6 +8441,8 @@ const ShellyAdoptBody = ShellyAdoptBodyRaw.extend({}).openapi('ShellyAdoptBody',
     + 'up to four rows sharing one device_id. name is optional: the Shelly account\'s own name is used when it is '
     + 'omitted, and a device with neither is stored with name null (the card composes a placeholder at render '
     + 'time — a synthesised name is indistinguishable from a human\'s the moment anyone looks at the row). '
+    + 'kind (switch | light, default switch) is the kind the discovery row showed; the route stores the live '
+    + 'reading\'s kind. '
     + 'Unknown keys are REJECTED: `channel` has a default, so a body carrying `chanel: 3` would otherwise drop '
     + 'the unknown key, default to 0 and silently adopt the WRONG RELAY.',
 })
@@ -8507,6 +8509,7 @@ const ShellyDeviceState = z.object({
   apower: z.number().nullable(),
   aenergy_wh: z.number().nullable(),
   temperature_c: z.number().nullable(),
+  brightness: z.number().nullable().optional(),
   source: z.string().nullable(),
   at: z.string().datetime(),
 }).openapi('ShellyDeviceState', {
@@ -8527,6 +8530,7 @@ const ShellyDevice = z.object({
   model: z.string().nullable(),
   gen: z.number().int().nullable(),
   zone: z.string().nullable(),
+  kind: z.enum(['switch', 'light']),
   enabled: z.boolean(),
   schedule_mode: z.enum(['none', 'fixed', 'class']),
   fixed_windows: z.array(ShellyWindow),
@@ -8664,6 +8668,7 @@ const ShellyDiscoveredRow = z.object({
   gen: z.number().int().nullable(),
   online: z.boolean(),
   supported: z.boolean().nullable(),
+  kind: z.enum(['switch', 'light']),
   reason: z.enum(['gen1', 'no_switch']).optional(),
   adopted: z.enum(['here', 'elsewhere']).nullable(),
   elsewhere_location_name: z.string().optional(),
