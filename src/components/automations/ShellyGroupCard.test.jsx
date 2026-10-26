@@ -9,7 +9,7 @@
 // new state (the device card's rule 2), and the route's own sentence is shown.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react'
 import ShellyGroupCard, { groupReasonLine, groupSwitchState } from './ShellyGroupCard.jsx'
 
 const TZ = 'Europe/Dublin'
@@ -46,6 +46,10 @@ const answer = (status, json) => ({ ok: status >= 200 && status < 300, status, j
 const originalFetch = global.fetch
 beforeEach(() => { global.fetch = vi.fn() })
 afterEach(() => { cleanup(); global.fetch = originalFetch })
+
+// The group's one switch: role=button + aria-pressed (role=switch has no
+// valid "mixed"), labelled "<name>: <state>".
+const groupSwitch = (name = 'Studio lights') => screen.getByRole('button', { name: new RegExp(`^${name}: `) })
 
 const renderCard = (g = group(), props = {}) => render(
   <ShellyGroupCard group={g} devices={devices} groups={[g]} connected locationTz={TZ} glofoxConnected onChanged={vi.fn()} {...props} />,
@@ -111,15 +115,15 @@ describe('groupReasonLine', () => {
 describe('ShellyGroupCard — the switch', () => {
   it('shows "1 of 2 on" in the mixed state', () => {
     renderCard()
-    const sw = screen.getByRole('switch')
+    const sw = groupSwitch()
     expect(sw.textContent).toContain('1 of 2 on')
-    expect(sw.getAttribute('aria-checked')).toBe('mixed')
+    expect(sw.getAttribute('aria-pressed')).toBe('mixed')
   })
 
   it('a fully-on group switches every member off, with no `until` for "until midnight"', async () => {
     global.fetch.mockResolvedValue(answer(200, { success: true, applied: 'all', pending_device_ids: [] }))
     renderCard(group({ now: { on_count: 2, member_count: 2, mode: 'window', until: null } }))
-    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(groupSwitch())
     await waitFor(() => expect(global.fetch).toHaveBeenCalled())
     const [url, init] = global.fetch.mock.calls[0]
     expect(url).toBe('/api/shelly/groups/g1/toggle')
@@ -130,7 +134,7 @@ describe('ShellyGroupCard — the switch', () => {
   it('a mixed group switches every member on', async () => {
     global.fetch.mockResolvedValue(answer(200, { success: true, applied: 'all', pending_device_ids: [] }))
     renderCard()
-    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(groupSwitch())
     await waitFor(() => expect(global.fetch).toHaveBeenCalled())
     expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ state: 'on' })
   })
@@ -139,7 +143,7 @@ describe('ShellyGroupCard — the switch', () => {
     const message = 'Saved. 1 of 2 did not answer — it will follow as soon as it is back online.'
     global.fetch.mockResolvedValue(answer(200, { success: true, applied: 'partial', pending_device_ids: ['d2'], message }))
     renderCard()
-    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(groupSwitch())
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(message))
     expect(screen.queryByText('Switched on.')).toBeNull()
   })
@@ -148,7 +152,7 @@ describe('ShellyGroupCard — the switch', () => {
     const message = 'Saved. Shelly is busy right now — the group will follow within a minute.'
     global.fetch.mockResolvedValue(answer(429, { success: true, applied: 'none', pending: true, code: 'rate_limited', message }))
     renderCard()
-    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(groupSwitch())
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(message))
   })
 
@@ -163,7 +167,7 @@ describe('ShellyGroupCard — the switch', () => {
 
   it('an empty group has nothing to switch', () => {
     renderCard(group({ device_ids: [], now: { on_count: 0, member_count: 0, mode: 'none', until: null, next_on: null } }))
-    expect(screen.getByRole('switch').disabled).toBe(true)
+    expect(groupSwitch().disabled).toBe(true)
   })
 })
 
@@ -293,7 +297,7 @@ describe('ShellyGroupCard — pending answers keep the "stays as you set it" not
       success: true, applied: 'partial', pending: true, pending_device_ids: ['d2'], message, holds_until_changed: true, notice,
     }))
     renderCard(group({ enabled: false, now: { on_count: 1, member_count: 2, mode: 'none', until: null, next_on: null } }))
-    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(groupSwitch())
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(message))
     expect(screen.getByRole('status').textContent).toContain(notice)
   })
@@ -304,7 +308,7 @@ describe('ShellyGroupCard — one action at a time', () => {
     global.fetch.mockReturnValue(new Promise(() => {}))
     renderCard()
     fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
-    await waitFor(() => expect(screen.getByRole('switch').disabled).toBe(true))
+    await waitFor(() => expect(groupSwitch().disabled).toBe(true))
   })
 
   it('the switch is disabled while a delete is in flight', async () => {
@@ -313,7 +317,7 @@ describe('ShellyGroupCard — one action at a time', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete group' }))
     const confirm = screen.getAllByRole('button', { name: 'Delete group' }).at(-1)
     fireEvent.click(confirm)
-    await waitFor(() => expect(screen.getByRole('switch').disabled).toBe(true))
+    await waitFor(() => expect(groupSwitch().disabled).toBe(true))
   })
 })
 
@@ -365,7 +369,7 @@ describe('ShellyGroupCard — rename has its own saving flag', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
     await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('switch').disabled).toBe(false)
+    expect(groupSwitch().disabled).toBe(false)
   })
 })
 
@@ -378,5 +382,84 @@ describe('autoOutcomeText — a member the page does not know', () => {
     renderCard()
     fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Shelly refused a device'))
+  })
+})
+
+describe('ShellyGroupCard — final-review fixes (SHELLYGROUPS.8)', () => {
+  it('the switch is a pressed-state button: aria-pressed true, false or mixed, never role=switch', () => {
+    const { rerender } = renderCard()
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(groupSwitch().getAttribute('aria-pressed')).toBe('mixed')
+    rerender(<ShellyGroupCard group={group({ now: { on_count: 2, member_count: 2, mode: 'window', until: null } })} devices={devices} groups={[group()]} connected locationTz={TZ} glofoxConnected onChanged={vi.fn()} />)
+    expect(groupSwitch().getAttribute('aria-pressed')).toBe('true')
+    rerender(<ShellyGroupCard group={group({ now: { on_count: 0, member_count: 2, mode: 'window', until: null } })} devices={devices} groups={[group()]} connected locationTz={TZ} glofoxConnected onChanged={vi.fn()} />)
+    expect(groupSwitch().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('"Back to schedule" and Delete are locked while the switch is in flight', async () => {
+    global.fetch.mockReturnValue(new Promise(() => {}))
+    renderCard()
+    fireEvent.click(groupSwitch())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back to schedule' }).disabled).toBe(true))
+    expect(screen.getByRole('button', { name: 'Delete group' }).disabled).toBe(true)
+  })
+
+  it('the delete confirm is locked while "Back to schedule" is in flight', async () => {
+    global.fetch.mockReturnValue(new Promise(() => {}))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete group' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
+    await waitFor(() => expect(groupSwitch().disabled).toBe(true))
+    expect(screen.getAllByRole('button', { name: 'Delete group' }).at(-1).disabled).toBe(true)
+  })
+
+  it('"Back to schedule" words a plan_mismatch member as not switched', async () => {
+    global.fetch.mockResolvedValue(answer(200, {
+      success: true,
+      applied: 'partial',
+      pending_device_ids: ['d2'],
+      results: [
+        { device_id: 'd1', applied: 'on', reason: 'fixed' },
+        { device_id: 'd2', applied: null, code: 'plan_mismatch' },
+      ],
+    }))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
+    await waitFor(() => expect(screen.getByRole('status')).toBeTruthy())
+    const text = screen.getByRole('status').textContent
+    expect(text).toContain('Back on schedule for 1 of 2.')
+    expect(text).toContain('Back light was not switched.')
+    expect(text).not.toMatch(/back online/)
+  })
+
+  it('the result line clears itself after about 10 seconds', async () => {
+    vi.useFakeTimers()
+    try {
+      global.fetch.mockResolvedValue(answer(200, { success: true, applied: 'all', pending_device_ids: [] }))
+      renderCard()
+      await act(async () => { fireEvent.click(groupSwitch()) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.getByRole('status').textContent).toContain('Switched on.')
+      await act(async () => { await vi.advanceTimersByTimeAsync(9_000) })
+      expect(screen.queryByRole('status')).not.toBeNull()
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500) })
+      expect(screen.queryByRole('status')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a pending result clears on the next poll that shows every member as asked', async () => {
+    global.fetch.mockResolvedValue(answer(200, { success: true, applied: 'partial', pending: true, pending_device_ids: ['d2'], message: 'Saved. 1 of 2 did not answer.' }))
+    const props = { devices, groups: [group()], connected: true, locationTz: TZ, glofoxConnected: true, onChanged: vi.fn() }
+    const { rerender } = render(<ShellyGroupCard group={group()} {...props} />)
+    fireEvent.click(groupSwitch())
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Saved. 1 of 2 did not answer.'))
+    // A poll that still disagrees keeps it.
+    rerender(<ShellyGroupCard group={group({ now: { on_count: 1, member_count: 2, mode: 'override', until: null } })} {...props} />)
+    expect(screen.queryByRole('status')).not.toBeNull()
+    // A poll where every member is on, as asked, clears it.
+    rerender(<ShellyGroupCard group={group({ now: { on_count: 2, member_count: 2, mode: 'override', until: null } })} {...props} />)
+    expect(screen.queryByRole('status')).toBeNull()
   })
 })

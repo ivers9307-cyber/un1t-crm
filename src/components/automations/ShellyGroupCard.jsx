@@ -36,6 +36,19 @@
 //     and says Shelly refused it; only a member that did not answer is told it
 //     will follow once it is back online.
 //
+//  7. THE RESULT LINE CLEARS ITSELF (the page's refresh-verdict rule): after
+//     RESULT_MS, or, for a pending answer, on the first poll whose `now`
+//     shows every member as asked. A verdict left on screen becomes a claim
+//     about whatever the lights do next.
+//
+//  8. ONE ACTION AT A TIME. The switch, "Back to schedule" and Delete are all
+//     locked while any of them is in flight: two of them racing would command
+//     the same members twice in opposite directions.
+//
+//  9. THE SWITCH IS role="button" + aria-pressed, NOT role="switch".
+//     aria-checked="mixed" is invalid on a switch; aria-pressed takes "mixed".
+//     It keeps the switch's look.
+//
 //  5. A SWITCHED-OFF GROUP IS "NEVER AUTOMATIC". The card has no separate
 //     on/off for the schedule (Richard's approved look), so the editor is
 //     handed the group as `schedule_mode: 'none'` whenever `enabled` is false,
@@ -45,7 +58,7 @@
 
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, Droplet, Fan, Lightbulb, Plug, Trash2, Tv } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import { DEFAULT_TZ, instantToZonedParts, timeLabelIn } from '@shared/zoned-time'
@@ -56,6 +69,9 @@ import ShellyScheduleEditor from './ShellyScheduleEditor'
 import ShellyGroupMembersEditor from './ShellyGroupMembersEditor'
 
 const HOUR_MS = 60 * 60 * 1000
+// Long enough to read; short enough not to be read as the state of whatever
+// happens next (ShellyDevicesClient's REFRESH_MSG_MS is the same idea).
+export const RESULT_MS = 10_000
 
 const ICONS = { bulb: Lightbulb, fan: Fan, tv: Tv, plug: Plug, droplet: Droplet }
 
@@ -246,7 +262,9 @@ export default function ShellyGroupCard({
   group, devices = [], groups = [], connected, locationTz = DEFAULT_TZ, glofoxConnected, glofoxUnknown = false, onChanged,
 }) {
   const [busy, setBusy] = useState(null)
-  const [result, setResult] = useState(null) // { tone: 'ok'|'warn'|'error', text }
+  // { tone: 'ok'|'warn'|'error', text, want?: 'on'|'off' } — `want` is set on a
+  // pending on/off answer: a poll showing every member that way clears it.
+  const [result, setResult] = useState(null)
   const [duration, setDuration] = useState('midnight')
   const [editingMembers, setEditingMembers] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -266,7 +284,18 @@ export default function ShellyGroupCard({
   const byId = new Map(devices.map((d) => [d.id, d]))
   const members = (Array.isArray(group.device_ids) ? group.device_ids : []).map((id) => byId.get(id)).filter(Boolean)
 
+  // Rule 7: self-clearing.
+  useEffect(() => {
+    if (!result) return undefined
+    const t = setTimeout(() => setResult(null), RESULT_MS)
+    return () => clearTimeout(t)
+  }, [result])
+  useEffect(() => {
+    if (result?.want && face === result.want) setResult(null)
+  }, [face, result])
+
   const controlsOff = connected === false
+  const anyBusy = busy !== null
   const switchTitle = controlsOff ? 'Connect your Shelly account first' : face === 'empty' ? 'Add devices to this group first' : undefined
 
   async function toggle(next) {
@@ -296,7 +325,7 @@ export default function ShellyGroupCard({
         || PENDING_FALLBACK
       // An unmanaged group's lights stay as set: said on a partial answer too.
       const notice = res.json?.notice
-      setResult({ tone: 'warn', text: notice ? `${base} ${notice}` : base })
+      setResult({ tone: 'warn', text: notice ? `${base} ${notice}` : base, want: next === 'on' || next === 'off' ? next : undefined })
       await onChanged?.()
       return
     }
@@ -423,13 +452,12 @@ export default function ShellyGroupCard({
         </div>
         <button
           type="button"
-          role="switch"
-          aria-checked={faceInfo.aria}
+          aria-pressed={faceInfo.aria}
           aria-label={`${group.name}: ${switchText}`}
           title={switchTitle}
           // One action at a time: a press while "Back to schedule" or a delete
           // is in flight would race it on the same members.
-          disabled={controlsOff || face === 'empty' || busy !== null}
+          disabled={controlsOff || face === 'empty' || anyBusy}
           onClick={() => toggle(face === 'on' ? 'off' : 'on')}
           className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition disabled:opacity-60 ${faceInfo.cls}`}
         >
@@ -448,7 +476,7 @@ export default function ShellyGroupCard({
           >
             {DURATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
           </select>
-          <Button size="sm" variant="ghost" disabled={controlsOff || face === 'empty'} loading={busy === 'auto'} onClick={() => toggle('auto')}>
+          <Button size="sm" variant="ghost" disabled={controlsOff || face === 'empty' || anyBusy} loading={busy === 'auto'} onClick={() => toggle('auto')}>
             Back to schedule
           </Button>
         </div>
@@ -491,14 +519,14 @@ export default function ShellyGroupCard({
       {/* ——— delete ——————————————————————————————————————————————— */}
       <div className="border-t border-un1t-border/60 pt-3">
         {!confirmingDelete ? (
-          <Button size="sm" variant="ghost" icon={Trash2} onClick={() => setConfirmingDelete(true)}>Delete group</Button>
+          <Button size="sm" variant="ghost" icon={Trash2} disabled={anyBusy} onClick={() => setConfirmingDelete(true)}>Delete group</Button>
         ) : (
           <div className="space-y-2">
             <p className="text-xs text-un1t-text">
               Delete this group? Its devices stay as they are, with no schedule, until you switch them or add them to another group.
             </p>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="danger" loading={busy === 'delete'} onClick={remove}>Delete group</Button>
+              <Button size="sm" variant="danger" disabled={anyBusy} loading={busy === 'delete'} onClick={remove}>Delete group</Button>
               <Button size="sm" variant="ghost" onClick={() => setConfirmingDelete(false)}>Keep it</Button>
             </div>
           </div>

@@ -572,11 +572,14 @@ describe('ShellyDevicesClient — groups first, then "Not in a group"', () => {
     G({ id: 'g-c', name: 'Alpha', sort_order: 2 }),
   ]
 
+  // Each group card's one switch (role=button + aria-pressed, labelled "<name>: <state>").
+  const groupSwitches = () => screen.getAllByRole('button').filter((b) => /^[^:]+: (On|Off|No devices|\d+ of \d+ on)$/.test(b.getAttribute('aria-label') || ''))
+
   it('lists the group cards by sort_order then name, then the ungrouped devices', async () => {
     page({ groups: twoGroups() })
     render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
-    await waitFor(() => expect(screen.getByRole('switch', { name: /^Studio lights:/ })).toBeTruthy())
-    const order = screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label').split(':')[0])
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Studio lights: / })).toBeTruthy())
+    const order = groupSwitches().map((s) => s.getAttribute('aria-label').split(':')[0])
     expect(order).toEqual(['Studio lights', 'Alpha', 'Zeta'])
 
     const notGrouped = screen.getByRole('region', { name: 'Not in a group' })
@@ -584,7 +587,7 @@ describe('ShellyDevicesClient — groups first, then "Not in a group"', () => {
     // A grouped device is not in the ungrouped section.
     expect(within(notGrouped).queryByText('Front light')).toBeNull()
     // The group cards come before the ungrouped section in the document.
-    const firstSwitch = screen.getAllByRole('switch')[0]
+    const firstSwitch = groupSwitches()[0]
     expect(firstSwitch.compareDocumentPosition(notGrouped) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -610,7 +613,7 @@ describe('ShellyDevicesClient — groups first, then "Not in a group"', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New group' }))
     fireEvent.change(screen.getByLabelText('New group name'), { target: { value: 'Changing rooms' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create group' }))
-    await waitFor(() => expect(screen.getByRole('switch', { name: /^Changing rooms:/ })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Changing rooms: / })).toBeTruthy())
     const post = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/shelly/groups' && i?.method === 'POST')
     expect(JSON.parse(post[1].body)).toEqual({ name: 'Changing rooms' })
     expect(state.groups).toHaveLength(1)
