@@ -182,6 +182,14 @@ describe('POST …/toggle — when the override expires', () => {
   })
 })
 
+describe('POST …/toggle — riding out the cron (SHELLYBUSY.1)', () => {
+  it('builds its client with three 429 retries, so a press that lands on the cron read is not "busy"', async () => {
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: 3 }))
+  })
+})
+
 describe('POST …/toggle — intent before command', () => {
   it('the override is ON THE ROW by the time setSwitch is called', async () => {
     let seen

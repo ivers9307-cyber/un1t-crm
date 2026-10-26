@@ -230,6 +230,27 @@ describe('createShellyClient', () => {
     expect(res).toMatchObject({ ok: false, kind: 'rate_limited', retried: true })
   })
 
+  // SHELLYBUSY.1 — a staff press that lands on the cron's read gets 429'd; one
+  // retry 1.1 s later can land on the cron's NEXT call. Interactive callers opt
+  // into more retries; the cron keeps exactly one (it owns its own budget).
+  it('max429Retries lets an interactive caller retry a 429 more than once, with growing waits', async () => {
+    const { fetchImpl, calls } = fetchStub([{ status: 429, body: '' }, { status: 429, body: '' }, { status: 200, body: '' }])
+    const clk = clockAndSleep()
+    const c = createShellyClient(conn, { fetchImpl, now: clk.now, sleep: clk.sleep, max429Retries: 3 })
+    const res = await c.setLight('a', 0, true)
+    expect(calls).toHaveLength(3)
+    expect(clk.slept.filter((ms) => ms >= RETRY_429_AFTER_MS)).toEqual([RETRY_429_AFTER_MS, 2 * RETRY_429_AFTER_MS])
+    expect(res).toMatchObject({ ok: true, retried: true })
+  })
+
+  it('max429Retries gives up tagged after its last retry', async () => {
+    const { fetchImpl, calls } = fetchStub(Array.from({ length: 5 }, () => ({ status: 429, body: '' })))
+    const clk = clockAndSleep()
+    const c = createShellyClient(conn, { fetchImpl, now: clk.now, sleep: clk.sleep, max429Retries: 3 })
+    expect(await c.setSwitch('a', 0, true)).toMatchObject({ ok: false, kind: 'rate_limited', retried: true })
+    expect(calls).toHaveLength(4)
+  })
+
   it('a 429 that succeeds on the retry is ok, and still says it cost two requests', async () => {
     const { fetchImpl, calls } = fetchStub([{ status: 429, body: '' }, { status: 200, body: JSON.stringify([{ id: 'a' }]) }])
     const clk = clockAndSleep()

@@ -192,7 +192,7 @@ export const POST = withAuth(
       // Never asked. Not "unresolved" — see `covered` above.
       if (!covered.has(key)) continue
       const raw = rawById.get(key)
-      pending.push({ row, key, raw, name: resolveDeviceName(raw, row.channel) })
+      pending.push({ row, key, raw, name: resolveDeviceName(raw, row.channel, row.kind) })
     }
 
     // ---- the ACCOUNT layer (SHELLY-NAMES.3) --------------------------------

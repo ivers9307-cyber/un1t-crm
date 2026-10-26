@@ -232,6 +232,21 @@ describe('POST /api/shelly/sync-names — what it writes', () => {
     expect(names).toEqual(['Sauna', 'Ice bath'])
   })
 
+  // SHELLYLIGHTNAMES.1 — Stillorgan's RGBW PMs in 4-light profile.
+  it('names a multi-LIGHT device per channel from light:N', async () => {
+    useDb(world([
+      deviceRow({ id: DEV_A, name: null, channel: 0, kind: 'light' }),
+      deviceRow({ id: DEV_B, location_id: LOC_A, name: null, channel: 1, kind: 'light' }),
+    ]))
+    get.mockResolvedValue(okGet([item(SHELLY_ID, {
+      status: { 'light:0': {}, 'light:1': {} },
+      settings: { DeviceInfo: { name: 'Changing room' }, 'light:0': { name: 'Mirror' }, 'light:1': { name: 'Showers' } },
+    })]))
+    const res = await POST(syncReq())
+    expect(await res.json()).toMatchObject({ total: 2, updated: 2 })
+    expect(db.rowsIn('shelly_devices').map((r) => r.name)).toEqual(['Mirror', 'Showers'])
+  })
+
   it('batches at the client’s own MAX_GET_IDS rather than a hardcoded 10', async () => {
     const many = Array.from({ length: 12 }, (_, i) => deviceRow({
       id: `d0000000-0000-4000-8000-0000000000${String(i).padStart(2, '0')}`,
