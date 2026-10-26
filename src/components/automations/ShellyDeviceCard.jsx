@@ -164,6 +164,11 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
   const health = deviceHealth(device, { connected, nowMs })
   const managed = Boolean(device.enabled) && device.schedule_mode !== 'none'
   const state = device.last_state || {}
+  // SHELLYNOPOWER.1 — some hardware meters nothing (Stillorgan's Men's
+  // Changing Room RGBW PM reports neither watts nor an energy counter). Only an
+  // ONLINE reading with both absent says so; an offline row's nulls are "we
+  // heard nothing", not "it cannot meter" (status.js rule 2).
+  const noPower = state.online === true && state.apower == null && state.aenergy_wh == null
   // The route's answer when we have one, our own predicate otherwise. They
   // agree by construction (both read `enabled` and `schedule_mode`), so this
   // only matters in the window where the row on screen is older than the
@@ -406,7 +411,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
       <p className="text-xs text-un1t-subtle">
         <span className="font-medium text-un1t-text">{outputLabel(state.output, state.brightness, device.kind)}</span>
         {' · '}
-        {typeof state.apower === 'number' ? `${Math.round(state.apower)} W` : '—'}
+        {typeof state.apower === 'number' ? `${Math.round(state.apower)} W` : noPower ? 'Doesn’t report power' : '—'}
         {state.at ? ` · ${formatRelative(state.at)}` : ''}
       </p>
 
@@ -499,7 +504,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
       </div>
 
       {/* ——— energy ——————————————————————————————————————————————— */}
-      <div className="border-t border-un1t-border/60 pt-3">
+      {!noPower && <div className="border-t border-un1t-border/60 pt-3">
         <button
           type="button"
           onClick={() => setShowEnergy((v) => !v)}
@@ -512,7 +517,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
         {/* Mounted only when open — the fetch lives in the chart, so a page of
             ten devices costs zero energy queries until someone asks. */}
         {showEnergy && <div className="mt-2"><ShellyEnergyChart deviceId={device.id} /></div>}
-      </div>
+      </div>}
 
       {/* ——— remove ——————————————————————————————————————————————— */}
       <div className="border-t border-un1t-border/60 pt-3">

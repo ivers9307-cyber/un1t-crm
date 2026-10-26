@@ -70,6 +70,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MODULE = 'shelly-toggle'
+const TOGGLE_429_RETRIES = 3
 const HOUR_MS = 60 * 60 * 1000
 
 // The sentence an unmanaged device's toggle has to carry. Exported so Task 6
@@ -359,7 +360,9 @@ export const POST = withAuth(
     // ——— 2. the command ——————————————————————————————————————————————
     // A light is a `light:N` component, addressed through set/light; set/switch
     // would name a component the device does not have (SHELLYLIGHT.3).
-    const shelly = createShellyClient(engineConn)
+    // Three 429 retries (1.1 s, 2.2 s, 3.3 s): a press that lands on the
+    // cron's read rides it out instead of answering "busy". SHELLYBUSY.1.
+    const shelly = createShellyClient(engineConn, { max429Retries: TOGGLE_429_RETRIES })
     const res = deviceKind(device) === 'light'
       ? await shelly.setLight(device.device_id, device.channel, on)
       : await shelly.setSwitch(device.device_id, device.channel, on)

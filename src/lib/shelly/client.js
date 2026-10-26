@@ -181,7 +181,14 @@ function commandFailure(res) {
   }, res)
 }
 
-export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep, now = Date.now, minGapMs = MIN_GAP_MS } = {}) {
+// `max429Retries` (SHELLYBUSY.1): how many times one call re-sends after a
+// 429, each wait one RETRY_429_AFTER_MS longer than the last. The default of 1
+// is the cron's: it owns a whole tick's budget and must not stall it. A staff
+// press passes more, because its one request most often collides with the
+// cron's read of the same account and a single 1.1 s retry can land on the
+// cron's next call — the press then reads "Shelly is busy" for a request that
+// would have gone through a second later.
+export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep, now = Date.now, minGapMs = MIN_GAP_MS, max429Retries = 1 } = {}) {
   // Re-validated HERE, not just at the column CHECK. The CHECK only protects
   // rows that were persisted; probeConnection tests an operator-PASTED
   // connection that has not been saved yet, so a pasted
@@ -264,11 +271,11 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       const wait = minGapMs - (now() - lastCallAt)
       if (wait > 0) await sleep(wait)
       let res = await once(path, body, opts)
-      if (!res.ok && res.kind === 'rate_limited') {
+      for (let attempt = 1; attempt <= max429Retries && !res.ok && res.kind === 'rate_limited'; attempt++) {
         // Never shorter than the configured gap: an injected minGapMs above
         // the default is a deliberately slower budget, and a fixed 1100 ms
         // retry would quietly undercut it.
-        await sleep(Math.max(RETRY_429_AFTER_MS, minGapMs))
+        await sleep(Math.max(RETRY_429_AFTER_MS, minGapMs) * attempt)
         res = { ...(await once(path, body, opts)), retried: true }
       }
       return res
