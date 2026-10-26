@@ -428,3 +428,31 @@ describe('runRevolutReconcile — offers and donations', () => {
     expect(getOrder).not.toHaveBeenCalled()
   })
 })
+
+describe('runRevolutReconcile — run deadline', () => {
+  it('stops starting rows once the deadline passes and counts the rest as out_of_time', async () => {
+    const mod = await import('./revolut-reconcile.js')
+    let t = 0
+    // Each clock read is 100 s later: the first row starts inside the 150 s
+    // deadline, the second does not.
+    const clock = () => (t += 100_000)
+    const getOrder = vi.fn(async () => null)
+    const now = new Date('2026-10-26T12:00:00Z')
+    const createdAt = new Date(now.getTime() - 30 * 60_000).toISOString()
+    const rows = [1, 2, 3, 4].map((n) => ({ id: `r${n}`, payment_provider_ref: `o${n}`, created_at: createdAt }))
+    const empty = { data: [], error: null }
+    const db = {
+      from: (table) => {
+        const answer = table === 'race_payments' ? { data: rows, error: null } : empty
+        const q = new Proxy({}, {
+          get: (_, k) => (k === 'then' ? (res) => Promise.resolve(answer).then(res) : () => q),
+        })
+        return q
+      },
+    }
+    const r = await mod.runRevolutReconcile({ db, now, getOrder, clock, runDeadlineMs: 150_000 })
+    expect(r.counts.due).toBe(4)
+    expect(r.counts.checked).toBe(1)
+    expect(r.counts.out_of_time).toBe(3)
+  })
+})

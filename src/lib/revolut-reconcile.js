@@ -87,6 +87,15 @@ const LOG_MODULE = 'revolut-reconcile'
 export const RECONCILE_MIN_AGE_MS = 10 * 60_000
 export const RECONCILE_MAX_AGE_MS = 7 * 24 * 60 * 60_000
 export const RECONCILE_BUDGET = 50
+/**
+ * Wall-clock limit for the row loop. The route's maxDuration is 300 s; a
+ * Revolut outage makes every getOrder wait out its timeout, and 50 of those
+ * would outlast the function, which Vercel kills mid-row. Rows not reached
+ * are counted as out_of_time and come back on a later tick.
+ */
+export const RECONCILE_RUN_DEADLINE_MS = 240_000
+/** The cron's own getOrder: one retry and a shorter timeout than a webhook's. */
+const cronGetOrder = (ref) => revolutGetOrder(ref, { timeoutMs: 8_000, retries: 1 })
 /** The cron's period: the unit of the backoff. */
 export const RECONCILE_TICK_MS = 15 * 60_000
 const HOURLY_FROM_MS = 2 * 60 * 60_000
@@ -387,8 +396,10 @@ const APPLY = {
  * @returns {Promise<{ healthy: boolean, counts: object }>}
  */
 export async function runRevolutReconcile({
-  db, now = new Date(), getOrder = revolutGetOrder, publish = publishQueuePush, budget = RECONCILE_BUDGET,
+  db, now = new Date(), getOrder = cronGetOrder, publish = publishQueuePush, budget = RECONCILE_BUDGET,
+  runDeadlineMs = RECONCILE_RUN_DEADLINE_MS, clock = Date.now,
 }) {
+  const startedMs = clock()
   const nowMs = now.getTime()
   const fromIso = new Date(nowMs - RECONCILE_MAX_AGE_MS).toISOString()
   const toIso = new Date(nowMs - RECONCILE_MIN_AGE_MS).toISOString()
@@ -396,6 +407,7 @@ export async function runRevolutReconcile({
   const counts = {
     candidates: 0, due: 0, checked: 0, over_budget: 0,
     settled: 0, still_pending: 0, already_settled: 0, not_applied: 0, provider_failed: 0, errors: 0,
+    out_of_time: 0,
     list_failed: [],
     by_domain: {},
   }
@@ -436,7 +448,12 @@ export async function runRevolutReconcile({
     }
   }
 
-  for (const row of batch) {
+  for (const [i, row] of batch.entries()) {
+    if (clock() - startedMs > runDeadlineMs) {
+      counts.out_of_time = batch.length - i
+      logWarn(LOG_MODULE, 'run deadline reached; remaining rows wait for a later tick', { out_of_time: counts.out_of_time })
+      break
+    }
     counts.checked++
     const d = (counts.by_domain[row.domain] ||= { checked: 0, settled: 0 })
     d.checked++

@@ -141,7 +141,15 @@ export async function POST(request) {
   // (src/lib/car-deposit-revolut.js; the reconcile cron runs the same).
   // REVPAY.1 — a failed deposit write runs no side effect and defers: the
   // claim made it final otherwise.
-  const { error: carWriteErr } = await applyCarDepositUpdates({ db, car, order, state, updates })
+  // REVPAY.3 — Revolut sends ORDER_AUTHORISED then ORDER_COMPLETED (distinct
+  // dedupe keys) and both re-read the order as completed; the reconcile cron
+  // is a third observer. A car already in the target status is a no-op, and
+  // the write is a compare-and-set on the status read here, so the orders
+  // sync, the contact event and the sequence enrolment run once.
+  if (car.deposit_status === updates.deposit_status) {
+    return NextResponse.json({ success: true, already: state })
+  }
+  const { written, error: carWriteErr } = await applyCarDepositUpdates({ db, car, order, state, updates, guardStatus: true })
   if (carWriteErr) {
     logError('revolut-webhook', 'cars deposit write failed; deferred', { err: carWriteErr, carId: car.id, orderId, state })
     return await defer()
@@ -149,6 +157,7 @@ export async function POST(request) {
 
   // The buyer receipt SMS (mig 078) was retired with Twilio
   // (TWILIO-RETIRE.1); the public deposit page shows the paid receipt.
+  if (!written) return NextResponse.json({ success: true, already: state })
   return NextResponse.json({ success: true, applied: updates })
 }
 
