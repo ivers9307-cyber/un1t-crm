@@ -248,10 +248,19 @@ export const POST = withAuth(
       })
     }
     const channels = Array.isArray(item.channels) ? item.channels : []
+    // SHELLYLIGHT.3 — the component kind on this channel, from the READING.
+    // The body's `kind` is only a tie-break: when the device reports both a
+    // switch and a light on the channel, take the one asked for; when it
+    // reports one, take that one whatever the body says; when it reports none
+    // (offline, channel 0 on faith below) there is nothing to overrule it with.
+    let kind = input.kind
     if (channels.length) {
-      if (!channels.some((c) => c?.channel === input.channel)) {
+      const onChannel = channels.filter((c) => c?.channel === input.channel)
+      if (!onChannel.length) {
         return bad(`This device has no channel ${input.channel}`, 400, { code: 'bad_channel' })
       }
+      const kinds = new Set(onChannel.map((c) => c?.kind ?? 'switch'))
+      kind = kinds.has(input.kind) ? input.kind : [...kinds][0]
     } else if (input.channel !== 0) {
       // No channels in the reading is "we heard nothing", not "it has none" —
       // an offline device reports no switch components at all. Channel 0 is
@@ -374,6 +383,7 @@ export const POST = withAuth(
         location_id: locationId,
         device_id: input.device_id,
         channel: input.channel,
+        kind,
         // The operator's name wins, then the Shelly account's own, then null.
         // Null rather than a synthesised "Plug 1a2b": the card renders its own
         // placeholder, and a stored fake name is indistinguishable from one a
@@ -390,7 +400,7 @@ export const POST = withAuth(
         // The FULL last_state shape, from the reading we already have — every
         // writer writes all seven fields (mig 562's column comment), and an
         // offline device correctly lands output:null = unknown, never "off".
-        last_state: stateFromReading(null, item, input.channel, nowIso),
+        last_state: stateFromReading(null, item, input.channel, nowIso, kind),
         // Only a device that actually answered has been "seen". Stamping now
         // for an offline plug would start its health clock green on evidence
         // we never had.

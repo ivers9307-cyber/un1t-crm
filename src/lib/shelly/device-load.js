@@ -38,7 +38,7 @@ const MODULE = 'shelly-device'
 // nobody remembered to subtract it. (No secrets live on this table — the
 // allowlist is about contract stability, not about the key.)
 export const DEVICE_COLUMNS =
-  'id, location_id, device_id, channel, name, model, gen, zone, enabled, schedule_mode, ' +
+  'id, location_id, device_id, channel, kind, name, model, gen, zone, enabled, schedule_mode, ' +
   'fixed_windows, class_rule, override, last_applied, last_state, last_seen_at, created_at, updated_at'
 
 /**
