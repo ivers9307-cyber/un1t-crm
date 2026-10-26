@@ -430,7 +430,7 @@ describe('refreshRacePaymentFromProvider — a move_gap payment completed by the
     sendGapPaidEmail.mockRejectedValueOnce(new Error('postmark down'))
     const out = await refreshRacePaymentFromProvider(dbWith(), GAP)
     expect(out).toBeTruthy()
-    expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('gap receipt'), expect.objectContaining({ paymentId: 'gp1' }))
+    expect(logError).toHaveBeenCalledWith('race-payment-completed', expect.stringContaining('gap receipt'), expect.objectContaining({ paymentId: 'gp1' }))
   })
 })
 
