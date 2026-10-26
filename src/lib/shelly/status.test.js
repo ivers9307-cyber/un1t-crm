@@ -663,3 +663,54 @@ describe('timer_until (SHELLYTIMERS.4)', () => {
     expect(stateChanged({ ...base, timer_until: 'A' }, { ...base, at: later, timer_until: 'A' })).toBe(false)
   })
 })
+
+// SHELLYALERTS.1 — the device's own power-fault flags (`errors` on a switch or
+// a light), read into last_state so the alert pass can push about them.
+describe('errors (SHELLYALERTS.1)', () => {
+  const withSw = (sw) => ({ ...plugS, status: { 'switch:0': { ...plugS.status['switch:0'], ...sw } } })
+
+  it('a fault lands as errors: a sorted, de-duplicated list of strings', () => {
+    const r = normaliseGetItems([withSw({ errors: ['overtemp', 'overpower', 'overtemp'] })])[0]
+    expect(r.channels[0].errors).toEqual(['overpower', 'overtemp'])
+    expect(stateFromReading(null, r, 0, 'T1')).toEqual({
+      online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', errors: ['overpower', 'overtemp'], at: 'T1',
+    })
+  })
+
+  it('a light reads it too', () => {
+    const r = normaliseGetItems([{ id: 'abcabcabcabc', gen: 2, online: 1, status: { 'light:0': { output: false, brightness: 50, errors: ['overvoltage'] } } }])[0]
+    expect(stateFromReading(null, r, 0, 'T1', 'light').errors).toEqual(['overvoltage'])
+  })
+
+  it('no errors, an empty list or junk: the key is ABSENT (exact shape kept)', () => {
+    for (const sw of [{}, { errors: [] }, { errors: null }, { errors: 'overpower' }, { errors: [1, null, '', '  ', {}] }, { errors: {} }]) {
+      const r = normaliseGetItems([withSw(sw)])[0]
+      expect(r.channels[0]).not.toHaveProperty('errors')
+      expect(stateFromReading(null, r, 0, 'T1')).not.toHaveProperty('errors')
+    }
+  })
+
+  it('junk entries are dropped, real ones kept and trimmed; the list is capped', () => {
+    const r = normaliseGetItems([withSw({ errors: [' overpower ', 7, '', 'undervoltage'] })])[0]
+    expect(r.channels[0].errors).toEqual(['overpower', 'undervoltage'])
+    const many = normaliseGetItems([withSw({ errors: Array.from({ length: 30 }, (_, i) => `e${String(i).padStart(2, '0')}`) })])[0]
+    expect(many.channels[0].errors).toHaveLength(8)
+    const long = normaliseGetItems([withSw({ errors: ['x'.repeat(200)] })])[0]
+    expect(long.channels[0].errors[0]).toHaveLength(40)
+  })
+
+  it('offline keeps known errors; online with none drops them', () => {
+    const prev = { online: true, output: false, apower: 0, aenergy_wh: 1, temperature_c: 1, source: 'x', errors: ['overpower'], at: 'T1' }
+    expect(stateFromReading(prev, normaliseGetItems([offline])[0], 0, 'T2').errors).toEqual(['overpower'])
+    expect(stateFromReading(prev, normaliseGetItems([plugS])[0], 0, 'T2')).not.toHaveProperty('errors')
+  })
+
+  it('stateChanged notices a fault appearing, clearing or changing', () => {
+    const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
+    const later = '2026-07-06T10:01:00.000Z'
+    expect(stateChanged(base, { ...base, at: later, errors: ['overpower'] })).toBe(true)
+    expect(stateChanged({ ...base, errors: ['overpower'] }, { ...base, at: later })).toBe(true)
+    expect(stateChanged({ ...base, errors: ['overpower'] }, { ...base, at: later, errors: ['overpower', 'overtemp'] })).toBe(true)
+    expect(stateChanged({ ...base, errors: ['overpower'] }, { ...base, at: later, errors: ['overpower'] })).toBe(false)
+  })
+})
