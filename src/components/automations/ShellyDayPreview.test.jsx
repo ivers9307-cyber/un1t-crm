@@ -182,3 +182,76 @@ describe('ShellyDayPreview — refetches when the groups change', () => {
     expect(previewCalls()).toHaveLength(1)
   })
 })
+
+describe('ShellyDayPreview — final-review fixes (SHELLYGROUPS.8)', () => {
+  const withNow = (mode) => groups.map((g) => (g.id === 'g2'
+    ? { ...g, now: { mode, on_count: 1, member_count: 1, until: mode === 'override' ? '2026-10-27T00:00:00.000Z' : null } }
+    : { ...g, now: { mode: 'window', on_count: 1, member_count: 1 } }))
+  const previewCalls = () => urls().filter((u) => String(u).startsWith('/api/shelly/preview'))
+
+  it('today\'s "Manual override not shown" follows the groups prop, with no new request', async () => {
+    global.fetch.mockImplementation(async (u) => answer(200, body(String(u).split('date=')[1])))
+    const { rerender } = render(<ShellyDayPreview groups={withNow('window')} tz={TZ} />)
+    expect(await screen.findByText('Classes')).toBeTruthy()
+    expect(screen.queryByText('Manual override not shown')).toBeNull()
+
+    rerender(<ShellyDayPreview groups={withNow('override')} tz={TZ} />)
+    expect(screen.getByText('Manual override not shown')).toBeTruthy()
+
+    rerender(<ShellyDayPreview groups={withNow('window')} tz={TZ} />)
+    expect(screen.queryByText('Manual override not shown')).toBeNull()
+    await Promise.resolve()
+    expect(previewCalls()).toHaveLength(1)
+  })
+
+  it('names the shared gap when every class group has the same one', async () => {
+    global.fetch.mockResolvedValue(answer(200, body('2026-10-26')))
+    const two = [
+      { id: 'g1', name: 'Studio lights', enabled: true, schedule_mode: 'class', class_rule: { merge_gap_min: 45 } },
+      { id: 'g3', name: 'Fans', enabled: true, schedule_mode: 'class', class_rule: { merge_gap_min: 45 } },
+    ]
+    render(<ShellyDayPreview groups={two} tz={TZ} />)
+    expect(await screen.findByText('Classes under 45 min apart keep the lights on')).toBeTruthy()
+  })
+
+  it('words the gap per group when they differ, and never claims 30', async () => {
+    global.fetch.mockResolvedValue(answer(200, body('2026-10-26')))
+    const two = [
+      { id: 'g1', name: 'Studio lights', enabled: true, schedule_mode: 'class', class_rule: { merge_gap_min: 15 } },
+      { id: 'g3', name: 'Fans', enabled: true, schedule_mode: 'class', class_rule: { merge_gap_min: 60 } },
+    ]
+    render(<ShellyDayPreview groups={two} tz={TZ} />)
+    await screen.findByText('Classes')
+    const caption = screen.getByText(/keep/)
+    expect(caption.textContent).toContain('Studio lights 15 min')
+    expect(caption.textContent).toContain('Fans 60 min')
+    expect(caption.textContent).not.toContain('30')
+  })
+
+  it('a refusal that is not about the timetable says "Couldn\'t load the preview"', async () => {
+    global.fetch.mockResolvedValue(answer(500, { success: false, error: 'boom' }))
+    render(<ShellyDayPreview groups={groups} tz={TZ} />)
+    expect(await screen.findByText(/Couldn.t load the preview/)).toBeTruthy()
+    expect(screen.queryByText(/timetable/)).toBeNull()
+  })
+
+  it('a "Never automatic" or switched-off group\'s lane says so', async () => {
+    global.fetch.mockResolvedValue(answer(200, body('2026-10-26')))
+    const gs = [
+      ...groups,
+      { id: 'g4', name: 'Office', enabled: true, schedule_mode: 'none' },
+      { id: 'g5', name: 'Hall', enabled: false, schedule_mode: 'fixed' },
+    ]
+    render(<ShellyDayPreview groups={gs} tz={TZ} />)
+    await screen.findByText('Classes')
+    expect(screen.getAllByText('Never automatic')).toHaveLength(2)
+  })
+
+  it('group names in the lanes use the readable subtle token', async () => {
+    global.fetch.mockResolvedValue(answer(200, body('2026-10-26')))
+    render(<ShellyDayPreview groups={groups} tz={TZ} />)
+    const label = await screen.findByText('Studio lights')
+    expect(label.className).toContain('text-un1t-subtle')
+    expect(label.className).not.toContain('text-un1t-muted')
+  })
+})

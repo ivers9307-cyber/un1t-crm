@@ -13,8 +13,16 @@
 // the strip then says it could not read the timetable rather than drawing
 // blank lanes that read as "nothing scheduled".
 //
-// "Manual override not shown" is only worded for TODAY: the route lists groups
-// whose override is live now, whatever date was asked for.
+// "Manual override not shown" is only worded for TODAY, and for today it is
+// read off the `groups` prop's `now.mode === 'override'` (the page poll's live
+// answer), not off the preview response: the revision below deliberately
+// leaves the override out, so a group press would otherwise leave the note
+// stale until something else refetched. A group with no `now` falls back to
+// the route's `ignored_overrides` list.
+//
+// THE JOIN CAPTION NEVER CLAIMS A GAP IT DID NOT READ. When every class-mode
+// group shares one merge gap it is named; when they differ it is worded per
+// group.
 
 'use client'
 
@@ -22,9 +30,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '@/components/ui'
 import { addDaysIn, dayStartMsIn, formatInZone, timeLabelIn, todayStrIn, zonedWallClockToInstant } from '@shared/zoned-time'
 import { fetchJson } from './shelly-fetch'
+import { DEFAULT_MERGE_GAP_MIN } from '@/lib/shelly/schemas'
 
-const MAX_DAYS = 60 // the route's bound either side of today
-const DEFAULT_MERGE_GAP_MIN = 30
+// MUST EQUAL MAX_PREVIEW_DAYS in src/app/api/shelly/preview/route.js (the
+// route's bound either side of today). Re-typed because a client component
+// cannot import a route module (it would pull the server code into the bundle).
+const MAX_DAYS = 60
 const TICK_HOURS = [0, 3, 6, 9, 12, 15, 18, 21]
 
 const clampPct = (v) => Math.max(0, Math.min(100, v))
@@ -43,7 +54,7 @@ function placeBlock(startIso, endIso, dayStart, dayEnd) {
 function Lane({ label, children }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="w-28 shrink-0 truncate text-xs text-un1t-muted" title={label}>{label}</div>
+      <div className="w-28 shrink-0 truncate text-xs text-un1t-subtle" title={label}>{label}</div>
       <div className="relative h-6 flex-1 rounded bg-un1t-surface ring-1 ring-un1t-border">{children}</div>
     </div>
   )
@@ -56,7 +67,7 @@ export default function ShellyDayPreview({ groups = [], tz }) {
   const [today] = useState(() => todayStrIn(tz))
   const [offset, setOffset] = useState(0)
   const date = addDaysIn(today, offset, tz)
-  const [state, setState] = useState({ status: 'loading', data: null })
+  const [state, setState] = useState({ status: 'loading', data: null, code: null })
 
   // A revision derived from what the server's windows depend on, so a saved
   // schedule, a new group or a membership change refetches the chosen day,
@@ -70,12 +81,12 @@ export default function ShellyDayPreview({ groups = [], tz }) {
     let live = true
     // Only a new DAY blanks the strip; a revision refetch keeps the old lanes
     // on screen until the new answer lands.
-    if (shownDate.current !== date) setState({ status: 'loading', data: null })
+    if (shownDate.current !== date) setState({ status: 'loading', data: null, code: null })
     shownDate.current = date
     fetchJson(`/api/shelly/preview?date=${date}`).then(({ ok, json }) => {
       if (!live) return
-      if (ok && json?.success) setState({ status: 'ready', data: json })
-      else setState({ status: 'error', data: null })
+      if (ok && json?.success) setState({ status: 'ready', data: json, code: null })
+      else setState({ status: 'error', data: null, code: json?.code ?? null })
     })
     return () => { live = false }
   }, [date, revision])
@@ -89,11 +100,15 @@ export default function ShellyDayPreview({ groups = [], tz }) {
   const ordered = [...groups].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.name).localeCompare(String(b.name)))
   const data = state.data
   const windowsOf = (id) => data?.groups?.find((g) => g.id === id)?.windows || []
-  const ignored = new Set(date === today ? data?.ignored_overrides || [] : [])
+  const routeIgnored = new Set(data?.ignored_overrides || [])
+  const overrideHidden = (g) => date === today && (g?.now ? g.now.mode === 'override' : routeIgnored.has(g.id))
+  const neverAutomatic = (g) => g.enabled === false || !g.schedule_mode || g.schedule_mode === 'none'
   const classGroups = ordered.filter((g) => g.enabled !== false && g.schedule_mode === 'class')
-  const gap = classGroups.length === 1
-    ? Number.isFinite(classGroups[0].class_rule?.merge_gap_min) ? classGroups[0].class_rule.merge_gap_min : DEFAULT_MERGE_GAP_MIN
-    : DEFAULT_MERGE_GAP_MIN
+  const gapOf = (g) => (Number.isFinite(g.class_rule?.merge_gap_min) ? g.class_rule.merge_gap_min : DEFAULT_MERGE_GAP_MIN)
+  const gaps = new Set(classGroups.map(gapOf))
+  const joinCaption = gaps.size === 1
+    ? `Classes under ${[...gaps][0]} min apart keep the lights on`
+    : `Classes closer together than a group's gap keep its lights on: ${classGroups.map((g) => `${g.name} ${gapOf(g)} min`).join(', ')}`
 
   const stepBtn = 'rounded px-2 py-1 text-sm text-un1t-muted hover:bg-un1t-surface hover:text-un1t-text disabled:opacity-40 disabled:hover:bg-transparent'
 
@@ -109,7 +124,9 @@ export default function ShellyDayPreview({ groups = [], tz }) {
 
       {state.status === 'loading' && <p className="text-sm text-un1t-muted">Loading the day…</p>}
       {state.status === 'error' && (
-        <p role="alert" className="rounded bg-amber-500/10 px-3 py-2 text-sm text-amber-700">Couldn&apos;t read the timetable for this day</p>
+        <p role="alert" className="rounded bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          {state.code === 'occurrences' ? 'Couldn’t read the timetable for this day' : 'Couldn’t load the preview'}
+        </p>
       )}
 
       {state.status === 'ready' && (
@@ -142,12 +159,13 @@ export default function ShellyDayPreview({ groups = [], tz }) {
                 const label = `On ${timeLabelIn(w.on_at, tz)}–${timeLabelIn(w.off_at, tz)}`
                 return <div key={i} title={label} aria-label={`${g.name}: ${label}`} role="img" className="absolute inset-y-1 rounded-sm bg-green-500/10 ring-1 ring-green-600/60" style={{ left: `${p.left}%`, width: `${p.width}%` }} />
               })}
-              {ignored.has(g.id) && <span className="absolute inset-0 flex items-center justify-end pr-2 text-[10px] text-amber-700">Manual override not shown</span>}
+              {neverAutomatic(g) && <span className="absolute inset-0 flex items-center pl-2 text-[10px] text-un1t-subtle">Never automatic</span>}
+              {overrideHidden(g) && <span className="absolute inset-0 flex items-center justify-end pr-2 text-[10px] text-amber-700">Manual override not shown</span>}
             </Lane>
           ))}
 
           {classGroups.length > 0 && (
-            <p className="text-xs text-un1t-muted">Classes under {gap} min apart keep the lights on</p>
+            <p className="text-xs text-un1t-muted">{joinCaption}</p>
           )}
         </div>
       )}
