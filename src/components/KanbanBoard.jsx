@@ -157,13 +157,15 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
 
   // Ordered contact ids for the open contact's column (board render order), so
   // the drawer can step through it. Spans the loaded cards.
-  const columnContactIds = useMemo(() => {
-    if (!openContactId) return []
+  // HATCHCOLD.2 — and that column's slug, so the drawer's Cold label follows
+  // this board rather than the contact's home studio.
+  const { columnContactIds, openStageSlug } = useMemo(() => {
+    if (!openContactId) return { columnContactIds: [], openStageSlug: null }
     for (const stage of initialStages) {
       const ids = sortColumn(columnDeals[stage.id] || []).map((d) => d.contacts?.id).filter(Boolean)
-      if (ids.includes(openContactId)) return ids
+      if (ids.includes(openContactId)) return { columnContactIds: ids, openStageSlug: stage.slug ?? null }
     }
-    return []
+    return { columnContactIds: [], openStageSlug: null }
   }, [openContactId, initialStages, columnDeals])
 
   return (
@@ -232,7 +234,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
                     onDragEnd={manual ? () => { setDragDealId(null); setDropStageId(null) } : undefined}
                     className={manual ? 'cursor-grab active:cursor-grabbing' : undefined}
                   >
-                    <DealCard deal={deal} locationId={locationId} timezone={timezone} stageName={stage.name} onOpenContact={openContact} manual={manual} canTask={canTask} />
+                    <DealCard deal={deal} locationId={locationId} timezone={timezone} stageName={stage.name} stageSlug={stage.slug} onOpenContact={openContact} manual={manual} canTask={canTask} />
                   </div>
                 ))}
                 {hasMore && (
@@ -255,6 +257,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
             contactId={openContactId}
             columnContactIds={columnContactIds}
             locationId={locationId}
+            stageSlug={openStageSlug}
             timezone={timezone}
             // WAITLIST.6 — the drawer's Cold item is derived-board-only, and
             // the board it opened from is the honest answer to "which board?"

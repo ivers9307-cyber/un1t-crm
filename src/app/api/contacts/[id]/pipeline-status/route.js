@@ -8,6 +8,11 @@
 // classifier auto-revives a cold lead the moment they attend a class after
 // the dismissal — no un-cold click needed if they simply come back and train.
 //
+// HATCHCOLD.2 — `location_id` names the board's studio. At the contact's home
+// studio (or with no location_id) the stamp is contacts.pipeline_dismissed_at;
+// at any other studio it is that studio's contact_pipeline_dismissals row (mig
+// 777), and the contact must hold an open deal there.
+//
 // Authorization: session + `pipeline` permission (same gate as the board),
 // THEN an explicit in-location check on the contact. Service-role client
 // bypasses RLS, so this guard IS the access control (repo invariant).
@@ -21,6 +26,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { ensureDealForContact } from '@/lib/glofox-sync'
 import { reclassifyUn1tBoardNow } from '@/lib/un1t-pipeline-cadence'
+import { writeStudioDismissal } from '@/lib/studio-pipeline-dismissal'
 import { logPipelineDismissal } from '@/lib/activity-events'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -29,6 +35,10 @@ export const runtime = 'nodejs'
 const PipelineStatusSchema = z.object({
   // true → mark Cold (dismiss); false → return to the pipeline (clear).
   cold: z.boolean(),
+  // HATCHCOLD.2 — the studio whose board Cold was pressed on. Omitted = the
+  // contact's home studio (the contact page). Never trusted on its own: a
+  // studio other than home needs an open deal for this contact there.
+  location_id: uuidLike.optional(),
 })
 
 // Classifier input columns — must include everything classifyContact reads so
@@ -56,7 +66,7 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, PipelineStatusSchema)
   if (!validation.ok) return validation.response
-  const { cold } = validation.data
+  const { cold, location_id: requestedLocationId } = validation.data
 
   const db = createServerClient()
 
@@ -70,22 +80,55 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccessOr404(user, contact.location_id)
+  // HATCHCOLD.2 — Cold applies on the board it was pressed from. The home
+  // studio's Cold is contacts.pipeline_dismissed_at; any other studio's is its
+  // own contact_pipeline_dismissals row, which only that studio's board reads.
+  const boardLocationId = requestedLocationId || contact.location_id
+  const atHome = boardLocationId === contact.location_id
+
+  const guard = assertLocationAccessOr404(user, boardLocationId)
   if (guard) return guard
-  // ROLESWEEP.1c — `pipeline` judged at the contact's location, not the active studio.
-  if (!hasPermissionForLocation(user, contact.location_id, 'pipeline')) {
+  // ROLESWEEP.1c — `pipeline` judged at the board's studio, not the active studio.
+  if (!hasPermissionForLocation(user, boardLocationId, 'pipeline')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
+  }
+
+  if (!atHome) {
+    // The person must be on this studio's board: an open deal here. 404, not
+    // 403, so a studio id cannot be used to probe for contacts.
+    const { data: hereDeals, error: hereErr } = await db
+      .from('deals')
+      .select('id')
+      .eq('contact_id', id)
+      .eq('location_id', boardLocationId)
+      .eq('status', 'open')
+      .limit(1)
+    if (hereErr) {
+      return NextResponse.json({ success: false, error: hereErr.message }, { status: 500 })
+    }
+    if (!hereDeals?.length) {
+      return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
+    }
   }
 
   // now (ISO) when dismissing, null when clearing. Idempotent — setting the
   // same value twice is harmless.
   const dismissedAt = cold ? new Date().toISOString() : null
-  const { error: updateErr } = await db
-    .from('contacts')
-    .update({ pipeline_dismissed_at: dismissedAt })
-    .eq('id', id)
-  if (updateErr) {
-    return NextResponse.json({ success: false, error: updateErr.message }, { status: 500 })
+  if (atHome) {
+    const { error: updateErr } = await db
+      .from('contacts')
+      .update({ pipeline_dismissed_at: dismissedAt })
+      .eq('id', id)
+    if (updateErr) {
+      return NextResponse.json({ success: false, error: updateErr.message }, { status: 500 })
+    }
+  } else {
+    const { error: studioErr } = await writeStudioDismissal(db, {
+      contactId: id, locationId: boardLocationId, dismissedAt, userId: user.id,
+    })
+    if (studioErr) {
+      return NextResponse.json({ success: false, error: studioErr.message }, { status: 500 })
+    }
   }
 
   // Move the deal now so the board updates immediately, mirroring the persisted
@@ -95,10 +138,12 @@ export async function POST(request, props) {
   try {
     deal = await ensureDealForContact(
       db,
-      contact.location_id,
+      boardLocationId,
       id,
       { ...contact, pipeline_dismissed_at: dismissedAt },
       contact.name || null,
+      // Away from home the deal already exists (checked above); never make one.
+      { noCreate: !atHome },
     )
   } catch (e) {
     deal = { action: 'error', error: e?.message || 'deal placement threw' }
@@ -110,7 +155,7 @@ export async function POST(request, props) {
   // stayed on it until the next hourly run. Run that pass now. It fires its own
   // stage triggers for the moves it lands; a studio with no un1t board returns
   // at once without a pass. Never throws.
-  const boardPass = await reclassifyUn1tBoardNow(db, contact.location_id, { userId: user.id })
+  const boardPass = await reclassifyUn1tBoardNow(db, boardLocationId, { userId: user.id })
 
   // STAGETRIG.1 — a Cold dismissal (or restore) is a real, operator-driven
   // pipeline stage move, and it was invisible to the sequence engine: the
@@ -135,7 +180,7 @@ export async function POST(request, props) {
   // hiccup never fails the already-saved dismissal.
   await logPipelineDismissal(db, {
     contactId: id,
-    locationId: contact.location_id,
+    locationId: boardLocationId,
     cold,
     actorName: user.full_name || user.email || null,
   })
@@ -145,8 +190,8 @@ export async function POST(request, props) {
     actor: { id: user.id, full_name: user.full_name, email: user.email },
     // Contacts aren't profiles — identity goes in resource, never target.id.
     target: { label: contact.name || null, resource: `contacts/${id}` },
-    locationId: contact.location_id,
-    details: { cold, deal_action: deal?.action || null, board_pass: boardPass.ran ? 'ran' : boardPass.reason },
+    locationId: boardLocationId,
+    details: { cold, at_home: atHome, deal_action: deal?.action || null, board_pass: boardPass.ran ? 'ran' : boardPass.reason },
     request,
   })
 
