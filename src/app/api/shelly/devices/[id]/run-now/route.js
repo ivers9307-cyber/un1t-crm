@@ -118,8 +118,26 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
     logError(MODULE, 'device row cannot be commanded', { locationId, deviceId: device.id })
     return bad('This device row is incomplete — remove it and adopt it again', 500, { code: 'bad_device' })
   }
+  if (result.kind === 'device') {
+    // SHELLYERR.1 — Shelly answered, and the plug said no. That is a fact
+    // about the PLUG, not "Shelly cloud did not answer", so it is a 409, not
+    // a 502. A code waiting cannot fix (DEVICE_NOT_FOUND, BAD_REQUEST…) says
+    // so; anything else (DEVICE_OFFLINE, DEVICE_FAILED_COMMAND) is worth a
+    // retry once the plug is back.
+    logWarn(MODULE, 'run-now refused by the device', {
+      locationId, deviceId: device.id, code: result.code, statusCode: result.statusCode, permanent: result.permanent === true,
+    })
+    if (result.permanent === true) {
+      return bad(`Shelly refused the command (${result.code}) — check this plug in the Shelly app`, 409, {
+        code: 'device_refused', shelly_code: result.code,
+      })
+    }
+    return bad('The plug did not take the command — check it is online, then try again', 409, {
+      code: 'device', shelly_code: result.code ?? null,
+    })
+  }
   logWarn(MODULE, 'run-now failed', {
-    locationId, deviceId: device.id, kind: result.kind, statusCode: result.statusCode,
+    locationId, deviceId: device.id, kind: result.kind, code: result.code ?? null, statusCode: result.statusCode,
   })
   return bad('Shelly cloud did not answer — try again in a minute', 502, { code: result.kind, kind: result.kind })
 })

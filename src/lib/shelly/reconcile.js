@@ -642,7 +642,11 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       // WHOLE batch failed (the client says so), not that some of it landed.
       counters.failed += batch.length
       lastKind = res.kind
-      logWarn(MODULE, 'command batch failed', { locationId, kind: res.kind, count: batch.length, on })
+      // `code` is Shelly's error string (truncated by the client); null when
+      // the body carried none. SHELLYERR.1.
+      logWarn(MODULE, 'command batch failed', {
+        locationId, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, count: batch.length, on,
+      })
       if (res.kind === 'auth') { auth = true; break }
       if (res.kind === 'config') { hostBad = true; break }
       continue
@@ -883,7 +887,9 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
 
   const client = makeClient(conn, { sleep, now })
   const res = await client.setSwitch(device.device_id, device.channel, plan.action === 'on')
-  if (!res.ok) return { ok: false, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null }
+  if (!res.ok) {
+    return { ok: false, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, permanent: res.permanent === true }
+  }
 
   const nowIso = new Date(nowMs).toISOString()
   const { error } = await db

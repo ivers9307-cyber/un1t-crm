@@ -93,6 +93,13 @@ const PENDING_MESSAGE = {
 }
 const PENDING_FALLBACK = 'Saved. Shelly cloud is not answering — the plug will follow within a minute.'
 
+// SHELLYERR.1 — the plug (through Shelly) refused the request itself:
+// DEVICE_INVALID_CHANNEL, DEVICE_NOT_FOUND, BAD_REQUEST… Still `pending`, because
+// the override IS saved and the cron keeps re-planning it, but no wait fixes
+// it, so the one thing this copy must not say is "it will follow".
+const refusedMessage = (code) =>
+  `Saved, but Shelly refused the command (${code}). Check this plug in the Shelly app — it will not follow until that is fixed.`
+
 // The seven fields mig 562's column comment requires of every last_state
 // writer. A partial shape is what makes `output` read as "off" when it is
 // really "unknown", so a row that is missing any of them is rebuilt rather
@@ -351,9 +358,10 @@ export const POST = withAuth(
       if (res.kind === 'auth') await markKeyRejected(db, locationId)
       else {
         logWarn(MODULE, 'toggle command did not land', {
-          locationId, deviceId: device.id, kind: res.kind, statusCode: res.statusCode,
+          locationId, deviceId: device.id, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode,
         })
       }
+      const refused = res.kind === 'device' && res.permanent === true
       const body = {
         success: true,
         device: withOverride,
@@ -361,9 +369,10 @@ export const POST = withAuth(
         // The cron applies a live override to every adopted device, enabled or
         // not — this is a delay, not a loss.
         pending: true,
-        code: PENDING_CODE[res.kind] ?? 'pending',
+        code: refused ? 'device_refused' : (PENDING_CODE[res.kind] ?? 'pending'),
         kind: res.kind,
-        message: PENDING_MESSAGE[res.kind] ?? PENDING_FALLBACK,
+        message: refused ? refusedMessage(res.code) : (PENDING_MESSAGE[res.kind] ?? PENDING_FALLBACK),
+        ...(refused ? { shelly_code: res.code } : {}),
         // Carried on the pending body too: what the cron eventually applies is
         // the same override, so the same "it will hold" is true of it.
         holds_until_changed: unmanaged,
