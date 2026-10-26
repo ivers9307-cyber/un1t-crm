@@ -21,6 +21,14 @@
 //     (device_id, channel) is UNIQUE across the estate, moving a plug to
 //     another studio is NECESSARILY remove-then-adopt. The message names the
 //     loss; Task 6's two-step confirm names it before the click.
+//   * A GROUPED DEVICE'S SCHEDULE IS LOCKED (SHELLYGROUPS.5). While a device
+//     is in a group the GROUP's enabled and schedule govern it
+//     (effectiveTarget), so its own `enabled`, `schedule_mode`,
+//     `fixed_windows` and `class_rule` are invisible — and they would come
+//     back to life the moment it left the group. The spec rule is that leaving
+//     a group can never revive a stale, invisible schedule: joining clears the
+//     device's schedule, and this route refuses to write one back while it is
+//     grouped (409 `grouped`). A rename is still fine.
 //
 // locationId ALWAYS comes from withAuth's ctx, and every write pins it in the
 // WHERE clause rather than reading the row back and comparing — a guessed id
@@ -43,6 +51,11 @@ const MODULE = 'shelly-device'
 // card say the same thing.
 export const DISABLE_NOTICE = 'Schedule switched off — the plug stays as it is until you toggle it'
 
+// The refusal for a schedule edit on a grouped device (see the header).
+export const GROUPED_MESSAGE =
+  "This device follows its group's schedule — change the group, or take the device out of the group first"
+const SCHEDULE_FIELDS = ['enabled', 'schedule_mode', 'fixed_windows', 'class_rule']
+
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
 
@@ -62,6 +75,10 @@ export const PATCH = withAuth(
       return bad('Could not load this device', 500)
     }
     const device = loaded.device
+
+    if (device.group_id && SCHEDULE_FIELDS.some((f) => input[f] !== undefined)) {
+      return bad(GROUPED_MESSAGE, 409, { code: 'grouped' })
+    }
 
     // Read from the row as it was BEFORE this patch: `last_applied.action` is
     // the record of what WE last did to the relay, so an `on` there means the

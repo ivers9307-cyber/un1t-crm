@@ -7,8 +7,9 @@
 //     "switch it off"), so the response carries GROUP_DISABLE_NOTICE;
 //   * deleting a group releases its members through the FK (ON DELETE SET
 //     NULL, mig 776). They fall back to their OWN schedule, which joining the
-//     group cleared, so they are unmanaged and stay as they are. Nothing is
-//     sent.
+//     group cleared and the device PATCH refuses to write back while they are
+//     grouped (409 `grouped`), so they are unmanaged and stay as they are.
+//     Nothing is sent.
 //
 // Every write pins `location_id` in the WHERE clause; a foreign id and a
 // malformed one answer the same 404 (group-load.js).

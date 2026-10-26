@@ -8602,7 +8602,7 @@ const ShellyErrorResponse = ErrorResponse.extend({
     'no_schedule', 'disabled', 'occurrences', 'rate_limited',
     'unexpected_noop', 'device_refused',
     // SHELLYGROUPS.5
-    'name_taken', 'group_limit', 'group_unavailable', 'member_overrides_not_cleared', 'partial',
+    'name_taken', 'group_limit', 'group_unavailable', 'member_overrides_not_cleared', 'partial', 'grouped',
     // pass-through client/engine failure tags (502s)
     'config', 'network', 'http', 'device',
     'invalid_ids', 'too_many_ids', 'bad_clock', 'unreachable',
@@ -9078,6 +9078,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id, an id at another location, or a row that was deleted between the read and the write — ALL THREE answer the identical body, which is what makes ids un-enumerable', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code `grouped`: the device is in a group, and the patch carries a schedule field (`enabled`, `schedule_mode`, `fixed_windows`, `class_rule`). The group\'s schedule governs it; change the group, or take the device out first. A rename is still allowed.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })

@@ -9,7 +9,9 @@
 //     same as for an id that does not exist).
 //  2. JOINING clears the device's own schedule (schedule_mode 'none', no
 //     windows, an empty class rule; `enabled` is kept). Spec: leaving a group
-//     must never revive a stale, invisible schedule. A device moving from
+//     must never revive a stale, invisible schedule — which is also why the
+//     device PATCH refuses a schedule edit on a grouped device (409
+//     `grouped`): a schedule written while grouped would be exactly that. A device moving from
 //     another group at the studio simply joins this one — a device is in at
 //     most one group.
 //  3. LEAVING writes group_id null and nothing else. No relay is commanded,
