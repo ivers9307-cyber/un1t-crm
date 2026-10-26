@@ -193,6 +193,28 @@ describe('POST …/run-now — when it could not', () => {
     expect((await res.json()).code).toBe('bad_device')
   })
 
+  // SHELLYERR.1 — the plug answered (through Shelly) and said no. That is not
+  // "Shelly cloud did not answer", and a 502 would say it was.
+  it('an offline plug is a 409 about the PLUG, carrying Shelly\'s code', async () => {
+    runNowForDevice.mockResolvedValue({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 400, permanent: false })
+    const res = await POST(runReq(), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body).toMatchObject({ code: 'device', shelly_code: 'DEVICE_OFFLINE' })
+    expect(body.error).toMatch(/plug/i)
+    expect(body.error).not.toMatch(/did not answer/i)
+  })
+
+  it('a code waiting cannot fix says so and names the code', async () => {
+    runNowForDevice.mockResolvedValue({ ok: false, kind: 'device', code: 'DEVICE_NOT_FOUND', statusCode: 404, permanent: true })
+    const res = await POST(runReq(), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body).toMatchObject({ code: 'device_refused', shelly_code: 'DEVICE_NOT_FOUND' })
+    expect(body.error).toContain('DEVICE_NOT_FOUND')
+    expect(body.error).toMatch(/Shelly app/)
+  })
+
   it('anything else is a 502 carrying the kind, and never the key', async () => {
     runNowForDevice.mockResolvedValue({ ok: false, kind: 'network', statusCode: 0 })
     const res = await POST(runReq(), ctxFor(DEV_A))

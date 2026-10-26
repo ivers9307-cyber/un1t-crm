@@ -8588,7 +8588,7 @@ const ShellyErrorResponse = ErrorResponse.extend({
     'device_cap', 'adopted_here', 'adopted', 'not_on_account',
     'unsupported', 'bad_channel', 'bad_host', 'bad_device',
     'no_schedule', 'disabled', 'occurrences', 'rate_limited',
-    'unexpected_noop',
+    'unexpected_noop', 'device_refused',
     // pass-through client/engine failure tags (502s)
     'config', 'network', 'http', 'device',
     'invalid_ids', 'too_many_ids', 'bad_clock', 'unreachable',
@@ -8603,6 +8603,10 @@ const ShellyErrorResponse = ErrorResponse.extend({
   // it is whatever client.js tagged, and pinning it here would make a new tag
   // a spec violation rather than a log line.
   kind: z.string().optional(),
+  // SHELLYERR.1 — Shelly's own error string (DEVICE_OFFLINE, DEVICE_NOT_FOUND,
+  // …), truncated, on a run-now the device refused. Free string for the same
+  // reason as `kind`.
+  shelly_code: z.string().nullable().optional(),
 }).openapi('ShellyErrorResponse')
 
 const ShellyConnectionPublic = z.object({
@@ -8718,9 +8722,10 @@ const ShellyToggleResponse = z.object({
   device: ShellyDevice,
   applied: z.union([z.literal(true), z.literal(false), z.enum(['on', 'off']), z.null()]),
   pending: z.literal(true).optional(),
-  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending']).optional(),
+  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending', 'device_refused']).optional(),
   kind: z.string().optional(),
   message: z.string().optional(),
+  shelly_code: z.string().optional(),
   reason: ShellyActionReason.optional(),
   holds_until_changed: z.boolean().optional(),
   notice: z.string().optional(),
@@ -8729,7 +8734,8 @@ const ShellyToggleResponse = z.object({
     + 'state. (a) applied: true — the relay physically moved. (b) applied: false with pending: true — the '
     + 'override IS SAVED and the relay has not moved; the cron applies a live override to every adopted device, '
     + 'enabled or not, so this is a delay, not a loss. `code` says what to tell the operator (key_rejected → '
-    + 're-paste, rate_limited → busy, bad_host → fix the connection settings, pending → offline) and `message` '
+    + 're-paste, rate_limited → busy, bad_host → fix the connection settings, pending → offline, device_refused → Shelly refused the request '
+    + 'itself (its code in `shelly_code`; no wait fixes it, so the copy never says the plug will follow)) and `message` '
     + 'carries the copy. Painting the new state optimistically here would show a plug as ON while it is '
     + 'physically off. (c) state "auto" — applied is the action taken ("on"/"off", reason "run_now") or null with a '
     + '`reason` of exactly TWO values: disabled ("the schedule is switched off") or no_schedule ("there is '
@@ -9159,7 +9165,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
-    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed); "device" (the plug did not take the command, e.g. DEVICE_OFFLINE — retry once it is back) or "device_refused" (a code waiting cannot fix, e.g. DEVICE_NOT_FOUND), both with Shelly\'s code in `shelly_code`', content: { 'application/json': { schema: ShellyErrorResponse } } },
     429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'The device or connection read failed; code: "bad_device" (the row has no usable device id/channel — remove it and adopt it again); or code: "unexpected_noop", the unreachable case kept LOUD on purpose — the two 409s above take every state the forced planner can decline, so a no-op arriving here means the planner and this route disagree about what force means, and a cheerful applied:null would bury that under a green tick', content: { 'application/json': { schema: ShellyErrorResponse } } },
     502: { description: 'code "occurrences" (today\'s timetable could not be read — a class-mode device is refused rather than switched off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },

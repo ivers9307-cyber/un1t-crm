@@ -712,6 +712,15 @@ describe('commands', () => {
     expect(out.failed).toBe(2)
   })
 
+  // SHELLYERR.1 — the documented group-level failure is an HTTP 400; its code
+  // reaches the log line so "which batch failed, and why" is answerable.
+  it('logs the Shelly code of a failed batch, so the reason is in the log', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: false, kind: 'device', code: 'BAD_REQUEST', statusCode: 400, permanent: true }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(warned('command batch failed')[0][2]).toMatchObject({ kind: 'device', code: 'BAD_REQUEST', statusCode: 400 })
+  })
+
   it('counts a failed stamp as failed rather than reporting the command applied', async () => {
     const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })], fail: { deviceUpdate: 'stamp write down' } })
     const out = await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
@@ -1210,7 +1219,15 @@ describe('runNowForDevice', () => {
     const { factory } = makeClientFactory({ setSwitch: () => ({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 200 }) })
     const db = makeDb({})
     const out = await runNowForDevice(db, conn(), dev({ device_id: 'mac1' }), { now: () => NOW, makeClient: factory })
-    expect(out).toEqual({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 200 })
+    expect(out).toEqual({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 200, permanent: false })
+    expect(db.writes.deviceUpdates).toEqual([])
+  })
+
+  it('passes a permanent refusal through, so the route can say waiting will not help', async () => {
+    const { factory } = makeClientFactory({ setSwitch: () => ({ ok: false, kind: 'device', code: 'DEVICE_INVALID_CHANNEL', statusCode: 400, permanent: true }) })
+    const db = makeDb({})
+    const out = await runNowForDevice(db, conn(), dev({ device_id: 'mac1' }), { now: () => NOW, makeClient: factory })
+    expect(out).toEqual({ ok: false, kind: 'device', code: 'DEVICE_INVALID_CHANNEL', statusCode: 400, permanent: true })
     expect(db.writes.deviceUpdates).toEqual([])
   })
 
