@@ -212,15 +212,16 @@ export function toggleShellyGroup(groupId, { state, until } = {}, locationId) {
 // Cached per location for UNADOPTED_TTL_MS, module-level, so re-focusing the
 // screen (back from a sub-screen, an app switch) costs at most one Shelly
 // cloud call per five minutes per studio. Only a READ answer is cached: an
-// unreadable list (null) is asked again on the next focus.
+// unreadable list (null) is asked again on the next focus. `{ fresh: true }`
+// (pull-to-refresh: the operator asked for now) skips the cache and refills it.
 export const UNADOPTED_TTL_MS = 5 * 60_000
 const unadoptedCache = new Map()
 
 /** Test seam: forget every cached count. */
 export function _resetUnadoptedShellyCache() { unadoptedCache.clear() }
 
-export async function countUnadoptedShelly(locationId) {
-  const hit = unadoptedCache.get(locationId)
+export async function countUnadoptedShelly(locationId, { fresh = false } = {}) {
+  const hit = fresh ? null : unadoptedCache.get(locationId)
   if (hit && Date.now() - hit.at < UNADOPTED_TTL_MS) return hit.count
   const r = await api('/api/shelly/discover', { locationId })
   if (r?.success !== true || !Array.isArray(r.devices)) return null

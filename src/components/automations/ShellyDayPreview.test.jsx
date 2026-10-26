@@ -222,10 +222,22 @@ describe('ShellyDayPreview — final-review fixes (SHELLYGROUPS.8)', () => {
     ]
     render(<ShellyDayPreview groups={two} tz={TZ} />)
     await screen.findByText('Classes')
-    const caption = screen.getByText(/keep/)
-    expect(caption.textContent).toContain('Studio lights 15 min')
-    expect(caption.textContent).toContain('Fans 60 min')
+    const caption = screen.getByText(/apart stay on/)
+    // Lane order (sort_order, then name).
+    expect(caption.textContent).toBe('Fans: classes under 60 min apart stay on; Studio lights: under 15 min')
     expect(caption.textContent).not.toContain('30')
+  })
+
+  it('an off group with a live override shows only "Never automatic", never two labels', async () => {
+    global.fetch.mockResolvedValue(answer(200, body('2026-10-26', { ignored_overrides: ['g5'] })))
+    const gs = [
+      ...groups,
+      { id: 'g5', name: 'Hall', enabled: false, schedule_mode: 'fixed', now: { mode: 'override', on_count: 1, member_count: 1 } },
+    ]
+    render(<ShellyDayPreview groups={gs} tz={TZ} />)
+    await screen.findByText('Classes')
+    expect(screen.getAllByText('Never automatic')).toHaveLength(1)
+    expect(screen.queryByText('Manual override not shown')).toBeNull()
   })
 
   it('a refusal that is not about the timetable says "Couldn\'t load the preview"', async () => {

@@ -523,7 +523,12 @@ export const GROUP_HOLDS_TEXT = 'No schedule runs this group — it stays as set
  * `success: true`, and the 429 rate-limit body arrives through api()
  * unchanged with `pending: true`, so a success-first read would print
  * "Switched on." over a group whose relays have not moved. The route's
- * `message` is shown first whenever it sent one.
+ * `message` is shown first whenever it sent one — unless the answer names its
+ * `pending_members` (SHELLYICONS.1): then each member is worded by its own
+ * `code`, by name, as "Back to schedule" is (offline → "will follow when back
+ * online", permanent → "Shelly refused <name>", unverified/bad_device →
+ * "couldn't confirm <name>"). Mirrors `toggleOutcomeText` in
+ * ShellyGroupCard.jsx.
  *
  * `partial` ({ on, count }) is only returned for `applied: 'partial'`: the
  * members in `pending_device_ids` did not move, so after an ON press the rest
@@ -533,9 +538,10 @@ export const GROUP_HOLDS_TEXT = 'No schedule runs this group — it stays as set
  * @param {object|null} json   the api() result of POST /api/shelly/groups/<id>/toggle
  * @param {'on'|'off'} state   what was asked for
  * @param {number} memberCount the group's member count when it was pressed
+ * @param {(id: string) => string} [nameOf] device id → its display name
  * @returns {{ tone: 'ok'|'warn'|'error', text: string, partial: {on:number, count:number}|null }}
  */
-export function groupToggleOutcome(json, state, memberCount) {
+export function groupToggleOutcome(json, state, memberCount, nameOf) {
   if (!json) return { tone: 'error', text: 'That did not work — try again', partial: null }
   // The route's GROUP_HOLDS_NOTICE carries no full stop (the web shows it on
   // its own); composed after "Switched on." it is a sentence and needs one.
@@ -543,7 +549,8 @@ export function groupToggleOutcome(json, state, memberCount) {
   const holds = rawHolds ? (/[.!?]$/.test(rawHolds) ? rawHolds : `${rawHolds}.`) : null
   const withHolds = (text) => (holds ? `${text} ${holds}` : text)
   if (json.pending === true || json.applied === 'partial') {
-    const text = withHolds(json.message || 'Saved — the group will follow as soon as Shelly answers.')
+    const perMember = isMixedPendingAnswer(json) ? toggleOutcomeText(json.pending_members, memberCount, state, nameOf) : null
+    const text = withHolds(perMember || json.message || 'Saved — the group will follow as soon as Shelly answers.')
     let partial = null
     if (json.applied === 'partial') {
       const count = Number(memberCount) || 0
@@ -575,9 +582,23 @@ const AUTO_CODE_COPY = Object.freeze({
   config: 'The Shelly server on file is invalid — fix it on the web CRM.',
 })
 
-const joinNames = (names) => (names.length <= 1
-  ? names.join('')
-  : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+// Up to MAX_NAMED names, then "and N others", so a 20-light group's answer
+// stays one readable line.
+const MAX_NAMED = 3
+const joinNames = (names) => {
+  if (names.length <= 1) return names.join('')
+  if (names.length > MAX_NAMED) {
+    const rest = names.length - MAX_NAMED
+    return `${names.slice(0, MAX_NAMED).join(', ')} and ${rest} other${rest === 1 ? '' : 's'}`
+  }
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+// Per-member wording only for the route's MIXED answer: `code: 'pending'`
+// with no `kind`. A whole-batch failure (route.js: every member gets
+// code = res.kind, and the body carries `kind`) keeps the route's message —
+// otherwise a Shelly cloud outage reads as every light being offline.
+export const isMixedPendingAnswer = (json) => json?.code === 'pending' && json?.kind === undefined
 
 /**
  * Should a group card offer "Back to schedule"? Only a MANAGED group (switched
@@ -603,9 +624,17 @@ export function autoOutcomeText(results, nameOf) {
   if (missed.some((r) => r.code === 'occurrences')) {
     return "Couldn't read today's classes — nothing was switched. Try again in a minute."
   }
-  const name = typeof nameOf === 'function' ? nameOf : () => 'a device'
   const total = list.length
   const moved = total - missed.length
+  const lead = moved > 0 ? `Back on schedule for ${moved} of ${total}.` : 'Nothing moved yet.'
+  return `${lead} ${missedMemberParts(missed, nameOf).join(' ')}`
+}
+
+// The sentences for the members that did not move, each by its own `code`:
+// shared by autoOutcomeText and toggleOutcomeText (missedMemberParts in
+// ShellyGroupCard.jsx).
+function missedMemberParts(missed, nameOf) {
+  const name = typeof nameOf === 'function' ? nameOf : () => 'a device'
   const parts = []
   const names = (rows) => joinNames(rows.map((r) => name(r.device_id)))
 
@@ -619,7 +648,7 @@ export function autoOutcomeText(results, nameOf) {
 
   const mismatch = missed.filter((r) => r.code === 'plan_mismatch')
   if (mismatch.length) parts.push(`${names(mismatch)} ${mismatch.length === 1 ? 'was' : 'were'} not switched.`)
-  const unverified = missed.filter((r) => r.code === 'unverified' || r.code === 'bad_device')
+  const unverified = missed.filter((r) => !r.permanent && (r.code === 'unverified' || r.code === 'bad_device'))
   if (unverified.length) parts.push(`Couldn't confirm ${names(unverified)}.`)
 
   const handled = new Set(['plan_mismatch', 'unverified', 'bad_device', ...Object.keys(AUTO_CODE_COPY)])
@@ -628,8 +657,25 @@ export function autoOutcomeText(results, nameOf) {
     const one = silent.length === 1
     parts.push(`${names(silent)} did not answer — ${one ? 'it' : 'they'} will follow when ${one ? 'it is' : 'they are'} back online.`)
   }
-  const lead = moved > 0 ? `Back on schedule for ${moved} of ${total}.` : 'Nothing moved yet.'
-  return `${lead} ${parts.join(' ')}`
+  return parts
+}
+
+/**
+ * What an on/off press did, from the route's `pending_members[]`, or null
+ * when it names none. Re-typed from `toggleOutcomeText` (ShellyGroupCard.jsx).
+ *
+ * @param {Array<{device_id: string, code?: string, permanent?: boolean}>} pendingMembers
+ * @param {number} total   how many members the press was for
+ * @param {'on'|'off'} state
+ * @param {(id: string) => string} [nameOf]
+ */
+export function toggleOutcomeText(pendingMembers, total, state, nameOf) {
+  const missed = (Array.isArray(pendingMembers) ? pendingMembers : []).filter((p) => p && p.device_id)
+  if (!missed.length) return null
+  const count = Math.max(Number(total) || 0, missed.length)
+  const moved = count - missed.length
+  const lead = moved > 0 ? `Switched ${state} for ${moved} of ${count}.` : 'Saved. Nothing has moved yet.'
+  return `${lead} ${missedMemberParts(missed, nameOf).join(' ')}`
 }
 
 /**
