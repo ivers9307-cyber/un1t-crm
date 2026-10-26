@@ -26,6 +26,10 @@
 //                   → markDonationPaymentStatus (compare-and-set) +
 //                     runPaidDonationSideEffects
 //
+// Then, with no provider call, a sweep of PAID Revolut donations whose
+// receipt or donor contact link did not land (REVPAY.12; see
+// sweepPaidDonations below for the window, cap and observerWon choice).
+//
 // Rows on another provider (a Stripe Connect race payment or donation, a
 // un1t.online trial) are never listed. A row the webhook settles between the
 // listing and the apply is re-read first and skipped; where the webhook and
@@ -126,8 +130,13 @@ export function stableHash(str) {
  * rows of one age band spread over the ticks instead of arriving together).
  */
 export function isDue({ id, createdAtMs, nowMs }) {
+  return isDueInWindow({ id, createdAtMs, nowMs, minAgeMs: RECONCILE_MIN_AGE_MS, maxAgeMs: RECONCILE_MAX_AGE_MS })
+}
+
+/** isDue's backoff over any [minAgeMs, maxAgeMs] window (the receipt sweep's is 15 min .. 7 days). */
+export function isDueInWindow({ id, createdAtMs, nowMs, minAgeMs, maxAgeMs }) {
   const age = nowMs - createdAtMs
-  if (!Number.isFinite(age) || age < RECONCILE_MIN_AGE_MS || age > RECONCILE_MAX_AGE_MS) return false
+  if (!Number.isFinite(age) || age < minAgeMs || age > maxAgeMs) return false
   const period = age < HOURLY_FROM_MS ? 1 : age < SIX_HOURLY_FROM_MS ? 4 : 24
   const tick = Math.floor(nowMs / RECONCILE_TICK_MS)
   return (tick + stableHash(id)) % period === 0
@@ -384,6 +393,140 @@ const APPLY = {
   },
 }
 
+// ── REVPAY.12: paid donations whose receipt or contact step did not land ───
+//
+// The lists above only see 'awaiting_payment' donations. A donation that is
+// 'paid' but whose receipt (or donor contact link) failed was retried only
+// when someone observed it again: a webhook redelivery, the donor reopening
+// the status page, staff Re-check. This sweep is that later observation.
+// It makes no provider call (the row is already paid) and re-runs
+// runPaidDonationSideEffects, whose own stamps (receipt_email_sent_at,
+// contact_id, each written after its effect) make a step that already landed
+// a no-op.
+//
+// observerWon: FALSE. The sweep did not flip the row, and false is the value
+// that can only ever DEFER a receipt, never send one the helper would have
+// left to the winning observer: inside the minute after paid_at a false
+// observer answers 'deferred'. The sweep's window starts 15 minutes after
+// paid_at, so in practice false and true behave the same here (the receipt
+// goes iff its stamp is still null); but true would claim this caller won a
+// compare-and-set it never ran, and would bypass the single-observer guard
+// for any row that ever reached the sweep inside that minute. The remaining
+// duplicate risk is the helper's own (no claim before a send that cannot be
+// taken back): an observer running at the same instant as the sweep, which
+// sendDonationReceipt logs as a DUPLICATE when its stamp loses.
+//
+// Candidates: status 'paid', provider 'revolut', paid 15 minutes to 7 days
+// ago, a donor address present (a donation with no address has nothing to
+// deliver and no contact to link, so it is never listed), and the receipt
+// stamp or the contact link still missing. A receipt suppressed by consent
+// is stamped, so it is never retried. The same age backoff as isDue, on
+// paid_at, so a receipt that keeps failing leaves the head of the queue and
+// stops at 7 days; at most RECEIPT_SWEEP_BUDGET rows a tick, oldest first.
+// Each due row is re-read just before its side effects so the stamps it
+// carries are current. A sweep failure (the list, an event read, a row) is a
+// count, never an unhealthy run: the provider backstop above is what pages.
+
+export const RECEIPT_SWEEP_MIN_AGE_MS = 15 * 60_000
+export const RECEIPT_SWEEP_MAX_AGE_MS = 7 * 24 * 60 * 60_000
+export const RECEIPT_SWEEP_BUDGET = 25
+
+const RECEIPT_SWEEP_LIST_COLS = 'id, paid_at, donor_email'
+
+async function listReceiptSweepCandidates(db, fromIso, toIso) {
+  return (await paginate((a, b) => db.from('donations')
+    .select(RECEIPT_SWEEP_LIST_COLS)
+    .eq('status', 'paid')
+    .eq('payment_provider', 'revolut')
+    .not('donor_email', 'is', null)
+    .neq('donor_email', '')
+    .or('receipt_email_sent_at.is.null,contact_id.is.null')
+    .gte('paid_at', fromIso)
+    .lte('paid_at', toIso)
+    .order('paid_at', { ascending: true })
+    .order('id', { ascending: true })
+    .range(a, b)))
+    // A whitespace-only address is no address.
+    .filter((r) => String(r.donor_email || '').trim())
+    .map((r) => ({ id: r.id, paidAt: r.paid_at }))
+}
+
+/**
+ * Pure: this tick's receipt-sweep batch. Due rows only (isDueInWindow on
+ * paid_at), oldest first, at most `budget`.
+ */
+export function selectReceiptSweepBatch(candidates, nowMs, budget = RECEIPT_SWEEP_BUDGET) {
+  const due = candidates
+    .map((c) => ({ ...c, paidAtMs: Date.parse(c.paidAt) }))
+    .filter((c) => isDueInWindow({
+      id: c.id, createdAtMs: c.paidAtMs, nowMs, minAgeMs: RECEIPT_SWEEP_MIN_AGE_MS, maxAgeMs: RECEIPT_SWEEP_MAX_AGE_MS,
+    }))
+    .sort((a, b) => (a.paidAtMs - b.paidAtMs) || String(a.id).localeCompare(String(b.id)))
+  const batch = due.slice(0, Math.max(0, budget))
+  return { batch, due: due.length, overBudget: due.length - batch.length }
+}
+
+/**
+ * The receipt sweep. Never throws; adds its receipt_* counts to `counts`.
+ * `pastDeadline()` is the run's wall-clock check.
+ */
+async function sweepPaidDonations({ db, nowMs, counts, budget, pastDeadline }) {
+  Object.assign(counts, {
+    receipt_candidates: 0, receipt_due: 0, receipt_over_budget: 0,
+    receipt_retried: 0, receipt_sent: 0, receipt_failed: 0, receipt_contact_linked: 0,
+    receipt_skipped: 0, receipt_errors: 0, receipt_out_of_time: 0, receipt_list_failed: false,
+  })
+  let candidates
+  try {
+    candidates = await listReceiptSweepCandidates(
+      db,
+      new Date(nowMs - RECEIPT_SWEEP_MAX_AGE_MS).toISOString(),
+      new Date(nowMs - RECEIPT_SWEEP_MIN_AGE_MS).toISOString(),
+    )
+  } catch (e) {
+    counts.receipt_list_failed = true
+    logError(LOG_MODULE, 'paid-donation receipt sweep: list unreadable', { code: e?.code ?? null, errClass: e?.name ?? null })
+    return
+  }
+  counts.receipt_candidates = candidates.length
+  const { batch, due, overBudget } = selectReceiptSweepBatch(candidates, nowMs, budget)
+  counts.receipt_due = due
+  counts.receipt_over_budget = overBudget
+
+  const races = new Map()
+  for (const [i, c] of batch.entries()) {
+    if (pastDeadline()) {
+      counts.receipt_out_of_time = batch.length - i
+      break
+    }
+    try {
+      const { data: donation, error } = await db.from('donations').select(DONATION_COLS).eq('id', c.id).maybeSingle()
+      if (error) throw error
+      const needsWork = donation && donation.status === 'paid' && donation.payment_provider === 'revolut'
+        && String(donation.donor_email || '').trim() && (!donation.receipt_email_sent_at || !donation.contact_id)
+      if (!needsWork) {
+        counts.receipt_skipped++
+        continue
+      }
+      let race = races.get(donation.race_event_id)
+      if (!race) {
+        const { data, error: raceErr } = await db.from('race_events').select(DONATION_EVENT_COLS).eq('id', donation.race_event_id).maybeSingle()
+        if (raceErr || !data) throw raceErr || new Error('donation event row missing')
+        race = data
+        races.set(donation.race_event_id, race)
+      }
+      counts.receipt_retried++
+      const out = await runPaidDonationSideEffects({ db, donation, race, ipAddress: null, observerWon: false })
+      if (out?.receipt === 'sent') counts.receipt_sent++
+      else if (out?.receipt === 'failed') counts.receipt_failed++
+      if (!donation.contact_id && out?.contact === 'linked') counts.receipt_contact_linked++
+    } catch (e) {
+      counts.receipt_errors++
+      logError(LOG_MODULE, 'paid-donation receipt sweep: row failed', { err: e, donationId: c.id })
+    }
+  }
+}
+
 /**
  * One reconcile run. Never throws.
  *
@@ -393,11 +536,12 @@ const APPLY = {
  * @param {(orderId: string) => Promise<object>} [args.getOrder]  injected in tests
  * @param {Function} [args.publish]  QStash nudge, injected in tests
  * @param {number} [args.budget]
+ * @param {number} [args.receiptBudget]  rows the paid-donation receipt sweep may take (REVPAY.12)
  * @returns {Promise<{ healthy: boolean, counts: object }>}
  */
 export async function runRevolutReconcile({
   db, now = new Date(), getOrder = cronGetOrder, publish = publishQueuePush, budget = RECONCILE_BUDGET,
-  runDeadlineMs = RECONCILE_RUN_DEADLINE_MS, clock = Date.now,
+  runDeadlineMs = RECONCILE_RUN_DEADLINE_MS, clock = Date.now, receiptBudget = RECEIPT_SWEEP_BUDGET,
 }) {
   const startedMs = clock()
   const nowMs = now.getTime()
@@ -468,6 +612,18 @@ export async function runRevolutReconcile({
   }
 
   counts.provider_calls = calls.made
+
+  // REVPAY.12 — paid donations whose receipt or contact link did not land.
+  // Counts only: it never makes the run unhealthy.
+  try {
+    await sweepPaidDonations({
+      db, nowMs, counts, budget: receiptBudget, pastDeadline: () => clock() - startedMs > runDeadlineMs,
+    })
+  } catch (e) {
+    counts.receipt_errors = (counts.receipt_errors || 0) + 1
+    logError(LOG_MODULE, 'paid-donation receipt sweep threw', { err: e })
+  }
+
   const everyProviderCallFailed = calls.made > 0 && calls.failed === calls.made
   const healthy = counts.list_failed.length === 0 && !everyProviderCallFailed
   return { healthy, counts }
