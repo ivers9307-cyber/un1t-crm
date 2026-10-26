@@ -34,7 +34,7 @@ vi.mock('@/lib/shelly/reconcile', async (importOriginal) => {
 import { POST, maxDuration } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { overrideKey } from '@/lib/shelly/plan'
 import { AUTH_ERROR } from '@/lib/shelly/connections'
@@ -127,6 +127,12 @@ describe('POST …/groups/[id]/toggle — on/off (group wins)', () => {
     expect(dev('d0000000-0000-4000-8000-0000000000a3').override).toEqual(devOv)
     expect(dev(DEV_B).override).toEqual(devOv)
     for (const u of updatesTo(db, 'shelly_devices')) expect(u.filters.location_id).toBe(LOC_A)
+  })
+
+  it('builds its client with the interactive 429 retries, like the device toggle', async () => {
+    await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+    expect(INTERACTIVE_429_RETRIES).toBeGreaterThan(1)
+    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: INTERACTIVE_429_RETRIES }))
   })
 
   it('defaults until to the LOCATION’s next midnight', async () => {
@@ -295,6 +301,12 @@ describe('POST …/groups/[id]/toggle — back to schedule', () => {
       { device_id: DEV_A, applied: 'on', reason: 'run_now' },
       { device_id: DEV_A2, applied: 'on', reason: 'run_now' },
     ])
+  })
+
+  it('the shared run-now client carries the interactive 429 retries', async () => {
+    await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+    expect(createShellyClient).toHaveBeenCalledTimes(1)
+    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: INTERACTIVE_429_RETRIES }))
   })
 
   it('a member that does not take it is partial and named', async () => {

@@ -65,7 +65,7 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { loadDevice, DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { effectiveTarget } from '@/lib/shelly/effective'
@@ -80,7 +80,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MODULE = 'shelly-toggle'
-const TOGGLE_429_RETRIES = 3
 const HOUR_MS = 60 * 60 * 1000
 
 // The sentence an unmanaged device's toggle has to carry. Exported so Task 6
@@ -344,7 +343,7 @@ export const POST = withAuth(
     // would name a component the device does not have (SHELLYLIGHT.3).
     // Three 429 retries (1.1 s, 2.2 s, 3.3 s): a press that lands on the
     // cron's read rides it out instead of answering "busy". SHELLYBUSY.1.
-    const shelly = createShellyClient(engineConn, { max429Retries: TOGGLE_429_RETRIES })
+    const shelly = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
     const res = deviceKind(device) === 'light'
       ? await shelly.setLight(device.device_id, device.channel, on)
       : await shelly.setSwitch(device.device_id, device.channel, on)

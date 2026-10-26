@@ -181,6 +181,10 @@ function commandFailure(res) {
   }, res)
 }
 
+// What an interactive press (the device toggle, the group switch) passes as
+// `max429Retries` (see below). One constant so the two switches cannot drift.
+export const INTERACTIVE_429_RETRIES = 3
+
 // `max429Retries` (SHELLYBUSY.1): how many times one call re-sends after a
 // 429, each wait one RETRY_429_AFTER_MS longer than the last. The default of 1
 // is the cron's: it owns a whole tick's budget and must not stall it. A staff

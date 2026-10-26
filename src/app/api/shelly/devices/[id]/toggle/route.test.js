@@ -42,7 +42,7 @@ vi.mock('@/lib/shelly/reconcile', async (importOriginal) => {
 import { POST, HOLDS_NOTICE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { logWarn } from '@/lib/log'
 import { overrideKey } from '@/lib/shelly/plan'
@@ -186,7 +186,8 @@ describe('POST …/toggle — riding out the cron (SHELLYBUSY.1)', () => {
   it('builds its client with three 429 retries, so a press that lands on the cron read is not "busy"', async () => {
     const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
     expect(res.status).toBe(200)
-    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: 3 }))
+    expect(INTERACTIVE_429_RETRIES).toBe(3)
+    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: INTERACTIVE_429_RETRIES }))
   })
 })
 

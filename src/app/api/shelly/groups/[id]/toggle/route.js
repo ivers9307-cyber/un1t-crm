@@ -20,7 +20,10 @@
 //      group override from step 1 is ROLLED BACK to its previous value first
 //      (best-effort, checked, logged on failure), so "nothing was sent" stays
 //      true: otherwise the next tick would apply it to every member.
-//   3. ONE set/groups call over the members, switches and lights together.
+//   3. ONE set/groups call over the members, switches and lights together,
+//      on a client with INTERACTIVE_429_RETRIES (SHELLYBUSY.1: a press that
+//      lands on the cron's read rides it out instead of answering "busy";
+//      the 'auto' run-now client gets the same).
 //      Zero members: no client is even built (Review Focus 1).
 //   4. each member that landed is stamped with overrideKey(groupOverride) —
 //      the key the planner mints for the effective target — so the next tick
@@ -48,7 +51,7 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { loadGroup, publicGroup } from '@/lib/shelly/group-load'
@@ -225,7 +228,7 @@ export const POST = withAuth(
 
     let res = { ok: true, failed: {} }
     if (batch.length) {
-      const shelly = createShellyClient(engineConn)
+      const shelly = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
       res = await shelly.setGroups({
         switch: batch.filter((x) => deviceKind(x.device) === 'switch').map((x) => x.gid),
         light: batch.filter((x) => deviceKind(x.device) === 'light').map((x) => x.gid),
@@ -347,7 +350,7 @@ async function backToSchedule({ db, engineConn, locationId, group, members, unma
     loadOccurrences = async () => cached
   }
 
-  const shared = createShellyClient(engineConn)
+  const shared = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
   const makeClient = () => shared
   const results = []
   let stopped = null
