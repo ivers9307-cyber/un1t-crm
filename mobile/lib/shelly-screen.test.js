@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest'
 import {
   arrangeShellyCards, groupSwitchView, groupToggleOutcome, deviceSwitchView, memberMeta,
   totalWattsText, unadoptedBannerText, nextClassWindow, nextClassLabel, screenHeaderLine,
-  groupIconName, GROUP_HOLDS_TEXT, GROUP_ICON_NAMES, groupReasonLine,
+  groupIconName, memberToggleLabel, GROUP_HOLDS_TEXT, GROUP_ICON_NAMES, groupReasonLine,
   showBackToSchedule, autoOutcomeText, groupAutoOutcome,
 } from './shelly'
 
@@ -342,6 +342,17 @@ describe('screenHeaderLine', () => {
       .toBe('UN1T Stillorgan · next class 18:00 BU1LD · 412 W now')
     expect(screenHeaderLine({ studio: 'UN1T Stillorgan', nextClass: null, watts: '412 W now' })).toBe('UN1T Stillorgan · 412 W now')
     expect(screenHeaderLine({ studio: null, nextClass: null, watts: null })).toBe('')
+  })
+})
+
+// SHELLYPHONECOLLAPSE.1 — a group's devices are hidden until asked for.
+describe('memberToggleLabel', () => {
+  it('names the count when collapsed, singular and plural', () => {
+    expect(memberToggleLabel(14, false)).toBe('Show 14 devices')
+    expect(memberToggleLabel(1, false)).toBe('Show 1 device')
+  })
+  it('says hide when expanded', () => {
+    expect(memberToggleLabel(14, true)).toBe('Hide devices')
   })
 })
 
