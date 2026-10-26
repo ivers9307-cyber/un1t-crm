@@ -12,7 +12,7 @@
 // Each one names its web original so the pair can be moved together.
 
 import {
-  addDaysISO, formatInZone, instantToZonedParts, resolveZone, strictDayStrIn, timeLabelIn,
+  addDaysISO, formatInZone, instantToZonedParts, nextLocalMidnightMs, resolveZone, strictDayStrIn, timeLabelIn,
 } from 'shared/zoned-time'
 
 // ── Freshness thresholds ────────────────────────────────────────────────────
@@ -402,4 +402,266 @@ export function memberPowerText(device) {
   if (Number.isFinite(state.apower)) return `${Math.round(state.apower)} W`
   if (state.online === true && state.apower == null && state.aenergy_wh == null) return 'Doesn’t report power'
   return '—'
+}
+
+// ── SHELLYGROUPS.10 — the phone screen's arrangement ───────────────────────
+// mobile/ has no React Native screen harness, so every decision the redesigned
+// screen makes is here and pinned by shelly-screen.test.js; the screen file
+// does IO and layout only.
+
+/**
+ * Which card each device is drawn in.
+ *
+ * Groups keep the SERVER's order (GET /api/shelly/groups sorts by sort_order
+ * then name) and each group's members follow its `device_ids`. A device whose
+ * id the group list missed but whose `group_id` names a listed group joins it
+ * (the member read is capped server-side). Everything else — no group, or a
+ * group the list does not hold — goes in the last card: a device is NEVER
+ * hidden because the group read and the device read disagree. A device two
+ * groups claim is drawn once, under the first.
+ *
+ * With no groups (none made, or the list unreadable) there is nothing for
+ * devices to be "not in", so the last card is just "Devices".
+ *
+ * @param {object[]|null} devices  GET /api/shelly/devices rows
+ * @param {object[]|null} groups   GET /api/shelly/groups rows (null = unread)
+ */
+export function arrangeShellyCards(devices, groups) {
+  const list = (Array.isArray(devices) ? devices : []).filter(Boolean)
+  const groupList = (Array.isArray(groups) ? groups : []).filter(Boolean)
+  const byId = new Map(list.map((d) => [d.id, d]))
+  const placed = new Set()
+  const cards = groupList.map((group) => {
+    const members = []
+    for (const id of Array.isArray(group.device_ids) ? group.device_ids : []) {
+      const d = byId.get(id)
+      if (d && !placed.has(id)) { members.push(d); placed.add(id) }
+    }
+    return { group, members }
+  })
+  const cardById = new Map(cards.map((c) => [c.group.id, c]))
+  for (const d of list) {
+    if (placed.has(d.id) || !d.group_id || !cardById.has(d.group_id)) continue
+    cardById.get(d.group_id).members.push(d)
+    placed.add(d.id)
+  }
+  return {
+    groups: cards,
+    ungrouped: list.filter((d) => !placed.has(d.id)),
+    ungroupedTitle: cards.length ? 'Not in a group' : 'Devices',
+  }
+}
+
+/**
+ * The ONE switch on a group card.
+ *
+ * Tone from groupTone (server counts; amber mixed only when 0 < on < count),
+ * unless a partial press is being painted: `partial` is the `{ on, count }`
+ * groupToggleOutcome returned, shown until the next poll replaces it with
+ * the server's counts. A press sends 'off' only when everything reads on;
+ * mixed, off and offline all send 'on' (the obvious meaning of tapping an
+ * amber switch is "all of them on").
+ *
+ * An empty group says "No devices" and cannot be pressed. Otherwise only
+ * `connected === false` disables it — an offline group is still settable,
+ * the press is saved and applied when the members are back (rule 3).
+ *
+ * @param {object} group
+ * @param {object[]} [devices]
+ * @param {{ connected?: boolean|null, partial?: {on:number, count:number}|null }} [opts]
+ */
+export function groupSwitchView(group, devices, { connected, partial } = {}) {
+  const name = group?.name || 'Group'
+  const count = Number(group?.now?.member_count) || 0
+  const idsCount = Array.isArray(group?.device_ids) ? group.device_ids.length : 0
+  if (count <= 0 && idsCount <= 0) {
+    return {
+      tone: 'off', checked: false, nextState: 'on', empty: true, disabled: true,
+      countText: 'No devices', accessibilityLabel: `${name}, no devices`,
+    }
+  }
+  const disabled = connected === false
+  if (partial && Number.isFinite(partial.on) && Number.isFinite(partial.count) && partial.count > 0) {
+    const all = partial.on >= partial.count
+    const none = partial.on <= 0
+    const tone = all ? 'on' : none ? 'off' : 'mixed'
+    const countText = tone === 'mixed' ? `${partial.on} of ${partial.count} on` : null
+    return {
+      tone, checked: tone === 'mixed' ? 'mixed' : all, nextState: all ? 'off' : 'on',
+      empty: false, disabled, countText,
+      accessibilityLabel: `${name}, ${countText || (all ? 'on' : 'off')}`,
+    }
+  }
+  const tone = groupTone(group, devices)
+  const on = Number(group?.now?.on_count) || 0
+  const allOn = count > 0 && on >= count
+  const countText = tone === 'mixed' ? `${on} of ${count} on` : null
+  const checked = tone === 'mixed' ? 'mixed' : allOn
+  const word = tone === 'offline' ? 'offline' : tone === 'mixed' ? countText : allOn ? 'on' : 'off'
+  return {
+    tone, checked, nextState: allOn ? 'off' : 'on', empty: false, disabled, countText,
+    accessibilityLabel: `${name}, ${word}`,
+  }
+}
+
+// The group twin of HOLDS_TEXT, for a toggle answer that says
+// `holds_until_changed` without the route's own `notice`.
+export const GROUP_HOLDS_TEXT = 'No schedule runs this group — it stays as set until you change it.'
+
+/**
+ * What a group press says, and what (if anything) to paint before the next
+ * poll. BRANCHES ON `pending` FIRST: every queued and partial body says
+ * `success: true`, and the 429 rate-limit body arrives through api()
+ * unchanged with `pending: true`, so a success-first read would print
+ * "Switched on." over a group whose relays have not moved. The route's
+ * `message` is shown first whenever it sent one.
+ *
+ * `partial` ({ on, count }) is only returned for `applied: 'partial'`: the
+ * members in `pending_device_ids` did not move, so after an ON press the rest
+ * are on, and after an OFF press the pending ones are the ones still on (the
+ * best the answer can say; the next poll's counts replace it).
+ *
+ * @param {object|null} json   the api() result of POST /api/shelly/groups/<id>/toggle
+ * @param {'on'|'off'} state   what was asked for
+ * @param {number} memberCount the group's member count when it was pressed
+ * @returns {{ tone: 'ok'|'warn'|'error', text: string, partial: {on:number, count:number}|null }}
+ */
+export function groupToggleOutcome(json, state, memberCount) {
+  if (!json) return { tone: 'error', text: 'That did not work — try again', partial: null }
+  const holds = json.holds_until_changed ? (json.notice || GROUP_HOLDS_TEXT) : null
+  const withHolds = (text) => (holds ? `${text} ${holds}` : text)
+  if (json.pending === true || json.applied === 'partial') {
+    const text = withHolds(json.message || 'Saved — the group will follow as soon as Shelly answers.')
+    let partial = null
+    if (json.applied === 'partial') {
+      const count = Number(memberCount) || 0
+      const pending = Array.isArray(json.pending_device_ids) ? json.pending_device_ids.length : 0
+      if (count > 0) partial = { on: state === 'on' ? Math.max(0, count - pending) : Math.min(count, pending), count }
+    }
+    return { tone: 'warn', text, partial }
+  }
+  if (json.success !== true) {
+    return { tone: 'error', text: errorText(json, 'That did not work'), partial: null }
+  }
+  return { tone: 'ok', text: withHolds(state === 'on' ? 'Switched on.' : 'Switched off.'), partial: null }
+}
+
+/**
+ * A device's own small switch (a member row, or a "Not in a group" row).
+ * `output: null` is UNKNOWN — neither side of the switch, and the label says
+ * so (rule 1); pressing it sends 'on'. Only `connected === false` disables it
+ * (rule 3).
+ */
+export function deviceSwitchView(device, connected) {
+  const output = device?.last_state?.output
+  const tone = output === true ? 'on' : output === false ? 'off' : 'unknown'
+  const label = tone === 'unknown' ? 'state unknown' : lightStateLabel(device)
+  return {
+    tone,
+    checked: tone === 'unknown' ? undefined : output === true,
+    nextState: output === true ? 'off' : 'on',
+    disabled: connected === false,
+    accessibilityLabel: `${plugDisplayName(device)}, ${label}`,
+  }
+}
+
+/**
+ * A member row's right-hand facts: the Offline chip (a reading that says
+ * `online: false` — then no power figure, the last one is not live), the relay
+ * words (a light's "On · 55%") and the watts / "Doesn’t report power". An
+ * unknown figure ('—') shows nothing.
+ */
+export function memberMeta(device) {
+  const offline = device?.last_state?.online === false
+  const power = offline ? null : memberPowerText(device)
+  return { offline, power: power === '—' ? null : power, state: lightStateLabel(device) }
+}
+
+/**
+ * The header's "412 W now": the sum of every reading that is live. An
+ * offline plug's last figure is not "now", and absent is not zero, so a
+ * screen with no reading at all gets null (the part is omitted), while a real
+ * 0 W total is shown.
+ */
+export function totalWattsText(devices) {
+  let total = 0
+  let any = false
+  for (const d of Array.isArray(devices) ? devices : []) {
+    const s = d?.last_state || {}
+    if (s.online === false || !Number.isFinite(s.apower)) continue
+    total += s.apower
+    any = true
+  }
+  return any ? `${Math.round(total)} W now` : null
+}
+
+/**
+ * The amber banner over the list, from countUnadoptedShelly (mobile/lib/api.js).
+ * null (the discover list could not be read) and 0 both hide it: an unread
+ * list is unknown, never "nothing to adopt", and unknown is not worth a banner.
+ */
+export function unadoptedBannerText(n) {
+  if (!Number.isFinite(n) || n <= 0) return null
+  return n === 1
+    ? '1 device on your Shelly account isn’t set up here'
+    : `${n} devices on your Shelly account aren’t set up here`
+}
+
+/**
+ * The read window for the header's next class: now until the STUDIO's next
+ * local midnight (shared/zoned-time — the class_occurrences day is the
+ * studio's, never the phone's).
+ */
+export function nextClassWindow(nowMs, tz) {
+  const zone = resolveZone(tz)
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now()
+  return {
+    fromIso: new Date(now).toISOString(),
+    toIso: new Date(nextLocalMidnightMs(now, zone)).toISOString(),
+  }
+}
+
+/**
+ * "next class 18:00 BU1LD" — the soonest uncancelled class still to start,
+ * on the studio's clock — or null when there is none left today or the list
+ * could not be read (the header then simply omits the part). Picked at
+ * render time from the list read on focus, so a screen left open past a
+ * class's start moves on to the next one at the next poll's repaint.
+ */
+export function nextClassLabel(occurrences, nowMs, tz) {
+  const zone = resolveZone(tz)
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now()
+  let best = null
+  let bestMs = Infinity
+  for (const o of Array.isArray(occurrences) ? occurrences : []) {
+    if (!o || o.cancelled_at) continue
+    const ms = Date.parse(o.starts_at ?? '')
+    if (!Number.isFinite(ms) || ms <= now || ms >= bestMs) continue
+    best = o
+    bestMs = ms
+  }
+  if (!best) return null
+  const time = timeLabelIn(new Date(bestMs).toISOString(), zone)
+  const name = best.name || best.program
+  return name ? `next class ${time} ${name}` : `next class ${time}`
+}
+
+/** "UN1T Stillorgan · next class 18:00 BU1LD · 412 W now", unknown parts dropped. */
+export function screenHeaderLine({ studio, nextClass, watts } = {}) {
+  return [studio, nextClass, watts].filter((x) => typeof x === 'string' && x.length > 0).join(' · ')
+}
+
+// A group's `icon` (mig 776's CHECK list) → the nearest Ionicons glyph, the
+// set the rest of the app draws with. Ionicons has no fan; the aperture's
+// blades are the nearest shape.
+export const GROUP_ICON_NAMES = Object.freeze({
+  bulb: 'bulb-outline',
+  fan: 'aperture-outline',
+  tv: 'tv-outline',
+  plug: 'flash-outline',
+  droplet: 'water-outline',
+})
+
+export function groupIconName(icon) {
+  return GROUP_ICON_NAMES[icon] || GROUP_ICON_NAMES.plug
 }

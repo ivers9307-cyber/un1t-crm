@@ -213,3 +213,35 @@ export async function countUnadoptedShelly(locationId) {
   if (r?.success !== true || !Array.isArray(r.devices)) return null
   return r.devices.filter((d) => d?.supported === true && d?.adopted == null).length
 }
+
+/**
+ * SHELLYGROUPS.10 — the studio's classes still to start today, for the Smart
+ * plugs header's "next class 18:00 BU1LD". A direct RLS-scoped read
+ * (class_occurrences_location_scoped_select, the same table and policy the
+ * Studio dashboard's Today strip reads); the window is the STUDIO's day from
+ * nextClassWindow in mobile/lib/shelly.js. Returns NULL when the read failed,
+ * so the header omits the part rather than claiming "no more classes".
+ * Called once per screen open, never on the poll: nextClassLabel picks the
+ * next one at render time.
+ *
+ * @param {string} locationId
+ * @param {{ fromIso: string, toIso: string }} window
+ * @returns {Promise<object[]|null>}
+ */
+export async function listClassesRemainingToday(locationId, { fromIso, toIso }) {
+  try {
+    const { data, error } = await supabase
+      .from('class_occurrences')
+      .select('name, program, starts_at, cancelled_at')
+      .eq('location_id', locationId)
+      .gte('starts_at', fromIso)
+      .lt('starts_at', toIso)
+      .is('cancelled_at', null)
+      .order('starts_at')
+      .limit(50)
+    if (error) return null
+    return Array.isArray(data) ? data : []
+  } catch {
+    return null
+  }
+}

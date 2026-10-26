@@ -16,7 +16,7 @@
 // ShellyDeviceCard.jsx). Each was a backend review finding, and each is a lie
 // waiting to happen if this file paraphrases it:
 //
-//  1. `last_state.output === null` IS "UNKNOWN", NEVER "OFF" — plugStateLabel
+//  1. `last_state.output === null` IS "UNKNOWN", NEVER "OFF" — lightStateLabel
 //     owns that, and it is tested.
 //
 //  2. BRANCH ON `pending` BEFORE PAINTING THE NEW STATE. A toggle answers
@@ -38,6 +38,26 @@
 //     live hardware; replacing it with "Network error" for a tick is worse
 //     than showing a slightly stale reading under a retry line. Same posture
 //     as SonosControlCard.
+//
+// SHELLYGROUPS.10 — GROUPS. The plugs are drawn as group cards (one switch
+// for the group, its members underneath with their own small switches) and a
+// last "Not in a group" card. Every decision — which card a device is in, the
+// switch's colour and label, what a group press says, the header line, the
+// banner — is a tested helper in mobile/lib/shelly.js (mobile has no screen
+// harness); this file does IO and layout only. Two more rules:
+//
+//  5. A GROUP PRESS BRANCHES ON `pending` BEFORE PAINTING (rule 2, for groups):
+//     groupToggleOutcome reads the queued / partial answer first and shows the
+//     route's `message`; a partial press paints amber "N of M on" until the
+//     next POLL replaces it with the server's counts (the press's own reload
+//     does not clear it).
+//
+//  6. THE DISCOVER CALL (unadopted banner) AND THE CLASS READ (next class) RUN
+//     ONCE PER SCREEN FOCUS, never on the 30 s poll: discover reads Shelly's
+//     cloud live, and the next class is picked from today's list at render.
+//
+// Authoring — creating groups, their schedules and membership — stays on the
+// web CRM, like every other schedule.
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator, RefreshControl } from 'react-native'
@@ -47,11 +67,17 @@ import { useAuth } from '../../../lib/auth-context'
 import { canMobile } from '../../../lib/permissions'
 import { usePhysicalLocation } from '../../../lib/use-physical-location'
 import { resolveControlLocation, pickerLocations } from '../../../lib/control-location'
-import { api } from '../../../lib/api'
 import {
-  plugTone, plugStateLabel, plugDisplayName, toggleResultText, errorText, isQueued,
+  api, listShellyGroups, toggleShellyGroup, countUnadoptedShelly, listClassesRemainingToday,
+} from '../../../lib/api'
+import {
+  plugTone, plugDisplayName, toggleResultText, errorText, isQueued,
+  arrangeShellyCards, groupSwitchView, groupToggleOutcome, deviceSwitchView, memberMeta,
+  groupReasonLine, groupIconName, totalWattsText, unadoptedBannerText, nextClassWindow,
+  nextClassLabel, screenHeaderLine,
   PLUG_TONE_TEXT, PLUG_TONE_DOT,
 } from '../../../lib/shelly'
+import { zoneOfLocationRow } from '../../../lib/studio-zone'
 import LocationPill from '../../../components/LocationPill'
 
 const POLL_MS = 30_000
@@ -59,7 +85,7 @@ const POLL_MS = 30_000
 // the operator wonders whether it is about the press they just made.
 const NOTE_CLEAR_MS = 6_000
 
-const WEB_HINT = 'Schedules and setup live on the web CRM.'
+const WEB_HINT = 'Groups, schedules and setup live on the web CRM.'
 
 function NoticeCard({ icon, tone, children }) {
   const isError = tone === 'error'
@@ -75,85 +101,165 @@ function NoticeCard({ icon, tone, children }) {
   )
 }
 
-// The manual switch. Two halves of one pill so the CURRENT state is visible at
-// a glance — and neither half is highlighted when the relay is Unknown, which
-// is the honest render for a plug that has told us nothing (rule 1).
-function OnOff({ output, busy, disabled, onPress }) {
-  const half = (label, isOn) => {
-    const active = output === isOn
-    return (
-      <Pressable
-        onPress={() => onPress(isOn ? 'on' : 'off')}
-        disabled={disabled || busy}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active, disabled: disabled || busy }}
-        accessibilityLabel={`Switch ${isOn ? 'on' : 'off'}`}
-        className={`px-5 py-2 active:opacity-70 ${active ? 'bg-un1t-bg' : ''}`}
-      >
-        <Text className={`text-sm ${active ? 'font-semibold text-un1t-text' : 'text-un1t-subtle'}`}>{label}</Text>
-      </Pressable>
-    )
-  }
+// Switch colours (a style, not a class: the track is a plain <View>). Green
+// on, grey off, amber mixed (some of a group on), slate for a group whose
+// every member is offline, and a pale track with a centred knob for a plug
+// whose relay is UNKNOWN (rule 1: neither side is claimed).
+const TRACK = Object.freeze({
+  on: '#10B981',
+  off: '#CBD5E1',
+  mixed: '#F59E0B',
+  offline: '#94A3B8',
+  unknown: '#E2E8F0',
+})
+
+const NOTE_CLASS = Object.freeze({
+  ok: 'text-emerald-700',
+  warn: 'text-amber-700',
+  error: 'text-red-700',
+})
+
+// One switch, used for a group and (small) for each device. `checked` is
+// true / false / 'mixed' / undefined (unknown); mixed and unknown sit the
+// knob in the middle.
+function ToggleSwitch({ tone, checked, disabled, busy, small, onPress, accessibilityLabel }) {
+  const w = small ? 40 : 52
+  const h = small ? 24 : 30
+  const knob = h - 6
+  const left = checked === true ? w - knob - 3 : checked === false ? 3 : (w - knob) / 2
+  const off = disabled || busy
   return (
     <View className="flex-row items-center">
-      <View className={`flex-row rounded-full border border-un1t-border overflow-hidden ${disabled || busy ? 'opacity-40' : ''}`}>
-        {half('On', true)}
-        <View className="w-px bg-un1t-border" />
-        {half('Off', false)}
-      </View>
-      {busy && <ActivityIndicator color="#94A3B8" style={{ marginLeft: 10 }} />}
+      {busy && <ActivityIndicator color="#94A3B8" style={{ marginRight: 8 }} />}
+      <Pressable
+        onPress={onPress}
+        disabled={off}
+        hitSlop={8}
+        accessibilityRole="switch"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{ checked, disabled: off, busy: Boolean(busy) }}
+        className="active:opacity-70"
+        style={{ opacity: off ? 0.4 : 1 }}
+      >
+        <View style={{ width: w, height: h, borderRadius: h / 2, backgroundColor: TRACK[tone] || TRACK.off }}>
+          <View
+            style={{
+              position: 'absolute', top: 3, left, width: knob, height: knob, borderRadius: knob / 2,
+              backgroundColor: '#FFFFFF',
+              shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 2, shadowOffset: { width: 0, height: 1 },
+              elevation: 1,
+            }}
+          />
+        </View>
+      </Pressable>
     </View>
   )
 }
 
-function PlugRow({ device, connected, busy, note, onToggle }) {
+// One device row: a member under a group, or a "Not in a group" row. Keeps
+// every rule of the old PlugRow — freshness dot, queued/pending notes, the
+// offline "your choice is queued" line, controls off only on connected===false.
+function DeviceRow({ device, connected, busy, note, onToggle, first }) {
   const health = plugTone(device, connected)
-  // Rule 3 — only a missing CONNECTION kills the strip. `connected === false`,
-  // never `!== true`: an unknown connection is our read failing.
+  const meta = memberMeta(device)
+  const sw = deviceSwitchView(device, connected)
+  // Rule 3 — only a missing CONNECTION kills the switch.
   const controlsOff = connected === false
-  const noteClass = note?.tone === 'error'
-    ? 'text-red-700'
-    : note?.tone === 'warn' ? 'text-amber-700' : 'text-emerald-700'
-
   return (
-    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
-      <View className="flex-row items-start justify-between">
+    <View className={`py-3 ${first ? '' : 'border-t border-un1t-border'}`}>
+      <View className="flex-row items-center">
+        <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: PLUG_TONE_DOT[health.tone] }} />
         <View className="flex-1 pr-3">
-          <Text className="text-base font-semibold text-un1t-text" numberOfLines={1}>
-            {plugDisplayName(device)}
+          <Text className="text-sm font-semibold text-un1t-text" numberOfLines={1}>{plugDisplayName(device)}</Text>
+          <Text className="text-xs text-un1t-subtle mt-0.5" numberOfLines={1}>
+            {meta.state}
+            {/* The freshness verdict only when it is not the healthy green —
+                "Online" on every row is noise; "Last seen 9 min ago" is not. */}
+            {health.tone !== 'green' && !meta.offline ? (
+              <Text className={PLUG_TONE_TEXT[health.tone]}>{` · ${health.label}`}</Text>
+            ) : null}
           </Text>
-          <Text className="text-sm text-un1t-text mt-0.5">{plugStateLabel(device)}</Text>
         </View>
-        <View className="flex-row items-center shrink-0">
-          <View
-            className="w-2 h-2 rounded-full mr-1.5"
-            style={{ backgroundColor: PLUG_TONE_DOT[health.tone] }}
-          />
-          <Text className={`text-[11px] ${PLUG_TONE_TEXT[health.tone]}`}>{health.label}</Text>
-        </View>
-      </View>
-
-      <View className="mt-3">
-        <OnOff
-          output={device.last_state?.output}
+        {meta.offline ? (
+          <View className="rounded-full px-2 py-0.5 mr-3 bg-slate-500/10">
+            <Text className="text-[11px] font-semibold text-slate-700">Offline</Text>
+          </View>
+        ) : meta.power ? (
+          <Text className="text-xs text-un1t-subtle mr-3">{meta.power}</Text>
+        ) : null}
+        <ToggleSwitch
+          small
+          tone={sw.tone}
+          checked={sw.checked}
+          disabled={sw.disabled}
           busy={busy}
-          disabled={controlsOff}
-          onPress={(state) => onToggle(device, state)}
+          accessibilityLabel={sw.accessibilityLabel}
+          onPress={() => onToggle(device, sw.nextState)}
         />
       </View>
-
       {/* An offline plug is still settable — say so rather than looking broken. */}
       {!controlsOff && health.reason === 'offline' && !note && (
-        <Text className="text-xs text-un1t-subtle mt-2">
+        <Text className="text-xs text-un1t-subtle mt-1.5 ml-4">
           Offline — your choice is queued and applied when the plug is back.
         </Text>
       )}
-      {controlsOff && !note && (
-        <Text className="text-xs text-un1t-subtle mt-2">Connect Shelly on the web CRM first.</Text>
-      )}
       {note && (
-        <Text className={`text-xs mt-2 ${noteClass}`} accessibilityRole="text">{note.text}</Text>
+        <Text className={`text-xs mt-1.5 ml-4 ${NOTE_CLASS[note.tone] || NOTE_CLASS.ok}`} accessibilityRole="text">{note.text}</Text>
       )}
+    </View>
+  )
+}
+
+function GroupCard({ group, members, devices, connected, zone, busy, note, partial, onToggle, rowProps }) {
+  const sw = groupSwitchView(group, devices, { connected, partial })
+  const reason = groupReasonLine(group, zone, Date.now())
+  return (
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
+      <View className="flex-row items-center">
+        <View className="w-9 h-9 rounded-full bg-un1t-bg border border-un1t-border items-center justify-center mr-3">
+          <Ionicons name={groupIconName(group.icon)} size={18} color="#111827" />
+        </View>
+        <View className="flex-1 pr-3">
+          <Text className="text-base font-semibold text-un1t-text" numberOfLines={1}>{group.name}</Text>
+          <Text className="text-xs text-un1t-subtle mt-0.5" numberOfLines={2}>{reason}</Text>
+          {sw.countText && (
+            <Text className={`text-xs font-semibold mt-0.5 ${sw.tone === 'mixed' ? 'text-amber-700' : 'text-un1t-subtle'}`}>
+              {sw.countText}
+            </Text>
+          )}
+        </View>
+        <ToggleSwitch
+          tone={sw.tone}
+          checked={sw.checked}
+          disabled={sw.disabled}
+          busy={busy}
+          accessibilityLabel={sw.accessibilityLabel}
+          onPress={() => onToggle(group, sw.nextState, members.length || Number(group?.now?.member_count) || 0)}
+        />
+      </View>
+      {note && (
+        <Text className={`text-xs mt-2 ${NOTE_CLASS[note.tone] || NOTE_CLASS.ok}`} accessibilityRole="text">{note.text}</Text>
+      )}
+      {members.length > 0 && (
+        <View className="mt-2">
+          {members.map((d, i) => (
+            <DeviceRow key={d.id} device={d} first={i === 0} {...rowProps(d)} />
+          ))}
+        </View>
+      )}
+    </View>
+  )
+}
+
+function DeviceListCard({ title, devices, rowProps }) {
+  return (
+    <View className="bg-un1t-surface border border-un1t-border rounded-2xl px-4 pt-3 pb-1">
+      <Text className="text-xs font-semibold text-un1t-subtle uppercase tracking-wide">{title}</Text>
+      <View className="mt-1">
+        {devices.map((d, i) => (
+          <DeviceRow key={d.id} device={d} first={i === 0} {...rowProps(d)} />
+        ))}
+      </View>
     </View>
   )
 }
@@ -174,6 +280,8 @@ export default function ShellyScreen() {
     locations,
   })
   const locationId = controlLocation?.id
+  // The STUDIO's clock for every time on the screen (reason lines, next class).
+  const zone = zoneOfLocationRow(controlLocation)
   const allowed = canMobile(profile, 'device_control', controlLocation)
   const pickable = pickerLocations(profile, locations, 'device_control')
   // HOME-LOC.10b — the screen is usable before the geofence answer lands, on
@@ -191,6 +299,15 @@ export default function ShellyScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [notes, setNotes] = useState({})
+  // SHELLYGROUPS.10. undefined = not answered yet; null = the list could not
+  // be read (every plug is then drawn in one plain card, never hidden).
+  const [groups, setGroups] = useState(undefined)
+  const [busyGroupId, setBusyGroupId] = useState(null)
+  // groupId → { on, count } from a partial press, painted until the next poll.
+  const [partials, setPartials] = useState({})
+  // Read once per focus (rule 6). null = unknown → no banner / no next class.
+  const [unadopted, setUnadopted] = useState(null)
+  const [classes, setClasses] = useState(null)
 
   // The location the painted list was fetched for, without putting `devices` in
   // load()'s deps (that would defeat the [locationId]-only memoisation and
@@ -198,6 +315,9 @@ export default function ShellyScreen() {
   // a boolean: a blip while refetching for a NEW location must not keep the OLD
   // location's rows painted. Same shape as the Sonos screen.
   const listLocationRef = useRef(null)
+  // The groups list's twin of listLocationRef: a failed groups read keeps the
+  // painted cards for THIS location (rule 4) rather than collapsing them.
+  const groupsLocationRef = useRef(null)
   // HOME-LOC.10b — the location the SCREEN is on NOW, readable from inside an
   // in-flight load(). `seq` alone does not cover this: it only invalidates a
   // load once a LATER one has started, and the toggle/refresh paths call
@@ -222,7 +342,12 @@ export default function ShellyScreen() {
     setError(null)
     setRetrying(false)
     setNotes({})
+    setGroups(undefined)
+    setPartials({})
+    setUnadopted(null)
+    setClasses(null)
     listLocationRef.current = null
+    groupsLocationRef.current = null
   }, [locationId])
 
   useEffect(() => {
@@ -250,13 +375,24 @@ export default function ShellyScreen() {
   // toggle and pull-to-refresh paths both pass `() => true`, which is right
   // for BLUR — they want their own reload to land — but says nothing about a
   // location flip). isActive stays for the blur race it was written for.
-  const load = useCallback(async (isActive) => {
+  //
+  // `clearPartials` is set by the focus read and the 30 s poll (and the pull
+  // to refresh), never by a press's own reload: a partial press's amber
+  // "N of M on" stays until the NEXT poll (rule 5).
+  const load = useCallback(async (isActive, { clearPartials = false } = {}) => {
     if (!locationId) return
     const n = ++seq.current
     const painted = () => listLocationRef.current === locationId
     const stale = () => locationId !== currentLocationRef.current
     try {
-      const r = await api('/api/shelly/devices', { locationId })
+      // In parallel: the groups read never delays the plugs, and a failed one
+      // costs only the grouping (below), never the rows.
+      const [r, g] = await Promise.all([
+        api('/api/shelly/devices', { locationId }),
+        (async () => {
+          try { return await listShellyGroups(locationId) } catch { return null }
+        })(),
+      ])
       if (stale() || n !== seq.current || !isActive()) return
       if (!r.success) {
         // Rule 4. The keep-or-blank decision is made on WHETHER WE ALREADY
@@ -274,6 +410,15 @@ export default function ShellyScreen() {
       setConnected(r.connected)
       setConnectionStatus(r.connection_status)
       listLocationRef.current = locationId
+      if (g?.success === true && Array.isArray(g.groups)) {
+        setGroups(g.groups)
+        groupsLocationRef.current = locationId
+      } else if (groupsLocationRef.current !== locationId) {
+        // Never painted for this studio: draw every plug in one card and say
+        // the groups could not be read. Painted already: keep the cards.
+        setGroups(null)
+      }
+      if (clearPartials) setPartials({})
     } catch {
       if (stale() || n !== seq.current || !isActive()) return
       // MOBILE-SESSION.1 — never the raw `e.message`. api() answers a failed
@@ -290,15 +435,41 @@ export default function ShellyScreen() {
     let active = true
     const isActive = () => active
     if (!allowed) return () => { active = false }
-    load(isActive)
-    const timer = setInterval(() => load(isActive), POLL_MS)
+    load(isActive, { clearPartials: true })
+    const timer = setInterval(() => load(isActive, { clearPartials: true }), POLL_MS)
     return () => { active = false; clearInterval(timer) }
   }, [allowed, load]))
+
+  // Rule 6 — once per focus (and per studio: a flip re-runs it), never on the
+  // poll. Both answers are optional decoration, so a failure is null and the
+  // banner / next-class part simply does not render.
+  useFocusEffect(useCallback(() => {
+    let active = true
+    if (!allowed || !locationId) return () => { active = false }
+    const live = () => active && locationId === currentLocationRef.current
+    ;(async () => {
+      try {
+        const n = await countUnadoptedShelly(locationId)
+        if (live()) setUnadopted(n)
+      } catch {
+        if (live()) setUnadopted(null)
+      }
+    })()
+    ;(async () => {
+      try {
+        const list = await listClassesRemainingToday(locationId, nextClassWindow(Date.now(), zone))
+        if (live()) setClasses(list)
+      } catch {
+        if (live()) setClasses(null)
+      }
+    })()
+    return () => { active = false }
+  }, [allowed, locationId, zone]))
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      await load(() => true)
+      await load(() => true, { clearPartials: true })
     } finally {
       setRefreshing(false)
     }
@@ -342,6 +513,32 @@ export default function ShellyScreen() {
       setNote(device.id, { tone: 'error', text: 'That did not work — try again' })
     } finally {
       setBusyId(null)
+    }
+  }, [locationId, load, setNote])
+
+  // Rule 5. groupToggleOutcome reads `pending` / `applied` BEFORE anything is
+  // painted: the note is the route's message, a partial paints its amber
+  // count, and the reload repaints from the server's counts — so nothing here
+  // asserts the requested state.
+  const toggleGroup = useCallback(async (group, state, memberCount) => {
+    const key = `group:${group.id}`
+    setBusyGroupId(group.id)
+    setNote(key, null)
+    try {
+      const json = await toggleShellyGroup(group.id, { state }, locationId)
+      const out = groupToggleOutcome(json, state, memberCount)
+      setPartials((prev) => {
+        const next = { ...prev }
+        if (out.partial) next[group.id] = out.partial
+        else delete next[group.id]
+        return next
+      })
+      setNote(key, { tone: out.tone, text: out.text })
+      await load(() => true)
+    } catch {
+      setNote(key, { tone: 'error', text: 'That did not work — try again' })
+    } finally {
+      setBusyGroupId(null)
     }
   }, [locationId, load, setNote])
 
@@ -410,6 +607,20 @@ export default function ShellyScreen() {
   // off; the operator needs to be told where the fix lives, not what the code is.
   const connectionNeedsAttention = connected === false && !notConnected
 
+  const arranged = arrangeShellyCards(devices, groups)
+  const rowProps = (d) => ({
+    connected,
+    busy: busyId === d.id,
+    note: notes[d.id],
+    onToggle: toggle,
+  })
+  const headerLine = screenHeaderLine({
+    studio: controlLocation?.name || null,
+    nextClass: nextClassLabel(classes, Date.now(), zone),
+    watts: totalWattsText(devices),
+  })
+  const banner = unadoptedBannerText(unadopted)
+
   return (
     <ScrollView
       className="flex-1 bg-un1t-bg"
@@ -423,6 +634,15 @@ export default function ShellyScreen() {
         onPick={(id) => router.setParams({ loc: id })}
         detecting={detecting}
       />
+      {headerLine ? (
+        <Text className="text-sm text-un1t-subtle -mt-2 mb-3">{headerLine}</Text>
+      ) : null}
+      {banner && (
+        <View className="rounded-2xl p-3 flex-row items-start mb-3 bg-amber-500/10 border border-amber-500/30">
+          <Ionicons name="warning-outline" size={14} color="#B45309" style={{ marginTop: 2 }} />
+          <Text className="text-xs ml-2 flex-1 text-amber-700">{banner}</Text>
+        </View>
+      )}
       {notConnected && (
         <NoticeCard icon="flash-off-outline">
           Not connected — set up on the web CRM under{' '}
@@ -449,19 +669,30 @@ export default function ShellyScreen() {
           </NoticeCard>
         )
       ) : (
-        // Keyed on the location so a flip REMOUNTS the rows rather than
+        // Keyed on the location so a flip REMOUNTS the cards rather than
         // reusing them under the new pill.
         <View key={locationId} className="gap-3">
-          {devices.map((d) => (
-            <PlugRow
-              key={d.id}
-              device={d}
+          {groups === null && (
+            <NoticeCard icon="help-circle-outline">Couldn&apos;t read the groups — showing every plug. Retrying.</NoticeCard>
+          )}
+          {arranged.groups.map(({ group, members }) => (
+            <GroupCard
+              key={group.id}
+              group={group}
+              members={members}
+              devices={devices}
               connected={connected}
-              busy={busyId === d.id}
-              note={notes[d.id]}
-              onToggle={toggle}
+              zone={zone}
+              busy={busyGroupId === group.id}
+              note={notes[`group:${group.id}`]}
+              partial={partials[group.id]}
+              onToggle={toggleGroup}
+              rowProps={rowProps}
             />
           ))}
+          {arranged.ungrouped.length > 0 && (
+            <DeviceListCard title={arranged.ungroupedTitle} devices={arranged.ungrouped} rowProps={rowProps} />
+          )}
         </View>
       )}
 
