@@ -12174,7 +12174,7 @@ registry.registerPath({
   summary: 'Record one app usage batch (session + feature visits) from a staff phone or browser',
   description: 'Session cookie or mobile Bearer JWT. Masters, view-as and support sessions answer recorded:false and write nothing. Times are clamped to the server clock; ids are client-minted so a re-send upserts.',
   security: [{ CookieAuth: [] }],
-  request: { body: { content: { 'application/json': { schema: usageEventsSchema.openapi('UsageEventsBatch') } } } },
+  request: { body: { content: { 'application/json': { schema: usageEventsSchema } } } },
   responses: {
     200: { description: '{ recorded: true, visits } or { recorded: false, reason }' },
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
