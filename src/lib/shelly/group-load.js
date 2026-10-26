@@ -63,3 +63,7 @@ export function publicGroup(group) {
   const { last_applied: _lastApplied, ...rest } = group
   return rest
 }
+
+// The 409 copy for a name another group at the studio already holds (any
+// case). One string for create and rename, and for the raw 23505.
+export const NAME_TAKEN = 'A group with that name already exists here'
