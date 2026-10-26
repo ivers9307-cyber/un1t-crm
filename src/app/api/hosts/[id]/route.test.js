@@ -15,7 +15,7 @@ vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/hosts', async (orig) => ({ ...(await orig()), loadHostForOrg: vi.fn() }))
 
-import { PATCH } from './route.js'
+import { PATCH, DELETE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { loadHostForOrg } from '@/lib/hosts'
@@ -146,5 +146,52 @@ describe('PATCH /api/hosts/[id] — postmark_stream_id', () => {
     expect(res.status).toBe(400)
     const json = await res.json()
     expect(json.issues?.[0]?.message).toBe('No fields to update')
+  })
+})
+
+// HOST-EMAILS.2 — a host that has sent email is kept: mig 593b's trigger
+// refuses to delete a sent campaign, and host_campaigns cascades from the host.
+describe('DELETE /api/hosts/[id] — a host with sent email is kept', () => {
+  const del = () => DELETE(new Request(`http://localhost/api/hosts/${HOST_ID}`, { method: 'DELETE' }), props)
+  const route = ({ sent = 0, countError = null, deleteError = null } = {}) => (state) => {
+    if (state.table === 'host_campaigns') return { count: sent, error: countError }
+    if (state.table === 'event_hosts' && op(state, 'delete')) return { error: deleteError }
+    return {}
+  }
+
+  it('409s, and deletes nothing, when any campaign is past scheduled', async () => {
+    const { db, statements } = makeDb(route({ sent: 2 }))
+    createServerClient.mockReturnValue(db)
+    const res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/has sent emails/)
+    expect(statements.some((s) => s.table === 'event_hosts' && op(s, 'delete'))).toBe(false)
+    const read = statements.find((s) => s.table === 'host_campaigns')
+    expect(op(read, 'eq').args).toEqual(['host_id', HOST_ID])
+    expect(op(read, 'not').args).toEqual(['status', 'in', '(draft,scheduled)'])
+  })
+
+  it('deletes a host whose campaigns are all drafts or scheduled', async () => {
+    const { db, statements } = makeDb(route({ sent: 0 }))
+    createServerClient.mockReturnValue(db)
+    const res = await del()
+    expect(res.status).toBe(200)
+    expect(statements.some((s) => s.table === 'event_hosts' && op(s, 'delete'))).toBe(true)
+  })
+
+  it('maps the trigger refusal (a send started after the read) to the same 409', async () => {
+    const { db } = makeDb(route({ deleteError: { code: '23514', message: 'Host campaign x is sending and cannot be deleted.' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/has sent emails/)
+  })
+
+  it('500s when the campaign read fails, rather than guessing', async () => {
+    const { db, statements } = makeDb(route({ countError: { message: 'down' } }))
+    createServerClient.mockReturnValue(db)
+    const res = await del()
+    expect(res.status).toBe(500)
+    expect(statements.some((s) => s.table === 'event_hosts' && op(s, 'delete'))).toBe(false)
   })
 })

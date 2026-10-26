@@ -300,10 +300,17 @@ describe('the shipped allowlist files', () => {
   // version). Both were checked against a source-mapped `expo export`: the
   // shipped bundle contains neither, nor any module that imports them
   // (micromatch/fast-glob/chokidar/tailwindcss, @expo/code-signing-certificates).
+  // DEPAUDIT.7 (2026-10-25) dropped the braces accept: the gate reported it
+  // stale (braces no longer high/critical).
+  //
+  // DEPAUDIT.7 added zod (GHSA-mrhx-c7xc-m3w5) for the copy nested under
+  // expo > @expo/cli only, which pins zod ^3 (no patched 3.x exists) and uses
+  // it for `expo start`'s dev-tools schemas; a source-mapped `expo export`
+  // holds no module from that copy (the app's own zod is 4.6.7, patched).
   //
   // Exact-match on sorted ids, so ANY additional accept — or a swap to a
   // different id — still fails here and forces a reviewed decision.
-  it('mobile accepts exactly the image-size, build-time brace-expansion, braces and node-forge advisories', () => {
+  it('mobile accepts exactly the image-size, build-time brace-expansion, node-forge and dev-server zod advisories', () => {
     const ids = load('../mobile/.audit-allowlist.json')
       .accepted.map((e) => e.id)
       .sort()
@@ -311,8 +318,8 @@ describe('the shipped allowlist files', () => {
       'GHSA-5p2g-fcmc-qvqq', // image-size
       'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.5)
       'GHSA-86w9-cpqp-85rv', // node-forge (DEPAUDIT.6)
+      'GHSA-mrhx-c7xc-m3w5', // zod under @expo/cli (DEPAUDIT.7)
       'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.5)
-      'GHSA-vfj7-8cjw-p6xm', // braces (DEPAUDIT.6)
       'GHSA-w3rx-r6r6-pgpr', // image-size
     ])
   })
@@ -331,11 +338,12 @@ describe('mobile linkify-it override', () => {
     expect(pkg.overrides?.['linkify-it']).toBe('^5.0.2')
   })
 
-  it('does NOT reach for 6.x, which would break markdown-it@10 at runtime', () => {
+  it('does NOT reach for 6.x, which would break markdown-it at runtime', () => {
     // linkify-it 6 switched to named exports (`exports.LinkifyIt = …`).
-    // markdown-it@10 does `var LinkifyIt = require('linkify-it'); new LinkifyIt()`,
-    // so 6.x throws "LinkifyIt is not a constructor" when MarkdownIt is
-    // constructed — i.e. the contracts screen white-screens on mount.
+    // markdown-it (10 before DEPAUDIT.7, 14 since) consumes the DEFAULT export
+    // (`require('linkify-it')` / `import LinkifyIt from 'linkify-it'`) and
+    // calls `new LinkifyIt()`, so 6.x throws "LinkifyIt is not a constructor"
+    // when MarkdownIt is constructed — the contracts screen white-screens on mount.
     // 5.0.2 still does `module.exports = LinkifyIt`, which is why it is safe.
     expect(pkg.overrides['linkify-it']).not.toMatch(/\^?6\./)
   })
@@ -352,6 +360,37 @@ describe('mobile linkify-it override', () => {
       expect(v, 'a linkify-it in the vulnerable range survived the override').not.toMatch(
         /^([0-4]\.|5\.0\.[01]$)/,
       )
+    }
+  })
+})
+
+// DEPAUDIT.7: react-native-markdown-display@7.0.2 (its latest) pins markdown-it
+// ^10.0.0 and builds `MarkdownIt({ typographer: true })`, which runs the
+// smartquotes rule GHSA-r7fv-28h4-cvq7 makes quadratic (fixed in 14.3.2). The
+// override is the fix; assert it here for the same reason as linkify-it's.
+describe('mobile markdown-it override', () => {
+  const pkg = JSON.parse(
+    readFileSync(new URL('../mobile/package.json', import.meta.url), 'utf8'),
+  )
+
+  it('pins markdown-it to the patched 14.x line', () => {
+    // Not 15.x: react-native-markdown-display was checked against 14 only
+    // (same AST for a contract-shaped fixture, and Metro bundles index.mjs).
+    expect(pkg.overrides?.['markdown-it']).toBe('^14.3.2')
+  })
+
+  it('leaves no vulnerable markdown-it in the lockfile', () => {
+    const lock = JSON.parse(
+      readFileSync(new URL('../mobile/package-lock.json', import.meta.url), 'utf8'),
+    )
+    const versions = Object.entries(lock.packages || {})
+      .filter(([path]) => path.endsWith('node_modules/markdown-it'))
+      .map(([, v]) => v.version)
+    expect(versions.length).toBeGreaterThan(0)
+    for (const v of versions) {
+      const [major, minor, patch] = v.split('.').map(Number)
+      const patched = major === 14 && (minor > 3 || (minor === 3 && patch >= 2))
+      expect(patched, `markdown-it ${v} is in the vulnerable range`).toBe(true)
     }
   })
 })

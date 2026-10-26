@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES,
   listMoveTargets, moveRegistration, readRegistrationForMove, entryLeadEmail, checkMove,
@@ -10,6 +10,18 @@ const sendMovedEmail = vi.hoisted(() => vi.fn(async () => { throw new Error('pos
 vi.mock('./race-confirmations', () => ({ sendRegistrationMovedEmail: sendMovedEmail }))
 const syncHostList = vi.hoisted(() => vi.fn(async () => ({})))
 vi.mock('./host-contact-list', () => ({ addEventAttendeesToHostList: syncHostList }))
+
+// The fixtures' target events are dated 2026-10-25 and a past target is
+// target_unavailable, so on the real clock the whole file broke at midnight
+// on 26 Oct. Pin Date (only Date: no timer is faked) to the instant the
+// unpaid-hold test below already uses.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-10-24T12:00:00Z'))
+})
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('entryLabel', () => {
   it('names a team of two or more by the team name', () => {

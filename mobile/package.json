@@ -67,6 +67,7 @@
   },
   "overrides": {
     "linkify-it": "^5.0.2",
+    "markdown-it": "^14.3.2",
     "@xmldom/xmldom": "^0.8.15"
   }
 }

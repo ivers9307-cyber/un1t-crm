@@ -33,7 +33,7 @@
 // DEFAULT IS A DRY RUN — the admin route only writes on an explicit ?dry=0.
 
 import { listOutboundMessages, getOutboundMessageDetails, listBounces } from './postmark-messages.js'
-import { bounceTypeFrom } from './host-campaign-outcome.js'
+import { bounceTypeFrom, clickUrlForStorage, clickInstant } from './host-campaign-outcome.js'
 import { logError, logWarn } from './log.js'
 
 const PAGE = 500
@@ -147,17 +147,42 @@ export function foldMessageEvents(events, bounce = null) {
 }
 
 /**
+ * HOST-EMAILS.2 — the message's clicks, one per LinkClicked event that
+ * carries a link (Postmark's details timeline puts it in Details.Link).
+ * Pure. Order preserved.
+ * @returns {Array<{url: string, at: string}>}
+ */
+export function foldClickEvents(events) {
+  if (!Array.isArray(events)) return []
+  const out = []
+  for (const e of events) {
+    if (e?.Type !== 'LinkClicked') continue
+    const url = e?.Details?.Link
+    if (typeof url !== 'string' || !url) continue
+    // Same keys the webhook writes: no unsubscribe token, millisecond instant.
+    const at = clickInstant(e.ReceivedAt)
+    if (!at) continue
+    out.push({ url: clickUrlForStorage(url), at })
+  }
+  return out
+}
+
+/**
  * Backfill Postmark delivery/open/click/bounce/unsubscribe events onto one
  * host's host_campaign_sends rows.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
  * @param {{hostId: string, dry?: boolean, fromDate?: string, toDate?: string, sleep?: (ms:number)=>Promise<void>}} opts
- * @returns {Promise<{dry: boolean, scanned: number, matched: number, stamped: number, updated: number, skipped: number, errors: Array<object>}>}
+ * @returns {Promise<{dry: boolean, scanned: number, matched: number, stamped: number, updated: number, skipped: number, clicks_seen: number, clicks_written: number, errors: Array<object>}>}
  *   Never throws — a list/campaign-load failure is collected in `errors` and
- *   the summary returned so far.
+ *   the summary returned so far. `clicks_seen` counts LinkClicked events
+ *   observed in Postmark's timeline; `clicks_written` counts rows the upsert
+ *   actually inserted (from `.select('id')` — `ignoreDuplicates` returns
+ *   nothing for a skipped row), so a re-run against already-folded messages
+ *   reports clicks_seen > 0 but clicks_written: 0 rather than looking live.
  */
 export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromDate, toDate, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
-  const summary = { dry, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, errors: [] }
+  const summary = { dry, scanned: 0, matched: 0, stamped: 0, updated: 0, skipped: 0, clicks_seen: 0, clicks_written: 0, errors: [] }
 
   // 1. Which campaigns belong to this host — scopes every message match
   // below so a stray Metadata collision can never touch another host's rows.
@@ -273,12 +298,25 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
       }
 
       // Nothing left to learn: every timestamp column this backfill can set
-      // is already set, so no patch derived from the details call could
-      // ever change this row. Skip the (rate-limited) details call outright.
-      const nothingLeftToLearn =
+      // is already set, so no patch derived from the details call could ever
+      // change this row. Skip the (rate-limited) details call outright.
+      // HOST-EMAILS.2: a fully stamped row has clicked_at, so it also has
+      // click rows to collect, and it is skipped only once some are stored
+      // (the webhook or an earlier run wrote them). One cheap read, made only
+      // for these rare fully stamped rows; a failed read is not a reason to
+      // skip, so it falls through to the details call. The unique index on
+      // host_campaign_clicks keeps a re-fold idempotent either way.
+      const fullyStamped =
         row.postmark_message_id && row.delivered_at && row.opened_at && row.clicked_at &&
         (row.bounced_at || row.complained_at || row.unsubscribed_at)
-      if (nothingLeftToLearn) continue
+      if (fullyStamped) {
+        const { data: storedClicks, error: storedErr } = await db
+          .from('host_campaign_clicks')
+          .select('id')
+          .eq('send_id', row.id)
+          .limit(1)
+        if (!storedErr && storedClicks?.length) continue
+      }
 
       const { details, error: detailsError } = await getOutboundMessageDetails(message.MessageID)
       if (detailsError) {
@@ -288,41 +326,66 @@ export async function backfillHostCampaignEvents(db, { hostId, dry = true, fromD
       }
 
       const patch = foldMessageEvents(details?.MessageEvents, bounceByMessage.get(message.MessageID) ?? null)
-      if (Object.keys(patch).length === 0) {
+      const clicks = foldClickEvents(details?.MessageEvents)
+      if (Object.keys(patch).length === 0 && clicks.length === 0) {
         await sleep(PAUSE_MS)
         continue
       }
 
-      if (dry) {
-        if (wouldChangeRow(row, patch)) {
-          summary.updated += 1
-          applyGuardedPatch(row, patch) // so a resend within this run isn't double-counted
-        }
-      } else {
-        let anyWritten = false
-        for (const [k, v] of Object.entries(patch)) {
-          if (k === 'open_count' || k === 'click_count') {
-            if (row[k] > 0) continue // already counted — never re-count
+      if (Object.keys(patch).length > 0) {
+        if (dry) {
+          if (wouldChangeRow(row, patch)) {
+            summary.updated += 1
+            applyGuardedPatch(row, patch) // so a resend within this run isn't double-counted
+          }
+        } else {
+          let anyWritten = false
+          for (const [k, v] of Object.entries(patch)) {
+            if (k === 'open_count' || k === 'click_count') {
+              if (row[k] > 0) continue // already counted — never re-count
+              const { data, error: writeErr } = await db
+                .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).eq(k, 0).select('id')
+              if (writeErr) {
+                logWarn('host-campaign-backfill', `failed to write ${k}`, { row_id: row.id, error: writeErr })
+                summary.errors.push({ message_id: message.MessageID, error: writeErr })
+                continue
+              }
+              if (data?.length) { row[k] = v; anyWritten = true }
+              continue
+            }
             const { data, error: writeErr } = await db
-              .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).eq(k, 0).select('id')
+              .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).is(k, null).select('id')
             if (writeErr) {
               logWarn('host-campaign-backfill', `failed to write ${k}`, { row_id: row.id, error: writeErr })
               summary.errors.push({ message_id: message.MessageID, error: writeErr })
               continue
             }
             if (data?.length) { row[k] = v; anyWritten = true }
-            continue
           }
-          const { data, error: writeErr } = await db
-            .from('host_campaign_sends').update({ [k]: v }).eq('id', row.id).is(k, null).select('id')
-          if (writeErr) {
-            logWarn('host-campaign-backfill', `failed to write ${k}`, { row_id: row.id, error: writeErr })
-            summary.errors.push({ message_id: message.MessageID, error: writeErr })
-            continue
-          }
-          if (data?.length) { row[k] = v; anyWritten = true }
+          if (anyWritten) summary.updated += 1
         }
-        if (anyWritten) summary.updated += 1
+      }
+
+      // HOST-EMAILS.2 — one row per click for the report's link breakdown.
+      // Best effort: a failed insert is logged as an error but does not
+      // abort the run.
+      if (clicks.length) {
+        summary.clicks_seen += clicks.length
+        if (!dry) {
+          const { data: clickRows, error: clickErr } = await db
+            .from('host_campaign_clicks')
+            .upsert(clicks.map((c) => ({
+              host_id: hostId, campaign_id: row.campaign_id, send_id: row.id, contact_id: row.contact_id,
+              url: c.url, clicked_at: c.at, postmark_message_id: message.MessageID,
+            })), { onConflict: 'send_id,url,clicked_at', ignoreDuplicates: true })
+            .select('id')
+          if (clickErr) {
+            logWarn('host-campaign-backfill', 'failed to write click rows', { row_id: row.id, error: clickErr })
+            summary.errors.push({ message_id: message.MessageID, error: clickErr })
+          } else {
+            summary.clicks_written += clickRows?.length ?? 0
+          }
+        }
       }
 
       await sleep(PAUSE_MS)
