@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   normaliseShellyHost, fingerprintAuthKey, redactSecret,
   classifyV2, classifyV1, parseGroupsResult, createShellyClient,
-  MIN_GAP_MS, RETRY_429_AFTER_MS, MAX_GET_IDS,
+  MIN_GAP_MS, RETRY_429_AFTER_MS, MAX_GET_IDS, SHELLY_PERMANENT_CODES,
 } from './client'
 import * as shellyClient from './client'
 
@@ -408,6 +408,93 @@ describe('createShellyClient', () => {
     const c2 = createShellyClient(conn, { fetchImpl: retry.fetchImpl, ...clockAndSleep() })
     expect(await c2.deviceList()).toMatchObject({ ok: true, retried: true })
     expect(retry.calls).toHaveLength(2)
+  })
+})
+
+// SHELLYERR.1 — the documented error shape. Communication v2.0-beta answers a
+// single-device command failure with a NON-2xx status and an `{ error }` body
+// (400 DEVICE_OFFLINE / DEVICE_INVALID_CHANNEL / BAD_REQUEST, 404
+// DEVICE_NOT_FOUND / INSTANCE_NOT_FOUND, 500 UNEXPECTED_SUBSERVICE_ERROR).
+// The 2xx-with-error shape above stays covered: prod has never logged which
+// one it actually sends, so both must classify the same way.
+describe('SHELLYERR.1 — non-2xx error bodies', () => {
+  const err = (status, error) => ({ status, body: JSON.stringify({ error, data: { messages: ['x'] } }) })
+
+  it('setSwitch: a 400 DEVICE_OFFLINE is a device failure with its code, not an anonymous http one', async () => {
+    const { fetchImpl } = fetchStub([err(400, 'DEVICE_OFFLINE')])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const res = await c.setSwitch('a8032abe41fc', 0, true)
+    expect(res).toMatchObject({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 400, permanent: false })
+    expect(res.body).toBeUndefined()
+  })
+
+  it('setSwitch: the codes retrying cannot fix are flagged permanent, at any status', async () => {
+    for (const [status, code] of [[400, 'DEVICE_INVALID_CHANNEL'], [400, 'DEVICE_INVALID_MODE'], [400, 'BAD_REQUEST'], [404, 'DEVICE_NOT_FOUND'], [200, 'DEVICE_INVALID_CHANNEL']]) {
+      const { fetchImpl } = fetchStub([err(status, code)])
+      const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+      expect(await c.setSwitch('a', 0, true)).toMatchObject({ ok: false, kind: 'device', code, statusCode: status, permanent: true })
+    }
+  })
+
+  it('setSwitch: a Shelly-side failure is the cloud, not the plug — http with its code, never permanent', async () => {
+    for (const [status, code] of [[404, 'INSTANCE_NOT_FOUND'], [500, 'UNEXPECTED_SUBSERVICE_ERROR'], [200, 'UNEXPECTED_SUBSERVICE_ERROR']]) {
+      const { fetchImpl } = fetchStub([err(status, code)])
+      const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+      expect(await c.setSwitch('a', 0, true)).toMatchObject({ ok: false, kind: 'http', code, statusCode: status, permanent: false })
+    }
+  })
+
+  it('setSwitch: a non-2xx with no readable error stays a plain http failure', async () => {
+    for (const r of [{ status: 502, body: '<html>bad gateway</html>' }, { status: 400, body: JSON.stringify({ error: 42 }) }, { status: 500, body: '' }]) {
+      const { fetchImpl } = fetchStub([r])
+      const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+      const res = await c.setSwitch('a', 0, true)
+      expect(res).toMatchObject({ ok: false, kind: 'http', statusCode: r.status })
+      expect(res.code).toBeUndefined()
+    }
+  })
+
+  it('setSwitch: auth and rate limiting keep their own tags even when a body carries an error', async () => {
+    const a = fetchStub([err(401, 'UNAUTHORIZED')])
+    expect(await createShellyClient(conn, { fetchImpl: a.fetchImpl, ...clockAndSleep() }).setSwitch('a', 0, true))
+      .toMatchObject({ ok: false, kind: 'auth' })
+    const r = fetchStub([err(429, 'TOO_MANY'), err(429, 'TOO_MANY')])
+    expect(await createShellyClient(conn, { fetchImpl: r.fetchImpl, ...clockAndSleep() }).setSwitch('a', 0, true))
+      .toMatchObject({ ok: false, kind: 'rate_limited', retried: true })
+  })
+
+  it('setSwitch: a 429 then a 400 keeps the retried flag on the rewritten device failure', async () => {
+    const { fetchImpl } = fetchStub([{ status: 429, body: '' }, err(400, 'DEVICE_OFFLINE')])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    expect(await c.setSwitch('a', 0, true)).toMatchObject({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', retried: true })
+  })
+
+  it('setGroups: a group-level 400 fails the whole batch with its code and no failed map', async () => {
+    const { fetchImpl } = fetchStub([err(400, 'BAD_REQUEST')])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const res = await c.setGroups(['a_0', 'b_0'], true)
+    expect(res).toMatchObject({ ok: false, kind: 'device', code: 'BAD_REQUEST', statusCode: 400, permanent: true })
+    expect(res.failed).toBeUndefined()
+  })
+
+  it('get: a non-2xx error body keeps kind http (the read-path vocabulary) but carries the code', async () => {
+    const { fetchImpl } = fetchStub([err(500, 'UNEXPECTED_SUBSERVICE_ERROR')])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const res = await c.get(['a'])
+    expect(res).toMatchObject({ ok: false, kind: 'http', code: 'UNEXPECTED_SUBSERVICE_ERROR', statusCode: 500 })
+  })
+
+  it('an error code from a body is truncated before it can ride into a log line', async () => {
+    const { fetchImpl } = fetchStub([err(400, 'X'.repeat(500))])
+    const c = createShellyClient(conn, { fetchImpl, ...clockAndSleep() })
+    const res = await c.setSwitch('a', 0, true)
+    expect(res.code).toHaveLength(64)
+  })
+
+  it('the permanent list is exactly the codes retrying cannot fix', () => {
+    expect([...SHELLY_PERMANENT_CODES].sort()).toEqual(
+      ['BAD_REQUEST', 'DEVICE_INVALID_CHANNEL', 'DEVICE_INVALID_MODE', 'DEVICE_NOT_FOUND', 'DEVICE_UNSUPPORTED_COMMAND'],
+    )
   })
 })
 

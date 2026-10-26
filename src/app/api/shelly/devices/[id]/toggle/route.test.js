@@ -292,6 +292,28 @@ describe('POST …/toggle — when the command does not land', () => {
     expect(body.device.override).toMatchObject({ state: 'on' })
   })
 
+  // SHELLYERR.1 — the DOCUMENTED offline shape is a 400; the client now tags it
+  // 'device' exactly like the 2xx one, so the operator gets the same sentence.
+  it('a documented 400 DEVICE_OFFLINE reads as offline, not as the cloud not answering', async () => {
+    useCloud({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 400, permanent: false })
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ applied: false, pending: true, code: 'pending', kind: 'device' })
+    expect(body.message).toMatch(/back online/i)
+  })
+
+  it('a code waiting cannot fix is never promised to follow "when it is back online"', async () => {
+    useCloud({ ok: false, kind: 'device', code: 'DEVICE_INVALID_CHANNEL', statusCode: 400, permanent: true })
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, applied: false, pending: true, code: 'device_refused', kind: 'device', shelly_code: 'DEVICE_INVALID_CHANNEL' })
+    expect(body.message).toContain('DEVICE_INVALID_CHANNEL')
+    expect(body.message).not.toMatch(/back online|within a minute/i)
+    // The intent is still saved — the cron keeps trying, and a fix in the
+    // Shelly app (re-pairing the plug) lets it land.
+    expect(rowA().override).toMatchObject({ state: 'on' })
+  })
+
   it('a rate limit is a 429 — and still pending', async () => {
     useCloud({ ok: false, kind: 'rate_limited', statusCode: 429 })
     const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))

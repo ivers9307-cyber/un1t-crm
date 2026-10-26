@@ -132,6 +132,55 @@ export function parseGroupsResult(body) {
 // different tag, so "did this cost two requests" survives the rewrite.
 const withRetried = (out, res) => (res && res.retried ? { ...out, retried: true } : out)
 
+// SHELLYERR.1 — Shelly's error vocabulary, from Communication v2.0-beta.
+//
+// THE DOCUMENTED SHAPE IS NON-2xx. A single-device command failure answers
+// 400 DEVICE_OFFLINE / DEVICE_INVALID_CHANNEL / BAD_REQUEST …, 404
+// DEVICE_NOT_FOUND / INSTANCE_NOT_FOUND or 500 UNEXPECTED_SUBSERVICE_ERROR,
+// each with an `{ error }` body. Until SHELLYERR.1 this file read `error` only
+// on a 2xx, so the documented shape arrived as an anonymous `kind:'http'`: an
+// offline plug told the operator "Shelly cloud is not answering", and its code
+// never reached a log line. Prod has never recorded which shape it really
+// sends (no failure has been logged with a status), so BOTH are read the same.
+//
+// PERMANENT means waiting cannot fix it: the request itself is wrong for this
+// device. The cron still re-plans it every tick (an unstamped command is
+// retried by design), so the flag is for what the operator is TOLD — never
+// "it will follow when it is back online" for a plug that never will.
+export const SHELLY_PERMANENT_CODES = new Set([
+  'BAD_REQUEST', 'DEVICE_INVALID_CHANNEL', 'DEVICE_INVALID_MODE', 'DEVICE_NOT_FOUND', 'DEVICE_UNSUPPORTED_COMMAND',
+])
+// The two codes the docs pin on Shelly's own servers ("problem with the server
+// handling the device", "internal subservice failure"). They are the cloud, not
+// the plug, so they keep the cloud's tag — 'http' — and its copy.
+const SHELLY_SIDE_CODES = new Set(['INSTANCE_NOT_FOUND', 'UNEXPECTED_SUBSERVICE_ERROR'])
+// A code comes out of a response body, and callers log it; a body is never
+// logged whole, so neither is an unbounded string out of one.
+const CODE_MAX = 64
+
+function errorCodeOf(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+  return typeof body.error === 'string' ? body.error.slice(0, CODE_MAX) : null
+}
+
+// The set/ endpoints' failure rewrite, for a 2xx AND a non-2xx error body.
+// null = "not an error body; pass the result through". auth, rate_limited,
+// network and config keep their own tags whatever the body says: those are
+// facts about the key, the budget or the host, and the reconcile's brakes key
+// off them.
+function commandFailure(res) {
+  if (!res || (!res.ok && res.kind !== 'http')) return null
+  const code = errorCodeOf(res.body)
+  if (code === null) return null
+  return withRetried({
+    ok: false,
+    kind: SHELLY_SIDE_CODES.has(code) ? 'http' : 'device',
+    code,
+    statusCode: res.statusCode,
+    permanent: SHELLY_PERMANENT_CODES.has(code),
+  }, res)
+}
+
 export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep, now = Date.now, minGapMs = MIN_GAP_MS } = {}) {
   // Re-validated HERE, not just at the column CHECK. The CHECK only protects
   // rows that were persisted; probeConnection tests an operator-PASTED
@@ -257,28 +306,27 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       // Tagged 'http' rather than 'device' on purpose: the read path's
       // black-hole stop and the "Shelly unreachable (kind)" copy both key off
       // the kinds `get` can yield, and 'device' belongs to the set/ endpoints.
-      if (res.ok && res.body && typeof res.body === 'object' && !Array.isArray(res.body)
-        && typeof res.body.error === 'string') {
-        return withRetried({ ok: false, kind: 'http', code: res.body.error, statusCode: res.statusCode }, res)
+      // SHELLYERR.1: a non-2xx error body stays 'http' for the same reason,
+      // and carries its code like the 2xx one does.
+      const code = res.ok || res.kind === 'http' ? errorCodeOf(res.body) : null
+      if (code !== null) {
+        return withRetried({ ok: false, kind: 'http', code, statusCode: res.statusCode }, res)
       }
       return res
     },
     setSwitch: async (deviceId, channel, on) => {
       const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on })
-      if (res.ok && res.body && typeof res.body.error === 'string') {
-        return withRetried({ ok: false, kind: 'device', code: res.body.error, statusCode: res.statusCode }, res)
-      }
-      return res
+      return commandFailure(res) ?? res
     },
     setGroups: async (groupIds, on) => {
       const res = await call('/v2/devices/api/set/groups', { switch: { ids: groupIds, command: { on: !!on } } })
+      // Mirror setSwitch: a body carrying a top-level error fails the WHOLE
+      // batch — the docs return group-level validation and server errors as an
+      // HTTP error, not in failedCommands. Reporting it as { ok: true, failed:
+      // {} } would read as "every command landed" for a call where none did.
+      const failure = commandFailure(res)
+      if (failure) return failure
       if (!res.ok) return res
-      // Mirror setSwitch: a 2xx carrying a top-level error is a device
-      // failure. Reporting it as { ok: true, failed: {} } would read as
-      // "every command landed" for a call where none of them did.
-      if (res.body && typeof res.body.error === 'string') {
-        return withRetried({ ok: false, kind: 'device', code: res.body.error, statusCode: res.statusCode }, res)
-      }
       const parsed = parseGroupsResult(res.body)
       // An unreadable failedCommands is a failed batch, not an empty one — the
       // caller must retry rather than stamp. 'http' keeps it inside the kinds
