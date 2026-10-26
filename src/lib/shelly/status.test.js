@@ -618,3 +618,48 @@ describe('light components (SHELLYLIGHT.1)', () => {
     expect(stateChanged(a, { ...a })).toBe(false)
   })
 })
+
+// SHELLYTIMERS.4 — the device's own running timer, read into last_state so the
+// live check can see a safety cap reached the plug.
+describe('timer_until (SHELLYTIMERS.4)', () => {
+  const STARTED = Date.parse('2026-07-06T10:00:00.000Z') / 1000
+  const withTimer = (sw) => ({ ...plugS, status: { 'switch:0': { ...plugS.status['switch:0'], ...sw } } })
+
+  it('a running timer lands as timer_until = started + duration (ISO)', () => {
+    const r = normaliseGetItems([withTimer({ timer_started_at: STARTED + 0.25, timer_duration: 5400, timer_type: 'toggle' })])[0]
+    expect(r.channels[0].timer_until).toBe('2026-07-06T11:30:00.250Z')
+    expect(stateFromReading(null, r, 0, 'T1')).toEqual({
+      online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', timer_until: '2026-07-06T11:30:00.250Z', at: 'T1',
+    })
+  })
+
+  it('a light reads it too', () => {
+    const r = normaliseGetItems([{ id: 'abcabcabcabc', gen: 2, online: 1, status: { 'light:0': { output: true, brightness: 50, timer_started_at: STARTED, timer_duration: 60 } } }])[0]
+    expect(stateFromReading(null, r, 0, 'T1', 'light').timer_until).toBe('2026-07-06T10:01:00.000Z')
+  })
+
+  it('no timer, or an unreadable one: the key is ABSENT (exact shape kept)', () => {
+    for (const sw of [{}, { timer_started_at: STARTED }, { timer_duration: 60 }, { timer_started_at: 'x', timer_duration: 60 },
+      { timer_started_at: STARTED, timer_duration: 0 }, { timer_started_at: STARTED, timer_duration: -5 }, { timer_started_at: 0, timer_duration: 60 },
+      { timer_started_at: STARTED, timer_duration: Infinity }, { timer_started_at: 1e20, timer_duration: 60 }]) {
+      const r = normaliseGetItems([withTimer(sw)])[0]
+      expect(r.channels[0]).not.toHaveProperty('timer_until')
+      expect(stateFromReading(null, r, 0, 'T1')).not.toHaveProperty('timer_until')
+    }
+  })
+
+  it('offline keeps a known timer_until; online with no timer drops it', () => {
+    const prev = { online: true, output: true, apower: 1, aenergy_wh: 1, temperature_c: 1, source: 'x', timer_until: '2026-07-06T11:30:00.000Z', at: 'T1' }
+    expect(stateFromReading(prev, normaliseGetItems([offline])[0], 0, 'T2').timer_until).toBe('2026-07-06T11:30:00.000Z')
+    expect(stateFromReading(prev, normaliseGetItems([plugS])[0], 0, 'T2')).not.toHaveProperty('timer_until')
+  })
+
+  it('stateChanged notices a timer starting, ending or moving', () => {
+    const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
+    const later = '2026-07-06T10:01:00.000Z'
+    expect(stateChanged(base, { ...base, at: later, timer_until: '2026-07-06T11:30:00.000Z' })).toBe(true)
+    expect(stateChanged({ ...base, timer_until: '2026-07-06T11:30:00.000Z' }, { ...base, at: later })).toBe(true)
+    expect(stateChanged({ ...base, timer_until: 'A' }, { ...base, at: later, timer_until: 'B' })).toBe(true)
+    expect(stateChanged({ ...base, timer_until: 'A' }, { ...base, at: later, timer_until: 'A' })).toBe(false)
+  })
+})

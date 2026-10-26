@@ -9,7 +9,7 @@
 //  3. A device LEAVING gets group_id null and nothing else, and nothing is
 //     sent to any relay.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -26,7 +26,7 @@ vi.mock('@/lib/shelly/client', async (importOriginal) => {
   return { ...actual, createShellyClient: vi.fn() }
 })
 
-import { PUT } from './route.js'
+import { PUT, LEFT_MESSAGE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createShellyClient } from '@/lib/shelly/client'
@@ -148,5 +148,27 @@ describe('PUT /api/shelly/groups/[id]/devices', () => {
   it('403s staff', async () => {
     getCurrentUser.mockResolvedValue(STAFF_A)
     expect((await PUT(putReq({ device_ids: [] }), ctxFor(GRP_A))).status).toBe(403)
+  })
+})
+
+// SHELLYTIMERS.6 — the removal answer names a leaver's pending safety timer.
+describe('PUT /api/shelly/groups/[id]/devices — leavers with a safety timer', () => {
+  const NOW = Date.parse('2026-08-23T12:00:00.000Z')
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW) })
+  afterEach(() => vi.useRealTimers())
+
+  it('a leaver the schedule switched on, with a future cap: notice with the time', async () => {
+    useDb(world())
+    dev(DEV_A3).last_applied = { key: 'w:1', action: 'on', cap_at: '2026-08-23T20:30:00.000Z' }
+    const body = await (await PUT(putReq({ device_ids: [DEV_A, DEV_A2] }), ctxFor(GRP_A))).json()
+    expect(body.left).toEqual([DEV_A3])
+    expect(body.notice).toBe(`${LEFT_MESSAGE} A light the schedule switched on still switches itself off by 21:30 (safety timer).`)
+  })
+
+  it('no notice when no leaver has a pending timer — or when only a STAYING member does', async () => {
+    useDb(world())
+    dev(DEV_A2).last_applied = { key: 'w:1', action: 'on', cap_at: '2026-08-23T20:30:00.000Z' }
+    const body = await (await PUT(putReq({ device_ids: [DEV_A, DEV_A2] }), ctxFor(GRP_A))).json()
+    expect(body).not.toHaveProperty('notice')
   })
 })

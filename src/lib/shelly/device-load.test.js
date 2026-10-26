@@ -139,7 +139,7 @@ describe('withLocationTz', () => {
   it('grafts the session location’s zone onto a connection that has no embed', () => {
     const conn = { id: 'conn-1', host: 'h', auth_key: 'k' }
     const out = withLocationTz(conn, { activeLocation: { timezone: 'America/New_York' } })
-    expect(out.locations).toEqual({ timezone: 'America/New_York' })
+    expect(out.locations).toEqual({ timezone: 'America/New_York', safety_timers: false })
     expect(out.host).toBe('h')
     expect(out.auth_key).toBe('k')
     // The input is not mutated — the caller keeps holding the row it read.
@@ -149,10 +149,17 @@ describe('withLocationTz', () => {
   it('REPLACES a stale embed rather than merging it — the session location is the authority', () => {
     const conn = { locations: { timezone: 'Australia/Sydney', name: 'Somewhere else' } }
     const out = withLocationTz(conn, { activeLocation: { timezone: 'America/New_York' } })
-    expect(out.locations).toEqual({ timezone: 'America/New_York' })
+    expect(out.locations).toEqual({ timezone: 'America/New_York', safety_timers: false })
   })
 
   it('carries a null through — the engine resolves its own default from it', () => {
-    expect(withLocationTz({}, {}).locations).toEqual({ timezone: null })
+    expect(withLocationTz({}, {}).locations).toEqual({ timezone: null, safety_timers: false })
+  })
+
+  it('grafts the safety-timer switch, true only for an explicit true (SHELLYTIMERS.5)', () => {
+    expect(withLocationTz({}, {}, { safetyTimers: true }).locations.safety_timers).toBe(true)
+    for (const v of [false, 'true', 1, null, undefined]) {
+      expect(withLocationTz({}, {}, { safetyTimers: v }).locations.safety_timers).toBe(false)
+    }
   })
 })

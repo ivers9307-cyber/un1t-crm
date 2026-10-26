@@ -164,6 +164,16 @@ export function project(row, cols) {
   const out = {}
   for (const col of splitCols(cols)) {
     const embed = col.match(/^([A-Za-z_]+)(?:!\w+)?\(/)
+    // `alias:col->a->b` (a JSON path, as the safety-timer switch reads it):
+    // the alias is the key, and the path is walked into the jsonb column.
+    const aliased = !embed && col.match(/^([A-Za-z_]+):(.+)$/)
+    if (aliased) {
+      const [base, ...path] = aliased[2].split('->').map((x) => x.trim())
+      let v = row[base]
+      for (const k of path) v = v && typeof v === 'object' ? v[k] : undefined
+      out[aliased[1]] = v === undefined ? null : v
+      continue
+    }
     const key = embed ? embed[1] : col
     out[key] = row[key] === undefined ? null : row[key]
   }

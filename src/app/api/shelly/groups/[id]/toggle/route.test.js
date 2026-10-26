@@ -475,3 +475,79 @@ describe('POST …/groups/[id]/toggle — back to schedule (ONE batch)', () => {
     expect(createShellyClient).not.toHaveBeenCalled()
   })
 })
+
+// SHELLYTIMERS.3 — the safety net on the group switch. A MANAGED group's ON
+// press arms one timer for the batch (until + 30 min); an unmanaged group and
+// every OFF press arm none; 'auto' arms by the window rule (above).
+describe('POST …/groups/[id]/toggle — the safety-net timer', () => {
+  // The studio's switch ON (SHELLYTIMERS.5); off is the default.
+  const timersOn = (w) => ({ ...w, rows: { ...w.rows, locations: [{ id: LOC_A, settings: { shelly: { safety_timers: true } } }] } })
+  beforeEach(() => { useDb(timersOn(world())) })
+
+  it('a managed ON press with the default until arms local midnight + 30 min', async () => {
+    await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+    // until 23:00Z, + 30 min = 11.5 h from 12:00Z.
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true, { toggleAfterSec: 41_400 })
+    for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied.cap_at).toBe('2026-08-23T23:30:00.000Z')
+  })
+
+  it('back to schedule inside the window arms by the window rule and stamps cap_at', async () => {
+    useDb(timersOn(world({ group: { override: { state: 'on', until: '2026-08-23T22:00:00.000Z', set_by: OWNER_ID, set_at: NOW_ISO } } })))
+    await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+    // off 21:00 IST (20:00Z) + 30 min, 8.5 h away.
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true, { toggleAfterSec: 30_600 })
+    for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied.cap_at).toBe('2026-08-23T20:30:00.000Z')
+  })
+  it('an explicit until is armed at until + 30 min, and every landed member is stamped with cap_at', async () => {
+    await POST(toggleReq({ state: 'on', until: new Date(NOW + 2 * HOUR).toISOString() }), ctxFor(GRP_A))
+    expect(setGroups).toHaveBeenCalledWith(expect.any(Object), true, { toggleAfterSec: 9000 })
+    for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied.cap_at).toBe('2026-08-23T14:30:00.000Z')
+  })
+
+  it('an OFF press sends no timer and stamps no cap_at', async () => {
+    await POST(toggleReq({ state: 'off' }), ctxFor(GRP_A))
+    expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), false])
+    for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied).not.toHaveProperty('cap_at')
+  })
+
+  for (const group of [{ enabled: false }, { enabled: true, schedule_mode: 'none', fixed_windows: [] }]) {
+    it(`an UNMANAGED group (${JSON.stringify(group)}) gets no timer — its lights stay as set until changed`, async () => {
+      useDb(timersOn(world({ group })))
+      const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))).json()
+      expect(body.holds_until_changed).toBe(true)
+      expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), true])
+      for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied).not.toHaveProperty('cap_at')
+    })
+  }
+
+  it('a member in failedCommands is not stamped, cap_at included', async () => {
+    useCloud({ ok: true, statusCode: 200, failed: { aabbcc000002_1: 'DEVICE_OFFLINE' } })
+    await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+    expect(dev(DEV_A).last_applied.cap_at).toBe('2026-08-23T23:30:00.000Z')
+    expect(dev(DEV_A2).last_applied).toBeNull()
+  })
+
+  it('back to schedule OUTSIDE every window is an off with no timer', async () => {
+    useDb(timersOn(world({ group: { fixed_windows: [{ days: [7], on: '18:00', off: '21:00' }] } })))
+    await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+    expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), false])
+    expect(dev(DEV_A).last_applied).not.toHaveProperty('cap_at')
+  })
+})
+
+// SHELLYTIMERS.5 — the switch OFF (the default): no toggle_after, no cap_at,
+// on a press or on back-to-schedule.
+describe('POST …/groups/[id]/toggle — safety timers switched off', () => {
+  for (const settings of [null, { shelly: { safety_timers: false } }, { shelly: { safety_timers: 'true' } }]) {
+    it(`settings ${JSON.stringify(settings)}: a press and back-to-schedule go out unarmed`, async () => {
+      const w = world()
+      useDb({ ...w, rows: { ...w.rows, locations: [{ id: LOC_A, settings }] } })
+      await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+      expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), true])
+      for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied).not.toHaveProperty('cap_at')
+      await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+      expect(setGroups.mock.calls[1]).toEqual([expect.any(Object), true])
+      for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied).not.toHaveProperty('cap_at')
+    })
+  }
+})

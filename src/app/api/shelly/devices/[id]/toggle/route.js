@@ -56,6 +56,21 @@
 // with 409 group_unavailable before the override is touched (running the
 // device on its own, cleared schedule would force the relay off).
 //
+// THE SAFETY NET (SHELLYTIMERS.3), only while the studio's switch
+// `locations.settings.shelly.safety_timers` is true (SHELLYTIMERS.5; off by
+// default, and off means every command is exactly what it was before timers).
+// A press ON for a MANAGED device carries a
+// device-side timer — `toggle_after` up to `until` + SAFETY_MARGIN_MS, the
+// planner's rule for an `on` override, so the cron reads the stamp's cap_at as
+// already armed — and the stamp records `cap_at`. The relay then switches
+// itself off even if this CRM never gets to close it. Never on:
+//   • an UNMANAGED device (and a member whose group could not be read, which
+//     we cannot show is managed): the copy promises it "stays as you set it
+//     until you change it", and a timer would break that promise (ruling).
+//   • an OFF press: a timer flips to the opposite of `on`, so it would switch
+//     the room back ON at expiry, fighting the schedule.
+// 'auto' goes through runNowForDevice, which arms by the window rule.
+//
 // TIMEZONE. `until` defaults to the LOCATION's next local midnight, and the
 // engine that later expires it resolves the zone from `conn.locations`, which
 // loadConnectionWithKey does not select — see withLocationTz in
@@ -67,11 +82,12 @@ import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { loadSafetyTimers } from '@/lib/shelly/safety-timers'
 import { loadDevice, DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { effectiveTarget } from '@/lib/shelly/effective'
 import { loadDeviceGroup } from '@/lib/shelly/group-load'
-import { overrideKey } from '@/lib/shelly/plan'
-import { runNowForDevice, deviceKind } from '@/lib/shelly/reconcile'
+import { overrideKey, safetyCap, isManagedTarget, SAFETY_MARGIN_MS } from '@/lib/shelly/plan'
+import { runNowForDevice, deviceKind, appliedStamp } from '@/lib/shelly/reconcile'
 import { ShellyToggleBody, ShellyOverride, MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import { optimisticState } from '@/lib/shelly/optimistic-state'
 import { nextLocalMidnightMs } from '@/lib/location-time'
@@ -137,8 +153,11 @@ export const POST = withAuth(
       logError(MODULE, 'connection read failed', { locationId, reason: conn.reason, error: conn.error })
       return bad('Could not read the Shelly connection', 500)
     }
-    // The engine reads the zone off `locations` — graft the session's.
-    const engineConn = withLocationTz(conn.connection, user)
+    // The engine reads the zone off `locations` — graft the session's — and,
+    // beside it, the studio's safety-timer switch (SHELLYTIMERS.5: off by
+    // default; read server-side as one json path, never shipped anywhere).
+    const safetyTimers = await loadSafetyTimers(db, locationId)
+    const engineConn = withLocationTz(conn.connection, user, { safetyTimers })
 
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
@@ -287,6 +306,9 @@ export const POST = withAuth(
     // "unmanaged" — joining cleared them — which is evidence we do not have.
     // A manual switch is not worth refusing over a banner flag.
     const unmanaged = grouped.ok && (!target.enabled || target.schedule_mode === 'none')
+    // The other side of that judgement, for the timer: only a target we KNOW
+    // is managed is armed (see THE SAFETY NET in the header).
+    const managed = grouped.ok && isManagedTarget(target)
     const tz = requestTz(user)
     const untilMs = input.until ? Date.parse(input.until) : nextLocalMidnightMs(nowMs, tz)
     if (!Number.isFinite(untilMs)) {
@@ -343,10 +365,12 @@ export const POST = withAuth(
     // would name a component the device does not have (SHELLYLIGHT.3).
     // Three 429 retries (1.1 s, 2.2 s, 3.3 s): a press that lands on the
     // cron's read rides it out instead of answering "busy". SHELLYBUSY.1.
+    const cap = on && managed && safetyTimers ? safetyCap(untilMs + SAFETY_MARGIN_MS, nowMs) : null
+    const timer = cap ? [{ toggleAfterSec: cap.toggleAfterSec }] : []
     const shelly = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
     const res = deviceKind(device) === 'light'
-      ? await shelly.setLight(device.device_id, device.channel, on)
-      : await shelly.setSwitch(device.device_id, device.channel, on)
+      ? await shelly.setLight(device.device_id, device.channel, on, ...timer)
+      : await shelly.setSwitch(device.device_id, device.channel, on, ...timer)
     if (!res.ok) {
       if (res.kind === 'auth') await markKeyRejected(db, locationId)
       else {
@@ -383,7 +407,8 @@ export const POST = withAuth(
       .update({
         // The SAME key the planner would have minted, so the next tick reads
         // this override as already applied and does not re-issue it.
-        last_applied: { key: overrideKey(override), action: input.state, reason: 'override', at: nowIso },
+        // cap_at only when the command carried a timer (appliedStamp).
+        last_applied: appliedStamp({ key: overrideKey(override), action: input.state, reason: 'override', capAt: cap?.capAt }, nowIso),
         last_state: optimisticState(device.last_state, device.channel, on, nowIso, deviceKind(device)),
         last_seen_at: nowIso,
         updated_at: nowIso,

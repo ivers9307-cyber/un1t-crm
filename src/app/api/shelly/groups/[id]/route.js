@@ -21,11 +21,13 @@
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { logError } from '@/lib/log'
+import { logError, logWarn } from '@/lib/log'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { GROUP_COLUMNS } from '@/lib/shelly/effective'
 import { loadGroup, publicGroup, NAME_TAKEN } from '@/lib/shelly/group-load'
-import { ShellyGroupPatch, ShellyClassRule } from '@/lib/shelly/schemas'
+import { ShellyGroupPatch, ShellyClassRule, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
+import { requestTz } from '@/lib/shelly/device-load'
+import { withSafetyTimerNotice } from '@/lib/shelly/safety-notice'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,9 +44,26 @@ const notFound = () => bad('Not found', 404)
 
 const managed = (g) => !!g?.enabled && g.schedule_mode !== 'none'
 
+// SHELLYTIMERS.6 — "stay as they are" holds only until a member's safety timer
+// (cap_at / timer_until). The members' stamps are read for the notice alone:
+// a failed read costs the extra sentence, never the request (logged, ids only).
+async function membersForNotice(db, locationId, groupId) {
+  const { data, error } = await db
+    .from('shelly_devices')
+    .select('id, last_applied, last_state')
+    .eq('location_id', locationId)
+    .eq('group_id', groupId)
+    .limit(MAX_DEVICES_PER_LOCATION + 1)
+  if (error) {
+    logWarn(MODULE, 'member read for the safety-timer notice failed', { locationId, groupId, error: error.message })
+    return []
+  }
+  return data || []
+}
+
 export const PATCH = withAuth(
   { permission: 'device_control', schema: ShellyGroupPatch },
-  async ({ db, locationId, input, params }) => {
+  async ({ user, db, locationId, input, params }) => {
     const loaded = await loadGroup(db, locationId, params?.id)
     if (!loaded.ok) {
       if (loaded.status === 404) return notFound()
@@ -102,21 +121,26 @@ export const PATCH = withAuth(
     if (!row) return notFound()
 
     const disabled = managed(group) && !managed(row)
+    const notice = disabled
+      ? withSafetyTimerNotice(GROUP_DISABLE_NOTICE, await membersForNotice(db, locationId, group.id), Date.now(), requestTz(user))
+      : null
     return NextResponse.json({
       success: true,
       group: publicGroup(row),
-      ...(disabled ? { notice: GROUP_DISABLE_NOTICE } : {}),
+      ...(disabled ? { notice } : {}),
     })
   },
 )
 
-export const DELETE = withAuth({ permission: 'device_control' }, async ({ db, locationId, params }) => {
+export const DELETE = withAuth({ permission: 'device_control' }, async ({ user, db, locationId, params }) => {
   const loaded = await loadGroup(db, locationId, params?.id)
   if (!loaded.ok) {
     if (loaded.status === 404) return notFound()
     logError(MODULE, 'group read failed', { locationId, error: loaded.error })
     return bad('Could not load this group', 500)
   }
+  // Read BEFORE the delete: the FK clears group_id the moment it lands.
+  const members = await membersForNotice(db, locationId, loaded.group.id)
   const { error } = await db
     .from('shelly_groups')
     .delete()
@@ -126,5 +150,8 @@ export const DELETE = withAuth({ permission: 'device_control' }, async ({ db, lo
     logError(MODULE, 'group delete failed', { locationId, groupId: loaded.group.id, error: error.message })
     return bad('Could not remove the group', 500)
   }
-  return NextResponse.json({ success: true, message: GROUP_DELETED_MESSAGE })
+  return NextResponse.json({
+    success: true,
+    message: withSafetyTimerNotice(GROUP_DELETED_MESSAGE, members, Date.now(), requestTz(user)),
+  })
 })

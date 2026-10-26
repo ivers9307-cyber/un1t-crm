@@ -54,6 +54,7 @@ function parseGen(raw) {
 // both land as null, never 0 (a 0 would claim "dimmed to nothing").
 function channelFromComponent(kind, n, sw) {
   const s = isObj(sw) ? sw : {}
+  const timerUntil = timerUntilOf(s)
   return {
     kind,
     channel: n,
@@ -63,7 +64,27 @@ function channelFromComponent(kind, n, sw) {
     aenergy_wh: num(s.aenergy?.total),
     temperature_c: num(s.temperature?.tC),
     source: str(s.source),
+    // Only while a timer runs: the key is ABSENT otherwise, so every row
+    // without one keeps the exact shape it always had.
+    ...(timerUntil ? { timer_until: timerUntil } : {}),
   }
+}
+
+// SHELLYTIMERS.4 — the DEVICE's own running timer (our safety cap, or any
+// toggle_after / auto-off). A Gen2+ switch or light reports
+// `timer_started_at` (unix SECONDS, may be fractional) and `timer_duration`
+// (seconds) only while a timer is running. Both must be positive finite
+// numbers; anything else is "no timer we can read", never a guess. This is
+// what proves live that a safety cap reached the device. `timer_type` is not
+// read: when it appears it does not change when the timer ends.
+function timerUntilOf(s) {
+  const started = s.timer_started_at
+  const duration = s.timer_duration
+  if (typeof started !== 'number' || !Number.isFinite(started) || started <= 0) return null
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return null
+  const ms = Math.round((started + duration) * 1000)
+  const d = new Date(ms)
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
 
 // Canonical `switch:N` only. `\d+` would also take `switch:00`, which parses
@@ -489,8 +510,10 @@ export function normaliseAllStatus(body) {
 export function stateFromReading(prev, reading, channel, atIso, kind = 'switch') {
   const p = isObj(prev) ? prev : {}
   if (!reading?.online) {
+    // A known timer is kept like every other last-known value: the device is
+    // still counting it down even while we cannot hear from it.
     return { online: false, output: p.output ?? null, ...(kind === 'light' ? { brightness: p.brightness ?? null } : {}), apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
-      temperature_c: p.temperature_c ?? null, source: p.source ?? null, at: atIso }
+      temperature_c: p.temperature_c ?? null, source: p.source ?? null, ...(typeof p.timer_until === 'string' ? { timer_until: p.timer_until } : {}), at: atIso }
   }
   // Online but this channel is gone (adopted channel 3, device now reports
   // 0-1): nulls, not stale values — the device is talking and not mentioning
@@ -498,7 +521,8 @@ export function stateFromReading(prev, reading, channel, atIso, kind = 'switch')
   const list = Array.isArray(reading.channels) ? reading.channels : []
   const c = list.find((x) => x?.channel === channel && (x?.kind ?? 'switch') === kind)
     || channelFromComponent(kind, channel, null)
-  return { online: true, output: c.output, ...(kind === 'light' ? { brightness: c.brightness ?? null } : {}), apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source, at: atIso }
+  return { online: true, output: c.output, ...(kind === 'light' ? { brightness: c.brightness ?? null } : {}), apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source,
+    ...(c.timer_until ? { timer_until: c.timer_until } : {}), at: atIso }
 }
 
 // Cheap fields are compared exactly; the measured ones get a deadband so a
@@ -523,6 +547,8 @@ export function stateChanged(prev, next) {
   if (!isObj(prev) || !isObj(next)) return true
   if (prev.online !== next.online || prev.output !== next.output || prev.source !== next.source) return true
   if ((prev.brightness ?? null) !== (next.brightness ?? null)) return true
+  // A timer starting, ending or being re-armed is a change (SHELLYTIMERS.4).
+  if ((prev.timer_until ?? null) !== (next.timer_until ?? null)) return true
   if (numChanged(prev.apower, next.apower, APOWER_DEADBAND_W)) return true
   if (numChanged(prev.aenergy_wh, next.aenergy_wh, ENERGY_STEP_WH)) return true
   if (numChanged(prev.temperature_c, next.temperature_c, TEMP_STEP_C)) return true

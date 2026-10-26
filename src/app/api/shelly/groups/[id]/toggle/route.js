@@ -55,18 +55,28 @@
 // TWO REGIMES, as for a device: on an UNMANAGED group (disabled or mode 'none')
 // planner rule 2 never closes an expired override, so `until` bounds the
 // banner, not the relays — `holds_until_changed: true` and the notice.
+//
+// THE SAFETY NET (SHELLYTIMERS.3), only while the studio's safety-timer
+// switch is on (SHELLYTIMERS.5, off by default), the device toggle's rule
+// widened: a press
+// ON for a MANAGED group sends its one batch with `toggle_after` up to
+// `until` + SAFETY_MARGIN_MS, and every member that landed is stamped with
+// `cap_at`. An unmanaged group, and every OFF press, gets no timer (the
+// "stays until changed" promise; a timer on an off would flip the room back
+// on). 'auto' arms by the planner's window rule: the plan carries the cap.
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { createShellyClient, INTERACTIVE_429_RETRIES, SHELLY_PERMANENT_CODES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { loadSafetyTimers } from '@/lib/shelly/safety-timers'
 import { DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { loadGroup, publicGroup } from '@/lib/shelly/group-load'
 import { effectiveTarget } from '@/lib/shelly/effective'
 import { optimisticState } from '@/lib/shelly/optimistic-state'
-import { overrideKey, planDeviceAction } from '@/lib/shelly/plan'
-import { deviceKind, loadTodayOccurrences } from '@/lib/shelly/reconcile'
+import { overrideKey, planDeviceAction, safetyCap, SAFETY_MARGIN_MS } from '@/lib/shelly/plan'
+import { deviceKind, loadTodayOccurrences, appliedStamp } from '@/lib/shelly/reconcile'
 import { ShellyGroupToggle, ShellyOverride, MAX_OVERRIDE_HOURS, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
 import { groupId } from '@/lib/shelly/status'
 import { nextLocalMidnightMs, strictDayStrIn } from '@/lib/location-time'
@@ -157,7 +167,9 @@ export const POST = withAuth(
       logError(MODULE, 'connection read failed', { locationId, reason: conn.reason, error: conn.error })
       return bad('Could not read the Shelly connection', 500)
     }
-    const engineConn = withLocationTz(conn.connection, user)
+    // The studio's safety-timer switch rides beside the zone (SHELLYTIMERS.5).
+    const safetyTimers = await loadSafetyTimers(db, locationId)
+    const engineConn = withLocationTz(conn.connection, user, { safetyTimers })
 
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
@@ -236,7 +248,7 @@ export const POST = withAuth(
     const cleared = members.map((m) => ({ ...m, override: null }))
 
     if (input.state === 'auto') {
-      return backToSchedule({ db, engineConn, locationId, group: savedGroup, members: cleared, tz: requestTz(user), nowMs, nowIso })
+      return backToSchedule({ db, engineConn, locationId, group: savedGroup, members: cleared, tz: requestTz(user), nowMs, nowIso, safetyTimers })
     }
 
     // ——— 3–4. one command over the members, stamp what landed ——————————
@@ -246,9 +258,11 @@ export const POST = withAuth(
       return NextResponse.json({ success: true, applied: 'all', pending_device_ids: [], group: publicGroup(savedGroup), ...holds })
     }
 
+    const cap = on && !unmanaged && safetyTimers ? safetyCap(Date.parse(override.until) + SAFETY_MARGIN_MS, nowMs) : null
     const sent = await sendAndStamp({
       db, engineConn, locationId, groupId: group.id, members: cleared, on, nowIso,
-      lastApplied: { key: overrideKey(override), action: override.state, reason: 'override', at: nowIso },
+      toggleAfterSec: cap?.toggleAfterSec ?? null,
+      lastApplied: appliedStamp({ key: overrideKey(override), action: override.state, reason: 'override', capAt: cap?.capAt }, nowIso),
     })
 
     if (sent.batchFailure) {
@@ -299,7 +313,7 @@ export const POST = withAuth(
  *   `pending` names every member that did not land and why; `batchFailure` is
  *   the client's result when the WHOLE call failed (every member is pending).
  */
-async function sendAndStamp({ db, engineConn, locationId, groupId: gid0, members, on, nowIso, lastApplied }) {
+async function sendAndStamp({ db, engineConn, locationId, groupId: gid0, members, on, nowIso, lastApplied, toggleAfterSec = null }) {
   const pending = new Map()
   const miss = (id, code, shellyCode = null) => {
     const permanent = shellyCode !== null && SHELLY_PERMANENT_CODES.has(shellyCode)
@@ -320,10 +334,14 @@ async function sendAndStamp({ db, engineConn, locationId, groupId: gid0, members
   if (!batch.length) return { pending, batchFailure: null }
 
   const shelly = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
-  const res = await shelly.setGroups({
+  const groups = {
     switch: batch.filter((x) => deviceKind(x.device) === 'switch').map((x) => x.gid),
     light: batch.filter((x) => deviceKind(x.device) === 'light').map((x) => x.gid),
-  }, on)
+  }
+  // The safety-net timer rides only when the caller armed one (header).
+  const res = toggleAfterSec == null
+    ? await shelly.setGroups(groups, on)
+    : await shelly.setGroups(groups, on, { toggleAfterSec })
 
   if (!res.ok) {
     if (res.kind === 'auth') await markKeyRejected(db, locationId)
@@ -380,7 +398,7 @@ async function sendAndStamp({ db, engineConn, locationId, groupId: gid0, members
  * 'auto', after both overrides are cleared: plan the group's schedule ONCE and
  * send it to every member in ONE batch (see the header).
  */
-async function backToSchedule({ db, engineConn, locationId, group, members, tz, nowMs, nowIso }) {
+async function backToSchedule({ db, engineConn, locationId, group, members, tz, nowMs, nowIso, safetyTimers = false }) {
   if (!members.length) {
     return NextResponse.json({ success: true, applied: 'all', pending_device_ids: [], results: [], group: publicGroup(group) })
   }
@@ -416,7 +434,7 @@ async function backToSchedule({ db, engineConn, locationId, group, members, tz, 
   }
 
   const dateStr = strictDayStrIn(nowMs, tz)
-  const planFor = (m) => planDeviceAction(effectiveTarget(m, group, nowMs), nowMs, dateStr, occurrences, tz, { force: true })
+  const planFor = (m) => planDeviceAction(effectiveTarget(m, group, nowMs), nowMs, dateStr, occurrences, tz, { force: true, timers: safetyTimers })
 
   // Every member's override is cleared, so under force each one's effective
   // target is the group's schedule and its plan is the same: taken from the
@@ -440,9 +458,12 @@ async function backToSchedule({ db, engineConn, locationId, group, members, tz, 
     }
   }
 
+  // The plan carries its safety cap when it opens a window (plan.js); the
+  // stamp records it exactly as the cron's would.
   const sent = await sendAndStamp({
     db, engineConn, locationId, groupId: group.id, members: same, on: plan.action === 'on', nowIso,
-    lastApplied: { key: plan.key, action: plan.action, reason: plan.reason, at: nowIso },
+    toggleAfterSec: plan.toggleAfterSec ?? null,
+    lastApplied: appliedStamp(plan, nowIso),
   })
 
   const results = members.map((m) => {

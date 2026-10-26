@@ -38,7 +38,8 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
-import { loadDevice, DEVICE_COLUMNS } from '@/lib/shelly/device-load'
+import { loadDevice, DEVICE_COLUMNS, requestTz } from '@/lib/shelly/device-load'
+import { withSafetyTimerNotice } from '@/lib/shelly/safety-notice'
 import { ShellyDevicePatch } from '@/lib/shelly/schemas'
 
 export const runtime = 'nodejs'
@@ -50,6 +51,10 @@ const MODULE = 'shelly-device'
 // render it without re-typing it, and so a test can assert the route and the
 // card say the same thing.
 export const DISABLE_NOTICE = 'Schedule switched off — the plug stays as it is until you toggle it'
+// SHELLYTIMERS.6: when the relay we switched on carries a safety timer (an
+// armed cap_at, or a running timer the plug reported), that "stays as it is"
+// holds only until the timer, so the notice gains one sentence saying when
+// (withSafetyTimerNotice, in the studio's zone).
 
 // The refusal for a schedule edit on a grouped device (see the header).
 export const GROUPED_MESSAGE =
@@ -67,7 +72,7 @@ const notFound = () => bad('Not found', 404)
  */
 export const PATCH = withAuth(
   { permission: 'device_control', schema: ShellyDevicePatch },
-  async ({ db, locationId, input, params }) => {
+  async ({ user, db, locationId, input, params }) => {
     const loaded = await loadDevice(db, locationId, params?.id)
     if (!loaded.ok) {
       if (loaded.status === 404) return notFound()
@@ -124,7 +129,7 @@ export const PATCH = withAuth(
     return NextResponse.json({
       success: true,
       device: row,
-      ...(leavesRelayOn ? { notice: DISABLE_NOTICE } : {}),
+      ...(leavesRelayOn ? { notice: withSafetyTimerNotice(DISABLE_NOTICE, [device], Date.now(), requestTz(user), 'It') } : {}),
     })
   },
 )
