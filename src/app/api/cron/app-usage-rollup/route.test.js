@@ -72,7 +72,7 @@ describe('GET /api/cron/app-usage-rollup', () => {
       ['_session', 'web', 3600], ['_session', 'all', 3600], ['contacts', 'web', 3600],
     ]))
     const stale = db.calls.find((c) => c.op === 'delete' && c.table === 'app_usage_daily' && c.filters.some((f) => f[1] === 'updated_at'))
-    expect(stale.filters).toEqual(expect.arrayContaining([['in', 'day', ['2026-10-25', '2026-10-26']]]))
+    expect(stale.filters).toEqual(expect.arrayContaining([['in', 'day', ['2026-10-24', '2026-10-25', '2026-10-26']]]))
     expect(stampHeartbeat).toHaveBeenCalledWith('app-usage-rollup', expect.objectContaining({ sessions: 1 }))
   })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { unionMs, splitByDay, buildDailyRows, rebuildDays, NIL_UUID, RETENTION } from './rollup.js'
+import { unionMs, splitByDay, buildDailyRows, rebuildDays, purgeOld, NIL_UUID, ALL_STUDIOS_KEY, RETENTION } from './rollup.js'
 
 const TZ = 'Europe/Dublin'
 const MIN = 60_000
@@ -88,9 +88,19 @@ describe('buildDailyRows', () => {
     expect(pick(rows, { feature: '_session', platform: 'phone' }).map((r) => r.location_key).sort()).toEqual(['loc1', 'loc2'])
   })
 
+  it('adds one cross-studio union so phone at one studio and web at another count once', () => {
+    const rows = buildDailyRows({
+      sessions: [session('s1', 'phone', at(10), at(11)), session('s2', 'web', at(10, 30), at(11, 30), { location_id: 'loc2' })],
+      visits: [],
+      zoneFor,
+    })
+    const across = pick(rows, { feature: '_session', platform: 'all', location_key: ALL_STUDIOS_KEY })
+    expect(across).toEqual([expect.objectContaining({ location_id: null, seconds: 5400, visits: 2 })])
+  })
+
   it('files a session with no studio under the nil uuid', () => {
     const rows = buildDailyRows({ sessions: [session('s1', 'web', at(9), at(10), { location_id: null })], visits: [], zoneFor })
-    expect(rows[0]).toMatchObject({ location_id: null, location_key: NIL_UUID })
+    expect(pick(rows, { platform: 'web' })[0]).toMatchObject({ location_id: null, location_key: NIL_UUID })
   })
 
   it('splits a session and its visit across midnight', () => {
@@ -112,8 +122,31 @@ describe('buildDailyRows', () => {
 })
 
 describe('rebuildDays', () => {
-  it('is today and yesterday in each zone', () => {
-    expect([...rebuildDays(at(1), [TZ])].sort()).toEqual(['2026-10-25', '2026-10-26'])
+  it('is today and the two days before in each zone (ingest accepts batches up to 48 h old)', () => {
+    expect([...rebuildDays(at(1), [TZ])].sort()).toEqual(['2026-10-24', '2026-10-25', '2026-10-26'])
+  })
+})
+
+describe('purgeOld', () => {
+  it('deletes by cutoff in one statement per table, never by an id list', async () => {
+    const calls = []
+    const db = {
+      from(table) {
+        const b = {
+          delete() { calls.push(['delete', table]); return b },
+          lt(col, v) { calls.push(['lt', table, col, v]); return b },
+          in() { throw new Error('no id lists') },
+          select() { throw new Error('no reads') },
+          then(resolve) { return Promise.resolve({ data: null, error: null }).then(resolve) },
+        }
+        return b
+      },
+    }
+    await purgeOld(db, at(12))
+    expect(calls).toEqual([
+      ['delete', 'app_usage_sessions'], ['lt', 'app_usage_sessions', 'started_at', new Date(at(12) - 90 * 86400_000).toISOString()],
+      ['delete', 'app_usage_daily'], ['lt', 'app_usage_daily', 'day', '2025-09-21'],
+    ])
   })
 })
 

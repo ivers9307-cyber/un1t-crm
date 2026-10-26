@@ -14,11 +14,18 @@
 //     time, per platform and across both ('all'), so phone + web at once, or
 //     two browser tabs, never count a minute twice;
 //   - feature rows carry the visit count and the SUM of visit time;
-//   - a visit or session that crosses midnight counts on each day it touches.
+//   - a visit or session that crosses midnight counts on each day it touches;
+//   - the rebuilt days are today and the two before, because the route
+//     accepts a batch up to 48 h after its session ended.
 
 import { dateKeyIn, dayStartMsIn, addDaysIn, todayStrIn, PLATFORM_TZ } from '@shared/zoned-time'
 
 export const NIL_UUID = '00000000-0000-0000-0000-000000000000'
+// location_key of the cross-studio '_session'/'all' row: the union over every
+// studio, so a person with the phone at one studio and the web at another
+// (each app keeps its own active studio) never counts a minute twice in the
+// headline. Read only when no studio is chosen (app_usage_summary, mig 778).
+export const ALL_STUDIOS_KEY = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
 export const RETENTION = Object.freeze({ rawDays: 90, dailyDays: 400 })
 export const SESSION_FEATURE = '_session'
 const DAY_MS = 86400_000
@@ -56,13 +63,14 @@ export function splitByDay(startMs, endMs, zone) {
   return parts
 }
 
-/** Today and yesterday in each zone: the days a run rebuilds. */
+export const REBUILD_DAYS = 3
+
+/** Today and the two days before in each zone: the days a run rebuilds. */
 export function rebuildDays(nowMs, zones) {
   const days = new Set()
   for (const zone of new Set([PLATFORM_TZ, ...zones])) {
     const today = todayStrIn(zone, nowMs)
-    days.add(today)
-    days.add(addDaysIn(today, -1, zone))
+    for (let n = 0; n < REBUILD_DAYS; n++) days.add(addDaysIn(today, -n, zone))
   }
   return days
 }
@@ -89,8 +97,8 @@ export function buildDailyRows({ sessions, visits, zoneFor }) {
   for (const s of sessions) {
     const zone = zoneFor(s.location_id)
     for (const part of splitByDay(Date.parse(s.started_at), Date.parse(s.ended_at), zone)) {
-      for (const platform of [s.platform, 'all']) {
-        const base = baseOf(s, part.day, platform, SESSION_FEATURE)
+      const across = { ...baseOf(s, part.day, 'all', SESSION_FEATURE), location_id: null, location_key: ALL_STUDIOS_KEY }
+      for (const base of [baseOf(s, part.day, s.platform, SESSION_FEATURE), baseOf(s, part.day, 'all', SESSION_FEATURE), across]) {
         const k = keyOf(base)
         if (!sessionSpans.has(k)) sessionSpans.set(k, { base, spans: [], count: 0 })
         const acc = sessionSpans.get(k)
@@ -138,13 +146,13 @@ async function readAll(build) {
  * The cron's work: rebuild today and yesterday, then retention.
  * @param {object} db service-role client
  * @param {{ nowMs: number, getZones: (ids: string[]) => Promise<Map<string,string>> }} opts
- * @returns {Promise<{ days: string[], sessions: number, rows: number, purged_sessions: number, purged_daily: number }>}
+ * @returns {Promise<{ days: string[], sessions: number, rows: number, raw_cutoff: string, daily_cutoff: string }>}
  */
 export async function runUsageRollup(db, { nowMs, getZones }) {
   const runIso = new Date(nowMs).toISOString()
-  // Any session that touches yesterday in any zone ended within the last
-  // 72 h (yesterday starts at most 48 h + 14 h ago).
-  const windowIso = new Date(nowMs - 72 * 3600_000).toISOString()
+  // Any session that touches a rebuilt day in any zone ended within the
+  // last 96 h (the earliest rebuilt day starts at most 72 h + 14 h ago).
+  const windowIso = new Date(nowMs - 96 * 3600_000).toISOString()
 
   const sessions = await readAll(() => db
     .from('app_usage_sessions')
@@ -189,26 +197,18 @@ export async function runUsageRollup(db, { nowMs, getZones }) {
   return { days: [...days].sort(), sessions: sessions.length, rows: rows.length, ...purged }
 }
 
-async function purgeBatches(db, table, column, cutoff) {
-  let total = 0
-  for (let round = 0; round < 50; round++) {
-    const { data, error } = await db.from(table).select('id').lt(column, cutoff).order('id').limit(PAGE)
-    if (error) throw new Error(`usage retention read failed: ${error.code || error.message}`)
-    if (!data || data.length === 0) return total
-    const { error: delErr } = await db.from(table).delete().in('id', data.map((r) => r.id))
-    if (delErr) throw new Error(`usage retention delete failed: ${delErr.code || delErr.message}`)
-    total += data.length
-    if (data.length < PAGE) return total
-  }
-  return total
+// One range delete per table: an id list in the query string would outgrow
+// URL limits, and the started_at / day indexes make the range cheap.
+async function purgeBefore(db, table, column, cutoff) {
+  const { error } = await db.from(table).delete().lt(column, cutoff)
+  if (error) throw new Error(`usage retention delete failed (${table}): ${error.code || error.message}`)
 }
 
 /** Raw sessions (visits cascade) after 90 days, daily rows after 400. */
 export async function purgeOld(db, nowMs) {
   const rawCutoff = new Date(nowMs - RETENTION.rawDays * DAY_MS).toISOString()
   const dailyCutoff = addDaysIn(todayStrIn(PLATFORM_TZ, nowMs), -RETENTION.dailyDays, PLATFORM_TZ)
-  return {
-    purged_sessions: await purgeBatches(db, 'app_usage_sessions', 'started_at', rawCutoff),
-    purged_daily: await purgeBatches(db, 'app_usage_daily', 'day', dailyCutoff),
-  }
+  await purgeBefore(db, 'app_usage_sessions', 'started_at', rawCutoff)
+  await purgeBefore(db, 'app_usage_daily', 'day', dailyCutoff)
+  return { raw_cutoff: rawCutoff, daily_cutoff: dailyCutoff }
 }

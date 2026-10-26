@@ -78,11 +78,14 @@ COMMENT ON TABLE public.app_usage_visits IS
   'USAGE.1 (mig 778): one visit to a feature (shared/usage-features.js key) inside an app_usage_sessions row. Kept 90 days (cascade). Service role only.';
 
 -- Per person, day, platform, feature and studio totals, rebuilt from the raw
--- tables by the rollup cron (re-deriving a day is idempotent). feature
+-- tables by the rollup cron (re-deriving a day is idempotent; it rebuilds
+-- today and the two days before, since a batch may arrive up to 48 h late). feature
 -- '_session' carries the session count and the UNION of session time;
 -- platform 'all' (only on '_session' rows) is the union across phone and web.
 -- location_key is location_id or the nil uuid, so the unique key works for
--- a session with no studio.
+-- a session with no studio; the all-f uuid marks the cross-studio 'all' row
+-- (the union over every studio, location_id NULL), which the report reads
+-- when no studio is chosen.
 CREATE TABLE public.app_usage_daily (
   id           bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   profile_id   uuid        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -134,7 +137,16 @@ AS $$
     FROM public.app_usage_daily d
    WHERE d.day BETWEEN p_from AND p_to
      AND d.profile_id = ANY (p_profile_ids)
-     AND (p_location_id IS NULL OR d.location_id = p_location_id)
+     AND (
+           -- One studio: that studio's rows (the cross-studio row has no
+           -- location_id, so it never matches).
+           (p_location_id IS NOT NULL AND d.location_id = p_location_id)
+           -- Every studio: phone/web and feature rows add up across studios,
+           -- but the 'all' session union is the cross-studio row alone, so
+           -- phone at one studio and web at another never count twice.
+        OR (p_location_id IS NULL AND (d.platform <> 'all'
+              OR d.location_key = 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
+         )
    GROUP BY d.profile_id, d.platform, d.feature
    ORDER BY d.profile_id, d.platform, d.feature
 $$;
