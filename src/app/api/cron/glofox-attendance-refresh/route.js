@@ -46,7 +46,7 @@ import { glofoxCredentialsForLocation, fetchUserBookingsResult, fetchMemberResul
 import { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 import { locationsWithSource, skippedSummary } from '@/lib/membership/locations-for-source'
 import { computeBookingAggregates, mergeBookingAggregates, trimRecentBookings, extractMembershipPlan, extractMembershipState, extractMemberProfile } from '@/lib/glofox-sync'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { glofoxCrossoverContactIds, scopeToGlofoxStudio } from '@/lib/glofox-crossover'
 import { dayStrIn, DAY_MS } from '@/lib/location-time'
 
@@ -108,10 +108,22 @@ export async function GET(request) {
   // The run is time-bound (sequential, TIME_BUDGET_MS), so refreshed < eligible
   // with budget_exhausted=true is its normal shape; the stalest-first order
   // rotates who is left for tomorrow.
-  await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skipped))
+  //
+  // GLOFOX414.1 — a location that failed did no work, so it withholds the stamp
+  // (as glofox-detail-backfill does): the heartbeat goes stale and pages. It
+  // used to stamp anyway, so from 25 Oct 2026 a failing Stillorgan run looked
+  // healthy with failed_locations: 1 and no member refreshed.
+  const failed = perLocation.filter((r) => r.status === 'failed')
+  if (failed.length > 0) {
+    logError('glofox-attendance-refresh', 'location run failed; heartbeat not stamped', {
+      failed: failed.map((r) => ({ locationId: r.location_id, error: r.error })),
+    })
+  } else {
+    await stampHeartbeat('glofox-attendance-refresh', attendanceOutcome(perLocation, budgetExhausted, glofoxHttpStatsSince(httpBefore), skipped))
+  }
 
   return NextResponse.json({
-    success: true,
+    success: failed.length === 0,
     locations_processed: perLocation.length,
     locations_skipped: skipped.length,
     ...skippedSummary(skipped),

@@ -23,7 +23,7 @@
 
 import { escapeLikePattern } from './like-escape.js'
 import { ensureStudioPreferences } from './un1t-online-studio-preferences.js'
-import { upsertContactStudio, contactsAtStudio, studiosOfContacts } from './contact-studios.js'
+import { upsertContactStudio, studiosOfContacts } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
 
 // ORGCONTACTS.5 (mig 768): the link table is gone; "linked at this studio" is
@@ -188,18 +188,42 @@ export async function recordGlofoxCrossover(db, { locationId, glofoxMemberId, co
 // status. The names stay until Phase 5's sweep; the data source is the
 // relationship table.
 
+// GLOFOX414.1 — the ids travel in the request URL (`id.in.(…)`), so this list
+// must hold only the true crossovers: contacts whose home location_id is NOT
+// the studio (another studio, or none). The studio's own contacts are already
+// covered by `location_id.eq`. From ORGCONTACTS.2 it returned every Glofox
+// relationship at the studio (8,541 at Stillorgan against 16 crossovers), the
+// URL grew to ~300 KB, Cloudflare answered 414, and the detail backfill and
+// attendance refresh failed every run from 25 Oct 2026.
+// More than MAX_SCOPE_IDS is an error rather than a request the edge refuses:
+// at ~37 characters an id, 300 is ~11 KB, inside Cloudflare's 16 KB.
+export const MAX_SCOPE_IDS = 300
+const SCOPE_PAGE = 1000
+
 /**
- * The contact ids with a Glofox relationship at `locationId` (any status),
- * paged past the 1,000-row cap. Any failure is `error` (the caller decides;
- * never read it as "none").
+ * The ids of the contacts with a Glofox relationship at `locationId` (any
+ * status) whose home location is somewhere else or nowhere (the view's
+ * `studio_is_crossover`), paged past the 1,000-row cap. Any failure, or more
+ * than MAX_SCOPE_IDS, is `error` (the caller decides; never read it as "none").
  *
  * @returns {Promise<{ ids: string[], error?: string }>}
  */
 export async function glofoxCrossoverContactIds(db, locationId) {
   try {
-    const r = await contactsAtStudio(db, locationId)
-    if (!r.ok) return { ids: [], error: `contact_studios read: ${r.error}` }
-    return { ids: [...new Set(r.rows.filter((row) => row.source === 'glofox').map((row) => row.contact_id).filter(Boolean))] }
+    const ids = new Set()
+    for (let from = 0; ; from += SCOPE_PAGE) {
+      const { data, error } = await db.from(LINK_VIEW).select('id')
+        .eq('studio_location_id', locationId).eq('studio_source', 'glofox').eq('studio_is_crossover', true)
+        .order('id', { ascending: true })
+        .range(from, from + SCOPE_PAGE - 1)
+      if (error) return { ids: [], error: `${LINK_VIEW} read: ${message(error)}` }
+      for (const row of data || []) if (row.id) ids.add(row.id)
+      if (!data || data.length < SCOPE_PAGE) break
+    }
+    if (ids.size > MAX_SCOPE_IDS) {
+      return { ids: [], error: `${ids.size} crossover contacts is more than the ${MAX_SCOPE_IDS} a request URL can carry` }
+    }
+    return { ids: [...ids] }
   } catch (err) {
     return { ids: [], error: message(err) }
   }
