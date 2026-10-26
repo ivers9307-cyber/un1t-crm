@@ -73,7 +73,7 @@ function DetailRow({ label, value, href = null }) {
 // the Task item. Defaults true, like DealCard's.
 // TZ.16 (D3 = A) — `timezone` is the board's studio zone (the chip matches the
 // card it was opened from).
-export default function ContactDrawer({ contactId, columnContactIds = [], locationId, timezone = null, onNavigate, onClose, manual = false, canTask = true }) {
+export default function ContactDrawer({ contactId, columnContactIds = [], locationId, stageSlug = null, timezone = null, onNavigate, onClose, manual = false, canTask = true }) {
   const viewerZone = useViewerZone()
   const [bundle, setBundle] = useState(null)
   const [error, setError] = useState(null)
@@ -159,7 +159,9 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                     contactId={contact.id}
                     locationId={locationId}
                     actions={personActionsFor(DRAWER_ACTIONS[manual ? 'manual' : 'derived'], { canTask })}
-                    isCold={contact.pipeline_stage_slug === 'cold_lead'}
+                    // HATCHCOLD.2 — Cold on the board the drawer opened from.
+                    isCold={(stageSlug ?? contact.pipeline_stage_slug) === 'cold_lead'}
+                    boardLocationId={locationId}
                   />
                 </PersonHeader>
                 {/* Contact line — phone + email at a glance, clickable. */}

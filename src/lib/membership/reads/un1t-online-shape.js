@@ -3,6 +3,7 @@
 // No DB, no clock: the queries in ./un1t-online.js hand rows in, the shapes
 // the Glofox functions return (membership-snapshot.js, studio-kpis.js,
 // membership-flows.js, dashboard-data.js) come out. Money is integer cents.
+import { dismissalAtStudio } from '@/lib/studio-pipeline-dismissal'
 import { computeMrr } from '@shared/studio-kpi-math'
 import { pctDelta } from '@shared/dashboard-metrics'
 import { dayStrIn } from '@/lib/location-time'
@@ -613,17 +614,20 @@ function aggregatorOf(bookings) {
  *
  * `contact` lends ONLY pipeline_dismissed_at and last_lead_source_at, and only
  * when `contact.location_id === locationId` (a Stillorgan dismissal is a
- * Stillorgan judgement). Nothing else on it is read.
+ * Stillorgan judgement). Nothing else on it is read. HATCHCOLD.2: for a contact
+ * whose home is another studio, Cold pressed on THIS studio's board arrives as
+ * `studioDismissedAt` (contact_pipeline_dismissals, mig 777).
  *
  * @param {object} a
  * @param {object} a.client       un1t_clients row (un1t_user_id, credit_balance, credit_unlimited, last_attended_at, remote_created_at)
  * @param {object|null} a.contact { id, location_id, pipeline_dismissed_at, last_lead_source_at }
  * @param {string} a.locationId
+ * @param {string|null} [a.studioDismissedAt] this studio's own Cold (non-home contacts)
  * @param {number} [a.now]        accepted for the interface; no rule here reads the clock
  *                                (classifyContact applies every time window itself)
  */
 export function shapePipelineSnapshot({
-  client, contact, locationId, freshSubs = [], transactions = [], productsById = new Map(),
+  client, contact, locationId, studioDismissedAt = null, freshSubs = [], transactions = [], productsById = new Map(),
   bookings = [], memberships = [], ledgerTrials = [], now: _now = Date.now(),
 } = {}) {
   const credits = splitUn1tCredits({ client, transactions, productsById, bookings, ledgerTrials })
@@ -685,7 +689,7 @@ export function shapePipelineSnapshot({
     recent_bookings: recentBookings,
     converted_at: firstSales(transactions.filter(Boolean))[0]?.remote_created_at ?? null,
     pack_customer_at: earliestOf(transactions.filter((t) => isPaidPack(t, productsById)).map((t) => t.remote_created_at)),
-    pipeline_dismissed_at: owned ? (contact.pipeline_dismissed_at ?? null) : null,
+    pipeline_dismissed_at: dismissalAtStudio(contact, locationId, studioDismissedAt),
     last_lead_source_at: owned ? (contact.last_lead_source_at ?? null) : null,
     gympass_member_id: aggregator.gympassMemberId,
     trial_expires_at: trialExpiresAt(credits, productsById),

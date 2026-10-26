@@ -79,3 +79,43 @@ export async function maybeReclassifyAfterSync(db, locationId, { now = Date.now(
     return { ran: false, reason: 'error' }
   }
 }
+
+/**
+ * HATCHCOLD.1 — re-sort a un1t.online studio's board NOW, for an operator
+ * action that changed a classifier input (the Cold button). Stillorgan's
+ * Cold re-places the one deal through ensureDealForContact, but that only
+ * acts on a DERIVED primary board, and Hatch's primary is the manual
+ * Waitlist; its derived Acquisition board reads un1t rows, which only the
+ * whole-studio pass loads (~2 s). Without this a Cold lead sat on the board
+ * until the next hourly pass.
+ *
+ * No recency gate: the person pressing the button is waiting on it, and a
+ * pass is idempotent. Never throws; the dismissal is already saved.
+ *
+ * @param {object} db service-role client
+ * @param {string} locationId
+ * @param {{ userId?: string|null }} [opts]
+ * @returns {Promise<{ ran: false, reason: 'no_un1t_board'|'error' } | { ran: true, result: object }>}
+ */
+export async function reclassifyUn1tBoardNow(db, locationId, { userId = null } = {}) {
+  try {
+    const { data: boards, error: boardsErr } = await db
+      .from('pipelines')
+      .select('module')
+      .eq('location_id', locationId)
+      .eq('enabled', true)
+    if (boardsErr) throw boardsErr
+    if (!(boards || []).some((b) => getBoardModule(b.module)?.inputSource === UN1T_INPUT)) {
+      return { ran: false, reason: 'no_un1t_board' }
+    }
+    const result = await reclassifyAllContacts(db, { locationId, source: 'manual', userId })
+    return { ran: true, result }
+  } catch (err) {
+    logError('un1t-pipeline-cadence', 'reclassify on operator action failed', {
+      locationId,
+      reason: 'error',
+      errName: err?.name ?? null,
+    })
+    return { ran: false, reason: 'error' }
+  }
+}

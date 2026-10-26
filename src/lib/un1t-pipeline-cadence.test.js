@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./pipeline-reclassify.js', () => ({ reclassifyAllContacts: vi.fn() }))
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
-import { maybeReclassifyAfterSync, RECLASSIFY_MIN_GAP_MS, RECLASSIFY_IN_FLIGHT_MS } from './un1t-pipeline-cadence.js'
+import { maybeReclassifyAfterSync, reclassifyUn1tBoardNow, RECLASSIFY_MIN_GAP_MS, RECLASSIFY_IN_FLIGHT_MS } from './un1t-pipeline-cadence.js'
 import { reclassifyAllContacts } from './pipeline-reclassify.js'
 import { logError } from './log.js'
 
@@ -148,5 +148,28 @@ describe('maybeReclassifyAfterSync', () => {
     expect(await maybeReclassifyAfterSync(b.db, LOC, { now: NOW })).toEqual({ ran: false, reason: 'error' })
     expect(reclassifyAllContacts).not.toHaveBeenCalled()
     expect(logError).toHaveBeenCalledTimes(2)
+  })
+})
+
+// HATCHCOLD.1 — the Cold button's on-the-spot pass.
+describe('reclassifyUn1tBoardNow', () => {
+  it('no un1t board → no_un1t_board, no pass', async () => {
+    const { db } = fakeDb({ pipelines: [{ id: 'p0', module: 'acquisition' }] })
+    expect(await reclassifyUn1tBoardNow(db, LOC)).toEqual({ ran: false, reason: 'no_un1t_board' })
+    expect(reclassifyAllContacts).not.toHaveBeenCalled()
+  })
+
+  it('a un1t board → runs a manual pass for that studio, ignoring a recent run', async () => {
+    const { db, reads } = fakeDb({ pipelines: UN1T_BOARD, runs: [{ started_at: minAgo(2), finished_at: minAgo(1), status: 'success' }] })
+    expect(await reclassifyUn1tBoardNow(db, LOC, { userId: 'u1' })).toEqual({ ran: true, result: { ok: true, run_id: 'r1' } })
+    expect(reclassifyAllContacts).toHaveBeenCalledWith(db, { locationId: LOC, source: 'manual', userId: 'u1' })
+    expect(reads.map((r) => r.table)).toEqual(['pipelines'])
+  })
+
+  it('a throw → error, logged, never thrown', async () => {
+    reclassifyAllContacts.mockRejectedValue(new Error('boom'))
+    const { db } = fakeDb({ pipelines: UN1T_BOARD })
+    expect(await reclassifyUn1tBoardNow(db, LOC)).toEqual({ ran: false, reason: 'error' })
+    expect(logError).toHaveBeenCalled()
   })
 })

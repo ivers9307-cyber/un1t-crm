@@ -166,6 +166,16 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
     return []
   }, [openContactId, initialStages, columnDeals])
 
+  // HATCHCOLD.2 — the open contact's column slug, so the drawer's Cold label
+  // follows this board rather than the contact's home studio.
+  const openStageSlug = useMemo(() => {
+    if (!openContactId) return null
+    for (const stage of initialStages) {
+      if ((columnDeals[stage.id] || []).some((d) => d.contacts?.id === openContactId)) return stage.slug ?? null
+    }
+    return null
+  }, [openContactId, initialStages, columnDeals])
+
   return (
     <>
       {moveError && (
@@ -232,7 +242,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
                     onDragEnd={manual ? () => { setDragDealId(null); setDropStageId(null) } : undefined}
                     className={manual ? 'cursor-grab active:cursor-grabbing' : undefined}
                   >
-                    <DealCard deal={deal} locationId={locationId} timezone={timezone} stageName={stage.name} onOpenContact={openContact} manual={manual} canTask={canTask} />
+                    <DealCard deal={deal} locationId={locationId} timezone={timezone} stageName={stage.name} stageSlug={stage.slug} onOpenContact={openContact} manual={manual} canTask={canTask} />
                   </div>
                 ))}
                 {hasMore && (
@@ -255,6 +265,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
             contactId={openContactId}
             columnContactIds={columnContactIds}
             locationId={locationId}
+            stageSlug={openStageSlug}
             timezone={timezone}
             // WAITLIST.6 — the drawer's Cold item is derived-board-only, and
             // the board it opened from is the honest answer to "which board?"

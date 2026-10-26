@@ -766,7 +766,7 @@ describe('pipelineInputs and trialEligibility', () => {
       const { db, log } = makeDb(world())
       await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
       const tables = new Set(log.map((q) => q.table))
-      expect([...tables].sort()).toEqual(['contact_studios', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
+      expect([...tables].sort()).toEqual(['contact_pipeline_dismissals', 'contact_studios', 'contacts', 'un1t_bookings', 'un1t_clients', 'un1t_events', 'un1t_products', 'un1t_subscriptions', 'un1t_transactions', 'un1t_write_events'])
       for (const q of log.filter((x) => x.table !== 'contacts')) {
         expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       }
@@ -794,6 +794,34 @@ describe('pipelineInputs and trialEligibility', () => {
       const s = out.data.snapshots.get('cd')
       expect(s.pipeline_dismissed_at).toBeNull()
       expect(s.last_lead_source_at).toBeNull()
+    })
+
+    // HATCHCOLD.2 — Cold pressed on THIS board for a contact whose home is elsewhere.
+    it('a dual-studio contact Cold at this studio (mig 777 row) is dismissed here; another studio\'s row is not', async () => {
+      const w = world({
+        un1t_clients: [client({ contact_id: 'cd' })],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_studios: [],
+        contacts: [contact({ id: 'cd', location_id: STILLORGAN, pipeline_dismissed_at: null })],
+        contact_pipeline_dismissals: [
+          { contact_id: 'cd', location_id: HATCH, dismissed_at: '2026-10-26T13:05:00Z' },
+          { contact_id: 'cd', location_id: 'loc-other', dismissed_at: '2026-10-20T00:00:00Z' },
+        ],
+      })
+      const { db } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('cd').pipeline_dismissed_at).toBe('2026-10-26T13:05:00Z')
+    })
+
+    it('a home contact keeps its contacts-column Cold and ignores a stray studio row', async () => {
+      const w = world({
+        un1t_clients: [client({ contact_id: 'ch' })],
+        un1t_subscriptions: [], un1t_transactions: [], un1t_bookings: [], contact_studios: [],
+        contacts: [contact({ id: 'ch', location_id: HATCH, pipeline_dismissed_at: '2026-10-01T00:00:00Z' })],
+        contact_pipeline_dismissals: [{ contact_id: 'ch', location_id: HATCH, dismissed_at: '2026-10-26T00:00:00Z' }],
+      })
+      const { db } = makeDb(w)
+      const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+      expect(out.data.snapshots.get('ch').pipeline_dismissed_at).toBe('2026-10-01T00:00:00Z')
     })
 
     it('a stale subscription row does not make a member', async () => {
