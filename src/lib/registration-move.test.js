@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   entryLabel, entryHeadcount, computePriceGapCents, evaluateMove, MOVE_ERRORS, MOVE_ERROR_MESSAGES,
   listMoveTargets, moveRegistration, readRegistrationForMove, entryLeadEmail, checkMove,
@@ -352,6 +352,15 @@ describe('readRegistrationForMove', () => {
 })
 
 describe('moveRegistration', () => {
+  // The fixtures' target race is dated 2026-10-25. moveRegistration reads the
+  // real clock when no `today` is passed, so pin it to the fixtures' TODAY or
+  // the target turns into a past race on 26 Oct 2026 and every move is refused.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(`${TODAY}T12:00:00Z`))
+  })
+  afterEach(() => { vi.useRealTimers() })
+
   function happyDb(over = {}) {
     const rpc = vi.fn(async () => ({ data: { id: 'mv1', registration_id: 'r1', to_event_id: 'e2', price_gap_cents: 1000 }, error: null }))
     const db = fakeDb({
