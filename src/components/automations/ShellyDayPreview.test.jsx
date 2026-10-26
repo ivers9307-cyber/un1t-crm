@@ -110,3 +110,43 @@ describe('ShellyDayPreview', () => {
     expect(screen.queryByText('Classes')).toBeNull()
   })
 })
+
+describe('ShellyDayPreview zone maths (fails under plain-UTC maths)', () => {
+  const only = (id, windows, date) => body(date, { classes: [], groups: [{ id: 'g1', windows }, { id: 'g2', windows: [] }] })
+  const pct = (el, k) => parseFloat(el.style[k])
+  const run = async (day, windows) => {
+    vi.setSystemTime(new Date(`${day}T12:00:00.000Z`))
+    global.fetch.mockResolvedValue(answer(200, only('g1', windows, day)))
+    render(<ShellyDayPreview groups={groups} tz={TZ} />)
+    await screen.findByText('Classes')
+  }
+
+  it('summer day (UTC+1): 05:45Z is 06:45 local, placed against a 23:00Z day start', async () => {
+    await run('2026-07-15', [{ on_at: '2026-07-15T05:45:00.000Z', off_at: '2026-07-15T06:55:00.000Z' }])
+    const b = screen.getByLabelText('Studio lights: On 06:45–07:55')
+    expect(pct(b, 'left')).toBeCloseTo((6.75 / 24) * 100, 6)
+    expect(pct(b, 'width')).toBeCloseTo((70 / 1440) * 100, 6)
+    expect(pct(screen.getByText('12'), 'left')).toBeCloseTo((12 / 24) * 100, 6)
+  })
+
+  it('25-hour fall-back day (2026-10-25): spans divide by 25, ticks sit on real hours', async () => {
+    await run('2026-10-25', [
+      { on_at: '2026-10-24T22:00:00.000Z', off_at: '2026-10-25T02:00:00.000Z' }, // 23:00 IST the evening before -> 02:00 GMT
+      { on_at: '2026-10-25T01:00:00.000Z', off_at: '2026-10-25T04:00:00.000Z' }, // 01:00-04:00 GMT, after the change
+    ])
+    const [cross, after] = screen.getAllByLabelText(/^Studio lights: On/)
+    expect(pct(cross, 'left')).toBe(0)
+    expect(pct(cross, 'width')).toBeCloseTo((3 / 25) * 100, 6) // day starts 23:00Z, so 23:00Z-02:00Z
+    expect(pct(after, 'left')).toBeCloseTo((2 / 25) * 100, 6)
+    expect(pct(after, 'width')).toBeCloseTo((3 / 25) * 100, 6)
+    expect(pct(screen.getByText('12'), 'left')).toBeCloseTo((13 / 25) * 100, 6) // 12:00 GMT is 13 real hours in
+  })
+
+  it('23-hour spring-forward day (2026-03-29): 12:00-13:00 local is 11/23, width 1/23', async () => {
+    await run('2026-03-29', [{ on_at: '2026-03-29T11:00:00.000Z', off_at: '2026-03-29T12:00:00.000Z' }])
+    const b = screen.getByLabelText('Studio lights: On 12:00–13:00')
+    expect(pct(b, 'left')).toBeCloseTo((11 / 23) * 100, 6)
+    expect(pct(b, 'width')).toBeCloseTo((1 / 23) * 100, 6)
+    expect(pct(screen.getByText('12'), 'left')).toBeCloseTo((11 / 23) * 100, 6)
+  })
+})
