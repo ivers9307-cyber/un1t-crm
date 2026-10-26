@@ -15,7 +15,7 @@
 //      happened, and what will happen. The one exception is a rate limit,
 //      which is HTTP 429 so the client can back off rather than re-press;
 //      the body still says `pending:true`, because it is.
-//   3. A FAILED *STAMP* IS NOT A FAILED COMMAND. If setSwitch succeeded the
+//   3. A FAILED *STAMP* IS NOT A FAILED COMMAND. If the command succeeded the
 //      relay has physically moved, so a lost `last_applied` write is logged
 //      and the response still says `applied:true`. Telling the operator the
 //      switch did not happen when it did is the louder failure, and the cost
@@ -61,7 +61,7 @@ import { createShellyClient } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { loadDevice, DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { overrideKey } from '@/lib/shelly/plan'
-import { runNowForDevice } from '@/lib/shelly/reconcile'
+import { runNowForDevice, deviceKind } from '@/lib/shelly/reconcile'
 import { ShellyToggleBody, ShellyOverride, MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import { stateFromReading } from '@/lib/shelly/status'
 import { nextLocalMidnightMs } from '@/lib/location-time'
@@ -135,12 +135,16 @@ const notFound = () => bad('Not found', 404)
  * absent is not zero — and it is not a stale number wearing a new date
  * either.)
  */
-function optimisticState(prev, channel, on, nowIso) {
+function optimisticState(prev, channel, on, nowIso, kind = 'switch') {
   const base = hasFullState(prev)
     ? { ...prev }
-    : stateFromReading(null, { online: true, channels: [] }, channel, nowIso)
+    : stateFromReading(null, { online: true, channels: [] }, channel, nowIso, kind)
   return {
     ...base,
+    // SHELLYLIGHT.3 — a light's level is a SETTING, not a measurement: set/light
+    // sends `on` only and the dimmer keeps its own brightness, so the last known
+    // level is still the truth. A switch never carries the key (status.js).
+    ...(kind === 'light' ? { brightness: base.brightness ?? null } : {}),
     online: true,
     output: on,
     apower: null,
@@ -353,7 +357,12 @@ export const POST = withAuth(
     const withOverride = { ...device, override }
 
     // ——— 2. the command ——————————————————————————————————————————————
-    const res = await createShellyClient(engineConn).setSwitch(device.device_id, device.channel, on)
+    // A light is a `light:N` component, addressed through set/light; set/switch
+    // would name a component the device does not have (SHELLYLIGHT.3).
+    const shelly = createShellyClient(engineConn)
+    const res = deviceKind(device) === 'light'
+      ? await shelly.setLight(device.device_id, device.channel, on)
+      : await shelly.setSwitch(device.device_id, device.channel, on)
     if (!res.ok) {
       if (res.kind === 'auth') await markKeyRejected(db, locationId)
       else {
@@ -391,7 +400,7 @@ export const POST = withAuth(
         // The SAME key the planner would have minted, so the next tick reads
         // this override as already applied and does not re-issue it.
         last_applied: { key: overrideKey(override), action: input.state, reason: 'override', at: nowIso },
-        last_state: optimisticState(device.last_state, device.channel, on, nowIso),
+        last_state: optimisticState(device.last_state, device.channel, on, nowIso, deviceKind(device)),
         last_seen_at: nowIso,
         updated_at: nowIso,
       })
