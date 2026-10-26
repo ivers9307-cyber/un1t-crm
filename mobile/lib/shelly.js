@@ -11,6 +11,10 @@
 // made, because mobile cannot import src/lib (CLAUDE.md, Web/mobile boundary).
 // Each one names its web original so the pair can be moved together.
 
+import {
+  addDaysISO, formatInZone, instantToZonedParts, resolveZone, strictDayStrIn, timeLabelIn,
+} from 'shared/zoned-time'
+
 // ── Freshness thresholds ────────────────────────────────────────────────────
 // Re-typed from src/lib/shelly/device-health.js (HEALTH_FRESH_MS /
 // HEALTH_STALE_MS). The fresh window is the ENGINE'S WRITE FLOOR PLUS ONE
@@ -242,4 +246,160 @@ export function errorText(json, fallback) {
  */
 export function plugDisplayName(device) {
   return device?.name || `${device?.model || 'Shelly'} · ${String(device?.device_id || '').slice(-4)}`
+}
+
+// ── SHELLYGROUPS.9 — groups ─────────────────────────────────────────────────
+// Re-typed from src/components/automations/ShellyGroupCard.jsx (and its
+// overrideUntilLabel / outputLabel from ShellyDeviceCard.jsx). The rule the web
+// card states first holds here too: a group's `now` IS THE SERVER'S ANSWER.
+// GET /api/shelly/groups resolves each group's windows with the engine's own
+// call, so these helpers only WORD what `now` says; they never resolve a
+// window, and when the timetable could not be read (`windows_unread`) they say
+// so instead of inventing a time. Zone maths comes from shared/zoned-time
+// only (CLAUDE.md, Timezones): every time printed is the STUDIO's clock.
+
+// isManaged / deviceLabel twins: a group runs on its own only when it is
+// switched on AND has a schedule. On an unmanaged group the planner never
+// closes an expired override, so no countdown may be printed for it.
+const isManagedGroup = (g) => Boolean(g?.enabled) && g?.schedule_mode !== 'none'
+
+/**
+ * When an override ends, in the STUDIO's zone: "16:00", "16:00 tomorrow",
+ * "Thu 16:00", or '' for an unreadable instant.
+ *
+ * Re-typed from `overrideUntilLabel` in src/components/automations/
+ * ShellyDeviceCard.jsx. The route computes the default expiry as the
+ * location's next local midnight, so rendering it in the phone's own zone
+ * would print a time the engine will not act on. An unusable zone resolves to
+ * the default zone (resolveZone) rather than costing the whole line.
+ *
+ * @param {string|null} iso
+ * @param {number} nowMs
+ * @param {string} tz  the LOCATION's IANA zone
+ */
+export function overrideUntilLabel(iso, nowMs, tz) {
+  const ms = Date.parse(iso ?? '')
+  if (!Number.isFinite(ms)) return ''
+  const zone = resolveZone(tz)
+  const time = timeLabelIn(new Date(ms).toISOString(), zone)
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now()
+  const today = strictDayStrIn(now, zone)
+  const day = strictDayStrIn(ms, zone)
+  if (day === today) return time
+  if (day === addDaysISO(today, 1)) return `${time} tomorrow`
+  return `${formatInZone(ms, zone, { weekday: 'short' })} ${time}`
+}
+
+/**
+ * The group switch's colour: 'on' | 'off' | 'mixed' | 'offline'.
+ *
+ * Re-typed from `groupSwitchState` (ShellyGroupCard.jsx), from the server's
+ * counts: MIXED only when 0 < on_count < member_count. That amber is a display
+ * state, never a third command — it is what "one member offline during a group
+ * press" looks like on the next list (Review Focus 2).
+ *
+ * Two phone-side differences, both because the phone draws a tone where the
+ * web draws a labelled pill:
+ *   • 'offline' — when the caller passes the device list and EVERY member it
+ *     holds reads `online: false`. A dead member's last reading may still say
+ *     `output: true`; painting that green would claim lights are on that
+ *     nobody can see. Absent/null `online` is not a verdict, so it never
+ *     counts as offline.
+ *   • an empty group (the web's 'empty') is 'off': nothing in it is on.
+ *
+ * @param {object} group      a GET /api/shelly/groups row (with `now`, `device_ids`)
+ * @param {object[]} [devices] the GET /api/shelly/devices rows, to read `online`
+ */
+export function groupTone(group, devices) {
+  const ids = new Set(Array.isArray(group?.device_ids) ? group.device_ids : [])
+  const members = (Array.isArray(devices) ? devices : []).filter((d) => d && ids.has(d.id))
+  if (members.length > 0 && members.every((d) => d.last_state?.online === false)) return 'offline'
+  const count = Number(group?.now?.member_count) || 0
+  const on = Number(group?.now?.on_count) || 0
+  if (count <= 0 || on <= 0) return 'off'
+  if (on >= count) return 'on'
+  return 'mixed'
+}
+
+// Today's fixed hours by the STUDIO's weekday (ISO, 1 = Monday): "06:00–21:00",
+// several joined with commas, or null when no window runs today.
+function fixedHoursToday(windows, zone, nowMs) {
+  const { weekday } = instantToZonedParts(nowMs, zone)
+  const today = (Array.isArray(windows) ? windows : [])
+    .filter((w) => Array.isArray(w?.days) && w.days.includes(weekday) && w.on && w.off)
+    .sort((a, b) => String(a.on).localeCompare(String(b.on)))
+  if (!today.length) return null
+  return today.map((w) => `${w.on}–${w.off}`).join(', ')
+}
+
+/**
+ * The one line under a group's name, worded from the server's `now`:
+ *   "Follows classes · on until 19:10", "Fixed hours · 06:00–21:00",
+ *   "1 of 2 on · manual until midnight", "Never automatic".
+ *
+ * Re-typed from `groupReasonLine` in ShellyGroupCard.jsx, branch for branch.
+ *
+ * @param {object} group  a GET /api/shelly/groups row (with `now`)
+ * @param {string} tz     the LOCATION's IANA zone
+ * @param {number} [nowMs] testable clock
+ */
+export function groupReasonLine(group, tz, nowMs) {
+  const zone = resolveZone(tz)
+  const at = Number.isFinite(nowMs) ? nowMs : Date.now()
+  const now = group?.now || {}
+  let reason
+  if (now.mode === 'override') {
+    if (!isManagedGroup(group)) reason = 'Manual · stays until changed'
+    else if (timeLabelIn(now.until, zone) === '00:00') reason = 'Manual until midnight'
+    else reason = `Manual until ${overrideUntilLabel(now.until, at, zone)}`
+  } else if (now.mode === 'none' || !isManagedGroup(group)) {
+    reason = 'Never automatic'
+  } else if (group.schedule_mode === 'fixed') {
+    const hours = fixedHoursToday(group.fixed_windows, zone, at)
+    // An overnight window opened yesterday is not in today's list, but the
+    // server says it is open: name its end rather than claim "off today".
+    if (hours) reason = `Fixed hours · ${hours}`
+    else if (now.mode === 'window' && now.until) reason = `Fixed hours · on until ${timeLabelIn(now.until, zone)}`
+    else reason = 'Fixed hours · off today'
+  } else if (now.windows_unread) {
+    reason = "Follows classes · couldn't read today's classes"
+  } else if (now.mode === 'window' && now.until) {
+    reason = `Follows classes · on until ${timeLabelIn(now.until, zone)}`
+  } else if (now.next_on) {
+    reason = `Follows classes · next on at ${timeLabelIn(now.next_on, zone)}`
+  } else {
+    reason = 'Follows classes · no more classes today'
+  }
+  if (groupTone(group) !== 'mixed') return reason
+  return `${now.on_count} of ${now.member_count} on · ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
+}
+
+/**
+ * The relay as words, with a light's brightness: "On · 55%", "On", "Off",
+ * "Unknown". Re-typed from `outputLabel` in ShellyDeviceCard.jsx: a switch
+ * never shows a brightness, even if a stray key rode in on its state, and
+ * `output: null` is Unknown, never Off (plugStateLabel's rule).
+ */
+export function lightStateLabel(device) {
+  const state = device?.last_state || {}
+  if (state.output === true) {
+    return device?.kind === 'light' && Number.isFinite(state.brightness)
+      ? `On · ${Math.round(state.brightness)}%`
+      : 'On'
+  }
+  if (state.output === false) return 'Off'
+  return 'Unknown'
+}
+
+/**
+ * A member row's power column: "42 W", "Doesn’t report power" or "—".
+ * Re-typed from ShellyGroupCard's MemberRow (SHELLYNOPOWER.1's rule): only an
+ * ONLINE reading with `apower` AND `aenergy_wh` both absent means the hardware
+ * meters nothing. Offline, or one figure present, is simply not known.
+ */
+export function memberPowerText(device) {
+  const state = device?.last_state || {}
+  if (Number.isFinite(state.apower)) return `${Math.round(state.apower)} W`
+  if (state.online === true && state.apower == null && state.aenergy_wh == null) return 'Doesn’t report power'
+  return '—'
 }

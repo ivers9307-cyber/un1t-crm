@@ -176,3 +176,40 @@ export async function api(path, options = {}) {
   }
   return json
 }
+
+// ── SHELLYGROUPS.9 — Shelly groups ─────────────────────────────────────────
+// Thin wrappers over api(), so every call carries authHeaders() (the
+// impersonation header included) and api()'s envelope rules: the toggle's
+// HTTP 429 `success:true, pending:true` body reaches the caller UNCHANGED, and
+// mobile/lib/shelly.js reads `applied` / `pending` off it.
+
+/** GET /api/shelly/groups → `{ success, groups: [{ …, device_ids, now }] }`. */
+export function listShellyGroups(locationId) {
+  return api('/api/shelly/groups', { locationId })
+}
+
+/**
+ * POST /api/shelly/groups/<id>/toggle with `{ state: 'on'|'off'|'auto', until? }`.
+ * An absent `until` is OMITTED, not sent as null: the route then computes
+ * midnight in the STUDIO's zone ("Until midnight").
+ * → `{ success, applied: 'all'|'partial'|'none', pending_device_ids, pending_members, message?, group }`
+ */
+export function toggleShellyGroup(groupId, { state, until } = {}, locationId) {
+  const body = until ? { state, until } : { state }
+  return api(`/api/shelly/groups/${encodeURIComponent(groupId)}/toggle`, { method: 'POST', body, locationId })
+}
+
+/**
+ * How many devices on the studio's Shelly account could be adopted and are
+ * not: rows from GET /api/shelly/discover with `supported === true` and
+ * `adopted == null`. Returns NULL when the list could not be read — an unread
+ * list is unknown, never "nothing to adopt". Called once per screen open (the
+ * discover route reads Shelly's cloud live).
+ *
+ * @returns {Promise<number|null>}
+ */
+export async function countUnadoptedShelly(locationId) {
+  const r = await api('/api/shelly/discover', { locationId })
+  if (r?.success !== true || !Array.isArray(r.devices)) return null
+  return r.devices.filter((d) => d?.supported === true && d?.adopted == null).length
+}

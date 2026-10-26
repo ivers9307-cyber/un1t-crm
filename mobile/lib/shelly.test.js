@@ -16,6 +16,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   plugStateLabel, plugTone, isQueued, toggleResultText, errorText, plugDisplayName,
+  groupTone, groupReasonLine, lightStateLabel, memberPowerText, overrideUntilLabel,
   PLUG_FRESH_MS, PLUG_STALE_MS, PLUG_TONE_TEXT, PLUG_TONE_DOT, HOLDS_TEXT,
 } from './shelly'
 
@@ -290,5 +291,177 @@ describe('plugDisplayName', () => {
     expect(plugDisplayName({ device_id: 'abc123de' })).toBe('Shelly · 23de')
     expect(plugDisplayName({})).toBe('Shelly · ')
     expect(plugDisplayName(null)).toBe('Shelly · ')
+  })
+})
+
+// ── SHELLYGROUPS.9 — the group card's judgements ─────────────────────────────
+// Re-typed from the web's ShellyGroupCard / ShellyDeviceCard. Every clock below
+// is Dublin SUMMER time (UTC+1) on purpose, so a helper that formatted in UTC or
+// in the runner's zone prints the wrong hour and fails.
+
+const G_NOW = Date.parse('2026-08-24T12:00:00.000Z') // Mon 13:00 in Dublin
+const DUB = 'Europe/Dublin'
+const DUB_MIDNIGHT = '2026-08-24T23:00:00.000Z' // Tue 00:00 in Dublin
+const group = (over = {}, now = {}) => ({
+  id: 'g1', name: 'Studio lights', enabled: true, schedule_mode: 'glofox', fixed_windows: [],
+  device_ids: ['d1', 'd2'],
+  ...over,
+  now: { on_count: 0, member_count: 2, mode: 'idle', until: null, next_on: null, ...now },
+})
+
+describe('groupTone', () => {
+  it('mixed when SOME but not all members read on — the "1 of 2 on" state (Review Focus 2, phone half)', () => {
+    // One member offline during a group press: the route answers `partial` and
+    // the next list shows on_count 1 of 2. That is amber, never green.
+    expect(groupTone(group({}, { on_count: 1, member_count: 2 }))).toBe('mixed')
+    expect(groupTone(group({}, { on_count: 2, member_count: 3 }))).toBe('mixed')
+  })
+
+  it('on when every member reads on, off when none does', () => {
+    expect(groupTone(group({}, { on_count: 2, member_count: 2 }))).toBe('on')
+    expect(groupTone(group({}, { on_count: 0, member_count: 2 }))).toBe('off')
+  })
+
+  it('an empty group (or a missing `now`) is off — nothing is on', () => {
+    expect(groupTone(group({ device_ids: [] }, { on_count: 0, member_count: 0 }))).toBe('off')
+    expect(groupTone({})).toBe('off')
+    expect(groupTone(null)).toBe('off')
+  })
+
+  it('offline when every member the device list holds reads online:false — it beats a stale "on"', () => {
+    const devices = [
+      { id: 'd1', last_state: { online: false, output: true } },
+      { id: 'd2', last_state: { online: false, output: true } },
+      { id: 'other', last_state: { online: true, output: true } },
+    ]
+    expect(groupTone(group({}, { on_count: 2, member_count: 2 }), devices)).toBe('offline')
+  })
+
+  it('one member online is NOT offline — the counts decide', () => {
+    const devices = [
+      { id: 'd1', last_state: { online: false, output: null } },
+      { id: 'd2', last_state: { online: true, output: true } },
+    ]
+    expect(groupTone(group({}, { on_count: 1, member_count: 2 }), devices)).toBe('mixed')
+  })
+
+  it('an unknown online flag is not offline (absent is not a verdict)', () => {
+    const devices = [{ id: 'd1', last_state: {} }, { id: 'd2', last_state: { online: null } }]
+    expect(groupTone(group({}, { on_count: 0, member_count: 2 }), devices)).toBe('off')
+  })
+})
+
+describe('groupReasonLine', () => {
+  it('"Follows classes · on until 19:10" — the studio clock, not UTC', () => {
+    const g = group({}, { mode: 'window', until: '2026-08-24T18:10:00.000Z' })
+    expect(groupReasonLine(g, DUB, G_NOW)).toBe('Follows classes · on until 19:10')
+  })
+
+  it('a New York studio reads its own clock', () => {
+    const g = group({}, { mode: 'window', until: '2026-08-24T23:10:00.000Z' })
+    expect(groupReasonLine(g, 'America/New_York', G_NOW)).toBe('Follows classes · on until 19:10')
+  })
+
+  it('follows classes: next on, none left, and an unreadable timetable', () => {
+    expect(groupReasonLine(group({}, { mode: 'idle', next_on: '2026-08-24T16:30:00.000Z' }), DUB, G_NOW))
+      .toBe('Follows classes · next on at 17:30')
+    expect(groupReasonLine(group(), DUB, G_NOW)).toBe('Follows classes · no more classes today')
+    // windows_unread: say so, never invent a time.
+    expect(groupReasonLine(group({}, { mode: 'idle', windows_unread: true, next_on: '2026-08-24T16:30:00.000Z' }), DUB, G_NOW))
+      .toBe("Follows classes · couldn't read today's classes")
+  })
+
+  it('"Fixed hours · 06:00–21:00" — today\'s windows by the studio weekday', () => {
+    const g = group({
+      schedule_mode: 'fixed',
+      fixed_windows: [
+        { days: [1, 2, 3, 4, 5], on: '06:00', off: '21:00' },
+        { days: [6, 7], on: '08:00', off: '14:00' },
+      ],
+    })
+    expect(groupReasonLine(g, DUB, G_NOW)).toBe('Fixed hours · 06:00–21:00')
+  })
+
+  it('fixed hours: several windows joined, none today, and an overnight window still open', () => {
+    const several = group({
+      schedule_mode: 'fixed',
+      fixed_windows: [{ days: [1], on: '17:00', off: '21:00' }, { days: [1], on: '06:00', off: '09:00' }],
+    })
+    expect(groupReasonLine(several, DUB, G_NOW)).toBe('Fixed hours · 06:00–09:00, 17:00–21:00')
+    const weekend = group({ schedule_mode: 'fixed', fixed_windows: [{ days: [6, 7], on: '08:00', off: '14:00' }] })
+    expect(groupReasonLine(weekend, DUB, G_NOW)).toBe('Fixed hours · off today')
+    const overnight = group(
+      { schedule_mode: 'fixed', fixed_windows: [{ days: [7], on: '22:00', off: '02:00' }] },
+      { mode: 'window', until: '2026-08-24T13:30:00.000Z' },
+    )
+    expect(groupReasonLine(overnight, DUB, G_NOW)).toBe('Fixed hours · on until 14:30')
+  })
+
+  it('"1 of 2 on · manual until midnight" — mixed prefixes the reason, lower-cased', () => {
+    const g = group({ schedule_mode: 'fixed' }, { mode: 'override', until: DUB_MIDNIGHT, on_count: 1, member_count: 2 })
+    expect(groupReasonLine(g, DUB, G_NOW)).toBe('1 of 2 on · manual until midnight')
+  })
+
+  it('a manual override that is not midnight names its end, with a day when it is not today', () => {
+    expect(groupReasonLine(group({}, { mode: 'override', until: '2026-08-24T15:00:00.000Z' }), DUB, G_NOW))
+      .toBe('Manual until 16:00')
+    expect(groupReasonLine(group({}, { mode: 'override', until: '2026-08-25T15:00:00.000Z' }), DUB, G_NOW))
+      .toBe('Manual until 16:00 tomorrow')
+  })
+
+  it('an override on an unmanaged group stays until changed — no countdown nobody keeps', () => {
+    const g = group({ enabled: false }, { mode: 'override', until: DUB_MIDNIGHT })
+    expect(groupReasonLine(g, DUB, G_NOW)).toBe('Manual · stays until changed')
+  })
+
+  it('"Never automatic" — a switched-off group, or mode none', () => {
+    expect(groupReasonLine(group({ enabled: false }), DUB, G_NOW)).toBe('Never automatic')
+    expect(groupReasonLine(group({ schedule_mode: 'none' }), DUB, G_NOW)).toBe('Never automatic')
+    expect(groupReasonLine(group({}, { mode: 'none' }), DUB, G_NOW)).toBe('Never automatic')
+  })
+
+  it('an unusable zone falls back to the default zone rather than throwing', () => {
+    const g = group({}, { mode: 'window', until: '2026-08-24T18:10:00.000Z' })
+    expect(groupReasonLine(g, 'Not/AZone', G_NOW)).toBe('Follows classes · on until 19:10')
+  })
+})
+
+describe('overrideUntilLabel', () => {
+  it('today, tomorrow, later in the week, and junk', () => {
+    expect(overrideUntilLabel('2026-08-24T15:00:00.000Z', G_NOW, DUB)).toBe('16:00')
+    expect(overrideUntilLabel('2026-08-25T15:00:00.000Z', G_NOW, DUB)).toBe('16:00 tomorrow')
+    expect(overrideUntilLabel('2026-08-27T15:00:00.000Z', G_NOW, DUB)).toBe('Thu 16:00')
+    expect(overrideUntilLabel(null, G_NOW, DUB)).toBe('')
+    expect(overrideUntilLabel('nope', G_NOW, DUB)).toBe('')
+  })
+})
+
+describe('lightStateLabel', () => {
+  it('"On · 55%" for a light that is on, rounded', () => {
+    expect(lightStateLabel({ kind: 'light', last_state: { output: true, brightness: 55 } })).toBe('On · 55%')
+    expect(lightStateLabel({ kind: 'light', last_state: { output: true, brightness: 54.6 } })).toBe('On · 55%')
+  })
+
+  it('a light with no brightness reading is plain On; off and unknown are the relay words', () => {
+    expect(lightStateLabel({ kind: 'light', last_state: { output: true } })).toBe('On')
+    expect(lightStateLabel({ kind: 'light', last_state: { output: false, brightness: 55 } })).toBe('Off')
+    expect(lightStateLabel({ kind: 'light', last_state: { output: null } })).toBe('Unknown')
+    expect(lightStateLabel(null)).toBe('Unknown')
+  })
+
+  it('a switch never shows a brightness, even if a stray key rode in', () => {
+    expect(lightStateLabel({ kind: 'switch', last_state: { output: true, brightness: 55 } })).toBe('On')
+    expect(lightStateLabel({ last_state: { output: true, brightness: 55 } })).toBe('On')
+  })
+})
+
+describe('memberPowerText', () => {
+  it('watts when measured, "Doesn’t report power" only for an ONLINE reading with both absent', () => {
+    expect(memberPowerText({ last_state: { online: true, apower: 41.6 } })).toBe('42 W')
+    expect(memberPowerText({ last_state: { online: true, apower: null, aenergy_wh: null } })).toBe('Doesn’t report power')
+    // Offline or unknown: we do not know the hardware meters nothing.
+    expect(memberPowerText({ last_state: { online: false } })).toBe('—')
+    expect(memberPowerText({ last_state: { online: true, aenergy_wh: 12 } })).toBe('—')
+    expect(memberPowerText(null)).toBe('—')
   })
 })
