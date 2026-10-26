@@ -406,7 +406,6 @@ export const EXEMPT = {
   },
   'src/app/api/webhooks/revolut/route.js': {
     cars: 'Signature-verified webhook resolves the car by deposit_revolut_order_id — the provider\'s order id from the verified payload IS the row identity.',
-    contacts: 'Buyer-email ilike lookup to link the deposit event to an existing contact; input comes from the signature-verified payload\'s order, only the contact id is used for the event emit.',
   },
   'src/app/api/webhooks/revolut/donations/route.js': {
     donations: 'CHARITY.7 signature-verified donations webhook: the re-read is by the row\'s own id, taken from resolveDonationByRef on the provider\'s order id from the verified payload — the provider\'s order id IS the row identity.',
