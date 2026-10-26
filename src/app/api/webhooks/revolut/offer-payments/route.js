@@ -23,13 +23,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
-import {
-  resolveOfferPurchaseByOrderId,
-  markOfferPurchaseState,
-  linkOrCreateContactForPurchase,
-  notifyStaffOfPaidPurchase,
-} from '@/lib/sale-offers'
-import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
+import { resolveOfferPurchaseByOrderId, markOfferPurchaseState } from '@/lib/sale-offers'
+import { runOfferPaidSideEffects } from '@/lib/offer-purchase-paid'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { logWarn, logError } from '@/lib/log'
 
@@ -106,8 +101,10 @@ export async function POST(request) {
   let changed
   let state
   try {
-    // Throws on a failed write.
-    ({ changed, state } = await markOfferPurchaseState({ db, purchase, providerState }))
+    // Throws on a failed write. casOnState (REVPAY.3): the status poll and the
+    // reconcile cron can settle the same purchase; only the write that lands
+    // reports `changed`, so the paid side effects run once.
+    ({ changed, state } = await markOfferPurchaseState({ db, purchase, providerState, casOnState: true }))
   } catch (e) {
     logError('offer-webhook', `offer purchase state write failed for order ${orderId}; deferred`, { err: e, purchaseId: purchase.id })
     return await defer()
@@ -115,16 +112,9 @@ export async function POST(request) {
 
   if (changed && state === 'paid') {
     // Fire-and-forget: a contact/notify failure must never 500 the webhook.
+    // Contact link/tag, staff alert, buyer receipt (src/lib/offer-purchase-paid.js).
     try {
-      const { contactId } = await linkOrCreateContactForPurchase(db, purchase)
-      await notifyStaffOfPaidPurchase(db, purchase, purchase.offer || {})
-      // Buyer receipt. Deliberately says "within 24 hours", NOT "it's ready" —
-      // fulfilment is a manual Glofox step that has not happened yet.
-      await sendOfferPurchaseEmail(db, {
-        purchase: { ...purchase, contact_id: purchase.contact_id || contactId || null },
-        offer: purchase.offer || {},
-        kind: 'paid',
-      })
+      await runOfferPaidSideEffects(db, purchase)
     } catch (e) {
       logWarn('offer-webhook', `paid side-effects failed for ${purchase.id}`, { err: e })
     }

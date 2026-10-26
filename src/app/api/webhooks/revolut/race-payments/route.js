@@ -41,9 +41,8 @@ import { NextResponse, after } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
-import { sendRaceConfirmations, sendGapPaidEmail } from '@/lib/race-confirmations'
+import { runRacePaymentCompletedEffects } from '@/lib/race-payment-completed'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -136,108 +135,20 @@ export async function POST(request) {
   // applied, so release and let a resend or the return-page refresh apply it.
   if (result?.error) return await defer()
 
-  // On a fresh completion, fire the confirmations. Idempotent inside
-  // sendRaceConfirmations via the *_sent_at stamps so a Revolut retry
-  // can't double-send.
-  let confirmations = null
-  // EVENT-MOVE.5 — a paid PRICE DIFFERENCE (kind move_gap) settled its move
-  // inside markRacePaymentStatus; it gets the short gap receipt, never the
-  // entry confirmation, and never the Glofox push (its people were pushed
-  // when the entry was paid).
-  if (result.applied?.status === 'completed' && payment.kind === GAP_PAYMENT_KIND) {
-    try {
-      confirmations = await sendGapPaidEmail({ db, paymentId: payment.id })
-    } catch (e) {
-      console.warn(`[revolut-race-webhook] gap receipt failed for ${payment.id}: ${e.message}`)
-      confirmations = { failed: [`unhandled:${e.message}`] }
-    }
-  } else if (result.applied?.status === 'completed') {
-    try {
-      confirmations = await sendRaceConfirmations({ db, paymentId: payment.id })
-    } catch (e) {
-      console.warn(`[revolut-race-webhook] confirmations failed for ${payment.id}: ${e.message}`)
-      confirmations = { failed: [`unhandled:${e.message}`] }
-    }
-
-    // GLOFOX3.3 (mig 145). Post-payment Glofox push for opted-in
-    // events. Race payments don't push at registration time (would
-    // create Glofox accounts for teams that abandon checkout), so
-    // the push fires here instead — once payment is confirmed.
-    // Best-effort, fire-and-forget. Idempotency: every push routes
-    // through findOrCreateGlofoxMember which skips already-linked
-    // contacts, so a Revolut retry can't double-push either.
-    // after(): the push runs once the response is sent, and Vercel keeps
-    // the function alive until it finishes (a floating promise could be cut
-    // off when the response returned).
-    after(() => pushRaceTeamToGlofox(db, payment.id))
-  }
+  // On a fresh completion: the entry confirmations + Glofox push, or the gap
+  // receipt for a price difference (EVENT-MOVE.5), never both. Shared with
+  // the reconcile cron (src/lib/race-payment-completed.js, REVPAY.3).
+  // after(): the Glofox push runs once the response is sent, and Vercel keeps
+  // the function alive until it finishes (a floating promise could be cut off
+  // when the response returned).
+  const { confirmations, glofoxPush } = await runRacePaymentCompletedEffects({ db, payment, applied: result.applied })
+  if (glofoxPush) after(glofoxPush)
 
   return NextResponse.json({
     success: true,
     applied: result.applied,
     confirmations,
   })
-}
-
-// GLOFOX3.3 (mig 145) — the opted-in event's team, pushed to Glofox after the
-// payment completed. Best-effort: logs and never throws.
-async function pushRaceTeamToGlofox(db, paymentId) {
-  try {
-    const { data: pay, error: payErr } = await db
-      .from('race_payments')
-      .select(`
-        id,
-        race_registrations:race_registration_id (
-          id, team_id,
-          race_events:race_event_id ( id, create_in_glofox )
-        )
-      `)
-      .eq('id', paymentId)
-      .maybeSingle()
-    if (payErr) {
-      logWarn('revolut-race-webhook.glofox', 'payment unreadable; Glofox push skipped', { err: payErr, paymentId })
-      return
-    }
-    const race = pay?.race_registrations?.race_events
-    const teamId = pay?.race_registrations?.team_id
-    if (!race?.create_in_glofox || !teamId) return
-    const { findOrCreateGlofoxMember } = await import('@/lib/glofox-push')
-    const { data: members, error: membersErr } = await db
-      .from('team_members')
-      .select(`
-        name, email, role, contact_id,
-        contacts:contact_id ( id, name, email, first_name, last_name, phone, dob, location_id, glofox_member_id )
-      `)
-      .eq('team_id', teamId)
-    if (membersErr) {
-      logWarn('revolut-race-webhook.glofox', 'team unreadable; Glofox push skipped', { err: membersErr, paymentId, teamId })
-      return
-    }
-    for (const m of (members || [])) {
-      if (!m.contacts || !m.contacts.id || !m.contacts.email) continue
-      const c = m.contacts
-      let { first_name, last_name } = c
-      if ((!first_name || !last_name) && (c.name || m.name)) {
-        const full = (c.name || m.name).trim().split(/\s+/)
-        first_name = first_name || full[0] || ''
-        last_name = last_name || (full.slice(1).join(' ') || '—')
-      }
-      try {
-        await findOrCreateGlofoxMember({
-          db,
-          locationId: c.location_id,
-          contact: { ...c, first_name, last_name },
-          source: 'event_registration',
-          createIfMissing: true,
-          attachTrial: true,
-        })
-      } catch (e) {
-        logWarn('revolut-race-webhook.glofox', `push failed for ${c.email}`, { err: e })
-      }
-    }
-  } catch (e) {
-    logWarn('revolut-race-webhook.glofox', `glofox push failed for ${paymentId}`, { err: e })
-  }
 }
 
 // Revolut hits GET when configuring the webhook URL — return 200 so

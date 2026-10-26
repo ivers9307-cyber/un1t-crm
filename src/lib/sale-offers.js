@@ -72,12 +72,25 @@ export async function resolveOfferPurchaseByOrderId(db, orderId, { throwOnError 
 // or the next event settle it.
 const STATE_MAP = { completed: 'paid', failed: 'failed', cancelled: 'cancelled' }
 
-export async function markOfferPurchaseState({ db, purchase, providerState }) {
+// `casOnState` (REVPAY.3) makes the write a compare-and-set on the state the
+// caller read: zero rows means another path settled it first, so this caller
+// reports no change and runs no paid side effects. All three Revolut paths
+// pass it (the webhook, the public status poll, the reconcile cron), which
+// closes the race where two of them both saw 'created' and both sent the
+// receipt and the staff alert.
+export async function markOfferPurchaseState({ db, purchase, providerState, casOnState = false }) {
   const next = STATE_MAP[providerState]
   if (!next || purchase.state === next) return { changed: false, state: purchase.state }
   if (purchase.state === 'paid') return { changed: false, state: 'paid' } // never downgrade a paid row
   const patch = { state: next, updated_at: new Date().toISOString() }
   if (next === 'paid' && !purchase.paid_at) patch.paid_at = new Date().toISOString()
+  if (casOnState) {
+    const { data, error } = await db.from('offer_purchases').update(patch)
+      .eq('id', purchase.id).eq('state', purchase.state).select('id')
+    if (error) throw new Error(`offer_purchases update: ${error.message}`)
+    if (!Array.isArray(data) || data.length === 0) return { changed: false, state: purchase.state }
+    return { changed: true, state: next }
+  }
   const { error } = await db.from('offer_purchases').update(patch).eq('id', purchase.id)
   if (error) throw new Error(`offer_purchases update: ${error.message}`)
   return { changed: true, state: next }
