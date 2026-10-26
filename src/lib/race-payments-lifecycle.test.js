@@ -274,7 +274,8 @@ describe('markRacePaymentStatus — the status write is a compare-and-set (EVENT
   it('a failed write applies nothing and never throws', async () => {
     const db = casDb({ error: { message: 'down' } })
     const r = await markRacePaymentStatus({ db, payment: pending, revolutState: 'completed', revolutAmount: 5000 })
-    expect(r).toEqual({ applied: null, state_changed: false })
+    // REVPAY.1 — the error is returned so the Revolut webhook can defer on it.
+    expect(r).toEqual({ applied: null, state_changed: false, error: { message: 'down' } })
     expect(db._captured.some((u) => u.table === 'race_registrations')).toBe(false)
   })
 })

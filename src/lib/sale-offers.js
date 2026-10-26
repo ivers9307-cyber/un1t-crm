@@ -55,12 +55,15 @@ export function formatSaleDeadline(endsAt, { uppercase = true, zone = DEFAULT_TZ
   return uppercase ? text.toUpperCase() : text
 }
 
-export async function resolveOfferPurchaseByOrderId(db, orderId) {
-  const { data } = await db
+// REVPAY.1 — `throwOnError`: a failed read throws instead of reading as "no
+// row", so the Revolut webhook can defer rather than drop the payment.
+export async function resolveOfferPurchaseByOrderId(db, orderId, { throwOnError = false } = {}) {
+  const { data, error } = await db
     .from('offer_purchases')
     .select('*, offer:offer_id ( id, slug, name, bonus_headline, price_cents, category )')
     .eq('revolut_order_id', orderId)
     .maybeSingle()
+  if (error && throwOnError) throw error
   return data || null
 }
 

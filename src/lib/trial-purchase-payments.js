@@ -59,10 +59,15 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
   }
 }
 
-/** Webhook lookup: the row that owns this provider order (null when none). */
-export async function resolveTrialPurchaseByRef(db, providerRef) {
+/**
+ * Webhook lookup: the row that owns this provider order (null when none).
+ * REVPAY.1 — `throwOnError`: a failed read throws instead of reading as "no
+ * row", so the Revolut webhook can defer rather than drop the payment.
+ */
+export async function resolveTrialPurchaseByRef(db, providerRef, { throwOnError = false } = {}) {
   if (!providerRef) return null
-  const { data } = await db.from('trial_purchases').select('*').eq('payment_provider_ref', providerRef).maybeSingle()
+  const { data, error } = await db.from('trial_purchases').select('*').eq('payment_provider_ref', providerRef).maybeSingle()
+  if (error && throwOnError) throw error
   return data || null
 }
 

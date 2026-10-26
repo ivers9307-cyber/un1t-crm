@@ -162,8 +162,10 @@ export async function POST(request, props) {
   }
   const refundAmount = resolution.refundAmount
 
-  // Dispatch to the order's payment provider. Revolut → refundOrder (dedupes
-  // internally); Stripe Connect → a refund on the host's connected account.
+  // Dispatch to the order's payment provider. Revolut → refundOrder, which
+  // sends the idempotency key below as the Idempotency-Key header (REVPAY.1:
+  // until then the key was dropped and nothing deduped a retried refund);
+  // Stripe Connect → a refund on the host's connected account, same key.
   // A FULL refund also returns UN1T's booking fee (refundApplicationFee) so the
   // customer is made whole; a PARTIAL refund keeps the fee and comes out of the
   // host's portion. Provider errors → a clean 502. (EVENTS-HOST.7)
@@ -181,6 +183,18 @@ export async function POST(request, props) {
     })
   } catch (e) {
     const status = e instanceof RevolutError ? Math.min(Math.max(e.status || 502, 400), 599) : 502
+    // REVPAY.1 — no answer (timeout / network) or a 5xx means Revolut may have
+    // refunded anyway. Say so, rather than "failed": the same refund retried
+    // carries the same idempotency key, so it cannot pay out twice.
+    const outcomeUnknown = e instanceof RevolutError && (e.code === 'timeout' || e.code === 'network' || (e.status || 0) >= 500)
+    if (outcomeUnknown) {
+      logError('orders-refund', 'refund outcome unknown (no answer or 5xx from the provider)', { err: e, orderId: order.id, provider: order.payment_provider })
+      return NextResponse.json({
+        success: false,
+        error: `The payment provider did not confirm this refund (${e.message || 'no answer'}). It may have gone through. Retry the SAME refund to check: it is idempotent and will not pay out twice.`,
+        code: 'provider_outcome_unknown',
+      }, { status })
+    }
     return NextResponse.json({
       success: false,
       error: `Refund failed: ${e.message || 'unknown'}`,
@@ -209,7 +223,25 @@ export async function POST(request, props) {
       refund_revolut_id: order.payment_provider === 'revolut' ? (refundResult?.refundId || null) : null,
     },
   }
-  await db.from('orders').update(updates).eq('id', order.id)
+  // REVPAY.1 — the money has gone back; if the ledger write fails, say so
+  // plainly instead of answering success over an order that still reads
+  // 'completed' with nothing refunded. Retrying is safe: the order row is
+  // unchanged, so a retry of the same refund recomputes the SAME idempotency
+  // key, Revolut returns the refund it already made, and this write runs again.
+  // The cascade and events wait for that successful retry (running them now
+  // would emit ORDER_REFUNDED twice).
+  const { error: orderWriteErr } = await db.from('orders').update(updates).eq('id', order.id)
+  if (orderWriteErr) {
+    logError('orders-refund', 'refund issued but the orders row was NOT updated', {
+      err: orderWriteErr, orderId: order.id, refundId: refundResult?.refundId || null, refundedTotal: resolution.newRefundedTotal,
+    })
+    return NextResponse.json({
+      success: false,
+      error: 'The refund went through with the payment provider, but it could not be recorded here. Retry the SAME refund (same amount) to record it: it will not pay out twice. Do not refund a different amount until it shows as refunded.',
+      code: 'refund_not_recorded',
+      data: { order_id: order.id, refund_id: refundResult?.refundId || null },
+    }, { status: 500 })
+  }
 
   // Cascade to source. Both target tables have their own status enum.
   // EVENT-MOVE.5 — the write answers the payment's kind: a refunded price
@@ -234,9 +266,14 @@ export async function POST(request, props) {
     }
   } else if (order.source_type === 'car_deposit' && resolution.isFull) {
     // Car deposits are fixed-amount; only a full refund clears the deposit.
-    await db.from('cars')
+    // The order row already says refunded, so a failed write is logged to be
+    // put right by hand (the same posture as race_payments above).
+    const { error: carErr } = await db.from('cars')
       .update({ deposit_status: 'refunded' })
       .eq('id', order.source_id)
+    if (carErr) {
+      logError('orders-refund', 'refund issued but cars.deposit_status was NOT updated', { err: carErr, orderId: order.id, carId: order.source_id })
+    }
   }
 
   // Event + tag re-evaluation. Best-effort — refund is already
