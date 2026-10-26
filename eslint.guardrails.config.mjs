@@ -518,6 +518,10 @@ const config = [
       'src/lib/screen-plan.js',
       'src/lib/screen-doorbell.js',
       'src/lib/fleet-screen-health.js',
+      // REVPAY.13 — the Revolut customer mapping: born clean; every
+      // revolut_customers write reads its error (a failure only logs, the
+      // order still goes out).
+      'src/lib/revolut-customers.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

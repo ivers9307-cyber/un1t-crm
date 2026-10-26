@@ -75,6 +75,8 @@ export async function POST(request, props) {
     // REVPAY.7 — a fresh order per checkout click (random purchaseId), paid in
     // the page's widget: the 30-minute default expiry applies.
     customer: { email: parsed.data.email, fullName: parsed.data.name },
+    // REVPAY.13 — reuse this buyer's Revolut customer (found-or-created by email).
+    db,
     merchantReference: `offer:${purchaseId}`,
     statementDescriptorSuffix: offer.name,
   })
