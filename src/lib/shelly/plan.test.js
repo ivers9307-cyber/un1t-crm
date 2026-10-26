@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { planDeviceAction, overrideKey, windowKey, isLiveOverride } from './plan'
+import {
+  planDeviceAction, overrideKey, windowKey, isLiveOverride,
+  safetyCap, isManagedTarget, SAFETY_MARGIN_MS, CAP_REARM_SLACK_MS,
+} from './plan'
 
 const DAY = '2026-07-06' // Monday, Dublin IST (+01:00)
 const T = (hhmm, day = DAY) => Date.parse(`${day}T${hhmm}:00+01:00`)
@@ -13,10 +16,15 @@ const base = {
 const dev = (over = {}) => ({ ...base, ...over })
 const ov = (state, until, set_at = '2026-07-06T19:00:00.000Z') => ({ state, until, set_at, set_by: 'u1' })
 const plan = (d, hhmm, opts) => planDeviceAction(d, T(hhmm), DAY, [], 'Europe/Dublin', opts)
+const iso = (ms) => new Date(ms).toISOString()
+// The 07:00–21:30 window's safety cap: 21:30 + 30 min = 22:00 local.
+const CAP = iso(T('22:00'))
+// What the planner answers at 12:00 inside that window: 10 h to the cap.
+const OPEN_NOON = { action: 'on', reason: 'window_open', key: W, toggleAfterSec: 36_000, capAt: CAP }
 
 describe('planDeviceAction — windows', () => {
   it('1. first tick inside the window opens it', () => {
-    expect(plan(dev(), '07:00')).toEqual({ action: 'on', reason: 'window_open', key: W })
+    expect(plan(dev(), '07:00')).toEqual({ action: 'on', reason: 'window_open', key: W, toggleAfterSec: 54_000, capAt: CAP })
   })
   it('2. a missed boundary tick self-heals', () => {
     expect(plan(dev(), '07:07')).toMatchObject({ action: 'on', key: W })
@@ -55,7 +63,10 @@ describe('planDeviceAction — overrides', () => {
   const until = '2026-07-06T23:00:00.000Z' // local midnight
   it('8. a live override wins and is keyed on set_at', () => {
     const d = dev({ override: ov('on', until), last_applied: { key: W, action: 'on' } })
-    expect(plan(d, '20:00')).toEqual({ action: 'on', reason: 'override', key: overrideKey(d.override) })
+    // Armed at until + 30 min (23:30Z), 4.5 h after 20:00 local.
+    expect(plan(d, '20:00')).toEqual({
+      action: 'on', reason: 'override', key: overrideKey(d.override), toggleAfterSec: 16_200, capAt: '2026-07-06T23:30:00.000Z',
+    })
   })
   it('9. a live override beats the window close', () => {
     const d = dev({ override: ov('on', until), last_applied: { key: overrideKey(ov('on', until)), action: 'on' } })
@@ -120,7 +131,7 @@ describe('planDeviceAction — hostile rows', () => {
   // silently inverted into a physical off.
   for (const state of ['ON', 'On', 'on ', 'toggle', true, 1, '', null]) {
     it(`an unrecognised override state (${JSON.stringify(state)}) is not a live override`, () => {
-      expect(plan(dev(ovBad(state)), '12:00')).toEqual({ action: 'on', reason: 'window_open', key: W })
+      expect(plan(dev(ovBad(state)), '12:00')).toEqual(OPEN_NOON)
       expect(plan(dev({ ...ovBad(state), enabled: false }), '12:00')).toBe(null)
     })
   }
@@ -131,13 +142,13 @@ describe('planDeviceAction — hostile rows', () => {
   for (const until of ['soon', null, '', String(Date.parse(LIVE)), {}, 0]) {
     it(`an override whose until is ${JSON.stringify(until)} is not live`, () => {
       expect(plan(dev({ override: { state: 'off', until, set_at: 's1' } }), '12:00'))
-        .toEqual({ action: 'on', reason: 'window_open', key: W })
+        .toEqual(OPEN_NOON)
     })
   }
 
   it('a null options argument does not throw (a default only covers undefined)', () => {
     expect(planDeviceAction(dev(), T('12:00'), DAY, [], 'Europe/Dublin', null))
-      .toEqual({ action: 'on', reason: 'window_open', key: W })
+      .toEqual(OPEN_NOON)
   })
 
   it('a non-object last_applied is ignored, never dereferenced', () => {
@@ -180,7 +191,8 @@ describe('planDeviceAction — hostile rows', () => {
 
 describe('planDeviceAction — force (run-now)', () => {
   it('17. inside a window force re-applies even when already stamped, as run_now', () => {
-    expect(plan(dev({ last_applied: { key: W, action: 'on' } }), '12:00', { force: true })).toEqual({ action: 'on', reason: 'run_now', key: W })
+    expect(plan(dev({ last_applied: { key: W, action: 'on' } }), '12:00', { force: true }))
+      .toEqual({ ...OPEN_NOON, reason: 'run_now' })
   })
   it('18. outside every window force means off with a run key, and the next plain tick is quiet', () => {
     const p = plan(dev(), '22:00', { force: true })
@@ -209,7 +221,7 @@ describe('planDeviceAction — sequences and edges', () => {
     })
     // 12:00 is the first window's off_at (exclusive) and the second's on_at
     // (inclusive), so the seam is served by the later window, not by a close.
-    expect(plan(two, '12:00')).toEqual({ action: 'on', reason: 'window_open', key: 'w:' + T('12:00') })
+    expect(plan(two, '12:00')).toEqual({ ...OPEN_NOON, key: 'w:' + T('12:00') })
   })
 
   it('overlapping windows: earliest wins, and the handover re-issues one idempotent on', () => {
@@ -225,7 +237,7 @@ describe('planDeviceAction — sequences and edges', () => {
     // re-issued under the later key — harmless for a relay, and the reason
     // this planner can do what the Sonos one could not.
     expect(plan(dev({ ...overlap, last_applied: { key: W, action: 'on' } }), '14:00'))
-      .toEqual({ action: 'on', reason: 'window_open', key: 'w:' + T('12:00') })
+      .toEqual({ action: 'on', reason: 'window_open', key: 'w:' + T('12:00'), toggleAfterSec: 28_800, capAt: CAP })
   })
 
   it('disabling mid-window leaves the relay as it is — rule 2 returns before rule 4 can close', () => {
@@ -247,9 +259,11 @@ describe('planDeviceAction — sequences and edges', () => {
       .toEqual({ action: 'off', reason: 'override_expired', key: K })
     // Stamped with that close, the morning window still opens on its own key.
     const open = tick({ key: K, action: 'off' }, '07:00', TUE)
-    expect(open).toEqual({ action: 'on', reason: 'window_open', key: 'w:' + T('07:00', TUE) })
-    // And having opened it, the next tick inside the same window is quiet.
-    expect(tick({ key: open.key, action: 'on' }, '07:01', TUE)).toBe(null)
+    expect(open).toEqual({
+      action: 'on', reason: 'window_open', key: 'w:' + T('07:00', TUE), toggleAfterSec: 54_000, capAt: iso(T('22:00', TUE)),
+    })
+    // And having opened it (stamped with its cap), the next tick is quiet.
+    expect(tick({ key: open.key, action: 'on', cap_at: open.capAt }, '07:01', TUE)).toBe(null)
   })
 
   it('an off override beats a live CLASS window (rule 1 precedes the schedule)', () => {
@@ -309,5 +323,174 @@ describe('isLiveOverride', () => {
         expect(acted).toBe(isLiveOverride(o, NOW))
       }
     }
+  })
+})
+
+// SHELLYTIMERS.2 — the device-side safety cap. Pure maths on instants, so the
+// whole file runs identically under TZ=Europe/Dublin and TZ=America/New_York
+// (CI runs both); the location zone is always passed explicitly.
+describe('safetyCap', () => {
+  const NOW = Date.parse('2026-07-06T11:00:00.000Z')
+  it('rounds the cap UP to the minute and counts whole seconds from now', () => {
+    expect(safetyCap(NOW + 90 * 60_000, NOW)).toEqual({ toggleAfterSec: 5400, capAt: '2026-07-06T12:30:00.000Z' })
+    // 12:30:20 → 12:31:00: never earlier than wanted.
+    expect(safetyCap(NOW + 90 * 60_000 + 20_000, NOW)).toEqual({ toggleAfterSec: 5460, capAt: '2026-07-06T12:31:00.000Z' })
+  })
+  it('a now that is not on a second boundary still yields a whole-second timer at or after the cap', () => {
+    const now = NOW + 400
+    const c = safetyCap(NOW + 60 * 60_000, now)
+    expect(Number.isInteger(c.toggleAfterSec)).toBe(true)
+    expect(Date.parse(c.capAt)).toBeGreaterThanOrEqual(NOW + 60 * 60_000)
+  })
+  it('nothing to arm for a cap that is not in the future, or an unusable instant', () => {
+    for (const [cap, now] of [[NOW, NOW], [NOW - 1, NOW], [NaN, NOW], [NOW + 1, NaN], [Infinity, NOW]]) {
+      expect(safetyCap(cap, now)).toBe(null)
+    }
+  })
+  it('margin and slack are the ruled values', () => {
+    expect(SAFETY_MARGIN_MS).toBe(30 * 60_000)
+    expect(CAP_REARM_SLACK_MS).toBe(60_000)
+  })
+})
+
+describe('isManagedTarget', () => {
+  it('is enabled AND a schedule that is not none', () => {
+    expect(isManagedTarget(dev())).toBe(true)
+    expect(isManagedTarget(dev({ schedule_mode: 'class' }))).toBe(true)
+    expect(isManagedTarget(dev({ enabled: false }))).toBe(false)
+    expect(isManagedTarget(dev({ schedule_mode: 'none' }))).toBe(false)
+    expect(isManagedTarget(null)).toBe(false)
+  })
+})
+
+describe('planDeviceAction — safety cap (SHELLYTIMERS.2)', () => {
+  const until = '2026-07-06T23:00:00.000Z' // local midnight
+  const stamped = (extra = {}) => ({ key: W, action: 'on', reason: 'window_open', at: 'x', cap_at: CAP, ...extra })
+  const longer = (off) => ({ fixed_windows: [{ days: [1, 2, 3, 4, 5], on: '07:00', off }] })
+
+  it('an armed window is quiet while its cap still covers it', () => {
+    expect(plan(dev({ last_applied: stamped() }), '12:00', { relayOn: true })).toBe(null)
+  })
+
+  it('the window GREW (off 21:30 → 23:00): re-sent on with the later cap, tagged cap_extend', () => {
+    expect(plan(dev({ ...longer('23:00'), last_applied: stamped() }), '12:00', { relayOn: true }))
+      .toEqual({ action: 'on', reason: 'cap_extend', key: W, toggleAfterSec: 41_400, capAt: iso(T('23:30')) })
+  })
+
+  it('a growth of exactly the slack is not worth a request; one minute more is', () => {
+    // 21:31 → cap 22:01, exactly 60 s past the armed 22:00.
+    expect(plan(dev({ ...longer('21:31'), last_applied: stamped() }), '12:00', { relayOn: true })).toBe(null)
+    expect(plan(dev({ ...longer('21:32'), last_applied: stamped() }), '12:00', { relayOn: true }))
+      .toMatchObject({ action: 'on', reason: 'cap_extend', capAt: iso(T('22:02')) })
+  })
+
+  it('a SHRINKING window is never re-sent — the cron closes it, the later timer is harmless', () => {
+    expect(plan(dev({ ...longer('20:00'), last_applied: stamped() }), '12:00', { relayOn: true })).toBe(null)
+  })
+
+  it('a re-arm never undoes a human: a relay read OFF, or not read at all, is left alone', () => {
+    const d = dev({ ...longer('23:00'), last_applied: stamped() })
+    for (const relayOn of [false, null, undefined, 'on', 1]) {
+      expect(plan(d, '12:00', { relayOn })).toBe(null)
+    }
+  })
+
+  it('once the armed cap has PASSED inside a live window, the off was ours: re-opened whatever the reading', () => {
+    // Armed for 12:00 (say the window was 07:00–11:30 when it opened), now
+    // 12:05 and the window runs to 21:30.
+    const d = dev({ last_applied: stamped({ cap_at: iso(T('12:00')) }) })
+    for (const relayOn of [false, null, undefined]) {
+      expect(plan(d, '12:05', { relayOn })).toEqual({
+        action: 'on', reason: 'cap_extend', key: W, toggleAfterSec: 35_700, capAt: CAP,
+      })
+    }
+  })
+
+  it('LEGACY: a stamp with no cap_at is re-armed ONCE (relay on), and the re-stamped row is then quiet', () => {
+    const legacy = dev({ last_applied: { key: W, action: 'on', reason: 'window_open', at: 'x' } })
+    const p = plan(legacy, '12:00', { relayOn: true })
+    expect(p).toEqual({ ...OPEN_NOON, reason: 'cap_extend' })
+    const restamped = dev({ last_applied: { key: p.key, action: p.action, reason: p.reason, at: 'y', cap_at: p.capAt } })
+    expect(plan(restamped, '12:01', { relayOn: true })).toBe(null)
+    // …and a legacy row whose relay reads off (or unread) is never touched.
+    expect(plan(legacy, '12:00', { relayOn: false })).toBe(null)
+    expect(plan(legacy, '12:00')).toBe(null)
+  })
+
+  it('LEGACY: an unreadable cap_at reads as "not armed", never as a crash', () => {
+    for (const cap_at of ['soon', 42, {}, null, '', ['x'], true]) {
+      expect(plan(dev({ last_applied: stamped({ cap_at }) }), '12:00', { relayOn: true }))
+        .toEqual({ ...OPEN_NOON, reason: 'cap_extend' })
+      expect(plan(dev({ last_applied: stamped({ cap_at }) }), '12:00')).toBe(null)
+    }
+  })
+
+  it('a live ON override on a managed target is armed at until + 30 min, and quiet once stamped with it', () => {
+    const o = ov('on', until)
+    const first = plan(dev({ override: o }), '20:00')
+    expect(first).toMatchObject({ action: 'on', reason: 'override', toggleAfterSec: 16_200, capAt: '2026-07-06T23:30:00.000Z' })
+    const d = dev({ override: o, last_applied: { key: overrideKey(o), action: 'on', reason: 'override', at: 'x', cap_at: first.capAt } })
+    expect(plan(d, '20:01', { relayOn: true })).toBe(null)
+    // A press stamped before timers existed is re-armed once, like a window.
+    const legacy = dev({ override: o, last_applied: { key: overrideKey(o), action: 'on' } })
+    expect(plan(legacy, '20:00', { relayOn: true })).toMatchObject({ action: 'on', reason: 'cap_extend', key: overrideKey(o) })
+  })
+
+  it('UNMANAGED targets never get a timer — not on a press, not as a re-arm (the "stays until changed" promise)', () => {
+    const o = ov('on', until)
+    for (const over of [{ enabled: false }, { schedule_mode: 'none', fixed_windows: [] }]) {
+      const p = plan(dev({ ...over, override: o }), '20:00')
+      expect(p).toEqual({ action: 'on', reason: 'override', key: overrideKey(o) })
+      expect(plan(dev({ ...over, override: o, last_applied: { key: overrideKey(o), action: 'on' } }), '20:00', { relayOn: true })).toBe(null)
+      expect(plan(dev({ ...over, override: o }), '20:00', { force: true })).toEqual({ action: 'on', reason: 'run_now', key: overrideKey(o) })
+    }
+  })
+
+  it('an OFF never carries a timer: off override, window close, override expiry, run-now off', () => {
+    const offOv = ov('off', until)
+    expect(plan(dev({ override: offOv }), '20:00')).toEqual({ action: 'off', reason: 'override', key: overrideKey(offOv) })
+    expect(plan(dev({ last_applied: stamped() }), '21:30')).toEqual({ action: 'off', reason: 'window_close', key: W })
+    expect(Object.keys(plan(dev(), '22:00', { force: true }))).toEqual(['action', 'reason', 'key'])
+    const onOv = ov('on', until)
+    expect(planDeviceAction(dev({ override: onOv, last_applied: { key: overrideKey(onOv), action: 'on' } }), Date.parse(until) + 60_000, '2026-07-07', [], 'Europe/Dublin'))
+      .toEqual({ action: 'off', reason: 'override_expired', key: overrideKey(onOv) })
+  })
+
+  it('force (run-now) always arms, even over a cap that still covers the window', () => {
+    expect(plan(dev({ last_applied: stamped() }), '12:00', { force: true })).toEqual({ ...OPEN_NOON, reason: 'run_now' })
+  })
+
+  it('a cap_extend stamp still closes at the window end (it is an on, keyed on the window)', () => {
+    expect(plan(dev({ last_applied: stamped({ reason: 'cap_extend' }) }), '21:30')).toEqual({ action: 'off', reason: 'window_close', key: W })
+  })
+
+  it('class mode: the cap is the class window end (class end + lag) + 30 min', () => {
+    const cls = dev({ schedule_mode: 'class', fixed_windows: [], class_rule: { lead_min: 15, lag_min: 10 } })
+    const occ = [{ starts_at: iso(T('12:00')), ends_at: iso(T('13:00')) }]
+    // Window 11:45–13:10, cap 13:40; at 12:15 that is 85 min.
+    expect(planDeviceAction(cls, T('12:15'), DAY, occ, 'Europe/Dublin'))
+      .toEqual({ action: 'on', reason: 'window_open', key: 'w:' + T('11:45'), toggleAfterSec: 5100, capAt: iso(T('13:40')) })
+    // A class added after it: the joined window now ends 14:10, so it re-arms to 14:40.
+    const more = [...occ, { starts_at: iso(T('13:15')), ends_at: iso(T('14:00')) }]
+    const d = { ...cls, last_applied: { key: 'w:' + T('11:45'), action: 'on', cap_at: iso(T('13:40')) } }
+    expect(planDeviceAction(d, T('12:15'), DAY, more, 'Europe/Dublin', { relayOn: true }))
+      .toMatchObject({ action: 'on', reason: 'cap_extend', capAt: iso(T('14:40')) })
+  })
+
+  it('DST: an overnight tail across the Dublin fall-back counts REAL seconds, not wall-clock ones', () => {
+    // Sat 24 Oct 22:00 → Sun 25 Oct 02:00 local. Clocks go back at 02:00 IST,
+    // so 00:30 IST (23:30Z Sat) to 02:30 GMT (02:30Z) is THREE hours, not two.
+    const night = dev({ fixed_windows: [{ days: [6], on: '22:00', off: '02:00' }] })
+    const now = Date.parse('2026-10-24T23:30:00.000Z')
+    expect(planDeviceAction(night, now, '2026-10-25', [], 'Europe/Dublin'))
+      .toMatchObject({ action: 'on', toggleAfterSec: 10_800, capAt: '2026-10-25T02:30:00.000Z' })
+  })
+
+  it('a location in New York: the cap follows THAT zone\'s off time', () => {
+    const ny = dev()
+    const now = Date.parse('2026-07-06T16:00:00.000Z') // 12:00 EDT
+    // 21:30 EDT = 01:30Z next day; + 30 min = 02:00Z.
+    expect(planDeviceAction(ny, now, DAY, [], 'America/New_York'))
+      .toMatchObject({ action: 'on', reason: 'window_open', toggleAfterSec: 36_000, capAt: '2026-07-07T02:00:00.000Z' })
   })
 })

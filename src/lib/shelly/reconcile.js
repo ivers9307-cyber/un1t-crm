@@ -126,6 +126,23 @@ export const ERROR_RETRY_MS = 5 * 60_000
 // which no single client can see.
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// SHELLYTIMERS.2 — the relay's output as THIS tick read it, for the planner's
+// re-arm guard (plan.js header): true / false only from a device that spoke
+// and named this channel; anything else is null, "not known", which the
+// planner never re-arms on. The row's stored last_state is NOT used — it is
+// the previous tick's.
+function relayOnFrom(reading, d) {
+  if (!reading?.online) return null
+  const out = stateFromReading(null, reading, d?.channel, '', deviceKind(d)).output
+  return out === true ? true : out === false ? false : null
+}
+
+// The last_applied stamp for a command that landed. `cap_at` only when the
+// command carried a timer: an absent cap_at is what "not armed" means.
+export const appliedStamp = (p, atIso) => ({
+  key: p.key, action: p.action, reason: p.reason, at: atIso, ...(p.capAt ? { cap_at: p.capAt } : {}),
+})
+
 // The energy carry window. rollDailyEnergy can only bank a gap into today while
 // the caller still hands it the last row, so THIS WINDOW IS THE REACH of that
 // promise (energy.js's fourth obligation spells it out). The row cap moves with
@@ -709,7 +726,9 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       counters.skippedClass++
       continue
     }
-    const plan = planDeviceAction(t, nowMs, dateStr, occurrences, tz)
+    const plan = planDeviceAction(t, nowMs, dateStr, occurrences, tz, {
+      relayOn: relayOnFrom(readings.get(idKey(d.device_id)), d),
+    })
     // The DEVICE row rides on: its id is what gets stamped, its device_id and
     // channel are what gets commanded. effectiveTarget keeps those (and the
     // device's own last_applied) unchanged, so the planner and the stamp agree.
@@ -718,17 +737,26 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   counters.planned = plans.length
 
   // ---- 6. command, then stamp --------------------------------------------
-  // Two calls at most per location: every opening device in one setGroups, every
-  // closing device in another. `on` first — a window that opens and one that
-  // closes in the same tick should light the room before it darkens the other.
+  // One call per direction per TIMER: every closing device in one setGroups,
+  // and the opening devices in one setGroups per distinct safety cap
+  // (SHELLYTIMERS.2 — set/groups carries ONE toggle_after per call, and
+  // plan.js rounds caps to the minute so the devices of one window share
+  // one). Unarmed opens (an unmanaged target's override) are their own batch.
+  // `on` first — a window that opens and one that closes in the same tick
+  // should light the room before it darkens the other.
   // Each call carries both kinds (SHELLYLIGHT.3): `{ switch: [...], light: [...] }`
-  // in ONE request, so a studio with lights still spends one slot per direction.
+  // in ONE request, so a studio with lights spends no extra slot for them.
   // failedCommands keys stay `<id>_<channel>` for both kinds, and a switch and
   // a light never share an id and channel (mig 775), so one gid set reads both.
+  const batches = []
   for (const on of [true, false]) {
     const wanted = plans.filter((p) => p.action === (on ? 'on' : 'off'))
-    if (!wanted.length) continue
+    // An off never carries a timer (the planner never emits one on an off).
+    const byTimer = on ? Map.groupBy(wanted, (p) => p.toggleAfterSec ?? null) : new Map([[null, wanted]])
+    for (const [toggleAfterSec, group] of byTimer) if (group.length) batches.push({ on, toggleAfterSec, wanted: group })
+  }
 
+  for (const { on, toggleAfterSec, wanted } of batches) {
     const batch = []
     for (const p of wanted) {
       let gid
@@ -757,10 +785,13 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
 
     attempted = true
-    const res = await client.setGroups({
+    const groups = {
       switch: batch.filter((x) => deviceKind(x.device) === 'switch').map((x) => x.gid),
       light: batch.filter((x) => deviceKind(x.device) === 'light').map((x) => x.gid),
-    }, on)
+    }
+    const res = toggleAfterSec == null
+      ? await client.setGroups(groups, on)
+      : await client.setGroups(groups, on, { toggleAfterSec })
     // Symmetric with the read path: a retried success and an outright 429 are
     // the same signal about the account's budget, counted once either way.
     if (res.retried || (!res.ok && res.kind === 'rate_limited')) counters.rateLimited++
@@ -774,6 +805,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       // the body carried none. SHELLYERR.1.
       logWarn(MODULE, 'command batch failed', {
         locationId, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, count: batch.length, on,
+        toggleAfterSec: toggleAfterSec ?? null,
       })
       if (res.kind === 'auth') { auth = true; break }
       if (res.kind === 'config') { hostBad = true; break }
@@ -811,7 +843,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       }
       const { error } = await db
         .from('shelly_devices')
-        .update({ last_applied: { key: x.key, action: x.action, reason: x.reason, at: nowIso }, updated_at: nowIso })
+        .update({ last_applied: appliedStamp(x, nowIso), updated_at: nowIso })
         .eq('id', x.device.id)
       if (error) {
         // The relay DID move; only the stamp failed. Next tick re-plans the same
@@ -1036,10 +1068,12 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
 
   const client = makeClient(conn, { sleep, now })
   // A light is addressed through set/light; set/switch would name a component
-  // the device does not have.
+  // the device does not have. An armed `on` (SHELLYTIMERS.2) carries its
+  // safety cap; an off, or an unmanaged target's on, carries none.
+  const timer = plan.toggleAfterSec ? [{ toggleAfterSec: plan.toggleAfterSec }] : []
   const res = deviceKind(device) === 'light'
-    ? await client.setLight(device.device_id, device.channel, plan.action === 'on')
-    : await client.setSwitch(device.device_id, device.channel, plan.action === 'on')
+    ? await client.setLight(device.device_id, device.channel, plan.action === 'on', ...timer)
+    : await client.setSwitch(device.device_id, device.channel, plan.action === 'on', ...timer)
   if (!res.ok) {
     return { ok: false, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, permanent: res.permanent === true }
   }
@@ -1047,7 +1081,7 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   const nowIso = new Date(nowMs).toISOString()
   const { error } = await db
     .from('shelly_devices')
-    .update({ last_applied: { key: plan.key, action: plan.action, reason: plan.reason, at: nowIso }, updated_at: nowIso })
+    .update({ last_applied: appliedStamp(plan, nowIso), updated_at: nowIso })
     .eq('id', device.id)
   // Best-effort: the relay has already moved, and reporting failure would tell
   // the operator the switch did not happen when it did.
