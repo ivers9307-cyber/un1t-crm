@@ -9294,7 +9294,8 @@ const ShellyGroupCreate = ShellyGroupCreateRaw.extend({}).openapi('ShellyGroupCr
 const ShellyGroupPatch = ShellyGroupPatchRaw.extend({}).openapi('ShellyGroupPatch', {
   description: 'Every field optional, strict, and an empty body is a 400 ("Nothing to update"). The schedule fields '
     + 'mean exactly what they mean on a device (ShellyDevicePatch): class_rule is { lead_min, lag_min, '
-    + 'merge_gap_min, days } with defaults 15 / 10 / 30 / every day.',
+    + 'merge_gap_min, days }. It is PARTIAL here: merged onto the stored rule, the merged rule validated (a 400 '
+    + 'names the field), with defaults 15 / 10 / 30 / every day for anything neither side has.',
 })
 const ShellyGroupMembers = ShellyGroupMembersRaw.extend({}).openapi('ShellyGroupMembers', {
   description: 'The group\'s WHOLE membership, replacing what was there; [] empties it. At most '

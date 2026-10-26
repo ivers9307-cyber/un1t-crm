@@ -11,6 +11,11 @@
 //     grouped (409 `grouped`), so they are unmanaged and stay as they are.
 //     Nothing is sent.
 //
+// A `class_rule` in the patch is PARTIAL: it is merged onto the stored rule
+// and the merged rule is validated with ShellyClassRule (which fills the
+// engine's defaults for anything neither side has, and drops keys the engine
+// does not read), so `{ lead_min: 20 }` changes the lead and nothing else.
+//
 // Every write pins `location_id` in the WHERE clause; a foreign id and a
 // malformed one answer the same 404 (group-load.js).
 
@@ -20,7 +25,7 @@ import { logError } from '@/lib/log'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { GROUP_COLUMNS } from '@/lib/shelly/effective'
 import { loadGroup, publicGroup, NAME_TAKEN } from '@/lib/shelly/group-load'
-import { ShellyGroupPatch } from '@/lib/shelly/schemas'
+import { ShellyGroupPatch, ShellyClassRule } from '@/lib/shelly/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,6 +53,21 @@ export const PATCH = withAuth(
     }
     const group = loaded.group
 
+    const patch = { ...input }
+    if (input.class_rule !== undefined) {
+      const stored = group.class_rule && typeof group.class_rule === 'object' && !Array.isArray(group.class_rule)
+        ? group.class_rule
+        : {}
+      const merged = ShellyClassRule.safeParse({ ...stored, ...input.class_rule })
+      if (!merged.success) {
+        // A stored value the schema no longer accepts (written before a bound
+        // tightened) — say which field, never echo the value.
+        const issue = merged.error.issues[0]
+        return bad(`That class rule cannot be saved (${issue?.path?.join('.') || 'class_rule'}: ${issue?.message ?? 'invalid'})`, 400)
+      }
+      patch.class_rule = merged.data
+    }
+
     if (input.name !== undefined) {
       // Another group at this studio with the same name in any case. The
       // group itself is excluded, so re-casing its own name is allowed.
@@ -67,7 +87,7 @@ export const PATCH = withAuth(
 
     const { data: row, error } = await db
       .from('shelly_groups')
-      .update({ ...input, updated_at: new Date().toISOString() })
+      .update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', group.id)
       .eq('location_id', locationId)
       .select(GROUP_COLUMNS)

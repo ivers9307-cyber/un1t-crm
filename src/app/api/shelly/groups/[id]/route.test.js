@@ -98,6 +98,27 @@ describe('PATCH /api/shelly/groups/[id]', () => {
     expect(createShellyClient).not.toHaveBeenCalled()
   })
 
+  it('merges a PARTIAL class_rule onto the stored one', async () => {
+    useDb(world({ schedule_mode: 'class', enabled: true, class_rule: { lead_min: 15, lag_min: 5, merge_gap_min: 45, days: [1, 3] } }))
+    const res = await PATCH(patchReq({ class_rule: { lead_min: 20 } }), ctxFor(GRP_A))
+    expect(res.status).toBe(200)
+    expect(rowOf(GRP_A).class_rule).toEqual({ lead_min: 20, lag_min: 5, merge_gap_min: 45, days: [1, 3] })
+    expect((await res.json()).group.class_rule).toEqual({ lead_min: 20, lag_min: 5, merge_gap_min: 45, days: [1, 3] })
+  })
+
+  it('drops keys the engine does not read from the stored rule when merging', async () => {
+    useDb(world({ class_rule: { lead_min: 5, junk: 'x' } }))
+    await PATCH(patchReq({ class_rule: { lag_min: 0 } }), ctxFor(GRP_A))
+    expect(rowOf(GRP_A).class_rule).toEqual({ lead_min: 5, lag_min: 0, merge_gap_min: 30, days: [1, 2, 3, 4, 5, 6, 7] })
+  })
+
+  it('400s when the MERGED rule is invalid, writing nothing', async () => {
+    useDb(world({ class_rule: { lead_min: 999 } }))
+    const res = await PATCH(patchReq({ class_rule: { lag_min: 5 } }), ctxFor(GRP_A))
+    expect(res.status).toBe(400)
+    expect(updatesTo(db, 'shelly_groups')).toEqual([])
+  })
+
   it('switching a running schedule off says the lights stay as they are', async () => {
     useDb(world({ enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1], on: '07:00', off: '09:00' }] }))
     const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(GRP_A))).json()

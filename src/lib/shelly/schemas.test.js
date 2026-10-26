@@ -198,6 +198,18 @@ describe('ShellyClassRule', () => {
     expect(ShellyClassRule.parse({ days: [1, 3] }).days).toEqual([1, 3])
   })
 
+  it('ALL_DAYS is frozen, and every default is a fresh copy of it', () => {
+    expect(Object.isFrozen(ALL_DAYS)).toBe(true)
+    const one = ShellyClassRule.parse({}).days
+    const two = ShellyClassRule.parse({}).days
+    expect(one).toEqual(ALL_DAYS)
+    expect(one).not.toBe(ALL_DAYS)
+    expect(one).not.toBe(two)
+    // A caller mutating its parsed rule cannot reach the next caller's default.
+    one.push(8)
+    expect(ShellyClassRule.parse({}).days).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
   it('a default-parsed rule resolves the same windows as an absent one, with several classes and days', () => {
     const occurrences = [
       { starts_at: '2026-08-24T06:00:00.000Z', ends_at: '2026-08-24T06:45:00.000Z' },
@@ -640,6 +652,17 @@ describe('ShellyGroupPatch', () => {
   })
   it('is strict', () => {
     expect(ShellyGroupPatch.safeParse({ nmae: 'typo' }).success).toBe(false)
+  })
+  // The route MERGES a partial rule onto the stored one, so the patch schema
+  // must not fill defaults: { lead_min: 20 } defaulted would reset days and
+  // merge_gap_min to the engine's.
+  it('takes a PARTIAL class_rule without filling defaults', () => {
+    expect(ShellyGroupPatch.parse({ class_rule: { lead_min: 20 } }).class_rule).toEqual({ lead_min: 20 })
+  })
+  it('still bounds every class_rule field', () => {
+    expect(ShellyGroupPatch.safeParse({ class_rule: { lead_min: 181 } }).success).toBe(false)
+    expect(ShellyGroupPatch.safeParse({ class_rule: { days: [] } }).success).toBe(false)
+    expect(ShellyGroupPatch.safeParse({ class_rule: { days: [1, 1] } }).success).toBe(false)
   })
 })
 

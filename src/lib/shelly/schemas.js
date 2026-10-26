@@ -104,8 +104,9 @@ export const MAX_CLASS_LEAD_LAG_MIN = 180
 // The engine's own fallbacks, from src/lib/schedule/desired-state.js
 // (DEFAULT_LEAD_MIN / DEFAULT_LAG_MIN / DEFAULT_MERGE_GAP_MIN) and mig 562's class_rule column comment
 // ("defaults 15/10"). They are RE-TYPED, not imported, because this module must
-// stay import-light (see the header) — desired-state.js does not export them
-// and pulls in the timezone helpers. schemas.test.js pins the mirror by running
+// stay import-light (see the header): desired-state.js exports only
+// DEFAULT_MERGE_GAP_MIN (lead and lag are module-private there), and importing
+// it at all would pull in the timezone helpers. schemas.test.js pins the mirror by running
 // the real resolveDayWindows over both an absent class_rule and a
 // default-parsed one and asserting identical windows, so a drift in either file
 // fails the suite instead of silently shifting every class-mode plug by 15
@@ -113,7 +114,10 @@ export const MAX_CLASS_LEAD_LAG_MIN = 180
 export const DEFAULT_LEAD_MIN = 15
 export const DEFAULT_LAG_MIN = 10
 export const DEFAULT_MERGE_GAP_MIN = 30
-export const ALL_DAYS = [1, 2, 3, 4, 5, 6, 7]
+// Frozen, and every default below is a FRESH copy of it: a default handed out
+// by reference is one array shared by every parse, so a caller that mutated
+// its parsed rule would rewrite the next caller's default.
+export const ALL_DAYS = Object.freeze([1, 2, 3, 4, 5, 6, 7])
 
 // One recurring on/off window: WindowBase with the same-boundary rule applied
 // last (Shelly uses the bare shape, so there is nothing to .extend() first).
@@ -142,15 +146,26 @@ export const ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY.check, {
 // merely touched class_rule silently deleted the pre-heat — no error, nothing
 // in the UI to explain why the room went cold. That is the "silent wrong
 // value" shape. An operator who genuinely wants no lead sends 0 and gets 0.
-export const ShellyClassRule = z.object({
-  lead_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_LEAD_MIN),
-  lag_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_LAG_MIN),
-  merge_gap_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_MERGE_GAP_MIN),
+const classRuleFields = {
+  lead_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN),
+  lag_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN),
+  merge_gap_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN),
   days: z.array(z.number().int().min(1).max(7))
     .min(1, 'Pick at least one day')
-    .refine((d) => new Set(d).size === d.length, { message: 'Days must be unique' })
-    .default(ALL_DAYS),
+    .refine((d) => new Set(d).size === d.length, { message: 'Days must be unique' }),
+}
+export const ShellyClassRule = z.object({
+  lead_min: classRuleFields.lead_min.default(DEFAULT_LEAD_MIN),
+  lag_min: classRuleFields.lag_min.default(DEFAULT_LAG_MIN),
+  merge_gap_min: classRuleFields.merge_gap_min.default(DEFAULT_MERGE_GAP_MIN),
+  days: classRuleFields.days.default(() => [...ALL_DAYS]),
 })
+
+// The group PATCH's class_rule: the same bounds, NO defaults. The route merges
+// it onto the stored rule and validates the merged result with ShellyClassRule,
+// so `{ lead_min: 20 }` changes the lead and nothing else — defaulted here, it
+// would silently reset days and merge_gap_min to the engine's.
+export const ShellyClassRulePatch = z.object(classRuleFields).partial()
 
 // Connect / re-paste. `auth_key` is OPTIONAL and has NO minimum: an operator
 // re-pasting the server host of an already-connected studio must not have to
@@ -358,7 +373,8 @@ export const ShellyGroupPatch = z.object({
   enabled: groupFields.enabled.optional(),
   schedule_mode: groupFields.schedule_mode.optional(),
   fixed_windows: groupFields.fixed_windows.optional(),
-  class_rule: groupFields.class_rule.optional(),
+  // Partial and merged by the route (ShellyClassRulePatch).
+  class_rule: ShellyClassRulePatch.optional(),
 })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' })
