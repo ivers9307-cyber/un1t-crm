@@ -20,6 +20,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { ensureDealForContact } from '@/lib/glofox-sync'
+import { reclassifyUn1tBoardNow } from '@/lib/un1t-pipeline-cadence'
 import { logPipelineDismissal } from '@/lib/activity-events'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -103,6 +104,14 @@ export async function POST(request, props) {
     deal = { action: 'error', error: e?.message || 'deal placement threw' }
   }
 
+  // HATCHCOLD.1 — at a un1t.online studio (Hatch Street) the call above is a
+  // no-op: the primary board is the manual Waitlist, and the derived
+  // Acquisition board is placed only by the whole-studio pass, so a Cold lead
+  // stayed on it until the next hourly run. Run that pass now. It fires its own
+  // stage triggers for the moves it lands; a studio with no un1t board returns
+  // at once without a pass. Never throws.
+  const boardPass = await reclassifyUn1tBoardNow(db, contact.location_id, { userId: user.id })
+
   // STAGETRIG.1 — a Cold dismissal (or restore) is a real, operator-driven
   // pipeline stage move, and it was invisible to the sequence engine: the
   // pipeline_stage_change trigger only ever ran from contact CREATION. Fires
@@ -137,9 +146,9 @@ export async function POST(request, props) {
     // Contacts aren't profiles — identity goes in resource, never target.id.
     target: { label: contact.name || null, resource: `contacts/${id}` },
     locationId: contact.location_id,
-    details: { cold, deal_action: deal?.action || null },
+    details: { cold, deal_action: deal?.action || null, board_pass: boardPass.ran ? 'ran' : boardPass.reason },
     request,
   })
 
-  return NextResponse.json({ success: true, data: { cold, pipeline_dismissed_at: dismissedAt, deal } })
+  return NextResponse.json({ success: true, data: { cold, pipeline_dismissed_at: dismissedAt, deal, board_pass: boardPass.ran ? 'ran' : boardPass.reason } })
 }

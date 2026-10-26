@@ -35,6 +35,7 @@ vi.mock('@/lib/permissions', () => {
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/glofox-sync', () => ({ ensureDealForContact: vi.fn(() => Promise.resolve({ action: 'move', to_slug: 'cold_lead' })) }))
+vi.mock('@/lib/un1t-pipeline-cadence', () => ({ reclassifyUn1tBoardNow: vi.fn(async () => ({ ran: false, reason: 'no_un1t_board' })) }))
 vi.mock('@/lib/sequences/triggers', () => ({ triggerSequencesForDealPlacement: vi.fn(async () => {}) }))
 vi.mock('@/lib/activity-events', () => ({ logPipelineDismissal: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve({ logged: true })) }))
@@ -44,6 +45,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { ensureDealForContact } from '@/lib/glofox-sync'
+import { reclassifyUn1tBoardNow } from '@/lib/un1t-pipeline-cadence'
 import { triggerSequencesForDealPlacement } from '@/lib/sequences/triggers'
 import { logPipelineDismissal } from '@/lib/activity-events'
 import { logAuditEvent } from '@/lib/audit'
@@ -105,6 +107,27 @@ describe('POST /api/contacts/[id]/pipeline-status', () => {
     const res = await POST(req({ cold: false }), props)
     expect(res.status).toBe(200)
     expect(updateSpy.mock.calls[0][0].pipeline_dismissed_at).toBeNull()
+  })
+
+  // HATCHCOLD.1 — a un1t.online studio's Acquisition board is re-sorted on the spot.
+  it('runs the un1t board pass for the contact\'s studio, after the dismissal is saved', async () => {
+    const updateSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb(updateSpy))
+    reclassifyUn1tBoardNow.mockResolvedValueOnce({ ran: true, result: { ok: true } })
+    const res = await POST(req({ cold: true }), props)
+    const json = await res.json()
+    expect(reclassifyUn1tBoardNow).toHaveBeenCalledWith(expect.anything(), LOC_ID, { userId: STAFF.id })
+    expect(updateSpy.mock.invocationCallOrder[0]).toBeLessThan(reclassifyUn1tBoardNow.mock.invocationCallOrder[0])
+    expect(json.data.board_pass).toBe('ran')
+  })
+
+  it('a failed un1t board pass still returns success (dismissal already saved)', async () => {
+    createServerClient.mockReturnValue(makeDb(vi.fn()))
+    reclassifyUn1tBoardNow.mockResolvedValueOnce({ ran: false, reason: 'error' })
+    const res = await POST(req({ cold: true }), props)
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.data.board_pass).toBe('error')
   })
 
   it('missing pipeline permission → 403', async () => {
