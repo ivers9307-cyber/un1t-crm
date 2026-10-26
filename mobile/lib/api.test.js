@@ -38,11 +38,14 @@ vi.mock('./impersonate', () => ({
   readImpersonate: async () => null,
 }))
 
-import { api, listShellyGroups, toggleShellyGroup, countUnadoptedShelly } from './api'
+import {
+  api, listShellyGroups, toggleShellyGroup, countUnadoptedShelly, _resetUnadoptedShellyCache, UNADOPTED_TTL_MS,
+} from './api'
 import { supabase } from './supabase'
 
 beforeEach(() => {
   delete global.fetch
+  _resetUnadoptedShellyCache()
   vi.mocked(supabase.auth.getSession).mockReset()
   vi.mocked(supabase.auth.getSession).mockImplementation(async () => OK_SESSION)
 })
@@ -259,6 +262,36 @@ describe('Shelly group wrappers', () => {
     const [url, init] = global.fetch.mock.calls[0]
     expect(url).toBe('https://test.local/api/shelly/discover')
     expect(init.headers['x-active-location']).toBe('loc-1')
+  })
+
+  it('countUnadoptedShelly caches a read count per location for five minutes', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(Date.parse('2026-10-26T12:00:00Z'))
+      global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }] })
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      // Another studio is its own entry.
+      expect(await countUnadoptedShelly('loc-2')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      // Just inside the window: still cached. At the window: asked again.
+      vi.setSystemTime(Date.parse('2026-10-26T12:00:00Z') + UNADOPTED_TTL_MS - 1)
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      vi.setSystemTime(Date.parse('2026-10-26T12:00:00Z') + UNADOPTED_TTL_MS)
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('countUnadoptedShelly never caches an unreadable list', async () => {
+    global.fetch = okFetch({ success: false, error: 'x' }, 500)
+    expect(await countUnadoptedShelly('loc-1')).toBeNull()
+    global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }] })
+    expect(await countUnadoptedShelly('loc-1')).toBe(1)
   })
 
   it('countUnadoptedShelly answers null — never 0 — when the list could not be read', async () => {
