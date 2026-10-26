@@ -123,6 +123,11 @@ export const ACTION_NEEDED_RETRY_MS = 15 * 60_000
 // requests a day out of an account budget its siblings are sharing.
 export const ERROR_RETRY_MS = 5 * 60_000
 
+// SHELLYALERTS — the alert pass is skipped when the sweep has less than this
+// left: it makes no Shelly call, but it does make ledger round trips, and an
+// alert the ledger has not claimed is simply sent on the next tick.
+export const ALERT_DEADLINE_MARGIN_MS = 10_000
+
 // Only used when `sleep` is not injected. The client keeps its own copy for its
 // own pacing; this one is for the gap BETWEEN two locations of one account,
 // which no single client can see.
@@ -590,11 +595,21 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   // state writes and the connection status. It pushes nothing to Shelly (no
   // budget spent) and it can never break this reconcile or the sweep: any
   // throw is logged with ids only (the message redacted of the key).
+  //
+  // Review fixes: skipped within ALERT_DEADLINE_MARGIN_MS of the sweep's
+  // deadline (the ledger keeps the alert for the next tick), and device alerts
+  // (offline, fault) are planned only when a read LANDED this tick: on a
+  // refused key or a bad host nothing was learned about any device.
+  const deviceAlerts = state.anyOk && !state.auth && !state.config
   const alertPass = async (keyRejected) => {
     try {
+      if (now() > deadlineAt - ALERT_DEADLINE_MARGIN_MS) {
+        logWarn(MODULE, 'alert pass skipped — time budget nearly spent', { locationId })
+        return
+      }
       const current = devices.map((d) => (state.fresh?.has(d.id) ? { ...d, ...state.fresh.get(d.id) } : d))
       await (ctx.alerts || runShellyAlerts)(db, {
-        locationId, conn, devices: current, nowMs, tz, keyRejected, studioName: conn?.locations?.name ?? null,
+        locationId, conn, devices: current, nowMs, tz, keyRejected, deviceAlerts, studioName: conn?.locations?.name ?? null,
       })
     } catch (e) {
       logWarn(MODULE, 'alert pass failed', { locationId, err: redactSecret(e, conn?.auth_key) })

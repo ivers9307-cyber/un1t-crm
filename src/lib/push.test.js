@@ -484,6 +484,23 @@ describe('resolvePushAllowedIds — shelly_alert role defaults', () => {
   )
 })
 
+// SHELLYALERTS.5 — owner at L1 and plain staff at L2 (Richard's SourceIt row):
+// a Shelly alert AT L1 is judged on the L1 role, so the owner is told.
+describe('resolvePushAllowedIds — shelly_alert is judged at the alert’s studio', () => {
+  it('owner at loc1 + staff at loc2 → told for an alert at loc1', async () => {
+    fakeProfiles = [{ id: 'u', active: true }]
+    fakeLinks = [
+      { profile_id: 'u', location_id: 'loc1', role: 'owner', permissions: null },
+      { profile_id: 'u', location_id: 'loc2', role: 'staff', permissions: null },
+    ]
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['u'], 'shelly_alert', { locationId: 'loc1' })
+    expect(allowed.has('u')).toBe(true)
+    // Unscoped, the staff row's default (false) wins — why the alerts scope it.
+    const unscoped = await resolvePushAllowedIds(makeFakeDb(), ['u'], 'shelly_alert')
+    expect(unscoped.has('u')).toBe(false)
+  })
+})
+
 // PUSH-LOC.1 — the notification's location decides the per-category gate.
 describe('resolvePushAllowedIds — per-location gating', () => {
   // Richard's live case: owner at Stillorgan (role default notify_whatsapp

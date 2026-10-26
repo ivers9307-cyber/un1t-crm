@@ -699,6 +699,14 @@ describe('errors (SHELLYALERTS.1)', () => {
     expect(long.channels[0].errors[0]).toHaveLength(40)
   })
 
+  it('known power faults are kept first, so the cap never drops one behind junk (review item 7)', () => {
+    const junk = Array.from({ length: 12 }, (_, i) => `aa${String(i).padStart(2, '0')}`)
+    const r = normaliseGetItems([withSw({ errors: [...junk, 'undervoltage', 'overpower'] })])[0]
+    expect(r.channels[0].errors).toHaveLength(8)
+    expect(r.channels[0].errors.slice(0, 2)).toEqual(['overpower', 'undervoltage'])
+    expect(r.channels[0].errors.slice(2)).toEqual(junk.slice(0, 6))
+  })
+
   it('offline keeps known errors; online with none drops them', () => {
     const prev = { online: true, output: false, apower: 0, aenergy_wh: 1, temperature_c: 1, source: 'x', errors: ['overpower'], at: 'T1' }
     expect(stateFromReading(prev, normaliseGetItems([offline])[0], 0, 'T2').errors).toEqual(['overpower'])

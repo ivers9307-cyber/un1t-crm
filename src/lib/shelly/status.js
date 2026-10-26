@@ -76,11 +76,16 @@ function channelFromComponent(kind, n, sw) {
 // SHELLYALERTS.1 — the DEVICE's own fault flags. A Gen2+ switch or light lists
 // `errors` (e.g. 'overpower', 'overtemp', 'overvoltage', 'undervoltage') only
 // while a protection has tripped. Strings only, trimmed, non-blank, de-duped
-// and sorted (so the alert key and stateChanged compare a set, not an order),
+// and in a fixed order (known power faults first, each part sorted, so the
+// alert key and stateChanged compare a set, not an arrival order),
 // capped in count and length so a hostile body cannot grow the row. Anything
 // else, or nothing left, is null: the key is then absent.
 const ERRORS_MAX = 8
 const ERROR_LEN_MAX = 40
+// The protections the alert pass pushes about (src/lib/shelly/alerts.js words
+// them). Kept FIRST before the cap, so eight junk codes can never push a real
+// power fault off the end of the list.
+export const POWER_FAULTS = Object.freeze(['overpower', 'overtemp', 'overvoltage', 'undervoltage'])
 function errorsOf(s) {
   if (!Array.isArray(s.errors)) return null
   const out = new Set()
@@ -90,10 +95,11 @@ function errorsOf(s) {
     if (t) out.add(t)
   }
   if (!out.size) return null
-  return [...out].sort().slice(0, ERRORS_MAX)
+  const all = [...out].sort()
+  return [...all.filter((e) => POWER_FAULTS.includes(e)), ...all.filter((e) => !POWER_FAULTS.includes(e))].slice(0, ERRORS_MAX)
 }
 
-// Two error lists as one comparable value (both are already sorted).
+// Two error lists as one comparable value (both are already in errorsOf order).
 const errorsKey = (v) => (Array.isArray(v) && v.length ? v.join('|') : null)
 
 // SHELLYTIMERS.4 — the DEVICE's own running timer (our safety cap, or any

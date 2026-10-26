@@ -1909,11 +1909,43 @@ describe('reconcileLocation — the alert pass', () => {
     expect(runShellyAlerts.mock.calls[0][1].keyRejected).toBe(true)
   })
 
-  it('a bad host is not a rejected key', async () => {
+  it('a bad host is not a rejected key, and plans no device alert (no read landed)', async () => {
     const { factory } = makeClientFactory({ get: () => ({ ok: false, kind: 'config', statusCode: 0 }) })
     const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })] })
     await runShellyReconcile(db, deps({ makeClient: factory }))
-    expect(runShellyAlerts.mock.calls[0][1].keyRejected).toBe(false)
+    expect(runShellyAlerts.mock.calls[0][1]).toMatchObject({ keyRejected: false, deviceAlerts: false })
+  })
+
+  // Review item 4 — a key refused on the read: no read landed, key alert only.
+  it('a key refused on the READ plans no device alert; a read that landed does', async () => {
+    const { factory } = makeClientFactory({ get: () => ({ ok: false, kind: 'auth', statusCode: 401 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(runShellyAlerts.mock.calls[0][1].deviceAlerts).toBe(false)
+
+    runShellyAlerts.mockClear()
+    const ok = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(ok, deps({ makeClient: makeClientFactory().factory }))
+    expect(runShellyAlerts.mock.calls[0][1].deviceAlerts).toBe(true)
+  })
+
+  it('a key refused on the COMMAND keeps device alerts (the read landed)', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: false, kind: 'auth', statusCode: 401 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(runShellyAlerts.mock.calls[0][1]).toMatchObject({ keyRejected: true, deviceAlerts: true })
+  })
+
+  // Review item 2 — never past (or within 10 s of) the sweep's deadline.
+  it('the pass is skipped within 10 s of the deadline', async () => {
+    let t = NOW
+    const now = () => t
+    // Every read moves the clock to 5 s before the deadline.
+    const { factory } = makeClientFactory({ get: ({ ids }) => { t = NOW + 90_000 - 5_000; return okGet(ids) } })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory, now, budgetMs: 90_000 }))
+    expect(runShellyAlerts).not.toHaveBeenCalled()
+    expect(warned('alert pass skipped')).toHaveLength(1)
   })
 
   it('nothing adopted: no pass at all', async () => {
