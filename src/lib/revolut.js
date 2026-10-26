@@ -218,3 +218,17 @@ export function verifyWebhookSignature(rawBody, signatureHeader, timestampHeader
   }
   return false
 }
+
+/**
+ * Retrieve one dispute (chargeback) by id — `GET /api/disputes/{dispute_id}`.
+ * The dispute webhook carries only `{ event, dispute_id }`; this is the
+ * authoritative read. Shape (merchant-2026-03-12 spec, `Dispute`): `id`,
+ * `state` (needs_response | under_review | won | lost), `substate`,
+ * `created_at`, `updated_at`, `response_due_date`, `reason_code`,
+ * `reason_description`, `amount` (minor units), `currency`,
+ * `payment: { id, order_id, created_at, arn, amount, currency, payment_method }`.
+ * REVPAY.4.
+ */
+export async function getDispute(disputeId) {
+  return request(`/api/disputes/${encodeURIComponent(disputeId)}`)
+}

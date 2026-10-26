@@ -45,6 +45,7 @@ REVOLUT_WEBHOOK_SECRET=          # signing_secret for the CARS deposit webhook (
 REVOLUT_RACE_WEBHOOK_SECRET=     # signing_secret for the RACE-PAYMENTS webhook (/api/webhooks/revolut/race-payments). Mig 084. If unset, race route falls back to REVOLUT_WEBHOOK_SECRET (single-merchant transitional case).
 REVOLUT_OFFER_WEBHOOK_SECRET=    # signing_secret for the OFFERS webhook (/api/webhooks/revolut/offer-payments). Mig 505. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET.
 REVOLUT_DONATION_WEBHOOK_SECRET= # signing_secret for the DONATIONS webhook (/api/webhooks/revolut/donations). Mig 765. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET.
+REVOLUT_DISPUTE_WEBHOOK_SECRET= # signing_secret for the DISPUTES webhook (/api/webhooks/revolut/disputes). REVPAY.4, mig 774. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET. Register it via POST /api/webhooks with events [DISPUTE_ACTION_REQUIRED, DISPUTE_UNDER_REVIEW, DISPUTE_WON, DISPUTE_LOST]; staff get an ops alert on ACTION_REQUIRED and LOST.
 REVOLUT_API_VERSION=2026-03-12   # optional; default in src/lib/revolut.js
 NEXT_PUBLIC_REVOLUT_MODE=        # 'prod' | 'sandbox' — must match REVOLUT_API_BASE_URL
 NEXT_PUBLIC_REVOLUT_PUBLIC_KEY=  # Public API key (pk_live_... or pk_sandbox_...) for the embedded checkout widget

@@ -2152,6 +2152,32 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/webhooks/revolut/disputes',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Revolut disputes webhook verification',
+  description: 'Configuration ping (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut/disputes',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut dispute (chargeback) events (REVPAY.4)',
+  description: 'Revolut Merchant to CRM. DISPUTE_ACTION_REQUIRED / UNDER_REVIEW / WON / LOST carry only { event, dispute_id }; the dispute is re-read from Revolut and upserted into revolut_disputes. Verified with REVOLUT_DISPUTE_WEBHOOK_SECRET, falling back to REVOLUT_WEBHOOK_SECRET. Deduped per event:dispute. Staff get an ops alert on ACTION_REQUIRED and LOST.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutDisputeEvent') } } } },
+  responses: {
+    200: { description: 'Accepted (processed, deduped or deferred)' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/webhooks/revolut/donations',
   tags: ['Webhooks (Inbound)'],
   security: [],
