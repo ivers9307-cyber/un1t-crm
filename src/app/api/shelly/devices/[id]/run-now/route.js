@@ -26,6 +26,12 @@
 // old `noop → applied:null` arm was unreachable code whose only possible
 // effect was to report "already correct" for a state we had not checked.
 //
+// A DEVICE IN A GROUP (SHELLYGROUPS.5) runs on its GROUP's schedule: joining
+// cleared its own, so the two refusals are judged on effectiveTarget (the
+// group's enabled and mode), and the group is handed to the engine. A group
+// that cannot be read is refused with 409 group_unavailable — running the
+// device on its own (empty) schedule would force the relay OFF.
+//
 // The Sonos run-now route learned the distinctness rule the same way —
 // collapsing "switched off" and "no window is active right now" into one
 // message points an operator debugging "run now does nothing" at the wrong
@@ -36,6 +42,8 @@ import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { loadDevice, withLocationTz } from '@/lib/shelly/device-load'
+import { effectiveTarget } from '@/lib/shelly/effective'
+import { loadDeviceGroup } from '@/lib/shelly/group-load'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 
 export const runtime = 'nodejs'
@@ -57,11 +65,20 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
   }
   const device = loaded.device
 
+  const grouped = await loadDeviceGroup(db, device)
+  if (!grouped.ok) {
+    logWarn(MODULE, 'group unavailable for a grouped device', { locationId, deviceId: device.id, groupId: device.group_id, reason: grouped.reason })
+    return bad("Could not read this device's group — try again", 409, { code: 'group_unavailable' })
+  }
+  const group = grouped.group
+  // What the planner will judge: the group's enabled and mode for a member.
+  const target = effectiveTarget(device, group, Date.now())
+
   // Order is load-bearing — see the header.
-  if (device.schedule_mode === 'none') {
+  if (target.schedule_mode === 'none') {
     return bad('No schedule to apply', 409, { code: 'no_schedule' })
   }
-  if (!device.enabled) {
+  if (!target.enabled) {
     return bad("This device's schedule is switched off — turn it on first", 409, { code: 'disabled' })
   }
 
@@ -77,7 +94,7 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
   // loadConnectionWithKey selects shelly_connections alone, and the engine
   // reads the zone from conn.locations — without this graft a New York studio
   // resolves its class windows on Dublin time. See device-load.js.
-  const result = await runNowForDevice(db, withLocationTz(conn.connection, user), device, {})
+  const result = await runNowForDevice(db, withLocationTz(conn.connection, user), device, { group })
 
   if (result.ok) {
     if (result.noop) {
@@ -89,7 +106,7 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
       // operator pressing Run now would be told it worked while no relay
       // moved.
       logError(MODULE, 'run-now answered an unexpected no-op for a managed device', {
-        locationId, deviceId: device.id, enabled: device.enabled, scheduleMode: device.schedule_mode,
+        locationId, deviceId: device.id, enabled: target.enabled, scheduleMode: target.schedule_mode,
       })
       return bad('Could not apply the schedule — nothing was sent', 500, { code: 'unexpected_noop' })
     }

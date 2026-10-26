@@ -48,6 +48,14 @@
 //     Task 6 renders plain On/Off with no expiry time rather than a countdown
 //     that would be a lie.
 //
+// A DEVICE IN A GROUP (SHELLYGROUPS.5). Its device override still wins over the
+// group (effective.js), so on/off is unchanged — but "managed" means the
+// GROUP's schedule, so `holds_until_changed` is judged on effectiveTarget.
+// 'auto' hands the device back to the GROUP's schedule: the group is read
+// FIRST and passed to the engine, and a group that cannot be read refuses
+// with 409 group_unavailable before the override is touched (running the
+// device on its own, cleared schedule would force the relay off).
+//
 // TIMEZONE. `until` defaults to the LOCATION's next local midnight, and the
 // engine that later expires it resolves the zone from `conn.locations`, which
 // loadConnectionWithKey does not select — see withLocationTz in
@@ -60,10 +68,12 @@ import { logError, logWarn } from '@/lib/log'
 import { createShellyClient } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
 import { loadDevice, DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
+import { effectiveTarget } from '@/lib/shelly/effective'
+import { loadDeviceGroup } from '@/lib/shelly/group-load'
 import { overrideKey } from '@/lib/shelly/plan'
 import { runNowForDevice, deviceKind } from '@/lib/shelly/reconcile'
 import { ShellyToggleBody, ShellyOverride, MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
-import { stateFromReading } from '@/lib/shelly/status'
+import { optimisticState } from '@/lib/shelly/optimistic-state'
 import { nextLocalMidnightMs } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -100,60 +110,10 @@ const PENDING_FALLBACK = 'Saved. Shelly cloud is not answering — the plug will
 const refusedMessage = (code) =>
   `Saved, but Shelly refused the command (${code}). Check this plug in the Shelly app — it will not follow until that is fixed.`
 
-// The seven fields mig 562's column comment requires of every last_state
-// writer. A partial shape is what makes `output` read as "off" when it is
-// really "unknown", so a row that is missing any of them is rebuilt rather
-// than spread.
-const STATE_KEYS = ['online', 'output', 'apower', 'aenergy_wh', 'temperature_c', 'source', 'at']
-const hasFullState = (s) =>
-  !!s && typeof s === 'object' && !Array.isArray(s) && STATE_KEYS.every((k) => k in s)
-
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
 
 const notFound = () => bad('Not found', 404)
-
-/**
- * The optimistic last_state after a command we KNOW landed.
- *
- * Only the three fields we have evidence for are asserted — output, source and
- * `at` — plus `online`, which rests on exactly the same evidence as the
- * `last_seen_at` written beside it: Shelly Cloud answers a set/switch for an
- * unreachable device with a body-level error, which client.js tags
- * `kind:'device'`, so an ok result means the plug spoke. If that ever proves
- * wrong, this line and the last_seen_at stamp must change together.
- *
- * THE MEASUREMENTS GO TO NULL (SHELLY-UI.9b). A set/switch measures nothing:
- * it returns no watts, no energy counter and no temperature. Carrying the
- * PREVIOUS readings forward under a FRESH `at` is not a neutral act — `at` is
- * what the card reads as "how current is this number", so the old wattage
- * would be re-dated to this instant and rendered as a live measurement of a
- * relay whose state we just changed. Switching a heater ON and then showing
- * the 0 W it drew while off, timestamped "just now", is precisely the silent
- * wrong value this file's write order exists to avoid. Null renders as "—"
- * and the next cron read fills it within the minute. (status.js rule 1:
- * absent is not zero — and it is not a stale number wearing a new date
- * either.)
- */
-function optimisticState(prev, channel, on, nowIso, kind = 'switch') {
-  const base = hasFullState(prev)
-    ? { ...prev }
-    : stateFromReading(null, { online: true, channels: [] }, channel, nowIso, kind)
-  return {
-    ...base,
-    // SHELLYLIGHT.3 — a light's level is a SETTING, not a measurement: set/light
-    // sends `on` only and the dimmer keeps its own brightness, so the last known
-    // level is still the truth. A switch never carries the key (status.js).
-    ...(kind === 'light' ? { brightness: base.brightness ?? null } : {}),
-    online: true,
-    output: on,
-    apower: null,
-    aenergy_wh: null,
-    temperature_c: null,
-    source: 'manual',
-    at: nowIso,
-  }
-}
 
 export const POST = withAuth(
   // WIDGET.1 — the Studio Controls widget's plug button lands here.
@@ -183,8 +143,24 @@ export const POST = withAuth(
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
 
+    // The member's group, when it has one. Read before anything is written.
+    const grouped = await loadDeviceGroup(db, device)
+    if (!grouped.ok) {
+      logWarn(MODULE, 'group unavailable for a grouped device', {
+        locationId, deviceId: device.id, groupId: device.group_id, reason: grouped.reason,
+      })
+    }
+    const group = grouped.ok ? grouped.group : null
+    // The schedule the planner judges this device on (the group's, for a member).
+    const target = effectiveTarget(device, group, nowMs)
+
     // ——— back to the schedule ————————————————————————————————————————
     if (input.state === 'auto') {
+      // Refused BEFORE the clear: nothing changes when we cannot say what
+      // "the schedule" is for this device.
+      if (!grouped.ok) {
+        return bad("Could not read this device's group — try again", 409, { code: 'group_unavailable' })
+      }
       const { data: cleared, error: clearError } = await db
         .from('shelly_devices')
         .update({ override: null, updated_at: nowIso })
@@ -204,7 +180,7 @@ export const POST = withAuth(
       // The override is GONE from the row before this runs, so pass the device
       // the same way — planDeviceAction reads `override` off the object it is
       // handed, and the stale one would re-apply the very thing just cleared.
-      const result = await runNowForDevice(db, engineConn, { ...device, override: null }, {})
+      const result = await runNowForDevice(db, engineConn, { ...device, override: null }, { group })
       const cleanDevice = { ...device, override: null }
 
       if (result.ok) {
@@ -220,10 +196,10 @@ export const POST = withAuth(
           // removed it: telling an operator "already on schedule" about a
           // device we in fact declined to touch is the false-reassurance shape
           // this file exists to avoid.
-          if (!device.enabled) {
+          if (!target.enabled) {
             return NextResponse.json({ success: true, device: cleanDevice, applied: null, reason: 'disabled' })
           }
-          if (device.schedule_mode === 'none') {
+          if (target.schedule_mode === 'none') {
             return NextResponse.json({ success: true, device: cleanDevice, applied: null, reason: 'no_schedule' })
           }
           // Unreachable by the argument above, and therefore the one case
@@ -233,7 +209,7 @@ export const POST = withAuth(
           // that behind a green tick forever. The override IS cleared either
           // way (that write already landed), so the copy says so.
           logError(MODULE, 'run-now answered an unexpected no-op for a managed device', {
-            locationId, deviceId: device.id, enabled: device.enabled, scheduleMode: device.schedule_mode,
+            locationId, deviceId: device.id, enabled: target.enabled, scheduleMode: target.schedule_mode,
           })
           return bad(
             'The override was cleared, but the schedule could not be applied — try Run now',
@@ -304,7 +280,11 @@ export const POST = withAuth(
     // See "TWO REGIMES" in the header: on an unmanaged device the engine never
     // closes an expired override (plan.js rule 2 returns before rule 4), so the
     // relay holds until a human changes it and `until` bounds only the banner.
-    const unmanaged = !device.enabled || device.schedule_mode === 'none'
+    // Judged on the effective schedule (the group's, for a member). If the
+    // member's group could not be read this falls back to the device's own
+    // fields — only this flag depends on it, and a manual switch is not worth
+    // refusing over it.
+    const unmanaged = !target.enabled || target.schedule_mode === 'none'
     const tz = requestTz(user)
     const untilMs = input.until ? Date.parse(input.until) : nextLocalMidnightMs(nowMs, tz)
     if (!Number.isFinite(untilMs)) {
