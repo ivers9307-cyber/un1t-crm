@@ -177,9 +177,17 @@ export function groupReasonLine(group, tz = DEFAULT_TZ, nowMs = Date.now()) {
   return `${now.on_count} of ${now.member_count} on · ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
 }
 
-const joinNames = (names) => (names.length <= 1
-  ? names.join('')
-  : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+// Up to MAX_NAMED names, then "and N others", so a 20-light group's answer
+// stays one readable line.
+const MAX_NAMED = 3
+const joinNames = (names) => {
+  if (names.length <= 1) return names.join('')
+  if (names.length > MAX_NAMED) {
+    const rest = names.length - MAX_NAMED
+    return `${names.slice(0, MAX_NAMED).join(', ')} and ${rest} other${rest === 1 ? '' : 's'}`
+  }
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
 
 // Our copy for a member the route could not move, keyed by its `code` (the
 // toggle route's PENDING_CODE vocabulary plus the auto branch's own codes).
@@ -256,6 +264,12 @@ export function toggleOutcomeText(pendingMembers, total, state, nameOf) {
   const lead = moved > 0 ? `Switched ${state} for ${moved} of ${count}.` : 'Saved. Nothing has moved yet.'
   return `${lead} ${missedMemberParts(missed, nameOf).join(' ')}`
 }
+
+// Per-member wording only for the route's MIXED answer: `code: 'pending'`
+// with no `kind`. A whole-batch failure (route.js: every member gets
+// code = res.kind, and the body carries `kind`) keeps the route's message —
+// otherwise a Shelly cloud outage reads as every light being offline.
+export const isMixedPendingAnswer = (json) => json?.code === 'pending' && json?.kind === undefined
 
 const SWITCH_FACE = {
   on: { text: 'On', cls: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/40', aria: 'true' },
@@ -365,7 +379,9 @@ export default function ShellyGroupCard({
       }
       const base = (next === 'auto'
         ? res.json?.message || autoOutcomeText(res.json?.results, nameOf)
-        : toggleOutcomeText(res.json?.pending_members, members.length || group.now?.member_count, next, nameOf) || res.json?.message)
+        : (isMixedPendingAnswer(res.json)
+          ? toggleOutcomeText(res.json?.pending_members, members.length || group.now?.member_count, next, nameOf)
+          : null) || res.json?.message)
         || PENDING_FALLBACK
       // An unmanaged group's lights stay as set: said on a partial answer too.
       const notice = res.json?.notice

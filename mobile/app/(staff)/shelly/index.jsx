@@ -503,18 +503,19 @@ export default function ShellyScreen() {
 
   // A pull also re-asks the unadopted count past its 5-minute cache: the
   // operator asked for "now" (they may have just added a plug in the Shelly
-  // app). Best-effort, like the focus read; a studio flip mid-read drops it.
+  // app). Best-effort and NOT awaited — the discover read is a live Shelly
+  // cloud call, so the spinner ends with the list and the banner updates when
+  // the count lands. A studio flip mid-read drops it.
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
     const loc = locationId
-    const unadoptedRead = allowed && loc
-      ? countUnadoptedShelly(loc, { fresh: true })
+    if (allowed && loc) {
+      countUnadoptedShelly(loc, { fresh: true })
         .then((n) => { if (loc === currentLocationRef.current) setUnadopted(n) })
         .catch(() => { if (loc === currentLocationRef.current) setUnadopted(null) })
-      : null
+    }
     try {
       await load(() => true, { clearPartials: true })
-      await unadoptedRead
     } finally {
       setRefreshing(false)
     }

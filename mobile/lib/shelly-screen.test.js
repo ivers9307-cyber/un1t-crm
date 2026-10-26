@@ -233,13 +233,28 @@ describe('groupToggleOutcome', () => {
         .toBe("Saved. Nothing has moved yet. Couldn't confirm Front light and Back light.")
     })
 
-    it('an account-wide failure is said once, pointed at the web CRM', () => {
-      const json = body([
-        { device_id: 'a', code: 'auth', permanent: false },
-        { device_id: 'b', code: 'auth', permanent: false },
-      ], { applied: 'none', code: 'key_rejected' })
-      expect(groupToggleOutcome(json, 'on', 2, nameOf).text)
-        .toBe('Saved. Nothing has moved yet. Shelly rejected the stored key — re-paste it on the web CRM.')
+    it('a WHOLE-batch failure shows the route\'s message, never "every light offline"', () => {
+      // route.js: a failed setGroups gives every member code = res.kind and
+      // answers `kind`; its `code` is 'pending' for network/http too.
+      const network = body([
+        { device_id: 'a', code: 'network', permanent: false },
+        { device_id: 'b', code: 'network', permanent: false },
+      ], { applied: 'none', code: 'pending', kind: 'network', message: 'Saved. Shelly cloud is not answering — the group will follow within a minute.' })
+      expect(groupToggleOutcome(network, 'on', 2, nameOf).text).toBe(network.message)
+      for (const [code, kind] of [['key_rejected', 'auth'], ['rate_limited', 'rate_limited'], ['bad_host', 'config'], ['device_refused', 'device']]) {
+        const json = { ...network, code, kind, message: `Route says ${code}.` }
+        expect(groupToggleOutcome(json, 'on', 2, nameOf).text).toBe(`Route says ${code}.`)
+      }
+    })
+
+    it('a long list names three, then "and N others"', () => {
+      const ids = ['a', 'b', 'c', 'd', 'e']
+      const json = body(ids.map((id) => ({ device_id: id, code: 'device', permanent: false })), { applied: 'none' })
+      const many = (id) => `Light ${id.toUpperCase()}`
+      expect(groupToggleOutcome(json, 'on', 5, many).text)
+        .toBe('Saved. Nothing has moved yet. Light A, Light B, Light C and 2 others did not answer — they will follow when they are back online.')
+      const four = body(ids.slice(0, 4).map((id) => ({ device_id: id, code: 'device', permanent: false })), { applied: 'none' })
+      expect(groupToggleOutcome(four, 'on', 4, many).text).toContain('Light A, Light B, Light C and 1 other did not answer')
     })
 
     it('the unmanaged notice still rides along', () => {

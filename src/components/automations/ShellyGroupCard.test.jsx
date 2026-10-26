@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react'
-import ShellyGroupCard, { groupReasonLine, groupSwitchState } from './ShellyGroupCard.jsx'
+import ShellyGroupCard, { groupReasonLine, groupSwitchState, toggleOutcomeText } from './ShellyGroupCard.jsx'
 
 const TZ = 'Europe/Dublin'
 // Monday 26 Oct 2026, 12:00 in Dublin (GMT: summer time ended the day before).
@@ -536,5 +536,35 @@ describe('ShellyGroupCard — on/off pending worded per member (pending_members)
       { device_id: 'd2', code: 'unverified', permanent: false },
     ], { applied: 'none' }))
     expect(text).toBe("Saved. Nothing has moved yet. Couldn't confirm Front light and Back light.")
+  })
+
+  it('a WHOLE-batch failure shows the route\'s message, not "every light did not answer"', async () => {
+    const message = 'Saved. Shelly cloud is not answering — the group will follow within a minute.'
+    const text = await press(pendingBody([
+      { device_id: 'd1', code: 'network', permanent: false },
+      { device_id: 'd2', code: 'network', permanent: false },
+    ], { applied: 'none', code: 'pending', kind: 'network', message }))
+    expect(text).toBe(message)
+  })
+
+  it('a whole-batch key rejection shows the route\'s message', async () => {
+    const message = 'Saved. Shelly rejected the stored key — re-paste it from the Shelly app and the group will follow.'
+    const text = await press(pendingBody([
+      { device_id: 'd1', code: 'auth', permanent: false },
+      { device_id: 'd2', code: 'auth', permanent: false },
+    ], { applied: 'none', code: 'key_rejected', kind: 'auth', message }))
+    expect(text).toBe(message)
+  })
+})
+
+describe('toggleOutcomeText — long lists', () => {
+  it('names three, then "and N others"', () => {
+    const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ device_id: id, code: 'device', permanent: true }))
+    expect(toggleOutcomeText(rows, 5, 'off', (id) => `Light ${id.toUpperCase()}`))
+      .toBe('Saved. Nothing has moved yet. Shelly refused Light A, Light B, Light C and 2 others — check them in the Shelly app.')
+    expect(toggleOutcomeText(rows.slice(0, 4), 4, 'off', (id) => `Light ${id.toUpperCase()}`))
+      .toContain('Light A, Light B, Light C and 1 other —')
+    expect(toggleOutcomeText(rows.slice(0, 3), 3, 'off', (id) => `Light ${id.toUpperCase()}`))
+      .toContain('Light A, Light B and Light C —')
   })
 })

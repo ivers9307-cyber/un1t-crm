@@ -549,7 +549,7 @@ export function groupToggleOutcome(json, state, memberCount, nameOf) {
   const holds = rawHolds ? (/[.!?]$/.test(rawHolds) ? rawHolds : `${rawHolds}.`) : null
   const withHolds = (text) => (holds ? `${text} ${holds}` : text)
   if (json.pending === true || json.applied === 'partial') {
-    const perMember = toggleOutcomeText(json.pending_members, memberCount, state, nameOf)
+    const perMember = isMixedPendingAnswer(json) ? toggleOutcomeText(json.pending_members, memberCount, state, nameOf) : null
     const text = withHolds(perMember || json.message || 'Saved — the group will follow as soon as Shelly answers.')
     let partial = null
     if (json.applied === 'partial') {
@@ -582,9 +582,23 @@ const AUTO_CODE_COPY = Object.freeze({
   config: 'The Shelly server on file is invalid — fix it on the web CRM.',
 })
 
-const joinNames = (names) => (names.length <= 1
-  ? names.join('')
-  : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+// Up to MAX_NAMED names, then "and N others", so a 20-light group's answer
+// stays one readable line.
+const MAX_NAMED = 3
+const joinNames = (names) => {
+  if (names.length <= 1) return names.join('')
+  if (names.length > MAX_NAMED) {
+    const rest = names.length - MAX_NAMED
+    return `${names.slice(0, MAX_NAMED).join(', ')} and ${rest} other${rest === 1 ? '' : 's'}`
+  }
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+// Per-member wording only for the route's MIXED answer: `code: 'pending'`
+// with no `kind`. A whole-batch failure (route.js: every member gets
+// code = res.kind, and the body carries `kind`) keeps the route's message —
+// otherwise a Shelly cloud outage reads as every light being offline.
+export const isMixedPendingAnswer = (json) => json?.code === 'pending' && json?.kind === undefined
 
 /**
  * Should a group card offer "Back to schedule"? Only a MANAGED group (switched
