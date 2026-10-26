@@ -88,6 +88,28 @@ describe('ShellyDeviceCard — a light', () => {
   })
 })
 
+// SHELLYNOPOWER.1 — the Men's Changing Room RGBW PM reports no power or energy
+// at all. Its card must say so rather than offer an Energy chart of nothing.
+describe('ShellyDeviceCard — a device that reports no power', () => {
+  const renderCard = (device) => render(<ShellyDeviceCard device={device} connected glofoxConnected />)
+  it('an online device with no power and no energy reading says so and offers no Energy chart', () => {
+    renderCard(managed({ kind: 'light', last_state: state({ output: true, apower: null, aenergy_wh: null, brightness: 50 }) }))
+    expect(screen.getByText(/doesn.t report power/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /energy/i })).toBeNull()
+  })
+
+  it('a device that reports energy keeps its Energy chart', () => {
+    renderCard(managed({ last_state: state({ apower: 12, aenergy_wh: 345 }) }))
+    expect(screen.getByRole('button', { name: /energy/i })).toBeTruthy()
+    expect(screen.queryByText(/doesn.t report power/i)).toBeNull()
+  })
+
+  it('an offline device keeps the chart — no reading is not proof it cannot meter', () => {
+    renderCard(managed({ last_state: state({ online: false, apower: null, aenergy_wh: null }) }))
+    expect(screen.getByRole('button', { name: /energy/i })).toBeTruthy()
+  })
+})
+
 describe('ShellyDeviceCard — what it is doing', () => {
   it('renders "Unknown" for output:null, never "Off"', () => {
     render(<ShellyDeviceCard device={managed({ last_state: state({ output: null, apower: null }) })} connected glofoxConnected />)

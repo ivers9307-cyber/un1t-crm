@@ -159,26 +159,39 @@ export function rawItemId(item) {
   return raw ? raw.toLowerCase() : null
 }
 
-// Every `switch:N` key the item mentions, in EITHER half of the payload.
-// `status` alone is not enough: an offline device reports no switch components
-// at all (rule 2) while its `settings` still names all four of a 4PM's
-// outputs — and it is exactly the multi-output case that decides whether the
-// per-output label wins below.
-function switchKeys(item) {
+// Every output key of one KIND the item mentions, in EITHER half of the
+// payload. `status` alone is not enough: an offline device reports no
+// components at all (rule 2) while its `settings` still names all four of a
+// 4PM's outputs — and it is exactly the multi-output case that decides whether
+// the per-output label wins below. SHELLYLIGHTNAMES.1: lights count their own
+// `light:N` keys, so a 4-light RGBW PM names each light the way a 4PM names
+// each relay.
+function outputKeys(item, kind) {
+  const re = kind === 'light' ? LIGHT_KEY_RE : SWITCH_KEY_RE
   const out = new Set()
   for (const bag of [item?.status, item?.settings]) {
     for (const key of Object.keys(isObj(bag) ? bag : {})) {
-      if (SWITCH_KEY_RE.test(key)) out.add(key)
+      if (re.test(key)) out.add(key)
     }
   }
   return [...out]
 }
 
+// The per-output label for one channel of one kind. A light on channel 0 may
+// live under the single-light profiles instead (rgbw wins, as in the reader).
+function perOutputName(settings, kind, ch) {
+  if (kind !== 'light') return str(settings?.[`switch:${ch}`]?.name)
+  return str(settings?.[`light:${ch}`]?.name)
+    ?? (ch === 0 ? str(settings?.['rgbw:0']?.name) ?? str(settings?.['rgb:0']?.name) : null)
+}
+
 /**
  * SHELLY-NAMES.1 — where a Shelly device's human label actually lives.
  *
- * Takes the RAW v2 `get` item (not a normalised row) and the channel being
- * named; returns a trimmed, capped string or null. Pure.
+ * Takes the RAW v2 `get` item (not a normalised row), the channel being
+ * named and the row's kind ('switch' | 'light'; a light reads `light:N`, or
+ * `rgbw:0`/`rgb:0` on channel 0, where a relay reads `switch:N`); returns a
+ * trimmed, capped string or null. Pure.
  *
  * WHY IT IS WIDER THAN nameFrom. nameFrom reads two places
  * (settings.sys.device.name, settings.name) and that matched the documented
@@ -209,12 +222,12 @@ function switchKeys(item) {
  * NEVER returns '' — str() drops blanks, so a factory-blank name falls through
  * to the next source instead of being stored as a name a human chose.
  */
-export function resolveDeviceName(item, channel = 0) {
+export function resolveDeviceName(item, channel = 0, kind = 'switch') {
   const settings = isObj(item?.settings) ? item.settings : null
   const status = isObj(item?.status) ? item.status : null
   const ch = Number.isInteger(channel) && channel >= 0 ? channel : 0
-  const perChannel = str(settings?.[`switch:${ch}`]?.name)
-  const multiRelay = switchKeys(item).length >= 2
+  const perChannel = perOutputName(settings, kind, ch)
+  const multiRelay = outputKeys(item, kind).length >= 2
 
   const picked =
     (multiRelay ? perChannel : null)

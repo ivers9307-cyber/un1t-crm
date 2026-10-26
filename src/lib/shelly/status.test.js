@@ -213,6 +213,40 @@ describe('parser deviations from the plan draft, pinned (SHELLY.4b)', () => {
 // label was not where nameFrom looks. These pin the wider net, and pin the
 // diagnostic that will tell us which arm the live account actually needs.
 
+// SHELLYLIGHTNAMES.1 — a 4-light RGBW PM names each output under light:N, the
+// way a Pro 4PM names switch:N. Live gate 2026-10-26: Stillorgan's two
+// controllers adopted as eight rows wearing the box name (one row with none).
+describe('resolveDeviceName for lights (SHELLYLIGHTNAMES.1)', () => {
+  const item = (over) => ({ id: 'aabbccddeeff', gen: 2, online: 1, status: {}, ...over })
+  const fourLights = (names) => item({
+    settings: {
+      DeviceInfo: { name: 'Box' },
+      ...Object.fromEntries(names.map((n, i) => [`light:${i}`, { name: n }])),
+    },
+  })
+
+  it('a multi-light device names each light from its own light:N', () => {
+    const it4 = fourLights(['Mirror', 'Ceiling', 'Lockers', 'Showers'])
+    expect(resolveDeviceName(it4, 2, 'light')).toBe('Lockers')
+    expect(resolveDeviceName(it4, 3, 'light')).toBe('Showers')
+  })
+
+  it('a light with no output name falls back to the box name, like a relay', () => {
+    expect(resolveDeviceName(fourLights(['Mirror', null, 'Lockers', 'Showers']), 1, 'light')).toBe('Box')
+  })
+
+  it('rgbw:0 / rgb:0 name channel 0 of a single-light profile when nothing box-level exists', () => {
+    expect(resolveDeviceName(item({ settings: { 'rgbw:0': { name: 'Strip' } } }), 0, 'light')).toBe('Strip')
+    expect(resolveDeviceName(item({ settings: { 'rgb:0': { name: 'Strip' } } }), 0, 'light')).toBe('Strip')
+  })
+
+  it('a switch never reads a light label, and the default kind is switch', () => {
+    const both = item({ settings: { 'switch:0': { name: 'Relay A' }, 'switch:1': { name: 'Relay B' }, 'light:0': { name: 'Lamp' } } })
+    expect(resolveDeviceName(both, 0)).toBe('Relay A')
+    expect(resolveDeviceName(both, 0, 'light')).toBe('Lamp')
+  })
+})
+
 describe('resolveDeviceName (SHELLY-NAMES.1)', () => {
   const item = (over) => ({ id: 'aabbccddeeff', gen: 2, online: 1, status: {}, ...over })
 

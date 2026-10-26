@@ -331,7 +331,7 @@ export const POST = withAuth(
     // be re-found in the body (it always can — `items` was derived from it) —
     // a name we already resolved must never be lost to a defensive lookup.
     const rawItem = rawItemsOf(res.body).find((x) => rawItemId(x) === input.device_id)
-    let resolvedName = resolveDeviceName(rawItem, input.channel) ?? item.name ?? null
+    let resolvedName = resolveDeviceName(rawItem, input.channel, kind) ?? item.name ?? null
     // Only set when the account layer actually answered, so the warning below
     // never describes a body nobody received.
     let listShape
