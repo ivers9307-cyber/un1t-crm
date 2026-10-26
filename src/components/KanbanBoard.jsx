@@ -157,15 +157,23 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
 
   // Ordered contact ids for the open contact's column (board render order), so
   // the drawer can step through it. Spans the loaded cards.
-  // HATCHCOLD.2 — and that column's slug, so the drawer's Cold label follows
-  // this board rather than the contact's home studio.
-  const { columnContactIds, openStageSlug } = useMemo(() => {
-    if (!openContactId) return { columnContactIds: [], openStageSlug: null }
+  const columnContactIds = useMemo(() => {
+    if (!openContactId) return []
     for (const stage of initialStages) {
       const ids = sortColumn(columnDeals[stage.id] || []).map((d) => d.contacts?.id).filter(Boolean)
-      if (ids.includes(openContactId)) return { columnContactIds: ids, openStageSlug: stage.slug ?? null }
+      if (ids.includes(openContactId)) return ids
     }
-    return { columnContactIds: [], openStageSlug: null }
+    return []
+  }, [openContactId, initialStages, columnDeals])
+
+  // HATCHCOLD.2 — the open contact's column slug, so the drawer's Cold label
+  // follows this board rather than the contact's home studio.
+  const openStageSlug = useMemo(() => {
+    if (!openContactId) return null
+    for (const stage of initialStages) {
+      if ((columnDeals[stage.id] || []).some((d) => d.contacts?.id === openContactId)) return stage.slug ?? null
+    }
+    return null
   }, [openContactId, initialStages, columnDeals])
 
   return (
