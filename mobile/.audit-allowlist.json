@@ -29,13 +29,21 @@
     "is imported by app code (nothing under mobile/app, components or lib imports glob, minimatch or brace-expansion).",
     "Take the lockfile bump with the next native release and delete both entries then.",
     "",
-    "The braces and node-forge accepts (DEPAUDIT.6, 2026-10-03) are NOT fixable, like image-size: braces' range is <= 3.0.3",
-    "and node-forge's is <= 1.4.0, both the LATEST published versions (checked `npm view <pkg> versions` and the GitHub",
-    "advisories 3 Oct: no first_patched_version). Both were proven absent from the shipped app the strong way: a local",
-    "`expo export --platform ios --source-maps` (the same Metro bundle eas update ships) lists 2666 source modules and",
-    "NONE of them is braces, micromatch, fast-glob, chokidar, tailwindcss, node-forge or @expo/code-signing-certificates.",
-    "Re-check at expiry; the moment a patched release lands, `npm update <pkg> --package-lock-only` with the next native",
-    "release and delete the entry."
+    "The node-forge accept (DEPAUDIT.6, 2026-10-03) is NOT fixable, like image-size: its range is <= 1.4.0, the LATEST",
+    "published version (checked `npm view node-forge versions` and the GitHub advisory 3 Oct: no first_patched_version).",
+    "It was proven absent from the shipped app the strong way: a local `expo export --platform ios --source-maps` (the same",
+    "Metro bundle eas update ships) lists 2666 source modules and NONE of them is node-forge or @expo/code-signing-certificates.",
+    "Re-check at expiry; the moment a patched release lands, `npm update node-forge --package-lock-only` with the next native",
+    "release and delete the entry. (Its sibling braces accept, GHSA-vfj7-8cjw-p6xm, was deleted 2026-10-25 as stale: the",
+    "gate stopped reporting braces at high/critical.)",
+    "",
+    "DEPAUDIT.7 (2026-10-25). markdown-it GHSA-r7fv-28h4-cvq7 is FIXED, not accepted, by the `markdown-it: ^14.3.2` override:",
+    "react-native-markdown-display@7.0.2 (its latest) pins ^10.0.0 and builds MarkdownIt({ typographer: true }), so the",
+    "vulnerable smartquotes rule was live on the staff contracts page. Verified before landing: the parser pipeline",
+    "(stringToTokens > cleanupTokens > groupTextTokens > omitListItemParagraph > tokensToAST) gives the same AST on 10.0.0 and",
+    "14.3.3 for a contract-shaped fixture (only `sourceInfo` on ordered items differs, which no render rule reads), and Metro",
+    "bundles 14's index.mjs. zod GHSA-mrhx-c7xc-m3w5 is accepted below: only the copy nested under expo/@expo/cli is vulnerable",
+    "(the app's own zod is 4.6.7), and no @expo/cli release, up to 58.1.15, declares anything but zod ^3.25.76."
   ],
   "accepted": [
     {
@@ -63,16 +71,16 @@
       "expires": "2026-12-15"
     },
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "reason": "Build-time only, first-party input only. One copy, braces 3.0.3, reached via (a) tailwindcss@3 (NativeWind's compiler, run by `withNativeWind` in metro.config.js) > micromatch / fast-glob / chokidar, expanding the content globs in mobile/tailwind.config.js (`./app/**/*.{js,jsx,ts,tsx}`, `./components/**/*.{js,jsx,ts,tsx}`); and (b) metro-file-map and @expo/metro-file-map > micromatch, matching the dev-server watcher's ignore/glob patterns from metro.config.js and expo's defaults. Every pattern is written by this repo or the tooling; all of it runs on the build machine (bundling, export, `expo start`). A local `expo export --platform ios --source-maps` shows none of braces, micromatch, fast-glob, chokidar or tailwindcss in the shipped bundle (NativeWind's runtime is react-native-css-interop, which does not import them), so no attacker-supplied pattern can ever reach brace expansion; the worst case is a stack overflow in our own build from a pattern we wrote. No patched version exists (vulnerable range <= 3.0.3 = every published release).",
-      "expires": "2026-12-15"
-    },
-    {
       "id": "GHSA-86w9-cpqp-85rv",
       "package": "node-forge",
       "reason": "Build-time/CLI only, never verifies an attacker's signature. One copy, node-forge 1.4.0, reached via (a) expo > @expo/cli (utils/codesigning.js: signs dev-server manifests with the developer's own key, `signBufferRSASHA256AndVerify` re-verifies the signature it JUST made, `validateSelfSignedCertificate` checks a cert we generated against our own key pair; run/ios/codeSigning/Security.js only PARSES certs from the local macOS keychain) and (b) expo-updates > @expo/code-signing-certificates, imported ONLY by expo-updates/cli (generate/configure code-signing commands), not by expo-updates/build. The flaw is a forgery-acceptance bug in RSA PKCS#1 v1.5 VERIFY; none of these paths verifies a signature produced by anyone else. On the phone, update code signing (not even configured in app.config.js) would be verified natively by expo-updates' Swift/Kotlin, not JS. A local `expo export --platform ios --source-maps` shows neither node-forge nor @expo/code-signing-certificates in the shipped bundle (expo-updates contributes only its build/ runtime modules). No patched version exists (vulnerable range <= 1.4.0 = every published release).",
       "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "reason": "Dev-server only, first-party input only, and not in the shipped app. The vulnerable copy is zod 3.25.76 at node_modules/expo/node_modules/zod, required only by expo > @expo/cli (declares ^3.25.76; so does every @expo/cli up to 58.1.15, and zod has no patched 3.x, so neither `npm update` nor an override to 4.x, whose root export is a different API, is open). @expo/cli uses it in three files under build/src/start/server, all run by `expo start` on a developer's machine: DevToolsPlugin.js validates the dev-tools plugin manifests of packages installed in our own node_modules, DevToolsPluginCliExtensionResults.js validates the stdout of those plugins' own CLI commands, and createMCPDevToolsExtensionSchema.js builds the schema for the local MCP dev-tools bridge. None of it runs in a build, an export or on a phone: a local `expo export --platform ios --source-maps` (2689 modules, 25 Oct 2026) contains no module under expo/node_modules/zod; the 94 zod modules in it are the app's own root zod 4.6.7, which is patched. Worst case is our own dev server running out of memory on a manifest we installed. The app's direct zod dependency stays on ^4.6.7, outside the vulnerable range.",
+      "expires": "2027-01-15"
     }
   ]
 }
