@@ -22,7 +22,7 @@ describe('normaliseGetItems', () => {
   it('normalises a Plug S with every field, lowercasing the id', () => {
     const [d] = normaliseGetItems([plugS])
     expect(d).toMatchObject({ device_id: 'a8032abe41fc', online: true, gen: 2, model: 'SNPL-00112EU', name: 'Treadmill 1', supported: true })
-    expect(d.channels).toEqual([{ channel: 0, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in' }])
+    expect(d.channels).toEqual([{ kind: 'switch', brightness: null, channel: 0, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in' }])
   })
   it('expands a Pro 4PM into four channels', () => {
     const [d] = normaliseGetItems([pro4pm])
@@ -89,12 +89,12 @@ describe('normaliseAllStatus (v1 discovery)', () => {
 describe('stateFromReading / stateChanged', () => {
   const reading = normaliseGetItems([plugS])[0]
   it('builds last_state from a channel reading', () => {
-    expect(stateFromReading(null, reading, 0, 'T1')).toEqual({ online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', at: 'T1' })
+    expect(stateFromReading(null, reading, 0, 'T1')).toEqual({ online: true, output: true, brightness: null, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', at: 'T1' })
   })
   it('offline keeps the previous output/apower and flips online', () => {
     const prev = { online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', at: 'T1' }
     const off = normaliseGetItems([offline])[0]
-    expect(stateFromReading(prev, off, 0, 'T2')).toEqual({ ...prev, online: false, at: 'T2' })
+    expect(stateFromReading(prev, off, 0, 'T2')).toEqual({ ...prev, brightness: null, online: false, at: 'T2' })
   })
   it('stateChanged ignores sub-threshold jitter but fires on output, online, 1 Wh, 1 °C, or a 5-minute refresh', () => {
     const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
