@@ -599,4 +599,19 @@ describe('POST …/toggle — a device in a group', () => {
     const unmanaged = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
     expect(unmanaged.holds_until_changed).toBe(true)
   })
+
+  it('on/off with an unreadable group still switches, but claims nothing about holding', async () => {
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    const applied = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(applied.status).toBe(200)
+    const body = await applied.json()
+    expect(body).toMatchObject({ applied: true, holds_until_changed: false })
+    expect(body).not.toHaveProperty('notice')
+
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    useCloud({ ok: false, kind: 'device', statusCode: 200 })
+    const pending = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(pending).toMatchObject({ pending: true, holds_until_changed: false })
+    expect(pending).not.toHaveProperty('notice')
+  })
 })

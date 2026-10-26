@@ -281,10 +281,12 @@ export const POST = withAuth(
     // closes an expired override (plan.js rule 2 returns before rule 4), so the
     // relay holds until a human changes it and `until` bounds only the banner.
     // Judged on the effective schedule (the group's, for a member). If the
-    // member's group could not be read this falls back to the device's own
-    // fields — only this flag depends on it, and a manual switch is not worth
-    // refusing over it.
-    const unmanaged = !target.enabled || target.schedule_mode === 'none'
+    // member's group could not be read we do not know whether a schedule will
+    // close this override, so we claim nothing: holds_until_changed false and
+    // no notice (controller ruling). The device's own fields would say
+    // "unmanaged" — joining cleared them — which is evidence we do not have.
+    // A manual switch is not worth refusing over a banner flag.
+    const unmanaged = grouped.ok && (!target.enabled || target.schedule_mode === 'none')
     const tz = requestTz(user)
     const untilMs = input.until ? Date.parse(input.until) : nextLocalMidnightMs(nowMs, tz)
     if (!Number.isFinite(untilMs)) {
