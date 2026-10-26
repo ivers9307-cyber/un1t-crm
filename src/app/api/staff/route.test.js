@@ -40,6 +40,7 @@ import { STAFF_MANAGED_SELECT } from '@/lib/staff-fields'
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
 function mockDb({ inviteError, profileUpdate, clearError, finalProfile } = {}) {
+  const profileUpdates = []
   const inviteUserByEmail = vi.fn((_email, _opts) =>
     Promise.resolve(inviteError
       ? { data: null, error: inviteError }
@@ -56,7 +57,7 @@ function mockDb({ inviteError, profileUpdate, clearError, finalProfile } = {}) {
           // PostgREST's real contract: `.select()` after an UPDATE returns the
           // rows it actually touched, and an UPDATE that matches nothing
           // returns NO error and an EMPTY array.
-          update: vi.fn(() => ({
+          update: vi.fn((u) => (profileUpdates.push(u), {
             eq: vi.fn(() => ({
               select: vi.fn(() => Promise.resolve(profileUpdate || { error: null, data: [{ id: 'new-user-id' }] })),
             })),
@@ -80,7 +81,7 @@ function mockDb({ inviteError, profileUpdate, clearError, finalProfile } = {}) {
       throw new Error(`unexpected table ${table}`)
     }),
   }
-  return { db, inviteUserByEmail }
+  return { db, inviteUserByEmail, profileUpdates }
 }
 
 const postReq = (body) => new Request('http://localhost/api/staff', {
@@ -132,6 +133,27 @@ describe('POST /api/staff', () => {
     // survive alongside it.
     expect(opts.data).toEqual({ full_name: 'New Coach', invited_for: 'staff' })
     expect(opts.redirectTo).toBe('https://crm.example.com/reset-password')
+  })
+
+  // PINSCOPE.1 (mig 772) — the trigger mints an INACTIVE 'staff' profile and
+  // never reads role or permissions from the caller-written metadata; this
+  // route's checked update is what activates the account and sets its role.
+  it('activates the trigger-minted profile and sets its role in one update, sending no role in metadata', async () => {
+    getCurrentUser.mockResolvedValue(ownerUser)
+    const { db, inviteUserByEmail, profileUpdates } = mockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({
+      email: 'new@example.com',
+      full_name: 'New Coach',
+      assignments: [{ location_id: LOC, role: 'manager' }],
+    }))
+
+    expect(res.status).toBe(201)
+    expect(profileUpdates[0]).toMatchObject({ role: 'manager', active: true })
+    const [, opts] = inviteUserByEmail.mock.calls[0]
+    expect(opts.data).not.toHaveProperty('role')
+    expect(opts.data).not.toHaveProperty('permissions')
   })
 
   it('409 with user_exists code when auth says the email is taken', async () => {
