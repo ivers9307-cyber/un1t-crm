@@ -75,6 +75,7 @@ import {
   plugTone, plugDisplayName, toggleResultText, errorText, isQueued,
   arrangeShellyCards, groupSwitchView, groupToggleOutcome, deviceSwitchView, memberMeta,
   groupReasonLine, groupIconName, totalWattsText, unadoptedBannerText, nextClassWindow,
+  showBackToSchedule, groupAutoOutcome,
   nextClassLabel, screenHeaderLine,
   PLUG_TONE_TEXT, PLUG_TONE_DOT,
 } from '../../../lib/shelly'
@@ -114,6 +115,14 @@ const TRACK = Object.freeze({
   unknown: '#E2E8F0',
 })
 
+// A copy of `set` with `id` added or removed (state sets are never mutated).
+function withId(set, id, on) {
+  const next = new Set(set)
+  if (on) next.add(id)
+  else next.delete(id)
+  return next
+}
+
 const NOTE_CLASS = Object.freeze({
   ok: 'text-emerald-700',
   warn: 'text-amber-700',
@@ -123,7 +132,7 @@ const NOTE_CLASS = Object.freeze({
 // One switch, used for a group and (small) for each device. `checked` is
 // true / false / 'mixed' / undefined (unknown); mixed and unknown sit the
 // knob in the middle.
-function ToggleSwitch({ tone, checked, disabled, busy, small, onPress, accessibilityLabel }) {
+function ToggleSwitch({ tone, checked, disabled, busy, small, onPress, accessibilityLabel, accessibilityValue }) {
   const w = small ? 40 : 52
   const h = small ? 24 : 30
   const knob = h - 6
@@ -135,9 +144,11 @@ function ToggleSwitch({ tone, checked, disabled, busy, small, onPress, accessibi
       <Pressable
         onPress={onPress}
         disabled={off}
-        hitSlop={8}
+        // ≥ 44 pt touch target: the small track is 40×24, the large 52×30.
+        hitSlop={small ? { top: 10, bottom: 10, left: 4, right: 4 } : { top: 7, bottom: 7, left: 4, right: 4 }}
         accessibilityRole="switch"
         accessibilityLabel={accessibilityLabel}
+        accessibilityValue={accessibilityValue ? { text: accessibilityValue } : undefined}
         accessibilityState={{ checked, disabled: off, busy: Boolean(busy) }}
         className="active:opacity-70"
         style={{ opacity: off ? 0.4 : 1 }}
@@ -160,7 +171,7 @@ function ToggleSwitch({ tone, checked, disabled, busy, small, onPress, accessibi
 // One device row: a member under a group, or a "Not in a group" row. Keeps
 // every rule of the old PlugRow — freshness dot, queued/pending notes, the
 // offline "your choice is queued" line, controls off only on connected===false.
-function DeviceRow({ device, connected, busy, note, onToggle, first }) {
+function DeviceRow({ device, connected, busy, locked, note, onToggle, first }) {
   const health = plugTone(device, connected)
   const meta = memberMeta(device)
   const sw = deviceSwitchView(device, connected)
@@ -192,9 +203,11 @@ function DeviceRow({ device, connected, busy, note, onToggle, first }) {
           small
           tone={sw.tone}
           checked={sw.checked}
-          disabled={sw.disabled}
+          // `locked`: its group's press is in flight — one command at a time.
+          disabled={sw.disabled || Boolean(locked)}
           busy={busy}
           accessibilityLabel={sw.accessibilityLabel}
+          accessibilityValue={sw.accessibilityValue}
           onPress={() => onToggle(device, sw.nextState)}
         />
       </View>
@@ -211,13 +224,19 @@ function DeviceRow({ device, connected, busy, note, onToggle, first }) {
   )
 }
 
-function GroupCard({ group, members, devices, connected, zone, busy, note, partial, onToggle, rowProps }) {
+function GroupCard({ group, members, devices, connected, zone, busy, note, partial, onToggle, onAuto, rowProps }) {
   const sw = groupSwitchView(group, devices, { connected, partial })
-  const reason = groupReasonLine(group, zone, Date.now())
+  // withCount:false — the count is printed once, on the amber line below.
+  const reason = groupReasonLine(group, zone, Date.now(), { withCount: false })
+  const offerAuto = showBackToSchedule(group) && !sw.empty
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
       <View className="flex-row items-center">
-        <View className="w-9 h-9 rounded-full bg-un1t-bg border border-un1t-border items-center justify-center mr-3">
+        <View
+          className="w-9 h-9 rounded-full bg-un1t-bg border border-un1t-border items-center justify-center mr-3"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
           <Ionicons name={groupIconName(group.icon)} size={18} color="#111827" />
         </View>
         <View className="flex-1 pr-3">
@@ -235,16 +254,30 @@ function GroupCard({ group, members, devices, connected, zone, busy, note, parti
           disabled={sw.disabled}
           busy={busy}
           accessibilityLabel={sw.accessibilityLabel}
+          accessibilityValue={sw.accessibilityValue}
           onPress={() => onToggle(group, sw.nextState, members.length || Number(group?.now?.member_count) || 0)}
         />
       </View>
+      {offerAuto && (
+        <Pressable
+          onPress={() => onAuto(group, members)}
+          disabled={busy || connected === false}
+          hitSlop={{ top: 12, bottom: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel={`Back to schedule, ${group.name}`}
+          className="self-start mt-2 active:opacity-70"
+          style={{ opacity: busy || connected === false ? 0.4 : 1 }}
+        >
+          <Text className="text-xs font-semibold text-blue-700">Back to schedule</Text>
+        </Pressable>
+      )}
       {note && (
         <Text className={`text-xs mt-2 ${NOTE_CLASS[note.tone] || NOTE_CLASS.ok}`} accessibilityRole="text">{note.text}</Text>
       )}
       {members.length > 0 && (
         <View className="mt-2">
           {members.map((d, i) => (
-            <DeviceRow key={d.id} device={d} first={i === 0} {...rowProps(d)} />
+            <DeviceRow key={d.id} device={d} first={i === 0} {...rowProps(d)} locked={busy} />
           ))}
         </View>
       )}
@@ -298,12 +331,13 @@ export default function ShellyScreen() {
   const [error, setError] = useState(null)     // only ever shown when NOTHING is painted
   const [retrying, setRetrying] = useState(false) // the subordinate line under painted rows
   const [refreshing, setRefreshing] = useState(false)
-  const [busyId, setBusyId] = useState(null)
+  // Per-id busy SETS: one press's finally must not clear another's spinner.
+  const [busyIds, setBusyIds] = useState(() => new Set())
   const [notes, setNotes] = useState({})
   // SHELLYGROUPS.10. undefined = not answered yet; null = the list could not
   // be read (every plug is then drawn in one plain card, never hidden).
   const [groups, setGroups] = useState(undefined)
-  const [busyGroupId, setBusyGroupId] = useState(null)
+  const [busyGroupIds, setBusyGroupIds] = useState(() => new Set())
   // groupId → { on, count } from a partial press, painted until the next poll.
   const [partials, setPartials] = useState({})
   // Read once per focus (rule 6). null = unknown → no banner / no next class.
@@ -480,7 +514,7 @@ export default function ShellyScreen() {
   // left spinning. (Since MOBILE-SESSION.1 a failed token refresh answers an
   // envelope rather than throwing, so this is the last-resort net.)
   const toggle = useCallback(async (device, state) => {
-    setBusyId(device.id)
+    setBusyIds((prev) => withId(prev, device.id, true))
     setNote(device.id, null)
     try {
       const json = await api(`/api/shelly/devices/${device.id}/toggle`, {
@@ -513,7 +547,7 @@ export default function ShellyScreen() {
       // Human copy, not the exception — see the load() catch above.
       setNote(device.id, { tone: 'error', text: 'That did not work — try again' })
     } finally {
-      setBusyId(null)
+      setBusyIds((prev) => withId(prev, device.id, false))
     }
   }, [locationId, load, setNote])
 
@@ -523,7 +557,7 @@ export default function ShellyScreen() {
   // asserts the requested state.
   const toggleGroup = useCallback(async (group, state, memberCount) => {
     const key = `group:${group.id}`
-    setBusyGroupId(group.id)
+    setBusyGroupIds((prev) => withId(prev, group.id, true))
     setNote(key, null)
     try {
       const json = await toggleShellyGroup(group.id, { state }, locationId)
@@ -539,7 +573,32 @@ export default function ShellyScreen() {
     } catch {
       setNote(key, { tone: 'error', text: 'That did not work — try again' })
     } finally {
-      setBusyGroupId(null)
+      setBusyGroupIds((prev) => withId(prev, group.id, false))
+    }
+  }, [locationId, load, setNote])
+
+  // "Back to schedule" (state 'auto'): the same press discipline as the
+  // switch — groupAutoOutcome reads partial / none / results[] before any
+  // success, and the reload repaints from the server.
+  const autoGroup = useCallback(async (group, members) => {
+    const key = `group:${group.id}`
+    setBusyGroupIds((prev) => withId(prev, group.id, true))
+    setNote(key, null)
+    const names = new Map((members || []).map((d) => [d.id, plugDisplayName(d)]))
+    try {
+      const json = await toggleShellyGroup(group.id, { state: 'auto' }, locationId)
+      const out = groupAutoOutcome(json, (id) => names.get(id) || 'a device')
+      setPartials((prev) => {
+        const next = { ...prev }
+        delete next[group.id]
+        return next
+      })
+      setNote(key, { tone: out.tone, text: out.text })
+      await load(() => true)
+    } catch {
+      setNote(key, { tone: 'error', text: 'That did not work — try again' })
+    } finally {
+      setBusyGroupIds((prev) => withId(prev, group.id, false))
     }
   }, [locationId, load, setNote])
 
@@ -611,7 +670,7 @@ export default function ShellyScreen() {
   const arranged = arrangeShellyCards(devices, groups)
   const rowProps = (d) => ({
     connected,
-    busy: busyId === d.id,
+    busy: busyIds.has(d.id),
     note: notes[d.id],
     onToggle: toggle,
   })
@@ -684,10 +743,11 @@ export default function ShellyScreen() {
               devices={devices}
               connected={connected}
               zone={zone}
-              busy={busyGroupId === group.id}
+              busy={busyGroupIds.has(group.id)}
               note={notes[`group:${group.id}`]}
               partial={partials[group.id]}
               onToggle={toggleGroup}
+              onAuto={autoGroup}
               rowProps={rowProps}
             />
           ))}
