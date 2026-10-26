@@ -108,6 +108,10 @@ describe('createDonationPayment', () => {
       returnUrl: 'https://app.test/event/x?donation=d1',
       metadata: { donation_id: 'd1', domain: 'un1t_donation', race_event_id: 'e1', location_id: 'L1' },
       idempotencyKey: 'd1',
+      // REVPAY.7: donor, row id and what it was for; no expiry arg = the 30-minute default.
+      customer: { email: DONATION.donor_email, fullName: DONATION.donor_name },
+      merchantReference: 'donation:d1',
+      statementDescriptorSuffix: 'DONATION',
       connectedAccountId: null,
       applicationFeeCents: 0,
     })

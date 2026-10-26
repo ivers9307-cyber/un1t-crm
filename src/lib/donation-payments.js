@@ -49,6 +49,9 @@ export const DONATION_COLS = [
   'marketing_opt_in', 'attribution', 'created_at', 'updated_at',
 ].join(', ')
 
+/** The race_events columns the mark (match multiplier) and the side effects read. */
+export const DONATION_EVENT_COLS = 'id, name, slug, location_id, host_id, sending_location_id, charity_enabled, charity, payment_currency'
+
 // paid and refunded never move. failed and expired never move on another
 // failure report, but a `completed` report may still follow one (see below).
 const IMMOVABLE = new Set(['paid', 'refunded'])
@@ -88,6 +91,11 @@ export async function createDonationPayment({ db, donation, race, host, returnUr
     returnUrl,
     metadata: { donation_id: donation.id, domain: 'un1t_donation', race_event_id: race.id, location_id: race.location_id },
     idempotencyKey: donation.id,
+    // REVPAY.7 — donor, our row id, and what it was for. Paid in-page: the
+    // 30-minute default expiry applies.
+    customer: { email: donation.donor_email, fullName: donation.donor_name },
+    merchantReference: `donation:${donation.id}`,
+    statementDescriptorSuffix: 'DONATION',
     connectedAccountId,
     applicationFeeCents: 0,
   })

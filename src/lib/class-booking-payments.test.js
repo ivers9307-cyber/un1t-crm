@@ -8,7 +8,7 @@ const resolveCustomerBaseUrl = vi.fn(async () => 'https://crm.test')
 vi.mock('./tenant-host', () => ({ resolveCustomerBaseUrl: (...a) => resolveCustomerBaseUrl(...a) }))
 vi.mock('./location-branding', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T Stillorgan', shortName: 'UN1T', locationName: 'UN1T Stillorgan' })) }))
 
-import { createClassBookingPayment, markClassBookingPaymentStatus, classBookingPaymentDescription } from './class-booking-payments'
+import { createClassBookingPayment, markClassBookingPaymentStatus, classBookingPaymentDescription, resolveClassBookingPaymentByRef } from './class-booking-payments'
 import { getLocationBranding } from './location-branding'
 
 function makeDb(updates) {
@@ -46,6 +46,17 @@ describe('createClassBookingPayment', () => {
     await createClassBookingPayment({ db: makeDb([]), request, location, amountCents: 2900, currency: 'EUR' })
     expect(getLocationBranding).toHaveBeenCalledWith(expect.anything(), 'loc1')
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ description: 'UN1T Stillorgan intro: HIIT' }))
+  })
+
+  it('REVPAY.7: the order carries the buyer, class:<id> and an INTRO CLASS suffix, on the default expiry', async () => {
+    await createClassBookingPayment({ db: makeDb([]), request, location, amountCents: 2900, currency: 'EUR' })
+    const args = createPayment.mock.calls[0][0]
+    expect(args).toEqual(expect.objectContaining({
+      customer: { email: 'a@b.com', fullName: 'A B' },
+      merchantReference: 'class:req1',
+      statementDescriptorSuffix: 'INTRO CLASS',
+    }))
+    expect('expirePendingAfter' in args).toBe(false)
   })
 
   it('W1.S1a: an unresolved brand never borrows another gym', () => {
@@ -95,5 +106,32 @@ describe('markClassBookingPaymentStatus', () => {
     const r = await markClassBookingPaymentStatus({ db: makeDb(updates), request: { ...row, payment_status: 'paid', status: 'queued' }, providerState: 'completed' })
     expect(r.released).toBe(false)
     expect(updates).toHaveLength(0)
+  })
+  // REVPAY.1 — the writes were bare: a failed 'paid' answered released:true
+  // over a booking still held, and the webhook's claim made it final.
+  it('a failed paid write returns the error and does NOT report released', async () => {
+    const err = { message: 'write failed' }
+    const db = { ...makeDb([]), eq() { return Promise.resolve({ data: null, error: err }) } }
+    const r = await markClassBookingPaymentStatus({ db, request: row, providerState: 'completed', providerAmount: 2900 })
+    expect(r).toEqual({ released: false, error: err })
+  })
+  it('a failed terminal write returns the error', async () => {
+    const err = { message: 'write failed' }
+    const db = { ...makeDb([]), eq() { return Promise.resolve({ data: null, error: err }) } }
+    const r = await markClassBookingPaymentStatus({ db, request: row, providerState: 'failed' })
+    expect(r).toEqual({ released: false, error: err })
+  })
+})
+
+describe('resolveClassBookingPaymentByRef (REVPAY.1)', () => {
+  const failingDb = {
+    from() { return this }, select() { return this }, eq() { return this },
+    maybeSingle: async () => ({ data: null, error: { message: 'db down' } }),
+  }
+  it('a failed read is "no row" by default (callers unchanged)', async () => {
+    expect(await resolveClassBookingPaymentByRef(failingDb, 'ord-1')).toBeNull()
+  })
+  it('throwOnError: a failed read throws', async () => {
+    await expect(resolveClassBookingPaymentByRef(failingDb, 'ord-1', { throwOnError: true })).rejects.toEqual({ message: 'db down' })
   })
 })

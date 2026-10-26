@@ -45,6 +45,7 @@ REVOLUT_WEBHOOK_SECRET=          # signing_secret for the CARS deposit webhook (
 REVOLUT_RACE_WEBHOOK_SECRET=     # signing_secret for the RACE-PAYMENTS webhook (/api/webhooks/revolut/race-payments). Mig 084. If unset, race route falls back to REVOLUT_WEBHOOK_SECRET (single-merchant transitional case).
 REVOLUT_OFFER_WEBHOOK_SECRET=    # signing_secret for the OFFERS webhook (/api/webhooks/revolut/offer-payments). Mig 505. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET.
 REVOLUT_DONATION_WEBHOOK_SECRET= # signing_secret for the DONATIONS webhook (/api/webhooks/revolut/donations). Mig 765. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET.
+REVOLUT_DISPUTE_WEBHOOK_SECRET= # signing_secret for the DISPUTES webhook (/api/webhooks/revolut/disputes). REVPAY.4, mig 774. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET. Register it via POST /api/webhooks with events [DISPUTE_ACTION_REQUIRED, DISPUTE_UNDER_REVIEW, DISPUTE_WON, DISPUTE_LOST]; staff get an ops alert on ACTION_REQUIRED and LOST.
 REVOLUT_API_VERSION=2026-03-12   # optional; default in src/lib/revolut.js
 NEXT_PUBLIC_REVOLUT_MODE=        # 'prod' | 'sandbox' — must match REVOLUT_API_BASE_URL
 NEXT_PUBLIC_REVOLUT_PUBLIC_KEY=  # Public API key (pk_live_... or pk_sandbox_...) for the embedded checkout widget
@@ -257,6 +258,14 @@ Used for car deposit payments. **All field names + enum values are verified agai
 - **Public key** (`pk_live_...` / `pk_sandbox_...`) — `NEXT_PUBLIC_REVOLUT_PUBLIC_KEY`. Exposed to the browser bundle (intentional — Revolut's docs explicitly say "the Public key is provided with payment methods at checkout"). Used to initialise the embedded checkout widget on the client.
 
 **API version pinning.** Every request sends `Revolut-Api-Version: 2026-03-12` (configurable via `REVOLUT_API_VERSION`, default in `lib/revolut.js`). When updating to a newer version, **read the changelog AND the OpenAPI spec for that version's enum values** — Revolut has shifted enum casing between versions (e.g. `capture_mode` was upper-snake in older versions, lowercase in newer; the SDK token field renamed from `public_id` to `token`).
+
+**Version check, 26 Oct 2026 (REVPAY audit).** Newest published spec is `merchant-2026-08-17`. Against our pinned `2026-03-12` it has the same endpoints and the same webhook event list, so there is no reason to bump yet; re-check enum casing before any bump.
+
+**One merchant account for every flow.** All Revolut flows (CCF Autos car deposits and UN1T races, paid classes, trials, offers, donations) use the single `REVOLUT_API_KEY`, so their money settles into one Revolut Business account. That is the opposite of the Xero rule (one legal entity, one set of books). If CCF Autos and Champ Fitness Ltd are separate companies, car deposits need their own merchant key (per location, like Xero); until then this is a known, deliberate-or-not decision for the owner, not a code default to copy.
+
+**Order fields (REVPAY.7).** `createOrder` sends `customer` (email, full name), `merchant_order_data.reference` (`car:` / `race:` / `class:` / `trial:` / `offer:` / `donation:` / `gap:` + our row id), a sanitised `statement_descriptor_suffix` (≤19 chars, no `*`) and `expire_pending_after` (default `PT30M`; car deposits use the link's remaining life, race entries the unpaid hold, staff price-difference links 7 days). An expired order goes to `failed` and fires `ORDER_FAILED`. Revolut creates a NEW customer record for every order that carries `customer` without an id (spec), so the dashboard's customer list grows per order.
+
+**Disputes and the backstop.** Disputes arrive at `/api/webhooks/revolut/disputes` (REVPAY.4, `revolut_disputes`, ops alert). Lost or deferred order webhooks are settled by `/api/cron/revolut-reconcile` (REVPAY.3, every 15 min).
 
 **Spec-verified facts.** All values lowercase in the current pinned version:
 

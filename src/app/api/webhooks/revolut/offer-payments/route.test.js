@@ -8,8 +8,10 @@ vi.mock('@/lib/revolut', () => ({
 }))
 
 const recordWebhookEvent = vi.fn(async () => ({ seen: false }))
+const releaseWebhookEvent = vi.fn(async () => {})
 vi.mock('@/lib/webhook-events', () => ({
   recordWebhookEvent: (...a) => recordWebhookEvent(...a),
+  releaseWebhookEvent: (...a) => releaseWebhookEvent(...a),
   WEBHOOK_PROVIDERS: { REVOLUT_OFFER: 'revolut_offer' },
 }))
 
@@ -41,6 +43,7 @@ beforeEach(() => {
   verifyWebhookSignature.mockClear(); verifyWebhookSignature.mockReturnValue(true)
   getOrder.mockClear(); getOrder.mockResolvedValue({ id: 'ord_1', state: 'completed', amount: 49700 })
   recordWebhookEvent.mockClear(); recordWebhookEvent.mockResolvedValue({ seen: false })
+  releaseWebhookEvent.mockClear()
   resolveOfferPurchaseByOrderId.mockClear(); resolveOfferPurchaseByOrderId.mockResolvedValue(purchase)
   markOfferPurchaseState.mockClear(); markOfferPurchaseState.mockResolvedValue({ changed: true, state: 'paid' })
   linkOrCreateContactForPurchase.mockClear()
@@ -58,15 +61,37 @@ describe('POST /api/webhooks/revolut/offer-payments', () => {
     expect(json.deduped).toBe(true)
     expect(getOrder).not.toHaveBeenCalled()
   })
-  it('200 + skipped for an unknown order id', async () => {
+  it('200 + skipped for an unknown order id, with NO dedupe claim (REVPAY.1)', async () => {
     resolveOfferPurchaseByOrderId.mockResolvedValueOnce(null)
     const json = await (await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_x' }))).json()
     expect(json.skipped).toBe('unknown_order')
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
+  })
+  it('resolves strictly; a failed lookup defers with nothing claimed', async () => {
+    resolveOfferPurchaseByOrderId.mockRejectedValueOnce(new Error('db down'))
+    const json = await (await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_1' }))).json()
+    expect(resolveOfferPurchaseByOrderId).toHaveBeenCalledWith(expect.anything(), 'ord_1', { throwOnError: true })
+    expect(json.deferred).toBe(true)
+    expect(recordWebhookEvent).not.toHaveBeenCalled()
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
+  })
+  it('a thrown state write defers and RELEASES the claim, no side effects', async () => {
+    markOfferPurchaseState.mockRejectedValueOnce(new Error('offer_purchases update: down'))
+    const res = await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_1' }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).deferred).toBe(true)
+    expect(releaseWebhookEvent).toHaveBeenCalledWith(expect.objectContaining({ provider: 'revolut_offer', eventId: 'ORDER_COMPLETED:ord_1' }))
+    expect(linkOrCreateContactForPurchase).not.toHaveBeenCalled()
+  })
+  it('a landed state write never releases the claim, even when side effects throw', async () => {
+    linkOrCreateContactForPurchase.mockRejectedValueOnce(new Error('boom'))
+    await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_1' }))
+    expect(releaseWebhookEvent).not.toHaveBeenCalled()
   })
   it('ORDER_COMPLETED → fresh getOrder state marks paid and runs side effects', async () => {
     const json = await (await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_1' }))).json()
     expect(getOrder).toHaveBeenCalledWith('ord_1')
-    expect(markOfferPurchaseState).toHaveBeenCalledWith(expect.objectContaining({ purchase, providerState: 'completed' }))
+    expect(markOfferPurchaseState).toHaveBeenCalledWith(expect.objectContaining({ purchase, providerState: 'completed', casOnState: true }))
     expect(linkOrCreateContactForPurchase).toHaveBeenCalled()
     expect(notifyStaffOfPaidPurchase).toHaveBeenCalled()
     expect(json.state).toBe('paid')
@@ -96,6 +121,7 @@ describe('POST /api/webhooks/revolut/offer-payments', () => {
     const json = await (await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_1' }))).json()
     expect(json.deferred).toBe(true)
     expect(markOfferPurchaseState).not.toHaveBeenCalled()
+    expect(releaseWebhookEvent).toHaveBeenCalledTimes(1)
   })
 })
 

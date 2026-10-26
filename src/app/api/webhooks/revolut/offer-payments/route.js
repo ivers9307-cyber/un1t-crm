@@ -13,18 +13,20 @@
 // webhook_events (provider REVOLUT_OFFER) + the row's own state guard;
 // returns 200 on anything unrecognised so Revolut doesn't auto-disable
 // the hook.
+//
+// REVPAY.1 — resolve FIRST, claim second: every endpoint on the merchant
+// account receives every order's events, so another flow's order answers 200
+// skipped with no dedupe row and no log line. After the claim, a deferral
+// (getOrder throws, the state write throws) releases the claim and answers
+// 200 { deferred } (the donations route's pattern). The paid side effects
+// after a write that landed never release it: they would re-send the receipt.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
-import {
-  resolveOfferPurchaseByOrderId,
-  markOfferPurchaseState,
-  linkOrCreateContactForPurchase,
-  notifyStaffOfPaidPurchase,
-} from '@/lib/sale-offers'
-import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
-import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { logWarn } from '@/lib/log'
+import { resolveOfferPurchaseByOrderId, markOfferPurchaseState } from '@/lib/sale-offers'
+import { runOfferPaidSideEffects } from '@/lib/offer-purchase-paid'
+import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
@@ -53,21 +55,35 @@ export async function POST(request) {
   if (!orderId || !event) return NextResponse.json({ success: true })
 
   const db = createServerClient()
+  const eventId = `${event}:${orderId}`
+
+  // Resolve before claiming. A failed read is not "not ours": defer (nothing
+  // is claimed yet).
+  let purchase
+  try {
+    purchase = await resolveOfferPurchaseByOrderId(db, orderId, { throwOnError: true })
+  } catch (e) {
+    logWarn('offer-webhook', 'offer_purchases lookup failed; deferred', { err: e, orderId, event })
+    return NextResponse.json({ success: true, deferred: true })
+  }
+  if (!purchase) {
+    // Another flow's order or a stale id. Normal traffic, so no log; 200 so
+    // Revolut moves on.
+    return NextResponse.json({ success: true, skipped: 'unknown_order' })
+  }
 
   const dedup = await recordWebhookEvent({
     db, provider: WEBHOOK_PROVIDERS.REVOLUT_OFFER,
-    eventId: `${event}:${orderId}`,
+    eventId,
   })
   if (dedup.seen) {
     return NextResponse.json({ success: true, deduped: true })
   }
 
-  const purchase = await resolveOfferPurchaseByOrderId(db, orderId)
-  if (!purchase) {
-    // Misrouted webhook from another Revolut flow, or a stale id — 200 so
-    // Revolut moves on.
-    logWarn('offer-webhook', `no offer_purchases row for order ${orderId}`, { event })
-    return NextResponse.json({ success: true, skipped: 'unknown_order' })
+  // Give the claim back and answer 200.
+  const defer = async () => {
+    await releaseWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.REVOLUT_OFFER, eventId })
+    return NextResponse.json({ success: true, deferred: true })
   }
 
   // Refresh authoritative state from Revolut (payload state can be stale
@@ -77,25 +93,28 @@ export async function POST(request) {
     order = await getOrder(orderId)
   } catch (e) {
     logWarn('offer-webhook', `getOrder failed for ${orderId}`, { err: e })
-    return NextResponse.json({ success: true, deferred: true })
+    return await defer()
   }
   if (!order) return NextResponse.json({ success: true, skipped: 'order_missing' })
 
   const providerState = String(order.state || '').toLowerCase()
-  const { changed, state } = await markOfferPurchaseState({ db, purchase, providerState })
+  let changed
+  let state
+  try {
+    // Throws on a failed write. casOnState (REVPAY.3): the status poll and the
+    // reconcile cron can settle the same purchase; only the write that lands
+    // reports `changed`, so the paid side effects run once.
+    ({ changed, state } = await markOfferPurchaseState({ db, purchase, providerState, casOnState: true }))
+  } catch (e) {
+    logError('offer-webhook', `offer purchase state write failed for order ${orderId}; deferred`, { err: e, purchaseId: purchase.id })
+    return await defer()
+  }
 
   if (changed && state === 'paid') {
     // Fire-and-forget: a contact/notify failure must never 500 the webhook.
+    // Contact link/tag, staff alert, buyer receipt (src/lib/offer-purchase-paid.js).
     try {
-      const { contactId } = await linkOrCreateContactForPurchase(db, purchase)
-      await notifyStaffOfPaidPurchase(db, purchase, purchase.offer || {})
-      // Buyer receipt. Deliberately says "within 24 hours", NOT "it's ready" —
-      // fulfilment is a manual Glofox step that has not happened yet.
-      await sendOfferPurchaseEmail(db, {
-        purchase: { ...purchase, contact_id: purchase.contact_id || contactId || null },
-        offer: purchase.offer || {},
-        kind: 'paid',
-      })
+      await runOfferPaidSideEffects(db, purchase)
     } catch (e) {
       logWarn('offer-webhook', `paid side-effects failed for ${purchase.id}`, { err: e })
     }

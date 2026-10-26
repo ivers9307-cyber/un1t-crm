@@ -37,6 +37,11 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
     returnUrl: `${baseUrl}${returnPath}?purchase=${purchase.id}`,
     metadata: { trial_purchase_id: purchase.id, domain: 'un1t_trial_purchase', location_id: purchase.location_id },
     idempotencyKey: purchase.id,
+    // REVPAY.7 — buyer, our row id, and what was bought on the statement. Paid
+    // in-page straight after the form: the 30-minute default expiry applies.
+    customer: { email: purchase.customer_email, fullName: purchase.customer_name },
+    merchantReference: `trial:${purchase.id}`,
+    statementDescriptorSuffix: 'TRIAL',
     connectedAccountId,
     applicationFeeCents: 0,
   })
@@ -59,10 +64,15 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
   }
 }
 
-/** Webhook lookup: the row that owns this provider order (null when none). */
-export async function resolveTrialPurchaseByRef(db, providerRef) {
+/**
+ * Webhook lookup: the row that owns this provider order (null when none).
+ * REVPAY.1 — `throwOnError`: a failed read throws instead of reading as "no
+ * row", so the Revolut webhook can defer rather than drop the payment.
+ */
+export async function resolveTrialPurchaseByRef(db, providerRef, { throwOnError = false } = {}) {
   if (!providerRef) return null
-  const { data } = await db.from('trial_purchases').select('*').eq('payment_provider_ref', providerRef).maybeSingle()
+  const { data, error } = await db.from('trial_purchases').select('*').eq('payment_provider_ref', providerRef).maybeSingle()
+  if (error && throwOnError) throw error
   return data || null
 }
 

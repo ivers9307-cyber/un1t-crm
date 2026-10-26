@@ -72,6 +72,11 @@ export async function POST(request, props) {
     metadata: { offer_purchase_id: purchaseId, offer_slug: offer.slug, location_id: offer.location_id },
     idempotencyKey: purchaseId,
     redirectUrl: `${origin}/offers/${offer.slug}?purchase=${purchaseId}`,
+    // REVPAY.7 — a fresh order per checkout click (random purchaseId), paid in
+    // the page's widget: the 30-minute default expiry applies.
+    customer: { email: parsed.data.email, fullName: parsed.data.name },
+    merchantReference: `offer:${purchaseId}`,
+    statementDescriptorSuffix: offer.name,
   })
 
   const { error } = await db.from('offer_purchases').insert({

@@ -23,6 +23,14 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { logWarn } from './log'
+import {
+  DEFAULT_EXPIRE_PENDING_AFTER,
+  buildCustomer,
+  normaliseExpirePendingAfter,
+  sanitiseStatementDescriptorSuffix,
+} from './revolut-order-fields'
+
+export { DEFAULT_EXPIRE_PENDING_AFTER }
 
 // API version pinned by header — Revolut requires this on every
 // request. Updating the date string is the migration path when they
@@ -47,14 +55,72 @@ function getConfig() {
 }
 
 export class RevolutError extends Error {
-  constructor(message, status) {
+  /**
+   * @param {string} message
+   * @param {number} [status]  HTTP status, or 504 for a timeout / 502 for no reply
+   * @param {string} [code]    'timeout' | 'network' when Revolut never answered
+   *   (outcome unknown for a POST); undefined for an HTTP error answer
+   */
+  constructor(message, status, code) {
     super(message)
     this.name = 'RevolutError'
     this.status = status
+    if (code) this.code = code
   }
 }
 
-async function request(path, { method = 'GET', body = undefined, idempotencyKey = undefined } = {}) {
+// REVPAY.1 — transport limits. A hung Revolut call used to hold a webhook or a
+// staff refund until Vercel killed the function. Every call now has a per-
+// attempt timeout, and a GET (a read, safe to repeat) is retried on 429/5xx/no
+// reply. A POST is NEVER retried here: a refund or order POST that answered
+// 5xx or timed out may well have landed, so its outcome is unknown and the
+// caller decides (the refund route retries only under the same
+// Idempotency-Key, which Revolut dedupes).
+export const REVOLUT_TIMEOUT_MS = 15_000
+const GET_RETRIES = 2
+const RETRY_BASE_MS = 300
+const RETRY_AFTER_CAP_MS = 2_000
+// The whole GET, retries and waits included, stays inside this, so a webhook
+// that reads an order finishes well within the function's limit.
+const GET_TOTAL_BUDGET_MS = 25_000
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function isRetryableStatus(status) {
+  return status === 429 || (status >= 500 && status <= 599)
+}
+
+// Retry-After is seconds or an HTTP date; capped so a long hint never stalls a
+// webhook. Unreadable → null (the caller uses its own backoff).
+function retryAfterMs(res) {
+  const raw = res?.headers?.get?.('retry-after')
+  if (!raw) return null
+  const secs = Number(raw)
+  const ms = Number.isFinite(secs) ? secs * 1000 : new Date(raw).getTime() - Date.now()
+  if (!Number.isFinite(ms) || ms < 0) return null
+  return Math.min(ms, RETRY_AFTER_CAP_MS)
+}
+
+function isTimeoutError(e) {
+  return e?.name === 'TimeoutError' || e?.name === 'AbortError'
+}
+
+/**
+ * @param {string} path
+ * @param {object} [opts]
+ * @param {'GET'|'POST'} [opts.method='GET']
+ * @param {object} [opts.body]
+ * @param {string} [opts.idempotencyKey]  sent as Idempotency-Key
+ * @param {number} [opts.timeoutMs]  per-attempt timeout (default REVOLUT_TIMEOUT_MS)
+ * @param {number} [opts.retries]    GET only: extra attempts (default 2); ignored for POST
+ */
+async function request(path, {
+  method = 'GET',
+  body = undefined,
+  idempotencyKey = undefined,
+  timeoutMs = REVOLUT_TIMEOUT_MS,
+  retries = GET_RETRIES,
+} = {}) {
   const { apiKey, baseUrl, apiVersion } = getConfig()
   const headers = {
     Authorization: `Bearer ${apiKey}`,
@@ -64,23 +130,56 @@ async function request(path, { method = 'GET', body = undefined, idempotencyKey 
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
 
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
-  // Revolut returns JSON on both success + error. Error shape:
-  //   { code: number, message: string, errorId: string }
-  const text = await res.text()
-  let json = null
-  try { json = text ? JSON.parse(text) : null } catch {
-    // Non-JSON body — keep going so we can still surface the status.
+  const isRead = method === 'GET' || method === 'HEAD'
+  const maxAttempts = isRead ? 1 + Math.max(0, Math.floor(Number(retries) || 0)) : 1
+  const deadline = Date.now() + (isRead ? Math.max(GET_TOTAL_BUDGET_MS, timeoutMs) : timeoutMs)
+
+  for (let attempt = 1; ; attempt++) {
+    const remaining = deadline - Date.now()
+    const attemptTimeout = Math.max(1, Math.min(timeoutMs, remaining))
+    const backoff = RETRY_BASE_MS * 2 ** (attempt - 1)
+    let res
+    try {
+      res = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(attemptTimeout),
+      })
+    } catch (e) {
+      const err = isTimeoutError(e)
+        ? new RevolutError(`Revolut API timed out after ${attemptTimeout}ms`, 504, 'timeout')
+        : new RevolutError(`Revolut API unreachable: ${e?.message || 'network error'}`, 502, 'network')
+      if (attempt < maxAttempts && deadline - Date.now() > backoff + 1000) {
+        await sleep(backoff)
+        continue
+      }
+      throw err
+    }
+
+    if (!res.ok && attempt < maxAttempts && isRetryableStatus(res.status)) {
+      const wait = retryAfterMs(res) ?? backoff
+      if (deadline - Date.now() > wait + 1000) {
+        // Drain the body so the connection is released before retrying.
+        try { await res.text() } catch { /* ignore */ }
+        await sleep(wait)
+        continue
+      }
+    }
+
+    // Revolut returns JSON on both success + error. Error shape:
+    //   { code: number, message: string, errorId: string }
+    const text = await res.text()
+    let json = null
+    try { json = text ? JSON.parse(text) : null } catch {
+      // Non-JSON body — keep going so we can still surface the status.
+    }
+    if (!res.ok) {
+      const message = json?.message || json?.error || `Revolut API ${res.status}`
+      throw new RevolutError(message, res.status)
+    }
+    return json
   }
-  if (!res.ok) {
-    const message = json?.message || json?.error || `Revolut API ${res.status}`
-    throw new RevolutError(message, res.status)
-  }
-  return json
 }
 
 /**
@@ -102,6 +201,17 @@ async function request(path, { method = 'GET', body = undefined, idempotencyKey 
  *   look the order up by id alone.
  * @param {string} [args.idempotencyKey] — protect against duplicate
  *   orders on retry. Recommended; we pass deposit_token here.
+ * @param {{ email?: string, fullName?: string, phone?: string }} [args.customer]
+ *   — REVPAY.7: sent as `customer`. Revolut creates a NEW customer record per
+ *   order from these details (no `customer.id` is needed or used).
+ * @param {string} [args.merchantReference] — REVPAY.7: `merchant_order_data.reference`,
+ *   our row id with a prefix, so an order found in the dashboard maps to a row.
+ * @param {string} [args.statementDescriptorSuffix] — REVPAY.7: shown on the card
+ *   statement after the account's base descriptor; sanitised to the spec.
+ * @param {string|null} [args.expirePendingAfter] — REVPAY.7: ISO 8601 duration after
+ *   which an unpaid order fails (`ORDER_FAILED`). `undefined` = DEFAULT_EXPIRE_PENDING_AFTER
+ *   (PT30M); `null` = opt out (the order never expires); clamped to PT1M..PT720H.
+ *   Cannot be changed after creation.
  */
 export async function createOrder({
   amount,
@@ -117,6 +227,10 @@ export async function createOrder({
   redirectUrl,
   metadata,
   idempotencyKey,
+  customer,
+  merchantReference,
+  statementDescriptorSuffix,
+  expirePendingAfter,
 }) {
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new RevolutError('createOrder: amount must be a positive integer in minor units', 400)
@@ -129,23 +243,47 @@ export async function createOrder({
   if (description) body.description = description
   if (redirectUrl) body.redirect_url = redirectUrl
   if (metadata && Object.keys(metadata).length > 0) body.metadata = metadata
+
+  const cust = buildCustomer(customer)
+  if (cust) body.customer = cust
+  const reference = merchantReference == null ? '' : String(merchantReference).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200)
+  if (reference) body.merchant_order_data = { reference }
+  const suffix = sanitiseStatementDescriptorSuffix(statementDescriptorSuffix)
+  if (suffix) body.statement_descriptor_suffix = suffix
+  if (expirePendingAfter !== null) {
+    const raw = expirePendingAfter === undefined ? DEFAULT_EXPIRE_PENDING_AFTER : expirePendingAfter
+    const expiry = normaliseExpirePendingAfter(raw)
+    if (expiry) body.expire_pending_after = expiry
+    else logWarn('revolut', 'expirePendingAfter is not an ISO 8601 duration; order created without an expiry')
+  }
   return request('/api/orders', { method: 'POST', body, idempotencyKey })
 }
 
-export async function getOrder(orderId) {
-  return request(`/api/orders/${encodeURIComponent(orderId)}`)
+/**
+ * Read an order. A GET: retried on 429/5xx/no reply inside a bounded budget.
+ * @param {string} orderId
+ * @param {{ timeoutMs?: number, retries?: number }} [opts]
+ */
+export async function getOrder(orderId, opts = {}) {
+  return request(`/api/orders/${encodeURIComponent(orderId)}`, opts)
 }
 
 /**
  * Issue a refund against an existing order. Omit `amount` for a full
  * refund; supply `amount` (minor units) for partial.
+ *
+ * REVPAY.1 — `idempotencyKey` is sent as the Idempotency-Key header, which
+ * POST /api/orders/{id}/refund accepts (merchant-2026-03-12 and 2026-08-17):
+ * a repeat with the same key gets the first refund back instead of a second
+ * one. Never retried in the transport (a POST); a timeout surfaces as
+ * RevolutError code 'timeout', outcome unknown.
  */
-export async function refundOrder(orderId, { amount, currency = 'EUR', description } = {}) {
+export async function refundOrder(orderId, { amount, currency = 'EUR', description, idempotencyKey, timeoutMs } = {}) {
   const body = {}
   if (Number.isFinite(amount)) body.amount = Math.round(amount)
   body.currency = currency
   if (description) body.description = description
-  return request(`/api/orders/${encodeURIComponent(orderId)}/refund`, { method: 'POST', body })
+  return request(`/api/orders/${encodeURIComponent(orderId)}/refund`, { method: 'POST', body, idempotencyKey, timeoutMs })
 }
 
 /**
@@ -217,4 +355,18 @@ export function verifyWebhookSignature(rawBody, signatureHeader, timestampHeader
     }
   }
   return false
+}
+
+/**
+ * Retrieve one dispute (chargeback) by id — `GET /api/disputes/{dispute_id}`.
+ * The dispute webhook carries only `{ event, dispute_id }`; this is the
+ * authoritative read. Shape (merchant-2026-03-12 spec, `Dispute`): `id`,
+ * `state` (needs_response | under_review | won | lost), `substate`,
+ * `created_at`, `updated_at`, `response_due_date`, `reason_code`,
+ * `reason_description`, `amount` (minor units), `currency`,
+ * `payment: { id, order_id, created_at, arn, amount, currency, payment_method }`.
+ * REVPAY.4.
+ */
+export async function getDispute(disputeId) {
+  return request(`/api/disputes/${encodeURIComponent(disputeId)}`)
 }

@@ -45,7 +45,7 @@ describe('GET /api/public/offer-purchases/[id]', () => {
     state.row = { id: 'p1', state: 'created', revolut_order_id: 'ord_1', offer: { name: 'x' } }
     const json = await (await GET(new Request('http://t'), props)).json()
     expect(getOrder).toHaveBeenCalledWith('ord_1')
-    expect(markOfferPurchaseState).toHaveBeenCalledWith(expect.objectContaining({ providerState: 'completed' }))
+    expect(markOfferPurchaseState).toHaveBeenCalledWith(expect.objectContaining({ providerState: 'completed', casOnState: true }))
     expect(linkOrCreateContactForPurchase).toHaveBeenCalled()
     expect(notifyStaffOfPaidPurchase).toHaveBeenCalled()
     expect(json.data.paid).toBe(true)

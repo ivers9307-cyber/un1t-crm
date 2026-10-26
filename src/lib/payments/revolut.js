@@ -19,7 +19,13 @@ export const provider = 'revolut'
  * Create a checkout order.
  * @returns {Promise<{ providerRef: string, checkoutToken: string|null, checkoutUrl: string|null, state: string, amountCents: number }>}
  */
-export async function createPayment({ amountCents, currency, description, returnUrl, metadata, idempotencyKey }) {
+export async function createPayment({
+  amountCents, currency, description, returnUrl, metadata, idempotencyKey,
+  // REVPAY.7 — order enrichment, passed straight to createOrder (which omits
+  // what is missing and sanitises the rest). `expirePendingAfter`: undefined =
+  // the 30-minute default, null = never expire.
+  customer, merchantReference, statementDescriptorSuffix, expirePendingAfter,
+}) {
   const order = await revolutCreateOrder({
     amount: amountCents,
     currency,
@@ -27,6 +33,10 @@ export async function createPayment({ amountCents, currency, description, return
     redirectUrl: returnUrl,
     metadata,
     idempotencyKey,
+    customer,
+    merchantReference,
+    statementDescriptorSuffix,
+    expirePendingAfter,
   })
   return {
     providerRef: order.id,
@@ -52,9 +62,12 @@ export async function getPayment(providerRef) {
 
 /**
  * Refund (full or partial). Revolut mints a new refund order under the hood.
+ * `idempotencyKey` reaches Revolut as the Idempotency-Key header.
  * @returns {Promise<{ refundId: string|null }>}
  */
-export async function refundPayment(providerRef, { amountCents, currency, description }) {
-  const res = await revolutRefundOrder(providerRef, { amount: amountCents, currency, description })
+export async function refundPayment(providerRef, { amountCents, currency, description, idempotencyKey }) {
+  // REVPAY.1 — the key was accepted by the refund route and dropped here until
+  // now, so a retried staff refund could pay out twice.
+  const res = await revolutRefundOrder(providerRef, { amount: amountCents, currency, description, idempotencyKey })
   return { refundId: res?.id || null }
 }

@@ -116,6 +116,30 @@ function makeUpdateDb(updates) {
   }
 }
 
+describe('markOfferPurchaseState casOnState (REVPAY.3, the reconcile cron)', () => {
+  function makeCasDb(rowsWritten) {
+    const calls = []
+    const b = {
+      from() { return b },
+      update(u) { calls.push(['update', u]); return b },
+      eq(c, v) { calls.push(['eq', c, v]); return b },
+      select() { return Promise.resolve({ data: rowsWritten, error: null }) },
+    }
+    return { db: b, calls }
+  }
+  it('writes only while the row still holds the state it was read in', async () => {
+    const { db, calls } = makeCasDb([{ id: 'p1' }])
+    const r = await markOfferPurchaseState({ db, purchase: { id: 'p1', state: 'created', paid_at: null }, providerState: 'completed', casOnState: true })
+    expect(r).toEqual({ changed: true, state: 'paid' })
+    expect(calls).toContainEqual(['eq', 'state', 'created'])
+  })
+  it('zero rows (the webhook settled it first) → no change, so no second set of side effects', async () => {
+    const { db } = makeCasDb([])
+    const r = await markOfferPurchaseState({ db, purchase: { id: 'p1', state: 'created', paid_at: null }, providerState: 'completed', casOnState: true })
+    expect(r).toEqual({ changed: false, state: 'created' })
+  })
+})
+
 describe('markOfferPurchaseState', () => {
   it('completed → paid, stamps paid_at', async () => {
     const updates = []
