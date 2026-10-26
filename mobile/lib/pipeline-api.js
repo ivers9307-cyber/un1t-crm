@@ -294,9 +294,12 @@ export async function createNote({ contactId, dealId: _dealId, content, location
 // board updates immediately. cold=true dismisses; cold=false returns
 // the lead to the funnel. The classifier auto-revives a cold lead the
 // moment they attend a class after the dismissal.
-export async function setPipelineCold(contactId, cold) {
+// HATCHCOLD.2 — boardLocationId is the studio of the deal's board, so Cold
+// applies there even when the contact's home is another studio (the server
+// checks the contact has an open deal at that studio).
+export async function setPipelineCold(contactId, cold, boardLocationId = null) {
   return api(`/api/contacts/${contactId}/pipeline-status`, {
     method: 'POST',
-    body: { cold: Boolean(cold) },
+    body: { cold: Boolean(cold), ...(boardLocationId ? { location_id: boardLocationId } : {}) },
   })
 }
