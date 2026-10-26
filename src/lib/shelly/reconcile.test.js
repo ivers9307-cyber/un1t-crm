@@ -21,8 +21,12 @@ import {
 import { MIN_GAP_MS } from './client'
 import { GROUP_COLUMNS } from './effective'
 import { logWarn, logError } from '@/lib/log'
+import { runShellyAlerts } from './alerts'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
+// SHELLYALERTS.3 — the alert pass is its own module with its own tests; here
+// only the wiring is pinned. clearAllMocks keeps this implementation.
+vi.mock('./alerts', () => ({ runShellyAlerts: vi.fn(async () => ({ alerts: 0, sent: 0, failed: 0 })) }))
 
 beforeEach(() => { vi.clearAllMocks() })
 
@@ -1839,7 +1843,98 @@ describe('safety-net timers switched OFF (SHELLYTIMERS.5, the default)', () => {
     const db = makeDb({ connections: [] })
     await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
     const sel = callArgs(db.reads.connectionCalls, 'select')[0]
-    expect(sel).toContain('locations(timezone, safety_timers:settings->shelly->safety_timers)')
+    expect(sel).toContain('locations(timezone, safety_timers:settings->shelly->safety_timers, name)')
     expect(sel).not.toMatch(/\bsettings\s*[,)]/)
+  })
+})
+
+// SHELLYALERTS.3 — the alert pass runs at the end of each location's reconcile,
+// on the rows as they stand AFTER this tick's state writes, and can never break
+// the reconcile or the sweep.
+describe('reconcileLocation — the alert pass', () => {
+  it('runs once per location with the post-write state, the studio clock and its name', async () => {
+    const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0 }], false)) }) })
+    const seen = iso(NOW - 30 * 60_000)
+    const db = makeDb({
+      connections: [conn({ locations: { timezone: 'Europe/Dublin', name: 'Hatch Street' } })],
+      devices: [dev({ device_id: 'mac1', schedule_mode: 'none', last_state: settledState(), last_seen_at: seen })],
+    })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(runShellyAlerts).toHaveBeenCalledTimes(1)
+    const [passedDb, input] = runShellyAlerts.mock.calls[0]
+    expect(passedDb).toBe(db)
+    expect(input).toMatchObject({ locationId: 'loc-A', nowMs: NOW, tz: 'Europe/Dublin', keyRejected: false, studioName: 'Hatch Street' })
+    expect(input.conn.id).toBe('c1')
+    // The device read offline this tick: the pass sees the WRITTEN state, and
+    // last_seen_at stays where the device last spoke.
+    expect(input.devices).toHaveLength(1)
+    expect(input.devices[0].last_state.online).toBe(false)
+    expect(input.devices[0].last_seen_at).toBe(seen)
+  })
+
+  it('a device that spoke carries its fresh last_seen_at and state (errors included)', async () => {
+    const faulty = (ids) => ({ ok: true, statusCode: 200, body: ids.map((id) => {
+      const it = item(id)
+      it.status['switch:0'].errors = ['overpower']
+      return it
+    }) })
+    const { factory } = makeClientFactory({ get: ({ ids }) => faulty(ids) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none', last_state: settledState(), last_seen_at: iso(NOW - 3600_000) })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    const d = runShellyAlerts.mock.calls[0][1].devices[0]
+    expect(d.last_state.errors).toEqual(['overpower'])
+    expect(d.last_seen_at).toBe(iso(NOW))
+  })
+
+  it('a failed state write leaves the pass on the stored state', async () => {
+    const { factory } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map((id) => item(id, [{ channel: 0 }], false)) }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none', last_state: settledState() })], fail: { deviceUpdate: 'pg down' } })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(runShellyAlerts.mock.calls[0][1].devices[0].last_state.online).toBe(true)
+  })
+
+  it('a key refused on the READ runs the pass with keyRejected, after parking the connection', async () => {
+    const { factory } = makeClientFactory({ get: () => ({ ok: false, kind: 'auth', statusCode: 401 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(db.writes.connectionUpdates[0].patch).toMatchObject({ status: 'action_needed', last_error: AUTH_ERROR })
+    expect(runShellyAlerts).toHaveBeenCalledTimes(1)
+    expect(runShellyAlerts.mock.calls[0][1]).toMatchObject({ keyRejected: true, locationId: 'loc-A' })
+  })
+
+  it('a key refused on the COMMAND runs the pass with keyRejected', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: false, kind: 'auth', statusCode: 401 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(runShellyAlerts.mock.calls[0][1].keyRejected).toBe(true)
+  })
+
+  it('a bad host is not a rejected key', async () => {
+    const { factory } = makeClientFactory({ get: () => ({ ok: false, kind: 'config', statusCode: 0 }) })
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1', schedule_mode: 'none' })] })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(runShellyAlerts.mock.calls[0][1].keyRejected).toBe(false)
+  })
+
+  it('nothing adopted: no pass at all', async () => {
+    const db = makeDb({ connections: [conn()], devices: [] })
+    await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
+    expect(runShellyAlerts).not.toHaveBeenCalled()
+  })
+
+  it('an alert pass that throws is logged with ids only and never breaks the reconcile or the sweep', async () => {
+    runShellyAlerts.mockRejectedValueOnce(new Error('boom KEY-AAA'))
+    const { factory } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn({ id: 'c1', location_id: 'loc-A' }), conn({ id: 'c2', location_id: 'loc-B', auth_key: 'KEY-BBB', auth_key_fingerprint: 'b'.repeat(64) })],
+      devices: [dev({ id: 'dA', location_id: 'loc-A', device_id: 'aaa1' }), dev({ id: 'dB', location_id: 'loc-B', device_id: 'bbb1' })],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(out).toMatchObject({ ok: true, crashed: 0, locations: 2 })
+    expect(db.writes.connectionUpdates.map((w) => w.patch.status)).toEqual(['connected', 'connected'])
+    expect(runShellyAlerts).toHaveBeenCalledTimes(2)
+    const line = logWarn.mock.calls.find((c) => c[1] === 'alert pass failed')
+    expect(line).toBeTruthy()
+    expect(JSON.stringify(line)).not.toContain('KEY-AAA')
   })
 })
