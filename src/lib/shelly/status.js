@@ -48,11 +48,17 @@ function parseGen(raw) {
   return m ? Number(m[1]) : null
 }
 
-function channelFromSwitch(n, sw) {
+// A relay (`switch`) or a dimmable output (`light`) reads the same fields; a
+// light adds `brightness` (0-100). Absent is not zero (rule 1): a switch has
+// no brightness at all, and a light that omits or nulls it is "unknown", so
+// both land as null, never 0 (a 0 would claim "dimmed to nothing").
+function channelFromComponent(kind, n, sw) {
   const s = isObj(sw) ? sw : {}
   return {
+    kind,
     channel: n,
     output: typeof s.output === 'boolean' ? s.output : null,
+    brightness: kind === 'light' ? num(s.brightness) : null,
     apower: num(s.apower),
     aenergy_wh: num(s.aenergy?.total),
     temperature_c: num(s.temperature?.tC),
@@ -72,16 +78,37 @@ const SWITCH_KEY_RE = /^switch:(0|[1-9]\d*)$/
 // sends, so they say nothing about what this one can do.
 const COMPONENT_INSTANCE_RE = /^[a-z][a-z0-9_]*:\d+$/
 
+// A dimmable output: `light:N` (Plus Dimmer, Mini Dimmer), or the single-light
+// `rgb:0` / `rgbw:0` profiles of a Plus RGBW PM. Same canonical-index rule as
+// SWITCH_KEY_RE, for the same duplicate-row reason.
+const LIGHT_KEY_RE = /^light:(0|[1-9]\d*)$/
+
+// Switches first (by channel), then lights (by channel): a device with both
+// lists both kinds. rgb:0 and rgbw:0 are one physical light in two profiles; if
+// a body reports both, rgbw wins and only one row is kept.
 function switchChannels(status) {
-  const out = []
-  for (const key of Object.keys(isObj(status) ? status : {})) {
-    const m = key.match(SWITCH_KEY_RE)
-    if (m) out.push(channelFromSwitch(Number(m[1]), status[key]))
+  const src = isObj(status) ? status : {}
+  const switches = []
+  const lights = new Map()
+  for (const key of Object.keys(src)) {
+    const sm = key.match(SWITCH_KEY_RE)
+    if (sm) { switches.push(channelFromComponent('switch', Number(sm[1]), src[key])); continue }
+    const lm = key.match(LIGHT_KEY_RE)
+    if (lm) lights.set(Number(lm[1]), channelFromComponent('light', Number(lm[1]), src[key]))
   }
-  return out.sort((a, b) => a.channel - b.channel)
+  if (!lights.has(0)) {
+    if (key0(src, 'rgbw:0')) lights.set(0, channelFromComponent('light', 0, src['rgbw:0']))
+    else if (key0(src, 'rgb:0')) lights.set(0, channelFromComponent('light', 0, src['rgb:0']))
+  }
+  const byChannel = (a, b) => a.channel - b.channel
+  return [...switches.sort(byChannel), ...[...lights.values()].sort(byChannel)]
 }
 
-// `no_switch` is judged on POSITIVE evidence — some component instance is
+// Present (even as an empty/odd value): the key is the evidence the component
+// exists, same as `switch:N`.
+const key0 = (src, k) => Object.prototype.hasOwnProperty.call(src, k)
+
+// `no_switch` (no switch AND no light) is judged on POSITIVE evidence — some component instance is
 // present and none of them is a switch — never on "the body had keys in it".
 // Key-counting looks equivalent and is not: an ordinary offline Plug S comes
 // back as `{_dev_info, cloud:{connected:false}}` (v1) or `{cloud:{}, sys:{}}`
@@ -429,8 +456,8 @@ export function normaliseAllStatus(body) {
     }
     // Still emit one row for a device with no channels: the adopt list has to
     // be able to show it and say why it cannot be adopted.
-    if (!channels.length) { rows.push({ ...base, channel: 0, output: null }); continue }
-    for (const c of channels) rows.push({ ...base, channel: c.channel, output: c.output })
+    if (!channels.length) { rows.push({ ...base, channel: 0, kind: 'switch', output: null }); continue }
+    for (const c of channels) rows.push({ ...base, channel: c.channel, kind: c.kind, output: c.output })
   }
   return rows
 }
@@ -445,18 +472,19 @@ export function normaliseAllStatus(body) {
 // diffed across that span reads as "0 Wh consumed over N minutes", which is a
 // measurement we never made. Anything differencing energy over time must gate
 // on `online` first (the daily roll does, and is safe).
-export function stateFromReading(prev, reading, channel, atIso) {
+export function stateFromReading(prev, reading, channel, atIso, kind = 'switch') {
   const p = isObj(prev) ? prev : {}
   if (!reading?.online) {
-    return { online: false, output: p.output ?? null, apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
+    return { online: false, output: p.output ?? null, brightness: p.brightness ?? null, apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
       temperature_c: p.temperature_c ?? null, source: p.source ?? null, at: atIso }
   }
   // Online but this channel is gone (adopted channel 3, device now reports
   // 0-1): nulls, not stale values — the device is talking and not mentioning
   // it, which is different from having heard nothing.
   const list = Array.isArray(reading.channels) ? reading.channels : []
-  const c = list.find((x) => x?.channel === channel) || channelFromSwitch(channel, null)
-  return { online: true, output: c.output, apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source, at: atIso }
+  const c = list.find((x) => x?.channel === channel && (x?.kind ?? 'switch') === kind)
+    || channelFromComponent(kind, channel, null)
+  return { online: true, output: c.output, brightness: c.brightness ?? null, apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source, at: atIso }
 }
 
 // Cheap fields are compared exactly; the measured ones get a deadband so a
@@ -480,6 +508,7 @@ const numChanged = (a, b, step) => (a == null) !== (b == null) || (a != null && 
 export function stateChanged(prev, next) {
   if (!isObj(prev) || !isObj(next)) return true
   if (prev.online !== next.online || prev.output !== next.output || prev.source !== next.source) return true
+  if ((prev.brightness ?? null) !== (next.brightness ?? null)) return true
   if (numChanged(prev.apower, next.apower, APOWER_DEADBAND_W)) return true
   if (numChanged(prev.aenergy_wh, next.aenergy_wh, ENERGY_STEP_WH)) return true
   if (numChanged(prev.temperature_c, next.temperature_c, TEMP_STEP_C)) return true
