@@ -18,6 +18,7 @@ import {
   RATE_LIMIT_ERROR,
 } from './reconcile'
 import { MIN_GAP_MS } from './client'
+import { GROUP_COLUMNS } from './effective'
 import { logWarn, logError } from '@/lib/log'
 
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -110,9 +111,9 @@ const settledState = (at = iso(NOW - 60_000)) => ({
 // ---------------------------------------------------------------- fake db
 
 function makeDb(state = {}) {
-  const { connections = [], devices = [], energy = [], occurrences = [], fail = {} } = state
+  const { connections = [], devices = [], energy = [], occurrences = [], groups = [], fail = {} } = state
   const writes = { deviceUpdates: [], connectionUpdates: [], energyUpserts: [] }
-  const reads = { fromCalls: [], occurrenceBounds: null, occurrenceCalls: null, energyBounds: null, deviceLimits: [], connectionCalls: null, energyCalls: null }
+  const reads = { fromCalls: [], occurrenceBounds: null, occurrenceCalls: null, energyBounds: null, deviceLimits: [], connectionCalls: null, energyCalls: null, groupCalls: [] }
 
   const chain = (op, args, run) => {
     const calls = [[op, args]]
@@ -177,6 +178,17 @@ function makeDb(state = {}) {
           upsert: (rows, opts) => chain('upsert', [rows, opts], () => {
             writes.energyUpserts.push({ rows, opts })
             return fail.energyUpsert ? { error: { message: fail.energyUpsert } } : { error: null }
+          }),
+        }
+      }
+      if (table === 'shelly_groups') {
+        return {
+          select: (...a) => chain('select', a, (calls) => {
+            reads.groupCalls.push(calls)
+            if (fail.groups) return err(fail.groups)
+            const loc = arg(calls, 'eq', 'location_id')
+            const lim = calls.find((c) => c[0] === 'limit')?.[1]?.[0] ?? Infinity
+            return { data: groups.filter((g) => g.location_id === loc).slice(0, lim), error: null }
           }),
         }
       }
@@ -1418,5 +1430,241 @@ describe('reconcileLocation (direct)', () => {
     expect(out.devices).toBe(0)
     expect(factory).not.toHaveBeenCalled()
     expect(logError).toHaveBeenCalled()
+  })
+})
+
+// ================================================================== groups
+
+// SHELLYGROUPS.4 — a grouped device is planned against its GROUP's schedule
+// (effectiveTarget), keeps its OWN last_applied, and still rides the one
+// setGroups per direction per location.
+describe('groups', () => {
+  // A member whose own schedule is off: anything it does here, it does because
+  // of the group.
+  const member = (over = {}) => dev({ enabled: false, schedule_mode: 'none', fixed_windows: [], group_id: 'g1', ...over })
+  const grp = (over = {}) => ({
+    id: 'g1', location_id: 'loc-A', name: 'Gym floor', icon: 'bulb', sort_order: 0,
+    enabled: true, schedule_mode: 'fixed',
+    fixed_windows: [{ days: [1, 2, 3, 4, 5, 6, 7], on: '07:00', off: '21:30' }],
+    class_rule: {}, override: null, last_applied: null,
+    created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    ...over,
+  })
+  const classRule = { lead_min: 15, lag_min: 10 }
+
+  it('reads the location groups once, with GROUP_COLUMNS, scoped and capped at 51', async () => {
+    const db = makeDb({ connections: [conn()], devices: [member({ id: 'a', device_id: 'mac1' })], groups: [grp()] })
+    await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
+    expect(db.reads.groupCalls).toHaveLength(1)
+    const calls = db.reads.groupCalls[0]
+    expect(callArgs(calls, 'select')).toEqual([GROUP_COLUMNS])
+    expect(calls).toContainEqual(['eq', ['location_id', 'loc-A']])
+    expect(callArgs(calls, 'limit')).toEqual([51])
+  })
+
+  it('two members of a fixed-mode group inside its window both open in ONE setGroups, each stamped w:<on_at>', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [member({ id: 'a', device_id: 'mac1' }), member({ id: 'b', device_id: 'mac2', channel: 1 })],
+      groups: [grp()],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(calls.setGroups).toHaveLength(1)
+    expect(calls.setGroups[0]).toMatchObject({ on: true, gids: ['mac1_0', 'mac2_1'] })
+    const stamps = stampsOf(db)
+    expect(stamps.map((w) => w.id)).toEqual(['a', 'b'])
+    for (const w of stamps) expect(w.patch.last_applied).toMatchObject({ key: `w:${NOW}`, action: 'on', reason: 'window_open' })
+    expect(out).toMatchObject({ planned: 2, applied: 2, failed: 0 })
+  })
+
+  it('a member in failedCommands is left unstamped while the other member is stamped', async () => {
+    const { factory } = makeClientFactory({ setGroups: () => ({ ok: true, statusCode: 200, failed: { mac2_0: 'DEVICE_OFFLINE' } }) })
+    const db = makeDb({
+      connections: [conn()],
+      devices: [member({ id: 'a', device_id: 'mac1' }), member({ id: 'b', device_id: 'mac2' })],
+      groups: [grp()],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(stampsOf(db).map((w) => w.id)).toEqual(['a'])
+    expect(out).toMatchObject({ applied: 1, failed: 1 })
+  })
+
+  it('a member already stamped with the group window key is not re-commanded', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [
+        member({ id: 'a', device_id: 'mac1', last_applied: { key: `w:${NOW}`, action: 'on', reason: 'window_open', at: iso(NOW) } }),
+        member({ id: 'b', device_id: 'mac2' }),
+      ],
+      groups: [grp()],
+    })
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(calls.setGroups[0].gids).toEqual(['mac2_0'])
+    expect(stampsOf(db).map((w) => w.id)).toEqual(['b'])
+  })
+
+  it('a failed groups read skips GROUPED devices for the tick and still plans ungrouped ones', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [member({ id: 'a', device_id: 'mac1' }), dev({ id: 'solo', device_id: 'mac2' })],
+      groups: [grp()],
+      fail: { groups: 'pg down' },
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+
+    expect(calls.setGroups).toHaveLength(1)
+    expect(calls.setGroups[0].gids).toEqual(['mac2_0'])
+    expect(stampsOf(db).map((w) => w.id)).toEqual(['solo'])
+    expect(out).toMatchObject({ planned: 1, applied: 1, skippedGroup: 1 })
+    expect(warned('groups load failed')).toHaveLength(1)
+    // ids only: never the error text's neighbours, never a row.
+    expect(warned('groups load failed')[0][2]).toMatchObject({ locationId: 'loc-A', skipped: 1 })
+  })
+
+  it('an occurrence failure skips the members of CLASS-mode groups only', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [
+        // Its OWN schedule is fixed, but it follows a class group: skipped.
+        member({ id: 'inClassGroup', device_id: 'mac1', group_id: 'gc', enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1, 2, 3, 4, 5, 6, 7], on: '07:00', off: '21:30' }] }),
+        // Its OWN schedule is class, but it follows a fixed group: planned.
+        member({ id: 'inFixedGroup', device_id: 'mac2', group_id: 'gf', enabled: true, schedule_mode: 'class', class_rule: classRule }),
+        // Ungrouped fixed: planned.
+        dev({ id: 'solo', device_id: 'mac3' }),
+      ],
+      groups: [grp({ id: 'gc', name: 'Class lights', schedule_mode: 'class', fixed_windows: [], class_rule: classRule }), grp({ id: 'gf', name: 'Floor' })],
+    })
+    const out = await runShellyReconcile(db, deps({
+      makeClient: factory,
+      loadOccurrences: async () => ({ ok: false, error: 'pg down' }),
+    }))
+
+    expect(out.skippedClass).toBe(1)
+    expect(calls.setGroups[0].gids).toEqual(['mac2_0', 'mac3_0'])
+    expect(warned('occurrence load failed')).toHaveLength(1)
+  })
+
+  it('loads the timetable for a class-mode GROUP even when no device row is class-mode', async () => {
+    const loadOccurrences = vi.fn(async () => ({ ok: true, occurrences: [{ starts_at: iso(NOW + 10 * 60_000), ends_at: iso(NOW + 55 * 60_000), cancelled_at: null }] }))
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [member({ id: 'a', device_id: 'mac1' })],
+      groups: [grp({ schedule_mode: 'class', fixed_windows: [], class_rule: classRule })],
+    })
+    await runShellyReconcile(db, deps({ makeClient: factory, loadOccurrences }))
+    expect(loadOccurrences).toHaveBeenCalledTimes(1)
+    expect(calls.setGroups[0]).toMatchObject({ on: true, gids: ['mac1_0'] })
+  })
+
+  it('does not read groups at all when no device is grouped', async () => {
+    const db = makeDb({ connections: [conn()], devices: [dev({ device_id: 'mac1' })], groups: [grp()] })
+    await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
+    expect(db.reads.groupCalls).toHaveLength(0)
+  })
+
+  it('warns and uses the first 50 when the location has more than 50 groups', async () => {
+    const groups = Array.from({ length: 51 }, (_, i) => grp({ id: `g${i}`, name: `G${i}` }))
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      devices: [member({ id: 'first', device_id: 'mac1', group_id: 'g0' }), member({ id: 'last', device_id: 'mac2', group_id: 'g50' })],
+      groups,
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(warned('group cap exceeded')).toHaveLength(1)
+    // g50 was not loaded: its member is skipped, never run on its own schedule.
+    expect(calls.setGroups[0].gids).toEqual(['mac1_0'])
+    expect(out.skippedGroup).toBe(1)
+  })
+
+  it('skips a member whose group was not loaded rather than running its own schedule', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({
+      connections: [conn()],
+      // Own schedule would open it; the group is missing.
+      devices: [member({ id: 'orphan', device_id: 'mac1', group_id: 'gone', enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1, 2, 3, 4, 5, 6, 7], on: '07:00', off: '21:30' }] })],
+      groups: [grp()],
+    })
+    const out = await runShellyReconcile(db, deps({ makeClient: factory }))
+    expect(calls.setGroups).toHaveLength(0)
+    expect(out.skippedGroup).toBe(1)
+    expect(warned('group not loaded')).toHaveLength(1)
+  })
+
+  it('ignores a group at another location, with ids only, and plans the device on its own schedule', async () => {
+    const { factory, calls } = makeClientFactory()
+    // The mock scopes by location, so hand the reconcile a row that slipped
+    // the filter: the in-code check is the last fence.
+    const db = makeDb({
+      connections: [conn()],
+      devices: [member({ id: 'a', device_id: 'mac1', group_id: 'gx' })],
+      groups: [grp({ id: 'gx', location_id: 'loc-A' })],
+    })
+    const realFrom = db.from.bind(db)
+    db.from = (t) => {
+      if (t !== 'shelly_groups') return realFrom(t)
+      const b = realFrom(t)
+      const sel = b.select
+      b.select = (...a) => {
+        const c = sel(...a)
+        const then = c.then
+        c.then = (ok, er) => then((r) => ({ ...r, data: (r.data || []).map((g) => ({ ...g, location_id: 'loc-B' })) })).then(ok, er)
+        return c
+      }
+      return b
+    }
+    await runShellyReconcile(db, deps({ makeClient: factory }))
+    const w = warned('group at another location — ignored')
+    expect(w).toHaveLength(1)
+    expect(w[0][2]).toEqual({ locationId: 'loc-A', deviceId: 'a', groupId: 'gx' })
+    // Own schedule is 'none': nothing sent.
+    expect(calls.setGroups).toHaveLength(0)
+  })
+})
+
+describe('runNowForDevice with a group', () => {
+  const member = (over = {}) => dev({ device_id: 'mac1', enabled: false, schedule_mode: 'none', fixed_windows: [], group_id: 'g1', ...over })
+  const grp = (over = {}) => ({
+    id: 'g1', location_id: 'loc-A', enabled: true, schedule_mode: 'fixed',
+    fixed_windows: [{ days: [1, 2, 3, 4, 5, 6, 7], on: '07:00', off: '21:30' }],
+    class_rule: {}, override: null, last_applied: null, ...over,
+  })
+
+  it('plans through the group schedule when given one', async () => {
+    const { factory, calls } = makeClientFactory()
+    const db = makeDb({})
+    const out = await runNowForDevice(db, conn(), member(), { now: () => NOW, makeClient: factory, group: grp() })
+    expect(out).toEqual({ ok: true, action: 'on', reason: 'run_now' })
+    expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true }])
+  })
+
+  it('without a group it is unchanged: an unmanaged member is a no-op', async () => {
+    const { factory } = makeClientFactory()
+    const out = await runNowForDevice(makeDb({}), conn(), member(), { now: () => NOW, makeClient: factory })
+    expect(out).toEqual({ ok: true, noop: true })
+  })
+
+  it('reads the timetable for a class-mode group, and refuses when it cannot', async () => {
+    const { factory } = makeClientFactory()
+    const loadOccurrences = vi.fn(async () => ({ ok: false, error: 'pg down' }))
+    const out = await runNowForDevice(makeDb({}), conn(), member(), {
+      now: () => NOW, makeClient: factory, loadOccurrences,
+      group: grp({ schedule_mode: 'class', fixed_windows: [], class_rule: { lead_min: 15, lag_min: 10 } }),
+    })
+    expect(loadOccurrences).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({ ok: false, kind: 'occurrences' })
+  })
+
+  it('ignores a group at another location, with ids only', async () => {
+    const { factory } = makeClientFactory()
+    const out = await runNowForDevice(makeDb({}), conn(), member(), { now: () => NOW, makeClient: factory, group: grp({ location_id: 'loc-B' }) })
+    expect(out).toEqual({ ok: true, noop: true })
+    expect(warned('group at another location — ignored')[0][2]).toEqual({ locationId: 'loc-A', deviceId: 'd1', groupId: 'g1' })
   })
 })

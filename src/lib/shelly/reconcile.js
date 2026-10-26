@@ -87,6 +87,7 @@ import { normaliseGetItems, stateFromReading, stateChanged, groupId } from './st
 import { planDeviceAction, isLiveOverride } from './plan'
 import { rollDailyEnergy } from './energy'
 import { AUTH_ERROR, HOST_ERROR } from './connections'
+import { effectiveTarget, GROUP_COLUMNS } from './effective'
 
 const MODULE = 'shelly-reconcile'
 
@@ -101,6 +102,8 @@ export const deviceKind = (d) => (d?.kind === 'light' ? 'light' : 'switch')
 // guessed.
 export const MAX_CONNECTIONS = 100
 export const MAX_DEVICES = 50
+// SHELLYGROUPS.4 — groups a location can hold, read cap + 1 like the rest.
+export const MAX_GROUPS = 50
 
 // Read batch size comes FROM the client, never a hardcoded 10: the client
 // refuses an over-long `get` outright (kind 'too_many_ids') rather than
@@ -166,6 +169,9 @@ export { AUTH_ERROR, HOST_ERROR }
 const COUNTER_KEYS = [
   'devices', 'reads', 'readFailures', 'rateLimited', 'stateWrites', 'energyWrites',
   'planned', 'applied', 'failed', 'authFailures', 'skippedClass', 'crashed',
+  // A grouped device not planned this tick because its group could not be
+  // read (or was not among the rows read). Never run on its own schedule.
+  'skippedGroup',
   // A location the tick never got to. Counted separately from `crashed` because
   // it is the sweep's own budget talking, not the location failing — and from
   // `failed`, which means a command we owed and did not send.
@@ -402,6 +408,80 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
 }
 
 /**
+ * The location's groups, read once per tick. cap + 1 like every select here:
+ * over the cap is warned and the first MAX_GROUPS used, never silent.
+ *
+ * @returns {{ok: true, groups: Array} | {ok: false, error: string}}
+ */
+async function loadLocationGroups(db, locationId) {
+  const { data, error } = await db
+    .from('shelly_groups')
+    .select(GROUP_COLUMNS)
+    .eq('location_id', locationId)
+    .order('sort_order')
+    .order('name')
+    .limit(MAX_GROUPS + 1)
+  if (error) return { ok: false, error: error.message }
+  const rows = data || []
+  if (rows.length > MAX_GROUPS) {
+    logWarn(MODULE, 'group cap exceeded, excess groups skipped this tick', { locationId, cap: MAX_GROUPS })
+    return { ok: true, groups: rows.slice(0, MAX_GROUPS) }
+  }
+  return { ok: true, groups: rows }
+}
+
+/**
+ * SHELLYGROUPS.4 — pair every device with what it is planned against.
+ *
+ * An ungrouped device is its own target and costs no read: a location with no
+ * groups never queries shelly_groups. A grouped device follows effectiveTarget,
+ * EXCEPT in the three cases below, and in none of them does it fall back to its
+ * own row's schedule silently:
+ *  • the groups read failed → every grouped device is skipped for the tick
+ *    (its own schedule is not what staff set; running it could switch a room
+ *    the group holds open). Ungrouped devices still run.
+ *  • its group is not among the rows read (over the cap, or deleted between
+ *    the two reads; ON DELETE SET NULL clears group_id by the next tick) →
+ *    skipped, for the same reason.
+ *  • its group sits at another location → the group is IGNORED (the DB
+ *    forbids the mix; this is the last fence before a relay command) and the
+ *    device runs on its own row, which is what effectiveTarget returns.
+ *    Logged with ids only.
+ */
+async function resolveTargets(db, locationId, devices, nowMs, counters) {
+  const grouped = devices.filter((d) => d.group_id != null)
+  const ungrouped = (d) => ({ device: d, target: d })
+  if (!grouped.length) return devices.map(ungrouped)
+
+  const res = await loadLocationGroups(db, locationId)
+  if (!res.ok) {
+    counters.skippedGroup += grouped.length
+    logWarn(MODULE, 'groups load failed — grouped devices skipped this tick', { locationId, skipped: grouped.length, error: res.error })
+    return devices.filter((d) => d.group_id == null).map(ungrouped)
+  }
+
+  const groupsById = new Map(res.groups.map((g) => [g.id, g]))
+  const targets = []
+  let notLoaded = 0
+  for (const d of devices) {
+    if (d.group_id == null) { targets.push(ungrouped(d)); continue }
+    const g = groupsById.get(d.group_id)
+    if (!g) { notLoaded++; continue }
+    if (g.location_id !== d.location_id) {
+      logWarn(MODULE, 'group at another location — ignored', { locationId, deviceId: d.id, groupId: g.id })
+      targets.push(ungrouped(d))
+      continue
+    }
+    targets.push({ device: d, target: effectiveTarget(d, g, nowMs) })
+  }
+  if (notLoaded) {
+    counters.skippedGroup += notLoaded
+    logWarn(MODULE, 'group not loaded — grouped devices skipped this tick', { locationId, skipped: notLoaded })
+  }
+  return targets
+}
+
+/**
  * One location's whole tick. Never throws for a data-shaped reason; a genuine
  * crash is caught by the sweep, which logs it with the key redacted.
  *
@@ -571,9 +651,18 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   }
 
   // ---- 5. plan ------------------------------------------------------------
+  if (stalled) logWarn(MODULE, 'no read succeeded — commands skipped this tick', { locationId, kind: lastKind })
+
+  // SHELLYGROUPS.4 — what each device is judged against. A black-holed account
+  // is planned for but not commanded (header rule 6), so with `stalled` there
+  // is nothing to resolve and no group read is spent on it.
+  const targets = stalled ? [] : await resolveTargets(db, locationId, devices, nowMs, counters)
+
   let occurrences = []
   let classOk = true
-  if (devices.some((d) => d.enabled && d.schedule_mode === 'class')) {
+  // The EFFECTIVE schedule decides: a member of a class-mode group needs the
+  // timetable even when its own row says 'fixed' or 'none'.
+  if (targets.some(({ target: t }) => t.enabled && t.schedule_mode === 'class')) {
     const res = await loadOccurrences(db, locationId, tz, nowMs)
     if (res.ok) occurrences = res.occurrences
     else {
@@ -582,13 +671,11 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
   }
 
-  if (stalled) logWarn(MODULE, 'no read succeeded — commands skipped this tick', { locationId, kind: lastKind })
-
   const plans = []
   // A black-holed account is planned for but not commanded (header rule 6):
   // iterating nothing leaves `planned` at 0, so the counters never claim work
   // that was never attempted, and no stamp is written for a command not sent.
-  for (const d of stalled ? [] : devices) {
+  for (const { device: d, target: t } of targets) {
     // With no timetable, a class device's windows resolve empty and rule 4
     // would CLOSE anything we had opened — a failed select would switch the
     // studio off. Skipping is the fail-open. A LIVE override is exempt: a
@@ -596,11 +683,16 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     // before the planner ever looks at a window. isLiveOverride is imported
     // rather than re-derived so a stale, expired override cannot defeat the
     // skip by merely existing.
-    if (d.enabled && d.schedule_mode === 'class' && !classOk && !isLiveOverride(d.override, nowMs)) {
+    // Judged on the EFFECTIVE target: the group's mode, and the override that
+    // won (device over group), so a live group override is exempt too.
+    if (t.enabled && t.schedule_mode === 'class' && !classOk && !isLiveOverride(t.override, nowMs)) {
       counters.skippedClass++
       continue
     }
-    const plan = planDeviceAction(d, nowMs, dateStr, occurrences, tz)
+    const plan = planDeviceAction(t, nowMs, dateStr, occurrences, tz)
+    // The DEVICE row rides on: its id is what gets stamped, its device_id and
+    // channel are what gets commanded. effectiveTarget keeps those (and the
+    // device's own last_applied) unchanged, so the planner and the stamp agree.
     if (plan) plans.push({ device: d, ...plan })
   }
   counters.planned = plans.length
@@ -862,6 +954,11 @@ export async function runShellyReconcile(db, deps = {}) {
  * and by switching a device back to 'auto' — both mean "stop waiting for the
  * next tick and make the relay agree with the schedule".
  *
+ * `deps.group` (SHELLYGROUPS.4, optional): the device's shelly_groups row. When
+ * given, the device is planned through effectiveTarget exactly as the cron
+ * plans it; omitted (every caller before groups), behaviour is unchanged. A
+ * group at another location is ignored, logged with ids only.
+ *
  * @returns {{ok: true, action, reason} | {ok: true, noop: true} | {ok: false, kind, ...}}
  */
 export async function runNowForDevice(db, conn, device, deps = {}) {
@@ -870,6 +967,7 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
     makeClient = createShellyClient,
     loadOccurrences = loadTodayOccurrences,
     sleep,
+    group = null,
   } = deps
 
   const tz = locationTz(conn)
@@ -887,8 +985,17 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   // the timetable read a device we could never command.
   if (!device?.device_id || !Number.isInteger(device?.channel)) return { ok: false, kind: 'bad_device' }
 
+  let target = device
+  if (group) {
+    if (group.location_id !== device.location_id) {
+      logWarn(MODULE, 'group at another location — ignored', { locationId: conn?.location_id, deviceId: device.id, groupId: group.id })
+    } else {
+      target = effectiveTarget(device, group, nowMs)
+    }
+  }
+
   let occurrences = []
-  if (device?.enabled && device?.schedule_mode === 'class') {
+  if (target.enabled && target.schedule_mode === 'class') {
     const res = await loadOccurrences(db, conn?.location_id, tz, nowMs)
     // A forced action off an empty timetable would be an OFF the operator did
     // not ask for. Refuse and say why instead.
@@ -898,7 +1005,7 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
 
   // force: the planner answers even when its own stamp says this key was
   // already applied — that is the entire point of the button.
-  const plan = planDeviceAction(device, nowMs, dateStr, occurrences, tz, { force: true })
+  const plan = planDeviceAction(target, nowMs, dateStr, occurrences, tz, { force: true })
   if (!plan) return { ok: true, noop: true }
 
   const client = makeClient(conn, { sleep, now })

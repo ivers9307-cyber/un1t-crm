@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { effectiveTarget, GROUP_COLUMNS } from './effective'
 import { planDeviceAction } from './plan'
 
@@ -56,5 +58,31 @@ describe('effectiveTarget', () => {
   })
   it('exports GROUP_COLUMNS', () => {
     expect(GROUP_COLUMNS).toBe('id, location_id, name, icon, sort_order, enabled, schedule_mode, fixed_windows, class_rule, override, last_applied, created_at, updated_at')
+  })
+})
+
+// check:select-columns cannot read an imported constant, so the reconcile's
+// `.select(GROUP_COLUMNS)` is invisible to it. This test is that gate for the
+// one constant: every name must be a column mig 776's CREATE TABLE defines.
+describe('GROUP_COLUMNS against mig 776', () => {
+  const sql = readFileSync(join(process.cwd(), 'supabase/migrations/776_shelly_groups.sql'), 'utf8')
+  const body = sql.match(/CREATE TABLE IF NOT EXISTS public\.shelly_groups \(([\s\S]*?)\n\);/)?.[1]
+  const created = (body || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('--') && !/^(CONSTRAINT|CHECK|UNIQUE|PRIMARY|FOREIGN)\b/i.test(l))
+    .map((l) => l.match(/^([a-z_][a-z0-9_]*)\s/)?.[1])
+    .filter(Boolean)
+
+  it('parses the CREATE TABLE', () => {
+    expect(created).toEqual([
+      'id', 'location_id', 'name', 'icon', 'sort_order', 'enabled', 'schedule_mode',
+      'fixed_windows', 'class_rule', 'override', 'last_applied', 'created_by', 'created_at', 'updated_at',
+    ])
+  })
+
+  it('names only columns the migration creates', () => {
+    const cols = GROUP_COLUMNS.split(',').map((c) => c.trim())
+    for (const c of cols) expect(created).toContain(c)
   })
 })
