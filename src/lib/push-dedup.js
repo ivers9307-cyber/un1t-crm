@@ -88,7 +88,10 @@ async function releaseEventSends(db, eventKey, recipientIds) {
  * notifyUsers — both return counts and never throw on partial failure.
  * Never throws; callers keep their existing best-effort posture.
  */
-async function sendOnce(db, eventKey, userIds, payload, sendFn, label) {
+async function sendOnce(db, eventKey, userIds, payload, sendFn, label, sendOpts = null) {
+  // SHELLYALERTS.5 — sendOpts (e.g. { locationId }) reaches sendFn only when
+  // given, so every existing caller makes exactly the two-argument call it did.
+  const call = (ids) => (sendOpts ? sendFn(ids, payload, sendOpts) : sendFn(ids, payload))
   const ids = [...new Set((Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean))]
   if (!ids.length) return { ...EMPTY }
 
@@ -96,7 +99,7 @@ async function sendOnce(db, eventKey, userIds, payload, sendFn, label) {
     // No stable key available at this call site (e.g. a Meta event
     // without a message id) — plain send is better than no send.
     logWarn('push-dedup', `${label} called without an event key — sending WITHOUT dedup`, {})
-    const plain = await sendFn(ids, payload)
+    const plain = await call(ids)
     return { ...plain, deduped: 0 }
   }
 
@@ -107,7 +110,7 @@ async function sendOnce(db, eventKey, userIds, payload, sendFn, label) {
   let result = null
   let threw = false
   try {
-    result = await sendFn(claimedIds, payload)
+    result = await call(claimedIds)
   } catch (err) {
     threw = true
     logWarn('push-dedup', `${label} threw`, { event_key: eventKey, err: err?.message })
@@ -139,8 +142,11 @@ async function sendOnce(db, eventKey, userIds, payload, sendFn, label) {
  * @param {object} payload         same shape as sendPush()
  * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number, deduped:number}>}
  */
-export async function sendPushOnce(db, eventKey, userIds, payload) {
-  return sendOnce(db, eventKey, userIds, payload, sendPush, 'sendPush')
+export async function sendPushOnce(db, eventKey, userIds, payload, opts = {}) {
+  // opts.locationId (SHELLYALERTS.5): judge the notify toggle AT that studio,
+  // not across every studio the recipient holds.
+  const sendOpts = opts?.locationId ? { locationId: opts.locationId } : null
+  return sendOnce(db, eventKey, userIds, payload, sendPush, 'sendPush', sendOpts)
 }
 
 /**
@@ -170,10 +176,13 @@ async function roleRecipients(db, eventKey, locationId, roles) {
  * manager added between webhook replays still gets exactly one push.
  * A failed read returns `recipients_failed: 1` and claims nothing.
  */
-export async function sendPushToRolesAtLocationOnce(db, eventKey, locationId, roles, payload) {
+export async function sendPushToRolesAtLocationOnce(db, eventKey, locationId, roles, payload, opts = {}) {
   const { ids, failure } = await roleRecipients(db, eventKey, locationId, roles)
   if (failure) return failure
-  return sendOnce(db, eventKey, ids, payload, sendPush, 'sendPush')
+  // opts.locationScoped (SHELLYALERTS.5): opt-in, so other callers keep the
+  // estate-wide judgement they were written against.
+  const sendOpts = opts?.locationScoped ? { locationId } : null
+  return sendOnce(db, eventKey, ids, payload, sendPush, 'sendPush', sendOpts)
 }
 
 /**

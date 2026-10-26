@@ -55,6 +55,7 @@ function parseGen(raw) {
 function channelFromComponent(kind, n, sw) {
   const s = isObj(sw) ? sw : {}
   const timerUntil = timerUntilOf(s)
+  const errors = errorsOf(s)
   return {
     kind,
     channel: n,
@@ -67,8 +68,39 @@ function channelFromComponent(kind, n, sw) {
     // Only while a timer runs: the key is ABSENT otherwise, so every row
     // without one keeps the exact shape it always had.
     ...(timerUntil ? { timer_until: timerUntil } : {}),
+    // Same exact-shape rule: present only while the device reports a fault.
+    ...(errors ? { errors } : {}),
   }
 }
+
+// SHELLYALERTS.1 — the DEVICE's own fault flags. A Gen2+ switch or light lists
+// `errors` (e.g. 'overpower', 'overtemp', 'overvoltage', 'undervoltage') only
+// while a protection has tripped. Strings only, trimmed, non-blank, de-duped
+// and in a fixed order (known power faults first, each part sorted, so the
+// alert key and stateChanged compare a set, not an arrival order),
+// capped in count and length so a hostile body cannot grow the row. Anything
+// else, or nothing left, is null: the key is then absent.
+const ERRORS_MAX = 8
+const ERROR_LEN_MAX = 40
+// The protections the alert pass pushes about (src/lib/shelly/alerts.js words
+// them). Kept FIRST before the cap, so eight junk codes can never push a real
+// power fault off the end of the list.
+export const POWER_FAULTS = Object.freeze(['overpower', 'overtemp', 'overvoltage', 'undervoltage'])
+function errorsOf(s) {
+  if (!Array.isArray(s.errors)) return null
+  const out = new Set()
+  for (const e of s.errors) {
+    if (typeof e !== 'string') continue
+    const t = e.trim().slice(0, ERROR_LEN_MAX)
+    if (t) out.add(t)
+  }
+  if (!out.size) return null
+  const all = [...out].sort()
+  return [...all.filter((e) => POWER_FAULTS.includes(e)), ...all.filter((e) => !POWER_FAULTS.includes(e))].slice(0, ERRORS_MAX)
+}
+
+// Two error lists as one comparable value (both are already in errorsOf order).
+const errorsKey = (v) => (Array.isArray(v) && v.length ? v.join('|') : null)
 
 // SHELLYTIMERS.4 — the DEVICE's own running timer (our safety cap, or any
 // toggle_after / auto-off). A Gen2+ switch or light reports
@@ -513,7 +545,9 @@ export function stateFromReading(prev, reading, channel, atIso, kind = 'switch')
     // A known timer is kept like every other last-known value: the device is
     // still counting it down even while we cannot hear from it.
     return { online: false, output: p.output ?? null, ...(kind === 'light' ? { brightness: p.brightness ?? null } : {}), apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
-      temperature_c: p.temperature_c ?? null, source: p.source ?? null, ...(typeof p.timer_until === 'string' ? { timer_until: p.timer_until } : {}), at: atIso }
+      temperature_c: p.temperature_c ?? null, source: p.source ?? null, ...(typeof p.timer_until === 'string' ? { timer_until: p.timer_until } : {}),
+      // A known fault is last-known too; it is cleared only by an online read.
+      ...(Array.isArray(p.errors) && p.errors.length ? { errors: p.errors } : {}), at: atIso }
   }
   // Online but this channel is gone (adopted channel 3, device now reports
   // 0-1): nulls, not stale values — the device is talking and not mentioning
@@ -522,7 +556,8 @@ export function stateFromReading(prev, reading, channel, atIso, kind = 'switch')
   const c = list.find((x) => x?.channel === channel && (x?.kind ?? 'switch') === kind)
     || channelFromComponent(kind, channel, null)
   return { online: true, output: c.output, ...(kind === 'light' ? { brightness: c.brightness ?? null } : {}), apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source,
-    ...(c.timer_until ? { timer_until: c.timer_until } : {}), at: atIso }
+    ...(c.timer_until ? { timer_until: c.timer_until } : {}),
+    ...(c.errors ? { errors: c.errors } : {}), at: atIso }
 }
 
 // Cheap fields are compared exactly; the measured ones get a deadband so a
@@ -549,6 +584,8 @@ export function stateChanged(prev, next) {
   if ((prev.brightness ?? null) !== (next.brightness ?? null)) return true
   // A timer starting, ending or being re-armed is a change (SHELLYTIMERS.4).
   if ((prev.timer_until ?? null) !== (next.timer_until ?? null)) return true
+  // A fault appearing, clearing or changing is a change (SHELLYALERTS.1).
+  if (errorsKey(prev.errors) !== errorsKey(next.errors)) return true
   if (numChanged(prev.apower, next.apower, APOWER_DEADBAND_W)) return true
   if (numChanged(prev.aenergy_wh, next.aenergy_wh, ENERGY_STEP_WH)) return true
   if (numChanged(prev.temperature_c, next.temperature_c, TEMP_STEP_C)) return true

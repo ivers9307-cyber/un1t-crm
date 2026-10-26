@@ -89,6 +89,7 @@ import { rollDailyEnergy } from './energy'
 import { AUTH_ERROR, HOST_ERROR } from './connections'
 import { effectiveTarget, GROUP_COLUMNS } from './effective'
 import { safetyTimersOn } from './safety-timers'
+import { runShellyAlerts } from './alerts'
 
 const MODULE = 'shelly-reconcile'
 
@@ -121,6 +122,11 @@ export const ACTION_NEEDED_RETRY_MS = 15 * 60_000
 // not every 60 seconds, which for a black-holed host is 1,440 pointless
 // requests a day out of an account budget its siblings are sharing.
 export const ERROR_RETRY_MS = 5 * 60_000
+
+// SHELLYALERTS — the alert pass is skipped when the sweep has less than this
+// left: it makes no Shelly call, but it does make ledger round trips, and an
+// alert the ledger has not claimed is simply sent on the next tick.
+export const ALERT_DEADLINE_MARGIN_MS = 10_000
 
 // Only used when `sleep` is not injected. The client keeps its own copy for its
 // own pacing; this one is for the gap BETWEEN two locations of one account,
@@ -327,6 +333,10 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
 
   const readings = new Map()
   const covered = new Set()
+  // SHELLYALERTS.3 — what each row looks like AFTER this tick, for the alert
+  // pass. Only rows whose write LANDED: a failed write leaves the stored row
+  // as the truth.
+  const fresh = new Map()
   let reads = 0
   let readFailures = 0
   let rateLimited = 0
@@ -412,7 +422,10 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
         })
         .eq('id', d.id)
       if (error) logWarn(MODULE, 'device state write failed', { locationId, deviceId: d.id, error: error.message })
-      else stateWrites++
+      else {
+        stateWrites++
+        fresh.set(d.id, { last_state: next, ...(next.online ? { last_seen_at: nowIso } : {}) })
+      }
     }
   }
 
@@ -442,7 +455,7 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
     logWarn(MODULE, 'every device reads offline — check the v2 online field', { locationId, items })
   }
 
-  return { readings, covered, client, nowIso, reads, readFailures, rateLimited, stateWrites, auth, config, anyOk, lastKind, stalled, budgetHit }
+  return { readings, covered, fresh, client, nowIso, reads, readFailures, rateLimited, stateWrites, auth, config, anyOk, lastKind, stalled, budgetHit }
 }
 
 /**
@@ -523,7 +536,7 @@ async function resolveTargets(db, locationId, devices, nowMs, counters) {
  * One location's whole tick. Never throws for a data-shaped reason; a genuine
  * crash is caught by the sweep, which logs it with the key redacted.
  *
- * @param ctx {{ now?, sleep?, makeClient?, loadOccurrences?, deadlineAt? }}
+ * @param ctx {{ now?, sleep?, makeClient?, loadOccurrences?, deadlineAt?, alerts? }} (alerts: SHELLYALERTS.3, defaults to runShellyAlerts)
  * @returns counters (never null — the sweep sums them)
  */
 export async function reconcileLocation(db, conn, ctx = {}) {
@@ -577,6 +590,31 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     now, nowMs, sleep: ctx.sleep, makeClient: ctx.makeClient, deadlineAt,
   })
   const { client, nowIso, readings, stalled } = state
+
+  // SHELLYALERTS.3 — the alert pass, LAST on every path that read: after the
+  // state writes and the connection status. It pushes nothing to Shelly (no
+  // budget spent) and it can never break this reconcile or the sweep: any
+  // throw is logged with ids only (the message redacted of the key).
+  //
+  // Review fixes: skipped within ALERT_DEADLINE_MARGIN_MS of the sweep's
+  // deadline (the ledger keeps the alert for the next tick), and device alerts
+  // (offline, fault) are planned only when a read LANDED this tick: on a
+  // refused key or a bad host nothing was learned about any device.
+  const deviceAlerts = state.anyOk && !state.auth && !state.config
+  const alertPass = async (keyRejected) => {
+    try {
+      if (now() > deadlineAt - ALERT_DEADLINE_MARGIN_MS) {
+        logWarn(MODULE, 'alert pass skipped — time budget nearly spent', { locationId })
+        return
+      }
+      const current = devices.map((d) => (state.fresh?.has(d.id) ? { ...d, ...state.fresh.get(d.id) } : d))
+      await (ctx.alerts || runShellyAlerts)(db, {
+        locationId, conn, devices: current, nowMs, tz, keyRejected, deviceAlerts, studioName: conn?.locations?.name ?? null,
+      })
+    } catch (e) {
+      logWarn(MODULE, 'alert pass failed', { locationId, err: redactSecret(e, conn?.auth_key) })
+    }
+  }
   counters.reads = state.reads
   counters.readFailures = state.readFailures
   counters.rateLimited = state.rateLimited
@@ -602,6 +640,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   if (auth) {
     counters.authFailures = 1
     await markConnection(db, conn, { status: 'action_needed', last_error: AUTH_ERROR, last_error_at: nowIso, updated_at: nowIso })
+    await alertPass(true)
     return counters
   }
   if (state.config) {
@@ -609,6 +648,8 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     // handled anyway — and NOT as 'error', which would retry a malformed host
     // forever. action_needed is the state that says "a human must retype this".
     await markConnection(db, conn, { status: 'action_needed', last_error: HOST_ERROR, last_error_at: nowIso, updated_at: nowIso })
+    // A bad host is not a rejected key: no key alert, the device alerts only.
+    await alertPass(false)
     return counters
   }
 
@@ -886,6 +927,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     })
   }
 
+  await alertPass(auth)
   return counters
 }
 
@@ -903,6 +945,7 @@ export async function runShellyReconcile(db, deps = {}) {
     loadOccurrences = loadTodayOccurrences,
     budgetMs = 90_000,
     concurrency = 4,
+    alerts,
   } = deps
 
   const startedAt = now()
@@ -920,7 +963,8 @@ export async function runShellyReconcile(db, deps = {}) {
     // `settings` itself, which holds the location's credentials.
     // (A literal, not SAFETY_TIMERS_SELECT interpolated, so check:select-columns
     // can read it.)
-    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone, safety_timers:settings->shelly->safety_timers)')
+    // `name` (SHELLYALERTS.3) is the studio name an alert push carries.
+    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone, safety_timers:settings->shelly->safety_timers, name)')
     // ROTATION, not registration order: whoever has gone longest without a
     // successful tick goes first, so when the budget runs short the shortfall
     // moves around the estate instead of always landing on the same tail.
@@ -960,7 +1004,7 @@ export async function runShellyReconcile(db, deps = {}) {
   // must never license running it in parallel with one it might share a budget
   // with. Slow is recoverable, a 429 storm is not.
   const groups = [...Map.groupBy(active, (c) => String(c.auth_key_fingerprint ?? '')).values()]
-  const ctx = { now, sleep, makeClient, loadOccurrences, deadlineAt }
+  const ctx = { now, sleep, makeClient, loadOccurrences, deadlineAt, alerts }
   const totals = zeroCounters()
 
   const sleepFn = sleep || realSleep

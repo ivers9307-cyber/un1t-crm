@@ -769,6 +769,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // nobody else (bit app_update and test within a day of each other).
   { key: 'notify_inspection_due',     label: '… Equipment inspections due', hint: 'Notify on your studio inspection day when equipment is due to be checked', mobileOnly: true, isNotify: true },
   { key: 'notify_inspection_overdue', label: '… Inspections not done',      hint: 'Notify owners when equipment was due for inspection and no one submitted it', mobileOnly: true, isNotify: true },
+  // SHELLYALERTS.2 — Shelly smart-plug health (owners + managers by default):
+  // the studio's key stopped working, a device offline 15 minutes, or a
+  // device reporting a power fault. Registered for the same fails-closed
+  // reason as the two above.
+  { key: 'notify_shelly_alert', label: '… Smart plug alerts', hint: 'Shelly key rejected, a device offline for 15 minutes, or a power fault', mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -809,6 +814,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_checklist_overdue: true, notify_checklist_compliance: true,
     notify_issue_submitted: true, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: true,
+    notify_shelly_alert: true,
   },
   staff: {
     hyrox: false,
@@ -854,6 +860,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // own reports.
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: false,
   },
   // Reception — staff-level mobile access + the WhatsApp inbox and
   // the operator bookings view (today/tomorrow is the desk's core
@@ -894,6 +901,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_checklist_overdue: true, notify_checklist_compliance: false,
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: false,
   },
   head_coach: {
     hyrox: true,
@@ -936,6 +944,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // routing) but can be granted via per-user opt-in.
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: false,
   },
   manager: {
     hyrox: true,
@@ -980,6 +989,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // routing) but resolved stays on (parity-superset of staff).
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: true,
   },
   owner: {
     hyrox: true,
@@ -1024,6 +1034,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // the studio" routing decision in REPORT-ISSUE.1).
     notify_issue_submitted: true, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: true,
+    notify_shelly_alert: true,
   },
 })
 

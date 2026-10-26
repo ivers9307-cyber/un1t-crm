@@ -568,3 +568,54 @@ describe('toggleOutcomeText — long lists', () => {
       .toContain('Light A, Light B and Light C —')
   })
 })
+
+// SHELLYALERTS.4 — PR B's timer notices reach the screen. The client copy
+// (LEAVE_WARNING, the delete confirm) stays as the BEFORE-save warning; the
+// server's answer is what is shown AFTER, because only the server knows a
+// safety timer is pending.
+describe('ShellyGroupCard — the server’s notices after a save or a delete', () => {
+  const deleted = 'Group removed. Its devices stay as they are until you switch them. A light the schedule switched on still switches itself off by 21:30 (safety timer).'
+
+  it('a delete hands the DELETE response message up (the card itself is about to go)', async () => {
+    const onNotice = vi.fn()
+    const onChanged = vi.fn()
+    global.fetch.mockResolvedValue(answer(200, { success: true, message: deleted }))
+    renderCard(group(), { onNotice, onChanged })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete group' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete group' }).at(-1))
+    await waitFor(() => expect(onNotice).toHaveBeenCalledWith({ tone: 'ok', text: deleted }))
+    expect(onChanged).toHaveBeenCalled()
+  })
+
+  it('a delete with no message (or an already-gone 404) hands nothing up', async () => {
+    const onNotice = vi.fn()
+    const onChanged = vi.fn()
+    global.fetch.mockResolvedValue(answer(404, { success: false, error: 'Not found' }))
+    renderCard(group(), { onNotice, onChanged })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete group' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete group' }).at(-1))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(onNotice).not.toHaveBeenCalled()
+  })
+
+  it('a members save that answers a notice shows it on the card', async () => {
+    const notice = 'A light the schedule switched on still switches itself off by 21:30 (safety timer).'
+    global.fetch.mockResolvedValue(answer(200, { success: true, notice }))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit devices' }))
+    fireEvent.click(screen.getByLabelText('Back light'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save devices' }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(notice))
+    expect(screen.queryByRole('button', { name: 'Save devices' })).toBeNull()
+  })
+
+  it('a members save with no notice shows nothing extra', async () => {
+    global.fetch.mockResolvedValue(answer(200, { success: true }))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit devices' }))
+    fireEvent.click(screen.getByLabelText('Back light'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save devices' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save devices' })).toBeNull())
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+})

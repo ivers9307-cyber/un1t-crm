@@ -56,6 +56,12 @@
 //     mig 776 CHECK list, and PATCHes `{ icon }` alone. The chosen icon is
 //     shown at once and kept until the next poll hands back the group with it;
 //     a refused save leaves the old icon and says why.
+// 11. AFTER A SAVE OR A DELETE, THE SERVER'S WORDS (SHELLYALERTS.4). The
+//     client copy (LEAVE_WARNING, the delete confirm) is the warning BEFORE;
+//     only the server knows whether a safety timer is still pending, so the
+//     members PUT's `notice` (sent only then) is shown on the card, and the
+//     DELETE's `message` is handed to the page (`onNotice`), because the card
+//     is gone by the time it could be read.
 //
 //  5. A SWITCHED-OFF GROUP IS "NEVER AUTOMATIC". The card has no separate
 //     on/off for the schedule (Richard's approved look), so the editor is
@@ -310,6 +316,9 @@ function MemberRow({ device }) {
 
 export default function ShellyGroupCard({
   group, devices = [], groups = [], connected, locationTz = DEFAULT_TZ, glofoxConnected, glofoxUnknown = false, onChanged,
+  // SHELLYALERTS.4 — a line for the PAGE to show: a deleted group's card is
+  // gone before its own result line could be read.
+  onNotice,
 }) {
   const [busy, setBusy] = useState(null)
   // { tone: 'ok'|'warn'|'error', text, want?: 'on'|'off' } — `want` is set on a
@@ -469,6 +478,9 @@ export default function ShellyGroupCard({
       setResult({ tone: 'error', text: errorText(res.json, 'Could not delete this group') })
       return
     }
+    // Rule 11: the server's sentence, which names a pending safety timer.
+    const message = res.ok ? res.json?.message : null
+    if (typeof message === 'string' && message) onNotice?.({ tone: 'ok', text: message })
     await onChanged?.()
   }
 
@@ -610,7 +622,12 @@ export default function ShellyGroupCard({
             devices={devices}
             groups={groups}
             onCancel={() => setEditingMembers(false)}
-            onSaved={async () => { setEditingMembers(false); await onChanged?.() }}
+            onSaved={async (json) => {
+              setEditingMembers(false)
+              // Rule 11: present only when a leaver's safety timer is pending.
+              if (typeof json?.notice === 'string' && json.notice) setResult({ tone: 'warn', text: json.notice })
+              await onChanged?.()
+            }}
           />
         ) : (
           <Button size="sm" variant="ghost" onClick={() => setEditingMembers(true)}>Edit devices</Button>

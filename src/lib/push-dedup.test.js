@@ -276,3 +276,32 @@ describe('sendOnce — a failed read inside the send releases the claim (C16 PUS
     expect(releasedCalls).toEqual([])
   })
 })
+
+// SHELLYALERTS.5 — a studio-scoped push judges the notify toggle AT that
+// studio. Without { locationId } sendPush judges the toggle across every
+// studio the person holds, so an owner here who is plain staff elsewhere
+// (staff default false) was told nothing. Opt-in only: other callers keep
+// exactly the call they had.
+describe('location-scoped sends (SHELLYALERTS.5)', () => {
+  it('sendPushOnce passes { locationId } to sendPush when asked', async () => {
+    await sendPushOnce(fakeDb, 'k', ['u1'], { title: 't' }, { locationId: 'loc1' })
+    expect(sendPush).toHaveBeenCalledWith(['u1'], { title: 't' }, { locationId: 'loc1' })
+  })
+
+  it('sendPushOnce without opts calls sendPush with two arguments, as before', async () => {
+    await sendPushOnce(fakeDb, 'k', ['u1'], { title: 't' })
+    expect(sendPush.mock.calls[0]).toHaveLength(2)
+  })
+
+  it('sendPushToRolesAtLocationOnce passes the location with { locationScoped: true }', async () => {
+    readRoleRecipientIds.mockResolvedValue({ ids: ['m1'], error: null })
+    await sendPushToRolesAtLocationOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' }, { locationScoped: true })
+    expect(sendPush).toHaveBeenCalledWith(['m1'], { title: 't' }, { locationId: 'loc1' })
+  })
+
+  it('sendPushToRolesAtLocationOnce without the flag is unchanged', async () => {
+    readRoleRecipientIds.mockResolvedValue({ ids: ['m1'], error: null })
+    await sendPushToRolesAtLocationOnce(fakeDb, 'k', 'loc1', ['owner'], { title: 't' })
+    expect(sendPush.mock.calls[0]).toHaveLength(2)
+  })
+})
