@@ -18,10 +18,13 @@
 //  3. BRANCH ON PENDING BEFORE PAINTING THE NEW STATE. The toggle answers
 //     `applied: 'all' | 'partial' | 'none'`; anything short of 'all' means
 //     some relays have NOT moved (they are queued: the group override is
-//     saved and the cron applies it). The route's `message` is shown first —
-//     it is written against the exact failure, per member — and ours is the
-//     fallback for a body that carried none. A 429 arrives with `pending`
-//     and is read the same way.
+//     saved and the cron applies it). When the answer names its
+//     `pending_members` (SHELLYICONS.1) each one is worded by its own `code`,
+//     by name, exactly as "Back to schedule" is (rule 6): offline → "will
+//     follow when back online", permanent → "Shelly refused <name>",
+//     unverified/bad_device → "couldn't confirm <name>". Otherwise the route's
+//     `message` is shown, and ours is the fallback for a body with neither.
+//     A 429 arrives with `pending` and is read the same way.
 //
 //  4. DURATION PRESETS ONLY FOR A MANAGED GROUP (enabled and a schedule). On
 //     an unmanaged group the planner never closes an expired override, so a
@@ -49,6 +52,11 @@
 //     aria-checked="mixed" is invalid on a switch; aria-pressed takes "mixed".
 //     It keeps the switch's look.
 //
+// 10. THE ICON PICKER (SHELLYICONS.1) offers exactly SHELLY_GROUP_ICONS, the
+//     mig 776 CHECK list, and PATCHes `{ icon }` alone. The chosen icon is
+//     shown at once and kept until the next poll hands back the group with it;
+//     a refused save leaves the old icon and says why.
+//
 //  5. A SWITCHED-OFF GROUP IS "NEVER AUTOMATIC". The card has no separate
 //     on/off for the schedule (Richard's approved look), so the editor is
 //     handed the group as `schedule_mode: 'none'` whenever `enabled` is false,
@@ -63,7 +71,7 @@ import { AlertCircle, Droplet, Fan, Lightbulb, Plug, Trash2, Tv } from 'lucide-r
 import { Button, Card } from '@/components/ui'
 import { DEFAULT_TZ, instantToZonedParts, timeLabelIn } from '@shared/zoned-time'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
-import { MAX_GROUP_NAME } from '@/lib/shelly/schemas'
+import { MAX_GROUP_NAME, SHELLY_GROUP_ICONS } from '@/lib/shelly/schemas'
 import { overrideUntilLabel } from './ShellyDeviceCard'
 import ShellyScheduleEditor from './ShellyScheduleEditor'
 import ShellyGroupMembersEditor from './ShellyGroupMembersEditor'
@@ -74,6 +82,7 @@ const HOUR_MS = 60 * 60 * 1000
 export const RESULT_MS = 10_000
 
 const ICONS = { bulb: Lightbulb, fan: Fan, tv: Tv, plug: Plug, droplet: Droplet }
+const ICON_LABELS = { bulb: 'Bulb', fan: 'Fan', tv: 'TV', plug: 'Plug', droplet: 'Droplet' }
 
 const DURATIONS = [
   { value: 'midnight', label: 'Until midnight' },
@@ -180,6 +189,36 @@ const AUTO_CODE_COPY = {
   config: 'The Shelly server on file is invalid — fix it in the connection settings.',
 }
 
+// The sentences for the members that did not move, each by its own `code`:
+// shared by "Back to schedule" (results[]) and the on/off press
+// (pending_members[]), so the two never word the same failure differently.
+function missedMemberParts(missed, nameOf) {
+  const name = typeof nameOf === 'function' ? nameOf : () => 'a device'
+  const parts = []
+  const names = (rows) => joinNames(rows.map((r) => name(r.device_id)))
+
+  const refused = missed.filter((r) => r.permanent === true)
+  if (refused.length) {
+    parts.push(`Shelly refused ${names(refused)} — check ${refused.length === 1 ? 'it' : 'them'} in the Shelly app.`)
+  }
+  const accountWide = new Set()
+  for (const r of missed) if (!r.permanent && AUTO_CODE_COPY[r.code]) accountWide.add(AUTO_CODE_COPY[r.code])
+  parts.push(...accountWide)
+
+  const mismatch = missed.filter((r) => r.code === 'plan_mismatch')
+  if (mismatch.length) parts.push(`${names(mismatch)} ${mismatch.length === 1 ? 'was' : 'were'} not switched.`)
+  const unverified = missed.filter((r) => !r.permanent && (r.code === 'unverified' || r.code === 'bad_device'))
+  if (unverified.length) parts.push(`Couldn't confirm ${names(unverified)}.`)
+
+  const handled = new Set(['plan_mismatch', 'unverified', 'bad_device', ...Object.keys(AUTO_CODE_COPY)])
+  const silent = missed.filter((r) => !r.permanent && !handled.has(r.code))
+  if (silent.length) {
+    const one = silent.length === 1
+    parts.push(`${names(silent)} did not answer — ${one ? 'it' : 'they'} will follow when ${one ? 'it is' : 'they are'} back online.`)
+  }
+  return parts
+}
+
 /**
  * What "Back to schedule" did, from the route's `results[]` (rule 6).
  * Returns null when every member moved.
@@ -195,30 +234,27 @@ export function autoOutcomeText(results, nameOf) {
   }
   const total = results.length
   const moved = total - missed.length
-  const parts = []
-  const names = (rows) => joinNames(rows.map((r) => nameOf(r.device_id)))
-
-  const refused = missed.filter((r) => r.permanent === true)
-  if (refused.length) {
-    parts.push(`Shelly refused ${names(refused)} — check ${refused.length === 1 ? 'it' : 'them'} in the Shelly app.`)
-  }
-  const accountWide = new Set()
-  for (const r of missed) if (!r.permanent && AUTO_CODE_COPY[r.code]) accountWide.add(AUTO_CODE_COPY[r.code])
-  parts.push(...accountWide)
-
-  const mismatch = missed.filter((r) => r.code === 'plan_mismatch')
-  if (mismatch.length) parts.push(`${names(mismatch)} ${mismatch.length === 1 ? 'was' : 'were'} not switched.`)
-  const unverified = missed.filter((r) => r.code === 'unverified' || r.code === 'bad_device')
-  if (unverified.length) parts.push(`Couldn't confirm ${names(unverified)}.`)
-
-  const handled = new Set(['plan_mismatch', 'unverified', 'bad_device', ...Object.keys(AUTO_CODE_COPY)])
-  const silent = missed.filter((r) => !r.permanent && !handled.has(r.code))
-  if (silent.length) {
-    const one = silent.length === 1
-    parts.push(`${names(silent)} did not answer — ${one ? 'it' : 'they'} will follow when ${one ? 'it is' : 'they are'} back online.`)
-  }
   const lead = moved > 0 ? `Back on schedule for ${moved} of ${total}.` : 'Nothing moved yet.'
-  return `${lead} ${parts.join(' ')}`
+  return `${lead} ${missedMemberParts(missed, nameOf).join(' ')}`
+}
+
+/**
+ * What an on/off press did, from the route's `pending_members[]` (rule 3).
+ * Returns null when the answer names no pending member (the caller then shows
+ * the route's `message`).
+ *
+ * @param {Array<{device_id: string, code?: string, shelly_code?: string, permanent?: boolean}>} pendingMembers
+ * @param {number} total   how many members the press was for
+ * @param {'on'|'off'} state
+ * @param {(id: string) => string} nameOf
+ */
+export function toggleOutcomeText(pendingMembers, total, state, nameOf) {
+  const missed = (Array.isArray(pendingMembers) ? pendingMembers : []).filter((p) => p && p.device_id)
+  if (!missed.length) return null
+  const count = Math.max(Number(total) || 0, missed.length)
+  const moved = count - missed.length
+  const lead = moved > 0 ? `Switched ${state} for ${moved} of ${count}.` : 'Saved. Nothing has moved yet.'
+  return `${lead} ${missedMemberParts(missed, nameOf).join(' ')}`
 }
 
 const SWITCH_FACE = {
@@ -273,13 +309,18 @@ export default function ShellyGroupCard({
   const [nameError, setNameError] = useState(null)
   // Rename has its own flag: it never blocks, or is blocked by, the switch.
   const [savingName, setSavingName] = useState(false)
+  // Rule 10: the picker, and the icon just saved until the poll catches up.
+  const [pickingIcon, setPickingIcon] = useState(false)
+  const [savedIcon, setSavedIcon] = useState(null)
+  const [savingIcon, setSavingIcon] = useState(false)
 
   const nowMs = Date.now()
   const managed = isManaged(group)
   const face = groupSwitchState(group.now)
   const faceInfo = SWITCH_FACE[face]
   const switchText = face === 'mixed' ? `${group.now.on_count} of ${group.now.member_count} on` : faceInfo.text
-  const Icon = ICONS[group.icon] || Lightbulb
+  const iconKey = ICONS[savedIcon] ? savedIcon : ICONS[group.icon] ? group.icon : 'bulb'
+  const Icon = ICONS[iconKey]
 
   const byId = new Map(devices.map((d) => [d.id, d]))
   const members = (Array.isArray(group.device_ids) ? group.device_ids : []).map((id) => byId.get(id)).filter(Boolean)
@@ -293,6 +334,8 @@ export default function ShellyGroupCard({
   useEffect(() => {
     if (result?.want && face === result.want) setResult(null)
   }, [face, result])
+  // The poll's answer replaces the locally-saved icon once it carries one.
+  useEffect(() => { setSavedIcon(null) }, [group.icon])
 
   const controlsOff = connected === false
   const anyBusy = busy !== null
@@ -320,8 +363,9 @@ export default function ShellyGroupCard({
         const d = byId.get(id)
         return d ? deviceLabel(d) : 'a device'
       }
-      const base = res.json?.message
-        || (next === 'auto' ? autoOutcomeText(res.json?.results, nameOf) : null)
+      const base = (next === 'auto'
+        ? res.json?.message || autoOutcomeText(res.json?.results, nameOf)
+        : toggleOutcomeText(res.json?.pending_members, members.length || group.now?.member_count, next, nameOf) || res.json?.message)
         || PENDING_FALLBACK
       // An unmanaged group's lights stay as set: said on a partial answer too.
       const notice = res.json?.notice
@@ -353,6 +397,20 @@ export default function ShellyGroupCard({
     }
     await onChanged?.()
     return { ok: true, json: res.json }
+  }
+
+  async function pickIcon(icon) {
+    setPickingIcon(false)
+    if (savingIcon || icon === iconKey) return
+    setSavingIcon(true)
+    const res = await fetchJson(`/api/shelly/groups/${group.id}`, jsonBody('PATCH', { icon }))
+    setSavingIcon(false)
+    if (!res.ok || res.json?.success === false) {
+      setResult({ tone: 'error', text: errorText(res.json, 'Could not change the icon') })
+      return
+    }
+    setSavedIcon(icon)
+    await onChanged?.()
   }
 
   function cancelRename() {
@@ -409,9 +467,17 @@ export default function ShellyGroupCard({
       {/* ——— header: icon, name, reason, the ONE switch ———————————————— */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <span className="mt-0.5 rounded-md bg-un1t-muted/10 p-1.5 text-un1t-text">
+          <button
+            type="button"
+            onClick={() => setPickingIcon((v) => !v)}
+            disabled={savingIcon}
+            aria-expanded={pickingIcon ? 'true' : 'false'}
+            aria-label={`Change icon, now ${ICON_LABELS[iconKey]}`}
+            title="Change icon"
+            className="mt-0.5 shrink-0 rounded-md bg-un1t-muted/10 p-1.5 text-un1t-text hover:bg-un1t-muted/20 disabled:opacity-60"
+          >
             <Icon size={16} aria-hidden="true" />
-          </span>
+          </button>
           <div className="min-w-0">
             {renaming ? (
               <div className="space-y-1">
@@ -464,6 +530,30 @@ export default function ShellyGroupCard({
           {busy === 'on' || busy === 'off' ? 'Switching…' : switchText}
         </button>
       </div>
+
+      {pickingIcon && (
+        <div role="group" aria-label="Group icon" className="flex flex-wrap items-center gap-1">
+          {SHELLY_GROUP_ICONS.map((key) => {
+            const Glyph = ICONS[key]
+            const current = key === iconKey
+            return (
+              <button
+                key={key}
+                type="button"
+                aria-label={ICON_LABELS[key]}
+                aria-pressed={current ? 'true' : 'false'}
+                title={ICON_LABELS[key]}
+                onClick={() => pickIcon(key)}
+                className={`rounded-md border p-1.5 ${current
+                  ? 'border-un1t-accent bg-un1t-accent/10 text-un1t-text'
+                  : 'border-un1t-border text-un1t-subtle hover:bg-un1t-muted/10 hover:text-un1t-text'}`}
+              >
+                <Glyph size={16} aria-hidden="true" />
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {managed && (
         <div className="flex flex-wrap items-center gap-2">

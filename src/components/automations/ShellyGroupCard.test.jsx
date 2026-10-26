@@ -463,3 +463,78 @@ describe('ShellyGroupCard — final-review fixes (SHELLYGROUPS.8)', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 })
+
+describe('ShellyGroupCard — the icon picker', () => {
+  it('picking "Fan" PATCHes { icon: "fan" } and the card shows it', async () => {
+    global.fetch.mockResolvedValue(answer(200, { success: true, group: group({ icon: 'fan' }) }))
+    const onChanged = vi.fn()
+    renderCard(group(), { onChanged })
+    const trigger = screen.getByRole('button', { name: 'Change icon, now Bulb' })
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    const picker = screen.getByRole('group', { name: 'Group icon' })
+    const options = within(picker).getAllByRole('button')
+    expect(options.map((b) => b.getAttribute('aria-label'))).toEqual(['Bulb', 'Fan', 'TV', 'Plug', 'Droplet'])
+    expect(within(picker).getByRole('button', { name: 'Bulb' }).getAttribute('aria-pressed')).toBe('true')
+    for (const b of options) expect(b.getAttribute('type')).toBe('button')
+
+    fireEvent.click(within(picker).getByRole('button', { name: 'Fan' }))
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1))
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toBe('/api/shelly/groups/g1')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body)).toEqual({ icon: 'fan' })
+    expect(await screen.findByRole('button', { name: 'Change icon, now Fan' })).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Group icon' })).toBeNull()
+    expect(onChanged).toHaveBeenCalled()
+  })
+
+  it('picking the icon it already has sends nothing', () => {
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Change icon, now Bulb' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Group icon' })).getByRole('button', { name: 'Bulb' }))
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(screen.queryByRole('group', { name: 'Group icon' })).toBeNull()
+  })
+
+  it('a refused save keeps the old icon and says so', async () => {
+    global.fetch.mockResolvedValue(answer(500, { success: false, error: 'Could not save this group' }))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Change icon, now Bulb' }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Group icon' })).getByRole('button', { name: 'TV' }))
+    expect(await screen.findByText('Could not save this group')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Change icon, now Bulb' })).toBeTruthy()
+  })
+})
+
+describe('ShellyGroupCard — on/off pending worded per member (pending_members)', () => {
+  const pendingBody = (pending_members, over = {}) => ({
+    success: true, applied: 'partial', pending: true, code: 'pending', message: 'Route words.',
+    pending_device_ids: pending_members.map((p) => p.device_id), pending_members, ...over,
+  })
+  const press = async (json) => {
+    global.fetch.mockResolvedValue(answer(200, json))
+    renderCard()
+    fireEvent.click(groupSwitch())
+    await waitFor(() => expect(screen.getByRole('status')).toBeTruthy())
+    return screen.getByRole('status').textContent
+  }
+
+  it('an offline member will follow when it is back online, named', async () => {
+    const text = await press(pendingBody([{ device_id: 'd2', code: 'device', shelly_code: 'DEVICE_OFFLINE', permanent: false }]))
+    expect(text).toBe('Switched on for 1 of 2. Back light did not answer — it will follow when it is back online.')
+  })
+
+  it('a permanent refusal is "Shelly refused <name>", never "back online"', async () => {
+    const text = await press(pendingBody([{ device_id: 'd2', code: 'device', shelly_code: 'BAD_CHANNEL', permanent: true }]))
+    expect(text).toBe('Switched on for 1 of 2. Shelly refused Back light — check it in the Shelly app.')
+  })
+
+  it('unverified members are "couldn\'t confirm <names>"', async () => {
+    const text = await press(pendingBody([
+      { device_id: 'd1', code: 'unverified', permanent: false },
+      { device_id: 'd2', code: 'unverified', permanent: false },
+    ], { applied: 'none' }))
+    expect(text).toBe("Saved. Nothing has moved yet. Couldn't confirm Front light and Back light.")
+  })
+})
