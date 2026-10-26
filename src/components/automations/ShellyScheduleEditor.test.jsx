@@ -11,8 +11,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import { DEFAULT_LEAD_MIN, DEFAULT_LAG_MIN, MAX_CLASS_LEAD_LAG_MIN } from '@/lib/shelly/schemas'
-import ShellyScheduleEditor from './ShellyScheduleEditor.jsx'
+import { DEFAULT_LEAD_MIN, DEFAULT_LAG_MIN, DEFAULT_MERGE_GAP_MIN, MAX_CLASS_LEAD_LAG_MIN } from '@/lib/shelly/schemas'
+import ShellyScheduleEditor, { EMPTY_MINUTES_MESSAGE } from './ShellyScheduleEditor.jsx'
 
 const device = (over = {}) => ({
   id: 'row-1',
@@ -38,7 +38,7 @@ describe('ShellyScheduleEditor — the relay-stays notice', () => {
     const notice = 'Schedule switched off — the plug stays as it is until you toggle it'
     const onSave = vi.fn(async () => ({ ok: true, json: { success: true, notice } }))
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByLabelText('Never automatic'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(notice))
   })
@@ -46,7 +46,7 @@ describe('ShellyScheduleEditor — the relay-stays notice', () => {
   it('says nothing when the route sent no notice', async () => {
     const onSave = vi.fn(async () => ok())
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByLabelText('Never automatic'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(screen.queryByRole('status')).toBeNull()
@@ -57,13 +57,13 @@ describe('ShellyScheduleEditor — the relay-stays notice', () => {
     let next = { ok: true, json: { success: true, notice } }
     const onSave = vi.fn(async () => next)
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByLabelText('Never automatic'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain(notice))
     // A second, still-dirty save that abandons nothing must not leave the
     // previous warning standing over it.
     next = ok()
-    fireEvent.click(screen.getByLabelText('Class timetable'))
+    fireEvent.click(screen.getByLabelText('Follow classes'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2))
     expect(screen.queryByRole('status')).toBeNull()
@@ -79,7 +79,7 @@ describe('ShellyScheduleEditor — the diff', () => {
   it('a mode change sends schedule_mode ALONE — not the class rule beside it', async () => {
     const onSave = vi.fn(async () => ok())
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByLabelText('Never automatic'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ schedule_mode: 'none' }))
   })
@@ -98,19 +98,22 @@ describe('ShellyScheduleEditor — the diff', () => {
   it('switching to class mode sends the rule with the mode, but only once it differs', async () => {
     const onSave = vi.fn(async () => ok())
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('Class timetable'))
+    fireEvent.click(screen.getByLabelText('Follow classes'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     // The rule matched what is stored, so it does not travel.
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ schedule_mode: 'class' }))
   })
 
-  it('a lead/lag edit sends class_rule with BOTH halves', async () => {
+  // The WHOLE rule travels: the device PATCH parses class_rule with its
+  // defaults, so a rule sent without days or the gap would silently reset a
+  // Mon–Fri rule to every day.
+  it('a lead/lag edit sends class_rule with all four fields', async () => {
     const onSave = vi.fn(async () => ok())
     render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
     fireEvent.change(screen.getByDisplayValue(String(DEFAULT_LEAD_MIN)), { target: { value: '25' } })
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({
-      class_rule: { lead_min: 25, lag_min: DEFAULT_LAG_MIN },
+      class_rule: { lead_min: 25, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: [1, 2, 3, 4, 5, 6, 7] },
     }))
   })
 
@@ -120,7 +123,7 @@ describe('ShellyScheduleEditor — the diff', () => {
     fireEvent.change(screen.getByDisplayValue(String(DEFAULT_LEAD_MIN)), { target: { value: '9999' } })
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({
-      class_rule: { lead_min: MAX_CLASS_LEAD_LAG_MIN, lag_min: DEFAULT_LAG_MIN },
+      class_rule: { lead_min: MAX_CLASS_LEAD_LAG_MIN, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: [1, 2, 3, 4, 5, 6, 7] },
     }))
   })
 
@@ -134,7 +137,7 @@ describe('ShellyScheduleEditor — the diff', () => {
 describe('ShellyScheduleEditor — Glofox gating', () => {
   it('class mode is unpickable without Glofox, and says why', () => {
     render(<ShellyScheduleEditor device={device()} glofoxConnected={false} onSave={vi.fn()} />)
-    const radio = screen.getByLabelText('Class timetable')
+    const radio = screen.getByLabelText('Follow classes')
     expect(radio.disabled).toBe(true)
     expect(radio.closest('label').getAttribute('title')).toBe('Connect a membership source with a class schedule to use class-linked schedules')
   })
@@ -156,7 +159,7 @@ describe('ShellyScheduleEditor — Glofox status unknown', () => {
 
   it('class mode is unpickable, and says the check failed (not "connect Glofox")', () => {
     render(<ShellyScheduleEditor device={device()} glofoxConnected={false} glofoxUnknown onSave={vi.fn()} />)
-    const radio = screen.getByLabelText('Class timetable')
+    const radio = screen.getByLabelText('Follow classes')
     expect(radio.disabled).toBe(true)
     expect(radio.closest('label').getAttribute('title')).toBe(UNKNOWN)
     expect(document.body.innerHTML).not.toMatch(/Connect Glofox/)
@@ -183,7 +186,7 @@ describe('ShellyScheduleEditor — keyboard', () => {
     fireEvent.change(lead, { target: { value: '30' } })
     fireEvent.keyDown(lead, { key: 'Enter' })
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({
-      class_rule: { lead_min: 30, lag_min: DEFAULT_LAG_MIN },
+      class_rule: { lead_min: 30, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: [1, 2, 3, 4, 5, 6, 7] },
     }))
   })
 
@@ -211,7 +214,7 @@ describe('ShellyScheduleEditor — saving', () => {
   it('renders the server’s refusal and stays dirty', async () => {
     const onSave = vi.fn(async () => ({ ok: false, message: 'Windows must not overlap: 06:00–21:00 and 20:00–22:00' }))
     render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByLabelText('Never automatic'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('must not overlap'))
     expect(screen.queryByText('Saved')).toBeNull()
@@ -220,11 +223,94 @@ describe('ShellyScheduleEditor — saving', () => {
   it('confirms a save once the draft and the row agree again', async () => {
     const onSave = vi.fn(async () => ok())
     const { rerender } = render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={onSave} />)
-    fireEvent.click(screen.getByLabelText('No schedule'))
+    fireEvent.click(screen.getByLabelText('Never automatic'))
     fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     // The parent reloads and hands back the saved row.
     rerender(<ShellyScheduleEditor device={device({ schedule_mode: 'none' })} glofoxConnected onSave={onSave} />)
     expect(screen.getByText('Saved')).toBeTruthy()
+  })
+})
+
+// SHELLYGROUPS.6 — the class rule grew a gap and a set of days.
+describe('ShellyScheduleEditor — follow classes', () => {
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+  it('offers the three choices in plain words', () => {
+    render(<ShellyScheduleEditor device={device()} glofoxConnected onSave={vi.fn()} />)
+    expect(screen.getByLabelText('Never automatic')).toBeTruthy()
+    expect(screen.getByLabelText('Fixed hours')).toBeTruthy()
+    expect(screen.getByLabelText('Follow classes')).toBeTruthy()
+  })
+
+  it('choosing "Follow classes" reveals the four class fields with their defaults', () => {
+    render(<ShellyScheduleEditor device={device({ class_rule: {} })} glofoxConnected onSave={vi.fn()} />)
+    expect(screen.queryByLabelText('On before each class')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Follow classes'))
+    expect(screen.getByLabelText('On before each class').value).toBe('15')
+    expect(screen.getByLabelText('Off after each class').value).toBe('10')
+    expect(screen.getByLabelText('Keep on if the gap is under').value).toBe('30')
+    for (const d of DAYS) {
+      expect(screen.getByRole('button', { name: d }).getAttribute('aria-pressed')).toBe('true')
+    }
+  })
+
+  it('unticking every day says "Pick at least one day" and does not save', () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    for (const d of DAYS) fireEvent.click(screen.getByRole('button', { name: d }))
+    expect(screen.getByText('Pick at least one day')).toBeTruthy()
+    const save = screen.getByRole('button', { name: /Save schedule/ })
+    expect(save.disabled).toBe(true)
+    fireEvent.click(save)
+    fireEvent.keyDown(screen.getByLabelText('On before each class'), { key: 'Enter' })
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('a day and gap edit sends the whole rule, days in order', async () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sun' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sun' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sat' }))
+    fireEvent.change(screen.getByLabelText('Keep on if the gap is under'), { target: { value: '45' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({
+      class_rule: { lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN, merge_gap_min: 45, days: [1, 2, 3, 4, 5, 7] },
+    }))
+  })
+
+  it('a stored Mon–Fri rule shows the weekend unticked', () => {
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class', class_rule: { days: [1, 2, 3, 4, 5] } })} glofoxConnected onSave={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Sat' }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Fri' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: /Save schedule/ }).disabled).toBe(true)
+  })
+})
+
+describe('ShellyScheduleEditor — an emptied minutes field is not saved as 0', () => {
+  for (const field of ['On before each class', 'Off after each class', 'Keep on if the gap is under']) {
+    it(`"${field}" left empty: says so and Save stays dead`, () => {
+      const onSave = vi.fn(async () => ok())
+      render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+      fireEvent.change(screen.getByLabelText(field), { target: { value: '' } })
+      expect(screen.getByText(EMPTY_MINUTES_MESSAGE)).toBeTruthy()
+      expect(EMPTY_MINUTES_MESSAGE).toBe('Enter a number of minutes')
+      const save = screen.getByRole('button', { name: /Save schedule/ })
+      expect(save.disabled).toBe(true)
+      fireEvent.click(save)
+      fireEvent.keyDown(screen.getByLabelText(field), { key: 'Enter' })
+      expect(onSave).not.toHaveBeenCalled()
+    })
+  }
+
+  it('a typed 0 is still a real answer and saves', async () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    fireEvent.change(screen.getByLabelText('Off after each class'), { target: { value: '0' } })
+    expect(screen.queryByText(EMPTY_MINUTES_MESSAGE)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].class_rule.lag_min).toBe(0)
   })
 })
