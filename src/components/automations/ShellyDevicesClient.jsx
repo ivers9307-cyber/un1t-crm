@@ -162,6 +162,9 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
   // by side would leave a stale one standing next to a fresh one, and the two
   // actions are mutually exclusive anyway (each debounces the other out).
   const [refreshMsg, setRefreshMsg] = useState(null)
+  // SHELLYALERTS.4 — a line a group card hands up (a deleted group's message:
+  // the card is gone before its own result line could be read).
+  const [groupMsg, setGroupMsg] = useState(null)
   // SHELLY-NAMES.1 — the name sync has its OWN in-flight and cooldown flags:
   // it spends the same shared 1 req/sec account budget as Refresh, so it gets
   // the same 10 s debounce, but sharing one flag would make either button
@@ -172,6 +175,7 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
   const coolTimer = useRef(null)
   const syncCoolTimer = useRef(null)
   const msgTimer = useRef(null)
+  const groupMsgTimer = useRef(null)
   // Monotonic load counter. Every load takes a ticket on the way in and
   // checks it is still the newest on the way out.
   const seqRef = useRef(0)
@@ -184,6 +188,7 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
       if (coolTimer.current) clearTimeout(coolTimer.current)
       if (syncCoolTimer.current) clearTimeout(syncCoolTimer.current)
       if (msgTimer.current) clearTimeout(msgTimer.current)
+      if (groupMsgTimer.current) clearTimeout(groupMsgTimer.current)
     }
   }, [])
 
@@ -257,6 +262,13 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
     // Self-clearing: a verdict left on screen becomes a claim about whatever
     // the operator does next.
     msgTimer.current = setTimeout(() => { if (liveRef.current) setRefreshMsg(null) }, REFRESH_MSG_MS)
+  }
+
+  // Self-clearing, like the refresh verdict.
+  function showGroupMsg(msg) {
+    setGroupMsg(msg)
+    if (groupMsgTimer.current) clearTimeout(groupMsgTimer.current)
+    groupMsgTimer.current = setTimeout(() => { if (liveRef.current) setGroupMsg(null) }, REFRESH_MSG_MS)
   }
 
   async function doRefresh() {
@@ -496,6 +508,10 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
             )}
           </div>
 
+          {groupMsg && (
+            <p className={`text-xs ${MSG_TONE[groupMsg.tone] || MSG_TONE.ok}`} role="status">{groupMsg.text}</p>
+          )}
+
           {creating && (
             <form onSubmit={createGroup} className="space-y-1 rounded-md border border-un1t-border bg-un1t-surface p-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -537,6 +553,7 @@ export default function ShellyDevicesClient({ locationName, locationTz, glofoxCo
                   glofoxConnected={glofoxConnected}
                   glofoxUnknown={glofoxUnknown}
                   onChanged={load}
+                  onNotice={showGroupMsg}
                 />
               ))}
             </div>

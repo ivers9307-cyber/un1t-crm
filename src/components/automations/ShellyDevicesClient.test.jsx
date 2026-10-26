@@ -619,6 +619,30 @@ describe('ShellyDevicesClient — groups first, then "Not in a group"', () => {
     expect(state.groups).toHaveLength(1)
   })
 
+  // SHELLYALERTS.4 — the deleted group's card is gone before its own result
+  // line could be read, so the DELETE's message (which names a pending safety
+  // timer) is shown by the page, in the groups section.
+  it('deleting a group shows the server’s message once the card is gone', async () => {
+    const message = 'Group removed. Its devices stay as they are until you switch them. A light the schedule switched on still switches itself off by 21:30 (safety timer).'
+    const state = page({ groups: twoGroups() })
+    const base = global.fetch
+    global.fetch = vi.fn(async (url, init = {}) => {
+      if (String(url) === '/api/shelly/groups/g-b' && init.method === 'DELETE') {
+        state.groups = state.groups.filter((g) => g.id !== 'g-b')
+        return json(200, { success: true, message })
+      }
+      return base(url, init)
+    })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Studio lights: / })).toBeTruthy())
+    const card = screen.getByRole('button', { name: 'Rename Studio lights' }).closest('.space-y-3')
+    fireEvent.click(within(card).getByRole('button', { name: 'Delete group' }))
+    fireEvent.click(within(card).getAllByRole('button', { name: 'Delete group' }).at(-1))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Studio lights: / })).toBeNull())
+    const groupsRegion = screen.getByRole('region', { name: 'Groups' })
+    expect(within(groupsRegion).getByRole('status').textContent).toBe(message)
+  })
+
   it('a taken name keeps the form open and says so', async () => {
     page({ groups: [], onPost: () => json(409, { success: false, error: 'A group with that name already exists here', code: 'name_taken' }) })
     render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
