@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { DEFAULT_LEAD_MIN, DEFAULT_LAG_MIN, DEFAULT_MERGE_GAP_MIN, MAX_CLASS_LEAD_LAG_MIN } from '@/lib/shelly/schemas'
-import ShellyScheduleEditor from './ShellyScheduleEditor.jsx'
+import ShellyScheduleEditor, { EMPTY_MINUTES_MESSAGE } from './ShellyScheduleEditor.jsx'
 
 const device = (over = {}) => ({
   id: 'row-1',
@@ -285,5 +285,32 @@ describe('ShellyScheduleEditor — follow classes', () => {
     expect(screen.getByRole('button', { name: 'Sat' }).getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByRole('button', { name: 'Fri' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('button', { name: /Save schedule/ }).disabled).toBe(true)
+  })
+})
+
+describe('ShellyScheduleEditor — an emptied minutes field is not saved as 0', () => {
+  for (const field of ['On before each class', 'Off after each class', 'Keep on if the gap is under']) {
+    it(`"${field}" left empty: says so and Save stays dead`, () => {
+      const onSave = vi.fn(async () => ok())
+      render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+      fireEvent.change(screen.getByLabelText(field), { target: { value: '' } })
+      expect(screen.getByText(EMPTY_MINUTES_MESSAGE)).toBeTruthy()
+      expect(EMPTY_MINUTES_MESSAGE).toBe('Enter a number of minutes')
+      const save = screen.getByRole('button', { name: /Save schedule/ })
+      expect(save.disabled).toBe(true)
+      fireEvent.click(save)
+      fireEvent.keyDown(screen.getByLabelText(field), { key: 'Enter' })
+      expect(onSave).not.toHaveBeenCalled()
+    })
+  }
+
+  it('a typed 0 is still a real answer and saves', async () => {
+    const onSave = vi.fn(async () => ok())
+    render(<ShellyScheduleEditor device={device({ schedule_mode: 'class' })} glofoxConnected onSave={onSave} />)
+    fireEvent.change(screen.getByLabelText('Off after each class'), { target: { value: '0' } })
+    expect(screen.queryByText(EMPTY_MINUTES_MESSAGE)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Save schedule/ }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(onSave.mock.calls[0][0].class_rule.lag_min).toBe(0)
   })
 })

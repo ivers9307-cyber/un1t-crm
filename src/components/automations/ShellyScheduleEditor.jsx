@@ -16,6 +16,11 @@
 // touched a window. The diff below is what keeps "I edited the windows" from
 // meaning "I also re-asserted the pre-heat".
 //
+// AN EMPTIED MINUTES FIELD IS NOT 0. Number('') is 0, so a cleared lead, lag
+// or gap would otherwise save as "no pre-heat" / "never join" without anyone
+// typing 0. Empty is invalid: Save stays dead and the editor says
+// EMPTY_MINUTES_MESSAGE. A typed 0 is a real answer and saves.
+//
 // THE OVERLAP AND SAME-BOUNDARY RULES ARE NOT CHECKED HERE. They live in
 // src/lib/schedule/windows.js and run on the server, so the answer an operator
 // gets is the one the engine will act on — a client-side copy is a second
@@ -40,6 +45,7 @@ const MODES = [
 ]
 
 export const NO_DAYS_MESSAGE = 'Pick at least one day'
+export const EMPTY_MINUTES_MESSAGE = 'Enter a number of minutes'
 
 // W1.M3a — source-neutral: the answer is the membership source, not Glofox.
 const GLOFOX_HINT = 'Connect a membership source with a class schedule to use class-linked schedules'
@@ -113,8 +119,9 @@ export default function ShellyScheduleEditor({ row, device: deviceProp, glofoxCo
 
   const patch = buildPatch()
   const noDays = mode === 'class' && days.length === 0
+  const emptyMinutes = mode === 'class' && [lead, lag, gap].some((v) => String(v ?? '').trim() === '')
   const dirty = Object.keys(patch).length > 0
-  const canSave = dirty && !noDays
+  const canSave = dirty && !noDays && !emptyMinutes
 
   function toggleDay(n) {
     setDays((cur) => (cur.includes(n) ? cur.filter((d) => d !== n) : [...cur, n].sort((a, b) => a - b)))
@@ -232,6 +239,7 @@ export default function ShellyScheduleEditor({ row, device: deviceProp, glofoxCo
               )
             })}
           </div>
+          {emptyMinutes && <p className="text-xs text-red-700" role="alert">{EMPTY_MINUTES_MESSAGE}</p>}
           {noDays && <p className="text-xs text-red-700" role="alert">{NO_DAYS_MESSAGE}</p>}
         </div>
       )}
