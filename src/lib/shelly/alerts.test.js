@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  planShellyAlerts, runShellyAlerts, readCooledBoxIds, boxIdsFromOfflineKey,
-  ALERT_ROLES, OFFLINE_AFTER_MS, OFFLINE_ALERT_WINDOW_MS, MAX_NEW_SENDS, MAX_ATTEMPTS, OFFLINE_COOLDOWN_MS,
+  planShellyAlerts, runShellyAlerts, readOfflineHistory, outagesFromOfflineKey,
+  ALERT_ROLES, OFFLINE_AFTER_MS, OFFLINE_ALERT_WINDOW_MS, MAX_NEW_SENDS, MAX_ATTEMPTS, MAX_KEY_MEMBERS,
 } from './alerts'
 import { logWarn } from '@/lib/log'
 
@@ -26,6 +26,8 @@ const dev = (over = {}) => ({
 // A dark box `id` last seen `minsAgo` minutes ago.
 const darkBox = (id, minsAgo, name = `Plug ${id}`) => dev({ id, device_id: `mac-${id}`, name, last_state: offline(), last_seen_at: iso(NOW - minsAgo * MIN) })
 
+// The outage token an offline key names for box `id` last seen `minsAgo` ago.
+const tok = (id, minsAgo, now = NOW) => `${id}@${now - minsAgo * MIN}`
 const input = (over = {}) => ({ locationId: 'loc-A', conn: conn(), devices: [dev()], nowMs: NOW, tz: 'Europe/Dublin', ...over })
 
 describe('planShellyAlerts', () => {
@@ -71,7 +73,7 @@ describe('planShellyAlerts', () => {
     const [a, ...rest] = planShellyAlerts(input({ devices: [dev({ last_state: offline(), last_seen_at: seen })] }))
     expect(rest).toEqual([])
     expect(a.kind).toBe('offline')
-    expect(a.eventKey).toBe(`shelly_offline:loc-A:${seen}:d1`)
+    expect(a.eventKey).toBe(`shelly_offline:loc-A:${tok('d1', 20)}`)
     expect(a.payload.body).toBe('Sauna has been offline since 14:40.')
     expect(a.payload.data).toEqual({ type: 'shelly_alert', kind: 'offline', location_id: 'loc-A', device_id: 'd1' })
     expect(a.payload.category).toBe('shelly_alert')
@@ -103,7 +105,7 @@ describe('planShellyAlerts', () => {
     const rows = [0, 1, 2, 3].map((ch) => dev({ id: `r${ch}`, channel: ch, name: `Light ${ch + 1}`, last_state: offline(), last_seen_at: seen }))
     const alerts = planShellyAlerts(input({ devices: rows }))
     expect(alerts).toHaveLength(1)
-    expect(alerts[0].eventKey).toBe(`shelly_offline:loc-A:${seen}:r0`)
+    expect(alerts[0].eventKey).toBe(`shelly_offline:loc-A:${tok('r0', 30)}`)
     expect(alerts[0].payload.body).toBe('Light 1 and 3 more has been offline since 14:30.')
   })
 
@@ -119,8 +121,7 @@ describe('planShellyAlerts', () => {
     const alerts = planShellyAlerts(input({ devices: boxes, studioName: 'Hatch Street' }))
     expect(alerts).toHaveLength(1)
     const [a] = alerts
-    const earliest = iso(NOW - 30 * MIN)
-    expect(a.eventKey).toBe(`shelly_offline:loc-A:${earliest}:b0,b1,b2,b3,b4,b5,b6,b7`)
+    expect(a.eventKey).toBe(`shelly_offline:loc-A:${Array.from({ length: 8 }, (_, i) => tok(`b${i}`, 30 - (i % 3))).join(',')}`)
     expect(a.payload.title).toBe('Smart plugs offline at Hatch Street')
     expect(a.payload.body).toBe('8 smart plugs offline at Hatch Street since 14:30: Plug 1, Plug 2 and 6 more.')
     expect(a.payload.data).toEqual({ type: 'shelly_alert', kind: 'offline', location_id: 'loc-A' })
@@ -138,8 +139,8 @@ describe('planShellyAlerts', () => {
     const later = darkBox('c', 25)
     const alerts = planShellyAlerts(input({ devices: [...cut, later] }))
     expect(alerts.map((a) => a.eventKey)).toEqual([
-      `shelly_offline:loc-A:${iso(NOW - 150 * MIN)}:a,b`,
-      `shelly_offline:loc-A:${iso(NOW - 25 * MIN)}:c`,
+      `shelly_offline:loc-A:${tok('a', 150)},${tok('b', 148)}`,
+      `shelly_offline:loc-A:${tok('c', 25)}`,
     ])
   })
 
@@ -153,10 +154,25 @@ describe('planShellyAlerts', () => {
 
   // Review item 5 — per-box cool-down.
   it('offline: a cooled box is left out; the rest of its outage is still pushed', () => {
-    expect(planShellyAlerts(input({ devices: [darkBox('a', 30)], cooledBoxIds: new Set(['a']) }))).toEqual([])
-    const [a] = planShellyAlerts(input({ devices: [darkBox('a', 30), darkBox('b', 30, 'TV')], cooledBoxIds: new Set(['a']) }))
-    expect(a.eventKey).toBe(`shelly_offline:loc-A:${iso(NOW - 30 * MIN)}:b`)
+    const flapping = { pairs: new Set(), recentIds: new Set(['a']) }
+    expect(planShellyAlerts(input({ devices: [darkBox('a', 30)], offlineHistory: flapping }))).toEqual([])
+    const [a] = planShellyAlerts(input({ devices: [darkBox('a', 30), darkBox('b', 30, 'TV')], offlineHistory: flapping }))
+    expect(a.eventKey).toBe(`shelly_offline:loc-A:${tok('b', 30)}`)
     expect(a.payload.body).toBe('TV has been offline since 14:30.')
+  })
+
+  it('offline: a box whose OUTAGE (id + last seen) was already named is left out, however old the push', () => {
+    const told = { pairs: new Set([tok('a', 300)]), recentIds: new Set() }
+    expect(planShellyAlerts(input({ devices: [darkBox('a', 300)], offlineHistory: told }))).toEqual([])
+    // The same box in a NEW outage (a later last seen) is not that outage.
+    expect(planShellyAlerts(input({ devices: [darkBox('a', 30)], offlineHistory: told }))).toHaveLength(1)
+  })
+
+  it(`offline: a cluster larger than ${MAX_KEY_MEMBERS} boxes is split so no key passes ~1 KB`, () => {
+    const boxes = Array.from({ length: MAX_KEY_MEMBERS + 4 }, (_, i) => darkBox(`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 30, `Plug ${i + 1}`))
+    const alerts = planShellyAlerts(input({ devices: boxes, locationId: '11111111-1111-4111-8111-111111111111' }))
+    expect(alerts.map((a) => a.payload.body.split(' ')[0])).toEqual([String(MAX_KEY_MEMBERS), '4'])
+    for (const a of alerts) expect(a.eventKey.length).toBeLessThan(1024)
   })
 
   it('power fault: words the protections, keyed on sorted faults and the local day', () => {
@@ -194,56 +210,152 @@ describe('planShellyAlerts', () => {
   })
 })
 
-describe('boxIdsFromOfflineKey', () => {
-  it('reads the trailing ids past the ISO timestamp’s colons', () => {
-    expect(boxIdsFromOfflineKey('shelly_offline:loc-A:2026-07-06T13:30:00.000Z:a,b')).toEqual(['a', 'b'])
-    expect(boxIdsFromOfflineKey('shelly_fault:x:y')).toEqual([])
-    expect(boxIdsFromOfflineKey(null)).toEqual([])
+describe('outagesFromOfflineKey', () => {
+  it('reads the id@lastSeenMs pairs after the last colon', () => {
+    expect(outagesFromOfflineKey('shelly_offline:loc-A:a@100,b@200')).toEqual([['a', '100'], ['b', '200']])
+    expect(outagesFromOfflineKey('shelly_offline:loc-A:junk')).toEqual([])
+    expect(outagesFromOfflineKey('shelly_fault:x:y')).toEqual([])
+    expect(outagesFromOfflineKey(null)).toEqual([])
   })
 })
 
-describe('readCooledBoxIds', () => {
-  const ledger = (result) => {
-    const calls = []
-    const chain = { calls }
-    for (const m of ['select', 'gte', 'like', 'limit']) chain[m] = (...a) => { calls.push([m, a]); return m === 'limit' ? Promise.resolve(result) : chain }
-    return { from: (t) => { calls.push(['from', [t]]); return chain }, calls }
+// An in-memory push ledger behind the real readOfflineHistory query shape.
+function ledgerDb(rows, { error = null, calls = [] } = {}) {
+  const q = { calls }
+  let since = ''
+  let prefix = ''
+  for (const m of ['select', 'gte', 'like', 'limit']) {
+    q[m] = (...a) => {
+      calls.push([m, a])
+      if (m === 'gte') since = a[1]
+      if (m === 'like') prefix = a[1].replace(/%$/, '').replace(/\\(.)/g, '$1')
+      if (m !== 'limit') return q
+      if (error) return Promise.resolve({ data: null, error })
+      return Promise.resolve({ data: rows.filter((r) => r.sent_at >= since && r.event_key.startsWith(prefix)), error: null })
+    }
   }
+  return { from: (t) => { calls.push(['from', [t]]); return q }, calls }
+}
 
-  it('one read of the last 2 hours of this studio’s offline keys, ids unioned', async () => {
-    const db = ledger({ data: [
-      { event_key: 'shelly_offline:loc-A:2026-07-06T13:30:00.000Z:a,b' },
-      { event_key: 'shelly_offline:loc-A:2026-07-06T13:30:00.000Z:a,b' },
-      { event_key: 'shelly_offline:loc-A:2026-07-06T12:30:00.000Z:c' },
-    ], error: null })
-    const ids = await readCooledBoxIds(db, 'loc-A', NOW)
-    expect([...ids].sort()).toEqual(['a', 'b', 'c'])
-    expect(db.calls).toEqual([
+describe('readOfflineHistory', () => {
+  it('one read of 24 hours of this studio’s offline keys: every pair, and the ids named under 2 hours ago', async () => {
+    const calls = []
+    const db = ledgerDb([
+      { event_key: 'shelly_offline:loc-A:a@1,b@2', sent_at: iso(NOW - 30 * MIN) },
+      { event_key: 'shelly_offline:loc-A:a@1,b@2', sent_at: iso(NOW - 30 * MIN) },
+      { event_key: 'shelly_offline:loc-A:c@3', sent_at: iso(NOW - 5 * 3600_000) },
+      { event_key: 'shelly_offline:loc-B:z@9', sent_at: iso(NOW - 30 * MIN) },
+    ], { calls })
+    const h = await readOfflineHistory(db, 'loc-A', NOW)
+    expect([...h.pairs].sort()).toEqual(['a@1', 'b@2', 'c@3'])
+    expect([...h.recentIds].sort()).toEqual(['a', 'b'])
+    expect(calls).toEqual([
       ['from', ['push_event_sends']],
-      ['select', ['event_key']],
-      ['gte', ['sent_at', iso(NOW - OFFLINE_COOLDOWN_MS)]],
+      ['select', ['event_key, sent_at']],
+      ['gte', ['sent_at', iso(NOW - OFFLINE_ALERT_WINDOW_MS)]],
       ['like', ['event_key', 'shelly_offline:loc-A:%']],
       ['limit', [500]],
     ])
   })
 
-  it('a failed read is logged and means no cool-down (a repeat beats a loss)', async () => {
-    const ids = await readCooledBoxIds(ledger({ data: null, error: { message: 'pg down' } }), 'loc-A', NOW)
-    expect(ids.size).toBe(0)
-    expect(logWarn).toHaveBeenCalledWith('shelly-alerts', 'offline cool-down read failed; no cool-down this tick', { locationId: 'loc-A', error: 'pg down' })
+  it('a failed read (an error or a throw) is logged and means no history', async () => {
+    const h = await readOfflineHistory(ledgerDb([], { error: { message: 'pg down' } }), 'loc-A', NOW)
+    expect(h.pairs.size + h.recentIds.size).toBe(0)
+    expect(logWarn).toHaveBeenCalledWith('shelly-alerts', 'offline history read failed; no cool-down this tick', { locationId: 'loc-A', error: 'pg down' })
+    const thrown = await readOfflineHistory({ from: () => { throw new Error('boom') } }, 'loc-A', NOW)
+    expect(thrown.pairs.size).toBe(0)
+  })
+})
+
+// Review fix: the offline key across SUCCESSIVE TICKS, against one in-memory
+// ledger (sendPushOnce semantics: a key already claimed is deduped).
+describe('offline alerts across ticks', () => {
+  const T0 = NOW
+  function world() {
+    const rows = []
+    const pushes = []
+    const send = vi.fn(async (_db, key, ids, payload) => {
+      if (rows.some((r) => r.event_key === key)) return { sent: 0, deduped: ids.length }
+      rows.push({ event_key: key, sent_at: iso(world.now) })
+      pushes.push({ key, body: payload.body, at: world.now })
+      return { sent: ids.length, deduped: 0 }
+    })
+    const db = ledgerDb(rows)
+    const tick = async (nowMs, devices) => {
+      world.now = nowMs
+      await runShellyAlerts(db, { locationId: 'loc-A', conn: conn(), devices, nowMs, tz: 'Europe/Dublin' },
+        { send, readRecipients: vi.fn().mockResolvedValue({ ids: ['o1'], error: null }) })
+    }
+    return { tick, pushes }
+  }
+  // A box last seen at `seenMs` (dark), or talking at `nowMs`.
+  const down = (id, seenMs) => dev({ id, device_id: `mac-${id}`, name: id.toUpperCase(), last_state: offline(), last_seen_at: iso(seenMs) })
+  const up = (id, nowMs) => dev({ id, device_id: `mac-${id}`, name: id.toUpperCase(), last_state: online(), last_seen_at: iso(nowMs) })
+  const at = (mins) => T0 + mins * MIN
+
+  it('a late joiner gets its own push once, and nobody is re-pushed when the 2 h cool-down expires', async () => {
+    const { tick, pushes } = world()
+    const A = at(-15); const B = at(-14)
+    // C still talks at the first push and goes dark right after: its last
+    // sighting (0) is within 15 min of A's, so from 2 h on, with the cool-down
+    // gone, A + B + C cluster together — under a membership key that would be
+    // a NEW event and a second "3 smart plugs offline".
+    await tick(at(0), [down('a', A), down('b', B), up('c', at(0))])
+    expect(pushes.map((p) => p.body)).toEqual(['2 smart plugs offline since 14:45: A and B.'])
+    for (let m = 5; m <= 24 * 60 - 20; m += 5) await tick(at(m), [down('a', A), down('b', B), down('c', at(0))])
+    expect(pushes.map((p) => p.body)).toEqual([
+      '2 smart plugs offline since 14:45: A and B.',
+      'C has been offline since 15:00.',
+    ])
+    expect(pushes[1].at).toBe(at(15))
+  })
+
+  it('a partial recovery never re-pushes the box still dark', async () => {
+    const { tick, pushes } = world()
+    const A = at(-15); const B = at(-15)
+    await tick(at(0), [down('a', A), down('b', B)])
+    await tick(at(60), [down('a', A), up('b', at(60))])
+    for (let m = 61; m <= 6 * 60; m += 7) await tick(at(m), [down('a', A), up('b', at(m))])
+    expect(pushes).toHaveLength(1)
+  })
+
+  it('an outage longer than 2 hours is pushed once', async () => {
+    const { tick, pushes } = world()
+    const A = at(-15)
+    for (let m = 0; m <= 10 * 60; m += 10) await tick(at(m), [down('a', A)])
+    expect(pushes.map((p) => p.body)).toEqual(['A has been offline since 14:45.'])
+  })
+
+  it('a NEW outage of the same box is pushed, but not inside 2 hours of the last push (flapping)', async () => {
+    const { tick, pushes } = world()
+    await tick(at(0), [down('a', at(-15))]) // outage 1 pushed at 0
+    await tick(at(30), [up('a', at(30))]) // back
+    await tick(at(60), [down('a', at(40))]) // outage 2, due since 55 …
+    await tick(at(100), [down('a', at(40))]) // … but inside the 2 h flap window
+    expect(pushes).toHaveLength(1)
+    await tick(at(121), [down('a', at(40))]) // 2 h after the first push
+    expect(pushes.map((p) => p.body)).toEqual(['A has been offline since 14:45.', 'A has been offline since 15:40.'])
+  })
+
+  it('a throwing history reader never costs the key alert', async () => {
+    const send = vi.fn().mockResolvedValue({ sent: 1, deduped: 0 })
+    await runShellyAlerts({}, input({ keyRejected: true, devices: [darkBox('a', 30)] }), {
+      send, readRecipients: vi.fn().mockResolvedValue({ ids: ['o1'], error: null }), readHistory: vi.fn().mockRejectedValue(new Error('boom')),
+    })
+    expect(send.mock.calls.map((c) => c[1])).toEqual(['shelly_key:c1:2026-07-06T13:59:00.000Z', `shelly_offline:loc-A:${tok('a', 30)}`])
   })
 })
 
 describe('runShellyAlerts', () => {
   const faulty = () => input({ keyRejected: true, devices: [dev({ last_state: online({ errors: ['overpower'] }) })] })
   const recipients = (ids = ['o1', 'm1']) => vi.fn().mockResolvedValue({ ids, error: null })
-  const noCool = () => vi.fn().mockResolvedValue(new Set())
+  const noCool = () => vi.fn().mockResolvedValue({ pairs: new Set(), recentIds: new Set() })
 
   it('reads the owners and managers ONCE and sends each alert scoped to the studio', async () => {
     const send = vi.fn().mockResolvedValue({ sent: 2, failed: 0, deduped: 0 })
     const readRecipients = recipients()
     const db = {}
-    const r = await runShellyAlerts(db, faulty(), { send, readRecipients, readCooled: noCool() })
+    const r = await runShellyAlerts(db, faulty(), { send, readRecipients, readHistory: noCool() })
     expect(r).toMatchObject({ alerts: 2, sent: 2, failed: 0, attempted: 2, deferred: 0 })
     expect(ALERT_ROLES).toEqual(['owner', 'manager'])
     expect(readRecipients).toHaveBeenCalledTimes(1)
@@ -255,7 +367,7 @@ describe('runShellyAlerts', () => {
   it('once per key: the ledger says deduped on a second tick, and that is not a failure', async () => {
     const seen = new Set()
     const send = vi.fn(async (_db, key, ids) => (seen.has(key) ? { sent: 0, deduped: ids.length } : (seen.add(key), { sent: 2, deduped: 0 })))
-    const deps = { send, readRecipients: recipients(), readCooled: noCool() }
+    const deps = { send, readRecipients: recipients(), readHistory: noCool() }
     const first = await runShellyAlerts({}, faulty(), deps)
     const second = await runShellyAlerts({}, faulty(), deps)
     expect(first.sent).toBe(2)
@@ -266,18 +378,18 @@ describe('runShellyAlerts', () => {
   it('healthy: no recipients read, no cool-down read, nothing sent', async () => {
     const send = vi.fn()
     const readRecipients = recipients()
-    const readCooled = noCool()
-    expect(await runShellyAlerts({}, input(), { send, readRecipients, readCooled })).toMatchObject({ alerts: 0, sent: 0 })
+    const readHistory = noCool()
+    expect(await runShellyAlerts({}, input(), { send, readRecipients, readHistory })).toMatchObject({ alerts: 0, sent: 0 })
     expect(send).not.toHaveBeenCalled()
     expect(readRecipients).not.toHaveBeenCalled()
-    expect(readCooled).not.toHaveBeenCalled()
+    expect(readHistory).not.toHaveBeenCalled()
   })
 
   // Review item 2 — bounded.
   it(`at most ${MAX_NEW_SENDS} alerts that claim somebody per pass; the rest wait for the next tick`, async () => {
     const devices = Array.from({ length: 6 }, (_, i) => dev({ id: `f${i}`, device_id: `mac-f${i}`, last_state: online({ errors: ['overpower'] }) }))
     const send = vi.fn().mockResolvedValue({ sent: 2, deduped: 0 })
-    const r = await runShellyAlerts({}, input({ devices }), { send, readRecipients: recipients(), readCooled: noCool() })
+    const r = await runShellyAlerts({}, input({ devices }), { send, readRecipients: recipients(), readHistory: noCool() })
     expect(send).toHaveBeenCalledTimes(MAX_NEW_SENDS)
     expect(r).toMatchObject({ alerts: 6, attempted: 3, deferred: 3 })
   })
@@ -285,14 +397,14 @@ describe('runShellyAlerts', () => {
   it('fully deduped alerts do not use the allowance (a standing alert cannot starve a new one); attempts are still capped', async () => {
     const devices = Array.from({ length: 12 }, (_, i) => dev({ id: `f${i}`, device_id: `mac-f${i}`, last_state: online({ errors: ['overpower'] }) }))
     const send = vi.fn(async (_db, key, ids) => (key.includes(':f11:') ? { sent: 2, deduped: 0 } : { sent: 0, deduped: ids.length }))
-    const r = await runShellyAlerts({}, input({ devices }), { send, readRecipients: recipients(), readCooled: noCool() })
+    const r = await runShellyAlerts({}, input({ devices }), { send, readRecipients: recipients(), readHistory: noCool() })
     expect(send).toHaveBeenCalledTimes(MAX_ATTEMPTS)
     expect(r).toMatchObject({ attempted: MAX_ATTEMPTS, deferred: 2 })
   })
 
   it('a failed recipients read claims nothing and sends nothing', async () => {
     const send = vi.fn()
-    const r = await runShellyAlerts({}, faulty(), { send, readRecipients: vi.fn().mockResolvedValue({ ids: [], error: { message: 'down' } }), readCooled: noCool() })
+    const r = await runShellyAlerts({}, faulty(), { send, readRecipients: vi.fn().mockResolvedValue({ ids: [], error: { message: 'down' } }), readHistory: noCool() })
     expect(send).not.toHaveBeenCalled()
     expect(r.recipients_failed).toBe(1)
     expect(logWarn).toHaveBeenCalledWith('shelly-alerts', 'alert recipients read failed; nothing claimed, nobody told this tick', { locationId: 'loc-A', error: 'down' })
@@ -300,31 +412,31 @@ describe('runShellyAlerts', () => {
 
   it('nobody holds the roles: nothing sent, nothing logged', async () => {
     const send = vi.fn()
-    await runShellyAlerts({}, faulty(), { send, readRecipients: recipients([]), readCooled: noCool() })
+    await runShellyAlerts({}, faulty(), { send, readRecipients: recipients([]), readHistory: noCool() })
     expect(send).not.toHaveBeenCalled()
     expect(logWarn).not.toHaveBeenCalled()
   })
 
-  it('the cool-down read runs only when a box is dark, and its answer is applied', async () => {
+  it('the history read runs only when a box is dark, and its answer is applied', async () => {
     const send = vi.fn().mockResolvedValue({ sent: 2, deduped: 0 })
-    const readCooled = vi.fn().mockResolvedValue(new Set(['a']))
-    await runShellyAlerts({}, input({ devices: [darkBox('a', 30), darkBox('b', 30, 'TV')] }), { send, readRecipients: recipients(), readCooled })
-    expect(readCooled).toHaveBeenCalledWith({}, 'loc-A', NOW)
+    const readHistory = vi.fn().mockResolvedValue({ pairs: new Set(), recentIds: new Set(['a']) })
+    await runShellyAlerts({}, input({ devices: [darkBox('a', 30), darkBox('b', 30, 'TV')] }), { send, readRecipients: recipients(), readHistory })
+    expect(readHistory).toHaveBeenCalledWith({}, 'loc-A', NOW)
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send.mock.calls[0][1]).toBe(`shelly_offline:loc-A:${iso(NOW - 30 * MIN)}:b`)
+    expect(send.mock.calls[0][1]).toBe(`shelly_offline:loc-A:${tok('b', 30)}`)
   })
 
-  it('deviceAlerts:false skips the cool-down read and every device alert', async () => {
+  it('deviceAlerts:false skips the history read and every device alert', async () => {
     const send = vi.fn().mockResolvedValue({ sent: 2, deduped: 0 })
-    const readCooled = noCool()
-    await runShellyAlerts({}, input({ keyRejected: true, deviceAlerts: false, devices: [darkBox('a', 30)] }), { send, readRecipients: recipients(), readCooled })
-    expect(readCooled).not.toHaveBeenCalled()
+    const readHistory = noCool()
+    await runShellyAlerts({}, input({ keyRejected: true, deviceAlerts: false, devices: [darkBox('a', 30)] }), { send, readRecipients: recipients(), readHistory })
+    expect(readHistory).not.toHaveBeenCalled()
     expect(send.mock.calls.map((c) => c[1])).toEqual(['shelly_key:c1:2026-07-06T13:59:00.000Z'])
   })
 
   it('a push that throws is logged with ids only and swallowed; the next alert still goes', async () => {
     const send = vi.fn().mockRejectedValueOnce(new Error('expo down')).mockResolvedValueOnce({ sent: 1, deduped: 0 })
-    const r = await runShellyAlerts({}, faulty(), { send, readRecipients: recipients(), readCooled: noCool() })
+    const r = await runShellyAlerts({}, faulty(), { send, readRecipients: recipients(), readHistory: noCool() })
     expect(r).toMatchObject({ alerts: 2, sent: 1, failed: 1 })
     expect(send).toHaveBeenCalledTimes(2)
     expect(logWarn).toHaveBeenCalledWith('shelly-alerts', 'alert push failed', { locationId: 'loc-A', kind: 'key_rejected', deviceId: null, err: 'expo down' })
@@ -332,14 +444,14 @@ describe('runShellyAlerts', () => {
 
   it('an undelivered push is counted and logged', async () => {
     const send = vi.fn().mockResolvedValue({ sent: 0, failed: 2, deduped: 0 })
-    const r = await runShellyAlerts({}, faulty(), { send, readRecipients: recipients(), readCooled: noCool() })
+    const r = await runShellyAlerts({}, faulty(), { send, readRecipients: recipients(), readHistory: noCool() })
     expect(r.failed).toBe(2)
     expect(logWarn).toHaveBeenCalledTimes(2)
   })
 
   it('a bad clock or unplannable input sends nothing and never throws', async () => {
     const send = vi.fn()
-    const deps = { send, readRecipients: recipients(), readCooled: noCool() }
+    const deps = { send, readRecipients: recipients(), readHistory: noCool() }
     expect(await runShellyAlerts({}, { ...faulty(), nowMs: NaN }, deps)).toMatchObject({ alerts: 0, sent: 0 })
     expect(await runShellyAlerts({}, { ...faulty(), devices: [{ get last_state() { throw new Error('boom') } }] }, deps)).toMatchObject({ sent: 0 })
     expect(send).not.toHaveBeenCalled()

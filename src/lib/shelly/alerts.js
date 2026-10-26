@@ -18,15 +18,25 @@
 //     minutes for as long as the key stays wrong. last_ok_at does not move
 //     while the connection is failing, and moves when it recovers, so it names
 //     one outage.
-//   shelly_offline:<location id>:<earliest last_seen_at>:<box ids>
+//   shelly_offline:<location id>:<id@lastSeenMs,…>
 //     One push per OUTAGE CLUSTER (review item 3): boxes whose last sighting
 //     is within OFFLINE_CLUSTER_MS of the cluster's earliest are one event, so
 //     a power cut across eight boxes is ONE push ("8 smart plugs offline …"),
-//     and a box that drops two hours later is its own. The trailing box ids
-//     (each box's first row id, sorted) are what the 2-hour per-box cool-down
-//     reads back out of the ledger (review item 5): a box named in an offline
-//     key claimed within OFFLINE_COOLDOWN_MS is left out of the next cluster,
-//     so a flapping plug is not pushed about every time it drops.
+//     and a box that drops two hours later is its own.
+//     Each member is named by its OUTAGE, `<first row id>@<last_seen_at ms>`:
+//     last_seen_at does not move while a box is dark, so the pair is constant
+//     for the whole outage however the cluster's membership shifts (a late
+//     joiner, a partial recovery). The ledger read (readOfflineHistory) takes
+//     the last 24 hours of these keys back, and a box is left out of the next
+//     cluster when EITHER
+//       - its (id, last seen) pair was already named: the same outage is
+//         never pushed twice, past the 2-hour cool-down too; or
+//       - its id was named under OFFLINE_COOLDOWN_MS ago: a plug flapping
+//         off and on is not pushed about every time it drops.
+//     The ledger has no payload column (mig 349: id, event_key, recipient_id,
+//     sent_at), so the pairs live in the key. To keep the key under ~1 KB a
+//     key names at most MAX_KEY_MEMBERS boxes (~50 bytes each); a larger
+//     cluster is split into several pushes of that size.
 //   shelly_fault:<device row id>:<sorted faults>:<studio's local day>
 //     at most one push a day per box for the same faults; a new fault is a
 //     new push.
@@ -71,6 +81,8 @@ export const OFFLINE_COOLDOWN_MS = 2 * 3600_000
 // on its first day (or the push kept failing for a day); another attempt
 // every minute buys nothing.
 export const OFFLINE_ALERT_WINDOW_MS = 24 * 3600_000
+// Boxes one offline key may name (each `<uuid>@<13-digit ms>` is ~51 bytes).
+export const MAX_KEY_MEMBERS = 16
 export const MAX_NEW_SENDS = 3
 export const MAX_ATTEMPTS = 10
 // Names a combined offline push spells out before "and N more".
@@ -121,12 +133,20 @@ function sinceLabel(iso, nowMs, tz) {
   return sameDay ? hm : `${formatInZone(Date.parse(iso), tz, { day: 'numeric', month: 'short' })} ${hm}`
 }
 
-// The box ids an offline key names (the segment after the last ':'; an ISO
-// timestamp has colons, a uuid has none).
-export function boxIdsFromOfflineKey(key) {
+// The outage token of one box, as an offline key names it.
+const outageToken = (b) => `${b.id}@${b.lastSeenMs}`
+
+// The [id, lastSeenMs] pairs an offline key names (the segment after the last
+// ':'; a uuid and a millisecond count carry no colon).
+export function outagesFromOfflineKey(key) {
   if (typeof key !== 'string' || !key.startsWith('shelly_offline:')) return []
-  return key.slice(key.lastIndexOf(':') + 1).split(',').filter(Boolean)
+  return key.slice(key.lastIndexOf(':') + 1).split(',').map((tok) => {
+    const at = tok.lastIndexOf('@')
+    return at > 0 ? [tok.slice(0, at), tok.slice(at + 1)] : null
+  }).filter(Boolean)
 }
+
+const NO_HISTORY = Object.freeze({ pairs: new Set(), recentIds: new Set() })
 
 // A box that has gone dark: every row offline, a readable newest sighting.
 function darkBox(rows) {
@@ -143,16 +163,18 @@ function darkBox(rows) {
  * send priority (key, offline, fault). Pure: the caller sends them.
  *
  * @param {{ locationId, conn, devices, nowMs, tz, keyRejected?, studioName?,
- *           deviceAlerts?, cooledBoxIds? }} input
+ *           deviceAlerts?, offlineHistory? }} input
  *   devices: the rows AS THEY STAND after this tick's state writes.
  *   deviceAlerts: false when no read landed this tick (review item 4): only
  *     the key alert is planned.
- *   cooledBoxIds: boxes pushed about as offline within OFFLINE_COOLDOWN_MS.
+ *   offlineHistory: { pairs, recentIds } from readOfflineHistory.
  */
 export function planShellyAlerts({
   locationId, conn, devices, nowMs, tz, keyRejected = false, studioName = null,
-  deviceAlerts = true, cooledBoxIds = new Set(),
+  deviceAlerts = true, offlineHistory = NO_HISTORY,
 }) {
+  const pushedPairs = offlineHistory?.pairs instanceof Set ? offlineHistory.pairs : NO_HISTORY.pairs
+  const recentIds = offlineHistory?.recentIds instanceof Set ? offlineHistory.recentIds : NO_HISTORY.recentIds
   const out = []
   const at = typeof studioName === 'string' && studioName.trim() ? ` at ${studioName.trim()}` : ''
   const data = (kind, extra = {}) => ({ type: 'shelly_alert', kind, location_id: locationId, ...extra })
@@ -175,7 +197,8 @@ export function planShellyAlerts({
 
   // ---- offline, clustered per outage --------------------------------------
   const dark = boxes.map((rows, order) => { const b = darkBox(rows); return b && { ...b, order } })
-    .filter((b) => b && nowMs - b.lastSeenMs <= OFFLINE_ALERT_WINDOW_MS && !cooledBoxIds.has(b.id))
+    .filter((b) => b && nowMs - b.lastSeenMs <= OFFLINE_ALERT_WINDOW_MS
+      && !pushedPairs.has(outageToken(b)) && !recentIds.has(b.id))
     .sort((a, b) => a.lastSeenMs - b.lastSeenMs)
   for (let i = 0; i < dark.length;) {
     const start = dark[i]
@@ -184,22 +207,26 @@ export function planShellyAlerts({
     if (nowMs - start.lastSeenMs < OFFLINE_AFTER_MS) continue
     const since = sinceLabel(start.lastSeen, nowMs, tz)
     const sinceText = since ? ` since ${since}` : ' for over 15 minutes'
-    const ids = cluster.map((b) => b.id).sort()
-    const eventKey = `shelly_offline:${locationId}:${start.lastSeen}:${ids.join(',')}`
-    if (cluster.length === 1) {
-      out.push({
-        kind: 'offline',
-        eventKey,
-        payload: {
-          title: `Smart plug offline${at}`,
-          body: `${boxName(start.rows)} has been offline${sinceText}.`,
-          data: data('offline', { device_id: start.id }),
-          category: 'shelly_alert',
-        },
-      })
-    } else {
-      // Named in the page's order (adoption order), not the order they fell.
-      const names = [...cluster].sort((a, b) => a.order - b.order).map((b) => rowName(b.rows[0]))
+    // Adoption order (the page's), not the order they fell; chunked so no
+    // key names more than MAX_KEY_MEMBERS boxes.
+    const ordered = [...cluster].sort((x, y) => x.order - y.order)
+    for (let c = 0; c < ordered.length; c += MAX_KEY_MEMBERS) {
+      const part = ordered.slice(c, c + MAX_KEY_MEMBERS)
+      const eventKey = `shelly_offline:${locationId}:${part.map(outageToken).sort().join(',')}`
+      if (part.length === 1) {
+        out.push({
+          kind: 'offline',
+          eventKey,
+          payload: {
+            title: `Smart plug offline${at}`,
+            body: `${boxName(part[0].rows)} has been offline${sinceText}.`,
+            data: data('offline', { device_id: part[0].id }),
+            category: 'shelly_alert',
+          },
+        })
+        continue
+      }
+      const names = part.map((x) => rowName(x.rows[0]))
       const shown = names.length > NAMES_SHOWN + 1
         ? `${names.slice(0, NAMES_SHOWN).join(', ')} and ${names.length - NAMES_SHOWN} more`
         : listWords(names)
@@ -208,7 +235,7 @@ export function planShellyAlerts({
         eventKey,
         payload: {
           title: `Smart plugs offline${at}`,
-          body: `${cluster.length} smart plugs offline${at}${sinceText}: ${shown}.`,
+          body: `${part.length} smart plugs offline${at}${sinceText}: ${shown}.`,
           data: data('offline'),
           category: 'shelly_alert',
         },
@@ -238,47 +265,76 @@ export function planShellyAlerts({
 }
 
 /**
- * The boxes named in an offline key claimed here within OFFLINE_COOLDOWN_MS.
- * One read (the ledger's sent_at index, then the key prefix). A failed read
- * is logged and answered with no cool-down: a repeat push beats a lost one.
+ * What the ledger says this studio was already told about offline boxes:
+ * `pairs` (every `<id>@<lastSeenMs>` named in an offline key claimed in the
+ * last OFFLINE_ALERT_WINDOW_MS, the window a box can still be pushed about)
+ * and `recentIds` (box ids named under OFFLINE_COOLDOWN_MS ago). One read on
+ * the ledger's sent_at index, then the key prefix. Never throws: a failed read
+ * is logged and answered with no history, because a repeat push beats a lost
+ * one.
  */
-export async function readCooledBoxIds(db, locationId, nowMs) {
-  const { data, error } = await db
-    .from('push_event_sends')
-    .select('event_key')
-    .gte('sent_at', new Date(nowMs - OFFLINE_COOLDOWN_MS).toISOString())
-    .like('event_key', `shelly_offline:${escapeLikePattern(locationId)}:%`)
-    .limit(500)
-  if (error) {
-    logWarn(MODULE, 'offline cool-down read failed; no cool-down this tick', { locationId, error: error.message })
-    return new Set()
+export async function readOfflineHistory(db, locationId, nowMs) {
+  try {
+    const { data, error } = await db
+      .from('push_event_sends')
+      .select('event_key, sent_at')
+      .gte('sent_at', new Date(nowMs - OFFLINE_ALERT_WINDOW_MS).toISOString())
+      .like('event_key', `shelly_offline:${escapeLikePattern(locationId)}:%`)
+      // A day of one studio's offline claims is a handful of keys times its
+      // owners and managers; 500 is far past that, and under the 1,000-row cap.
+      .limit(500)
+    if (error) {
+      logWarn(MODULE, 'offline history read failed; no cool-down this tick', { locationId, error: error.message })
+      return NO_HISTORY
+    }
+    const pairs = new Set()
+    const recentIds = new Set()
+    for (const r of data || []) {
+      const recent = nowMs - Date.parse(r?.sent_at ?? '') < OFFLINE_COOLDOWN_MS
+      for (const [id, ms] of outagesFromOfflineKey(r?.event_key)) {
+        pairs.add(`${id}@${ms}`)
+        if (recent) recentIds.add(id)
+      }
+    }
+    return { pairs, recentIds }
+  } catch (e) {
+    logWarn(MODULE, 'offline history read failed; no cool-down this tick', { locationId, err: e?.message })
+    return NO_HISTORY
   }
-  return new Set((data || []).flatMap((r) => boxIdsFromOfflineKey(r?.event_key)))
 }
 
 /**
  * Plan and send. Never throws.
  *
- * @param deps {{ send?, readRecipients?, readCooled? }}
+ * @param deps {{ send?, readRecipients?, readHistory? }}
  *   send(db, eventKey, ids, payload, { locationId }) defaults to sendPushOnce;
  *   readRecipients(db, locationId, roles) to readRoleRecipientIds;
- *   readCooled(db, locationId, nowMs) to readCooledBoxIds.
+ *   readHistory(db, locationId, nowMs) to readOfflineHistory.
  * @returns {{ alerts, sent, failed, attempted, deferred, recipients_failed? }}
  */
 export async function runShellyAlerts(db, input, deps = {}) {
   const send = deps.send || sendPushOnce
   const readRecipients = deps.readRecipients || readRoleRecipientIds
-  const readCooled = deps.readCooled || readCooledBoxIds
+  const readHistory = deps.readHistory || readOfflineHistory
   const counts = { alerts: 0, sent: 0, failed: 0, attempted: 0, deferred: 0 }
   const locationId = input?.locationId
   try {
     if (!Number.isFinite(input?.nowMs)) return counts
     const deviceAlerts = input.deviceAlerts !== false
-    // The cool-down read is spent only when some box has gone dark.
+    // The history read is spent only when some box has gone dark, and it can
+    // never cost the key alert: a throw from an injected reader is caught here
+    // and planned as "no history" (readOfflineHistory itself never throws).
     const anyDark = deviceAlerts && byBox(Array.isArray(input.devices) ? input.devices : [])
       .some((rows) => darkBox(rows) !== null)
-    const cooledBoxIds = anyDark ? await readCooled(db, locationId, input.nowMs) : new Set()
-    const planned = planShellyAlerts({ ...input, deviceAlerts, cooledBoxIds })
+    let offlineHistory = NO_HISTORY
+    if (anyDark) {
+      try {
+        offlineHistory = await readHistory(db, locationId, input.nowMs)
+      } catch (e) {
+        logWarn(MODULE, 'offline history read failed; no cool-down this tick', { locationId, err: e?.message })
+      }
+    }
+    const planned = planShellyAlerts({ ...input, deviceAlerts, offlineHistory })
     counts.alerts = planned.length
     if (!planned.length) return counts
 
