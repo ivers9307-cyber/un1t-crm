@@ -367,7 +367,10 @@ const SESSION_SPECS = [
   {
     name: 'PATCH /api/shelly/devices/[id] (session device update)',
     call: (c) => shellyDeviceDetailRoute.PATCH(
-      makeReq(`/api/shelly/devices/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Plug', enabled: false } }),
+      // A rename only: SHD_A1 is in a group, and a grouped device's schedule
+      // fields (`enabled` included) answer 409 grouped (SHELLYGROUPS.5l), which
+      // would turn the positive control into a refusal.
+      makeReq(`/api/shelly/devices/${c.id}`, { method: 'PATCH', body: { name: 'Hacked Plug' } }),
       propsOf({ id: c.id }),
     ),
     cases: [
