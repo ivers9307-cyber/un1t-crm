@@ -91,7 +91,7 @@ describe('POST /api/webhooks/revolut/offer-payments', () => {
   it('ORDER_COMPLETED → fresh getOrder state marks paid and runs side effects', async () => {
     const json = await (await POST(makeRequest({ event: 'ORDER_COMPLETED', order_id: 'ord_1' }))).json()
     expect(getOrder).toHaveBeenCalledWith('ord_1')
-    expect(markOfferPurchaseState).toHaveBeenCalledWith(expect.objectContaining({ purchase, providerState: 'completed' }))
+    expect(markOfferPurchaseState).toHaveBeenCalledWith(expect.objectContaining({ purchase, providerState: 'completed', casOnState: true }))
     expect(linkOrCreateContactForPurchase).toHaveBeenCalled()
     expect(notifyStaffOfPaidPurchase).toHaveBeenCalled()
     expect(json.state).toBe('paid')

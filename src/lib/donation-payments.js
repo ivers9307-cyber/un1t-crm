@@ -49,6 +49,9 @@ export const DONATION_COLS = [
   'marketing_opt_in', 'attribution', 'created_at', 'updated_at',
 ].join(', ')
 
+/** The race_events columns the mark (match multiplier) and the side effects read. */
+export const DONATION_EVENT_COLS = 'id, name, slug, location_id, host_id, sending_location_id, charity_enabled, charity, payment_currency'
+
 // paid and refunded never move. failed and expired never move on another
 // failure report, but a `completed` report may still follow one (see below).
 const IMMOVABLE = new Set(['paid', 'refunded'])

@@ -33,50 +33,15 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyWebhookSignature, getOrder } from '@/lib/revolut'
-import { syncOrderFromCarDeposit } from '@/lib/orders'
-import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
-import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { recordWebhookEvent, releaseWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { escapeLikePattern } from '@/lib/like-escape'
-import { orgLocationIdsFor, scopeFor } from '@/lib/inbound-contact-match'
-import { pickContact } from '@/lib/email-inbox'
-import { logInfo, logWarn, logError } from '@/lib/log'
+import { depositUpdateForOrder, applyCarDepositUpdates } from '@/lib/car-deposit-revolut'
+import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 
-/**
- * Pure: map a freshly-fetched Revolut order's state onto the cars-deposit
- * column updates. Terminal states (completed / cancelled / failed) return an
- * `updates` object; transient states (pending / processing / authorised)
- * return `updates: null` so the caller 200s-and-skips without a write.
- *
- * IDEMPOTENCY CROWN-JEWEL: a re-delivered ORDER_COMPLETED must NEVER re-stamp
- * `deposit_paid_at` — the `!car.deposit_paid_at` guard means the first
- * completion wins and retries leave the original timestamp intact. Revolut
- * amounts are minor units; converted back to majors here.
- *
- * @param {{ order: {state?: string, amount?: number}, car: {deposit_paid_at?: string|null}, now?: Date }} args
- * @returns {{ state: string, updates: object|null }}
- */
-export function depositUpdateForOrder({ order, car, now = new Date() }) {
-  const state = String(order?.state || '').toLowerCase()
-  const updates = {}
-  switch (state) {
-    case 'completed':
-      updates.deposit_status = 'paid'
-      if (!car?.deposit_paid_at) updates.deposit_paid_at = now.toISOString()
-      if (Number.isFinite(order?.amount)) updates.deposit_paid_amount = Number(order.amount) / 100
-      return { state, updates }
-    case 'cancelled':
-      updates.deposit_status = 'cancelled'
-      return { state, updates }
-    case 'failed':
-      updates.deposit_status = 'failed'
-      return { state, updates }
-    default:
-      return { state, updates: null }
-  }
-}
+// The state mapping, the deposit write and its side effects live in
+// src/lib/car-deposit-revolut.js (REVPAY.3), shared with the reconcile cron.
+export { depositUpdateForOrder }
 
 export async function POST(request) {
   const rawBody = await request.text()
@@ -172,103 +137,27 @@ export async function POST(request) {
   if (!updates) {
     return NextResponse.json({ success: true, ignored_state: state })
   }
-  if (Object.keys(updates).length > 0) {
-    // REVPAY.1 — was a bare write: a failure still ran the orders sync and the
-    // events as if the deposit were recorded, and the claim made it final.
-    const { error: carWriteErr } = await db.from('cars').update(updates).eq('id', car.id)
-    if (carWriteErr) {
-      logError('revolut-webhook', 'cars deposit write failed; deferred', { err: carWriteErr, carId: car.id, orderId, state })
-      return await defer()
-    }
+  // Write + orders ledger + contact event + order_* sequences
+  // (src/lib/car-deposit-revolut.js; the reconcile cron runs the same).
+  // REVPAY.1 — a failed deposit write runs no side effect and defers: the
+  // claim made it final otherwise.
+  // REVPAY.3 — Revolut sends ORDER_AUTHORISED then ORDER_COMPLETED (distinct
+  // dedupe keys) and both re-read the order as completed; the reconcile cron
+  // is a third observer. A car already in the target status is a no-op, and
+  // the write is a compare-and-set on the status read here, so the orders
+  // sync, the contact event and the sequence enrolment run once.
+  if (car.deposit_status === updates.deposit_status) {
+    return NextResponse.json({ success: true, already: state })
   }
-
-  // Project the cars deposit state into the generic orders ledger
-  // and emit a contact_events row for the matching transition.
-  // Best-effort — orders/events failures must not affect the
-  // webhook 200.
-  try {
-    const carForOrders = { ...car, ...updates }
-    await syncOrderFromCarDeposit({ db, car: carForOrders })
-    const evMap = {
-      completed: EVENT_TYPES.ORDER_COMPLETED,
-      failed: EVENT_TYPES.ORDER_FAILED,
-      cancelled: EVENT_TYPES.ORDER_ABANDONED,
-    }
-    const evType = evMap[state]
-    const buyerEmail = String(car.buyer_email || '').toLowerCase().trim()
-    if (evType && !buyerEmail) {
-      // No buyer email on the car: nothing to match a contact on, so no
-      // event and no order_* enrolment. The deposit write above stands.
-      logInfo('revolut-webhook', 'buyer contact skipped: no buyer_email', { carId: car.id, state })
-    }
-    if (evType && buyerEmail) {
-      // Look up a contact by buyer_email so the order_* sequence
-      // trigger (Tier 1A) has someone to enrol. We don't auto-create
-      // contacts on the cars side — the cars deposit flow is for
-      // car buyers, not necessarily UN1T contacts.
-      // escapeLikePattern: buyer_email is typed into the public deposit form,
-      // so a '%' or '_' in it would resolve to some unrelated contact and
-      // enrol THEM in the order_* sequence.
-      //
-      // W0.6b — scoped to the CAR'S ORGANISATION (cars.location_id is NOT
-      // NULL, mig 025, so there is always a scope; a failed sibling read
-      // narrows to the car's own studio). contacts_email_org_unique (mig 712)
-      // is per organisation, so one address can be a contact at several
-      // tenants: the estate-wide `.maybeSingle()` enrolled ANOTHER tenant's
-      // person in this tenant's order_* sequence when they were the only
-      // holder, and enrolled nobody (PGRST116 read as "no contact") when
-      // there were two. pickContact prefers the car's studio, then the
-      // oldest row, then the lowest id — the same choice the mail webhook
-      // makes. The error is logged, never discarded: no match is "no
-      // enrolment", which the caller already tolerates.
-      const orgLocIds = await orgLocationIdsFor(db, car.location_id)
-      const { data: holders, error: holdersErr } = await db
-        .from('contacts')
-        .select('id, location_id, created_at')
-        .in('location_id', scopeFor(orgLocIds))
-        .ilike('email', escapeLikePattern(buyerEmail))
-        .limit(20)
-      if (holdersErr) {
-        console.warn(`[revolut-webhook] buyer contact lookup failed for car ${car.id}: ${holdersErr.message}`)
-      }
-      const buyerContactId = pickContact(holders || [], car.location_id)?.id || null
-
-      await emitEvent({
-        db,
-        eventType: evType,
-        contactEmail: car.buyer_email,
-        contactId: buyerContactId,
-        locationId: car.location_id,
-        sourceType: 'car_deposit',
-        sourceId: car.id,
-        metadata: {
-          amount_cents: Number.isFinite(order.amount) ? order.amount : null,
-          car_make: car.make,
-          car_model: car.model,
-          irish_reg: car.irish_reg,
-        },
-      })
-
-      // Sequence trigger fires only when we have a contact — the
-      // sequence runner needs a contact_id to enrol. Cars-only buyers
-      // without a CRM contact silently skip (acceptable for v1).
-      if (buyerContactId && ['completed', 'failed', 'cancelled'].includes(state)) {
-        const status = state === 'cancelled' ? 'abandoned' : state
-        await triggerSequencesForOrderStatus({
-          contactId: buyerContactId,
-          locationId: car.location_id,
-          status,
-          sourceType: 'car_deposit',
-          orderId: car.id,
-        })
-      }
-    }
-  } catch (e) {
-    console.warn(`[revolut-webhook] orders/events sync failed for car ${car.id}: ${e?.message || e}`)
+  const { written, error: carWriteErr } = await applyCarDepositUpdates({ db, car, order, state, updates, guardStatus: true })
+  if (carWriteErr) {
+    logError('revolut-webhook', 'cars deposit write failed; deferred', { err: carWriteErr, carId: car.id, orderId, state })
+    return await defer()
   }
 
   // The buyer receipt SMS (mig 078) was retired with Twilio
   // (TWILIO-RETIRE.1); the public deposit page shows the paid receipt.
+  if (!written) return NextResponse.json({ success: true, already: state })
   return NextResponse.json({ success: true, applied: updates })
 }
 

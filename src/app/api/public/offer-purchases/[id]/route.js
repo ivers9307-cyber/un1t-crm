@@ -3,16 +3,13 @@
 // { paid, state } — no buyer PII. While the row is still 'created' it
 // re-checks Revolut directly (rate-capped) so the UI can advance before the
 // webhook lands; a flip to paid runs the same fire-and-forget side effects
-// the webhook would (marking is idempotent, so exactly one path runs them).
+// the webhook would. The mark is a compare-and-set (casOnState, REVPAY.3), so
+// of the poll, the webhook and the reconcile cron exactly one runs them.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getOrder } from '@/lib/revolut'
-import {
-  markOfferPurchaseState,
-  linkOrCreateContactForPurchase,
-  notifyStaffOfPaidPurchase,
-} from '@/lib/sale-offers'
-import { sendOfferPurchaseEmail } from '@/lib/offer-purchase-emails'
+import { markOfferPurchaseState } from '@/lib/sale-offers'
+import { runOfferPaidSideEffects } from '@/lib/offer-purchase-paid'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
 
@@ -36,17 +33,11 @@ export async function GET(_request, props) {
       try {
         const order = await getOrder(row.revolut_order_id)
         const state = String(order?.state || '').toLowerCase()
-        const { changed, state: next } = await markOfferPurchaseState({ db, purchase: row, providerState: state })
+        const { changed, state: next } = await markOfferPurchaseState({ db, purchase: row, providerState: state, casOnState: true })
         if (changed) current = { ...row, state: next }
         if (changed && next === 'paid') {
           try {
-            const { contactId } = await linkOrCreateContactForPurchase(db, row)
-            await notifyStaffOfPaidPurchase(db, row, row.offer || {})
-            await sendOfferPurchaseEmail(db, {
-              purchase: { ...row, contact_id: row.contact_id || contactId || null },
-              offer: row.offer || {},
-              kind: 'paid',
-            })
+            await runOfferPaidSideEffects(db, row)
           } catch (e) {
             logWarn('offer-status', `paid side-effects failed for ${id}`, { err: e })
           }

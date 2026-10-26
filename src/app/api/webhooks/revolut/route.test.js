@@ -55,7 +55,9 @@ function makeDb({ car = null, contact = null, carReadError = null, carWriteError
       : { data: table === 'cars' ? car : contact, error: null })
     b.then = (resolve) => {
       if (b._op === 'update') updates.push({ table, payload: b._payload })
-      return resolve({ data: null, error: b._op === 'update' && table === 'cars' ? carWriteError : null })
+      const writeErr = b._op === 'update' && table === 'cars' ? carWriteError : null
+      // A landed update returns the row (the guarded write selects 'id').
+      return resolve({ data: b._op === 'update' && !writeErr ? [{ id: 'row' }] : null, error: writeErr })
     }
     return b
   }
@@ -202,6 +204,17 @@ describe('POST /api/webhooks/revolut', () => {
     expect(syncOrderFromCarDeposit).not.toHaveBeenCalled()
   })
 
+  it('a car already paid is a no-op: a second terminal delivery runs no write and no side effects', async () => {
+    const db = makeDb({ car: { ...CAR, deposit_status: 'paid', deposit_paid_at: '2026-10-01T00:00:00Z' } })
+    createServerClient.mockReturnValue(db)
+    getOrder.mockResolvedValue({ state: 'completed', amount: 50000 })
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    expect((await res.json()).already).toBe('completed')
+    expect(db._updates.filter((u) => u.table === 'cars')).toHaveLength(0)
+    expect(syncOrderFromCarDeposit).not.toHaveBeenCalled()
+  })
+
   it('a landed cars write never releases the claim, even when the orders sync throws', async () => {
     const db = makeDb({ car: CAR })
     createServerClient.mockReturnValue(db)
@@ -293,7 +306,7 @@ function makeOrgDb({ car, locations = [], contacts = [] }) {
       return out
     }
     const settle = (shape) => {
-      if (b._op === 'update') return Promise.resolve({ data: null, error: null })
+      if (b._op === 'update') return Promise.resolve({ data: [{ id: 'row' }], error: null })
       if (table === 'contacts') contactLookups.push({ filters: b._filters, limit: b._limit })
       const out = rows()
       if (shape === 'single') {
