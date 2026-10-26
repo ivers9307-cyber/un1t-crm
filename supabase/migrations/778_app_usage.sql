@@ -110,6 +110,52 @@ REVOKE ALL ON public.app_usage_sessions FROM anon, authenticated;
 REVOKE ALL ON public.app_usage_visits   FROM anon, authenticated;
 REVOKE ALL ON public.app_usage_daily    FROM anon, authenticated;
 
+-- The report's two reads, aggregated in the database: a 12-month range is
+-- tens of thousands of daily rows, far past PostgREST's 1,000-row page.
+-- Service role only (the report routes); no client calls them.
+--
+-- app_usage_summary: per person, platform and feature over [p_from, p_to],
+-- the visits, seconds and number of distinct days with use. p_location_id
+-- narrows to sessions that started at one studio (NULL = every studio).
+CREATE FUNCTION public.app_usage_summary(
+  p_from date,
+  p_to date,
+  p_profile_ids uuid[],
+  p_location_id uuid DEFAULT NULL
+)
+RETURNS TABLE (profile_id uuid, platform text, feature text, visits bigint, seconds bigint, days bigint)
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  SELECT d.profile_id, d.platform, d.feature,
+         sum(d.visits)::bigint, sum(d.seconds)::bigint,
+         count(DISTINCT d.day) FILTER (WHERE d.seconds > 0)::bigint
+    FROM public.app_usage_daily d
+   WHERE d.day BETWEEN p_from AND p_to
+     AND d.profile_id = ANY (p_profile_ids)
+     AND (p_location_id IS NULL OR d.location_id = p_location_id)
+   GROUP BY d.profile_id, d.platform, d.feature
+   ORDER BY d.profile_id, d.platform, d.feature
+$$;
+
+-- app_usage_last_active: each person's latest session end (any studio).
+CREATE FUNCTION public.app_usage_last_active(p_profile_ids uuid[])
+RETURNS TABLE (profile_id uuid, last_active_at timestamptz)
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  SELECT s.profile_id, max(s.ended_at)
+    FROM public.app_usage_sessions s
+   WHERE s.profile_id = ANY (p_profile_ids)
+   GROUP BY s.profile_id
+   ORDER BY s.profile_id
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.app_usage_summary(date, date, uuid[], uuid) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.app_usage_last_active(uuid[]) FROM PUBLIC, anon, authenticated;
+
 -- The rollup cron runs every 15 minutes. Grace 1200 s: one missed tick
 -- (900 + jitter + run time) never pages; two do.
 --

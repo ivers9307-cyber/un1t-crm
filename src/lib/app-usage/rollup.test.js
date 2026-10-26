@@ -3,7 +3,6 @@ import { unionMs, splitByDay, buildDailyRows, rebuildDays, NIL_UUID, RETENTION }
 
 const TZ = 'Europe/Dublin'
 const MIN = 60_000
-const H = 3600_000
 // 26 Oct 2026 is after the clocks went back (25 Oct): Dublin = UTC+0.
 const at = (h, m = 0, day = 26) => Date.UTC(2026, 9, day, h, m)
 const iso = (ms) => new Date(ms).toISOString()

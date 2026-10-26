@@ -38,7 +38,7 @@
 
 import {
   Building2, Tag, Globe, Activity, UserPlus, ScrollText,
-  LayoutGrid, Radio, Smartphone, AlertTriangle,
+  LayoutGrid, Radio, Smartphone, AlertTriangle, BarChart3,
 } from 'lucide-react'
 
 // Which route roots render the PLATFORM console shell instead of the
@@ -46,7 +46,7 @@ import {
 // model agree on what "the console" is. Matched exact-or-prefixed
 // (p + '/'), so a nested page like /admin/tenants/new or
 // /admin/tenants/<orgId> stays inside the console shell too. Exactly
-// these eight — every other /admin/* page (including /admin/fleet —
+// these nine — every other /admin/* page (including /admin/fleet —
 // see the header comment) keeps its current (studio) shell.
 export const PLATFORM_TIER_PATHS = Object.freeze([
   '/admin/tenants',
@@ -56,6 +56,8 @@ export const PLATFORM_TIER_PATHS = Object.freeze([
   '/admin/matrix',
   '/admin/bridges',
   '/admin/studio-devices',
+  // USAGE.1 — staff app usage (master only, cross-tenant).
+  '/admin/app-usage',
   '/admin/webhook-dead-letter',
 ])
 
@@ -78,7 +80,7 @@ export function isPlatformTierPath(pathname) {
   return PLATFORM_TIER_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))
 }
 
-// The eight console pages, in nav order. Tenants is the home (the master
+// The nine console pages, in nav order (USAGE.1 added App usage). Tenants is the home (the master
 // landing target). All eight routes exist in-repo; each enforces its own
 // page-level gate (matrix/bridges/studio-devices are master-only,
 // webhook-dead-letter is master-or-owner — see the header comment), so
@@ -92,6 +94,8 @@ export const PLATFORM_PRIMARY_ITEMS = Object.freeze([
   Object.freeze({ key: 'matrix', href: '/admin/matrix', label: 'Feature matrix', icon: LayoutGrid }),
   Object.freeze({ key: 'bridges', href: '/admin/bridges', label: 'HR bridges', icon: Radio }),
   Object.freeze({ key: 'studio-devices', href: '/admin/studio-devices', label: 'Studio devices', icon: Smartphone }),
+  // USAGE.1 — who uses the phone app and web CRM, which features, how long.
+  Object.freeze({ key: 'app-usage', href: '/admin/app-usage', label: 'App usage', icon: BarChart3 }),
   Object.freeze({ key: 'webhook-dead-letter', href: '/admin/webhook-dead-letter', label: 'Dead letters', icon: AlertTriangle }),
 ])
 
