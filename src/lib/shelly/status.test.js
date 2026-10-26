@@ -89,12 +89,12 @@ describe('normaliseAllStatus (v1 discovery)', () => {
 describe('stateFromReading / stateChanged', () => {
   const reading = normaliseGetItems([plugS])[0]
   it('builds last_state from a channel reading', () => {
-    expect(stateFromReading(null, reading, 0, 'T1')).toEqual({ online: true, output: true, brightness: null, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', at: 'T1' })
+    expect(stateFromReading(null, reading, 0, 'T1')).toEqual({ online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', at: 'T1' })
   })
   it('offline keeps the previous output/apower and flips online', () => {
     const prev = { online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', at: 'T1' }
     const off = normaliseGetItems([offline])[0]
-    expect(stateFromReading(prev, off, 0, 'T2')).toEqual({ ...prev, brightness: null, online: false, at: 'T2' })
+    expect(stateFromReading(prev, off, 0, 'T2')).toEqual({ ...prev, online: false, at: 'T2' })
   })
   it('stateChanged ignores sub-threshold jitter but fires on output, online, 1 Wh, 1 °C, or a 5-minute refresh', () => {
     const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
@@ -571,6 +571,12 @@ describe('light components (SHELLYLIGHT.1)', () => {
     const reading = { online: true, channels: [{ kind: 'light', channel: 0, output: true, brightness: 55, apower: null, aenergy_wh: null, temperature_c: null, source: 'cloud' }] }
     expect(stateFromReading(null, reading, 0, 'T', 'light')).toMatchObject({ online: true, output: true, brightness: 55 })
     expect(stateFromReading(null, reading, 0, 'T', 'switch')).toMatchObject({ online: true, output: null })
+  })
+  it('a switch last_state carries no brightness; an offline light keeps its last one', () => {
+    const sw = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'switch:0': { output: true } } })
+    expect(stateFromReading(null, sw, 0, 'T')).not.toHaveProperty('brightness')
+    const off = { online: false, channels: [] }
+    expect(stateFromReading({ brightness: 33, output: true }, off, 0, 'T', 'light')).toMatchObject({ online: false, output: true, brightness: 33 })
   })
   it('a brightness change alone is a state change', () => {
     const a = { online: true, output: true, brightness: 40, apower: null, aenergy_wh: null, temperature_c: null, source: 'cloud', at: '2026-01-01T00:00:00Z' }

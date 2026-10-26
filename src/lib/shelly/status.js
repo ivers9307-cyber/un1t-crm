@@ -462,7 +462,8 @@ export function normaliseAllStatus(body) {
   return rows
 }
 
-// next last_state for one adopted row. Offline: keep what we last knew
+// next last_state for one adopted row. `brightness` is part of a LIGHT's
+// state only: a switch's last_state keeps its original shape. Offline: keep what we last knew
 // about output/power, flip online, do NOT advance last_seen_at (caller).
 // A missing reading counts as offline — same conservative treatment, since
 // "we did not hear from it" is all either case actually tells us.
@@ -475,7 +476,7 @@ export function normaliseAllStatus(body) {
 export function stateFromReading(prev, reading, channel, atIso, kind = 'switch') {
   const p = isObj(prev) ? prev : {}
   if (!reading?.online) {
-    return { online: false, output: p.output ?? null, brightness: p.brightness ?? null, apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
+    return { online: false, output: p.output ?? null, ...(kind === 'light' ? { brightness: p.brightness ?? null } : {}), apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
       temperature_c: p.temperature_c ?? null, source: p.source ?? null, at: atIso }
   }
   // Online but this channel is gone (adopted channel 3, device now reports
@@ -484,7 +485,7 @@ export function stateFromReading(prev, reading, channel, atIso, kind = 'switch')
   const list = Array.isArray(reading.channels) ? reading.channels : []
   const c = list.find((x) => x?.channel === channel && (x?.kind ?? 'switch') === kind)
     || channelFromComponent(kind, channel, null)
-  return { online: true, output: c.output, brightness: c.brightness ?? null, apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source, at: atIso }
+  return { online: true, output: c.output, ...(kind === 'light' ? { brightness: c.brightness ?? null } : {}), apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source, at: atIso }
 }
 
 // Cheap fields are compared exactly; the measured ones get a deadband so a
