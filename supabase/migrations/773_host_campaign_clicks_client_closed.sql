@@ -1,4 +1,4 @@
--- 772 — HOST-EMAILS.2: host_campaign_clicks is service role only.
+-- 773 — HOST-EMAILS.2: host_campaign_clicks is service role only.
 --
 -- The table was made by 593b (applied to prod as 594 on 7 Sep 2026), before
 -- mig 677 closed the default privileges, so authenticated still holds
@@ -20,6 +20,6 @@ begin
     where table_schema = 'public' and table_name = 'host_campaign_clicks'
       and grantee in ('anon', 'authenticated')
   ) then
-    raise exception 'mig 772: a client role still holds a privilege on host_campaign_clicks';
+    raise exception 'mig 773: a client role still holds a privilege on host_campaign_clicks';
   end if;
 end $$;

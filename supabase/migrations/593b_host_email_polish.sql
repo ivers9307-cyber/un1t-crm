@@ -6,7 +6,7 @@
 -- REVOKEs EXECUTE on host_campaigns_block_sent_delete(): a later number
 -- would leave a replay from scratch failing at 667 on a function that does
 -- not exist yet. The client REVOKE on host_campaign_clicks that 594 predated
--- is mig 772.
+-- is mig 773.
 
 -- HOST-EMAILS.2 — host email polish: reminder audience, link clicks, delete guard.
 --
