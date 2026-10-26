@@ -88,6 +88,7 @@ import { planDeviceAction, isLiveOverride } from './plan'
 import { rollDailyEnergy } from './energy'
 import { AUTH_ERROR, HOST_ERROR } from './connections'
 import { effectiveTarget, GROUP_COLUMNS } from './effective'
+import { safetyTimersOn } from './safety-timers'
 
 const MODULE = 'shelly-reconcile'
 
@@ -709,6 +710,8 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   }
 
   const plans = []
+  // SHELLYTIMERS.5 — off unless the studio switched it on.
+  const timers = safetyTimersOn(conn?.locations?.safety_timers)
   // A black-holed account is planned for but not commanded (header rule 6):
   // iterating nothing leaves `planned` at 0, so the counters never claim work
   // that was never attempted, and no stamp is written for a command not sent.
@@ -728,6 +731,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
     const plan = planDeviceAction(t, nowMs, dateStr, occurrences, tz, {
       relayOn: relayOnFrom(readings.get(idKey(d.device_id)), d),
+      timers,
     })
     // The DEVICE row rides on: its id is what gets stamped, its device_id and
     // channel are what gets commanded. effectiveTarget keeps those (and the
@@ -912,7 +916,11 @@ export async function runShellyReconcile(db, deps = {}) {
 
   const { data, error } = await db
     .from('shelly_connections')
-    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone)')
+    // The safety-timer switch rides as ONE json path (SHELLYTIMERS.5): never
+    // `settings` itself, which holds the location's credentials.
+    // (A literal, not SAFETY_TIMERS_SELECT interpolated, so check:select-columns
+    // can read it.)
+    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone, safety_timers:settings->shelly->safety_timers)')
     // ROTATION, not registration order: whoever has gone longest without a
     // successful tick goes first, so when the budget runs short the shortfall
     // moves around the estate instead of always landing on the same tail.
@@ -1063,7 +1071,9 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
 
   // force: the planner answers even when its own stamp says this key was
   // already applied — that is the entire point of the button.
-  const plan = planDeviceAction(target, nowMs, dateStr, occurrences, tz, { force: true })
+  const plan = planDeviceAction(target, nowMs, dateStr, occurrences, tz, {
+    force: true, timers: safetyTimersOn(conn?.locations?.safety_timers),
+  })
   if (!plan) return { ok: true, noop: true }
 
   const client = makeClient(conn, { sleep, now })

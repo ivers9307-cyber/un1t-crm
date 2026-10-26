@@ -30,7 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { AUTH_ERROR } from '@/lib/shelly/connections'
 import {
-  LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_A, OWNER_NY, STAFF_A, STORED_KEY,
+  LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_A, OWNER_NY, STAFF_A, STORED_KEY,
   deviceRow, groupRow, connectionRow, makeDb, selectsFrom, req, ctxFor,
 } from '../../../shelly-routes.test-helpers.js'
 
@@ -154,8 +154,14 @@ describe('POST …/run-now — what it applied', () => {
     getCurrentUser.mockResolvedValue(OWNER_NY)
     await POST(runReq(), ctxFor(DEV_A))
     const [, conn, device] = runNowForDevice.mock.calls[0]
-    expect(conn.locations).toEqual({ timezone: 'America/New_York' })
+    expect(conn.locations).toEqual({ timezone: 'America/New_York', safety_timers: false })
     expect(device.id).toBe(DEV_A)
+  })
+
+  it('grafts the studio safety-timer switch (SHELLYTIMERS.5): true only for an explicit true', async () => {
+    useDb({ ...world(), rows: { ...world().rows, locations: [{ id: LOC_A, settings: { shelly: { safety_timers: true } } }] } })
+    await POST(runReq(), ctxFor(DEV_A))
+    expect(runNowForDevice.mock.calls[0][1].locations.safety_timers).toBe(true)
   })
 })
 

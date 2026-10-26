@@ -112,13 +112,11 @@ describe('POST …/groups/[id]/toggle — on/off (group wins)', () => {
     expect(seenAtSend.a).toBeNull()
 
     expect(setGroups).toHaveBeenCalledTimes(1)
-    // A managed group's ON press arms the safety net (SHELLYTIMERS.3): the
-    // default until is local midnight (23:00Z), + 30 min = 11.5 h from 12:00Z.
-    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true, { toggleAfterSec: 41_400 })
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true)
 
     const key = overrideKey(grp().override)
     for (const id of [DEV_A, DEV_A2]) {
-      expect(dev(id).last_applied).toMatchObject({ key, action: 'on', reason: 'override', cap_at: '2026-08-23T23:30:00.000Z' })
+      expect(dev(id).last_applied).toMatchObject({ key, action: 'on', reason: 'override' })
       expect(dev(id).last_state).toMatchObject({ output: true, source: 'manual' })
     }
     expect(body).toMatchObject({ success: true, applied: 'all', pending_device_ids: [], holds_until_changed: false })
@@ -339,10 +337,9 @@ describe('POST …/groups/[id]/toggle — back to schedule (ONE batch)', () => {
     expect(seenAtSend).toEqual({ group: null, a: null })
     expect(runNowForDevice).not.toHaveBeenCalled()
     expect(setGroups).toHaveBeenCalledTimes(1)
-    // Armed by the window rule: off 21:00 IST (20:00Z) + 30 min, 8.5 h away.
-    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true, { toggleAfterSec: 30_600 })
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true)
     for (const id of [DEV_A, DEV_A2]) {
-      expect(dev(id).last_applied).toEqual({ key: `w:${WINDOW_ON_AT}`, action: 'on', reason: 'run_now', at: NOW_ISO, cap_at: '2026-08-23T20:30:00.000Z' })
+      expect(dev(id).last_applied).toEqual({ key: `w:${WINDOW_ON_AT}`, action: 'on', reason: 'run_now', at: NOW_ISO })
       expect(dev(id).last_state).toMatchObject({ output: true, source: 'manual', at: NOW_ISO })
       expect(dev(id).last_seen_at).toBe(NOW_ISO)
     }
@@ -368,7 +365,7 @@ describe('POST …/groups/[id]/toggle — back to schedule (ONE batch)', () => {
       deviceRow({ id: DEV_L, device_id: 'aabbcc000009', channel: 2, kind: 'light', group_id: GRP_A, schedule_mode: 'none', fixed_windows: [], last_state: fullState({ brightness: 40 }) }),
     ] }))
     await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
-    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0'], light: ['aabbcc000009_2'] }, true, { toggleAfterSec: 30_600 })
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0'], light: ['aabbcc000009_2'] }, true)
     expect(dev(DEV_L).last_state).toMatchObject({ output: true, brightness: 40 })
   })
 
@@ -422,7 +419,7 @@ describe('POST …/groups/[id]/toggle — back to schedule (ONE batch)', () => {
       deviceRow({ id: DEV_A2, device_id: 'aabbcc000002', channel: 1.5, group_id: GRP_A, schedule_mode: 'none', fixed_windows: [] }),
     ] }))
     const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))).json()
-    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0'], light: [] }, true, { toggleAfterSec: 30_600 })
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0'], light: [] }, true)
     expect(body).toMatchObject({ applied: 'partial', pending_device_ids: [DEV_A2] })
     expect(body.results[1]).toMatchObject({ device_id: DEV_A2, applied: null, code: 'bad_device' })
   })
@@ -436,8 +433,7 @@ describe('POST …/groups/[id]/toggle — back to schedule (ONE batch)', () => {
     expect(body.applied).toBe('all')
     expect(selectsFrom(db, 'class_occurrences')).toHaveLength(1)
     expect(setGroups).toHaveBeenCalledTimes(1)
-    // The class window ends 12:40Z (lag 10); + 30 min is 70 min away.
-    expect(setGroups).toHaveBeenCalledWith(expect.any(Object), true, { toggleAfterSec: 4200 })
+    expect(setGroups).toHaveBeenCalledWith(expect.any(Object), true)
   })
 
   it('a timetable that cannot be read for a class-mode group sends nothing and names every member', async () => {
@@ -484,6 +480,24 @@ describe('POST …/groups/[id]/toggle — back to schedule (ONE batch)', () => {
 // press arms one timer for the batch (until + 30 min); an unmanaged group and
 // every OFF press arm none; 'auto' arms by the window rule (above).
 describe('POST …/groups/[id]/toggle — the safety-net timer', () => {
+  // The studio's switch ON (SHELLYTIMERS.5); off is the default.
+  const timersOn = (w) => ({ ...w, rows: { ...w.rows, locations: [{ id: LOC_A, settings: { shelly: { safety_timers: true } } }] } })
+  beforeEach(() => { useDb(timersOn(world())) })
+
+  it('a managed ON press with the default until arms local midnight + 30 min', async () => {
+    await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+    // until 23:00Z, + 30 min = 11.5 h from 12:00Z.
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true, { toggleAfterSec: 41_400 })
+    for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied.cap_at).toBe('2026-08-23T23:30:00.000Z')
+  })
+
+  it('back to schedule inside the window arms by the window rule and stamps cap_at', async () => {
+    useDb(timersOn(world({ group: { override: { state: 'on', until: '2026-08-23T22:00:00.000Z', set_by: OWNER_ID, set_at: NOW_ISO } } })))
+    await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+    // off 21:00 IST (20:00Z) + 30 min, 8.5 h away.
+    expect(setGroups).toHaveBeenCalledWith({ switch: ['aabbcc000001_0', 'aabbcc000002_1'], light: [] }, true, { toggleAfterSec: 30_600 })
+    for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied.cap_at).toBe('2026-08-23T20:30:00.000Z')
+  })
   it('an explicit until is armed at until + 30 min, and every landed member is stamped with cap_at', async () => {
     await POST(toggleReq({ state: 'on', until: new Date(NOW + 2 * HOUR).toISOString() }), ctxFor(GRP_A))
     expect(setGroups).toHaveBeenCalledWith(expect.any(Object), true, { toggleAfterSec: 9000 })
@@ -498,7 +512,7 @@ describe('POST …/groups/[id]/toggle — the safety-net timer', () => {
 
   for (const group of [{ enabled: false }, { enabled: true, schedule_mode: 'none', fixed_windows: [] }]) {
     it(`an UNMANAGED group (${JSON.stringify(group)}) gets no timer — its lights stay as set until changed`, async () => {
-      useDb(world({ group }))
+      useDb(timersOn(world({ group })))
       const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))).json()
       expect(body.holds_until_changed).toBe(true)
       expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), true])
@@ -514,9 +528,26 @@ describe('POST …/groups/[id]/toggle — the safety-net timer', () => {
   })
 
   it('back to schedule OUTSIDE every window is an off with no timer', async () => {
-    useDb(world({ group: { fixed_windows: [{ days: [7], on: '18:00', off: '21:00' }] } }))
+    useDb(timersOn(world({ group: { fixed_windows: [{ days: [7], on: '18:00', off: '21:00' }] } })))
     await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
     expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), false])
     expect(dev(DEV_A).last_applied).not.toHaveProperty('cap_at')
   })
+})
+
+// SHELLYTIMERS.5 — the switch OFF (the default): no toggle_after, no cap_at,
+// on a press or on back-to-schedule.
+describe('POST …/groups/[id]/toggle — safety timers switched off', () => {
+  for (const settings of [null, { shelly: { safety_timers: false } }, { shelly: { safety_timers: 'true' } }]) {
+    it(`settings ${JSON.stringify(settings)}: a press and back-to-schedule go out unarmed`, async () => {
+      const w = world()
+      useDb({ ...w, rows: { ...w.rows, locations: [{ id: LOC_A, settings }] } })
+      await POST(toggleReq({ state: 'on' }), ctxFor(GRP_A))
+      expect(setGroups.mock.calls[0]).toEqual([expect.any(Object), true])
+      for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied).not.toHaveProperty('cap_at')
+      await POST(toggleReq({ state: 'auto' }), ctxFor(GRP_A))
+      expect(setGroups.mock.calls[1]).toEqual([expect.any(Object), true])
+      for (const id of [DEV_A, DEV_A2]) expect(dev(id).last_applied).not.toHaveProperty('cap_at')
+    })
+  }
 })

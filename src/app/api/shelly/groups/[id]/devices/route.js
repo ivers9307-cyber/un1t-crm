@@ -32,6 +32,8 @@ import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { loadGroup, publicGroup } from '@/lib/shelly/group-load'
 import { ShellyGroupMembers, MAX_DEVICES_PER_LOCATION } from '@/lib/shelly/schemas'
+import { requestTz } from '@/lib/shelly/device-load'
+import { withSafetyTimerNotice } from '@/lib/shelly/safety-notice'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,9 +45,14 @@ const bad = (error, status, extra = {}) =>
 
 const notFound = () => bad('Not found', 404)
 
+// SHELLYTIMERS.6 — the removal answer. A leaver stays as it is (rule 3), but a
+// light the schedule switched on still carries its safety timer, so when one
+// is pending the answer says by when. No pending timer → no notice at all.
+export const LEFT_MESSAGE = 'Removed devices stay as they are until you switch them.'
+
 export const PUT = withAuth(
   { permission: 'device_control', schema: ShellyGroupMembers },
-  async ({ db, locationId, input, params }) => {
+  async ({ user, db, locationId, input, params }) => {
     const loaded = await loadGroup(db, locationId, params?.id)
     if (!loaded.ok) {
       if (loaded.status === 404) return notFound()
@@ -56,7 +63,8 @@ export const PUT = withAuth(
 
     const { data: rows, error: readError } = await db
       .from('shelly_devices')
-      .select('id, group_id')
+      // last_applied/last_state only feed the leavers' safety-timer notice.
+      .select('id, group_id, last_applied, last_state')
       .eq('location_id', locationId)
       .limit(MAX_DEVICES_PER_LOCATION + 1)
     if (readError) {
@@ -106,12 +114,16 @@ export const PUT = withAuth(
       }
     }
 
+    const leftNotice = leaving.length
+      ? withSafetyTimerNotice(LEFT_MESSAGE, leaving.map((id) => byId.get(id)), Date.now(), requestTz(user))
+      : LEFT_MESSAGE
     return NextResponse.json({
       success: true,
       group: publicGroup(group),
       device_ids: wanted,
       joined: joining,
       left: leaving,
+      ...(leftNotice !== LEFT_MESSAGE ? { notice: leftNotice } : {}),
     })
   },
 )

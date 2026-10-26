@@ -220,7 +220,7 @@ describe('POST …/toggle — intent before command', () => {
   it('drives a kind:light device through setLight, never setSwitch', async () => {
     useDb(world({ kind: 'light', channel: 1 }))
     const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
-    expect(setLight).toHaveBeenCalledWith(SHELLY_ID, 1, true, { toggleAfterSec: expect.any(Number) })
+    expect(setLight).toHaveBeenCalledWith(SHELLY_ID, 1, true)
     expect(setSwitch).not.toHaveBeenCalled()
     expect(body.applied).toBe(true)
   })
@@ -262,8 +262,6 @@ describe('POST …/toggle — the stamp', () => {
     const row = rowA()
     expect(row.last_applied).toEqual({
       key: overrideKey(row.override), action: 'on', reason: 'override', at: NOW_ISO,
-      // A managed device's ON press arms the safety net (SHELLYTIMERS.3).
-      cap_at: expect.any(String),
     })
     expect(body.applied).toBe(true)
     expect(body.device.last_applied.key).toBe(overrideKey(row.override))
@@ -453,7 +451,7 @@ describe('POST …/toggle — back to auto', () => {
     // The engine reads its zone from conn.locations — loadConnectionWithKey
     // does not select one, so without the graft this studio would resolve on
     // Dublin time.
-    expect(conn.locations).toEqual({ timezone: 'America/New_York' })
+    expect(conn.locations).toEqual({ timezone: 'America/New_York', safety_timers: false })
     // …and the device it plans against must not still carry the override we
     // just cleared, or it would immediately re-apply it.
     expect(device.override).toBeNull()
@@ -633,6 +631,10 @@ describe('POST …/toggle — a device in a group', () => {
 // group we cannot read, and every OFF press carry none.
 describe('POST …/toggle — the safety-net timer', () => {
   const MIN = 60_000
+  // The studio's switch ON (SHELLYTIMERS.5): a locations row the route reads
+  // one json path of. Off is the default — see the describe after this one.
+  const timersOn = (w) => ({ ...w, rows: { ...w.rows, locations: [{ id: LOC_A, settings: { shelly: { safety_timers: true } } }] } })
+  beforeEach(() => { useDb(timersOn(world())) })
   const capFor = (untilMs) => {
     const capMs = Math.ceil((untilMs + 30 * MIN) / MIN) * MIN
     return { toggleAfterSec: Math.ceil((capMs - NOW) / 1000), capAt: new Date(capMs).toISOString() }
@@ -660,7 +662,7 @@ describe('POST …/toggle — the safety-net timer', () => {
 
   for (const over of [{ enabled: false }, { enabled: true, schedule_mode: 'none' }]) {
     it(`an UNMANAGED device (${JSON.stringify(over)}) gets no timer — the copy promises it holds until changed`, async () => {
-      useDb(world(over))
+      useDb(timersOn(world(over)))
       await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
       expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
       expect(rowA().last_applied).not.toHaveProperty('cap_at')
@@ -671,7 +673,7 @@ describe('POST …/toggle — the safety-net timer', () => {
     const memberWorld = (groupOver, extra = {}) => {
       const w = world({ group_id: GRP_A, enabled: false, schedule_mode: 'none', fixed_windows: [] })
       w.rows.shelly_groups = [groupRow(groupOver)]
-      return { ...w, ...extra }
+      return timersOn({ ...w, ...extra })
     }
     useDb(memberWorld({ enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [7], on: '07:00', off: '21:00' }] }))
     useCloud()
@@ -693,5 +695,35 @@ describe('POST …/toggle — the safety-net timer', () => {
     useCloud({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 200 })
     await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
     expect(rowA().last_applied).toBeNull()
+  })
+})
+
+// SHELLYTIMERS.5 — the switch OFF (the default): the press is byte-identical
+// to the pre-timer route, whatever the locations row says short of `true`.
+describe('POST …/toggle — safety timers switched off', () => {
+  const withSetting = (settings) => ({ ...world(), rows: { ...world().rows, locations: [{ id: LOC_A, settings }] } })
+  for (const settings of [null, {}, { shelly: {} }, { shelly: { safety_timers: false } }, { shelly: { safety_timers: 'true' } }]) {
+    it(`settings ${JSON.stringify(settings)}: no toggle_after, no cap_at`, async () => {
+      useDb(withSetting(settings))
+      await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+      expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+      expect(rowA().last_applied).toEqual({ key: overrideKey(rowA().override), action: 'on', reason: 'override', at: NOW_ISO })
+    })
+  }
+
+  it('an unreadable switch is off (the press still goes, unarmed)', async () => {
+    useDb({ ...withSetting({ shelly: { safety_timers: true } }), selectError: { locations: { message: 'pg down' } } })
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+  })
+
+  it("'auto' hands runNowForDevice the switch on the engine connection", async () => {
+    useDb(withSetting({ shelly: { safety_timers: true } }))
+    await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(runNowForDevice.mock.calls[0][1].locations.safety_timers).toBe(true)
+    useDb(world())
+    await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(runNowForDevice.mock.calls[1][1].locations.safety_timers).toBe(false)
   })
 })

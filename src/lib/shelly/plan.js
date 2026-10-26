@@ -65,8 +65,10 @@
 //     itself off at last_applied.cap_at. That is the safety net doing its job,
 //     but it means "stays as it is" holds only until that cap.
 
-// SHELLYTIMERS.2 — THE SAFETY NET. Every `on` this planner emits for a
-// MANAGED target (enabled, and a schedule that is not 'none') carries a
+// SHELLYTIMERS.2 — THE SAFETY NET. Only when the studio has switched it on
+// (`options.timers === true`, from locations.settings.shelly.safety_timers;
+// off by default so it can be proven live first), every `on` this planner
+// emits for a MANAGED target (enabled, and a schedule that is not 'none') carries a
 // device-side timer: `toggleAfterSec`, and `capAt`, the instant the device
 // will switch itself off if nothing else has. It is the planned off time +
 // SAFETY_MARGIN_MS — the window's off_at, or a live `on` override's until —
@@ -92,8 +94,9 @@
 //     `options.relayOn === true` (the caller's fresh reading). A relay read as
 //     off (a person switched it off mid-window — header rule 3 says they win)
 //     or not read at all is left alone. ONE exception: once the armed cap has
-//     PASSED inside a live window, the off was our own timer's, and rule 2's
-//     "re-open after our own close" applies whatever the reading says.
+//     PASSED inside a live window, the off was probably our own timer's, and
+//     rule 2's "re-open after our own close" applies to a relay we could not
+//     read — but never to one READ as off, because a human off always wins.
 
 import { resolveServeWindows } from '@/lib/schedule/desired-state'
 import { DEFAULT_TZ } from '@shared/zoned-time'
@@ -132,7 +135,10 @@ function needsRearm(last, wantedCapMs, nowMs, relayOn) {
   const armed = typeof last?.cap_at === 'string' ? Date.parse(last.cap_at) : NaN
   if (Number.isFinite(armed)) {
     if (wantedCapMs <= armed + CAP_REARM_SLACK_MS) return false
-    if (nowMs >= armed) return true
+    // Our own timer has fired, so an off is probably ours — but a relay READ
+    // as off may equally be a person's, and a person's off always wins: only
+    // an unread relay (null) is re-opened on the strength of the cap alone.
+    if (nowMs >= armed) return relayOn !== false
   }
   return relayOn === true
 }
@@ -167,18 +173,24 @@ export function isLiveOverride(ov, nowMs) {
 // default parameter only fires for `undefined`, so an explicit null — the
 // shape a caller threading an optional through gets for free — would throw.
 // `options.relayOn` (true | false | null): the relay's freshly READ output,
-// used only to decide a re-arm. Anything but true means "do not re-arm".
+// used only to decide a re-arm (see needsRearm).
+// `options.timers` (boolean): the studio's safety-timer switch. Only an
+// explicit true arms anything.
 export function planDeviceAction(device, nowMs, dateStr, occurrences = [], tz = DEFAULT_TZ, options = {}) {
   const force = !!options?.force
   const relayOn = options?.relayOn
   const last = device?.last_applied && typeof device.last_applied === 'object' ? device.last_applied : null
   const same = (key, action) => last?.key === key && last?.action === action
   const managed = isManagedTarget(device)
+  // SHELLYTIMERS.5 — the per-studio switch (locations.settings.shelly.
+  // safety_timers). Off — the default — means no cap and no re-arm at all:
+  // every answer is exactly what it was before timers existed.
+  const timers = options?.timers === true
 
   // An `on` for `key`, planned off at `offAtMs`: armed when managed, and
   // re-armed rather than skipped when already stamped (see the header).
   const openOn = (key, offAtMs, reason) => {
-    const cap = managed ? safetyCap(offAtMs + SAFETY_MARGIN_MS, nowMs) : null
+    const cap = managed && timers ? safetyCap(offAtMs + SAFETY_MARGIN_MS, nowMs) : null
     if (!force && same(key, 'on')) {
       if (!cap || !needsRearm(last, offAtMs + SAFETY_MARGIN_MS, nowMs, relayOn)) return null
       return { action: 'on', reason: 'cap_extend', key, ...cap }

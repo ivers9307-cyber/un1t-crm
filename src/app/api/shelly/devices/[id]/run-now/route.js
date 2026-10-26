@@ -41,6 +41,7 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { loadSafetyTimers } from '@/lib/shelly/safety-timers'
 import { loadDevice, withLocationTz } from '@/lib/shelly/device-load'
 import { effectiveTarget } from '@/lib/shelly/effective'
 import { loadDeviceGroup } from '@/lib/shelly/group-load'
@@ -94,7 +95,9 @@ export const POST = withAuth({ permission: 'device_control' }, async ({ user, db
   // loadConnectionWithKey selects shelly_connections alone, and the engine
   // reads the zone from conn.locations — without this graft a New York studio
   // resolves its class windows on Dublin time. See device-load.js.
-  const result = await runNowForDevice(db, withLocationTz(conn.connection, user), device, { group })
+  // The studio's safety-timer switch rides beside the zone (SHELLYTIMERS.5).
+  const safetyTimers = await loadSafetyTimers(db, locationId)
+  const result = await runNowForDevice(db, withLocationTz(conn.connection, user, { safetyTimers }), device, { group })
 
   if (result.ok) {
     if (result.noop) {

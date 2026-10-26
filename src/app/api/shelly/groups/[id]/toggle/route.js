@@ -56,7 +56,9 @@
 // planner rule 2 never closes an expired override, so `until` bounds the
 // banner, not the relays — `holds_until_changed: true` and the notice.
 //
-// THE SAFETY NET (SHELLYTIMERS.3), the device toggle's rule widened: a press
+// THE SAFETY NET (SHELLYTIMERS.3), only while the studio's safety-timer
+// switch is on (SHELLYTIMERS.5, off by default), the device toggle's rule
+// widened: a press
 // ON for a MANAGED group sends its one batch with `toggle_after` up to
 // `until` + SAFETY_MARGIN_MS, and every member that landed is stamped with
 // `cap_at`. An unmanaged group, and every OFF press, gets no timer (the
@@ -68,6 +70,7 @@ import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { createShellyClient, INTERACTIVE_429_RETRIES, SHELLY_PERMANENT_CODES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { loadSafetyTimers } from '@/lib/shelly/safety-timers'
 import { DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { loadGroup, publicGroup } from '@/lib/shelly/group-load'
 import { effectiveTarget } from '@/lib/shelly/effective'
@@ -164,7 +167,9 @@ export const POST = withAuth(
       logError(MODULE, 'connection read failed', { locationId, reason: conn.reason, error: conn.error })
       return bad('Could not read the Shelly connection', 500)
     }
-    const engineConn = withLocationTz(conn.connection, user)
+    // The studio's safety-timer switch rides beside the zone (SHELLYTIMERS.5).
+    const safetyTimers = await loadSafetyTimers(db, locationId)
+    const engineConn = withLocationTz(conn.connection, user, { safetyTimers })
 
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
@@ -243,7 +248,7 @@ export const POST = withAuth(
     const cleared = members.map((m) => ({ ...m, override: null }))
 
     if (input.state === 'auto') {
-      return backToSchedule({ db, engineConn, locationId, group: savedGroup, members: cleared, tz: requestTz(user), nowMs, nowIso })
+      return backToSchedule({ db, engineConn, locationId, group: savedGroup, members: cleared, tz: requestTz(user), nowMs, nowIso, safetyTimers })
     }
 
     // ——— 3–4. one command over the members, stamp what landed ——————————
@@ -253,7 +258,7 @@ export const POST = withAuth(
       return NextResponse.json({ success: true, applied: 'all', pending_device_ids: [], group: publicGroup(savedGroup), ...holds })
     }
 
-    const cap = on && !unmanaged ? safetyCap(Date.parse(override.until) + SAFETY_MARGIN_MS, nowMs) : null
+    const cap = on && !unmanaged && safetyTimers ? safetyCap(Date.parse(override.until) + SAFETY_MARGIN_MS, nowMs) : null
     const sent = await sendAndStamp({
       db, engineConn, locationId, groupId: group.id, members: cleared, on, nowIso,
       toggleAfterSec: cap?.toggleAfterSec ?? null,
@@ -393,7 +398,7 @@ async function sendAndStamp({ db, engineConn, locationId, groupId: gid0, members
  * 'auto', after both overrides are cleared: plan the group's schedule ONCE and
  * send it to every member in ONE batch (see the header).
  */
-async function backToSchedule({ db, engineConn, locationId, group, members, tz, nowMs, nowIso }) {
+async function backToSchedule({ db, engineConn, locationId, group, members, tz, nowMs, nowIso, safetyTimers = false }) {
   if (!members.length) {
     return NextResponse.json({ success: true, applied: 'all', pending_device_ids: [], results: [], group: publicGroup(group) })
   }
@@ -429,7 +434,7 @@ async function backToSchedule({ db, engineConn, locationId, group, members, tz, 
   }
 
   const dateStr = strictDayStrIn(nowMs, tz)
-  const planFor = (m) => planDeviceAction(effectiveTarget(m, group, nowMs), nowMs, dateStr, occurrences, tz, { force: true })
+  const planFor = (m) => planDeviceAction(effectiveTarget(m, group, nowMs), nowMs, dateStr, occurrences, tz, { force: true, timers: safetyTimers })
 
   // Every member's override is cleared, so under force each one's effective
   // target is the group's schedule and its plan is the same: taken from the

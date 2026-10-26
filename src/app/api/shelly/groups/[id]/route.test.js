@@ -5,7 +5,7 @@
 // (renaming "Fans" to "fans" is fine), and deleting switches nothing: the FK
 // releases the members (ON DELETE SET NULL).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -22,13 +22,13 @@ vi.mock('@/lib/shelly/client', async (importOriginal) => {
   return { ...actual, createShellyClient: vi.fn() }
 })
 
-import { PATCH, DELETE, GROUP_DISABLE_NOTICE } from './route.js'
+import { PATCH, DELETE, GROUP_DISABLE_NOTICE, GROUP_DELETED_MESSAGE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { createShellyClient } from '@/lib/shelly/client'
 import {
-  LOC_A, LOC_B, GRP_A, GRP_B, BAD_ID, OWNER_A, STAFF_A,
-  groupRow, makeDb, updatesTo, deletesFrom, jsonReq, req, ctxFor,
+  LOC_A, LOC_B, GRP_A, GRP_B, BAD_ID, OWNER_A, STAFF_A, DEV_A, DEV_B,
+  groupRow, deviceRow, makeDb, updatesTo, deletesFrom, jsonReq, req, ctxFor,
 } from '../../shelly-routes.test-helpers.js'
 
 const URL = 'http://localhost/api/shelly/groups/x'
@@ -169,5 +169,47 @@ describe('DELETE /api/shelly/groups/[id]', () => {
   it('500s a failed delete', async () => {
     db.conf.deleteError.shelly_groups = { message: 'pg down' }
     expect((await DELETE(req(URL, { method: 'DELETE' }), ctxFor(GRP_A))).status).toBe(500)
+  })
+})
+
+// SHELLYTIMERS.6 — switching the schedule off or removing the group: "stay as
+// they are" holds only until a member's pending safety timer.
+describe('/api/shelly/groups/[id] — notices name a pending safety timer', () => {
+  const NOW = Date.parse('2026-08-23T12:00:00.000Z')
+  const SENTENCE = ' A light the schedule switched on still switches itself off by 21:30 (safety timer).'
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW) })
+  afterEach(() => vi.useRealTimers())
+  const withMembers = (over, members) => {
+    const w = world(over)
+    w.rows.shelly_devices = members
+    return w
+  }
+  const armed = deviceRow({ id: DEV_A, group_id: GRP_A, last_applied: { key: 'w:1', action: 'on', cap_at: '2026-08-23T20:30:00.000Z' } })
+  const managedOver = { enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [1], on: '07:00', off: '09:00' }] }
+
+  it('PATCH disable: the notice gains the time (latest member cap, studio zone)', async () => {
+    const earlier = deviceRow({ id: 'd0000000-0000-4000-8000-0000000000a9', device_id: 'aabbcc000009', group_id: GRP_A, last_state: { timer_until: '2026-08-23T14:00:00.000Z' } })
+    // Another studio's member with a later cap must not leak into the answer.
+    const foreign = deviceRow({ id: DEV_B, location_id: LOC_B, device_id: 'ffeedd998877', group_id: GRP_A, last_applied: { action: 'on', cap_at: '2026-08-23T23:00:00.000Z' } })
+    useDb(withMembers(managedOver, [armed, earlier, foreign]))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(GRP_A))).json()
+    expect(body.notice).toBe(`${GROUP_DISABLE_NOTICE}.${SENTENCE}`)
+  })
+
+  it('PATCH disable with no pending timer, or an unreadable member list, keeps the plain notice', async () => {
+    useDb(withMembers(managedOver, [deviceRow({ id: DEV_A, group_id: GRP_A, last_applied: { action: 'off' } })]))
+    expect((await (await PATCH(patchReq({ enabled: false }), ctxFor(GRP_A))).json()).notice).toBe(GROUP_DISABLE_NOTICE)
+    useDb({ ...withMembers(managedOver, [armed]), selectError: { shelly_devices: { message: 'pg down' } } })
+    const res = await PATCH(patchReq({ enabled: false }), ctxFor(GRP_A))
+    expect(res.status).toBe(200)
+    expect((await res.json()).notice).toBe(GROUP_DISABLE_NOTICE)
+  })
+
+  it('DELETE: the message gains the time, read from the members BEFORE the delete', async () => {
+    useDb(withMembers({}, [armed]))
+    const body = await (await DELETE(req(URL, { method: 'DELETE' }), ctxFor(GRP_A))).json()
+    expect(body.message).toBe(`${GROUP_DELETED_MESSAGE}${SENTENCE}`)
+    useDb(withMembers({}, []))
+    expect((await (await DELETE(req(URL, { method: 'DELETE' }), ctxFor(GRP_A))).json()).message).toBe(GROUP_DELETED_MESSAGE)
   })
 })

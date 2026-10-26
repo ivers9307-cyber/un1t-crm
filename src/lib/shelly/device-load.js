@@ -104,6 +104,10 @@ export function requestTz(user) {
  * authority here (it is the location every route scoped its query by), and a
  * stale embed on the connection row must not win over it.
  */
-export function withLocationTz(conn, user) {
-  return { ...conn, locations: { timezone: user?.activeLocation?.timezone ?? null } }
+//
+// `safetyTimers` (SHELLYTIMERS.5): the studio's safety-timer switch, read
+// server-side by the caller (loadSafetyTimers). Grafted beside the zone so
+// the engine reads both from one place; anything but true is off.
+export function withLocationTz(conn, user, { safetyTimers = false } = {}) {
+  return { ...conn, locations: { timezone: user?.activeLocation?.timezone ?? null, safety_timers: safetyTimers === true } }
 }

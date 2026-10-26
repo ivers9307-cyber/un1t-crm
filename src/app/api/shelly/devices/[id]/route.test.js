@@ -15,7 +15,7 @@
 //  4. REMOVING NAMES THE LOSS. shelly_energy_daily cascades from the device
 //     row; the message says so.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -32,7 +32,7 @@ import { PATCH, DELETE, DISABLE_NOTICE, GROUPED_MESSAGE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import {
-  LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_A, MANAGER_A, STAFF_A,
+  LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_A, OWNER_NY, MANAGER_A, STAFF_A,
   deviceRow, makeDb, updatesTo, deletesFrom, jsonReq, req, ctxFor,
 } from '../../shelly-routes.test-helpers.js'
 
@@ -316,5 +316,35 @@ describe('DELETE /api/shelly/devices/[id]', () => {
     getCurrentUser.mockResolvedValue(STAFF_A)
     expect((await DELETE(delReq(), ctxFor(DEV_A))).status).toBe(403)
     expect(deletesFrom(db, 'shelly_devices')).toEqual([])
+  })
+})
+
+// SHELLYTIMERS.6 — "stays as it is" holds only until a pending safety timer.
+describe('PATCH /api/shelly/devices/[id] — the disable notice names a pending safety timer', () => {
+  const NOW = Date.parse('2026-08-23T12:00:00.000Z')
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW) })
+  afterEach(() => vi.useRealTimers())
+  const onWith = (extra) => ({ last_applied: { key: 'w:1', action: 'on', reason: 'window_open', at: '2026-08-23T07:00:00.000Z', ...extra } })
+
+  it('an armed cap_at in the future: the time, in the studio zone', async () => {
+    useDb(bothLocations(onWith({ cap_at: '2026-08-23T20:30:00.000Z' })))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(body.notice).toBe(`${DISABLE_NOTICE}. It still switches itself off by 21:30 (safety timer).`)
+    getCurrentUser.mockResolvedValue(OWNER_NY)
+    useDb(bothLocations(onWith({ cap_at: '2026-08-23T20:30:00.000Z' })))
+    const ny = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(ny.notice).toMatch(/by 16:30 \(safety timer\)\.$/)
+  })
+
+  it('a running timer the plug reported (last_state.timer_until) counts too', async () => {
+    useDb(bothLocations({ ...onWith({}), last_state: { online: true, output: true, timer_until: '2026-08-23T13:15:00.000Z' } }))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(body.notice).toMatch(/by 14:15 \(safety timer\)\.$/)
+  })
+
+  it('a cap that has passed leaves the plain notice', async () => {
+    useDb(bothLocations(onWith({ cap_at: '2026-08-23T11:00:00.000Z' })))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(body.notice).toBe(DISABLE_NOTICE)
   })
 })

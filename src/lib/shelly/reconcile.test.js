@@ -1040,10 +1040,8 @@ describe('planning', () => {
 
     expect(out.skippedClass).toBe(2)
     // The live override is applied (it never depended on the timetable); the
-    // expired one is not a reason to bypass the skip. Two batches since
-    // SHELLYTIMERS.2: the override and the window carry different caps.
-    expect(calls.setGroups.flatMap((c) => c.gids)).toEqual(['mac3_0', 'mac4_0'])
-    expect(calls.setGroups.map((c) => c.opts?.toggleAfterSec)).toEqual([HOUR / 1000 + 1800, 54_000])
+    // expired one is not a reason to bypass the skip.
+    expect(calls.setGroups[0].gids).toEqual(['mac3_0', 'mac4_0'])
     expect(warned('occurrence load failed')).toHaveLength(1)
     expect(stampsOf(db).find((w) => w.id === 'live').patch.last_applied).toMatchObject({ key: 'ov:S-new', action: 'on', reason: 'override' })
   })
@@ -1339,9 +1337,10 @@ describe('runNowForDevice', () => {
     const out = await runNowForDevice(db, conn(), dev({ device_id: 'mac1' }), { now: () => NOW, makeClient: factory })
 
     expect(out).toEqual({ ok: true, action: 'on', reason: 'run_now' })
-    // Armed (SHELLYTIMERS.2): 21:30 + 30 min = 22:00 IST, 15 h after 07:00.
-    expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true, opts: { toggleAfterSec: 54_000 } }])
-    expect(db.writes.deviceUpdates[0].patch.last_applied).toMatchObject({ action: 'on', reason: 'run_now', cap_at: '2026-07-06T21:00:00.000Z' })
+    // Safety timers are off by default (SHELLYTIMERS.5): no timer, no cap_at.
+    expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true }])
+    expect(db.writes.deviceUpdates[0].patch.last_applied).toMatchObject({ action: 'on', reason: 'run_now' })
+    expect(db.writes.deviceUpdates[0].patch.last_applied).not.toHaveProperty('cap_at')
   })
 
   it('drives a light through setLight, never setSwitch, and stamps the run', async () => {
@@ -1350,7 +1349,7 @@ describe('runNowForDevice', () => {
     const out = await runNowForDevice(db, conn(), dev({ device_id: 'mac1', kind: 'light' }), { now: () => NOW, makeClient: factory })
 
     expect(out).toEqual({ ok: true, action: 'on', reason: 'run_now' })
-    expect(calls.setLight).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true, opts: { toggleAfterSec: 54_000 } }])
+    expect(calls.setLight).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true }])
     expect(calls.setSwitch).toEqual([])
     expect(db.writes.deviceUpdates[0].patch.last_applied).toMatchObject({ action: 'on', reason: 'run_now' })
   })
@@ -1665,8 +1664,7 @@ describe('runNowForDevice with a group', () => {
     const db = makeDb({})
     const out = await runNowForDevice(db, conn(), member(), { now: () => NOW, makeClient: factory, group: grp() })
     expect(out).toEqual({ ok: true, action: 'on', reason: 'run_now' })
-    // Armed on the GROUP's window (the member's own row is unmanaged).
-    expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true, opts: { toggleAfterSec: 54_000 } }])
+    expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: true }])
   })
 
   it('without a group it is unchanged: an unmanaged member is a no-op', async () => {
@@ -1709,10 +1707,12 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
   const CAP = '2026-07-06T21:00:00.000Z'
   const W = `w:${NOW}`
   const offItem = (id) => item(id, [{ channel: 0, output: false }])
+  // The studio's switch ON (SHELLYTIMERS.5) — the default is off.
+  const tconn = (over = {}) => conn({ locations: { timezone: 'Europe/Dublin', safety_timers: true }, ...over })
 
   it('an opening window carries its cap, and the stamp records cap_at', async () => {
     const { factory, calls } = makeClientFactory()
-    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1' }), dev({ id: 'b', device_id: 'mac2' })] })
+    const db = makeDb({ connections: [tconn()], devices: [dev({ id: 'a', device_id: 'mac1' }), dev({ id: 'b', device_id: 'mac2' })] })
     await runShellyReconcile(db, deps({ makeClient: factory }))
     // Same window, same cap: ONE batch.
     expect(calls.setGroups).toHaveLength(1)
@@ -1726,7 +1726,7 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
   it('different caps are different batches, each stamped with its own cap; an off carries none', async () => {
     const { factory, calls } = makeClientFactory()
     const db = makeDb({
-      connections: [conn()],
+      connections: [tconn()],
       devices: [
         dev({ id: 'long', device_id: 'mac1' }),
         dev({ id: 'short', device_id: 'mac2', fixed_windows: [{ days: [1, 2, 3, 4, 5, 6, 7], on: '07:00', off: '12:00' }] }),
@@ -1750,7 +1750,7 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
   it('an UNMANAGED device\'s override on goes out with no timer, in its own batch', async () => {
     const { factory, calls } = makeClientFactory()
     const db = makeDb({
-      connections: [conn()],
+      connections: [tconn()],
       devices: [
         dev({ id: 'plain', device_id: 'mac1' }),
         dev({ id: 'held', device_id: 'mac2', schedule_mode: 'none', fixed_windows: [], override: { state: 'on', until: iso(NOW + HOUR), set_at: 'S1' } }),
@@ -1767,7 +1767,7 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
   it('LEGACY: a row stamped before timers is re-armed once (cap_extend) when its relay reads on', async () => {
     const { factory, calls } = makeClientFactory()
     const legacy = { key: W, action: 'on', reason: 'window_open', at: iso(NOW - 60_000) }
-    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: legacy })] })
+    const db = makeDb({ connections: [tconn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: legacy })] })
     await runShellyReconcile(db, deps({ makeClient: factory }))
     expect(calls.setGroups).toEqual([expect.objectContaining({ on: true, gids: ['mac1_0'], opts: { toggleAfterSec: 54_000 } })])
     const stamped = stampsOf(db)[0].patch.last_applied
@@ -1775,7 +1775,7 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
 
     // The next tick sees the re-stamped row and is quiet: once, never every tick.
     const again = makeClientFactory()
-    const db2 = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: stamped })] })
+    const db2 = makeDb({ connections: [tconn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: stamped })] })
     await runShellyReconcile(db2, deps({ makeClient: again.factory, now: () => NOW + 60_000 }))
     expect(again.calls.setGroups).toEqual([])
   })
@@ -1783,7 +1783,7 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
   it('a re-arm never switches back on a relay a person switched off', async () => {
     const { factory, calls } = makeClientFactory({ get: ({ ids }) => ({ ok: true, statusCode: 200, body: ids.map(offItem) }) })
     const legacy = { key: W, action: 'on', reason: 'window_open', at: iso(NOW - 60_000) }
-    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: legacy })] })
+    const db = makeDb({ connections: [tconn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: legacy })] })
     await runShellyReconcile(db, deps({ makeClient: factory }))
     expect(calls.setGroups).toEqual([])
     expect(stampsOf(db)).toEqual([])
@@ -1793,14 +1793,14 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
     // The device is missing from a successful batch: read as offline.
     const { factory, calls } = makeClientFactory({ get: () => ({ ok: true, statusCode: 200, body: [] }) })
     const legacy = { key: W, action: 'on', reason: 'window_open', at: iso(NOW - 60_000) }
-    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: legacy })] })
+    const db = makeDb({ connections: [tconn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: legacy })] })
     await runShellyReconcile(db, deps({ makeClient: factory }))
     expect(calls.setGroups).toEqual([])
   })
 
   it('a re-arm that did not land stamps nothing (exactly-once follows the command)', async () => {
     const { factory } = makeClientFactory({ setGroups: () => ({ ok: true, statusCode: 200, failed: { mac1_0: 'DEVICE_OFFLINE' } }) })
-    const db = makeDb({ connections: [conn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: { key: W, action: 'on' } })] })
+    const db = makeDb({ connections: [tconn()], devices: [dev({ id: 'a', device_id: 'mac1', last_applied: { key: W, action: 'on' } })] })
     const out = await runShellyReconcile(db, deps({ makeClient: factory }))
     expect(out).toMatchObject({ planned: 1, applied: 0, failed: 1 })
     expect(stampsOf(db)).toEqual([])
@@ -1809,9 +1809,37 @@ describe('safety-net timers (SHELLYTIMERS.2)', () => {
   it('run-now OFF carries no timer and stamps no cap_at', async () => {
     const { factory, calls } = makeClientFactory()
     const db = makeDb({})
-    const out = await runNowForDevice(db, conn(), dev({ device_id: 'mac1', fixed_windows: [] }), { now: () => NOW, makeClient: factory })
+    const out = await runNowForDevice(db, tconn(), dev({ device_id: 'mac1', fixed_windows: [] }), { now: () => NOW, makeClient: factory })
     expect(out).toEqual({ ok: true, action: 'off', reason: 'run_now' })
     expect(calls.setSwitch).toEqual([{ loc: 'loc-A', id: 'mac1', ch: 0, on: false }])
     expect(db.writes.deviceUpdates[0].patch.last_applied).not.toHaveProperty('cap_at')
+  })
+})
+
+describe('safety-net timers switched OFF (SHELLYTIMERS.5, the default)', () => {
+  const W = `w:${NOW}`
+  for (const locations of [{ timezone: 'Europe/Dublin' }, { timezone: 'Europe/Dublin', safety_timers: false }, { timezone: 'Europe/Dublin', safety_timers: 'true' }, { timezone: 'Europe/Dublin', safety_timers: null }]) {
+    it(`locations ${JSON.stringify(locations)}: no toggle_after, no cap_at, no legacy re-arm`, async () => {
+      const { factory, calls } = makeClientFactory()
+      const db = makeDb({
+        connections: [conn({ locations })],
+        devices: [
+          dev({ id: 'a', device_id: 'mac1' }),
+          // Stamped before timers, relay reads on: would re-arm if timers were on.
+          dev({ id: 'b', device_id: 'mac2', last_applied: { key: W, action: 'on', reason: 'window_open', at: iso(NOW - 60_000) } }),
+        ],
+      })
+      await runShellyReconcile(db, deps({ makeClient: factory }))
+      expect(calls.setGroups).toEqual([{ loc: 'loc-A', gids: ['mac1_0'], groups: { switch: ['mac1_0'], light: [] }, on: true }])
+      expect(stampsOf(db).map((w) => w.patch.last_applied)).toEqual([{ key: W, action: 'on', reason: 'window_open', at: iso(NOW) }])
+    })
+  }
+
+  it('the sweep reads the switch as ONE json path, never the settings column', async () => {
+    const db = makeDb({ connections: [] })
+    await runShellyReconcile(db, deps({ makeClient: makeClientFactory().factory }))
+    const sel = callArgs(db.reads.connectionCalls, 'select')[0]
+    expect(sel).toContain('locations(timezone, safety_timers:settings->shelly->safety_timers)')
+    expect(sel).not.toMatch(/\bsettings\s*[,)]/)
   })
 })

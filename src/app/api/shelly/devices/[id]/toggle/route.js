@@ -56,7 +56,10 @@
 // with 409 group_unavailable before the override is touched (running the
 // device on its own, cleared schedule would force the relay off).
 //
-// THE SAFETY NET (SHELLYTIMERS.3). A press ON for a MANAGED device carries a
+// THE SAFETY NET (SHELLYTIMERS.3), only while the studio's switch
+// `locations.settings.shelly.safety_timers` is true (SHELLYTIMERS.5; off by
+// default, and off means every command is exactly what it was before timers).
+// A press ON for a MANAGED device carries a
 // device-side timer — `toggle_after` up to `until` + SAFETY_MARGIN_MS, the
 // planner's rule for an `on` override, so the cron reads the stamp's cap_at as
 // already armed — and the stamp records `cap_at`. The relay then switches
@@ -79,6 +82,7 @@ import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
 import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { loadSafetyTimers } from '@/lib/shelly/safety-timers'
 import { loadDevice, DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
 import { effectiveTarget } from '@/lib/shelly/effective'
 import { loadDeviceGroup } from '@/lib/shelly/group-load'
@@ -149,8 +153,11 @@ export const POST = withAuth(
       logError(MODULE, 'connection read failed', { locationId, reason: conn.reason, error: conn.error })
       return bad('Could not read the Shelly connection', 500)
     }
-    // The engine reads the zone off `locations` — graft the session's.
-    const engineConn = withLocationTz(conn.connection, user)
+    // The engine reads the zone off `locations` — graft the session's — and,
+    // beside it, the studio's safety-timer switch (SHELLYTIMERS.5: off by
+    // default; read server-side as one json path, never shipped anywhere).
+    const safetyTimers = await loadSafetyTimers(db, locationId)
+    const engineConn = withLocationTz(conn.connection, user, { safetyTimers })
 
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
@@ -358,7 +365,7 @@ export const POST = withAuth(
     // would name a component the device does not have (SHELLYLIGHT.3).
     // Three 429 retries (1.1 s, 2.2 s, 3.3 s): a press that lands on the
     // cron's read rides it out instead of answering "busy". SHELLYBUSY.1.
-    const cap = on && managed ? safetyCap(untilMs + SAFETY_MARGIN_MS, nowMs) : null
+    const cap = on && managed && safetyTimers ? safetyCap(untilMs + SAFETY_MARGIN_MS, nowMs) : null
     const timer = cap ? [{ toggleAfterSec: cap.toggleAfterSec }] : []
     const shelly = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
     const res = deviceKind(device) === 'light'
