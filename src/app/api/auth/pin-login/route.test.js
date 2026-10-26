@@ -34,7 +34,7 @@ vi.mock('@/lib/trusted-ips', async (orig) => {
 })
 
 const { createServerClient } = await import('@/lib/supabase')
-const { findProfileByPin } = await import('@/lib/studio-pin')
+const { findProfileByPin, PinAmbiguousError } = await import('@/lib/studio-pin')
 const { findDeviceByToken, getDeviceLockoutState } = await import('@/lib/studio-devices')
 const { isTrustedIpForLocation } = await import('@/lib/trusted-ips')
 const { POST } = await import('./route.js')
@@ -195,6 +195,32 @@ describe('pin-login — wrong PIN', () => {
       body: { device_token: VALID_TOKEN, pin: VALID_PIN },
     }))
     expect(res.status).toBe(403)
+    expect(attemptInserts).toHaveLength(1)
+    expect(attemptInserts[0].outcome).toBe('wrong_pin')
+    expect(attemptInserts[0].matched_profile).toBe(null)
+  })
+})
+
+describe('pin-login — PINSCOPE.1 candidate pool', () => {
+  it("matches only among the people at the device's studio", async () => {
+    findDeviceByToken.mockResolvedValue(DEVICE)
+    isTrustedIpForLocation.mockResolvedValue(true)
+    getDeviceLockoutState.mockResolvedValue({ locked: false, recentFailures: 0 })
+    findProfileByPin.mockResolvedValue(null)
+    await POST(buildRequest({ body: { device_token: VALID_TOKEN, pin: VALID_PIN } }))
+    expect(findProfileByPin).toHaveBeenCalledWith(
+      expect.objectContaining({ pin: VALID_PIN, locationId: DEVICE.location_id }),
+    )
+  })
+
+  it('refuses a PIN two candidates share like a wrong PIN, and counts it towards the lockout', async () => {
+    findDeviceByToken.mockResolvedValue(DEVICE)
+    isTrustedIpForLocation.mockResolvedValue(true)
+    getDeviceLockoutState.mockResolvedValue({ locked: false, recentFailures: 0 })
+    findProfileByPin.mockRejectedValue(new PinAmbiguousError())
+    const res = await POST(buildRequest({ body: { device_token: VALID_TOKEN, pin: VALID_PIN } }))
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('Not allowed')
     expect(attemptInserts).toHaveLength(1)
     expect(attemptInserts[0].outcome).toBe('wrong_pin')
     expect(attemptInserts[0].matched_profile).toBe(null)

@@ -7,7 +7,8 @@
 //   2. Device token — paired and not revoked
 //   3. Trusted IP   — source IP is in the location's CIDR list
 //   4. Device lock  — 5-strikes-in-15-min cooldown not active
-//   5. PIN match    — finds the staffer by PIN-hash comparison
+//   5. PIN match    — finds the staffer by PIN-hash comparison, among
+//                     the people who can work at the device's studio
 //
 // Every attempt — success or failure — writes one row to
 // pin_login_attempts. That table drives both the per-device lockout
@@ -25,7 +26,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { findProfileByPin, isValidPinFormat } from '@/lib/studio-pin'
+import { findProfileByPin, isValidPinFormat, PinAmbiguousError } from '@/lib/studio-pin'
 import {
   findDeviceByToken,
   getDeviceLockoutState,
@@ -161,13 +162,27 @@ export async function POST(request) {
     )
   }
 
-  // -- 5. PIN match across all active profiles. PIN uniqueness means
-  //       at most one match. findProfileByPin throws if a misconfig
-  //       has more than safetyCap profiles holding live PINs.
+  // -- 5. PIN match among the people who can work at the device's
+  //       studio (PINSCOPE.1: a member there, an org admin of its
+  //       organisation, or the master), never the whole estate. A PIN
+  //       two candidates share is refused like a wrong PIN, not settled
+  //       by row order. findProfileByPin throws if more than safetyCap
+  //       candidates hold live PINs.
   let matched
   try {
-    matched = await findProfileByPin({ db, pin })
+    matched = await findProfileByPin({ db, pin, locationId: device.location_id })
   } catch (err) {
+    if (err instanceof PinAmbiguousError) {
+      logWarn('pin-login', 'pin held by more than one candidate', { deviceId: device.id })
+      await logAttempt(db, {
+        deviceId: device.id, sourceIp, outcome: 'wrong_pin',
+        matchedProfile: null, userAgent,
+      })
+      return NextResponse.json(
+        { success: false, error: 'Not allowed' },
+        { status: 403 },
+      )
+    }
     logWarn('pin-login', 'pin match failed', { err })
     return NextResponse.json(
       { success: false, error: 'Server error' },
