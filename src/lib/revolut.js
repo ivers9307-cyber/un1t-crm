@@ -23,6 +23,14 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { logWarn } from './log'
+import {
+  DEFAULT_EXPIRE_PENDING_AFTER,
+  buildCustomer,
+  normaliseExpirePendingAfter,
+  sanitiseStatementDescriptorSuffix,
+} from './revolut-order-fields'
+
+export { DEFAULT_EXPIRE_PENDING_AFTER }
 
 // API version pinned by header — Revolut requires this on every
 // request. Updating the date string is the migration path when they
@@ -193,6 +201,17 @@ async function request(path, {
  *   look the order up by id alone.
  * @param {string} [args.idempotencyKey] — protect against duplicate
  *   orders on retry. Recommended; we pass deposit_token here.
+ * @param {{ email?: string, fullName?: string, phone?: string }} [args.customer]
+ *   — REVPAY.7: sent as `customer`. Revolut creates a NEW customer record per
+ *   order from these details (no `customer.id` is needed or used).
+ * @param {string} [args.merchantReference] — REVPAY.7: `merchant_order_data.reference`,
+ *   our row id with a prefix, so an order found in the dashboard maps to a row.
+ * @param {string} [args.statementDescriptorSuffix] — REVPAY.7: shown on the card
+ *   statement after the account's base descriptor; sanitised to the spec.
+ * @param {string|null} [args.expirePendingAfter] — REVPAY.7: ISO 8601 duration after
+ *   which an unpaid order fails (`ORDER_FAILED`). `undefined` = DEFAULT_EXPIRE_PENDING_AFTER
+ *   (PT30M); `null` = opt out (the order never expires); clamped to PT1M..PT720H.
+ *   Cannot be changed after creation.
  */
 export async function createOrder({
   amount,
@@ -208,6 +227,10 @@ export async function createOrder({
   redirectUrl,
   metadata,
   idempotencyKey,
+  customer,
+  merchantReference,
+  statementDescriptorSuffix,
+  expirePendingAfter,
 }) {
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new RevolutError('createOrder: amount must be a positive integer in minor units', 400)
@@ -220,6 +243,19 @@ export async function createOrder({
   if (description) body.description = description
   if (redirectUrl) body.redirect_url = redirectUrl
   if (metadata && Object.keys(metadata).length > 0) body.metadata = metadata
+
+  const cust = buildCustomer(customer)
+  if (cust) body.customer = cust
+  const reference = merchantReference == null ? '' : String(merchantReference).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200)
+  if (reference) body.merchant_order_data = { reference }
+  const suffix = sanitiseStatementDescriptorSuffix(statementDescriptorSuffix)
+  if (suffix) body.statement_descriptor_suffix = suffix
+  if (expirePendingAfter !== null) {
+    const raw = expirePendingAfter === undefined ? DEFAULT_EXPIRE_PENDING_AFTER : expirePendingAfter
+    const expiry = normaliseExpirePendingAfter(raw)
+    if (expiry) body.expire_pending_after = expiry
+    else logWarn('revolut', 'expirePendingAfter is not an ISO 8601 duration; order created without an expiry')
+  }
   return request('/api/orders', { method: 'POST', body, idempotencyKey })
 }
 

@@ -64,6 +64,12 @@ describe('POST /api/public/offers/[slug]/checkout', () => {
     const { redirectUrl } = createOrder.mock.calls[0][0]
     expect(redirectUrl).toMatch(/^https:\/\/www\.un1tdublin\.com\/offers\/3-month-membership\?purchase=.+/)
     expect(redirectUrl).toContain(`purchase=${json.data.purchaseId}`)
+    // REVPAY.7: buyer, our row id and the offer on the statement; default expiry (no override).
+    const sent = createOrder.mock.calls[0][0]
+    expect(sent.customer).toEqual({ email: 'jane@example.com', fullName: goodBody.name })
+    expect(sent.merchantReference).toBe(`offer:${json.data.purchaseId}`)
+    expect(sent.statementDescriptorSuffix).toBe('3 Month Membership')
+    expect('expirePendingAfter' in sent).toBe(false)
     const inserted = state.inserts[0]
     expect(inserted).toEqual(expect.objectContaining({
       offer_id: 'offer-1', location_id: 'loc1', revolut_order_id: 'ord_1',

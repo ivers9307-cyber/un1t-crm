@@ -23,6 +23,8 @@
 // would land.
 
 import { paymentsFor } from './payments'
+import { resolveEntryPolicy } from './entry-policy'
+import { isoDurationFromHours } from './revolut-order-fields'
 import {
   resolveEventHost,
   resolvePaymentProvider,
@@ -184,6 +186,15 @@ export async function createRacePayment({ db, race, registration, captain, prici
       domain: 'un1t_race', // disambiguates from cars in the shared webhook stream
     },
     idempotencyKey: registration.id, // re-issuing for the same registration is safe
+    // REVPAY.7 — captain, our registration id (the payment row does not exist
+    // yet), and the event on the statement. The order must outlive the place it
+    // pays for: an unpaid entry holds its place for the event's unpaid_hold_hours
+    // (48 h by default, resolveEntryPolicy) and a returning buyer is resumed on
+    // this order, so the pending expiry is that hold, not a checkout timer.
+    customer: { email: captain.email, fullName: captain.name },
+    merchantReference: `race:${registration.id}`,
+    statementDescriptorSuffix: race.name,
+    expirePendingAfter: isoDurationFromHours(resolveEntryPolicy(race).unpaid_hold_hours),
     connectedAccountId: host?.stripe_connected_account_id || null,
     applicationFeeCents: applicationFee,
   })

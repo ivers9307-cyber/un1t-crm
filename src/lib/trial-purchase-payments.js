@@ -37,6 +37,11 @@ export async function createTrialPurchasePayment({ db, purchase, location, amoun
     returnUrl: `${baseUrl}${returnPath}?purchase=${purchase.id}`,
     metadata: { trial_purchase_id: purchase.id, domain: 'un1t_trial_purchase', location_id: purchase.location_id },
     idempotencyKey: purchase.id,
+    // REVPAY.7 — buyer, our row id, and what was bought on the statement. Paid
+    // in-page straight after the form: the 30-minute default expiry applies.
+    customer: { email: purchase.customer_email, fullName: purchase.customer_name },
+    merchantReference: `trial:${purchase.id}`,
+    statementDescriptorSuffix: 'TRIAL',
     connectedAccountId,
     applicationFeeCents: 0,
   })

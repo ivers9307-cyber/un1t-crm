@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { createOrder, getOrder, RevolutError } from '@/lib/revolut'
+import { isoDurationFromSeconds } from '@/lib/revolut-order-fields'
 import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
@@ -53,6 +54,7 @@ export async function POST(request, props) {
     .from('cars')
     .select(`
       id, make, model, location_id, deposit_token, deposit_token_expires_at,
+      buyer_name, buyer_email,
       deposit_amount, deposit_status,
       deposit_revolut_order_id, deposit_revolut_checkout_url,
       locations ( id, car_deposit_terms_version )
@@ -158,6 +160,18 @@ export async function POST(request, props) {
           deposit_token: car.deposit_token,
         },
         idempotencyKey: `deposit-${car.deposit_token}`,
+        // REVPAY.7 — this order is RE-USED for every retry on the same token
+        // (getOrder above, and the idempotency key), so it must live as long as
+        // the link does: the pending expiry is the token's remaining time
+        // (issue-deposit-link rotates the token and clears the order on every
+        // issue, so a new link always gets a new order). A token with no expiry
+        // opts out: the order never expires, as before.
+        expirePendingAfter: car.deposit_token_expires_at
+          ? isoDurationFromSeconds((new Date(car.deposit_token_expires_at).getTime() - Date.now()) / 1000)
+          : null,
+        customer: { email: car.buyer_email, fullName: car.buyer_name },
+        merchantReference: `car:${car.id}`,
+        statementDescriptorSuffix: 'DEPOSIT',
       })
       // Spec field is `token` (Order schema, merchant-2026-03-12.yaml).
       publicId = order?.token

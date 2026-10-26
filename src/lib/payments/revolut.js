@@ -19,7 +19,13 @@ export const provider = 'revolut'
  * Create a checkout order.
  * @returns {Promise<{ providerRef: string, checkoutToken: string|null, checkoutUrl: string|null, state: string, amountCents: number }>}
  */
-export async function createPayment({ amountCents, currency, description, returnUrl, metadata, idempotencyKey }) {
+export async function createPayment({
+  amountCents, currency, description, returnUrl, metadata, idempotencyKey,
+  // REVPAY.7 — order enrichment, passed straight to createOrder (which omits
+  // what is missing and sanitises the rest). `expirePendingAfter`: undefined =
+  // the 30-minute default, null = never expire.
+  customer, merchantReference, statementDescriptorSuffix, expirePendingAfter,
+}) {
   const order = await revolutCreateOrder({
     amount: amountCents,
     currency,
@@ -27,6 +33,10 @@ export async function createPayment({ amountCents, currency, description, return
     redirectUrl: returnUrl,
     metadata,
     idempotencyKey,
+    customer,
+    merchantReference,
+    statementDescriptorSuffix,
+    expirePendingAfter,
   })
   return {
     providerRef: order.id,

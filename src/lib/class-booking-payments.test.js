@@ -48,6 +48,17 @@ describe('createClassBookingPayment', () => {
     expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ description: 'UN1T Stillorgan intro: HIIT' }))
   })
 
+  it('REVPAY.7: the order carries the buyer, class:<id> and an INTRO CLASS suffix, on the default expiry', async () => {
+    await createClassBookingPayment({ db: makeDb([]), request, location, amountCents: 2900, currency: 'EUR' })
+    const args = createPayment.mock.calls[0][0]
+    expect(args).toEqual(expect.objectContaining({
+      customer: { email: 'a@b.com', fullName: 'A B' },
+      merchantReference: 'class:req1',
+      statementDescriptorSuffix: 'INTRO CLASS',
+    }))
+    expect('expirePendingAfter' in args).toBe(false)
+  })
+
   it('W1.S1a: an unresolved brand never borrows another gym', () => {
     expect(classBookingPaymentDescription('', 'HIIT')).toBe('Intro class: HIIT')
     expect(classBookingPaymentDescription('Northside Strength', '')).toBe('Northside Strength intro: class')

@@ -308,7 +308,7 @@ export async function POST(request) {
     try {
       const pay = await createClassBookingPayment({
         db,
-        request: { id: queuedRow.id, location_id: locationId, class_name: queuedRow.class_name },
+        request: { id: queuedRow.id, location_id: locationId, class_name: queuedRow.class_name, customer_name: name, customer_email: b.email.toLowerCase() },
         location: locationForPay,
         amountCents: priceCents,
         currency,

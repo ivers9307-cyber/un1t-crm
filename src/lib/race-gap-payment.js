@@ -198,6 +198,17 @@ export async function createGapPayment({ db, move = null, registration, race, re
         : `move:${move.id}:${forThisMove.length}`,
       connectedAccountId,
       applicationFeeCents: 0, // the per-ticket platform fee was taken on the entry
+      // REVPAY.7 — payer, our registration id (the payment row does not exist
+      // yet; a staff link adds the move id so the order maps to its move) and
+      // what it is on the statement. A STAFF link is emailed and can be paid
+      // days later, and this row is reused while it is pending, so it lives 7
+      // days; a CUSTOMER's date change is paid in-page, so it takes the
+      // 30-minute default (a lapsed one fails, refreshRacePaymentFromProvider
+      // closes the row and a fresh link is minted).
+      customer: { email, fullName: entryLeadName({ registration, payment: entryPayment }) },
+      merchantReference: pendingMove ? `gap:${registration.id}` : `gap:${move.id}`,
+      statementDescriptorSuffix: 'PRICE DIFFERENCE',
+      ...(pendingMove ? {} : { expirePendingAfter: 'P7D' }),
     })
   } catch (e) {
     logError('race-gap-payment', 'provider refused the gap payment; no link minted', { err: e, provider: providerName, registrationId: registration.id, moveId: move?.id || null })

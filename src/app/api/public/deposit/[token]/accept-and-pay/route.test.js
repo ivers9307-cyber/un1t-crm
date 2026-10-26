@@ -48,6 +48,7 @@ const PAST = new Date(Date.now() - 3600e3).toISOString()
 const CAR = {
   id: 'car-1', make: 'Tesla', model: 'Model 3', location_id: 'loc-1',
   deposit_token: 'tok-1', deposit_token_expires_at: FUTURE,
+  buyer_name: 'Bea Buyer', buyer_email: 'buyer@example.com',
   deposit_amount: 500, deposit_status: 'sent',
   deposit_revolut_order_id: null, deposit_revolut_checkout_url: null,
   locations: { id: 'loc-1', car_deposit_terms_version: 1 },
@@ -118,11 +119,24 @@ describe('POST /api/public/deposit/[token]/accept-and-pay', () => {
     expect(res.status).toBe(200)
     expect(createOrder).toHaveBeenCalledTimes(1)
     expect(createOrder.mock.calls[0][0].idempotencyKey).toBe('deposit-tok-1')
+    const sent = createOrder.mock.calls[0][0]
+    expect(sent.customer).toEqual({ email: 'buyer@example.com', fullName: 'Bea Buyer' })
+    expect(sent.merchantReference).toBe('car:car-1')
+    expect(sent.statementDescriptorSuffix).toBe('DEPOSIT')
+    // The order is re-used for every retry on the token, so it lives as long as
+    // the token does (FUTURE is one hour away).
+    expect(sent.expirePendingAfter).toBe('PT1H')
     expect(body.order_id).toBe('ord-new')
     expect(body.public_id).toBe('sdk-tok')
     const stamp = db._updates.find(u => u.deposit_revolut_order_id === 'ord-new')
     expect(stamp).toBeTruthy()
     expect(stamp.deposit_terms_accepted_version).toBe(1)
+  })
+
+  it('REVPAY.7: a token with no expiry opts out of the order expiry (null), never the 30-minute default', async () => {
+    createServerClient.mockReturnValue(makeDb({ car: { ...CAR, deposit_token_expires_at: null } }))
+    await POST(makeReq(), props())
+    expect(createOrder.mock.calls[0][0].expirePendingAfter).toBeNull()
   })
 
   it('createOrder failure → still stamps the buyer acceptance, returns the provider status', async () => {
