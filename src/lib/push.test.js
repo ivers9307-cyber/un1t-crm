@@ -470,6 +470,20 @@ describe('resolvePushAllowedIds — the category is bare', () => {
   })
 })
 
+// SHELLYALERTS.2 — smart plug alerts reach owners and managers by default,
+// nobody else (the category is registered, so it does not fail closed).
+describe('resolvePushAllowedIds — shelly_alert role defaults', () => {
+  it.each([['owner', true], ['manager', true], ['head_coach', false], ['staff', false], ['reception', false]])(
+    '%s → %s',
+    async (role, expected) => {
+      fakeProfiles = [{ id: 'u', active: true }]
+      fakeLinks = [{ profile_id: 'u', location_id: 'loc1', role, permissions: null }]
+      const allowed = await resolvePushAllowedIds(makeFakeDb(), ['u'], 'shelly_alert', { locationId: 'loc1' })
+      expect(allowed.has('u')).toBe(expected)
+    }
+  )
+})
+
 // PUSH-LOC.1 — the notification's location decides the per-category gate.
 describe('resolvePushAllowedIds — per-location gating', () => {
   // Richard's live case: owner at Stillorgan (role default notify_whatsapp

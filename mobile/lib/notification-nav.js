@@ -193,6 +193,10 @@ export function routeForNotification(data) {
     case 'issue_resolved': // submitter: their own report detail
       return data.issue_id ? `/issues/${data.issue_id}` : '/issues'
 
+    // ── Shelly smart plugs (SHELLYALERTS.3, the reconcile's alert pass) ─
+    case 'shelly_alert': // owner/manager: key rejected, offline, power fault
+      return '/shelly'
+
     // ── Admin ───────────────────────────────────────────────────────
     case 'admin_test_push': // delivery test from /admin — no destination
       return null
