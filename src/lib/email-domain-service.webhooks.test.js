@@ -24,11 +24,12 @@ vi.mock('@/lib/postmark-account', () => ({
   ensureTenantServerWebhooks: vi.fn(),
 }))
 
-import { provisionEmailDomain, verifyEmailDomain } from './email-domain-service.js'
+import { provisionEmailDomain, verifyEmailDomain, webhookFailureMessage } from './email-domain-service.js'
 import {
   createTenantServer,
   createTenantDomain,
   getTenantDomain,
+  domainIsFullyVerified,
   ensureTenantServerStreams,
   ensureTenantServerWebhooks,
 } from '@/lib/postmark-account'
@@ -167,6 +168,18 @@ describe('verifyEmailDomain — the verify button is the retry an operator can r
     expect(res.row.last_error).toMatch(/^Event webhooks were not registered.*HTTP 503.*Press Verify to retry\.$/)
   })
 
+  it('once the domain is live the copy names the Re-check DNS button the wizard then shows', async () => {
+    ensureTenantServerWebhooks.mockRejectedValue(new Error('Postmark server API error: HTTP 503'))
+    domainIsFullyVerified.mockReturnValueOnce(true)
+    const db = fakeDb({
+      organization_id: 'org-a', postmark_server_id: 101, postmark_server_token: 'srv-tok',
+      postmark_domain_id: 55, status: 'live', webhooks_registered_at: null,
+    })
+    const res = await verifyEmailDomain(db, 'org-a')
+    expect(res.row.status).toBe('live')
+    expect(res.row.last_error).toBe('Event webhooks were not registered on the sending server (Postmark server API error: HTTP 503). Press Re-check DNS to retry.')
+  })
+
   it('does nothing extra once stamped', async () => {
     const db = fakeDb({
       organization_id: 'org-a', postmark_server_id: 101, postmark_server_token: 'srv-tok',
@@ -174,5 +187,14 @@ describe('verifyEmailDomain — the verify button is the retry an operator can r
     })
     await verifyEmailDomain(db, 'org-a')
     expect(ensureTenantServerStreams).not.toHaveBeenCalled()
+  })
+})
+
+describe('webhookFailureMessage — names the button the wizard shows for that status', () => {
+  it('Verify before live, Re-check DNS once live, null with no failure', () => {
+    expect(webhookFailureMessage('boom', 'verifying')).toMatch(/Press Verify to retry\.$/)
+    expect(webhookFailureMessage('boom', 'pending')).toMatch(/Press Verify to retry\.$/)
+    expect(webhookFailureMessage('boom', 'live')).toMatch(/Press Re-check DNS to retry\.$/)
+    expect(webhookFailureMessage(null, 'live')).toBeNull()
   })
 })
