@@ -318,8 +318,23 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on })
       return commandFailure(res) ?? res
     },
-    setGroups: async (groupIds, on) => {
-      const res = await call('/v2/devices/api/set/groups', { switch: { ids: groupIds, command: { on: !!on } } })
+    // `on` ONLY — never brightness/mode/colour: a light keeps its own level.
+    setLight: async (deviceId, channel, on) => {
+      const res = await call('/v2/devices/api/set/light', { id: deviceId, channel: Number(channel) || 0, on: !!on })
+      return commandFailure(res) ?? res
+    },
+    // `groups` is a bare string[] (switch ids, the original shape) or
+    // { switch?: string[], light?: string[] }. Empty kinds are dropped; if
+    // none remain no request is spent.
+    setGroups: async (groups, on) => {
+      const kinds = Array.isArray(groups) ? { switch: groups } : groups || {}
+      const body = {}
+      for (const kind of ['switch', 'light']) {
+        const ids = kinds[kind]
+        if (Array.isArray(ids) && ids.length > 0) body[kind] = { ids, command: { on: !!on } }
+      }
+      if (Object.keys(body).length === 0) return { ok: true, statusCode: 0, failed: {} }
+      const res = await call('/v2/devices/api/set/groups', body)
       // Mirror setSwitch: a body carrying a top-level error fails the WHOLE
       // batch — the docs return group-level validation and server errors as an
       // HTTP error, not in failedCommands. Reporting it as { ok: true, failed:
