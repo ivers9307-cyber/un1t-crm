@@ -25,10 +25,29 @@ export const MAX_VISIT_MS = 4 * 3600 * 1000
 
 const iso = (ms) => new Date(ms).toISOString()
 
+/**
+ * A v4-shaped uuid for a session or visit id (the route pins the shape with
+ * uuidLike). Hermes ships no crypto global, hence the Math.random fallback
+ * (the same trade as mobile/lib/email-api.js draftUuid): the id carries no
+ * authority, and a collision with someone else's session is refused by the
+ * route's owner check.
+ */
+export function usageId() {
+  const c = globalThis.crypto
+  if (c?.randomUUID) return c.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (c?.getRandomValues) c.getRandomValues(bytes)
+  else for (let i = 0; i < 16; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 export function createUsageTracker({
   platform,
   appVersion = null,
-  newId,
+  newId = usageId,
   minVisitMs = MIN_VISIT_MS,
   maxVisitMs = MAX_VISIT_MS,
 }) {
@@ -131,5 +150,40 @@ export function createUsageTracker({
       pending = []
       return out
     },
+  }
+}
+
+/**
+ * Send everything the tracker holds: queued batches oldest first, then the
+ * live session's batch so far. `send(batch)` answers 'ok' (recorded),
+ * 'drop' (the server will never take it: a 400, or not recorded for this
+ * user) or 'retry' (offline, 401 mid-refresh, 5xx). A throw is 'retry'. The
+ * first 'retry' stops the loop and keeps that batch and everything after it,
+ * so batches for one session always land in order (the server keeps the
+ * latest end time, and an older batch landing last would roll it back).
+ * One flush at a time per tracker.
+ */
+const flushing = new WeakSet()
+export async function flushUsage(tracker, send, nowMs) {
+  if (flushing.has(tracker)) return
+  flushing.add(tracker)
+  try {
+    const live = tracker.drain(nowMs)
+    if (live) tracker.requeue(live)
+    const queue = tracker.takePending()
+    for (let i = 0; i < queue.length; i++) {
+      let outcome
+      try {
+        outcome = await send(queue[i])
+      } catch {
+        outcome = 'retry'
+      }
+      if (outcome === 'retry') {
+        for (const b of queue.slice(i)) tracker.requeue(b)
+        return
+      }
+    }
+  } finally {
+    flushing.delete(tracker)
   }
 }

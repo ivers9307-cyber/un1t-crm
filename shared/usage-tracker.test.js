@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { createUsageTracker, MAX_PENDING_BATCHES } from './usage-tracker.js'
+import { describe, it, expect, vi } from 'vitest'
+import { createUsageTracker, flushUsage, usageId, MAX_PENDING_BATCHES } from './usage-tracker.js'
 
 const T0 = Date.UTC(2026, 9, 26, 9, 0, 0)
 const iso = (ms) => new Date(ms).toISOString()
@@ -133,5 +133,63 @@ describe('createUsageTracker', () => {
     const t = tracker({ platform: 'phone', appVersion: '2.3.4' })
     t.screen('home', T0)
     expect(t.drain(T0 + 5_000).session).toMatchObject({ platform: 'phone', app_version: '2.3.4' })
+  })
+})
+
+describe('flushUsage', () => {
+  it('sends the live batch after the queued ones, in order', async () => {
+    const t = tracker()
+    t.screen('contacts', T0)
+    t.pause(T0 + 10_000)
+    t.resume(T0 + 20_000)
+    const sent = []
+    await flushUsage(t, async (b) => { sent.push(b.session.started_at); return 'ok' }, T0 + 30_000)
+    expect(sent).toEqual([iso(T0), iso(T0 + 20_000)])
+    expect(t.pending()).toHaveLength(0)
+  })
+
+  it('stops at the first retry and keeps it and everything after it', async () => {
+    const t = tracker()
+    t.requeue({ session: { id: 'a' }, visits: [] })
+    t.requeue({ session: { id: 'b' }, visits: [] })
+    const send = vi.fn().mockResolvedValueOnce('ok').mockResolvedValueOnce('retry')
+    await flushUsage(t, send, T0)
+    expect(t.pending().map((b) => b.session.id)).toEqual(['b'])
+  })
+
+  it('drops a batch the server will never take', async () => {
+    const t = tracker()
+    t.requeue({ session: { id: 'a' }, visits: [] })
+    await flushUsage(t, async () => 'drop', T0)
+    expect(t.pending()).toHaveLength(0)
+  })
+
+  it('treats a thrown send as retry', async () => {
+    const t = tracker()
+    t.requeue({ session: { id: 'a' }, visits: [] })
+    await flushUsage(t, async () => { throw new Error('offline') }, T0)
+    expect(t.pending()).toHaveLength(1)
+  })
+
+  it('never runs two flushes at once', async () => {
+    const t = tracker()
+    t.requeue({ session: { id: 'a' }, visits: [] })
+    let release
+    const send = vi.fn(() => new Promise((r) => { release = r }))
+    const first = flushUsage(t, send, T0)
+    await flushUsage(t, send, T0)
+    release('ok')
+    await first
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('usageId', () => {
+  it('is uuid shaped with and without crypto', () => {
+    const shape = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    expect(usageId()).toMatch(shape)
+    const saved = globalThis.crypto
+    vi.stubGlobal('crypto', undefined)
+    try { expect(usageId()).toMatch(shape) } finally { vi.stubGlobal('crypto', saved) }
   })
 })
