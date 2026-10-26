@@ -28,6 +28,14 @@
 //     countdown would be a promise nobody keeps; "Until midnight" omits
 //     `until` so the route computes midnight in the STUDIO's zone.
 //
+//  6. "BACK TO SCHEDULE" IS WORDED FROM `results[]` (SHELLYGROUPS.8). The
+//     'auto' branch sends no `message`, so each member that did not move is
+//     read by its own `code`: 'occurrences' means the timetable could not be
+//     read (nothing was sent, so "will follow when back online" would be a
+//     promise about the wrong failure); a PERMANENT refusal names the device
+//     and says Shelly refused it; only a member that did not answer is told it
+//     will follow once it is back online.
+//
 //  5. A SWITCHED-OFF GROUP IS "NEVER AUTOMATIC". The card has no separate
 //     on/off for the schedule (Richard's approved look), so the editor is
 //     handed the group as `schedule_mode: 'none'` whenever `enabled` is false,
@@ -42,6 +50,7 @@ import { AlertCircle, Droplet, Fan, Lightbulb, Plug, Trash2, Tv } from 'lucide-r
 import { Button, Card } from '@/components/ui'
 import { DEFAULT_TZ, instantToZonedParts, timeLabelIn } from '@shared/zoned-time'
 import { fetchJson, errorText, jsonBody } from './shelly-fetch'
+import { MAX_GROUP_NAME } from '@/lib/shelly/schemas'
 import { overrideUntilLabel } from './ShellyDeviceCard'
 import ShellyScheduleEditor from './ShellyScheduleEditor'
 import ShellyGroupMembersEditor from './ShellyGroupMembersEditor'
@@ -62,6 +71,8 @@ const AUTO_REASON_COPY = {
   disabled: 'This group has no schedule — pick fixed hours or follow classes first.',
   no_schedule: 'This group has no schedule — pick fixed hours or follow classes first.',
 }
+
+const NAME_TAKEN_COPY = 'A group with that name already exists'
 
 const isManaged = (g) => Boolean(g?.enabled) && g?.schedule_mode !== 'none'
 const deviceLabel = (d) => d.name || `${d.model || 'Shelly'} · ${String(d.device_id || '').slice(-4)}`
@@ -122,7 +133,12 @@ export function groupReasonLine(group, tz = DEFAULT_TZ, nowMs = Date.now()) {
   } else if (now.mode === 'none' || !isManaged(group)) {
     reason = 'Never automatic'
   } else if (group.schedule_mode === 'fixed') {
-    reason = `Fixed hours · ${fixedHoursToday(group.fixed_windows, tz, nowMs) || 'off today'}`
+    const hours = fixedHoursToday(group.fixed_windows, tz, nowMs)
+    // An overnight window opened yesterday is not in today's list, but the
+    // server says it is open: name its end rather than claim "off today".
+    if (hours) reason = `Fixed hours · ${hours}`
+    else if (now.mode === 'window' && now.until) reason = `Fixed hours · on until ${safeTime(now.until, tz)}`
+    else reason = 'Fixed hours · off today'
   } else if (now.windows_unread) {
     reason = "Follows classes · couldn't read today's classes"
   } else if (now.mode === 'window' && now.until) {
@@ -134,6 +150,59 @@ export function groupReasonLine(group, tz = DEFAULT_TZ, nowMs = Date.now()) {
   }
   if (groupSwitchState(now) !== 'mixed') return reason
   return `${now.on_count} of ${now.member_count} on · ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`
+}
+
+const joinNames = (names) => (names.length <= 1
+  ? names.join('')
+  : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+
+// Our copy for a member the route could not move, keyed by its `code` (the
+// toggle route's PENDING_CODE vocabulary plus the auto branch's own codes).
+const AUTO_CODE_COPY = {
+  auth: 'Shelly rejected the stored key — re-paste it from the Shelly app.',
+  rate_limited: 'Shelly is busy right now — the group will follow within a minute.',
+  config: 'The Shelly server on file is invalid — fix it in the connection settings.',
+}
+
+/**
+ * What "Back to schedule" did, from the route's `results[]` (rule 6).
+ * Returns null when every member moved.
+ *
+ * @param {Array<{device_id: string, applied: string|null, code?: string, shelly_code?: string, permanent?: boolean}>} results
+ * @param {(id: string) => string} nameOf
+ */
+export function autoOutcomeText(results, nameOf) {
+  const missed = (Array.isArray(results) ? results : []).filter((r) => r && r.applied == null)
+  if (!missed.length) return null
+  if (missed.some((r) => r.code === 'occurrences')) {
+    return "Couldn't read today's classes — nothing was switched. Try again in a minute."
+  }
+  const total = results.length
+  const moved = total - missed.length
+  const parts = []
+  const names = (rows) => joinNames(rows.map((r) => nameOf(r.device_id)))
+
+  const refused = missed.filter((r) => r.permanent === true)
+  if (refused.length) {
+    parts.push(`Shelly refused ${names(refused)} — check ${refused.length === 1 ? 'it' : 'them'} in the Shelly app.`)
+  }
+  const accountWide = new Set()
+  for (const r of missed) if (!r.permanent && AUTO_CODE_COPY[r.code]) accountWide.add(AUTO_CODE_COPY[r.code])
+  parts.push(...accountWide)
+
+  const mismatch = missed.filter((r) => r.code === 'plan_mismatch')
+  if (mismatch.length) parts.push(`${names(mismatch)} ${mismatch.length === 1 ? 'was' : 'were'} not switched.`)
+  const unverified = missed.filter((r) => r.code === 'unverified' || r.code === 'bad_device')
+  if (unverified.length) parts.push(`Couldn't confirm ${names(unverified)}.`)
+
+  const handled = new Set(['plan_mismatch', 'unverified', 'bad_device', ...Object.keys(AUTO_CODE_COPY)])
+  const silent = missed.filter((r) => !r.permanent && !handled.has(r.code))
+  if (silent.length) {
+    const one = silent.length === 1
+    parts.push(`${names(silent)} did not answer — ${one ? 'it' : 'they'} will follow when ${one ? 'it is' : 'they are'} back online.`)
+  }
+  const lead = moved > 0 ? `Back on schedule for ${moved} of ${total}.` : 'Nothing moved yet.'
+  return `${lead} ${parts.join(' ')}`
 }
 
 const SWITCH_FACE = {
@@ -181,6 +250,9 @@ export default function ShellyGroupCard({
   const [duration, setDuration] = useState('midnight')
   const [editingMembers, setEditingMembers] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [nameDraft, setNameDraft] = useState(group.name || '')
+  const [nameError, setNameError] = useState(null)
 
   const nowMs = Date.now()
   const managed = isManaged(group)
@@ -213,7 +285,16 @@ export default function ShellyGroupCard({
     // Rule 3 — pending BEFORE anything that looks like the new state.
     const applied = res.json?.applied
     if (res.json?.pending || applied === 'partial' || applied === 'none') {
-      setResult({ tone: 'warn', text: res.json?.message || PENDING_FALLBACK })
+      const nameOf = (id) => {
+        const d = byId.get(id)
+        return d ? deviceLabel(d) : 'one device'
+      }
+      const base = res.json?.message
+        || (next === 'auto' ? autoOutcomeText(res.json?.results, nameOf) : null)
+        || PENDING_FALLBACK
+      // An unmanaged group's lights stay as set: said on a partial answer too.
+      const notice = res.json?.notice
+      setResult({ tone: 'warn', text: notice ? `${base} ${notice}` : base })
       await onChanged?.()
       return
     }
@@ -241,6 +322,34 @@ export default function ShellyGroupCard({
     }
     await onChanged?.()
     return { ok: true, json: res.json }
+  }
+
+  function cancelRename() {
+    setRenaming(false)
+    setNameError(null)
+    setNameDraft(group.name || '')
+  }
+
+  async function saveName() {
+    const trimmed = nameDraft.trim()
+    if (!trimmed) {
+      setNameError('Give the group a name')
+      return
+    }
+    if (trimmed === group.name) {
+      cancelRename()
+      return
+    }
+    setBusy('name')
+    setNameError(null)
+    const res = await fetchJson(`/api/shelly/groups/${group.id}`, jsonBody('PATCH', { name: trimmed }))
+    setBusy(null)
+    if (!res.ok || res.json?.success === false) {
+      setNameError(res.json?.code === 'name_taken' ? NAME_TAKEN_COPY : errorText(res.json, 'Could not rename this group'))
+      return
+    }
+    setRenaming(false)
+    await onChanged?.()
   }
 
   async function remove() {
@@ -272,7 +381,38 @@ export default function ShellyGroupCard({
             <Icon size={16} aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-un1t-text">{group.name}</p>
+            {renaming ? (
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={nameDraft}
+                    maxLength={MAX_GROUP_NAME}
+                    autoFocus
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); saveName() }
+                      if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                    }}
+                    aria-label="Group name"
+                    className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-sm text-un1t-text"
+                  />
+                  <Button size="sm" variant="secondary" loading={busy === 'name'} onClick={saveName} aria-label="Save name">Save</Button>
+                  <Button size="sm" variant="ghost" onClick={cancelRename}>Cancel</Button>
+                </div>
+                {nameError && <p className="text-xs text-red-700" role="alert">{nameError}</p>}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setNameDraft(group.name || ''); setNameError(null); setRenaming(true) }}
+                className="block max-w-full truncate text-left text-sm font-semibold text-un1t-text hover:underline"
+                aria-label={`Rename ${group.name}`}
+                title="Rename"
+              >
+                {group.name}
+              </button>
+            )}
             <p className="mt-0.5 text-xs text-un1t-subtle" title={`Times shown in ${locationTz}`}>
               {groupReasonLine(group, locationTz, nowMs)}
             </p>
@@ -284,7 +424,9 @@ export default function ShellyGroupCard({
           aria-checked={faceInfo.aria}
           aria-label={`${group.name}: ${switchText}`}
           title={switchTitle}
-          disabled={controlsOff || face === 'empty' || busy === 'on' || busy === 'off'}
+          // One action at a time: a press while "Back to schedule" or a delete
+          // is in flight would race it on the same members.
+          disabled={controlsOff || face === 'empty' || (busy !== null && busy !== 'name')}
           onClick={() => toggle(face === 'on' ? 'off' : 'on')}
           className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition disabled:opacity-60 ${faceInfo.cls}`}
         >

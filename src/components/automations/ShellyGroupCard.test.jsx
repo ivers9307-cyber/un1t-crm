@@ -220,3 +220,136 @@ describe('ShellyGroupCard — the schedule', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Pick at least one day'))
   })
 })
+
+// SHELLYGROUPS.8 — carry-overs from the Task 10 review.
+describe('groupReasonLine — fixed hours that started yesterday', () => {
+  it('an overnight window still open says when it ends, not "off today"', () => {
+    // Sunday's 22:00–02:00 is still open at 01:00 on Monday, and Monday has no window of its own.
+    const g = group({
+      fixed_windows: [{ days: [7], on: '22:00', off: '02:00' }],
+      now: { on_count: 2, member_count: 2, mode: 'window', until: '2026-10-26T02:00:00.000Z', next_on: null },
+    })
+    expect(groupReasonLine(g, TZ, Date.parse('2026-10-26T01:00:00.000Z'))).toBe('Fixed hours · on until 02:00')
+  })
+})
+
+describe('ShellyGroupCard — "Back to schedule" worded from results', () => {
+  const backToSchedule = async (body) => {
+    global.fetch.mockResolvedValue(answer(200, body))
+    renderCard(group({ device_ids: ['d1', 'd2', 'd3'], now: { on_count: 1, member_count: 3, mode: 'window', until: null } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
+    await waitFor(() => expect(screen.getByRole('status')).toBeTruthy())
+    return screen.getByRole('status').textContent
+  }
+
+  it('an unreadable timetable says so, not "will follow when back online"', async () => {
+    const text = await backToSchedule({
+      success: true,
+      applied: 'none',
+      pending_device_ids: ['d1', 'd2', 'd3'],
+      results: ['d1', 'd2', 'd3'].map((id) => ({ device_id: id, applied: null, code: 'occurrences' })),
+    })
+    expect(text).toContain("Couldn't read today's classes")
+    expect(text).not.toMatch(/back online/)
+  })
+
+  it('a permanent refusal names the device and says Shelly refused it', async () => {
+    const text = await backToSchedule({
+      success: true,
+      applied: 'partial',
+      pending_device_ids: ['d2'],
+      results: [
+        { device_id: 'd1', applied: 'on', reason: 'fixed' },
+        { device_id: 'd2', applied: null, code: 'device', shelly_code: 'DEVICE_NOT_FOUND', permanent: true },
+        { device_id: 'd3', applied: 'on', reason: 'fixed' },
+      ],
+    })
+    expect(text).toContain('Shelly refused Back light')
+    expect(text).not.toMatch(/back online/)
+  })
+
+  it('only a member that did not answer gets "will follow when back online"', async () => {
+    const text = await backToSchedule({
+      success: true,
+      applied: 'partial',
+      pending_device_ids: ['d3'],
+      results: [
+        { device_id: 'd1', applied: 'on', reason: 'fixed' },
+        { device_id: 'd2', applied: 'on', reason: 'fixed' },
+        { device_id: 'd3', applied: null, code: 'device', shelly_code: 'DEVICE_OFFLINE', permanent: false },
+      ],
+    })
+    expect(text).toContain('Sauna plug')
+    expect(text).toMatch(/will follow when (it is|it's) back online/)
+    expect(text).not.toContain('refused')
+  })
+})
+
+describe('ShellyGroupCard — pending answers keep the "stays as you set it" notice', () => {
+  it('shows the route\'s notice alongside a partial answer', async () => {
+    const message = 'Saved. 1 of 2 did not answer — it will follow as soon as it is back online.'
+    const notice = 'No schedule is running this group, so its lights stay as you set them until you change them'
+    global.fetch.mockResolvedValue(answer(200, {
+      success: true, applied: 'partial', pending: true, pending_device_ids: ['d2'], message, holds_until_changed: true, notice,
+    }))
+    renderCard(group({ enabled: false, now: { on_count: 1, member_count: 2, mode: 'none', until: null, next_on: null } }))
+    fireEvent.click(screen.getByRole('switch'))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(message))
+    expect(screen.getByRole('status').textContent).toContain(notice)
+  })
+})
+
+describe('ShellyGroupCard — one action at a time', () => {
+  it('the switch is disabled while "Back to schedule" is in flight', async () => {
+    global.fetch.mockReturnValue(new Promise(() => {}))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
+    await waitFor(() => expect(screen.getByRole('switch').disabled).toBe(true))
+  })
+
+  it('the switch is disabled while a delete is in flight', async () => {
+    global.fetch.mockReturnValue(new Promise(() => {}))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete group' }))
+    const confirm = screen.getAllByRole('button', { name: 'Delete group' }).at(-1)
+    fireEvent.click(confirm)
+    await waitFor(() => expect(screen.getByRole('switch').disabled).toBe(true))
+  })
+})
+
+describe('ShellyGroupCard — rename', () => {
+  it('renames through PATCH { name }', async () => {
+    const onChanged = vi.fn()
+    global.fetch.mockResolvedValue(answer(200, { success: true, group: { id: 'g1', name: 'Gym floor' } }))
+    renderCard(group(), { onChanged })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Studio lights' }))
+    const input = screen.getByLabelText('Group name')
+    fireEvent.change(input, { target: { value: '  Gym floor ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled())
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toBe('/api/shelly/groups/g1')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body)).toEqual({ name: 'Gym floor' })
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(screen.queryByLabelText('Group name')).toBeNull()
+  })
+
+  it('a taken name says so and keeps the editor open', async () => {
+    global.fetch.mockResolvedValue(answer(409, { success: false, error: 'A group with that name already exists here', code: 'name_taken' }))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Studio lights' }))
+    fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Fans' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('A group with that name already exists'))
+    expect(screen.getByLabelText('Group name')).toBeTruthy()
+  })
+
+  it('Escape cancels without a request', () => {
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Studio lights' }))
+    fireEvent.keyDown(screen.getByLabelText('Group name'), { key: 'Escape' })
+    expect(screen.queryByLabelText('Group name')).toBeNull()
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})
