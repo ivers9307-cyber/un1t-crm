@@ -47,8 +47,8 @@ vi.mock('@/lib/qstash', () => ({
 }))
 
 import {
-  isDue, selectBatch, stableHash, runRevolutReconcile,
-  RECONCILE_TICK_MS, RECONCILE_MIN_AGE_MS, RECONCILE_MAX_AGE_MS,
+  isDue, selectBatch, stableHash, runRevolutReconcile, selectReceiptSweepBatch,
+  RECONCILE_TICK_MS, RECONCILE_MIN_AGE_MS, RECONCILE_MAX_AGE_MS, RECEIPT_SWEEP_BUDGET,
 } from './revolut-reconcile'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
@@ -76,6 +76,13 @@ function makeDb(tables = {}, { failList = [] } = {}) {
       if (k === 'notnull') return r[c] != null
       if (k === 'gte') return r[c] != null && r[c] >= v
       if (k === 'lte') return r[c] != null && r[c] <= v
+      if (k === 'neq') return r[c] !== v
+      if (k === 'or') {
+        return c.split(',').some((part) => {
+          const [col, op, val] = part.split('.')
+          return op === 'is' && val === 'null' ? r[col] == null : false
+        })
+      }
       return true
     }))
     const run = (single) => {
@@ -99,6 +106,8 @@ function makeDb(tables = {}, { failList = [] } = {}) {
     b.is = (c, v) => { b._filters.push(['is', c, v]); return b }
     b.not = (c, op, v) => { if (op === 'is' && v === null) b._filters.push(['notnull', c]); return b }
     b.gte = (c, v) => { b._filters.push(['gte', c, v]); return b }
+    b.neq = (c, v) => { b._filters.push(['neq', c, v]); return b }
+    b.or = (expr) => { b._filters.push(['or', expr]); return b }
     b.lte = (c, v) => { b._filters.push(['lte', c, v]); return b }
     b.order = () => b
     b.range = (a, z) => { b._range = [a, z]; return b }
@@ -454,5 +463,118 @@ describe('runRevolutReconcile — run deadline', () => {
     expect(r.counts.due).toBe(4)
     expect(r.counts.checked).toBe(1)
     expect(r.counts.out_of_time).toBe(3)
+  })
+})
+
+describe('REVPAY.12 — paid-donation receipt sweep', () => {
+  const paid = (id, over = {}) => ({
+    id, status: 'paid', payment_provider: 'revolut', payment_provider_ref: `ord-${id}`, race_event_id: 'ev1',
+    donor_email: 'donor@x.ie', contact_id: null, receipt_email_sent_at: null, paid_at: ago(30 * MIN), created_at: ago(40 * MIN),
+    ...over,
+  })
+  const EVENTS = [{ id: 'ev1', charity: {} }]
+  const noProvider = vi.fn(async () => { throw new Error('the sweep makes no provider call') })
+
+  it('re-runs the side effects of a paid donation whose receipt never landed, as a NON-winning observer, with no provider call', async () => {
+    const db = makeDb({ donations: [paid('d1')], race_events: EVENTS })
+    runPaidDonationSideEffects.mockResolvedValueOnce({ contact: 'linked', consent: 'skipped', receipt: 'sent' })
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: noProvider })
+    expect(noProvider).not.toHaveBeenCalled()
+    expect(runPaidDonationSideEffects).toHaveBeenCalledTimes(1)
+    const arg = runPaidDonationSideEffects.mock.calls[0][0]
+    expect(arg.observerWon).toBe(false)
+    expect(arg.donation).toMatchObject({ id: 'd1', status: 'paid' })
+    expect(arg.race).toMatchObject({ id: 'ev1' })
+    expect(r.counts).toMatchObject({ receipt_candidates: 1, receipt_due: 1, receipt_retried: 1, receipt_sent: 1, receipt_contact_linked: 1, receipt_errors: 0 })
+    expect(r.healthy).toBe(true)
+  })
+
+  it('retries a contact link that failed even when the receipt went', async () => {
+    const db = makeDb({ donations: [paid('d1', { receipt_email_sent_at: ago(29 * MIN) })], race_events: EVENTS })
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: noProvider })
+    expect(runPaidDonationSideEffects).toHaveBeenCalledTimes(1)
+    expect(r.counts.receipt_retried).toBe(1)
+  })
+
+  it.each([
+    ['a done row (receipt stamped, contact linked)', { receipt_email_sent_at: ago(29 * MIN), contact_id: 'c1' }],
+    ['a row with no donor address', { donor_email: null }],
+    ['a row with an empty donor address', { donor_email: '' }],
+    ['a row with a whitespace-only donor address', { donor_email: '   ' }],
+    ['a Stripe donation', { payment_provider: 'stripe_connect' }],
+    ['a refunded donation', { status: 'refunded' }],
+    ['a donation paid under 15 minutes ago (the observers still own it)', { paid_at: ago(14 * MIN) }],
+    ['a donation paid over 7 days ago', { paid_at: ago(7 * 24 * HOUR + MIN) }],
+  ])('never lists %s', async (_w, over) => {
+    const db = makeDb({ donations: [paid('d1', over)], race_events: EVENTS })
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: noProvider })
+    expect(runPaidDonationSideEffects).not.toHaveBeenCalled()
+    expect(r.counts.receipt_candidates).toBe(0)
+  })
+
+  it('takes at most RECEIPT_SWEEP_BUDGET rows a tick, oldest first', async () => {
+    expect(RECEIPT_SWEEP_BUDGET).toBe(25)
+    const rows = Array.from({ length: 30 }, (_, i) => paid(`d${String(i).padStart(2, '0')}`, { paid_at: ago((20 + i) * MIN) }))
+    const db = makeDb({ donations: rows, race_events: EVENTS })
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: noProvider })
+    expect(runPaidDonationSideEffects).toHaveBeenCalledTimes(25)
+    expect(runPaidDonationSideEffects.mock.calls[0][0].donation.id).toBe('d29')
+    expect(r.counts).toMatchObject({ receipt_candidates: 30, receipt_due: 30, receipt_retried: 25, receipt_over_budget: 5 })
+  })
+
+  it('a failing receipt is counted, never unhealthy, and backs off with age like the provider rows', async () => {
+    const db = makeDb({ donations: [paid('d1')], race_events: EVENTS })
+    runPaidDonationSideEffects.mockResolvedValueOnce({ contact: 'linked', consent: 'skipped', receipt: 'failed' })
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: noProvider })
+    expect(r.counts).toMatchObject({ receipt_retried: 1, receipt_failed: 1, receipt_sent: 0 })
+    expect(r.healthy).toBe(true)
+  })
+
+  it('an unreadable sweep list is a count, never an unhealthy run', async () => {
+    const db = makeDb({ cars: [car('c1')] })
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table !== 'donations') return b
+      const realOr = b.or
+      b.or = (...a) => {
+        realOr(...a)
+        b.then = (res) => Promise.resolve({ data: null, error: { code: '57014' } }).then(res)
+        return b
+      }
+      return b
+    }
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: async () => ({ state: 'pending' }) })
+    expect(r.counts.receipt_list_failed).toBe(true)
+    expect(r.counts.list_failed).toEqual([])
+    expect(r.healthy).toBe(true)
+  })
+
+  it('a row whose event cannot be read is an error count; the next row still runs', async () => {
+    const db = makeDb({
+      donations: [paid('d1', { race_event_id: 'gone', paid_at: ago(40 * MIN) }), paid('d2')],
+      race_events: EVENTS,
+    })
+    const r = await runRevolutReconcile({ db, now: NOW, getOrder: noProvider })
+    expect(runPaidDonationSideEffects).toHaveBeenCalledTimes(1)
+    expect(runPaidDonationSideEffects.mock.calls[0][0].donation.id).toBe('d2')
+    expect(r.counts).toMatchObject({ receipt_errors: 1, receipt_retried: 1 })
+    expect(r.healthy).toBe(true)
+  })
+
+  it('selectReceiptSweepBatch: the 15 min .. 7 day window on paid_at, and the isDue backoff past 2 hours', () => {
+    const nowMs = NOW.getTime()
+    const at = (ms) => ({ id: 'x', paidAt: ago(ms) })
+    expect(selectReceiptSweepBatch([at(14 * MIN)], nowMs).due).toBe(0)
+    expect(selectReceiptSweepBatch([at(16 * MIN)], nowMs).due).toBe(1)
+    expect(selectReceiptSweepBatch([at(8 * 24 * HOUR)], nowMs).due).toBe(0)
+    // A three-hour-old failure is due on exactly one tick in four.
+    const tick0 = Math.floor(nowMs / RECONCILE_TICK_MS) * RECONCILE_TICK_MS
+    let dueTicks = 0
+    for (let k = 0; k < 4; k++) {
+      const t = tick0 + k * RECONCILE_TICK_MS
+      if (selectReceiptSweepBatch([{ id: 'x', paidAt: new Date(t - 3 * HOUR).toISOString() }], t).due === 1) dueTicks++
+    }
+    expect(dueTicks).toBe(1)
   })
 })
