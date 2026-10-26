@@ -74,7 +74,7 @@ import {
 import {
   plugTone, plugDisplayName, toggleResultText, errorText, isQueued,
   arrangeShellyCards, groupSwitchView, groupToggleOutcome, deviceSwitchView, memberMeta,
-  groupReasonLine, groupIconName, totalWattsText, unadoptedBannerText, nextClassWindow,
+  groupReasonLine, groupIconName, memberToggleLabel, totalWattsText, unadoptedBannerText, nextClassWindow,
   showBackToSchedule, groupAutoOutcome,
   nextClassLabel, screenHeaderLine,
   PLUG_TONE_TEXT, PLUG_TONE_DOT,
@@ -229,6 +229,9 @@ function GroupCard({ group, members, devices, connected, zone, busy, note, parti
   // withCount:false — the count is printed once, on the amber line below.
   const reason = groupReasonLine(group, zone, Date.now(), { withCount: false })
   const offerAuto = showBackToSchedule(group) && !sw.empty
+  // SHELLYPHONECOLLAPSE.1 — members stay hidden until asked for; the group
+  // switch is the control, the list is detail.
+  const [expanded, setExpanded] = useState(false)
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
       <View className="flex-row items-center">
@@ -275,6 +278,19 @@ function GroupCard({ group, members, devices, connected, zone, busy, note, parti
         <Text className={`text-xs mt-2 ${NOTE_CLASS[note.tone] || NOTE_CLASS.ok}`} accessibilityRole="text">{note.text}</Text>
       )}
       {members.length > 0 && (
+        <Pressable
+          onPress={() => setExpanded((v) => !v)}
+          hitSlop={{ top: 12, bottom: 12 }}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          accessibilityLabel={`${memberToggleLabel(members.length, expanded)}, ${group.name}`}
+          className="self-start flex-row items-center mt-2 active:opacity-70"
+        >
+          <Text className="text-xs font-semibold text-un1t-subtle">{memberToggleLabel(members.length, expanded)}</Text>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="#64748B" style={{ marginLeft: 4 }} />
+        </Pressable>
+      )}
+      {expanded && members.length > 0 && (
         <View className="mt-2">
           {members.map((d, i) => (
             <DeviceRow key={d.id} device={d} first={i === 0} {...rowProps(d)} locked={busy} />
