@@ -18,9 +18,10 @@
 // id that already belongs to another profile is refused outright, so one
 // person can never overwrite another's record.
 
+import { MAX_VISIT_MS } from '@shared/usage-tracker'
+
 export const FUTURE_SLACK_MS = 2 * 60_000
 export const MAX_AGE_MS = 48 * 3600_000
-export const MAX_VISIT_MS = 4 * 3600_000
 
 const iso = (ms) => new Date(ms).toISOString()
 

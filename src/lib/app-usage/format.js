@@ -2,7 +2,7 @@
 
 import { dateKeyIn, addDaysIn, dayStartMsIn, timeLabelIn } from '@shared/zoned-time'
 
-export function formatDuration(seconds) {
+export function formatUsageDuration(seconds) {
   const s = Math.round(Number(seconds) || 0)
   if (s <= 0) return '—'
   if (s < 60) return `${s}s`

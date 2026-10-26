@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Table, Loading } from '@/components/ui'
 import { todayStrIn, PLATFORM_TZ } from '@shared/zoned-time'
-import { formatDuration, formatLastActive, formatPerDay, timelineBars } from '@/lib/app-usage/format'
+import { formatUsageDuration, formatLastActive, formatPerDay, timelineBars } from '@/lib/app-usage/format'
 
 const RANGES = [
   { value: 'today', label: 'Today' },
@@ -98,15 +98,15 @@ export default function AppUsageReport() {
     { key: 'last', header: 'Last active', render: (r) => formatLastActive(r.lastActiveAt, Date.now(), PLATFORM_TZ) },
     { key: 'days', header: 'Days used', align: 'right', render: (r) => `${r.daysUsed} / ${data?.range?.days ?? ''}` },
     { key: 'spd', header: 'Sessions / day', align: 'right', render: (r) => formatPerDay(r.sessionsPerDay) },
-    { key: 'time', header: 'Total time', align: 'right', render: (r) => formatDuration(r.seconds) },
+    { key: 'time', header: 'Total time', align: 'right', render: (r) => formatUsageDuration(r.seconds) },
     { key: 'split', header: 'Phone / web', align: 'right', render: phoneWebLabel },
   ]
   const featureColumns = [
     { key: 'label', header: 'Feature', render: (r) => <span className="font-medium text-un1t-text">{r.label}</span> },
     { key: 'people', header: 'People', align: 'right', accessor: 'people' },
     { key: 'vpd', header: 'Visits / day', align: 'right', render: (r) => formatPerDay(r.visitsPerDay) },
-    { key: 'avg', header: 'Avg visit', align: 'right', render: (r) => formatDuration(r.avgVisitSec) },
-    { key: 'time', header: 'Total time', align: 'right', render: (r) => formatDuration(r.seconds) },
+    { key: 'avg', header: 'Avg visit', align: 'right', render: (r) => formatUsageDuration(r.avgVisitSec) },
+    { key: 'time', header: 'Total time', align: 'right', render: (r) => formatUsageDuration(r.seconds) },
   ]
 
   return (
@@ -139,7 +139,7 @@ export default function AppUsageReport() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Metric label="Active staff" value={`${totals.activeStaff} / ${totals.staffCount}`} />
           <Metric label="Sessions" value={totals.sessions} />
-          <Metric label="Time in app" value={formatDuration(totals.seconds)} />
+          <Metric label="Time in app" value={formatUsageDuration(totals.seconds)} />
           <Metric label="Top feature" value={totals.topFeature || '—'} />
         </div>
       )}
@@ -217,8 +217,8 @@ function PersonDetail({ person, filters, onClose }) {
             columns={[
               { key: 'label', header: 'Feature', render: (r) => <span className="font-medium text-un1t-text">{r.label}</span> },
               { key: 'vpd', header: 'Visits / day', align: 'right', render: (r) => formatPerDay(r.visitsPerDay) },
-              { key: 'avg', header: 'Avg visit', align: 'right', render: (r) => formatDuration(r.avgVisitSec) },
-              { key: 'time', header: 'Total time', align: 'right', render: (r) => formatDuration(r.seconds) },
+              { key: 'avg', header: 'Avg visit', align: 'right', render: (r) => formatUsageDuration(r.avgVisitSec) },
+              { key: 'time', header: 'Total time', align: 'right', render: (r) => formatUsageDuration(r.seconds) },
               {
                 key: 'share',
                 header: 'Share',
@@ -279,7 +279,7 @@ function PersonDetail({ person, filters, onClose }) {
                       : trail.trail.map((t, i) => (
                         <span key={`${t.feature}-${i}`}>
                           {i > 0 && <span className="text-un1t-muted mx-1">→</span>}
-                          {t.label} {formatDuration(t.seconds)}
+                          {t.label} {formatUsageDuration(t.seconds)}
                         </span>
                       ))}
                   </div>

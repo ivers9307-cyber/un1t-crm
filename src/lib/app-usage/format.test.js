@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { formatDuration, formatLastActive, formatPerDay, timelineBars } from './format.js'
+import { formatUsageDuration, formatLastActive, formatPerDay, timelineBars } from './format.js'
 
 const TZ = 'Europe/Dublin'
 
-describe('formatDuration', () => {
+describe('formatUsageDuration', () => {
   it('reads like the mockup', () => {
-    expect(formatDuration(0)).toBe('—')
-    expect(formatDuration(45)).toBe('45s')
-    expect(formatDuration(130)).toBe('2m 10s')
-    expect(formatDuration(51 * 60)).toBe('51m')
-    expect(formatDuration(6 * 3600 + 5 * 60)).toBe('6h 05m')
+    expect(formatUsageDuration(0)).toBe('—')
+    expect(formatUsageDuration(45)).toBe('45s')
+    expect(formatUsageDuration(130)).toBe('2m 10s')
+    expect(formatUsageDuration(51 * 60)).toBe('51m')
+    expect(formatUsageDuration(6 * 3600 + 5 * 60)).toBe('6h 05m')
   })
 })
 
