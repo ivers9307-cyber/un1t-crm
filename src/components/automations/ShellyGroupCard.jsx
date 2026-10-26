@@ -253,6 +253,8 @@ export default function ShellyGroupCard({
   const [renaming, setRenaming] = useState(false)
   const [nameDraft, setNameDraft] = useState(group.name || '')
   const [nameError, setNameError] = useState(null)
+  // Rename has its own flag: it never blocks, or is blocked by, the switch.
+  const [savingName, setSavingName] = useState(false)
 
   const nowMs = Date.now()
   const managed = isManaged(group)
@@ -287,7 +289,7 @@ export default function ShellyGroupCard({
     if (res.json?.pending || applied === 'partial' || applied === 'none') {
       const nameOf = (id) => {
         const d = byId.get(id)
-        return d ? deviceLabel(d) : 'one device'
+        return d ? deviceLabel(d) : 'a device'
       }
       const base = res.json?.message
         || (next === 'auto' ? autoOutcomeText(res.json?.results, nameOf) : null)
@@ -331,6 +333,7 @@ export default function ShellyGroupCard({
   }
 
   async function saveName() {
+    if (savingName) return
     const trimmed = nameDraft.trim()
     if (!trimmed) {
       setNameError('Give the group a name')
@@ -340,10 +343,10 @@ export default function ShellyGroupCard({
       cancelRename()
       return
     }
-    setBusy('name')
+    setSavingName(true)
     setNameError(null)
     const res = await fetchJson(`/api/shelly/groups/${group.id}`, jsonBody('PATCH', { name: trimmed }))
-    setBusy(null)
+    setSavingName(false)
     if (!res.ok || res.json?.success === false) {
       setNameError(res.json?.code === 'name_taken' ? NAME_TAKEN_COPY : errorText(res.json, 'Could not rename this group'))
       return
@@ -391,13 +394,13 @@ export default function ShellyGroupCard({
                     autoFocus
                     onChange={(e) => setNameDraft(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') { e.preventDefault(); saveName() }
+                      if (e.key === 'Enter') { e.preventDefault(); if (!savingName) saveName() }
                       if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
                     }}
                     aria-label="Group name"
                     className="rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-sm text-un1t-text"
                   />
-                  <Button size="sm" variant="secondary" loading={busy === 'name'} onClick={saveName} aria-label="Save name">Save</Button>
+                  <Button size="sm" variant="secondary" loading={savingName} onClick={saveName} aria-label="Save name">Save</Button>
                   <Button size="sm" variant="ghost" onClick={cancelRename}>Cancel</Button>
                 </div>
                 {nameError && <p className="text-xs text-red-700" role="alert">{nameError}</p>}
@@ -426,7 +429,7 @@ export default function ShellyGroupCard({
           title={switchTitle}
           // One action at a time: a press while "Back to schedule" or a delete
           // is in flight would race it on the same members.
-          disabled={controlsOff || face === 'empty' || (busy !== null && busy !== 'name')}
+          disabled={controlsOff || face === 'empty' || busy !== null}
           onClick={() => toggle(face === 'on' ? 'off' : 'on')}
           className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition disabled:opacity-60 ${faceInfo.cls}`}
         >

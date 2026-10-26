@@ -150,3 +150,35 @@ describe('ShellyDayPreview zone maths (fails under plain-UTC maths)', () => {
     expect(pct(screen.getByText('12'), 'left')).toBeCloseTo((11 / 23) * 100, 6)
   })
 })
+
+// SHELLYGROUPS.8 — the strip follows the groups it is handed, without losing
+// the chosen day, and the poll's identical data costs no request.
+describe('ShellyDayPreview — refetches when the groups change', () => {
+  const previewCalls = () => urls().filter((u) => String(u).startsWith('/api/shelly/preview'))
+
+  it('a changed schedule refetches the SAME chosen day', async () => {
+    global.fetch.mockImplementation(async (u) => answer(200, body(String(u).split('date=')[1])))
+    const { rerender } = render(<ShellyDayPreview groups={groups} tz={TZ} />)
+    expect(await screen.findByText('Preview · Monday')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Next day' }))
+    expect(await screen.findByText('Preview · Tuesday')).toBeTruthy()
+    await waitFor(() => expect(previewCalls()).toHaveLength(2))
+
+    const changed = groups.map((g) => (g.id === 'g2' ? { ...g, fixed_windows: [{ days: [2], on: '07:00', off: '09:00' }] } : g))
+    rerender(<ShellyDayPreview groups={changed} tz={TZ} />)
+    await waitFor(() => expect(previewCalls()).toHaveLength(3))
+    expect(previewCalls()[2]).toBe('/api/shelly/preview?date=2026-10-27')
+    expect(screen.getByText('Preview · Tuesday')).toBeTruthy()
+  })
+
+  it('identical group data (a new array from the poll) does not refetch', async () => {
+    global.fetch.mockImplementation(async (u) => answer(200, body(String(u).split('date=')[1])))
+    const { rerender } = render(<ShellyDayPreview groups={groups} tz={TZ} />)
+    expect(await screen.findByText('Preview · Monday')).toBeTruthy()
+    await waitFor(() => expect(previewCalls()).toHaveLength(1))
+    rerender(<ShellyDayPreview groups={groups.map((g) => ({ ...g }))} tz={TZ} />)
+    rerender(<ShellyDayPreview groups={JSON.parse(JSON.stringify(groups))} tz={TZ} />)
+    await Promise.resolve()
+    expect(previewCalls()).toHaveLength(1)
+  })
+})

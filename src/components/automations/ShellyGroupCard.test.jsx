@@ -353,3 +353,30 @@ describe('ShellyGroupCard — rename', () => {
     expect(global.fetch).not.toHaveBeenCalled()
   })
 })
+
+describe('ShellyGroupCard — rename has its own saving flag', () => {
+  it('Enter while a rename save is in flight sends nothing more, and the switch stays usable', async () => {
+    global.fetch.mockReturnValue(new Promise(() => {}))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Studio lights' }))
+    const input = screen.getByLabelText('Group name')
+    fireEvent.change(input, { target: { value: 'Gym floor' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('switch').disabled).toBe(false)
+  })
+})
+
+describe('autoOutcomeText — a member the page does not know', () => {
+  it('is named "a device"', async () => {
+    global.fetch.mockResolvedValue(answer(200, {
+      success: true, applied: 'partial', pending_device_ids: ['gone'],
+      results: [{ device_id: 'd1', applied: 'on' }, { device_id: 'gone', applied: null, code: 'device', permanent: true }],
+    }))
+    renderCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to schedule' }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Shelly refused a device'))
+  })
+})

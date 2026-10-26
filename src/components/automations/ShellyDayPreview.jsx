@@ -18,7 +18,7 @@
 
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '@/components/ui'
 import { addDaysIn, dayStartMsIn, formatInZone, timeLabelIn, todayStrIn, zonedWallClockToInstant } from '@shared/zoned-time'
 import { fetchJson } from './shelly-fetch'
@@ -58,16 +58,27 @@ export default function ShellyDayPreview({ groups = [], tz }) {
   const date = addDaysIn(today, offset, tz)
   const [state, setState] = useState({ status: 'loading', data: null })
 
+  // A revision derived from what the server's windows depend on, so a saved
+  // schedule, a new group or a membership change refetches the chosen day,
+  // while the 30 s poll handing back identical rows does not (SHELLYGROUPS.8).
+  const revision = useMemo(() => JSON.stringify((Array.isArray(groups) ? groups : []).map((g) => [
+    g?.id, g?.enabled ?? null, g?.schedule_mode ?? null, g?.fixed_windows ?? null, g?.class_rule ?? null, g?.device_ids ?? null,
+  ])), [groups])
+  const shownDate = useRef(null)
+
   useEffect(() => {
     let live = true
-    setState({ status: 'loading', data: null })
+    // Only a new DAY blanks the strip; a revision refetch keeps the old lanes
+    // on screen until the new answer lands.
+    if (shownDate.current !== date) setState({ status: 'loading', data: null })
+    shownDate.current = date
     fetchJson(`/api/shelly/preview?date=${date}`).then(({ ok, json }) => {
       if (!live) return
       if (ok && json?.success) setState({ status: 'ready', data: json })
       else setState({ status: 'error', data: null })
     })
     return () => { live = false }
-  }, [date])
+  }, [date, revision])
 
   const dayStart = dayStartMsIn(date, tz)
   const dayEnd = dayStartMsIn(addDaysIn(date, 1, tz), tz)
