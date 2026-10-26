@@ -103,7 +103,7 @@ describe('ShellyDevicesClient — Glofox status unknown', () => {
     script([[okConn(), okDevices()]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected={false} glofoxUnknown canManageConnection />)
     await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
-    const radio = screen.getByLabelText('Class timetable')
+    const radio = screen.getByLabelText('Follow classes')
     expect(radio.disabled).toBe(true)
     expect(radio.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
   })

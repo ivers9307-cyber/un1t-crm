@@ -447,7 +447,7 @@ describe('ShellyDeviceCard — the schedule switch and run now', () => {
     const toggle = screen.getByLabelText('Schedule on')
     expect(toggle.disabled).toBe(true)
     expect(toggle.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
-    expect(screen.getByLabelText('Class timetable').closest('label').getAttribute('title'))
+    expect(screen.getByLabelText('Follow classes').closest('label').getAttribute('title'))
       .toBe("Couldn't check Glofox. Reload to try again.")
     expect(document.body.innerHTML).not.toMatch(/connect Glofox/i)
   })

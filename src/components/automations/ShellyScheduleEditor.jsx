@@ -1,5 +1,14 @@
 // SHELLY-UI.6 — what runs this plug: nothing, fixed windows, or the class
-// timetable.
+// timetable. SHELLYGROUPS.6 — the same editor runs a GROUP: the caller hands
+// in the row (`row`, or `device` for the device card) and an `onSave(patch)`
+// pointed at its own PATCH route, and the editor never knows which it is.
+//
+// THE CLASS RULE TRAVELS WHOLE. The device PATCH parses class_rule with its
+// defaults (ShellyClassRule), so a rule sent without `days` or `merge_gap_min`
+// would silently put a Mon–Fri rule back to every day. Sending all four fields
+// is right for the group PATCH too (it merges, and a full rule merges to
+// itself). "Pick at least one day" is checked here as well as by the schema
+// only so Save can stay dead instead of spending a round trip on a 400.
 //
 // PATCHES ONLY WHAT CHANGED. `ShellyDevicePatch` refuses an empty body and
 // every field it carries is written, so sending the whole draft would rewrite
@@ -18,14 +27,19 @@
 import { useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { MAX_FIXED_WINDOWS, MAX_CLASS_LEAD_LAG_MIN, DEFAULT_LEAD_MIN, DEFAULT_LAG_MIN } from '@/lib/shelly/schemas'
+import {
+  MAX_FIXED_WINDOWS, MAX_CLASS_LEAD_LAG_MIN, DEFAULT_LEAD_MIN, DEFAULT_LAG_MIN, DEFAULT_MERGE_GAP_MIN, ALL_DAYS,
+} from '@/lib/shelly/schemas'
+import { DAY_LABELS } from '@/lib/schedule/windows'
 import WindowsEditor from './WindowsEditor'
 
 const MODES = [
-  { value: 'none', label: 'No schedule', hint: 'The plug stays wherever you leave it.' },
-  { value: 'fixed', label: 'Fixed windows', hint: 'On and off at set times on set days.' },
-  { value: 'class', label: 'Class timetable', hint: 'On before each class and off after it.' },
+  { value: 'none', label: 'Never automatic', hint: 'Stays wherever you leave it.' },
+  { value: 'fixed', label: 'Fixed hours', hint: 'On and off at set times on set days.' },
+  { value: 'class', label: 'Follow classes', hint: 'On before each class and off after it.' },
 ]
+
+export const NO_DAYS_MESSAGE = 'Pick at least one day'
 
 // W1.M3a — source-neutral: the answer is the membership source, not Glofox.
 const GLOFOX_HINT = 'Connect a membership source with a class schedule to use class-linked schedules'
@@ -42,12 +56,23 @@ const clampMin = (v) => {
 
 const sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
-export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUnknown = false, onSave }) {
+// Stored days, cleaned to what the engine reads: unique ISO weekdays in order.
+// Absent or empty falls to every day, the schema's default.
+function storedDays(rule) {
+  const raw = Array.isArray(rule?.days) ? rule.days : []
+  const clean = [...new Set(raw.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7))].sort((a, b) => a - b)
+  return clean.length ? clean : [...ALL_DAYS]
+}
+
+export default function ShellyScheduleEditor({ row, device: deviceProp, glofoxConnected, glofoxUnknown = false, onSave }) {
+  const device = row ?? deviceProp
   const classHint = glofoxUnknown ? GLOFOX_UNKNOWN_HINT : GLOFOX_HINT
   const [mode, setMode] = useState(device.schedule_mode || 'none')
   const [windows, setWindows] = useState(Array.isArray(device.fixed_windows) ? device.fixed_windows : [])
   const [lead, setLead] = useState(device.class_rule?.lead_min ?? DEFAULT_LEAD_MIN)
   const [lag, setLag] = useState(device.class_rule?.lag_min ?? DEFAULT_LAG_MIN)
+  const [gap, setGap] = useState(device.class_rule?.merge_gap_min ?? DEFAULT_MERGE_GAP_MIN)
+  const [days, setDays] = useState(() => storedDays(device.class_rule))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
@@ -63,6 +88,8 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUn
   const storedRule = {
     lead_min: device.class_rule?.lead_min ?? DEFAULT_LEAD_MIN,
     lag_min: device.class_rule?.lag_min ?? DEFAULT_LAG_MIN,
+    merge_gap_min: device.class_rule?.merge_gap_min ?? DEFAULT_MERGE_GAP_MIN,
+    days: storedDays(device.class_rule),
   }
 
   function buildPatch() {
@@ -73,16 +100,29 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUn
     // looking at.
     if (mode === 'fixed' && !sameJson(windows, storedWindows)) patch.fixed_windows = windows
     if (mode === 'class') {
-      const rule = { lead_min: clampMin(lead), lag_min: clampMin(lag) }
+      const rule = {
+        lead_min: clampMin(lead),
+        lag_min: clampMin(lag),
+        merge_gap_min: clampMin(gap),
+        days: [...days].sort((a, b) => a - b),
+      }
       if (!sameJson(rule, storedRule)) patch.class_rule = rule
     }
     return patch
   }
 
   const patch = buildPatch()
+  const noDays = mode === 'class' && days.length === 0
   const dirty = Object.keys(patch).length > 0
+  const canSave = dirty && !noDays
+
+  function toggleDay(n) {
+    setDays((cur) => (cur.includes(n) ? cur.filter((d) => d !== n) : [...cur, n].sort((a, b) => a - b)))
+    setSaved(false)
+  }
 
   async function save() {
+    if (!canSave) return
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -103,7 +143,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUn
   // that swallows Enter reads as broken, and a typo needs an undo that is not
   // "remember what it was".
   function onRuleKeyDown(e, reset) {
-    if (e.key === 'Enter') { e.preventDefault(); if (dirty) save() }
+    if (e.key === 'Enter') { e.preventDefault(); if (canSave) save() }
     if (e.key === 'Escape') { e.preventDefault(); reset() }
   }
 
@@ -148,37 +188,51 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUn
       )}
 
       {mode === 'class' && (
-        <div className="flex flex-wrap items-center gap-3 pt-1">
-          <label className="inline-flex items-center gap-1 text-xs text-un1t-subtle">
-            On
-            <input
-              type="number"
-              min={0}
-              max={MAX_CLASS_LEAD_LAG_MIN}
-              value={lead}
-              disabled={!glofoxConnected}
-              title={!glofoxConnected ? classHint : undefined}
-              onChange={(e) => { setLead(e.target.value); setSaved(false) }}
-              onKeyDown={(e) => onRuleKeyDown(e, () => setLead(storedRule.lead_min))}
-              className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
-            />
-            min before each class
-          </label>
-          <label className="inline-flex items-center gap-1 text-xs text-un1t-subtle">
-            Off
-            <input
-              type="number"
-              min={0}
-              max={MAX_CLASS_LEAD_LAG_MIN}
-              value={lag}
-              disabled={!glofoxConnected}
-              title={!glofoxConnected ? classHint : undefined}
-              onChange={(e) => { setLag(e.target.value); setSaved(false) }}
-              onKeyDown={(e) => onRuleKeyDown(e, () => setLag(storedRule.lag_min))}
-              className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
-            />
-            min after it
-          </label>
+        <div className="space-y-2 pt-1">
+          <div className="flex flex-wrap items-center gap-3">
+            {[
+              { label: 'On before each class', value: lead, set: setLead, stored: storedRule.lead_min },
+              { label: 'Off after each class', value: lag, set: setLag, stored: storedRule.lag_min },
+              { label: 'Keep on if the gap is under', value: gap, set: setGap, stored: storedRule.merge_gap_min },
+            ].map((f) => (
+              <label key={f.label} className="inline-flex items-center gap-1 text-xs text-un1t-subtle">
+                {f.label}
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_CLASS_LEAD_LAG_MIN}
+                  value={f.value}
+                  aria-label={f.label}
+                  disabled={!glofoxConnected}
+                  title={!glofoxConnected ? classHint : undefined}
+                  onChange={(e) => { f.set(e.target.value); setSaved(false) }}
+                  onKeyDown={(e) => onRuleKeyDown(e, () => f.set(f.stored))}
+                  className="w-16 rounded border border-un1t-border bg-un1t-bg px-2 py-1 text-un1t-text disabled:opacity-40"
+                />
+                min
+              </label>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Class days">
+            {DAY_LABELS.map((d) => {
+              const on = days.includes(d.n)
+              return (
+                <button
+                  key={d.n}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={!glofoxConnected}
+                  onClick={() => toggleDay(d.n)}
+                  className={`text-[11px] px-2 py-0.5 rounded-full border transition disabled:opacity-40 ${
+                    on ? 'bg-blue-500/10 border-blue-500/40 text-blue-700' : 'border-un1t-border text-un1t-subtle hover:border-un1t-muted'
+                  }`}
+                >
+                  {d.label}
+                </button>
+              )
+            })}
+          </div>
+          {noDays && <p className="text-xs text-red-700" role="alert">{NO_DAYS_MESSAGE}</p>}
         </div>
       )}
 
@@ -187,7 +241,7 @@ export default function ShellyScheduleEditor({ device, glofoxConnected, glofoxUn
       )}
 
       <div className="flex items-center gap-2 pt-1">
-        <Button size="sm" variant="secondary" loading={busy} disabled={!dirty} onClick={save}>Save schedule</Button>
+        <Button size="sm" variant="secondary" loading={busy} disabled={!canSave} onClick={save}>Save schedule</Button>
         {saved && !dirty && <span className="text-xs text-emerald-700">Saved</span>}
       </div>
 
