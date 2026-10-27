@@ -18,7 +18,7 @@ const src = squash(page)
 
 describe('ROLEUI.2 — the contact page wires contactWorkGates into each component', () => {
   it('computes the gates at the contact', () => {
-    expect(src).toContain('const work = contactWorkGates(user, contact)')
+    expect(src).toContain('const work = contactWorkGates(user, contact, { actingLocationId: actingId })')
   })
 
   it.each([
@@ -28,7 +28,7 @@ describe('ROLEUI.2 — the contact page wires contactWorkGates into each compone
     ['Activity', /<ContactActions[^>]*canTask=\{work\.canTask\}/],
     ['Sequence', /<ContactActions[^>]*canSequence=\{work\.canSequence\}/],
     ['Start WhatsApp', /\{work\.canStartWhatsApp && \( <StartWhatsAppButton/],
-    ['the Book card', /\{work\.canBook && \( <ContactBookingCard/],
+    ['the Book card', /\{work\.canBook && bookHereWithGlofox && \( <ContactBookingCard/],
     ['the consent history', /\{work\.canReadConsent && \( <div className="mt-8"> <ContactConsentHistoryCard/],
     ['Marketing preferences (UN1TDUAL)', /<ContactWhoRail[^>]*canReadStudioCards=\{work\.canReadStudioCards\}/],
     ['Events + HR devices (UN1TDUAL)', /<ContactNextRail[^>]*canReadStudioCards=\{work\.canReadStudioCards\}/],

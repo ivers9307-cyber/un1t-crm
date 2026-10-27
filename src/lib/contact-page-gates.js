@@ -260,17 +260,24 @@ export function canStartWhatsAppThread(user, locationId) {
  * @param {object|null} user
  * @param {object|null} contact  the contacts row (location_id)
  */
-export function contactWorkGates(user, contact) {
+// CARDLENS.6 — `actingLocationId` is the studio the page acts at
+// (src/lib/contact-acting-studio.js). Note, Task, Sequence and Book follow it,
+// because their routes take that studio (…/notes and /api/activities/tasks a
+// location_id, the sequence picker and enrol the sequence's studio, the Book
+// card its own). The rest stay at the contact's primary studio, which their
+// routes still judge. Omitted, everything is the primary, as before.
+export function contactWorkGates(user, contact, { actingLocationId = null } = {}) {
   const loc = contact?.location_id || null
+  const acting = actingLocationId || loc
   return {
-    canNote: canAddContactNote(user, loc),
-    canTask: canAddContactTask(user, loc),
-    canSequence: canEnrolContactInSequence(user, loc),
+    canNote: canAddContactNote(user, acting),
+    canTask: canAddContactTask(user, acting),
+    canSequence: canEnrolContactInSequence(user, acting),
     canCancelForm: canSendCancellationForm(user, loc),
     canCold: canSetPipelineStatus(user, loc),
     canLinkAccounts: canLinkContacts(user, loc),
     canStartWhatsApp: canStartWhatsAppThread(user, loc),
-    canBook: isMemberOfContactStudio(user, loc),
+    canBook: isMemberOfContactStudio(user, acting),
     canReadConsent: isMemberOfContactStudio(user, loc),
     // UN1TDUAL — the three always-rendered read cards whose GET routes gate on
     // membership of the CONTACT's studio: Events (/api/contacts/[id]/events,
