@@ -19,7 +19,7 @@ const CHIP = 'text-[10px] font-medium px-1.5 py-0.5 rounded-full whitespace-nowr
 export function owedLabel(m) {
   if (m.overdue) {
     const amount = m.owedCents > 0 ? formatMoney(m.owedCents, 'EUR') : null
-    return { text: amount ? `${amount} overdue` : 'Overdue · amount not reported', cls: 'bg-red-500/10 text-red-700' }
+    return { text: amount ? `${amount} overdue` : `Overdue · amount not ${m.amountNotEur ? 'in EUR' : 'reported'}`, cls: 'bg-red-500/10 text-red-700' }
   }
   if (m.owedCents === 0) return { text: 'Nothing owed', cls: 'bg-slate-500/10 text-slate-700' }
   return null

@@ -58,7 +58,7 @@ export function lensMetrics({ memberships = [], lensId, base, deals = [] }) {
       ltvCents: target.ltvCents,
       arrearsCents: target.owedCents,
       deals: dealsHere,
-      un1t: target.overdue ? { overdue: true, amountUnreported: Boolean(target.amountUnreported), amountNotEur: false } : null,
+      un1t: target.overdue ? { overdue: true, amountUnreported: Boolean(target.amountUnreported), amountNotEur: Boolean(target.amountNotEur) } : null,
     }
   }
   return { ...base, attended: null, lastAttendedAt: null, ltvCents: null, arrearsCents: null, deals: dealsHere, un1t: null }

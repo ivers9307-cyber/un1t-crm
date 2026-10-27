@@ -59,6 +59,14 @@ describe('studioMemberships (CARDLENS.7)', () => {
     expect(h).toMatchObject({ overdue: true, owedCents: null, amountUnreported: true })
   })
 
+  // CARDLENS.11 — a due with a known foreign-currency amount is "not in EUR",
+  // not "not reported" (the command centre's arrearsTile wording).
+  it('un1t overdue in another currency only: amount not in EUR', () => {
+    const billing = { studios: [{ locationId: HATCH, pastDues: [{ amountCents: 4500, currency: 'GBP' }] }] }
+    const h = byId(studioMemberships({ contact: CONTACT, studioRows: ROWS, un1tClients: CLIENTS, un1tBilling: billing }))[HATCH]
+    expect(h).toMatchObject({ overdue: true, owedCents: null, amountUnreported: true, amountNotEur: true })
+  })
+
   it('unknown is null, never 0: a un1t studio the viewer cannot read billing or clients for', () => {
     const h = byId(studioMemberships({ contact: CONTACT, studioRows: ROWS }))[HATCH]
     expect(h).toMatchObject({ attended30d: null, lastAttendedAt: null, ltvCents: null, owedCents: null, overdue: false, creditsLine: null, syncedAt: null })

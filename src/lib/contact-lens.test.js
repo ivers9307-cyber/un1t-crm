@@ -14,6 +14,11 @@ describe('lensMetrics (CARDLENS.9)', () => {
     expect(m).toMatchObject({ attended: 3, lastAttendedAt: '2026-10-26T18:30:00Z', ltvCents: 15000, arrearsCents: 4500, un1t: { overdue: true } })
   })
 
+  it('lens on a un1t.online studio owed in another currency: the tile says not in EUR', () => {
+    const m = lensMetrics({ memberships: [G, { ...U, owedCents: null, amountUnreported: true, amountNotEur: true }], lensId: H, base: BASE, deals: DEALS })
+    expect(m.un1t).toEqual({ overdue: true, amountUnreported: true, amountNotEur: true })
+  })
+
   it('lens on the Glofox studio: the Glofox figures and that studio\'s deals, no un1t overdue', () => {
     const m = lensMetrics({ memberships: [G, U], lensId: S, base: BASE, deals: DEALS })
     expect(m).toMatchObject({ attended: 9, ltvCents: 90000, arrearsCents: 0, deals: 1, un1t: null })

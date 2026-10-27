@@ -74,4 +74,9 @@ describe('StudioStrip', () => {
     expect(h).toContain(`href="?tab=timeline&amp;multi=a&amp;studio=${H}"`)
     expect(h).toContain('href="?tab=timeline&amp;multi=a&amp;studio=all"')
   })
+
+  it('an overdue in another currency says so', () => {
+    const h = html({ memberships: [MEMBERSHIPS[0], { ...MEMBERSHIPS[1], owedCents: null, amountUnreported: true, amountNotEur: true }] })
+    expect(h).toContain('Overdue · amount not in EUR')
+  })
 })
