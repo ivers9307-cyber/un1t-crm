@@ -93,6 +93,10 @@ const MANIFEST = Object.freeze({
     kind: 'suppression',
     reason: "HATCHNUDGE.1: the branch predicate booked_class_at_studio asks whether the contact has any non-cancelled class booking at the sequence's studio, from ANY platform (a un1t.online booking must count, or Hatch leads who already booked are told to book). It selects id only, scoped to contact + studio; it decides whether a step proceeds and sends nothing from a booking row.",
   },
+  'src/lib/onboarding-journey-un1t.js': {
+    kind: 'display',
+    reason: "PULSEUN1T.1: the staff /pulse journey lane at a un1t.online studio counts that studio's attended un1t.online classes so coaches see who is falling behind. Display only: the pace push (notify-onboarding-pace) runs at Glofox studios through loadJourneyLane and never imports this module (pinned below), and the member app's journey stays Glofox-only.",
+  },
   'shared/studio-kpis.js': {
     kind: 'display',
     reason: 'Audit row 9: fetchFloor for the staff /dashboard/studio no-show, attended and activation figures.',
@@ -478,6 +482,19 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
     const bad = []
     for (const [p, code] of files) for (const why of bookingReadsIn(code)) bad.push(`${p} ${why}`)
     expect(bad, `Customer-facing code must not read bookings (spec G9: no fill, no-show or aggregate studio metric on a TV or public screen): ${bad.join('; ')}`).toEqual([])
+  })
+
+  it('the un1t.online journey lane is imported by the staff /pulse route alone, never by the pace push or the member app', () => {
+    // PULSEUN1T.1: it counts un1t.online attendance, which is display-only
+    // (Decision 1). Any other importer must be argued here first.
+    const ALLOWED = ['src/app/api/pulse/journey/route.js']
+    const importers = []
+    for (const dir of SCAN_DIRS) {
+      for (const f of walk(path.join(ROOT, dir))) {
+        if (/onboarding-journey-un1t['"]/.test(codeOfFile(f))) importers.push(rel(f))
+      }
+    }
+    expect(importers.sort()).toEqual(ALLOWED)
   })
 })
 
