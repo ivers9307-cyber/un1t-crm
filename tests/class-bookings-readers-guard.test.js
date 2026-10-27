@@ -491,6 +491,8 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
     const importers = []
     for (const dir of SCAN_DIRS) {
       for (const f of walk(path.join(ROOT, dir))) {
+        // Raw text first (cheap); blank comments only on the few files that name it.
+        if (!readFileSync(f, 'utf8').includes('onboarding-journey-un1t')) continue
         if (/onboarding-journey-un1t['"]/.test(codeOfFile(f))) importers.push(rel(f))
       }
     }
