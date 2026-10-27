@@ -215,7 +215,8 @@ export default async function ContactDetailPage(props) {
   // CARDLENS.10 — the lens filters what the page lists: for a person at two or
   // more studios, looking at one, only that studio's rows (a row with no
   // studio always shows). One studio, or All studios: everything.
-  const filtering = memberships.length >= 2 && !lensAll
+  // Never filter to a studio that has no membership card (its row missing).
+  const filtering = memberships.length >= 2 && !lensAll && memberships.some((m) => m.locationId === actingId)
   const inLens = (row) => !filtering || !row?.location_id || row.location_id === actingId
 
   // CARDLENS.10 — marketing consent per studio (WhatsApp STOP / START and
@@ -347,8 +348,9 @@ export default async function ContactDetailPage(props) {
   const actions = contactActionGates(user, contact, { relationshipStudioIds: contactStudios.rows.map((r) => r.location_id) })
   // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
   const actingWork = contactWorkGates(user, contact, { actingLocationId: actingId })
-  // CARDLENS.10 — All studios acts nowhere: pick a studio to note, task or enrol.
-  const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false } : actingWork
+  // CARDLENS.10 — All studios acts nowhere (Richard 2026-10-27): every write
+  // the page offers is off until a studio is picked.
+  const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false, canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false } : actingWork
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
@@ -443,6 +445,9 @@ export default async function ContactDetailPage(props) {
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
   const metricArrearsCents = mergeArrearsCents(glofoxArrearsCents, un1tBilling)
+  const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
+  const metricDeals = person ? person.dealsCount : deals.length
+
   // CARDLENS.9 — the header follows the lens: that studio's figures, or the
   // sum under All studios; today's figures when there are no memberships.
   const lensId = lensAll ? 'all' : actingId
@@ -460,8 +465,6 @@ export default async function ContactDetailPage(props) {
     deals: metricDeals,
   }, deals })
   const risk = lensRisk({ lensId, memberships, glofoxOverdue, glofoxChurn, un1tBilling, names: studioNames })
-  const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
-  const metricDeals = person ? person.dealsCount : deals.length
 
   // Identity contact rows (emails + phones). When grouped, render the
   // deduped cross-account lists from the aggregate; else the contact's

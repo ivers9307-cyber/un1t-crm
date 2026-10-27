@@ -10,6 +10,8 @@
 //   'all'                → attendance and value summed over the studios that
 //                          know them, the latest class, the merged arrears
 //   no memberships / a lens not among them → `base`, exactly as before
+//   one studio → `base` too, except a un1t.online-only member gets that
+//                studio's attendance, last class and value
 import { un1tHeaderRisk } from './contact-un1t-billing'
 
 const known = (v) => typeof v === 'number' && Number.isFinite(v)
@@ -24,6 +26,14 @@ const latest = (...isos) => isos.filter(Boolean).sort().pop() || null
  */
 export function lensMetrics({ memberships = [], lensId, base, deals = [] }) {
   if (!memberships.length) return { ...base }
+  // One studio: today's figures. A un1t.online-only member swaps in that
+  // studio's counters (the Glofox columns are empty for them); arrears and the
+  // un1t flags stay today's merged ones.
+  if (memberships.length < 2) {
+    const only = memberships[0]
+    if (only.platform !== 'un1t_online') return { ...base }
+    return { ...base, attended: only.attended30d, lastAttendedAt: only.lastAttendedAt, ltvCents: only.ltvCents }
+  }
   if (lensId === 'all') {
     const others = memberships.filter((m) => m.platform !== 'glofox')
     const sum = (start, key) => others.reduce((acc, m) => (known(m[key]) ? (acc ?? 0) + m[key] : acc), start)
@@ -36,8 +46,7 @@ export function lensMetrics({ memberships = [], lensId, base, deals = [] }) {
   }
   const target = memberships.find((m) => m.locationId === lensId)
   if (!target) return { ...base }
-  // One studio: every deal is theirs (an old deal can sit at a studio with no row).
-  const dealsHere = memberships.length < 2 ? base.deals : deals.filter((d) => d?.location_id === lensId).length
+  const dealsHere = deals.filter((d) => d?.location_id === lensId).length
   if (target.platform === 'glofox') {
     return { ...base, arrearsCents: base.glofoxArrearsCents ?? null, deals: dealsHere, un1t: null }
   }
@@ -75,7 +84,8 @@ export function lensRisk({ lensId, memberships = [], glofoxOverdue, glofoxChurn,
     const studios = (un1tBilling?.studios || []).filter((s) => s.locationId === locationId)
     return un1tHeaderRisk({ overdue: studios.some((s) => (s.pastDues || []).length > 0), studios })
   }
-  const target = lensId && lensId !== 'all' ? memberships.find((m) => m.locationId === lensId) : null
+  // One studio (or none): today's chain, unnamed.
+  const target = multi && lensId && lensId !== 'all' ? memberships.find((m) => m.locationId === lensId) : null
   if (target?.platform === 'glofox') return named(glofoxOverdue || glofoxChurn || null, target.locationId)
   if (target?.platform === 'un1t_online') return named(un1tAt(target.locationId), target.locationId)
   if (target) return null

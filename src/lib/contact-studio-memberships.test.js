@@ -85,6 +85,11 @@ describe('studioMemberships (CARDLENS.7)', () => {
     expect(s).toMatchObject({ overdue: true, owedCents: 12000 })
   })
 
+  it('a closed studio or a host anchor is not a membership (it would make a one-studio person "multi")', () => {
+    const rows = [ROWS[0], row(CCF, 'Old studio', 'none', { location: { id: CCF, name: 'Old studio', active: false, membership_source: 'none' } }), row(HATCH, 'Host', 'none', { location: { id: HATCH, name: 'Host', active: true, is_host_anchor: true, membership_source: 'none' } })]
+    expect(studioMemberships({ contact: CONTACT, studioRows: rows }).map((m) => m.locationId)).toEqual([STILL])
+  })
+
   it('no rows (a failed read): empty, so the page keeps its old cards', () => {
     expect(studioMemberships({ contact: CONTACT, studioRows: [] })).toEqual([])
   })

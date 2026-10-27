@@ -50,6 +50,9 @@ export function studioMemberships({ contact, studioRows, un1tClients = [], un1tB
   const out = []
   for (const r of studioRows || []) {
     if (!r?.location_id || seen.has(r.location_id)) continue
+    // A closed studio or a host anchor is history, not a membership: counting
+    // it would turn a one-studio person "multi" (strip, filters, cards).
+    if (r.location?.active === false || r.location?.is_host_anchor === true) continue
     seen.add(r.location_id)
     const source = r.location?.membership_source
     const platform = PLATFORMS.has(source) ? source : 'none'

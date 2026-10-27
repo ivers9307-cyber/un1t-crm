@@ -11,7 +11,8 @@ const src = stripComments(readFileSync(path.join(ROOT, 'src/app/(sales)/contacts
 
 describe('CARDLENS.10 — lens filters', () => {
   it('one rule: filter only for a two-studio person on one studio; rows with no studio always show', () => {
-    expect(src).toContain('const filtering = memberships.length >= 2 && !lensAll')
+    // Review: never filter to a studio that has no membership card (its row missing).
+    expect(src).toContain('const filtering = memberships.length >= 2 && !lensAll && memberships.some((m) => m.locationId === actingId)')
     expect(src).toContain('const inLens = (row) => !filtering || !row?.location_id || row.location_id === actingId')
   })
 
@@ -31,7 +32,7 @@ describe('CARDLENS.10 — lens filters', () => {
 
 describe('CARDLENS.10 — All studios acts nowhere (Richard 2026-10-27)', () => {
   it('Note, Task and Sequence are off, and no Book card', () => {
-    expect(src).toMatch(/const work = lensAll \? \{ \.\.\.actingWork, canNote: false, canTask: false, canSequence: false \} : actingWork/)
+    expect(src).toMatch(/const work = lensAll \? \{ \.\.\.actingWork, canNote: false, canTask: false, canSequence: false, canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false \} : actingWork/)
     expect(src).toMatch(/work\.canBook && !lensAll && actingId === contact\.location_id && \( <ContactBookingCard/)
     expect(src).toMatch(/!lensAll && un1tStudios\.filter/)
   })

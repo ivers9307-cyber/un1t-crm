@@ -38,6 +38,22 @@ describe('lensMetrics (CARDLENS.9)', () => {
     expect(lensMetrics({ memberships: [G], lensId: S, base: BASE, deals: DEALS })).toMatchObject({ deals: 2 })
   })
 
+  // Review (CARDLENS.9): a one-studio person keeps today's figures; only a
+  // un1t.online-only member swaps in that studio's counters.
+  it('one CRM-only studio (CCF): today\'s figures, never dashes', () => {
+    const N = { locationId: S, name: 'CCF Autos', platform: 'none', attended30d: null, lastAttendedAt: null, ltvCents: null, owedCents: null, overdue: false }
+    expect(lensMetrics({ memberships: [N], lensId: S, base: BASE, deals: DEALS })).toEqual({ ...BASE })
+  })
+
+  it('one Glofox studio: today\'s merged arrears and un1t flags kept', () => {
+    expect(lensMetrics({ memberships: [G], lensId: S, base: BASE, deals: DEALS })).toEqual({ ...BASE })
+  })
+
+  it('one un1t.online studio: its counters, today\'s arrears and un1t flags', () => {
+    const m = lensMetrics({ memberships: [U], lensId: H, base: { ...BASE, arrearsCents: 9900, un1t: { overdue: true, amountUnreported: true, amountNotEur: true } }, deals: [] })
+    expect(m).toMatchObject({ attended: 3, lastAttendedAt: '2026-10-26T18:30:00Z', ltvCents: 15000, arrearsCents: 9900, un1t: { overdue: true, amountUnreported: true, amountNotEur: true } })
+  })
+
   it('no memberships (a failed read) or a lens not among them: today\'s figures', () => {
     expect(lensMetrics({ memberships: [], lensId: S, base: BASE, deals: DEALS })).toEqual({ ...BASE })
     expect(lensMetrics({ memberships: [G, U], lensId: 'x', base: BASE, deals: DEALS })).toEqual({ ...BASE })
@@ -63,6 +79,13 @@ describe('lensRisk (CARDLENS.9)', () => {
   it('All studios: the worst, as before (Glofox overdue, then un1t overdue, then churn), named', () => {
     expect(lensRisk({ lensId: 'all', memberships: [G, U], glofoxOverdue: null, glofoxChurn: CHURN, un1tBilling: BILLING, names }).label).toBe('Payment overdue · Hatch Street')
     expect(lensRisk({ lensId: 'all', memberships: [G, U], glofoxOverdue: OVERDUE, glofoxChurn: CHURN, un1tBilling: BILLING, names }).label).toBe('Payment overdue · Stillorgan')
+  })
+
+  it('one studio of any kind: today\'s chain (Glofox overdue, un1t overdue, churn), unnamed', () => {
+    const N = { locationId: S, platform: 'none' }
+    expect(lensRisk({ lensId: S, memberships: [N], glofoxOverdue: null, glofoxChurn: CHURN, un1tBilling: null, names: {} })).toEqual(CHURN)
+    const r = lensRisk({ lensId: S, memberships: [G], glofoxOverdue: null, glofoxChurn: CHURN, un1tBilling: BILLING, names })
+    expect(r.label).toBe('Payment overdue')
   })
 
   it('one studio: no studio name on the chip, exactly as before', () => {

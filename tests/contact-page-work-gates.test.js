@@ -20,7 +20,7 @@ describe('ROLEUI.2 — the contact page wires contactWorkGates into each compone
   it('computes the gates at the contact', () => {
     expect(src).toContain('const actingWork = contactWorkGates(user, contact, { actingLocationId: actingId })')
     // CARDLENS.10 — All studios turns Note, Task and Sequence off on top.
-    expect(src).toContain('const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false } : actingWork')
+    expect(src).toContain('const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false, canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false } : actingWork')
   })
 
   it.each([
