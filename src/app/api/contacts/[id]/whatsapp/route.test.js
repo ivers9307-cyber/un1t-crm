@@ -65,6 +65,9 @@ vi.mock('@/lib/agent/core', () => ({
   manualTakeoverPatch: vi.fn(() => ({})),
 }))
 
+// CARDLENS.5 — a send for another of the person's studios asks contact_studios.
+vi.mock('@/lib/contact-studios', () => ({ hasRelationshipAt: vi.fn(async () => ({ ok: true, at: new Set() })) }))
+
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission, hasMobilePermission } from '@/lib/permissions'
@@ -304,6 +307,60 @@ describe('POST /api/contacts/[id]/whatsapp — files at the contact’s home stu
     createServerClient.mockReturnValue(makeDb(echoInsert()))
     const res = await POST(postReq({ text: 'Hi' }), props)
     expect(res.status).toBe(500)
+    expect(sendTextMessage).not.toHaveBeenCalled()
+  })
+})
+
+// CARDLENS.5 — the composer can send for another studio the person has a row
+// at (the acting studio): that studio's number, thread, permission and log.
+describe('POST /api/contacts/[id]/whatsapp — location_id (acting studio)', () => {
+  const HATCH = 'f0000000-0000-0000-0000-00000000000f'
+  const HATCH_STAFF = { ...STAFF, locations: [{ id: HATCH }] }
+
+  it('sends from the chosen studio\'s number and files the thread and message there', async () => {
+    const { hasRelationshipAt } = await import('@/lib/contact-studios')
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { getOrCreateConversation } = await import('@/lib/whatsapp')
+    hasRelationshipAt.mockResolvedValueOnce({ ok: true, at: new Set([HATCH]) })
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    const insertSpy = echoInsert()
+    const db = makeDb(insertSpy)
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(postReq({ text: 'Hi', location_id: HATCH }), props)
+    expect(res.status).toBe(200)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(HATCH)
+    expect(getOrCreateConversation).toHaveBeenCalledWith(db, expect.anything(), HATCH)
+    expect(insertSpy.captured().location_id).toBe(HATCH)
+  })
+
+  it('a studio the person has no row at is a 404: no number lookup, nothing sent', async () => {
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    const insertSpy = echoInsert()
+    createServerClient.mockReturnValue(makeDb(insertSpy))
+
+    const res = await POST(postReq({ text: 'Hi', location_id: HATCH }), props)
+    expect(res.status).toBe(404)
+    expect(getLocationWhatsAppNumberConfig).not.toHaveBeenCalled()
+    expect(sendTextMessage).not.toHaveBeenCalled()
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('the chosen studio has no number: 409, never the primary studio\'s number', async () => {
+    const { hasRelationshipAt } = await import('@/lib/contact-studios')
+    const { getLocationWhatsAppNumberConfig } = await import('@/lib/whatsapp-config')
+    const { sendTextMessage } = await import('@/lib/whatsapp')
+    hasRelationshipAt.mockResolvedValueOnce({ ok: true, at: new Set([HATCH]) })
+    getLocationWhatsAppNumberConfig.mockResolvedValueOnce(null)
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+
+    const res = await POST(postReq({ text: 'Hi', location_id: HATCH }), props)
+    expect(res.status).toBe(409)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledTimes(1)
+    expect(getLocationWhatsAppNumberConfig).toHaveBeenCalledWith(HATCH)
     expect(sendTextMessage).not.toHaveBeenCalled()
   })
 })

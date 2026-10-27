@@ -98,7 +98,7 @@ function StatTile({ label, value, tone = 'default' }) {
 // TZ.16 (D3 = A) — `timezone` is the contact's studio zone and `viewerZone` the
 // viewer's active studio (a server render cannot see the browser): the
 // next-class chip names the zone only when the two differ.
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, timezone = null, viewerZone = null, canToggleExempt = false, cancellationLink = null, manual = false, actionGates = null }) {
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, timezone = null, viewerZone = null, canToggleExempt = false, cancellationLink = null, manual = false, actionGates = null, actingLocationId = null }) {
   // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
@@ -173,7 +173,9 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
                 (WAITLIST.6: Cold only on a derived board). */}
             <PersonActionBar
               contactId={contact.id}
-              locationId={contact.location_id}
+              // CARDLENS.6 — the kebab's Task and Sequence act at the page's
+              // acting studio (the only two items that read locationId).
+              locationId={actingLocationId || contact.location_id}
               actions={headerActions(manual, actionGates)}
               isCold={contact.pipeline_stage_slug === 'cold_lead'}
             />

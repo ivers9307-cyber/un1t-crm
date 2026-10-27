@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { assertLocationAccessOr404 } from './auth'
 import { hasPermissionAtAnyLocation } from './permissions'
 import { canWriteActivitiesAt } from './activity-write-gate'
+import { hasRelationshipAt } from './contact-studios'
 
 const forbidden = () => NextResponse.json(
   { success: false, error: 'No Tasks permission at this location' }, { status: 403 })
@@ -37,7 +38,8 @@ export function taskWriteRefusalAt(user, locationId) {
 }
 
 /**
- * The links a new task carries: a contact AT the task's studio, and an
+ * The links a new task carries: a contact AT the task's studio (its primary,
+ * or a contact_studios row there; CARDLENS.6), and an
  * assignee who works there (the page's picker lists that studio's staff).
  * Returns a response to send, or null.
  *
@@ -51,8 +53,17 @@ export async function taskLinksRefusal(db, { locationId, contactId, assigneeId }
       .eq('id', contactId)
       .maybeSingle()
     if (error) return failed('Could not read the contact')
+    // CARDLENS.6 — a contact whose primary studio is elsewhere takes a task here
+    // when they have a contact_studios row here (any status): the contact
+    // page's acting studio. A failed read refuses, never admits.
+    let related = false
+    if (contact && contact.location_id !== locationId) {
+      const rel = await hasRelationshipAt(db, contact.id, [locationId])
+      if (!rel.ok) return failed('Could not read the contact\'s studios')
+      related = rel.at.has(locationId)
+    }
     // Missing, or at another studio: one answer, so ids are not enumerable.
-    if (!contact || contact.location_id !== locationId) {
+    if (!contact || (contact.location_id !== locationId && !related)) {
       return notFound('Contact not found, or not at this studio: add the task from the contact\'s own studio.')
     }
   }

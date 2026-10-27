@@ -19,7 +19,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('@/components/PersonActionBar', () => ({
-  default: ({ actions }) => <div data-actions={(actions || []).join(',')} />,
+  default: ({ actions, locationId }) => <div data-actions={(actions || []).join(',')} data-location={locationId} />,
 }))
 vi.mock('@/components/AutomationsExemptToggle', () => ({ default: () => null }))
 
@@ -137,5 +137,15 @@ describe('contact line', () => {
     expect(line).not.toBeNull()
     expect(line[1]).not.toMatch(/\btruncate\b/)
     expect(line[1]).toMatch(/break-words/)
+  })
+})
+
+// CARDLENS.6 — the kebab's Task and Sequence act at the page's acting studio.
+describe('acting studio', () => {
+  it('hands the acting studio to the action bar', () => {
+    expect(render({ actingLocationId: 'l-2' })).toContain('data-location="l-2"')
+  })
+  it('falls back to the contact\'s studio', () => {
+    expect(render({})).toContain('data-location="l-1"')
   })
 })

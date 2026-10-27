@@ -260,12 +260,19 @@ export function canStartWhatsAppThread(user, locationId) {
  * @param {object|null} user
  * @param {object|null} contact  the contacts row (location_id)
  */
-export function contactWorkGates(user, contact) {
+// CARDLENS.6 — `actingLocationId` is the studio the page acts at
+// (src/lib/contact-acting-studio.js). Note, Task and Sequence follow it,
+// because their routes take that studio (…/notes and /api/activities/tasks a
+// location_id, the sequence picker and enrol the sequence's studio). The rest,
+// Book included (/api/bookings/create and /api/glofox/classes/book judge the
+// contact's studio), stay at the primary. Omitted, everything is the primary.
+export function contactWorkGates(user, contact, { actingLocationId = null } = {}) {
   const loc = contact?.location_id || null
+  const acting = actingLocationId || loc
   return {
-    canNote: canAddContactNote(user, loc),
-    canTask: canAddContactTask(user, loc),
-    canSequence: canEnrolContactInSequence(user, loc),
+    canNote: canAddContactNote(user, acting),
+    canTask: canAddContactTask(user, acting),
+    canSequence: canEnrolContactInSequence(user, acting),
     canCancelForm: canSendCancellationForm(user, loc),
     canCold: canSetPipelineStatus(user, loc),
     canLinkAccounts: canLinkContacts(user, loc),

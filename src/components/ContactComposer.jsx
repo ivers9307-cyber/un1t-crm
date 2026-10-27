@@ -54,6 +54,10 @@ export default function ContactComposer({
   // to the company-sender path, so older render sites keep working.
   contactLocationId = null,
   contactEmail = null,
+  // CARDLENS.6 — the contact page's ACTING studio: every note, WhatsApp and
+  // company-sender email is sent for it (location_id). Omitted (the pipeline
+  // drawer), the routes use the contact's primary studio as before.
+  sendLocationId = null,
   canWhatsApp = false,
   canEmail = false,
   hasWaPhone = false,
@@ -145,6 +149,7 @@ export default function ContactComposer({
   // The list is in flight: no send may leave until it answers, because the
   // path it takes is not yet known. Never true when there is nothing to await.
   const awaitingAccounts = emailPlan.path === 'awaiting'
+  const atStudio = sendLocationId ? { location_id: sendLocationId } : {}
   async function post(urlPath, payload) {
     setSending(true)
     setError(null)
@@ -171,18 +176,18 @@ export default function ContactComposer({
 
   async function saveNote() {
     if (!text.trim()) return
-    const ok = await post(`/api/contacts/${contactId}/notes`, { content: text.trim() })
+    const ok = await post(`/api/contacts/${contactId}/notes`, { content: text.trim(), ...atStudio })
     if (ok) { setText(''); showFlash('Note saved'); afterSave() }
   }
 
   async function sendWhatsAppText() {
     if (!text.trim()) return
-    const ok = await post(`/api/contacts/${contactId}/whatsapp`, { text: text.trim() })
+    const ok = await post(`/api/contacts/${contactId}/whatsapp`, { text: text.trim(), ...atStudio })
     if (ok) { setText(''); showFlash('WhatsApp message sent'); afterSave() }
   }
 
   async function sendTemplate(name) {
-    const ok = await post(`/api/contacts/${contactId}/whatsapp`, { template_name: name })
+    const ok = await post(`/api/contacts/${contactId}/whatsapp`, { template_name: name, ...atStudio })
     if (ok) { showFlash('WhatsApp template sent'); afterSave() }
   }
 
@@ -206,7 +211,7 @@ export default function ContactComposer({
       if (ok) { setText(''); setSubject(''); showFlash('Email sent — the conversation is in Mail'); afterSave() }
       return
     }
-    const ok = await post(`/api/contacts/${contactId}/email`, { subject: subject.trim(), body: text.trim() })
+    const ok = await post(`/api/contacts/${contactId}/email`, { subject: subject.trim(), body: text.trim(), ...atStudio })
     if (ok) { setText(''); setSubject(''); showFlash('Email sent'); afterSave() }
   }
 

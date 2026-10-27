@@ -40,7 +40,8 @@ export default function ContactActions({ contactId, locationId, canNote = false,
     await fetch(`/api/contacts/${contactId}/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      // CARDLENS.6 — filed at the page's acting studio (locationId).
+      body: JSON.stringify({ content, ...(locationId ? { location_id: locationId } : {}) }),
     })
     setSaving(false)
     setShowForm(null)
