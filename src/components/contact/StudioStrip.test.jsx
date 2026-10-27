@@ -53,7 +53,9 @@ describe('StudioStrip', () => {
   it('offers All studios, and says where actions go', () => {
     const h = html()
     expect(h).toContain('href="?studio=all"')
-    expect(h).toContain('Messages go from the UN1T Hatch Street number, bookings through un1t.online, notes file at UN1T Hatch Street.')
+    // CARDLENS.11 — never claims a WhatsApp number the studio may not have.
+    expect(h).toContain('Messages, notes and tasks are for UN1T Hatch Street; bookings go through un1t.online.')
+    expect(h).not.toContain(' number')
   })
 
   it('under All studios, says actions need a studio', () => {
@@ -64,5 +66,12 @@ describe('StudioStrip', () => {
 
   it('renders nothing for a one-studio person', () => {
     expect(renderToStaticMarkup(<StudioStrip memberships={[MEMBERSHIPS[0]]} options={[OPTIONS[0]]} actingId={S} lensAll={false} />)).toBe('')
+  })
+
+  // CARDLENS.11 — switching studio keeps the rest of the page's query.
+  it('keeps other query parameters on every link', () => {
+    const h = html({ query: { tab: 'timeline', studio: S, multi: ['a', 'b'] } })
+    expect(h).toContain(`href="?tab=timeline&amp;multi=a&amp;studio=${H}"`)
+    expect(h).toContain('href="?tab=timeline&amp;multi=a&amp;studio=all"')
   })
 })

@@ -65,7 +65,20 @@ function Tile({ m }) {
 
 const TILE = 'flex flex-col items-start gap-2 rounded-lg bg-un1t-surface p-3 text-left'
 
-export default function StudioStrip({ memberships = [], options = [], actingId = null, lensAll = false }) {
+// CARDLENS.11 — a studio link keeps the rest of the page's query (the first
+// value of a repeated key), replacing only `studio`.
+export function studioHref(query, studio) {
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(query || {})) {
+    if (k === 'studio') continue
+    const first = Array.isArray(v) ? v[0] : v
+    if (typeof first === 'string') params.set(k, first)
+  }
+  params.set('studio', studio)
+  return `?${params.toString()}`
+}
+
+export default function StudioStrip({ memberships = [], options = [], actingId = null, lensAll = false, query = null }) {
   if (!Array.isArray(memberships) || memberships.length < 2) return null
   const actable = new Set((options || []).map((o) => o.locationId))
   const acting = lensAll ? null : (options || []).find((o) => o.locationId === actingId) || null
@@ -78,14 +91,14 @@ export default function StudioStrip({ memberships = [], options = [], actingId =
     <section aria-label="Studios" className="mb-5 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Studios</h2>
-        <Link href="?studio=all" aria-current={lensAll ? 'true' : undefined} className={pill(lensAll)}>All studios</Link>
+        <Link href={studioHref(query, 'all')} aria-current={lensAll ? 'true' : undefined} className={pill(lensAll)}>All studios</Link>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {memberships.map((m) => {
           const on = !lensAll && m.locationId === actingId
           const border = on ? 'border-2 border-un1t-text' : 'border border-un1t-border'
           return actable.has(m.locationId) ? (
-            <Link key={m.locationId} href={`?studio=${m.locationId}`} aria-current={on ? 'true' : undefined} className={`${TILE} ${border} hover:bg-un1t-bg`}>
+            <Link key={m.locationId} href={studioHref(query, m.locationId)} aria-current={on ? 'true' : undefined} className={`${TILE} ${border} hover:bg-un1t-bg`}>
               <Tile m={m} />
             </Link>
           ) : (
@@ -99,7 +112,7 @@ export default function StudioStrip({ memberships = [], options = [], actingId =
         {lensAll
           ? 'Viewing all studios. Pick a studio to message, book or add a note.'
           : acting
-            ? <><span className="font-semibold text-un1t-text">Acting at {acting.name}.</span> Messages go from the {acting.name} number, bookings through {bookings}, notes file at {acting.name}.</>
+            ? <><span className="font-semibold text-un1t-text">Acting at {acting.name}.</span> Messages, notes and tasks are for {acting.name}; bookings go through {bookings}.</>
             : null}
       </p>
     </section>
