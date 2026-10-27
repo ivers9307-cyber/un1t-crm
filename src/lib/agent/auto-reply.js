@@ -63,6 +63,7 @@ import {
   refuseToolForTurn, TOOL_NOT_AT_THIS_STUDIO,
 } from './tool-capability'
 import { PURCHASE_TOOL_NAMES } from './purchase-tools'
+import { CHOOSE_STUDIO_TOOL, CHOOSE_STUDIO_TOOL_NAME, matchStudioChoice, buildStudioChoiceBlock } from './studio-choice'
 import { deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint } from './tool-blocks'
 import { resolveMemberStudios, otherStudioOnly } from './member-studios'
 import {
@@ -77,7 +78,7 @@ import { anthropicMessages } from '@/lib/anthropic'
 import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -182,6 +183,14 @@ export const CACHED_BOOKING_FLOW_BLOCKS = Object.freeze({
 export function agentToolsFor(arg) {
   if (arg !== null && typeof arg === 'object') return CACHED_BLOCKS[selectToolBlock(arg)]
   return arg ? CACHED_ACCOUNT_TOOLS : CACHED_NO_BOOKING_TOOLS
+}
+/**
+ * MIAASKSTUDIO.1 — a turn that must ask which studio gets choose_studio after
+ * its block. Appended after the block's cache breakpoint, so the cached tool
+ * prefix is unchanged; only these rare turns pay for the extra tool. Pure.
+ */
+export function withStudioChoice(tools, plan) {
+  return plan?.studioChoices?.length > 1 ? [...tools, CHOOSE_STUDIO_TOOL] : tools
 }
 // Don't re-acknowledge a burst of non-text messages — one soft handoff
 // per minute is enough.
@@ -573,7 +582,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   // unconditionally would 400 the whole conv fetch for every Instagram turn.
   const isWhatsApp = adapter.name === 'whatsapp'
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at' : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at, agent_chosen_location_id' : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -950,15 +959,19 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // no resolution, which is today's thread-studio behaviour. The resolver
     // never throws; a failed read is { studios: [], readFailed: true } and the
     // dispatch below treats it exactly like no resolution.
+    // MIAASKSTUDIO.1 — the studio the customer named on this thread, if any;
+    // answerableStudios reads it only when their memberships do not decide.
+    let chosenStudioId = isWhatsApp ? conv?.agent_chosen_location_id || null : null
     const resolveTurnMemberStudios = async (anchorContactId) => {
       if (!isWhatsApp || !anchorContactId || !loc?.organization_id) return undefined
       try {
-        return await resolveMemberStudios(db, {
+        const resolution = await resolveMemberStudios(db, {
           anchorContactId,
           threadLocationId: locationId,
           organizationId: loc.organization_id,
           senderPhone: recipient,
         })
+        return resolution && !resolution.readFailed ? { ...resolution, chosenLocationId: chosenStudioId } : resolution
       } catch { return undefined }
     }
     const applyMemberStudios = (resolution) => {
@@ -1032,13 +1045,40 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       applyPlan(next)
       if (orgStudioLinks === undefined) orgStudioLinks = await readOrgStudioLinks(db, { organizationId: loc?.organization_id || null, threadLocationId: locationId }, actionStudios)
       const otherStudiosBlock = otherStudiosBlockFor(orgStudioLinks, next)
+      const studioChoiceBlock = buildStudioChoiceBlock(next.studioChoices)
       system = buildCachedSystem({
         ...(extra && !next.sameAsToday ? { ...systemOpts, ...extra } : systemOpts),
         ...(otherStudiosBlock ? { otherStudiosBlock } : {}),
+        ...(studioChoiceBlock ? { studioChoiceBlock } : {}),
         bookingFlow: toolCtx.bookingFlow?.offered === true,
       })
     }
     await settleTurn()
+
+    // MIAASKSTUDIO.1 — choose_studio: match the name against this turn's
+    // choices, keep it on the conversation, and re-plan with it. A failed
+    // write still re-plans this turn (the customer is answered now) and is
+    // logged; the next turn simply asks again.
+    const chooseStudio = async (input) => {
+      if (!plan?.studioChoices) {
+        return { error: 'not_needed', message: 'You already know which studio this is. Carry on.' }
+      }
+      const match = matchStudioChoice(plan.studioChoices, input?.studio)
+      if (!match) {
+        return { error: 'unknown_studio', message: 'That is not one of the listed studios. Ask them to pick one.', options: plan.studioChoices.map((c) => c.name) }
+      }
+      const { error: chooseErr } = await db.from(adapter.conversationsTable)
+        .update({ agent_chosen_location_id: match.locationId })
+        .eq('id', conversationId)
+      if (chooseErr) logError('mia-un1t', 'chosen studio not stored', { locationId, op: 'choose_studio', code: chooseErr.code ?? null })
+      chosenStudioId = match.locationId
+      if (toolCtx.memberStudios && !toolCtx.memberStudios.readFailed) {
+        applyMemberStudios({ ...toolCtx.memberStudios, chosenLocationId: chosenStudioId })
+      }
+      trace.chosenStudioId = chosenStudioId
+      await settleTurn({ keepIfKey: planKey(plan) })
+      return { chosen: match.name, message: `Saved: they mean ${match.name}. You now have ${match.name}'s tools: carry on with what they asked for.` }
+    }
 
     let verifyFails = conv?.agent_verify_attempts ?? 0
     // MIA-CREDITS.1 — set when book_class pre-flights to no_credits; the
@@ -1082,7 +1122,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             output_config: { effort: agentEffort },
             system,
             messages,
-            tools: (toolCtx.bookingFlow?.offered && CACHED_BOOKING_FLOW_BLOCKS[plan.block]) || CACHED_BLOCKS[plan.block],
+            tools: withStudioChoice((toolCtx.bookingFlow?.offered && CACHED_BOOKING_FLOW_BLOCKS[plan.block]) || CACHED_BLOCKS[plan.block], plan),
           },
           { apiKey, locationId, source: 'mia_auto_reply' },
           {
@@ -1144,6 +1184,12 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
             // words; ops keep the real signal in the log line.
             let result
             try {
+              // MIAASKSTUDIO.1 — the customer named their studio: keep it and
+              // re-plan, so that studio's tools arrive from the next iteration.
+              if (block.name === CHOOSE_STUDIO_TOOL_NAME) {
+                toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(await chooseStudio(block.input || {})) })
+                continue
+              }
               // MIAORG.1 Task 5 — a booking-system tool named at a studio
               // without one (never offered there, so the model invented it)
               // is refused before any executor runs: no Glofox call, no read.

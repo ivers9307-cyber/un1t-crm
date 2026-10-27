@@ -228,6 +228,28 @@ describe('answerableStudios (spec 6.1)', () => {
     expect(answerableStudios([noAccount, H({ answerable: false })], STILL)).toMatchObject({ basis: 'thread', answerable: [] })
   })
 
+  // MIAASKSTUDIO.1 — accounts at both, active at neither (a finished Hatch trial
+  // plus a Stillorgan Glofox account): Mia is told the choices and asks.
+  it('several accounts, active nowhere, no choice -> thread with the choices, thread studio first', () => {
+    const out = answerableStudios([S({ answerable: true }), H({ answerable: true })], HATCH)
+    expect(out).toMatchObject({ basis: 'thread', answerable: [] })
+    expect(out.choices.map((s) => s.locationId)).toEqual([HATCH, STILL])
+  })
+
+  it('several accounts, active nowhere, the customer chose -> that studio alone', () => {
+    const out = answerableStudios([S({ answerable: true }), H({ answerable: true })], STILL, { chosenLocationId: HATCH })
+    expect(out.basis).toBe('chosen')
+    expect(out.answerable.map((s) => s.locationId)).toEqual([HATCH])
+  })
+
+  it('a choice never overrides an active membership, and a choice outside the accounts is ignored', () => {
+    expect(answerableStudios([S({ active: true, answerable: true }), H({ answerable: true })], STILL, { chosenLocationId: HATCH }))
+      .toMatchObject({ basis: 'active' })
+    const out = answerableStudios([S({ answerable: true }), H({ answerable: true })], STILL, { chosenLocationId: 'loc-elsewhere' })
+    expect(out.basis).toBe('thread')
+    expect(out.choices).toHaveLength(2)
+  })
+
   it('empty studios -> thread', () => {
     expect(answerableStudios([], STILL)).toEqual({ answerable: [], basis: 'thread' })
   })
