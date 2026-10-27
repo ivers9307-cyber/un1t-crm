@@ -24,6 +24,13 @@ describe('lensMetrics (CARDLENS.9)', () => {
     expect(m).toMatchObject({ attended: 9, ltvCents: 90000, arrearsCents: 0, deals: 1, un1t: null })
   })
 
+  // CARDLENS.11 — the header counts the deals the rail lists (inLens keeps a
+  // deal with no studio).
+  it('a deal with no studio counts under a studio lens, like the rail', () => {
+    const m = lensMetrics({ memberships: [G, U], lensId: H, base: BASE, deals: [...DEALS, { location_id: null }] })
+    expect(m.deals).toBe(2)
+  })
+
   it('All studios: attendance and value summed, the latest class, the merged arrears', () => {
     const m = lensMetrics({ memberships: [G, U], lensId: 'all', base: BASE, deals: DEALS })
     expect(m).toMatchObject({ attended: 12, lastAttendedAt: '2026-10-26T18:30:00Z', ltvCents: 105000, arrearsCents: 4500, deals: 2, un1t: BASE.un1t })
