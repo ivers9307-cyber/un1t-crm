@@ -1,7 +1,7 @@
 // CC.2 — the "who they are" rail of the command-centre contact page:
-// linked accounts, identity (emails/phones, cross-account when
-// grouped), CRM details, the Glofox membership card, and marketing
-// preferences. Server component — cards moved verbatim from the old
+// linked accounts, the Person card (emails/phones, cross-account when
+// grouped, plus label and visit origin; CARDLENS.3), the Glofox
+// membership card, and marketing preferences. Server component — cards moved verbatim from the old
 // Overview / Admin tabs.
 
 import { Mail, Phone } from 'lucide-react'
@@ -21,15 +21,17 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] } }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] }, glofoxMode }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
       <LinkedAccountsCard person={person} contactId={contact.id} locationId={contact.location_id} canManage={canLinkAccounts} />
 
-      {/* Identity — emails + phones (deduped across the group when linked). */}
+      {/* CARDLENS.3 — one Person card: emails + phones (deduped across the
+          group when linked), then the CRM-native rows the header does not
+          already carry (source and created date live in the header line). */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-1">Identity</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-1">Person</h3>
         <div className="space-y-1.5">
           {identityEmails.length === 0 && identityPhones.length === 0 && (
             <p className="text-sm text-un1t-muted">No contact details</p>
@@ -52,18 +54,11 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
             </div>
           ))}
         </div>
-      </div>
-
-      {/* Info Card. GLOFOX2.9 — Glofox-specific fields live in the
-          dedicated Glofox Profile card below; this card only carries
-          CRM-native identifiers. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Details</h3>
-        <InfoRow label="Source" value={contact.lead_source || contact.source} />
-        {/* VISIT-ORIGIN.1 — only when something is known; no "unknown" row. */}
-        {visitOriginLabel(contact) && <InfoRow label="Came via" value={visitOriginLabel(contact)} />}
-        <InfoRow label="Label" value={contact.label || '—'} />
-        <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
+        <div className="pt-2 border-t border-un1t-border space-y-1.5">
+          {/* VISIT-ORIGIN.1 — only when something is known; no "unknown" row. */}
+          {visitOriginLabel(contact) && <InfoRow label="Came via" value={visitOriginLabel(contact)} />}
+          <InfoRow label="Label" value={contact.label || '—'} />
+        </div>
       </div>
 
       {/* ORGCONTACTS.2 — every studio the person has a relationship with (the
@@ -73,7 +68,8 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
       {/* HATCHPIPE.2 — what un1t.online says this contact owes and has paid. */}
       <Un1tPaymentsCard studios={un1tBilling?.studios} />
 
-      <GlofoxProfileCard contact={contact} />
+      {/* CARDLENS.1 — the page's glofoxCardMode: hidden at a studio that does not use Glofox. */}
+      <GlofoxProfileCard contact={contact} mode={glofoxMode} />
 
       {/* CONSENT.1 — operator toggles for marketing email / SMS /
           WhatsApp. Transactional sends stay on regardless. Members of the

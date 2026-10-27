@@ -77,3 +77,23 @@ export function deriveNeedsAttention({ contact, arrearsCents = 0, glofoxArrearsC
   }
   return items
 }
+
+// CARDLENS.2 — { location_id: shortName } for the studio tags on the contact
+// page, from loadContactStudios rows. Empty when the person has fewer than two
+// studios, so a single-studio contact (the norm) shows no tag at all. A word
+// every name starts with ("UN1T") is dropped, unless that would leave a name
+// empty.
+export function studioNameMap(rows) {
+  const byId = new Map()
+  for (const r of rows || []) {
+    const name = String(r?.location?.name || '').trim()
+    if (r?.location_id && name && !byId.has(r.location_id)) byId.set(r.location_id, name)
+  }
+  if (byId.size < 2) return {}
+  const words = [...byId.values()].map((n) => n.split(/\s+/))
+  const first = words[0][0]
+  const strip = words.every((w) => w.length > 1 && w[0] === first)
+  const out = {}
+  for (const [id, name] of byId) out[id] = strip ? name.split(/\s+/).slice(1).join(' ') : name
+  return out
+}

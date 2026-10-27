@@ -22,14 +22,20 @@ vi.mock('@/lib/supabase', () => ({
   })),
 }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn() }))
+vi.mock('@/lib/membership/source', () => ({ membershipSourceState: vi.fn() }))
 
 import { getCurrentUser } from '@/lib/auth'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
+import { membershipSourceState } from '@/lib/membership/source'
 import { POST } from './route.js'
 
 const call = () => POST(new Request(`http://crm.test/api/contacts/${CONTACT}/push-to-glofox`, { method: 'POST' }), { params: Promise.resolve({ id: CONTACT }) })
 
-beforeEach(() => { vi.clearAllMocks(); getCurrentUser.mockResolvedValue(MASTER) })
+beforeEach(() => {
+  vi.clearAllMocks()
+  getCurrentUser.mockResolvedValue(MASTER)
+  membershipSourceState.mockResolvedValue({ source: 'glofox', state: 'configured' })
+})
 
 describe('POST /api/contacts/[id]/push-to-glofox', () => {
   it('a failed push says why in `error` (502)', async () => {
@@ -46,5 +52,22 @@ describe('POST /api/contacts/[id]/push-to-glofox', () => {
     const j = await r.json()
     expect(j).toMatchObject({ success: true, result: { status: 'linked' } })
     expect(j.error).toBeUndefined()
+  })
+})
+
+describe('POST /api/contacts/[id]/push-to-glofox — only where Glofox is used (CARDLENS.1)', () => {
+  it('refuses a contact whose studio runs un1t.online (409) and never calls Glofox', async () => {
+    membershipSourceState.mockResolvedValueOnce({ source: 'un1t_online', state: 'configured' })
+    const r = await call()
+    expect(r.status).toBe(409)
+    expect(await r.json()).toMatchObject({ success: false, error: 'glofox_not_used_here' })
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+  })
+
+  it('answers 503 when the studio source cannot be read, and never calls Glofox', async () => {
+    membershipSourceState.mockResolvedValueOnce({ source: null, state: 'unknown', readError: 'x' })
+    const r = await call()
+    expect(r.status).toBe(503)
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
   })
 })

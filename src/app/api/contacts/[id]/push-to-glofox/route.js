@@ -22,6 +22,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, hasRoleAtLocation, hasRoleAtAnyLocation } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
+import { membershipSourceState } from '@/lib/membership/source'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -78,6 +79,22 @@ export async function POST(_request, { params }) {
       error: 'already_linked',
       message: 'Contact is already linked to Glofox. Use the Glofox profile section to view their record.',
       glofox_member_id: contact.glofox_member_id,
+    }, { status: 409 })
+  }
+
+  // CARDLENS.1 — only a studio that runs Glofox gets a Glofox account. Hatch
+  // Street keeps settings.glofox (a placeholder branch) but runs un1t.online,
+  // so the settings alone never decide this. An unreadable source is a 503:
+  // never a push on a guess.
+  const sourceState = await membershipSourceState(db, contact.location_id)
+  if (sourceState.state === 'unknown') {
+    return NextResponse.json({ success: false, error: 'Could not check which membership system this studio uses. Try again.' }, { status: 503 })
+  }
+  if (sourceState.source !== 'glofox') {
+    return NextResponse.json({
+      success: false,
+      error: 'glofox_not_used_here',
+      message: 'This studio does not use Glofox, so the contact cannot be pushed there.',
     }, { status: 409 })
   }
 

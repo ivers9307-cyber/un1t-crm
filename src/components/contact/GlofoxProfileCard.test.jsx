@@ -72,3 +72,24 @@ describe('GlofoxProfileCard — the one-time password outlives the refresh (PASS
     expect(screen.getByText(/SYNTH-PC-2/)).toBeTruthy()
   })
 })
+
+describe('GlofoxProfileCard — mode (CARDLENS.1)', () => {
+  it('renders nothing when the studio does not use Glofox', () => {
+    const { container } = render(<GlofoxProfileCard contact={UNLINKED} mode="hidden" />)
+    expect(container.textContent).toBe('')
+  })
+
+  it('offers Create in Glofox when the studio uses Glofox', () => {
+    render(<GlofoxProfileCard contact={UNLINKED} mode="pushable" />)
+    expect(screen.getByRole('button', { name: /create in glofox/i })).toBeTruthy()
+  })
+})
+
+describe('GlofoxProfileCard — a paused member (CARDLENS.3)', () => {
+  it('says the resume date once (the state badge carries it)', () => {
+    const future = new Date(Date.now() + 10 * 86_400_000).toISOString()
+    const { container } = render(<GlofoxProfileCard contact={{ ...LINKED, glofox_membership_state: 'paused', glofox_membership_resume_at: future, glofox_membership_paused_at: '2026-10-01T00:00:00Z' }} />)
+    expect(container.textContent.match(/resumes/g)).toHaveLength(1)
+    expect(container.textContent).toMatch(/Paused since/)
+  })
+})

@@ -12,6 +12,7 @@ import ContactAppAccountCard from '@/components/ContactAppAccountCard'
 import MemberPasswordOverrideButton from '@/components/MemberPasswordOverrideButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
 import { UpcomingEventsCard } from './EventRegistrationsCards'
+import StudioTag from './StudioTag'
 import { relativeTime, formatTime } from './format'
 
 const ATTENTION_TONE = {
@@ -27,8 +28,11 @@ export default function ContactNextRail({
   upcomingBookings = [],
   deals = [],
   admin, // contactActionGates(user, contact).admin (src/lib/contact-page-gates.js): { canPasswordOverride, canEdit, canDelete, canInvite, hasUserAccount, canEditDevices, canLinkAccount }
+  studioNames = null, // CARDLENS.2 — studioNameMap(); empty for a single-studio person
   canReadStudioCards = false, // contactWorkGates(user, contact).canReadStudioCards: Events + HR devices read at the contact's studio
 }) {
+  const showMore = canReadStudioCards
+    || Boolean(admin?.canLinkAccount || admin?.canEdit || admin?.canDelete || admin?.canInvite || admin?.canPasswordOverride)
   return (
     <>
       {/* Needs attention — derived, forward-looking (contact-view lib). */}
@@ -90,7 +94,7 @@ export default function ContactNextRail({
         </div>
       )}
 
-      <UpcomingEventsCard bookings={upcomingBookings} />
+      <UpcomingEventsCard bookings={upcomingBookings} studioNames={studioNames} />
 
       {/* Deals */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
@@ -98,7 +102,7 @@ export default function ContactNextRail({
         {deals.length === 0 && <p className="text-sm text-un1t-muted">No deals</p>}
         {deals.map(deal => (
           <div key={deal.id} className="flex items-center justify-between py-2 border-b border-un1t-border last:border-0">
-            <span className="text-sm">{deal.title}</span>
+            <span className="text-sm flex items-center gap-1.5 min-w-0">{deal.title} <StudioTag locationId={deal.location_id} names={studioNames} /></span>
             <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: deal.pipeline_stages?.color + '30', color: deal.pipeline_stages?.color }}>
               {deal.pipeline_stages?.name}
             </span>
@@ -106,61 +110,73 @@ export default function ContactNextRail({
         ))}
       </div>
 
-      {/* Race-event history (mig 086; HOST-MASTER.6b — host + internal
-          events, hence "Events"). Rendered for members of the contact's
-          studio (the route 404s anyone else, e.g. a crossover viewer); the
-          component shows a "no races yet" message when empty. */}
-      {canReadStudioCards && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Events</h3>
-          <ContactRaceHistory contactId={contact.id} />
-        </div>
-      )}
+      {/* CARDLENS.3 — the cards staff rarely need (events, HR straps, app
+          account, admin) fold under one closed "More" section. Each keeps its
+          own gate; the section is left out when the viewer could use none. */}
+      {showMore && (
+        <details className="bg-un1t-surface border border-un1t-border rounded-lg">
+          <summary className="cursor-pointer select-none p-4 text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
+            More
+          </summary>
+          <div className="space-y-5 px-4 pb-4">
+            {/* Race-event history (mig 086; HOST-MASTER.6b — host + internal
+                events, hence "Events"). Rendered for members of the contact's
+                studio (the route 404s anyone else, e.g. a crossover viewer); the
+                component shows a "no races yet" message when empty. */}
+            {canReadStudioCards && (
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Events</h3>
+                <ContactRaceHistory contactId={contact.id} />
+              </div>
+            )}
 
-      {/* HR devices: chest strap MAC registry (the route 403s a non-member
-          of the contact's studio). */}
-      {canReadStudioCards && (
-        <ContactDevicesCard contactId={contact.id} canEdit={admin.canEditDevices} />
-      )}
+            {/* HR devices: chest strap MAC registry (the route 403s a non-member
+                of the contact's studio). */}
+            {canReadStudioCards && (
+              <ContactDevicesCard contactId={contact.id} canEdit={admin.canEditDevices} />
+            )}
 
-      {/* REPSET-P5 — App account link state + admin link/unlink tool.
-          Master/owner only (staff never self-link their member contact —
-          the Repset app hard-disables self-linking for anyone with
-          has_ever_been_staff; an admin links from here instead). */}
-      {admin.canLinkAccount && (
-        <ContactAppAccountCard contactId={contact.id} contactName={contact.name} />
-      )}
+            {/* REPSET-P5 — App account link state + admin link/unlink tool.
+                Master/owner only (staff never self-link their member contact —
+                the Repset app hard-disables self-linking for anyone with
+                has_ever_been_staff; an admin links from here instead). */}
+            {admin.canLinkAccount && (
+              <ContactAppAccountCard contactId={contact.id} contactName={contact.name} />
+            )}
 
-      {/* Admin actions — edit / delete, app invite, password override.
-          Each keeps its existing permission gate. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Admin</h3>
-        <div className="flex flex-wrap items-center gap-3">
-          {/* AUTH.1 — admin password override for members with a linked
-              CRM auth account. Master/owner only; contacts without a
-              user_id link have no CRM login to reset. */}
-          {admin.canPasswordOverride && (
-            <MemberPasswordOverrideButton
-              contactId={contact.id}
-              contactLabel={contact.name || contact.email || 'this contact'}
-            />
-          )}
-          <ContactEditDeleteActions
-            contact={contact}
-            canEdit={admin.canEdit}
-            canDelete={admin.canDelete}
-          />
-          {admin.canInvite && (
-            <InviteToAppButton
-              contactId={contact.id}
-              hasUserAccount={admin.hasUserAccount}
-            />
-          )}
-          {/* NB: "Create in Glofox" (CreateInGlofoxButton) is NOT duplicated
-              here — it lives inside GlofoxProfileCard for unlinked contacts.
-              One place per component, as before. */}
-        </div>
-      </div>
+            {/* Admin actions — edit / delete, app invite, password override.
+                Each keeps its existing permission gate. */}
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Admin</h3>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* AUTH.1 — admin password override for members with a linked
+                    CRM auth account. Master/owner only; contacts without a
+                    user_id link have no CRM login to reset. */}
+                {admin.canPasswordOverride && (
+                  <MemberPasswordOverrideButton
+                    contactId={contact.id}
+                    contactLabel={contact.name || contact.email || 'this contact'}
+                  />
+                )}
+                <ContactEditDeleteActions
+                  contact={contact}
+                  canEdit={admin.canEdit}
+                  canDelete={admin.canDelete}
+                />
+                {admin.canInvite && (
+                  <InviteToAppButton
+                    contactId={contact.id}
+                    hasUserAccount={admin.hasUserAccount}
+                  />
+                )}
+                {/* NB: "Create in Glofox" (CreateInGlofoxButton) is NOT duplicated
+                    here — it lives inside GlofoxProfileCard for unlinked contacts.
+                    One place per component, as before. */}
+              </div>
+            </div>
+          </div>
+        </details>
+      )}
     </>
   )
 }
