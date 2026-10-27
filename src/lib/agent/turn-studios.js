@@ -60,11 +60,11 @@ export function threadTakesBookings(provider) {
  * `un1tWrites` is the caller's decision (resolveTurnPlan); absent or anything
  * but true plans the read blocks, as before MIAHATCH.5.
  *
- * @param {{ memberStudios?: { studios: object[], readFailed: boolean }, threadLocationId: string,
+ * @param {{ memberStudios?: { studios: object[], readFailed: boolean, chosenLocationId?: string|null }, threadLocationId: string,
  *   threadProvider?: { key: string, capabilities?: object }, channel: string, un1tWrites?: boolean }} args
  * @returns {{ block: string, todayBlock: string, sameAsToday: boolean, answerable: object[],
  *   un1tStudio: object|null, glofoxStudio: object|null, glofoxLocationId: string, otherStudios: object[],
- *   multiStudio: boolean, un1tWrites: boolean }}
+ *   multiStudio: boolean, un1tWrites: boolean, studioChoices: {locationId: string, name: string}[]|null }}
  */
 export function planTurnTools({ memberStudios, threadLocationId, threadProvider, channel, un1tWrites = false } = {}) {
   const canBook = threadTakesBookings(threadProvider)
@@ -72,7 +72,10 @@ export function planTurnTools({ memberStudios, threadLocationId, threadProvider,
   const studios = memberStudios && !memberStudios.readFailed && Array.isArray(memberStudios.studios)
     ? memberStudios.studios
     : null
-  const answerable = studios ? answerableStudios(studios, threadLocationId).answerable : []
+  // MIAASKSTUDIO.1 — the studio the customer named (choose_studio), used only
+  // when their memberships do not decide it.
+  const picked = studios ? answerableStudios(studios, threadLocationId, { chosenLocationId: memberStudios.chosenLocationId || null }) : null
+  const answerable = picked ? picked.answerable : []
   // Ruling 14: a Glofox thread studio where this sender has a LIVE
   // relationship that is not "active" (ClassPass pay-as-you-go, or a member
   // paused, locked or starting later) keeps its Glofox answers when another
@@ -107,6 +110,12 @@ export function planTurnTools({ memberStudios, threadLocationId, threadProvider,
     // which studio each answer is for (always so for un1t_read_dual).
     multiStudio: block === 'un1t_read_dual' || (block === 'un1t_full' && answerable.some((s) => s?.providerKey === 'glofox')),
     un1tWrites: block === 'un1t_full',
+    // MIAASKSTUDIO.1 — accounts at several studios, active at none, and no
+    // choice yet: Mia asks which studio and calls choose_studio. WhatsApp
+    // only (the choice is kept on the WhatsApp conversation).
+    studioChoices: channel === 'whatsapp' && answerable.length === 0 && picked?.choices?.length > 1
+      ? picked.choices.map((s) => ({ locationId: s.locationId, name: s.name || '' }))
+      : null,
   }
 }
 
@@ -123,7 +132,8 @@ export function todayPlan({ threadLocationId, threadProvider, channel } = {}) {
 export function planKey(plan) {
   if (!plan) return ''
   const others = (plan.otherStudios || []).map((s) => s?.locationId).filter(Boolean).sort()
-  return [plan.block, plan.multiStudio === true ? 'multi' : '', plan.un1tStudio?.locationId || '', others.join(',')].join('|')
+  const choices = (plan.studioChoices || []).map((s) => s?.locationId).filter(Boolean).sort()
+  return [plan.block, plan.multiStudio === true ? 'multi' : '', plan.un1tStudio?.locationId || '', others.join(','), choices.join(',')].join('|')
 }
 
 /**

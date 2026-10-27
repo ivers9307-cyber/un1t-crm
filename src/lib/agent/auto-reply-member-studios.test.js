@@ -97,6 +97,7 @@ const STILLORGAN_ONLY = { studios: [stillorganStudio({ active: true })], readFai
 function turnDb({ locationId = STILLORGAN, organizationId = ORG, settings = { enabled: true }, conv, freshVerified = null }) {
   const reads = []
   const inserts = []
+  const updates = []
   const mk = (table) => {
     const state = { op: 'select', cols: null, selectOpts: null }
     const finish = () => {
@@ -134,7 +135,7 @@ function turnDb({ locationId = STILLORGAN, organizationId = ORG, settings = { en
     }
     const builder = {
       select: (cols, opts) => { state.cols = cols; if (opts) state.selectOpts = opts; return builder },
-      update: () => { state.op = 'update'; return builder },
+      update: (row) => { state.op = 'update'; updates.push({ table, row }); return builder },
       insert: (row) => { inserts.push({ table, row }); return Promise.resolve({ error: null }) },
       eq: () => builder, or: () => builder, gte: () => builder, lte: () => builder,
       gt: () => { state.sawGt = true; return builder },
@@ -144,7 +145,7 @@ function turnDb({ locationId = STILLORGAN, organizationId = ORG, settings = { en
     }
     return builder
   }
-  return { db: { from: mk }, reads, inserts }
+  return { db: { from: mk }, reads, inserts, updates }
 }
 
 function makeAdapter(extra = {}) {
@@ -514,5 +515,70 @@ describe('Instagram turn', () => {
     expect(toolResultOf(bodies[1])).toEqual({ marker: 'REAL_ACCOUNT_TOOL_RAN' })
     const decision = inserts.find((i) => i.table === 'agent_decisions')
     expect(decision.row.meta).not.toHaveProperty('member_studios')
+  })
+})
+
+// MIAASKSTUDIO.1 — accounts at both studios, active at neither: Mia gets
+// choose_studio and the "Which studio?" block, and a choice re-plans the turn.
+describe('studio choice (accounts at both, active at neither)', () => {
+  const BOTH_INACTIVE = { studios: [stillorganStudio(), hatchStudio({ active: false, answerable: true })], readFailed: false }
+  const toolNames = (body) => body.tools.map((t) => t.name)
+  const systemText = (body) => body.system.map((b) => b.text).join('\n')
+
+  it('offers choose_studio; the choice is stored, re-plans the same turn and is logged', async () => {
+    resolveMemberStudios.mockResolvedValue(BOTH_INACTIVE)
+    const { fetchFn, bodies } = modelTurns([toolTurn('choose_studio', { studio: 'Hatch' }), textTurn('Sorting that now')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts, updates } = turnDb({ conv: VERIFIED_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx({ body: 'can you resend the membership link' }))
+
+    expect(toolNames(bodies[0])).toContain('choose_studio')
+    expect(systemText(bodies[0])).toContain('## Which studio?')
+    expect(toolResultOf(bodies[1])).toMatchObject({ chosen: 'UN1T Hatch Street' })
+    expect(updates).toContainEqual({ table: 'whatsapp_conversations', row: { agent_chosen_location_id: HATCH } })
+    // The next request is Hatch's block, with no choice left to make.
+    expect(toolNames(bodies[1])).not.toContain('choose_studio')
+    expect(systemText(bodies[1])).not.toContain('## Which studio?')
+    const meta = inserts.find((i) => i.table === 'agent_decisions').row.meta
+    expect(meta.chosen_studio).toBe(HATCH)
+    expect(meta.tool_block).toMatch(/^un1t_/)
+  })
+
+  it('an unknown name changes nothing and lists the options', async () => {
+    resolveMemberStudios.mockResolvedValue(BOTH_INACTIVE)
+    const { fetchFn, bodies } = modelTurns([toolTurn('choose_studio', { studio: 'Rathmines' }), textTurn('Which studio?')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, updates } = turnDb({ conv: VERIFIED_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx())
+
+    expect(toolResultOf(bodies[1])).toMatchObject({ error: 'unknown_studio', options: ['UN1T Stillorgan', 'UN1T Hatch Street'] })
+    expect(updates.some((u) => 'agent_chosen_location_id' in (u.row || {}))).toBe(false)
+    expect(toolNames(bodies[1])).toContain('choose_studio')
+  })
+
+  it('a choice already on the thread is used from the first request', async () => {
+    resolveMemberStudios.mockResolvedValue(BOTH_INACTIVE)
+    const { fetchFn, bodies } = modelTurns([textTurn('Hi')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db, inserts } = turnDb({ conv: { ...VERIFIED_THREAD, agent_chosen_location_id: HATCH } })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx())
+
+    expect(toolNames(bodies[0])).not.toContain('choose_studio')
+    expect(inserts.find((i) => i.table === 'agent_decisions').row.meta.tool_block).toMatch(/^un1t_/)
+  })
+
+  it('a member active somewhere is never asked', async () => {
+    resolveMemberStudios.mockResolvedValue(STILLORGAN_ONLY)
+    const { fetchFn, bodies } = modelTurns([textTurn('Hi')])
+    vi.stubGlobal('fetch', fetchFn)
+    const { db } = turnDb({ conv: VERIFIED_THREAD })
+
+    await runChannelAgent(db, makeAdapter(), turnCtx())
+
+    expect(toolNames(bodies[0])).not.toContain('choose_studio')
+    expect(systemText(bodies[0])).not.toContain('## Which studio?')
   })
 })
