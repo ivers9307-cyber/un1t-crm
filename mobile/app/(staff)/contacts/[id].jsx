@@ -37,7 +37,7 @@ import {
   getContact, getContactCommandCentre, listBookingsForContact,
   listWhatsAppThreadsForContact, prettyStage, contactDisplayName,
 } from '../../../lib/contacts-api'
-import { glofoxCardView, studioTag, latestThreadPerStudio } from '../../../lib/contact-platform-cards'
+import { glofoxCardView, studioTag, latestThreadPerStudio, notePostsToGlofox } from '../../../lib/contact-platform-cards'
 import { contactActionFlags } from '../../../lib/contact-actions'
 import { colors } from '../../../lib/colors'
 import { isoDate } from '../../../lib/dates'
@@ -368,7 +368,8 @@ export default function ContactDetail() {
           {/* Note composer + merged timeline */}
           <ContactTimelineSection
             contactId={id}
-            syncsToGlofox={Boolean(contact.glofox_member_id)}
+            syncsToGlofox={notePostsToGlofox(bundle, contact)}
+            canNote={actions.note}
             notes={notes}
             activities={activities}
             loadError={bundleError}

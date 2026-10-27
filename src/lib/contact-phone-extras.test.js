@@ -13,7 +13,7 @@ const HATCH = { location_id: 'h', location: { name: 'UN1T Hatch Street', members
 describe('shapePhoneContactExtras', () => {
   it('a Hatch-only un1t.online member: no Glofox card, no tags', () => {
     const out = shapePhoneContactExtras({ contact: { location_id: 'h' }, studioRows: [HATCH], primarySource: 'un1t_online' })
-    expect(out).toEqual({ glofox_card: { mode: 'hidden', studio_name: null }, studio_tags: {} })
+    expect(out).toEqual({ glofox_card: { mode: 'hidden', studio_name: null }, studio_tags: {}, glofox_note_push: false })
   })
 
   it('a Stillorgan Glofox member who also trains at Hatch: the card names Stillorgan, both studios tag', () => {
@@ -24,6 +24,13 @@ describe('shapePhoneContactExtras', () => {
     })
     expect(out.glofox_card).toEqual({ mode: 'linked', studio_name: 'UN1T Stillorgan' })
     expect(out.studio_tags).toEqual({ h: 'Hatch Street', s: 'Stillorgan' })
+    // Hatch-primary: the note push uses Hatch's (absent) Glofox, so no push.
+    expect(out.glofox_note_push).toBe(false)
+  })
+
+  it('a Stillorgan-primary Glofox member: notes also post to Glofox', () => {
+    const out = shapePhoneContactExtras({ contact: { location_id: 's', glofox_member_id: 'g1' }, studioRows: [STILL, HATCH], primarySource: 'glofox' })
+    expect(out.glofox_note_push).toBe(true)
   })
 
   it('an unlinked Stillorgan lead: pushable, named after the primary', () => {
@@ -42,7 +49,7 @@ describe('loadPhoneContactExtras', () => {
     loadContactStudios.mockRejectedValue(new Error('boom'))
     membershipSourceState.mockResolvedValue({ source: null, state: 'unknown' })
     const out = await loadPhoneContactExtras({}, { id: 'c', location_id: 'h' })
-    expect(out).toEqual({ glofox_card: { mode: 'pushable', studio_name: null }, studio_tags: {} })
+    expect(out).toEqual({ glofox_card: { mode: 'pushable', studio_name: null }, studio_tags: {}, glofox_note_push: false })
   })
 
   it('reads the primary studio source and the contact studios', async () => {

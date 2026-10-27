@@ -120,7 +120,8 @@ function TimelineItem({ item, isLast, studioName }) {
 /**
  * @param {object} props
  * @param {string}  props.contactId
- * @param {boolean} props.syncsToGlofox  contact is Glofox-linked (composer hint)
+ * @param {boolean} props.syncsToGlofox  a note posted here also lands in Glofox (composer hint)
+ * @param {boolean} [props.canNote]      CARDLENS-M.4 — show the note composer (the route's decision)
  * @param {Array|null} props.notes       null while the bundle is loading
  * @param {Array|null} props.activities
  * @param {string|null} props.loadError
@@ -129,7 +130,7 @@ function TimelineItem({ item, isLast, studioName }) {
  *   CARDLENS-M.3 — a row's studio tag (null for a one-studio person)
  */
 export default function ContactTimelineSection({
-  contactId, syncsToGlofox, notes, activities, loadError, onRefresh, studioNameFor = () => null,
+  contactId, syncsToGlofox, notes, activities, loadError, onRefresh, studioNameFor = () => null, canNote = true,
 }) {
   const [filter, setFilter] = useState('all')
   const loading = notes == null && activities == null && !loadError
@@ -144,7 +145,7 @@ export default function ContactTimelineSection({
         Notes & activity
       </Text>
 
-      <NoteComposer contactId={contactId} syncsToGlofox={syncsToGlofox} onCreated={onRefresh} />
+      {canNote && <NoteComposer contactId={contactId} syncsToGlofox={syncsToGlofox} onCreated={onRefresh} />}
 
       <View className="mt-3 mb-2">
         <Tabs tabs={TIMELINE_FILTERS} value={filter} onChange={setFilter} />

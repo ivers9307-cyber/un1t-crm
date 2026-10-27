@@ -41,6 +41,20 @@ export function glofoxCardView(bundle, contact) {
 }
 
 /**
+ * CARDLENS-M.4 — whether a note posted from the screen also lands in the
+ * member's Glofox timeline (the composer's hint). The server knows: the push
+ * uses the primary studio's Glofox, so a Hatch-primary person with a
+ * Stillorgan Glofox id gets none. An older server: any linked contact, as
+ * before.
+ * @param {object|string|null} bundle
+ * @param {{ glofox_member_id?: string|null }|null} contact
+ */
+export function notePostsToGlofox(bundle, contact) {
+  if (bundle && typeof bundle === 'object' && typeof bundle.glofox_note_push === 'boolean') return bundle.glofox_note_push
+  return Boolean(contact?.glofox_member_id)
+}
+
+/**
  * The studio tag for a row, or null (one studio, an old server, no location).
  * @param {object|null|undefined} bundle
  * @param {string|null|undefined} locationId

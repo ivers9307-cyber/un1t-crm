@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { glofoxCardView, studioTag, latestThreadPerStudio, GLOFOX_CARD_TITLE } from './contact-platform-cards.js'
+import { glofoxCardView, studioTag, latestThreadPerStudio, notePostsToGlofox, GLOFOX_CARD_TITLE } from './contact-platform-cards.js'
 
 const LINKED = { glofox_member_id: 'g1' }
 
@@ -35,6 +35,17 @@ describe('studioTag', () => {
     expect(studioTag('loading', 'h')).toBeNull()
     expect(studioTag(bundle, 'x')).toBeNull()
     expect(studioTag(bundle, null)).toBeNull()
+  })
+})
+
+describe('notePostsToGlofox', () => {
+  it('follows the server', () => {
+    expect(notePostsToGlofox({ glofox_note_push: false }, LINKED)).toBe(false)
+    expect(notePostsToGlofox({ glofox_note_push: true }, {})).toBe(true)
+  })
+  it('an old server or no bundle: any linked contact', () => {
+    expect(notePostsToGlofox({}, LINKED)).toBe(true)
+    expect(notePostsToGlofox('error', {})).toBe(false)
   })
 })
 

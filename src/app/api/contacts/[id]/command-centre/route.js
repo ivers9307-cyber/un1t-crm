@@ -27,7 +27,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { contactChannelFlags, canLoadContactConsultations, isMemberOfContactStudio } from '@/lib/contact-page-gates'
+import { contactChannelFlags, canLoadContactConsultations, canAddContactNote, isMemberOfContactStudio } from '@/lib/contact-page-gates'
 import { canViewContact } from '@/lib/contact-crossovers'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
@@ -235,13 +235,23 @@ export async function GET(request, props) {
       // web `consultations` permission at the contact's location). The staff
       // phone's contact screen reads every flag here instead of judging its
       // buttons at the active studio.
-      permissions: { ...channels, kudos: canLoadContactConsultations(user, contact.location_id) },
+      // CARDLENS-M.4 — `note` is POST /api/contacts/[id]/notes's decision
+      // (`contacts` at the contact's studio); the phone used to show its note
+      // composer to everyone and let the route refuse the post.
+      permissions: {
+        ...channels,
+        kudos: canLoadContactConsultations(user, contact.location_id),
+        note: canAddContactNote(user, contact.location_id),
+      },
       // CARDLENS-M.2 — { mode: 'linked'|'pushable'|'hidden', studio_name }:
       // the phone hides the Glofox card where the person has no Glofox account
       // and their studio does not run Glofox (a Hatch Street un1t.online member).
       glofox_card: phoneExtras.glofox_card,
       // CARDLENS-M.3 — location id → short studio name, {} for one studio.
       studio_tags: phoneExtras.studio_tags,
+      // CARDLENS-M.4 — whether a note posted from this screen also lands in
+      // the member's Glofox timeline (the composer's hint).
+      glofox_note_push: phoneExtras.glofox_note_push,
     }
   }
 
