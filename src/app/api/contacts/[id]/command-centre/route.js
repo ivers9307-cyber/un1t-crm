@@ -13,14 +13,22 @@
 // composer's sendable UTILITY templates, and the caller's channel
 // permissions.
 //
-// IDOR gate mirrors consent-log: resolve the contact's studio, check
-// it against the caller's locations, and answer 404 (not 403) on a
-// miss so contact ids can't be enumerated.
+// IDOR gate: the contact page's rule (canViewContact: a member of the
+// contact's studio, a crossover viewer whose studio holds a contact_studios
+// row for the person, or a master), answering 404 (not 403) on a miss so
+// contact ids can't be enumerated. CARDLENS-M.1 — it used to be membership of
+// the contact's studio only, so a Hatch Street coach opening a
+// Stillorgan-primary Hatch member on the phone got a 404 here: no timeline and
+// no buttons, while the web page opened. A crossover viewer gets what the web
+// page shows them: the bookable event types (the Book tab, membership only on
+// the web) stay off, and the channel and kudos flags, judged at the contact's
+// studio, come out false.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { contactChannelFlags, canLoadContactConsultations } from '@/lib/contact-page-gates'
+import { contactChannelFlags, canLoadContactConsultations, isMemberOfContactStudio } from '@/lib/contact-page-gates'
+import { canViewContact } from '@/lib/contact-crossovers'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
@@ -50,8 +58,8 @@ export async function GET(request, props) {
   if (!contact) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, contact.location_id)
-  if (guard) {
+  const isMember = isMemberOfContactStudio(user, contact.location_id)
+  if (!isMember && !(await canViewContact(db, user, contact))) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
@@ -93,11 +101,13 @@ export async function GET(request, props) {
       .eq('contact_id', params.id)
       .order('created_at', { ascending: false })
       .limit(MAX_ACTIVITIES),
-    db.from('event_types')
-      .select('id, name, slug, duration_minutes, availability, active')
-      .eq('location_id', contact.location_id)
-      .eq('active', true)
-      .order('name', { ascending: true }),
+    isMember
+      ? db.from('event_types')
+        .select('id, name, slug, duration_minutes, availability, active')
+        .eq('location_id', contact.location_id)
+        .eq('active', true)
+        .order('name', { ascending: true })
+      : { data: [], error: null },
     loadContactArrears(db, params.id),
     fetchLatestNote(),
     loadUn1tBilling(db, user, params.id),

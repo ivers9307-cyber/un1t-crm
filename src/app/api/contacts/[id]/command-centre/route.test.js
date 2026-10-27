@@ -47,12 +47,16 @@ vi.mock('@/lib/permissions', () => {
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/contact-un1t-billing', () => ({ loadUn1tBilling: vi.fn() }))
+// CARDLENS-M.1 — the crossover half of the gate (a contact_studios row at one
+// of the caller's studios). Off unless a test says otherwise.
+vi.mock('@/lib/contact-crossovers', () => ({ canViewContact: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
+import { canViewContact } from '@/lib/contact-crossovers'
 
 const NO_BILLING = { studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false }
 
@@ -89,6 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   hasPermission.mockReturnValue(false)
   loadUn1tBilling.mockResolvedValue(NO_BILLING)
+  canViewContact.mockResolvedValue(false)
 })
 
 describe('GET /api/contacts/[id]/command-centre', () => {
@@ -112,6 +117,38 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     }))
     const res = await GET(req(), props)
     expect(res.status).toBe(404)
+  })
+
+  it('CARDLENS-M.1: a crossover viewer (relationship row at their studio) gets the bundle, minus the Book tab and with every flag off', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u2', locations: [{ id: 'hatch' }] })
+    canViewContact.mockResolvedValue(true)
+    // This file's permission mock ignores the studio; the real at-the-contact
+    // decision for a non-member is false, which tests/role-sweep pins.
+    const db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      activities: { data: [{ id: 'a1' }], error: null },
+      event_types: { data: [{ id: 'et1' }], error: null },
+      notes: { data: [{ id: 'n1', content: 'x', created_at: '2026-10-20T10:00:00Z' }], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req('?scope=drawer'), props)
+    const j = await res.json()
+    expect(res.status).toBe(200)
+    expect(canViewContact).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'u2' }), CONTACT)
+    expect(j.activities).toHaveLength(1)
+    expect(j.notes).toHaveLength(1)
+    expect(j.event_types).toEqual([])
+    expect(db.__queried).not.toContain('event_types')
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false })
+    expect(j.composer_templates).toEqual([])
+  })
+
+  it('CARDLENS-M.1: a member of the contact\'s studio never needs the crossover probe', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    createServerClient.mockReturnValue(mockDb({ contacts: { data: CONTACT, error: null } }))
+    const res = await GET(req(), props)
+    expect(res.status).toBe(200)
+    expect(canViewContact).not.toHaveBeenCalled()
   })
 
   it('base scope keeps the original bundle shape, plus triage signals', async () => {
