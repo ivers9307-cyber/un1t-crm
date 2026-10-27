@@ -127,3 +127,15 @@ describe('ContactHeaderBand — Arrears tile with un1t.online (HATCHINV.1)', () 
     expect(tile(render({ metrics: { ...METRICS, un1t: un1t({ amountUnreported: true, amountNotEur: true }) } }))).toBe('amount not in EUR')
   })
 })
+
+// CARDLENS.3 review — the header line is now the only place showing the lead
+// source and the date added, so it wraps instead of cutting them off.
+describe('contact line', () => {
+  it('wraps rather than truncating, so source and added date stay visible', () => {
+    const html = render({ contact: { ...CONTACT, email: 'a.very.long.address.indeed@example.com', phone: '+353 1 234 5678', lead_source: 'Meta lead form', created_at: '2026-10-01T10:00:00Z' } })
+    const line = html.match(/<p class="([^"]*)"[^>]*>(?:(?!<\/p>).)*Meta lead form/)
+    expect(line).not.toBeNull()
+    expect(line[1]).not.toMatch(/\btruncate\b/)
+    expect(line[1]).toMatch(/break-words/)
+  })
+})

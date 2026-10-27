@@ -181,7 +181,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
 
           {/* Contact line — phone + email at a glance, clickable, with
               source + created for quick context. */}
-          <p className="text-xs text-un1t-subtle mt-1.5 truncate">
+          <p className="text-xs text-un1t-subtle mt-1.5 break-words">
             {contact.phone && (
               <a href={`tel:${contact.phone}`} className="hover:text-un1t-text hover:underline">{contact.phone}</a>
             )}
