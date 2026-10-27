@@ -4119,6 +4119,26 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/contacts/{id}/messaging',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Composer context for a contact: WhatsApp 24h window and sendable UTILITY templates',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({
+      location_id: uuidLike.optional().openapi({ description: 'CARDLENS-M.7 — the studio the composer sends for; another studio than the primary needs a contact_studios row there and caller membership (404 otherwise, 503 on a failed check)' }),
+    }),
+  },
+  responses: {
+    200: { description: 'Composer context', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ whatsapp: z.object({ windowOpen: z.boolean(), windowExpiresAt: z.string().nullable() }), templates: z.array(z.object({ name: z.string(), language: z.string(), bodyText: z.string() })) }) }) } } },
+    403: { description: 'No WhatsApp permission at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, or a studio the caller may not act at', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The contact studios check failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/contacts/{id}/command-centre',
   tags: ['Contacts'],
   security: [{ CookieAuth: [] }],
@@ -4127,6 +4147,7 @@ registry.registerPath({
     params: z.object({ id: uuidLike }),
     query: z.object({
       scope: z.enum(['drawer']).optional().openapi({ description: 'drawer — extend the bundle for the pipeline contact drawer' }),
+      studio: z.string().optional().openapi({ description: 'CARDLENS-M.6 (drawer scope) — the acting studio: default | all | a location id. Omitted: the contact\'s primary studio judges, as before.' }),
     }),
   },
   responses: {
@@ -4145,7 +4166,16 @@ registry.registerPath({
             composer_templates: z.array(z.object({
               name: z.string(), language: z.string(), bodyText: z.string(), sendable: z.boolean(),
             })).optional(),
-            permissions: z.object({ whatsapp: z.boolean(), email: z.boolean(), kudos: z.boolean() }).optional(),
+            permissions: z.object({
+              whatsapp: z.boolean(), email: z.boolean(), kudos: z.boolean(),
+              note: z.boolean(), task: z.boolean(), cancel_form: z.boolean(),
+            }).optional(),
+            glofox_card: z.object({ mode: z.enum(['linked', 'pushable', 'hidden']), studio_name: z.string().nullable() }).optional(),
+            studio_tags: z.record(z.string()).optional(),
+            glofox_note_push: z.boolean().optional(),
+            lens: z.enum(['legacy', 'studio', 'all']).optional(),
+            acting_studio: z.object({ location_id: z.string(), name: z.string().nullable(), platform: z.string().nullable() }).nullable().optional(),
+            studio_options: z.array(z.object({ location_id: z.string(), name: z.string(), platform: z.string().nullable(), primary: z.boolean() })).optional(),
           }).openapi('ContactCommandCentreBundle'),
         },
       },
