@@ -102,7 +102,10 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
   // CANCEL-FORM.4 — latest issued form link → one chip (sent / opened / submitted).
   const cancelChip = cancellationLinkChip(cancellationLink)
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
-  const lastAttended = person?.lastAttendedAt || contact.last_attended_at
+  // CARDLENS.9 — the page's lens decides when it says (null = that studio knows no class).
+  const lastAttended = metrics && 'lastAttendedAt' in metrics
+    ? metrics.lastAttendedAt
+    : (person?.lastAttendedAt || contact.last_attended_at)
   // HATCHINV.1 — `metrics.arrearsCents` is already Glofox + un1t.online EUR. When
   // un1t.online has the member overdue the tile follows the command centre's one
   // rule (never "€0" for an overdue with no amount); otherwise it is the old tile.
@@ -253,7 +256,7 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
       <div className="flex flex-wrap gap-2 mt-4">
         <StatTile label="Lifetime value" value={formatMoney(metrics.ltvCents, metrics.currency) || '—'} />
         {arrearsStat}
-        <StatTile label="Attended (30d)" value={metrics.attended} />
+        <StatTile label="Attended (30d)" value={metrics.attended ?? '—'} />
         <StatTile label="Deals" value={metrics.deals} />
         {journey?.inWindow && (
           <StatTile label="First 90 days" value={`Day ${journey.dayIndex}/${journey.windowDays} · ${journey.attended}/${journey.target}`} />

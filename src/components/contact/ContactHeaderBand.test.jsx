@@ -149,3 +149,19 @@ describe('acting studio', () => {
     expect(render({})).toContain('data-location="l-1"')
   })
 })
+
+// CARDLENS.9 — the page's lens decides Last attended when it says so.
+describe('last attended from the lens', () => {
+  it('uses metrics.lastAttendedAt over the contact row', () => {
+    const recent = new Date(Date.now() - 2 * 86_400_000).toISOString()
+    const html = render({ contact: { ...CONTACT, last_attended_at: null }, metrics: { ...METRICS, lastAttendedAt: recent } })
+    expect(html).toContain('Last attended')
+  })
+  it('a lens that knows no class hides the tile even when the Glofox row has one', () => {
+    const html = render({ contact: { ...CONTACT, last_attended_at: '2026-01-01T00:00:00Z' }, metrics: { ...METRICS, lastAttendedAt: null } })
+    expect(html).not.toContain('Last attended')
+  })
+  it('an unknown attendance shows a dash, not 0', () => {
+    expect(render({ metrics: { ...METRICS, attended: null } })).toMatch(/Attended \(30d\)<\/p><p[^>]*>—</)
+  })
+})
