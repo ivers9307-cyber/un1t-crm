@@ -95,7 +95,7 @@ const MANIFEST = Object.freeze({
   },
   'src/lib/onboarding-journey-un1t.js': {
     kind: 'display',
-    reason: "PULSEUN1T.1: the staff /pulse journey lane at a un1t.online studio counts that studio's attended un1t.online classes so coaches see who is falling behind. Display only: the pace push (notify-onboarding-pace) runs at Glofox studios through loadJourneyLane and never imports this module (pinned below), and the member app's journey stays Glofox-only.",
+    reason: "PULSEUN1T.1/.2: the staff /pulse journey lane and the staff contact page's journey panel at a un1t.online studio count that studio's attended un1t.online classes so coaches see who is falling behind. Display only: the pace push (notify-onboarding-pace) runs at Glofox studios through loadJourneyLane and never imports this module (pinned below), and the member app's /api/me/journey stays Glofox-only.",
   },
   'shared/studio-kpis.js': {
     kind: 'display',
@@ -484,10 +484,10 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
     expect(bad, `Customer-facing code must not read bookings (spec G9: no fill, no-show or aggregate studio metric on a TV or public screen): ${bad.join('; ')}`).toEqual([])
   })
 
-  it('the un1t.online journey lane is imported by the staff /pulse route alone, never by the pace push or the member app', () => {
-    // PULSEUN1T.1: it counts un1t.online attendance, which is display-only
+  it('the un1t.online journey is imported by staff screens alone (/pulse, the contact page), never by the pace push or the member app', () => {
+    // PULSEUN1T.1/.2: it counts un1t.online attendance, which is display-only
     // (Decision 1). Any other importer must be argued here first.
-    const ALLOWED = ['src/app/api/pulse/journey/route.js']
+    const ALLOWED = ['src/app/(sales)/contacts/[id]/page.js', 'src/app/api/pulse/journey/route.js']
     const importers = []
     for (const dir of SCAN_DIRS) {
       for (const f of walk(path.join(ROOT, dir))) {

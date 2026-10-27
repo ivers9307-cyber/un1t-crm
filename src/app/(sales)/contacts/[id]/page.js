@@ -10,6 +10,8 @@ import { canLoadContactConsultations, contactChannelFlags, contactActionGates, c
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
+import { loadUn1tContactJourney } from '@/lib/onboarding-journey-un1t'
+import { membershipSourceState } from '@/lib/membership/source'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
 // WAITLIST.6 — PIPELINES.5's board resolver, reused: never hardcode a pipeline.
 import { findPrimaryPipeline } from '@/lib/deal-lookup'
@@ -208,9 +210,16 @@ export default async function ContactDetailPage(props) {
   // tail, or expired without completing), so the compact block below only
   // renders for in-window members. Best-effort — a failed read (or a DB
   // without the journey data) must not blank the profile.
+  // PULSEUN1T.2 — at a un1t.online studio (Hatch) the journey is read from
+  // un1t.online at THAT studio (a person can be a member at two); everywhere
+  // else, and on an unreadable source, the Glofox journey as before.
   let journey = null
   try {
-    journey = await loadContactJourney(db, id)
+    const viewingId = user.activeLocation?.id
+    const viewingSource = viewingId ? await membershipSourceState(db, viewingId) : null
+    journey = viewingSource?.source === 'un1t_online'
+      ? await loadUn1tContactJourney(db, id, viewingId)
+      : await loadContactJourney(db, id)
   } catch { journey = null }
 
   const [seqRes, emailRes] = await Promise.all([

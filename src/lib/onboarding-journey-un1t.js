@@ -1,5 +1,6 @@
 // PULSEUN1T.1 — the first-90-days journey lane at a un1t.online studio (Hatch
-// Street), for the /pulse staff screen only.
+// Street), for the /pulse staff screen; PULSEUN1T.2 adds one member's journey
+// for the staff contact page. Staff screens only.
 //
 // loadJourneyLane (onboarding-journey-data.js) reads Glofox: members by
 // contacts.glofox_membership_status + joined_at at the location, attendance
@@ -23,11 +24,14 @@
 // `display` in tests/class-bookings-readers-guard.test.js.
 
 import { selectAll, selectAllByKeys } from '@/lib/select-all'
+import { journeyStatus, daysBetweenIn } from '@/lib/onboarding-journey'
 import {
   fetchJourneyConfig,
   fetchLastTouch,
   buildJourneyLane,
   laneSinceIso,
+  inWindowAttendance,
+  LANE_TAIL_DAYS,
 } from '@/lib/onboarding-journey-data'
 
 const UN1T_ONLINE_PLATFORM = 'un1t_online'
@@ -108,4 +112,63 @@ export async function loadUn1tOnlineJourneyLane(db, locationId, nowMs = Date.now
   }
 
   return { config, lane: buildJourneyLane({ members, attendance, lastTouch, config, zone, nowMs }) }
+}
+
+/**
+ * PULSEUN1T.2 — one member's journey for the staff contact page, at the
+ * un1t.online studio the viewer is on (one person can be a member at two
+ * studios, so the studio is the caller's, never guessed). Same reads and the
+ * same null rules as loadContactJourney: null when the contact is not an
+ * active member there, has no subscription there, is past the tail, or their
+ * window expired without completing. Staff display only: /api/me/journey
+ * keeps loadContactJourney.
+ *
+ * @param {object} db          service-role client
+ * @param {string} contactId
+ * @param {string} locationId  a un1t.online studio
+ * @param {number} [nowMs]
+ * @returns {Promise<object|null>}  { contactId, name, joinedAt, ...journeyStatus fields } | null
+ */
+export async function loadUn1tContactJourney(db, contactId, locationId, nowMs = Date.now()) {
+  if (!contactId || !locationId) return null
+
+  const { data: membership, error: msErr } = await db
+    .from('contact_studios')
+    .select('contact_id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .eq('membership_status', 'active')
+    .maybeSingle() // (contact_id, location_id) is the row's key: at most one
+  if (msErr) throw new Error(msErr.message)
+  if (!membership) return null
+
+  const joined = (await fetchJoinedAt(db, locationId, [contactId])).get(contactId)
+  if (!joined) return null
+  const joinedMs = Date.parse(joined)
+
+  const { config, zone } = await fetchJourneyConfig(db, locationId)
+  if (daysBetweenIn(joinedMs, nowMs, zone) > config.windowDays + LANE_TAIL_DAYS) return null
+
+  const [{ data: contact, error: cErr }, bookings] = await Promise.all([
+    db.from('contacts').select('id, name').eq('id', contactId).maybeSingle(),
+    selectAll((from, to) => db
+      .from('class_bookings')
+      .select('contact_id, starts_at')
+      .eq('contact_id', contactId)
+      .eq('location_id', locationId)
+      .eq('source_platform', UN1T_ONLINE_PLATFORM)
+      .eq('attended', true)
+      .not('status', 'eq', 'CANCELLED')
+      .order('id', { ascending: true })
+      .range(from, to)),
+  ])
+  if (cErr) throw new Error(cErr.message)
+  if (!contact) return null
+
+  const attendedAt = inWindowAttendance(joined, bookings, config.windowDays, zone)
+  const row = journeyStatus({ joinedAt: joined, attendedAt, now: nowMs, config }, zone)
+  if (!row) return null
+  if (!row.inWindow && row.status !== 'completed') return null
+
+  return { contactId: contact.id, name: contact.name || 'Member', joinedAt: joined, ...row }
 }

@@ -33,7 +33,7 @@ import { scopeToCrmActionable } from '@/lib/class-booking-platform'
 // (completed) — and /api/me/journey keeps serving a completed journey long
 // enough for the app's short celebration state. Past joined_at + windowDays
 // + LANE_TAIL_DAYS a member is off every journey surface.
-const LANE_TAIL_DAYS = 14
+export const LANE_TAIL_DAYS = 14
 
 // Same "someone reached out" action set the churn radar uses (its
 // CONTACTING_ACTIONS) — the touch route below writes 'contacted', and any
@@ -76,7 +76,7 @@ export async function fetchJourneyConfig(db, locationId) {
  * @param {string} zone  the member's home studio zone
  * @returns {string[]} in-window starts_at instants
  */
-function inWindowAttendance(joinedAt, rows, windowDays, zone) {
+export function inWindowAttendance(joinedAt, rows, windowDays, zone) {
   const joinedMs = Date.parse(joinedAt ?? '')
   if (!Number.isFinite(joinedMs)) return []
   const out = []

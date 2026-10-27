@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { loadUn1tOnlineJourneyLane } from './onboarding-journey-un1t'
+import { loadUn1tOnlineJourneyLane, loadUn1tContactJourney } from './onboarding-journey-un1t'
 
 // PULSEUN1T.1 — the /pulse lane at a un1t.online studio. Members come from the
 // membership facts on contact_studios (the un1t sync's), their join day from
@@ -178,5 +178,58 @@ describe('loadUn1tOnlineJourneyLane', () => {
       })
       await expect(loadUn1tOnlineJourneyLane(db, HATCH, NOW), table).rejects.toThrow(`${table} down`)
     }
+  })
+})
+
+// PULSEUN1T.2 — one member's journey for the staff contact page, at the
+// un1t.online studio the viewer is on.
+describe('loadUn1tContactJourney', () => {
+  const tables = (over = {}) => ({
+    locations: location,
+    contact_studios: [studio('c-1')],
+    un1t_subscriptions: [sub('c-1', '2026-10-06T09:00:00Z')],
+    contacts: [{ id: 'c-1', name: 'One' }],
+    class_bookings: [
+      booking('c-1', '2026-10-07T07:00:00Z'),
+      booking('c-1', '2026-10-09T07:00:00Z', { location_id: OTHER }),     // another studio
+      booking('c-1', '2026-10-10T07:00:00Z', { source_platform: 'glofox' }),
+      booking('c-1', '2026-10-11T07:00:00Z', { attended: false, status: 'NO_SHOW' }),
+    ],
+    ...over,
+  })
+
+  it('returns the in-window journey from the un1t.online subscription and classes at that studio', async () => {
+    const db = makeDb(tables())
+    const row = await loadUn1tContactJourney(db, 'c-1', HATCH, NOW)
+    expect(row).toMatchObject({ contactId: 'c-1', name: 'One', joinedAt: '2026-10-06T09:00:00Z', dayIndex: 21, attended: 1, inWindow: true })
+    expect(db.queries.find((q) => q.table === 'class_bookings').calls).toContainEqual(['eq', 'source_platform', 'un1t_online'])
+  })
+
+  it('returns null when the contact is not an active member at that studio', async () => {
+    expect(await loadUn1tContactJourney(makeDb(tables({ contact_studios: [studio('c-1', { membership_status: 'ended' })] })), 'c-1', HATCH, NOW)).toBeNull()
+    expect(await loadUn1tContactJourney(makeDb(tables({ contact_studios: [studio('c-1', { location_id: OTHER })] })), 'c-1', HATCH, NOW)).toBeNull()
+  })
+
+  it('returns null with no subscription at that studio', async () => {
+    expect(await loadUn1tContactJourney(makeDb(tables({ un1t_subscriptions: [sub('c-1', '2026-10-06T09:00:00Z', { location_id: OTHER })] })), 'c-1', HATCH, NOW)).toBeNull()
+  })
+
+  it('returns null for a long-standing member (earliest subscription past the tail)', async () => {
+    const db = makeDb(tables({ un1t_subscriptions: [sub('c-1', '2026-10-20T09:00:00Z'), sub('c-1', '2026-04-01T09:00:00Z')] }))
+    expect(await loadUn1tContactJourney(db, 'c-1', HATCH, NOW)).toBeNull()
+  })
+
+  it('returns null once the window has expired without completion', async () => {
+    const db = makeDb(tables({ un1t_subscriptions: [sub('c-1', '2026-09-10T09:00:00Z')] })) // day 47
+    expect(await loadUn1tContactJourney(db, 'c-1', HATCH, NOW)).toBeNull()
+  })
+
+  it('returns null without a contact or a studio', async () => {
+    expect(await loadUn1tContactJourney(makeDb(tables()), null, HATCH, NOW)).toBeNull()
+    expect(await loadUn1tContactJourney(makeDb(tables()), 'c-1', null, NOW)).toBeNull()
+  })
+
+  it('throws when a read fails (the page treats that as no panel)', async () => {
+    await expect(loadUn1tContactJourney(makeDb(tables({ un1t_subscriptions: { __error: 'subs down' } })), 'c-1', HATCH, NOW)).rejects.toThrow('subs down')
   })
 })
