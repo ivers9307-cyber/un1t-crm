@@ -26,14 +26,22 @@
 // `note` (CARDLENS-M.4) came later: a server older than this app sends no
 // `note` key, and then the composer shows as it always did (the route still
 // refuses a post it would not accept). An explicit false hides it.
+// CARDLENS-M.8 — since M-B the bundle judges whatsapp, email, note and `task`
+// at the screen's ACTING studio, and sends `cancel_form`, judged at the
+// primary studio (the web keeps the form there), so the cancel form no
+// longer follows the acting studio's channel flags. An older server sends
+// neither key: no Task button, and the cancel form follows the channels as
+// before.
 // Pure: no react-native imports, so the repo's vitest collects the test.
 
 /**
- * @param {{ whatsapp?: boolean, email?: boolean, kudos?: boolean, note?: boolean } | null | undefined} permissions
+ * @param {{ whatsapp?: boolean, email?: boolean, kudos?: boolean, note?: boolean,
+ *   task?: boolean, cancel_form?: boolean } | null | undefined} permissions
  *   the bundle's `permissions`, or null before it has loaded
  * @param {{ phone?: string|null, wa_phone?: string|null, email?: string|null } | null | undefined} contact
  * @returns {{ whatsapp: boolean, email: boolean,
- *   cancelFormEmail: boolean, cancelFormWhatsApp: boolean, cancelForm: boolean, kudos: boolean, note: boolean }}
+ *   cancelFormEmail: boolean, cancelFormWhatsApp: boolean, cancelForm: boolean, kudos: boolean,
+ *   note: boolean, task: boolean }}
  */
 export function contactActionFlags(permissions, contact) {
   const loaded = Boolean(permissions && typeof permissions === 'object')
@@ -41,13 +49,19 @@ export function contactActionFlags(permissions, contact) {
   const c = contact || {}
   const whatsapp = p.whatsapp === true && Boolean(c.wa_phone || c.phone)
   const email = p.email === true && Boolean(c.email)
+  const hasEmail = Boolean(c.email)
+  const hasPhone = Boolean(c.wa_phone || c.phone)
+  const formAllowed = 'cancel_form' in p ? p.cancel_form === true : null
+  const cancelFormEmail = formAllowed === null ? email : formAllowed && hasEmail
+  const cancelFormWhatsApp = formAllowed === null ? whatsapp : formAllowed && hasPhone
   return {
     whatsapp,
     email,
-    cancelFormEmail: email,
-    cancelFormWhatsApp: whatsapp,
-    cancelForm: email || whatsapp,
+    cancelFormEmail,
+    cancelFormWhatsApp,
+    cancelForm: cancelFormEmail || cancelFormWhatsApp,
     kudos: p.kudos === true,
     note: loaded && ('note' in p ? p.note === true : true),
+    task: p.task === true,
   }
 }

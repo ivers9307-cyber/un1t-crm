@@ -27,9 +27,15 @@
 // studio names that tag threads, bookings and the timeline for a person at
 // two or more studios (mobile/lib/contact-platform-cards.js).
 //
+// CARDLENS-M.8 — the studio lens: the bundle is fetched with `studio=`
+// (default, then whatever the switcher picks), the server judges every button
+// at that ACTING studio, and WhatsApp, email, notes and tasks are sent for it
+// (location_id), the web contact page's rule. All studios acts nowhere. The
+// cancellation form and kudos stay at the primary studio.
+//
 // Editing contact fields stays on the web — this screen adds read
 // surfaces plus the note + kudos writes only.
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, ActivityIndicator, Pressable, Linking, Alert } from 'react-native'
 import { useLocalSearchParams, useFocusEffect, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -52,6 +58,8 @@ import ContactGlofoxCard from '../../../components/ContactGlofoxCard'
 import ContactTimelineSection from '../../../components/ContactTimelineSection'
 import SendKudosCard from '../../../components/SendKudosCard'
 import StudioTag from '../../../components/StudioTag'
+import ContactStudioSwitcher from '../../../components/ContactStudioSwitcher'
+import { lensView, DEFAULT_STUDIO } from '../../../lib/contact-studio-lens'
 
 const PAST_BOOKINGS_SHOWN = 8
 
@@ -209,7 +217,13 @@ export default function ContactDetail() {
   // CARDLENS-M.2 / M.3 — the whole drawer bundle: 'loading' until it lands,
   // 'error' when the first read failed (the screen then renders as before).
   const [bundle, setBundle] = useState('loading')
-  useEffect(() => { setBundle('loading') }, [id])
+  // CARDLENS-M.8 — the lens asked for; a ref so a reload reads the latest
+  // pick, and a sequence so a slow answer for the previous pick never lands
+  // over the current one.
+  const [studio, setStudio] = useState(DEFAULT_STUDIO)
+  const studioRef = useRef(DEFAULT_STUDIO)
+  const bundleSeq = useRef(0)
+  useEffect(() => { setBundle('loading'); setStudio(DEFAULT_STUDIO); studioRef.current = DEFAULT_STUDIO }, [id])
   const [bookings, setBookings] = useState([])
   const [waThreads, setWaThreads] = useState([])
   // MOBILE-CONTACT-SEND.1 — which channel composer (if any) is open.
@@ -248,8 +262,10 @@ export default function ContactDetail() {
   // Timeline bundle — the web drawer's one-round-trip route. Separate
   // from load() so the note composer can refresh just this slice.
   const loadTimeline = useCallback(async () => {
+    const seq = ++bundleSeq.current
     try {
-      const res = await getContactCommandCentre(id)
+      const res = await getContactCommandCentre(id, { studio: studioRef.current })
+      if (seq !== bundleSeq.current) return
       if (res?.success) {
         setNotes(Array.isArray(res.notes) ? res.notes : [])
         setActivities(Array.isArray(res.activities) ? res.activities : [])
@@ -262,10 +278,21 @@ export default function ContactDetail() {
         setBundle((prev) => (prev && typeof prev === 'object' ? prev : 'error'))
       }
     } catch {
+      if (seq !== bundleSeq.current) return
       setBundleError('Could not load the timeline')
       setBundle((prev) => (prev && typeof prev === 'object' ? prev : 'error'))
     }
   }, [id])
+
+  // CARDLENS-M.8 — a new lens hides every button until its own flags land
+  // (they are judged at the new studio).
+  function switchStudio(next) {
+    if (!next || next === studio) return
+    studioRef.current = next
+    setStudio(next)
+    setActionPermissions(null)
+    loadTimeline()
+  }
 
   const load = useCallback(async () => {
     const res = await getContact(id)
@@ -291,6 +318,11 @@ export default function ContactDetail() {
   const pauseResume = useMemo(() => glofoxPauseResumeLabel(contact), [contact])
   const glofoxView = glofoxCardView(bundle, contact)
   const studioNameFor = (locationId) => studioTag(bundle, locationId)
+  const lens = lensView(bundle)
+  // The studio sends and notes are FOR: the acting studio under a lens, else
+  // nothing (the routes then act at the primary, as before M-B).
+  const sendLocationId = lens.sendLocationId
+  const sendStudioName = lens.footer && !lens.isAll ? lens.actingLabel : null
 
   return (
     <View className="flex-1 bg-un1t-bg">
@@ -326,6 +358,8 @@ export default function ContactDetail() {
             )}
           </View>
 
+          <ContactStudioSwitcher lens={lens} onChange={switchStudio} />
+
           {/* Quick actions. Call stays a phone dial; WhatsApp / Email
               send through the platform's linked services (company
               sender), gated per-channel by the server's per-contact flags
@@ -337,6 +371,21 @@ export default function ContactDetail() {
             {/* CANCEL-FORM.6 — hand the member a single-use pause/cancel form
                 link. Channel choice via a native sheet; the route does the
                 rest (mint, deliver, log). Web has the richer modal. */}
+            {actions.task && (
+              <ActionButton
+                icon="checkbox-outline"
+                label="Task"
+                onPress={() => router.push({
+                  pathname: '/tasks/new',
+                  params: {
+                    contactId: id,
+                    contactName: contactDisplayName(contact),
+                    locationId: sendLocationId || contact.location_id,
+                    studioName: sendStudioName || '',
+                  },
+                })}
+              />
+            )}
             {actions.cancelForm && (
               <ActionButton icon="document-text-outline" label="Cancel form" onPress={() => offerCancellationForm()} />
             )}
@@ -370,6 +419,8 @@ export default function ContactDetail() {
             contactId={id}
             syncsToGlofox={notePostsToGlofox(bundle, contact)}
             canNote={actions.note}
+            noteLocationId={sendLocationId}
+            noteStudioName={sendStudioName}
             notes={notes}
             activities={activities}
             loadError={bundleError}
@@ -393,8 +444,11 @@ export default function ContactDetail() {
           // MOBILE-MAILPARITY.1 — the Email action's Mail path (web
           // PROFILE-MAIL.1): the contact's own studio and address, so the
           // send goes out from a studio account there, not the company sender.
-          contactLocationId={contact.location_id || null}
+          // CARDLENS-M.8 — the acting studio's accounts under a lens.
+          contactLocationId={sendLocationId || contact.location_id || null}
           contactEmail={contact.email || null}
+          sendLocationId={sendLocationId}
+          studioName={sendStudioName}
           onClose={() => { setComposeChannel(null); load().catch(() => {}) }}
         />
       )}

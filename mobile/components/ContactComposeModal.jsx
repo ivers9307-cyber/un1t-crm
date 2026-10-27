@@ -39,6 +39,11 @@ export default function ContactComposeModal({
   // path, so older render sites keep working — same contract as the web card.
   contactLocationId = null,
   contactEmail = null,
+  // CARDLENS-M.8 — the acting studio the sends are FOR (location_id on the
+  // WhatsApp and company-email routes) and its short name for the sender
+  // line. Null: no location_id is sent and the routes act at the primary.
+  sendLocationId = null,
+  studioName = null,
 }) {
   const insets = useSafeAreaInsets()
   return (
@@ -59,7 +64,9 @@ export default function ContactComposeModal({
                 button, off the same inputs as the send itself. A blanket
                 "company" line above it would contradict a From row. */}
             {channel !== 'email' ? (
-              <Text className="text-[11px] text-un1t-muted px-4 pb-2">Sends from the company — not your phone.</Text>
+              <Text className="text-[11px] text-un1t-muted px-4 pb-2">
+                {studioName ? `Sends from the ${studioName} WhatsApp number, not your phone.` : 'Sends from the company — not your phone.'}
+              </Text>
             ) : (
               <Text className="text-[11px] text-un1t-muted px-4 pb-2">Not sent from your phone — the From line below says which address.</Text>
             )}
@@ -69,7 +76,7 @@ export default function ContactComposeModal({
               keyboardShouldPersistTaps="handled"
             >
               {channel === 'whatsapp' && contactId ? (
-                <ContactComposer contactId={contactId} contactName={contactName} onSent={onClose} />
+                <ContactComposer contactId={contactId} contactName={contactName} onSent={onClose} sendLocationId={sendLocationId} />
               ) : null}
               {channel === 'email' && contactId ? (
                 <EmailForm
@@ -77,6 +84,7 @@ export default function ContactComposeModal({
                   contactName={contactName}
                   contactLocationId={contactLocationId}
                   contactEmail={contactEmail}
+                  sendLocationId={sendLocationId}
                   onSent={onClose}
                 />
               ) : null}
@@ -88,7 +96,7 @@ export default function ContactComposeModal({
   )
 }
 
-function EmailForm({ contactId, contactName, contactLocationId, contactEmail, onSent }) {
+function EmailForm({ contactId, contactName, contactLocationId, contactEmail, sendLocationId, onSent }) {
   const [subject, setSubject] = useState('')
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -152,7 +160,7 @@ function EmailForm({ contactId, contactName, contactLocationId, contactEmail, on
           text: text.trim(),
           locationId: plan.locationId,
         })
-      : await sendContactEmail(contactId, { subject: subject.trim(), body: text.trim() })
+      : await sendContactEmail(contactId, { subject: subject.trim(), body: text.trim(), locationId: sendLocationId })
     setSending(false)
     if (!res.success) { setError(res.error || 'Send failed'); return }
     setFlash(plan.path === 'mail' ? 'Email sent — the conversation is in Mail' : 'Email sent')

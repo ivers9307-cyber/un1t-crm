@@ -146,8 +146,11 @@ export async function getContact(id) {
  * notes+activities timeline — see the access-path note at the top of
  * this file for why this is an api() call rather than direct selects.
  */
-export function getContactCommandCentre(id) {
-  return api(`/api/contacts/${id}/command-centre?scope=drawer`)
+export function getContactCommandCentre(id, { studio = null } = {}) {
+  // CARDLENS-M.8 — `studio` (default | all | a location id) asks for the
+  // acting-studio lens; the contact screen always sends it.
+  const q = studio ? `&studio=${encodeURIComponent(studio)}` : ''
+  return api(`/api/contacts/${id}/command-centre?scope=drawer${q}`)
 }
 
 /**
@@ -155,11 +158,11 @@ export function getContactCommandCentre(id) {
  * that also copies the note into Glofox as an interaction for the front
  * desk (GLOFOX-NOTES; fire-and-forget server-side, linked contacts only).
  */
-export function createContactNote(contactId, content) {
-  return api(`/api/contacts/${contactId}/notes`, {
-    method: 'POST',
-    body: { content },
-  })
+export function createContactNote(contactId, content, { locationId = null } = {}) {
+  // CARDLENS-M.8 — file the note at the acting studio (CARDLENS.5 route field).
+  const body = { content }
+  if (locationId) body.location_id = locationId
+  return api(`/api/contacts/${contactId}/notes`, { method: 'POST', body })
 }
 
 /**

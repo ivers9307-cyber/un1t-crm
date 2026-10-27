@@ -5,13 +5,17 @@
 //
 // WhatsApp only by design (SMS was retired with Twilio,
 // TWILIO-RETIRE.1). This composer uses the .mobile.whatsapp permission.
+//
+// CARDLENS-M.8 — `sendLocationId` (the contact screen's acting studio): the
+// window, templates and send are that studio's (its number, its thread).
+// Omitted, as on the deal screen, the contact's primary studio.
 
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, TextInput, Pressable, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { getMessagingContext, sendContactWhatsApp } from '../lib/messaging-api'
 
-export default function ContactComposer({ contactId, contactName, onSent }) {
+export default function ContactComposer({ contactId, contactName, onSent, sendLocationId = null }) {
   const [ctx, setCtx] = useState(null)
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
@@ -24,14 +28,14 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
 
   const load = useCallback(async () => {
     setError(null)
-    const res = await getMessagingContext(contactId)
+    const res = await getMessagingContext(contactId, { locationId: sendLocationId })
     if (res.success) {
       setCtx(res.data)
       setWindowClosed(!res.data?.whatsapp?.windowOpen)
     } else {
       setError(res.error || 'Could not load messaging')
     }
-  }, [contactId])
+  }, [contactId, sendLocationId])
 
   useEffect(() => {
     setLoading(true)
@@ -46,7 +50,7 @@ export default function ContactComposer({ contactId, contactName, onSent }) {
   async function send(payload) {
     setSending(true)
     setError(null)
-    const res = await sendContactWhatsApp(contactId, payload)
+    const res = await sendContactWhatsApp(contactId, { ...payload, locationId: sendLocationId })
     setSending(false)
     if (!res.success) {
       if (res.window_expired) setWindowClosed(true)
