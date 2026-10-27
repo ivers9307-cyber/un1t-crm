@@ -110,3 +110,33 @@ describe('studio tags', () => {
     expect(html).toContain('Hatch Street')
   })
 })
+
+// CARDLENS.3 — one Person card, and the rarely used cards folded under More.
+describe('trimmed rails', () => {
+  const SOURCED = { ...CONTACT, lead_source: 'Meta lead form', label: 'VIP' }
+  it('the left rail has one Person card and no Details card repeating the header', () => {
+    const w = renderToStaticMarkup(<ContactWhoRail contact={SOURCED} person={null} identityEmails={[{ value: 'a@b.com' }]} identityPhones={[]} canEditPrefs={false} />)
+    expect(w).toContain('>Person<')
+    expect(w).not.toContain('>Identity<')
+    expect(w).not.toContain('>Details<')
+    expect(w).not.toContain('>Source<')
+    expect(w).not.toContain('>Created<')
+    expect(w).toContain('a@b.com')
+    expect(w).toContain('VIP')
+  })
+
+  it('Events, HR straps, app account and admin sit in a closed More section', () => {
+    const n = next({ canReadStudioCards: true, admin: { ...ADMIN, canEdit: true, canLinkAccount: true } })
+    const more = n.slice(n.indexOf('<details'))
+    expect(n).toContain('<details')
+    expect(n).not.toContain('<details open')
+    expect(more).toContain('>Events<')
+    expect(more).toContain('data-card="devices"')
+    expect(more).toContain('data-card="app-account"')
+    expect(more).toContain('data-card="edit-delete"')
+  })
+
+  it('no More section when the viewer could use nothing in it', () => {
+    expect(next({ canReadStudioCards: false })).not.toContain('<details')
+  })
+})

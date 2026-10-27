@@ -221,10 +221,10 @@ export default function GlofoxProfileCard({ contact, mode }) {
             </p>
           )}
           {/* GLOFOX-REACTIVE — pause window detail (backward-looking
-              "since"; the chip carries the forward-looking "resumes"). */}
+              "since"; the state badge above carries "resumes", CARDLENS.3). */}
           {isPaused && pausedSince && (
             <p className="text-xs text-amber-700">
-              Paused since {pausedSince}{resumeFuture ? ` · resumes ${resumeDate}` : ''}
+              Paused since {pausedSince}
             </p>
           )}
 
