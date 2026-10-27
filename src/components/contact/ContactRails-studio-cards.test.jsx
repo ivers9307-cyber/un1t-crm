@@ -86,3 +86,27 @@ describe('Glofox card mode', () => {
     expect(who({ glofoxMode: 'linked' })).toContain('data-mode="linked"')
   })
 })
+
+// CARDLENS.2 — a person at two studios: deals, event registrations and the
+// timeline say which studio each belongs to.
+describe('studio tags', () => {
+  const NAMES = { s: 'Stillorgan', h: 'Hatch Street' }
+  it('tags each deal with its studio', () => {
+    const html = next({ deals: [{ id: 'd1', title: 'Membership', location_id: 'h', pipeline_stages: { name: 'Won', color: '#000' } }], studioNames: NAMES })
+    expect(html).toContain('Hatch Street')
+  })
+  it('no tag when the person has one studio', () => {
+    const html = next({ deals: [{ id: 'd1', title: 'Membership', location_id: 'h', pipeline_stages: { name: 'Won', color: '#000' } }], studioNames: {} })
+    expect(html).not.toContain('Hatch Street')
+  })
+  it('tags upcoming event registrations', async () => {
+    const { UpcomingEventsCard } = await import('./EventRegistrationsCards.jsx')
+    const html = renderToStaticMarkup(<UpcomingEventsCard bookings={[{ id: 'b1', location_id: 's', booking_date: '2026-11-02', start_time: '10:00', end_time: '11:00', status: 'confirmed' }]} studioNames={NAMES} />)
+    expect(html).toContain('Stillorgan')
+  })
+  it('tags timeline items', async () => {
+    const { default: ContactTimeline } = await import('./ContactTimeline.jsx')
+    const html = renderToStaticMarkup(<ContactTimeline timeline={[{ id: 'n1', type: 'note', activityType: 'note', date: '2026-10-20T10:00:00Z', content: 'hi', location_id: 'h' }]} studioNames={NAMES} />)
+    expect(html).toContain('Hatch Street')
+  })
+})

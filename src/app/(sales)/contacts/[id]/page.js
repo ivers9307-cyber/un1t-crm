@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { matchCatalogToPlan } from '@/lib/glofox-catalog'
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
+import { ArrowLeft, Mail, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
 import { canViewContact } from '@/lib/contact-crossovers'
@@ -10,6 +10,8 @@ import { canLoadContactConsultations, contactChannelFlags, contactActionGates, c
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
+import { membershipSourceState } from '@/lib/membership/source'
+import { glofoxCardMode } from '@/lib/contact-platforms'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
 // WAITLIST.6 — PIPELINES.5's board resolver, reused: never hardcode a pipeline.
 import { findPrimaryPipeline } from '@/lib/deal-lookup'
@@ -35,7 +37,8 @@ import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
 import { relativeTime } from '@/components/contact/format'
-import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
+import { mergeTimeline, deriveNeedsAttention, studioNameMap } from '@/lib/contact-view'
+import StudioTag from '@/components/contact/StudioTag'
 // CONSULTATIONS SP1 — coach/web surface (mig 272 tables), permission-gated.
 import ContactGoalsCard from '@/components/ContactGoalsCard'
 import ConsultationsList from '@/components/ConsultationsList'
@@ -94,7 +97,7 @@ export default async function ContactDetailPage(props) {
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
-    db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
+    db.from('whatsapp_conversations').select('id, location_id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
     // BOOK-ON-PROFILE.1 — bookable consultation event types for this
     // studio, so the profile's Book card matches the inbox Book tab.
     db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name'),
@@ -127,6 +130,8 @@ export default async function ContactDetailPage(props) {
     // Glofox card's mode. A failed read is null: the card behaves as before.
     membershipSourceState(db, contact.location_id).catch(() => null),
   ])
+  // CARDLENS.2 — short studio names for the tags; empty for a one-studio person.
+  const studioNames = studioNameMap(contactStudios.rows)
   const glofoxMode = glofoxCardMode({
     contact,
     primarySource: primarySourceState?.state === 'unknown' ? null : (primarySourceState?.source ?? null),
@@ -509,7 +514,7 @@ export default async function ContactDetailPage(props) {
                 canSequence={work.canSequence}
               />
             </div>
-            <ContactTimeline timeline={timeline} person={person} showFilters />
+            <ContactTimeline timeline={timeline} person={person} showFilters studioNames={studioNames} />
           </div>
 
           {/* CONTACT-MSG.1 — Messages: what we've emailed / texted this
@@ -522,9 +527,7 @@ export default async function ContactDetailPage(props) {
               {messages.map((m) => (
                 <div key={m.id} className="flex items-center justify-between gap-2 py-2 border-b border-un1t-border last:border-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    {m.channel === 'email'
-                      ? <Mail size={13} className="text-un1t-subtle shrink-0" />
-                      : <MessageSquare size={13} className="text-un1t-subtle shrink-0" />}
+                    <Mail size={13} className="text-un1t-subtle shrink-0" />
                     <span className="text-sm truncate">{m.label}</span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -558,7 +561,7 @@ export default async function ContactDetailPage(props) {
               {waConversations.map(conv => (
                 <Link
                   key={conv.id}
-                  href="/communications/inbox"
+                  href={`/communications/inbox?c=${conv.id}`}
                   className="block py-2 border-b border-un1t-border last:border-0 hover:bg-un1t-border/20 -mx-1 px-1 rounded transition-colors"
                 >
                   <div className="flex items-center justify-between">
@@ -566,6 +569,7 @@ export default async function ContactDetailPage(props) {
                       {conv.last_message_direction === 'outbound' && <span className="text-un1t-subtle">You: </span>}
                       {conv.last_message_preview || 'No messages'}
                     </p>
+                    <StudioTag locationId={conv.location_id} names={studioNames} />
                     {conv.unread_count > 0 && (
                       <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0 ml-2">
                         {conv.unread_count}
@@ -581,7 +585,7 @@ export default async function ContactDetailPage(props) {
           )}
 
           {/* Past event registrations (CRM-native). */}
-          <PastEventsCard bookings={pastBookings} />
+          <PastEventsCard bookings={pastBookings} studioNames={studioNames} />
         </div>
 
         {/* What happens next. */}
@@ -595,6 +599,7 @@ export default async function ContactDetailPage(props) {
             deals={deals}
             admin={actions.admin}
             canReadStudioCards={work.canReadStudioCards}
+            studioNames={studioNames}
           />
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or
@@ -658,7 +663,7 @@ function emailStatusPill(e) {
 function buildMessageHistory(emails) {
   const out = []
   for (const e of emails) {
-    out.push({ id: `e-${e.id}`, channel: 'email', label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
+    out.push({ id: `e-${e.id}`, label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
   }
   return out
     .filter((m) => m.at)

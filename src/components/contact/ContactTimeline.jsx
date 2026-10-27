@@ -15,6 +15,7 @@ import {
   Mail, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle,
 } from 'lucide-react'
 import { timelineFilterGroup } from '@/lib/contact-view'
+import StudioTag from './StudioTag'
 
 const activityIcons = {
   note: { bg: 'bg-blue-500/20', color: 'text-blue-700', label: 'Note' },
@@ -63,6 +64,8 @@ export default function ContactTimeline({
   person = null,
   showFilters = false,
   emptyText = 'No activity yet',
+  // CARDLENS.2 — studioNameMap() output; omitted (the drawer), no tags.
+  studioNames = null,
 }) {
   const [filter, setFilter] = useState('all')
   const grouped = Boolean(person && person.accounts.length > 1)
@@ -164,6 +167,7 @@ export default function ContactTimeline({
                         Glofox
                       </span>
                     )}
+                    <StudioTag locationId={item.location_id} names={studioNames} />
                   </div>
                   <span className="text-xs text-un1t-muted">
                     {new Date(item.date).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}

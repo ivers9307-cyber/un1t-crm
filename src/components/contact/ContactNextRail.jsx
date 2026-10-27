@@ -12,6 +12,7 @@ import ContactAppAccountCard from '@/components/ContactAppAccountCard'
 import MemberPasswordOverrideButton from '@/components/MemberPasswordOverrideButton'
 import ContactDevicesCard from '@/components/ContactDevicesCard'
 import { UpcomingEventsCard } from './EventRegistrationsCards'
+import StudioTag from './StudioTag'
 import { relativeTime, formatTime } from './format'
 
 const ATTENTION_TONE = {
@@ -27,6 +28,7 @@ export default function ContactNextRail({
   upcomingBookings = [],
   deals = [],
   admin, // contactActionGates(user, contact).admin (src/lib/contact-page-gates.js): { canPasswordOverride, canEdit, canDelete, canInvite, hasUserAccount, canEditDevices, canLinkAccount }
+  studioNames = null, // CARDLENS.2 — studioNameMap(); empty for a single-studio person
   canReadStudioCards = false, // contactWorkGates(user, contact).canReadStudioCards: Events + HR devices read at the contact's studio
 }) {
   return (
@@ -90,7 +92,7 @@ export default function ContactNextRail({
         </div>
       )}
 
-      <UpcomingEventsCard bookings={upcomingBookings} />
+      <UpcomingEventsCard bookings={upcomingBookings} studioNames={studioNames} />
 
       {/* Deals */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
@@ -98,7 +100,7 @@ export default function ContactNextRail({
         {deals.length === 0 && <p className="text-sm text-un1t-muted">No deals</p>}
         {deals.map(deal => (
           <div key={deal.id} className="flex items-center justify-between py-2 border-b border-un1t-border last:border-0">
-            <span className="text-sm">{deal.title}</span>
+            <span className="text-sm flex items-center gap-1.5 min-w-0">{deal.title} <StudioTag locationId={deal.location_id} names={studioNames} /></span>
             <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: deal.pipeline_stages?.color + '30', color: deal.pipeline_stages?.color }}>
               {deal.pipeline_stages?.name}
             </span>

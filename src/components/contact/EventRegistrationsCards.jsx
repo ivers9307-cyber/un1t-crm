@@ -5,6 +5,7 @@
 // in the centre history column.
 
 import { formatTime } from './format'
+import StudioTag from './StudioTag'
 
 const bookingStatusColors = {
   confirmed: 'bg-blue-500/20 text-blue-700',
@@ -13,7 +14,7 @@ const bookingStatusColors = {
   no_show: 'bg-yellow-500/20 text-yellow-700',
 }
 
-export function UpcomingEventsCard({ bookings }) {
+export function UpcomingEventsCard({ bookings, studioNames = null }) {
   if (bookings.length === 0) return null
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
@@ -25,7 +26,7 @@ export function UpcomingEventsCard({ bookings }) {
             style={{ backgroundColor: b.event_types?.color || '#6B7280' }}
           />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium">{b.event_types?.name || 'Event'}</p>
+            <p className="text-sm font-medium flex items-center gap-1.5">{b.event_types?.name || 'Event'} <StudioTag locationId={b.location_id} names={studioNames} /></p>
             <p className="text-xs text-un1t-subtle mt-0.5">
               {new Date(b.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}
               {' · '}
@@ -41,7 +42,7 @@ export function UpcomingEventsCard({ bookings }) {
   )
 }
 
-export function PastEventsCard({ bookings }) {
+export function PastEventsCard({ bookings, studioNames = null }) {
   if (bookings.length === 0) return null
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
@@ -53,7 +54,7 @@ export function PastEventsCard({ bookings }) {
             style={{ backgroundColor: b.event_types?.color || '#6B7280' }}
           />
           <div className="flex-1 min-w-0">
-            <p className="text-sm">{b.event_types?.name || 'Event'}</p>
+            <p className="text-sm flex items-center gap-1.5">{b.event_types?.name || 'Event'} <StudioTag locationId={b.location_id} names={studioNames} /></p>
             <p className="text-xs text-un1t-subtle mt-0.5">
               {new Date(b.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
               {' · '}
