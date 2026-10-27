@@ -20,6 +20,7 @@ import { PLATFORM_NAME } from '@/lib/brand-name'
 // The root layout's PERF.3 comment points here — keep them in sync.
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import { Analytics } from '@vercel/analytics/next'
+import UsageTracker from './UsageTracker'
 
 // NOTE: '/event-pay' must be listed SEPARATELY from '/event' — the matcher
 // is `pathname === p || startsWith(p + '/')`, so '/event' does NOT cover
@@ -141,6 +142,9 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-un1t-bg">
+      {/* USAGE.1 — staff app usage recording (renders nothing; skips
+          masters, view-as and support sessions). */}
+      <UsageTracker user={user} />
       {/* A11Y (WCAG 2.4.1 Bypass Blocks) — keyboard/screen-reader users can
           jump past the sidebar straight to <main>. Visually hidden until
           focused, then pinned top-left. Targets the #main-content id below. */}
