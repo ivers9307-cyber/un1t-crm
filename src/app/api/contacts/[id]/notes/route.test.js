@@ -39,6 +39,9 @@ vi.mock('@/lib/glofox-note-push', () => ({
   pushNoteToGlofox: vi.fn(() => Promise.resolve({ pushed: false })),
 }))
 
+// CARDLENS.5 — a note for another of the person's studios asks contact_studios.
+vi.mock('@/lib/contact-studios', () => ({ hasRelationshipAt: vi.fn(async () => ({ ok: true, at: new Set() })) }))
+
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -176,5 +179,40 @@ describe('POST /api/contacts/[id]/notes', () => {
     expect(res.status).toBe(400)
     expect(insertSpy).not.toHaveBeenCalled()
     expect(pushNoteToGlofox).not.toHaveBeenCalled()
+  })
+})
+
+// CARDLENS.5 — a note filed at the acting studio.
+describe('POST /api/contacts/[id]/notes — location_id (acting studio)', () => {
+  const HATCH_STAFF = { ...STAFF, locations: [{ id: OTHER_LOC }] }
+
+  it('files the note at the chosen studio and does not copy it to Glofox', async () => {
+    const { hasRelationshipAt } = await import('@/lib/contact-studios')
+    hasRelationshipAt.mockResolvedValueOnce({ ok: true, at: new Set([OTHER_LOC]) })
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    const insertSpy = echoInsert()
+    createServerClient.mockReturnValue(makeDb(insertSpy))
+
+    const res = await POST(postReq({ content: 'Asked about Friday evenings.', location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(200)
+    expect(insertSpy.captured().location_id).toBe(OTHER_LOC)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(pushNoteToGlofox).not.toHaveBeenCalled()
+  })
+
+  it('a studio the person has no row at is a 404 and nothing is written', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    const insertSpy = echoInsert()
+    createServerClient.mockReturnValue(makeDb(insertSpy))
+    const res = await POST(postReq({ content: 'x', location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(404)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('a non-member sending invalid content still gets 404, never a 400 that confirms the contact', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    createServerClient.mockReturnValue(makeDb(echoInsert()))
+    const res = await POST(postReq({ content: '   ' }), props)
+    expect(res.status).toBe(404)
   })
 })

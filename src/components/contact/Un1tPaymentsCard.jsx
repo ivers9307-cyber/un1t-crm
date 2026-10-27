@@ -41,7 +41,7 @@ function OverdueBand({ pastDue }) {
   )
 }
 
-function StudioBlock({ studio }) {
+export function StudioBlock({ studio }) {
   const { locationName, subscriptions = [], transactions = [], invoices = [], pastDues = [] } = studio
   const shownTransactions = transactions.slice(0, MAX_TRANSACTIONS)
   return (

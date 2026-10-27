@@ -90,7 +90,11 @@ function normaliseAnswer(raw) {
   return { q: q ? String(q) : null, a: String(a).trim() }
 }
 
-export default function GlofoxProfileCard({ contact }) {
+// CARDLENS.1 — `mode` is glofoxCardMode() (src/lib/contact-platforms.js),
+// decided by the page from the studio's membership source. 'hidden' renders
+// nothing; omitted, the card behaves as before (linked or pushable).
+export default function GlofoxProfileCard({ contact, mode }) {
+  if (mode === 'hidden') return null
   const linked = Boolean(contact.glofox_member_id)
   const statusMeta = GLOFOX_STATUS_META[contact.glofox_membership_status] || null
   const stateMeta = GLOFOX_STATE_META[contact.glofox_membership_state] || null
@@ -217,10 +221,10 @@ export default function GlofoxProfileCard({ contact }) {
             </p>
           )}
           {/* GLOFOX-REACTIVE — pause window detail (backward-looking
-              "since"; the chip carries the forward-looking "resumes"). */}
+              "since"; the state badge above carries "resumes", CARDLENS.3). */}
           {isPaused && pausedSince && (
             <p className="text-xs text-amber-700">
-              Paused since {pausedSince}{resumeFuture ? ` · resumes ${resumeDate}` : ''}
+              Paused since {pausedSince}
             </p>
           )}
 

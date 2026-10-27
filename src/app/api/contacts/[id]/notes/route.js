@@ -21,11 +21,14 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { resolveRouteStudio } from '@/lib/contact-acting-studio'
 
 export const runtime = 'nodejs'
 
 const CreateNoteSchema = z.object({
   // 1..20000 chars after trimming — z.string().trim() so " " alone is rejected.
+  // CARDLENS.5 — the acting studio; omitted = the contact's primary studio.
+  location_id: uuidLike.optional(),
   content: z.string().trim().min(1, 'Content is required').max(20_000, 'Content is too long (max 20000)'),
 })
 
@@ -63,16 +66,27 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
+  // The body is read here for its location_id, but a bad body is answered only
+  // after the studio checks below, so a non-member never learns from a 400
+  // that the contact exists.
+  const validation = await validateBody(request, CreateNoteSchema)
+
+  // CARDLENS.5 — the studio the note is filed at: the body's location_id when
+  // the person has a contact_studios row there and the caller belongs to it
+  // (404 otherwise, 503 on a failed read), else the primary as before.
+  const studio = await resolveRouteStudio(db, user, contact, validation.ok ? validation.data.location_id : undefined)
+  if (studio.response) return studio.response
+  const studioId = studio.locationId
+
   // Explicit in-location authorization — a staffer can't note a contact outside
   // their location(s). 404 (not 403) so contact ids can't be enumerated.
-  const guard = assertLocationAccessOr404(user, contact.location_id)
+  const guard = assertLocationAccessOr404(user, studioId)
   if (guard) return guard
-  // ROLESWEEP.1c — `contacts` judged at the contact's location, not the active studio.
-  if (!hasPermissionForLocation(user, contact.location_id, 'contacts')) {
+  // ROLESWEEP.1c — `contacts` judged at that studio, not the active studio.
+  if (!hasPermissionForLocation(user, studioId, 'contacts')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
 
-  const validation = await validateBody(request, CreateNoteSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
@@ -81,7 +95,7 @@ export async function POST(request, props) {
     .insert({
       contact_id: id,
       content: body.content,
-      location_id: contact.location_id,
+      location_id: studioId,
     })
     .select('id')
     .single()
@@ -94,7 +108,10 @@ export async function POST(request, props) {
   // only for Glofox-linked contacts; edits/deletes are NOT synced back). Never
   // awaited so it can't block or fail the response; the service swallows its own
   // errors. authorName = the session user so the interaction is attributed.
-  if (data?.id) {
+  // CARDLENS.5 — only a note filed at the primary studio is copied: Glofox's
+  // front desk is the primary studio's, and a note filed at another studio
+  // belongs to that studio's team.
+  if (data?.id && studioId === contact.location_id) {
     import('@/lib/glofox-note-push').then(({ pushNoteToGlofox }) =>
       pushNoteToGlofox(db, {
         contactId: id,

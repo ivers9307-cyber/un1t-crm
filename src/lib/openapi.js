@@ -4100,6 +4100,9 @@ registry.registerPath({
         'application/json': {
           schema: z.object({
             content: z.string().min(1).max(20_000),
+            // CARDLENS.5 — file the note at another studio the person has a
+            // relationship with (404 unless they do and the caller belongs there).
+            location_id: uuidLike.optional(),
           }).openapi('ContactNoteCreateBody'),
         },
       },

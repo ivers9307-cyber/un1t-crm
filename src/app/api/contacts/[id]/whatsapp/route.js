@@ -13,7 +13,10 @@
 //                       body variable (if any) is filled with the
 //                       contact's first name.
 //
-// Authorization: the 'whatsapp' permission + the contact's location
+// Optional `location_id` (CARDLENS.5): the studio to send for, one where the
+// person has a contact_studios row; omitted = the contact's primary studio.
+//
+// Authorization: the 'whatsapp' permission + membership of that studio
 // (assertLocationAccess — same IDOR guard the SMS surface uses).
 //
 // Side effects on success: a whatsapp_messages row, the conversation's
@@ -40,10 +43,14 @@ import { contactWaPhone, loadSendConversation } from '@/lib/whatsapp-conversatio
 import { ownNumberOrRefusal } from '@/lib/whatsapp-own-number'
 import { getConversationNumberConfig, pickReplyConfig, pickTemplateConfig } from '@/lib/whatsapp-config'
 import { whatsappErrorStatus } from '@/lib/whatsapp-number-missing'
+import { uuidLike } from '@/lib/schemas'
+import { resolveRouteStudio } from '@/lib/contact-acting-studio'
 
 export const runtime = 'nodejs'
 
 const SendSchema = z.object({
+  // CARDLENS.5 — the acting studio; omitted = the contact's primary studio.
+  location_id: uuidLike.optional(),
   text: z.string().min(1).max(4096).optional(),
   template_name: z.string().min(1).max(200).optional(),
 }).refine((d) => Boolean(d.text) !== Boolean(d.template_name), {
@@ -72,7 +79,7 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, SendSchema)
   if (!validation.ok) return validation.response
-  const { text, template_name } = validation.data
+  const { text, template_name, location_id: requestedStudio } = validation.data
 
   const { id: contactId } = params
   const db = createServerClient()
@@ -86,11 +93,19 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  // IDOR guard — caller must be assigned to the contact's location.
-  const guard = assertLocationAccessOr404(user, contact.location_id)
+  // CARDLENS.5 — the studio this send is FOR: the body's location_id when the
+  // person has a contact_studios row there and the caller belongs to it (404
+  // otherwise, 503 on a failed read), else the primary as before. Every check,
+  // number, thread, template and log below is judged at that studio.
+  const studio = await resolveRouteStudio(db, user, contact, requestedStudio)
+  if (studio.response) return studio.response
+  const studioId = studio.locationId
+
+  // IDOR guard — caller must be assigned to the studio.
+  const guard = assertLocationAccessOr404(user, studioId)
   if (guard) return guard
   // ROLESWEEP.1c — web OR mobile `whatsapp` judged at the contact's location.
-  if (!hasPermissionForLocation(user, contact.location_id, 'whatsapp') && !hasMobilePermissionForLocation(user, contact.location_id, 'whatsapp')) {
+  if (!hasPermissionForLocation(user, studioId, 'whatsapp') && !hasMobilePermissionForLocation(user, studioId, 'whatsapp')) {
     return NextResponse.json({ success: false, error: 'Forbidden — WhatsApp not enabled at this location for your role' }, { status: 403 })
   }
 
@@ -100,18 +115,19 @@ export async function POST(request, props) {
   // an empty thread in this location's inbox. 409 no number / 500 lookup.
   // The send below uses this checked config ({ config }), so there is one
   // lookup and no gap in which a different number could be resolved.
-  const own = await ownNumberOrRefusal(contact.location_id, 'contact-whatsapp-send')
+  const own = await ownNumberOrRefusal(studioId, 'contact-whatsapp-send')
   if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
 
-  // WAORGNUMBER.4 (R3) — the composer sends for the contact's HOME studio, so
-  // its thread files there (getOrCreateConversation at contact.location_id),
-  // never on the contact's most recent thread at another studio, which could
+  // WAORGNUMBER.4 (R3) — the composer sends for ONE studio (the primary, or
+  // the acting studio since CARDLENS.5), so its thread files there
+  // (getOrCreateConversation at studioId), never on the contact's most recent
+  // thread at another studio, which could
   // pair that studio's thread with this studio's number. The cancellation-form
   // send opens the same thread (CANCEL-FORM.4).
   const waPhone = contactWaPhone(contact)
   if (!waPhone) return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })
   const opened = await loadSendConversation(db,
-    await getOrCreateConversation(db, { ...contact, wa_phone: waPhone }, contact.location_id))
+    await getOrCreateConversation(db, { ...contact, wa_phone: waPhone }, studioId))
   if (!opened.ok) {
     return NextResponse.json({ success: false, error: opened.error }, { status: opened.status })
   }
@@ -120,7 +136,7 @@ export async function POST(request, props) {
   // customer wrote to (stamped by the webhook) while it is active here, like
   // the inbox send; else the checked default. Read by its id: the location is
   // still resolved once (own, above). null on any failed read → the default.
-  const threadNumber = await getConversationNumberConfig(contact.location_id, conversation.id)
+  const threadNumber = await getConversationNumberConfig(studioId, conversation.id)
 
   // ── Send ────────────────────────────────────────────────────────
   let result
@@ -146,7 +162,7 @@ export async function POST(request, props) {
       const { data: rows } = await db
         .from('whatsapp_templates')
         .select('name, language, category, status, components, header_media_url, business_account_id')
-        .eq('location_id', contact.location_id)
+        .eq('location_id', studioId)
         .eq('name', template_name)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -169,7 +185,7 @@ export async function POST(request, props) {
       const held = pickTemplateConfig(threadNumber, own.config, template.business_account_id || null)
       result = await sendTemplateMessage(
         waPhone, template.name, template.language || 'en', components,
-        held ? { config: held } : { locationId: contact.location_id, businessAccountId: template.business_account_id },
+        held ? { config: held } : { locationId: studioId, businessAccountId: template.business_account_id },
       )
       messageType = 'template'
       messageBody = `[Template: ${template.name}]`
@@ -190,7 +206,7 @@ export async function POST(request, props) {
   await db.from('whatsapp_messages').insert({
     conversation_id: conversation.id,
     contact_id: contactId,
-    location_id: contact.location_id,
+    location_id: studioId,
     wa_message_id: result.messageId,
     direction: 'outbound',
     message_type: messageType,
@@ -218,7 +234,7 @@ export async function POST(request, props) {
   // already delivered, so a log failure must not fail the response.
   await db.from('activities').insert({
     contact_id: contactId,
-    location_id: contact.location_id,
+    location_id: studioId,
     type: 'whatsapp_sent',
     subject: 'WhatsApp sent',
     note: messageBody,
