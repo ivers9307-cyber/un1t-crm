@@ -50,6 +50,9 @@ vi.mock('@/lib/contact-un1t-billing', () => ({ loadUn1tBilling: vi.fn() }))
 // CARDLENS-M.1 — the crossover half of the gate (a contact_studios row at one
 // of the caller's studios). Off unless a test says otherwise.
 vi.mock('@/lib/contact-crossovers', () => ({ canViewContact: vi.fn() }))
+// CARDLENS-M.2 / M.3 — the phone extras (own tests in contact-phone-extras.test.js).
+const PHONE_EXTRAS = { glofox_card: { mode: 'linked', studio_name: 'UN1T Stillorgan' }, studio_tags: { loc1: 'Stillorgan', h: 'Hatch Street' } }
+vi.mock('@/lib/contact-phone-extras', () => ({ loadPhoneContactExtras: vi.fn(async () => PHONE_EXTRAS) }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -141,6 +144,8 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(db.__queried).not.toContain('event_types')
     expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false })
     expect(j.composer_templates).toEqual([])
+    expect(j.glofox_card).toEqual(PHONE_EXTRAS.glofox_card)
+    expect(j.studio_tags).toEqual(PHONE_EXTRAS.studio_tags)
   })
 
   it('CARDLENS-M.1: a member of the contact\'s studio never needs the crossover probe', async () => {

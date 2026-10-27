@@ -33,6 +33,7 @@ import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outr
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
+import { loadPhoneContactExtras } from '@/lib/contact-phone-extras'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -168,7 +169,7 @@ export async function GET(request, props) {
   const scope = new URL(request.url).searchParams.get('scope')
   let drawerExtras = null
   if (scope === 'drawer') {
-    const [notesRes, seqRes, waRes] = await Promise.all([
+    const [notesRes, seqRes, waRes, phoneExtras] = await Promise.all([
       db.from('notes')
         .select('*')
         .eq('contact_id', params.id)
@@ -187,6 +188,9 @@ export async function GET(request, props) {
         .eq('location_id', contact.location_id)
         .order('last_message_at', { ascending: false })
         .limit(1),
+      // CARDLENS-M.2 / M.3 — the phone's Glofox card mode and studio tags.
+      // Never rejects; a failed read answers the pre-CARDLENS-M screen.
+      loadPhoneContactExtras(db, contact),
     ])
     const latestWa = (waRes.data || [])[0] || null
 
@@ -232,6 +236,12 @@ export async function GET(request, props) {
       // phone's contact screen reads every flag here instead of judging its
       // buttons at the active studio.
       permissions: { ...channels, kudos: canLoadContactConsultations(user, contact.location_id) },
+      // CARDLENS-M.2 — { mode: 'linked'|'pushable'|'hidden', studio_name }:
+      // the phone hides the Glofox card where the person has no Glofox account
+      // and their studio does not run Glofox (a Hatch Street un1t.online member).
+      glofox_card: phoneExtras.glofox_card,
+      // CARDLENS-M.3 — location id → short studio name, {} for one studio.
+      studio_tags: phoneExtras.studio_tags,
     }
   }
 
