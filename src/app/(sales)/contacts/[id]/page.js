@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { ArrowLeft, Mail, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
-import { canViewContact } from '@/lib/contact-crossovers'
+import { canViewContact, contactStudioIds } from '@/lib/contact-crossovers'
 import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates, un1tBookingStudios } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
@@ -31,7 +31,8 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
-import ActingStudioBar from '@/components/contact/ActingStudioBar'
+import StudioStrip from '@/components/contact/StudioStrip'
+import { studioMemberships } from '@/lib/contact-studio-memberships'
 import { loadContactStudios } from '@/lib/contact-studios-display'
 // HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
 import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
@@ -178,9 +179,15 @@ export default async function ContactDetailPage(props) {
   // member. Only the writes_enabled boolean leaves the settings (a JSON
   // path), never the settings object. Best-effort: no card on a failed read.
   let un1tStudios = []
+  // CARDLENS.8 — the same rows carry each studio's un1t.online counters for
+  // the membership cards, kept only where the viewer holds Contacts (the rule
+  // loadUn1tBilling applies to payments).
+  let un1tClients = []
   try {
     const { data: clientRows, error: clientErr } = await db.from('un1t_clients')
-      .select('location_id').eq('contact_id', contact.id).limit(50)
+      .select('location_id, last_attended_at, bookings_30d_attended, credit_balance, credit_unlimited, ltv_cents, synced_at').eq('contact_id', contact.id).limit(50)
+    const un1tVisible = new Set(contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]))
+    if (!clientErr) un1tClients = (clientRows || []).filter((r) => un1tVisible.has(r.location_id))
     const ids = [...new Set((clientRows || []).map((r) => r.location_id).filter(Boolean))]
     if (!clientErr && ids.length > 0) {
       const { data: locs, error: locErr } = await db.from('locations')
@@ -404,6 +411,12 @@ export default async function ContactDetailPage(props) {
   const ltvCents = contact.lifetime_value_cents
   const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
   const metricArrearsCents = mergeArrearsCents(glofoxArrearsCents, un1tBilling)
+
+  // CARDLENS.8 — one membership view per studio (the strip, the left rail).
+  // Fewer than two studios: the page shows its old cards.
+  const memberships = studioMemberships({ contact, studioRows: contactStudios.rows, un1tClients, un1tBilling, glofoxArrearsCents })
+  // "All studios" shows every studio and acts at none (Richard 2026-10-27).
+  const lensAll = memberships.length >= 2 && searchParams?.studio === 'all'
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
 
@@ -479,8 +492,9 @@ export default async function ContactDetailPage(props) {
         }}
       />
 
-      {/* CARDLENS.6 — which studio this page acts at; nothing for one studio. */}
-      <ActingStudioBar options={actingOptions} actingId={actingId} />
+      {/* CARDLENS.8 — the studios, and which one this page acts at (or All);
+          nothing for a one-studio person. */}
+      <StudioStrip memberships={memberships} options={actingOptions} actingId={actingId} lensAll={lensAll} />
 
       <div className="grid gap-5 items-start xl:grid-cols-[280px_minmax(0,1fr)_300px]">
         {/* Who they are — stacks under the working column on small screens. */}
@@ -497,6 +511,9 @@ export default async function ContactDetailPage(props) {
             canRehome={actions.admin.canRehome}
             un1tBilling={un1tBilling}
             glofoxMode={glofoxMode}
+            memberships={memberships}
+            actingId={actingId}
+            lensAll={lensAll}
           />
         </div>
 

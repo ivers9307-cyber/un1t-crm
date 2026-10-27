@@ -19,6 +19,8 @@ vi.mock('@/components/InviteToAppButton', () => stub('invite'))
 vi.mock('@/components/ContactAppAccountCard', () => stub('app-account'))
 vi.mock('@/components/MemberPasswordOverrideButton', () => stub('password'))
 vi.mock('@/components/LinkedAccountsCard', () => stub('linked-accounts'))
+vi.mock('./StudioMembershipCard', () => ({ default: ({ membership }) => <i data-card="studio-membership" data-studio={membership.locationId} /> }))
+vi.mock('./ContactStudiosCard', () => ({ default: ({ studios }) => (studios?.length ? <i data-card="studios" /> : null) }))
 vi.mock('./GlofoxProfileCard', () => ({ default: ({ mode }) => <i data-card="glofox" data-mode={mode ?? ''} /> }))
 // Mirrors the real card's one rule: nothing without a studio to show.
 vi.mock('./Un1tPaymentsCard', () => ({ default: ({ studios }) => (studios?.length ? <i data-card="un1t-payments" /> : null) }))
@@ -138,5 +140,30 @@ describe('trimmed rails', () => {
 
   it('no More section when the viewer could use nothing in it', () => {
     expect(next({ canReadStudioCards: false })).not.toContain('<details')
+  })
+})
+
+// CARDLENS.8 — a person at two or more studios: one membership card per
+// studio (the acting one, or all under All studios) in place of the Studios,
+// un1t.online payments and Glofox cards. One studio: the old cards, unchanged.
+describe('per-studio membership cards', () => {
+  const S = 'a0000000-0000-4000-8000-00000000000a'
+  const H = 'b0000000-0000-4000-8000-00000000000b'
+  const MEMBERSHIPS = [{ locationId: S, platform: 'glofox', primary: true }, { locationId: H, platform: 'un1t_online', primary: false }]
+  const cards = (html) => [...html.matchAll(/data-card="([^"]+)"(?: data-studio="([^"]+)")?/g)].map((m) => (m[2] ? `${m[1]}:${m[2]}` : m[1]))
+
+  it('acting at Hatch: only Hatch\'s membership card, no Studios / payments / Glofox cards', () => {
+    expect(cards(who({ memberships: MEMBERSHIPS, actingId: H, contactStudios: [{ location_id: S }, { location_id: H }], un1tBilling: { studios: [{ locationId: H }] } })))
+      .toEqual(['linked-accounts', `studio-membership:${H}`])
+  })
+
+  it('All studios: one card per studio, primary first', () => {
+    expect(cards(who({ memberships: MEMBERSHIPS, actingId: H, lensAll: true })))
+      .toEqual(['linked-accounts', `studio-membership:${S}`, `studio-membership:${H}`])
+  })
+
+  it('one studio: the old cards, exactly as before', () => {
+    expect(cards(who({ memberships: [MEMBERSHIPS[0]], contactStudios: [{ location_id: S }] })))
+      .toEqual(['linked-accounts', 'studios', 'glofox'])
   })
 })

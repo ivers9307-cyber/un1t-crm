@@ -23,7 +23,6 @@ describe('CARDLENS.6 — the contact page acts at the acting studio', () => {
     ['composer sends for it', /<ContactComposer[^>]*contactLocationId=\{actingId\}[^>]*sendLocationId=\{actingId\}/],
     ['Timeline actions', /<ContactActions[^>]*locationId=\{actingId\}/],
     ['header kebab (task, sequence)', /<ContactHeaderBand[^>]*actingLocationId=\{actingId\}/],
-    ['studio bar', /<ActingStudioBar options=\{actingOptions\} actingId=\{actingId\}/],
     ['templates at that studio', /from\('whatsapp_templates'\)[^;]*\.eq\('location_id', actingId\)/],
     ['the WhatsApp window is that studio\'s thread', /waConversations\.find\(\(c\) => c\.location_id === actingId\)/],
     ['un1t.online booking only for that studio', /un1tStudios\.filter\(\(s\) => s\.locationId === actingId\)/],
