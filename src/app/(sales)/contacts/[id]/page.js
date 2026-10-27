@@ -33,9 +33,10 @@ import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
 import StudioStrip from '@/components/contact/StudioStrip'
 import { studioMemberships } from '@/lib/contact-studio-memberships'
+import { lensMetrics, lensRisk } from '@/lib/contact-lens'
 import { loadContactStudios } from '@/lib/contact-studios-display'
 // HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
-import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
+import { loadUn1tBilling, mergeArrearsCents } from '@/lib/contact-un1t-billing'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
@@ -224,15 +225,16 @@ export default async function ContactDetailPage(props) {
   const arrearsCtx = contactArrears.count > 0 ? { pastDueIds: new Set([activityContact.id]) } : {}
   const churnClass = classifyContact(activityContact, arrearsCtx)
   const churnScored = churnClass === 'active' ? scoreMember(activityContact, Date.now()) : null
-  let risk = null
-  const un1tRisk = un1tHeaderRisk(un1tBilling)
-  if (churnClass === 'overdue') {
-    risk = { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
-  } else if (un1tRisk) {
-    risk = un1tRisk
-  } else if (churnScored) {
+  // CARDLENS.9 — the Glofox chips, split so the lens can pick (lensRisk,
+  // below): the chase-list overdue, else the radar's at-risk score. The
+  // un1t.online overdue is the lens's own (that studio, or the worst).
+  const glofoxOverdue = churnClass === 'overdue'
+    ? { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
+    : null
+  let glofoxChurn = null
+  if (churnScored) {
     const sigs = churnScored.signals.map((s) => `${s.label}: ${s.detail}`).join(' · ')
-    risk = churnScored.tier === 'high'
+    glofoxChurn = churnScored.tier === 'high'
       ? { label: 'At risk · High', cls: 'bg-red-50 text-red-700 border-red-200', title: sigs }
       : { label: churnScored.tier === 'medium' ? 'At risk · Medium' : 'At risk', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: sigs }
   }
@@ -417,6 +419,23 @@ export default async function ContactDetailPage(props) {
   const memberships = studioMemberships({ contact, studioRows: contactStudios.rows, un1tClients, un1tBilling, glofoxArrearsCents })
   // "All studios" shows every studio and acts at none (Richard 2026-10-27).
   const lensAll = memberships.length >= 2 && searchParams?.studio === 'all'
+  // CARDLENS.9 — the header follows the lens: that studio's figures, or the
+  // sum under All studios; today's figures when there are no memberships.
+  const lensId = lensAll ? 'all' : actingId
+  const headerMetrics = lensMetrics({ memberships, lensId, base: {
+    ltvCents,
+    arrearsCents: metricArrearsCents,
+    glofoxArrearsCents,
+    un1t: {
+      overdue: un1tBilling.overdue,
+      amountUnreported: un1tBilling.amountUnreported,
+      amountNotEur: un1tBilling.amountNotEur,
+    },
+    attended: metricAttended,
+    lastAttendedAt: person?.lastAttendedAt || contact.last_attended_at || null,
+    deals: metricDeals,
+  }, deals })
+  const risk = lensRisk({ lensId, memberships, glofoxOverdue, glofoxChurn, un1tBilling, names: studioNames })
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
 
@@ -478,18 +497,7 @@ export default async function ContactDetailPage(props) {
         // WAITLIST.6 — a location with no readable primary board resolves null
         // here, which is FALSE, which is today's behaviour (Cold shown).
         manual={primaryPipeline?.mode === 'manual'}
-        metrics={{
-          ltvCents,
-          arrearsCents: metricArrearsCents,
-          un1t: {
-            overdue: un1tBilling.overdue,
-            amountUnreported: un1tBilling.amountUnreported,
-            amountNotEur: un1tBilling.amountNotEur,
-          },
-          attended: metricAttended,
-          deals: metricDeals,
-          currency: contact.lifetime_currency,
-        }}
+        metrics={{ ...headerMetrics, currency: contact.lifetime_currency }}
       />
 
       {/* CARDLENS.8 — the studios, and which one this page acts at (or All);

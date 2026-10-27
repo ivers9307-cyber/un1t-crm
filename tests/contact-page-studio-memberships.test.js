@@ -34,3 +34,17 @@ describe('CARDLENS.8 — per-studio memberships on the contact page', () => {
     expect(src).toMatch(/<ContactWhoRail[^>]*memberships=\{memberships\}[^>]*actingId=\{actingId\}[^>]*lensAll=\{lensAll\}/)
   })
 })
+
+describe('CARDLENS.9 — the header follows the lens', () => {
+  it('splits the Glofox chips and lets lensRisk pick', () => {
+    expect(src).toContain('const glofoxOverdue = churnClass === \'overdue\'')
+    expect(src).toContain('const risk = lensRisk({ lensId, memberships, glofoxOverdue, glofoxChurn, un1tBilling, names: studioNames })')
+    expect(src).not.toMatch(/let risk = null/)
+  })
+
+  it('the stats come from lensMetrics over today\'s figures', () => {
+    expect(src).toContain("const lensId = lensAll ? 'all' : actingId")
+    expect(src).toMatch(/const headerMetrics = lensMetrics\(\{ memberships, lensId, base: \{/)
+    expect(src).toMatch(/<ContactHeaderBand[^>]*metrics=\{\{ \.\.\.headerMetrics, currency: contact\.lifetime_currency \}\}/)
+  })
+})
