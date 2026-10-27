@@ -89,7 +89,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios, primarySourceState] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -123,7 +123,14 @@ export default async function ContactDetailPage(props) {
     // ORGCONTACTS.2 — every studio the person has a relationship with
     // (contact_studios), the Studios card. Never throws; a failed read hides it.
     loadContactStudios(db, id, { primaryLocationId: contact.location_id }),
+    // CARDLENS.1 — which membership system the primary studio runs, for the
+    // Glofox card's mode. A failed read is null: the card behaves as before.
+    membershipSourceState(db, contact.location_id).catch(() => null),
   ])
+  const glofoxMode = glofoxCardMode({
+    contact,
+    primarySource: primarySourceState?.state === 'unknown' ? null : (primarySourceState?.source ?? null),
+  })
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
   // commitment terms) from the studio membership catalog by plan name.
@@ -463,6 +470,7 @@ export default async function ContactDetailPage(props) {
             canReadStudioCards={work.canReadStudioCards}
             canRehome={actions.admin.canRehome}
             un1tBilling={un1tBilling}
+            glofoxMode={glofoxMode}
           />
         </div>
 

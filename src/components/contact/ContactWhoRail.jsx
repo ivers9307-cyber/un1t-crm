@@ -21,7 +21,7 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] } }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] }, glofoxMode }) {
   return (
     <>
       {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
@@ -73,7 +73,8 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
       {/* HATCHPIPE.2 — what un1t.online says this contact owes and has paid. */}
       <Un1tPaymentsCard studios={un1tBilling?.studios} />
 
-      <GlofoxProfileCard contact={contact} />
+      {/* CARDLENS.1 — the page's glofoxCardMode: hidden at a studio that does not use Glofox. */}
+      <GlofoxProfileCard contact={contact} mode={glofoxMode} />
 
       {/* CONSENT.1 — operator toggles for marketing email / SMS /
           WhatsApp. Transactional sends stay on regardless. Members of the

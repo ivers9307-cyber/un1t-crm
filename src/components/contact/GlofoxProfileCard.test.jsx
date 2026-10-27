@@ -72,3 +72,15 @@ describe('GlofoxProfileCard — the one-time password outlives the refresh (PASS
     expect(screen.getByText(/SYNTH-PC-2/)).toBeTruthy()
   })
 })
+
+describe('GlofoxProfileCard — mode (CARDLENS.1)', () => {
+  it('renders nothing when the studio does not use Glofox', () => {
+    const { container } = render(<GlofoxProfileCard contact={UNLINKED} mode="hidden" />)
+    expect(container.textContent).toBe('')
+  })
+
+  it('offers Create in Glofox when the studio uses Glofox', () => {
+    render(<GlofoxProfileCard contact={UNLINKED} mode="pushable" />)
+    expect(screen.getByRole('button', { name: /create in glofox/i })).toBeTruthy()
+  })
+})

@@ -19,7 +19,7 @@ vi.mock('@/components/InviteToAppButton', () => stub('invite'))
 vi.mock('@/components/ContactAppAccountCard', () => stub('app-account'))
 vi.mock('@/components/MemberPasswordOverrideButton', () => stub('password'))
 vi.mock('@/components/LinkedAccountsCard', () => stub('linked-accounts'))
-vi.mock('./GlofoxProfileCard', () => stub('glofox'))
+vi.mock('./GlofoxProfileCard', () => ({ default: ({ mode }) => <i data-card="glofox" data-mode={mode ?? ''} /> }))
 // Mirrors the real card's one rule: nothing without a studio to show.
 vi.mock('./Un1tPaymentsCard', () => ({ default: ({ studios }) => (studios?.length ? <i data-card="un1t-payments" /> : null) }))
 
@@ -76,5 +76,13 @@ describe('Un1tPaymentsCard placement', () => {
     expect(cards(who({ un1tBilling: { studios: [] } }))).toEqual(BEFORE)
     expect(cards(who({ un1tBilling: null }))).toEqual(BEFORE)
     expect(cards(who({ canReadStudioCards: true }))).toEqual([...BEFORE, 'marketing-preferences'])
+  })
+})
+
+// CARDLENS.1 — the page decides the Glofox card's mode; the rail hands it on.
+describe('Glofox card mode', () => {
+  it('passes glofoxMode through to the card', () => {
+    expect(who({ glofoxMode: 'hidden' })).toContain('data-mode="hidden"')
+    expect(who({ glofoxMode: 'linked' })).toContain('data-mode="linked"')
   })
 })
