@@ -4,12 +4,19 @@
 // studio. Writes via tasks-api.createTask (direct Supabase, the same RLS
 // path the web TasksPage uses). On save it lands on the assignee's "Your
 // tasks" list; a self-assigned task shows up on yours immediately.
+//
+// CARDLENS-M.9 — opened from a contact (params contactId, contactName,
+// locationId, studioName) it creates a task ABOUT that person at the contact
+// screen's acting studio, through POST /api/activities/tasks, which checks
+// both the caller and the contact at that studio. The contact screen only
+// offers it where the bundle's `task` flag (that route's rule) is true, so the
+// active-studio Tasks gate below is not asked again here.
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, ScrollView, Pressable, TextInput } from 'react-native'
-import { Stack, useRouter } from 'expo-router'
+import { Stack, useRouter, useLocalSearchParams } from 'expo-router'
 import { useAuth } from '../../../lib/auth-context'
 import { sdk } from '../../../lib/sdk'
-import { createTask } from '../../../lib/tasks-api'
+import { createTask, createContactTask } from '../../../lib/tasks-api'
 import { tasksAccessState } from '../../../lib/tasks-access'
 import TasksUnavailable, { TasksPending } from '../../../components/TasksUnavailable'
 import { isoDate, addDays } from '../../../lib/dates'
@@ -47,6 +54,14 @@ function Pills({ options, value, onChange }) {
 export default function TaskNew() {
   const { activeLocation, profile } = useAuth()
   const router = useRouter()
+  const params = useLocalSearchParams()
+  const one = (v) => (Array.isArray(v) ? v[0] : v) || null
+  const contactId = one(params.contactId)
+  const contactName = one(params.contactName)
+  const studioName = one(params.studioName)
+  // The studio the task files at: the contact screen's acting studio, else
+  // the active one (the Tasks tab's own new task).
+  const taskLocationId = (contactId && one(params.locationId)) || activeLocation?.id || null
 
   const [subject, setSubject] = useState('')
   const [assigneeId, setAssigneeId] = useState(profile?.id || null)
@@ -66,10 +81,10 @@ export default function TaskNew() {
     if (!res.success) return
     const here = (res.data || []).filter(s =>
       s.id !== profile?.id &&
-      (s.profile_locations || []).some(pl => pl.location_id === activeLocation?.id)
+      (s.profile_locations || []).some(pl => pl.location_id === taskLocationId)
     )
     setColleagues(here)
-  }, [profile?.id, activeLocation?.id])
+  }, [profile?.id, taskLocationId])
 
   useEffect(() => { loadColleagues() }, [loadColleagues])
 
@@ -83,21 +98,18 @@ export default function TaskNew() {
   const stepDue = (n) => setDueDate(isoDate(addDays(new Date(dueDate + 'T00:00:00'), n)))
 
   // C146 — since mig 700 the insert is refused where Contacts is unreadable.
-  const access = tasksAccessState(profile, activeLocation)
+  const access = contactId ? 'allowed' : tasksAccessState(profile, activeLocation)
   const allowed = access === 'allowed'
-  const canSave = allowed && !!subject.trim() && !!activeLocation?.id && !saving
+  const canSave = allowed && !!subject.trim() && !!taskLocationId && !saving
 
   async function save() {
     if (!canSave) return
     setSaving(true)
     setError(null)
-    const res = await createTask({
-      locationId: activeLocation.id,
-      subject,
-      assigneeId,
-      priority,
-      dueDate: hasDue ? dueDate : null,
-    })
+    const fields = { subject, assigneeId, priority, dueDate: hasDue ? dueDate : null }
+    const res = contactId
+      ? await createContactTask({ ...fields, locationId: taskLocationId, contactId })
+      : await createTask({ ...fields, locationId: taskLocationId })
     setSaving(false)
     if (!res.success) { setError(res.error || 'Could not create task'); return }
     router.back()
@@ -108,7 +120,12 @@ export default function TaskNew() {
 
   return (
     <View className="flex-1 bg-un1t-bg">
-      <Stack.Screen options={{ title: 'New task', headerLeft: () => <BackHeaderLeft label="Tasks" fallbackHref="/tasks" /> }} />
+      <Stack.Screen options={{
+        title: 'New task',
+        headerLeft: () => (contactId
+          ? <BackHeaderLeft label="Contact" fallbackHref={`/contacts/${contactId}`} />
+          : <BackHeaderLeft label="Tasks" fallbackHref="/tasks" />),
+      }} />
 
       <ScrollView contentContainerClassName="px-4 pt-4 pb-10" keyboardShouldPersistTaps="handled">
         {error && (
@@ -117,6 +134,11 @@ export default function TaskNew() {
           </View>
         )}
 
+        {contactId && (
+          <Text className="text-sm text-un1t-subtle px-1 mb-3">
+            {`For ${contactName || 'this contact'}${studioName ? `, filed at ${studioName}` : ''}.`}
+          </Text>
+        )}
         <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle px-1 mb-2">Task</Text>
         <TextInput
           value={subject}
