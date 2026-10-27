@@ -24,7 +24,7 @@ export const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 // location_key of the cross-studio '_session'/'all' row: the union over every
 // studio, so a person with the phone at one studio and the web at another
 // (each app keeps its own active studio) never counts a minute twice in the
-// headline. Read only when no studio is chosen (app_usage_summary, mig 778).
+// headline. Read only when no studio is chosen (app_usage_summary, mig 779).
 export const ALL_STUDIOS_KEY = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
 export const RETENTION = Object.freeze({ rawDays: 90, dailyDays: 400 })
 export const SESSION_FEATURE = '_session'

@@ -1,10 +1,10 @@
-// USAGE.1 — every 15 minutes: rebuild today's and yesterday's app usage
+// USAGE.1 — every 15 minutes: rebuild the last three days' app usage
 // totals (app_usage_daily) from the raw sessions and visits, and enforce
 // retention (raw 90 days, daily 400). The work and its rules live in
 // src/lib/app-usage/rollup.js.
 //
 // Idempotent: each run re-derives whole days, so a missed or doubled tick
-// converges. The heartbeat (mig 778, 900 s + 1200 s grace) is stamped only
+// converges. The heartbeat (mig 779, 900 s + 1200 s grace) is stamped only
 // when the whole run succeeded; a failed read or write answers 500 and
 // leaves the previous totals in place.
 //

@@ -121,9 +121,9 @@ export const CLOSED_FUNCTIONS = [
     why: 'SHELLYGROUPS.2: BEFORE INSERT OR UPDATE OF group_id, location_id trigger on shelly_devices refusing a group from another location; a trigger fires without EXECUTE' },
   { fn: 'private.shelly_groups_location_frozen', args: '()', closedBy: 776,
     why: 'SHELLYGROUPS.2: BEFORE UPDATE OF location_id trigger on shelly_groups refusing a move (members would be stranded); a trigger fires without EXECUTE' },
-  { fn: 'public.app_usage_summary', args: '(date, date, uuid[], uuid)', closedBy: 778,
+  { fn: 'public.app_usage_summary', args: '(date, date, uuid[], uuid)', closedBy: 779,
     why: 'every staff member\'s app usage totals; read only by the master-only report routes (USAGE.1)' },
-  { fn: 'public.app_usage_last_active', args: '(uuid[])', closedBy: 778,
+  { fn: 'public.app_usage_last_active', args: '(uuid[])', closedBy: 779,
     why: 'any staff member\'s last app use; read only by the master-only report routes (USAGE.1)' },
 ]
 

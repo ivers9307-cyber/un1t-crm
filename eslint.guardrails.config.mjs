@@ -524,6 +524,10 @@ const config = [
       'src/app/api/usage/**',
       'src/app/api/admin/app-usage/**',
       'src/app/api/cron/app-usage-rollup/**',
+      // REVPAY.13 — the Revolut customer mapping: born clean; every
+      // revolut_customers write reads its error (a failure only logs, the
+      // order still goes out).
+      'src/lib/revolut-customers.js',
     ],
     ignores: NO_TESTS,
     plugins: { guardrails },

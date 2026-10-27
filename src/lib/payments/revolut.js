@@ -12,8 +12,19 @@ import {
   getOrder as revolutGetOrder,
   refundOrder as revolutRefundOrder,
 } from '../revolut'
+import { createServerClient } from '../supabase'
+import { logWarn } from '../log'
 
 export const provider = 'revolut'
+
+function customerDb() {
+  try {
+    return createServerClient()
+  } catch (e) {
+    logWarn('revolut-customers', 'no service client; order goes without a customer id', { error: e?.message })
+    return undefined
+  }
+}
 
 /**
  * Create a checkout order.
@@ -25,8 +36,14 @@ export async function createPayment({
   // what is missing and sanitises the rest). `expirePendingAfter`: undefined =
   // the 30-minute default, null = never expire.
   customer, merchantReference, statementDescriptorSuffix, expirePendingAfter,
+  // REVPAY.13 — the service-role client the Revolut customer is found-or-created
+  // through (one customer per email, not one per order). Optional: every
+  // dispatcher caller gets one made here, and none at all only means the order
+  // carries the details without an id, as before.
+  db,
 }) {
   const order = await revolutCreateOrder({
+    db: customer ? (db ?? customerDb()) : undefined,
     amount: amountCents,
     currency,
     description,

@@ -1,6 +1,6 @@
 // USAGE.1 — shaping the App usage report (platform console,
 // /admin/app-usage). Pure: the routes read the summary through
-// public.app_usage_summary / app_usage_last_active (mig 778) and the raw
+// public.app_usage_summary / app_usage_last_active (mig 779) and the raw
 // rows for the timeline, and hand them here.
 //
 // Definitions (design: docs/superpowers/specs/2026-10-26-app-usage-design.md):

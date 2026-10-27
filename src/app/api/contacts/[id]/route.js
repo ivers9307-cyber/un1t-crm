@@ -11,6 +11,7 @@ import { studiosOfContact } from '@/lib/contact-studios'
 import { isOrgAdminSomewhere } from '@/lib/org-admin'
 import { redactWhatsAppForContact, redactInBodyForContact, getContactImpact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
+import { forgetRevolutCustomerForContact } from '@/lib/revolut-customers'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { emailStatusResetForAddressChange } from '@/lib/email-reputation'
 import { logWarn, logError } from '@/lib/log'
@@ -326,6 +327,9 @@ export async function DELETE(_request, props) {
   // BEFORE the contact row is removed (once the FK nulls, they can't
   // be found by contact_id). Best-effort, same posture as the WA scrub.
   await redactInBodyForContact(db, params.id)
+  // REVPAY.13: the email → Revolut customer mapping holds the address in
+  // clear and is not keyed to the contact. Best-effort, like the scrubs here.
+  await forgetRevolutCustomerForContact(db, params.id)
 
   // MAIL-GDPR.1: the mail FKs (email_tickets, email_inbox_messages) are SET
   // NULL too, so tickets kept the requester's name + address and every message

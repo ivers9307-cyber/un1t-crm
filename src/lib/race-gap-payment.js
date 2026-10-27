@@ -36,8 +36,47 @@ import { moveRegistration } from './registration-move'
 // A cycle (race-payments imports completeGapPayment from here); safe, since
 // neither module touches the other's bindings at load time.
 import { refreshRacePaymentFromProvider } from './race-payments'
+import { zonedWallClockToInstant } from '@/lib/location-time'
+import { eventZone } from './event-day'
+import { isoDurationFromSeconds } from './revolut-order-fields'
 
 export { GAP_PAYMENT_KIND }
+
+/** A staff link's expiry when the event's start cannot be read, or has passed. */
+export const STAFF_GAP_LINK_FALLBACK_EXPIRY = 'P7D'
+
+/**
+ * REVPAY.12 — how long a STAFF price-difference link stays payable at Revolut:
+ * until the target event starts (its race_date at its FIRST wave's start time,
+ * wall clock in the event studio's zone), clamped to the spec's PT1M..PT720H.
+ * A difference only makes sense before the race, and a link that outlives it
+ * is a payment nobody should still be asked for.
+ *
+ * `race` is the entry's current event, i.e. the move's target (the staff move
+ * is already made), with `race_date`, `waves[]` and the `locations` embed with
+ * `timezone` (readRegistrationForMove's shape). Falls back to P7D (the old
+ * fixed expiry) when the date, the waves or the time cannot be read, and when
+ * the event has already started: the gap-link route does not refuse a past
+ * event (staff may still collect a difference after race day), so that case
+ * keeps the behaviour it had.
+ *
+ * @param {object} race
+ * @param {number} [nowMs]
+ * @returns {string} ISO 8601 duration
+ */
+export function staffGapLinkExpiry(race, nowMs = Date.now()) {
+  const date = race?.race_date ? String(race.race_date).slice(0, 10) : ''
+  const times = (Array.isArray(race?.waves) ? race.waves : [])
+    .map((w) => (typeof w?.start_time === 'string' ? w.start_time.slice(0, 8) : ''))
+    .filter(Boolean)
+    .sort()
+  if (!date || times.length === 0) return STAFF_GAP_LINK_FALLBACK_EXPIRY
+  const startMs = zonedWallClockToInstant(date, times[0], eventZone(race))
+  if (!Number.isFinite(startMs)) return STAFF_GAP_LINK_FALLBACK_EXPIRY
+  const seconds = (startMs - nowMs) / 1000
+  if (!(seconds > 0)) return STAFF_GAP_LINK_FALLBACK_EXPIRY
+  return isoDurationFromSeconds(seconds)
+}
 
 // The entry's payment rows, newest first. One read answers three questions:
 // is there a pending link for this move to reuse, how many links this move has
@@ -201,14 +240,15 @@ export async function createGapPayment({ db, move = null, registration, race, re
       // REVPAY.7 — payer, our registration id (the payment row does not exist
       // yet; a staff link adds the move id so the order maps to its move) and
       // what it is on the statement. A STAFF link is emailed and can be paid
-      // days later, and this row is reused while it is pending, so it lives 7
-      // days; a CUSTOMER's date change is paid in-page, so it takes the
+      // days later, and this row is reused while it is pending, so it lives
+      // until the event starts (REVPAY.12, staffGapLinkExpiry: at most 30
+      // days, 7 when the start is unreadable or past); a CUSTOMER's date change is paid in-page, so it takes the
       // 30-minute default (a lapsed one fails, refreshRacePaymentFromProvider
       // closes the row and a fresh link is minted).
       customer: { email, fullName: entryLeadName({ registration, payment: entryPayment }) },
       merchantReference: pendingMove ? `gap:${registration.id}` : `gap:${move.id}`,
       statementDescriptorSuffix: 'PRICE DIFFERENCE',
-      ...(pendingMove ? {} : { expirePendingAfter: 'P7D' }),
+      ...(pendingMove ? {} : { expirePendingAfter: staffGapLinkExpiry(race) }),
     })
   } catch (e) {
     logError('race-gap-payment', 'provider refused the gap payment; no link minted', { err: e, provider: providerName, registrationId: registration.id, moveId: move?.id || null })

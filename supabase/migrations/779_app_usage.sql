@@ -1,4 +1,4 @@
--- 778 USAGE.1 — app usage: staff sessions and per-feature visits on the phone
+-- 779 USAGE.1 — app usage: staff sessions and per-feature visits on the phone
 -- app and the web CRM, plus per-day totals for the platform console's
 -- App usage page (/admin/app-usage).
 --
@@ -53,7 +53,7 @@ CREATE INDEX app_usage_sessions_location_idx
   ON public.app_usage_sessions (location_id);
 
 COMMENT ON TABLE public.app_usage_sessions IS
-  'USAGE.1 (mig 778): one staff session on the phone app or web CRM. Client-minted id. Kept 90 days. Service role only.';
+  'USAGE.1 (mig 779): one staff session on the phone app or web CRM. Client-minted id. Kept 90 days. Service role only.';
 
 -- One visit to a feature inside a session (consecutive screens of the same
 -- feature are one visit). Client-minted id; the final end time wins.
@@ -75,7 +75,7 @@ CREATE INDEX app_usage_visits_started_idx
   ON public.app_usage_visits (started_at);
 
 COMMENT ON TABLE public.app_usage_visits IS
-  'USAGE.1 (mig 778): one visit to a feature (shared/usage-features.js key) inside an app_usage_sessions row. Kept 90 days (cascade). Service role only.';
+  'USAGE.1 (mig 779): one visit to a feature (shared/usage-features.js key) inside an app_usage_sessions row. Kept 90 days (cascade). Service role only.';
 
 -- Per person, day, platform, feature and studio totals, rebuilt from the raw
 -- tables by the rollup cron (re-deriving a day is idempotent; it rebuilds
@@ -104,7 +104,7 @@ CREATE INDEX app_usage_daily_day_idx ON public.app_usage_daily (day);
 CREATE INDEX app_usage_daily_location_idx ON public.app_usage_daily (location_id);
 
 COMMENT ON TABLE public.app_usage_daily IS
-  'USAGE.1 (mig 778): per-day app usage totals rebuilt by the app-usage-rollup cron. Kept 400 days. Service role only.';
+  'USAGE.1 (mig 779): per-day app usage totals rebuilt by the app-usage-rollup cron. Kept 400 days. Service role only.';
 
 ALTER TABLE public.app_usage_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.app_usage_visits   ENABLE ROW LEVEL SECURITY;

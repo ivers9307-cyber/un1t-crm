@@ -9,6 +9,9 @@
 //      say non-refundable, but we still want the capability).
 //      Note: refunds create a NEW order with type='refund' linked
 //      via related_order_id; the original order stays 'completed'.
+//   3b. createCustomer() / revolutMerchantKey() — REVPAY.13: one Revolut
+//      customer per email, remembered in revolut_customers (mig 778) by
+//      src/lib/revolut-customers.js; createOrder({ db }) links the order to it.
 //   4. verifyWebhookSignature() — HMAC-SHA256 validation of the
 //      `Revolut-Signature` header on incoming webhook POSTs.
 //
@@ -21,7 +24,7 @@
 //   Revolut-Api-Version header). Order.state values are LOWERCASE.
 //   capture_mode values are LOWERCASE ('automatic' / 'manual').
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { logWarn } from './log'
 import {
   DEFAULT_EXPIRE_PENDING_AFTER,
@@ -202,8 +205,18 @@ async function request(path, {
  * @param {string} [args.idempotencyKey] — protect against duplicate
  *   orders on retry. Recommended; we pass deposit_token here.
  * @param {{ email?: string, fullName?: string, phone?: string }} [args.customer]
- *   — REVPAY.7: sent as `customer`. Revolut creates a NEW customer record per
- *   order from these details (no `customer.id` is needed or used).
+ *   — REVPAY.7: sent as `customer`. Without `customerId`, Revolut creates a NEW
+ *   customer record per order from these details (Customer-v2: "we always
+ *   create a new customer, irrespective of another, existing customer object
+ *   having the same details").
+ * @param {string} [args.customerId] — REVPAY.13: an existing Revolut customer
+ *   id. When set the order carries `customer: { id }` ONLY: the spec says "If
+ *   `id` was provided, we ignore other customer details", and an id Revolut
+ *   does not know is a 404 "irrespective of other details provided".
+ * @param {object} [args.db] — REVPAY.13: the service-role client. When given,
+ *   the customer is found-or-created through `revolut_customers`
+ *   (src/lib/revolut-customers.js) and linked by id, so the dashboard keeps one
+ *   customer per email. Any failure there falls back to the details above.
  * @param {string} [args.merchantReference] — REVPAY.7: `merchant_order_data.reference`,
  *   our row id with a prefix, so an order found in the dashboard maps to a row.
  * @param {string} [args.statementDescriptorSuffix] — REVPAY.7: shown on the card
@@ -213,7 +226,21 @@ async function request(path, {
  *   (PT30M); `null` = opt out (the order never expires); clamped to PT1M..PT720H.
  *   Cannot be changed after creation.
  */
-export async function createOrder({
+export async function createOrder(args) {
+  if (!Number.isFinite(args?.amount) || args.amount <= 0) {
+    throw new RevolutError('createOrder: amount must be a positive integer in minor units', 400)
+  }
+  if (args.db) {
+    // Imported lazily: revolut-customers.js imports this module (createCustomer,
+    // createOrder), so a static import here would be a cycle.
+    const { db, ...order } = args
+    const { createOrderReusingCustomer } = await import('./revolut-customers')
+    return createOrderReusingCustomer(db, order)
+  }
+  return postOrder(args)
+}
+
+async function postOrder({
   amount,
   currency = 'EUR',
   description,
@@ -231,10 +258,8 @@ export async function createOrder({
   merchantReference,
   statementDescriptorSuffix,
   expirePendingAfter,
+  customerId,
 }) {
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new RevolutError('createOrder: amount must be a positive integer in minor units', 400)
-  }
   const body = {
     amount: Math.round(amount),
     currency,
@@ -244,8 +269,12 @@ export async function createOrder({
   if (redirectUrl) body.redirect_url = redirectUrl
   if (metadata && Object.keys(metadata).length > 0) body.metadata = metadata
 
-  const cust = buildCustomer(customer)
-  if (cust) body.customer = cust
+  if (typeof customerId === 'string' && customerId.trim()) {
+    body.customer = { id: customerId.trim() }
+  } else {
+    const cust = buildCustomer(customer)
+    if (cust) body.customer = cust
+  }
   const reference = merchantReference == null ? '' : String(merchantReference).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200)
   if (reference) body.merchant_order_data = { reference }
   const suffix = sanitiseStatementDescriptorSuffix(statementDescriptorSuffix)
@@ -257,6 +286,40 @@ export async function createOrder({
     else logWarn('revolut', 'expirePendingAfter is not an ISO 8601 duration; order created without an expiry')
   }
   return request('/api/orders', { method: 'POST', body, idempotencyKey })
+}
+
+/**
+ * REVPAY.13 — create a Merchant customer: `POST /api/customers`
+ * (merchant-2026-03-12, Customer-Creation-v2: `email` required, `full_name`,
+ * `phone`, `date_of_birth` optional; 201 answers Customer-Created with `id`).
+ * The spec documents NO Idempotency-Key for this endpoint and "does not
+ * prevent creating multiple customers with the same email address", so a
+ * repeat creates a second customer: a POST, never retried by the transport.
+ * @param {{ email: string, fullName?: string }} details
+ * @param {{ timeoutMs?: number }} [opts]
+ */
+export async function createCustomer({ email, fullName } = {}, { timeoutMs } = {}) {
+  const cust = buildCustomer({ email, fullName })
+  if (!cust?.email) throw new RevolutError('createCustomer: a valid email is required', 400)
+  const body = { email: cust.email }
+  if (cust.full_name) body.full_name = cust.full_name
+  return request('/api/customers', { method: 'POST', body, timeoutMs })
+}
+
+/**
+ * REVPAY.13 — which Revolut merchant ACCOUNT the configured key talks to, as a
+ * stable string: `<API base host>#<16 hex of sha256 over the API key>`. The host
+ * splits sandbox from live; the fingerprint splits two accounts on one host.
+ * The Merchant API has no "who am I" read, so the key is the only discriminator
+ * we hold; a rotated key reads as a new account (one extra customer per person,
+ * once), never as another account's. Throws when REVOLUT_API_KEY is unset.
+ */
+export function revolutMerchantKey() {
+  const { apiKey, baseUrl } = getConfig()
+  let host
+  try { host = new URL(baseUrl).host.toLowerCase() } catch { host = String(baseUrl).trim().toLowerCase() }
+  const fingerprint = createHash('sha256').update(`revolut-merchant:${apiKey}`).digest('hex').slice(0, 16)
+  return `${host}#${fingerprint}`
 }
 
 /**

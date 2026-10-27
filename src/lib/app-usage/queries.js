@@ -1,5 +1,5 @@
 // USAGE.1 — the App usage report's reads (service role). The aggregation
-// runs in the database (mig 778 functions) because a 12-month range is far
+// runs in the database (mig 779 functions) because a 12-month range is far
 // past PostgREST's 1,000-row page; results are still paged with .range().
 
 import { dayStartMsIn, addDaysIn, todayStrIn, PLATFORM_TZ } from '@shared/zoned-time'

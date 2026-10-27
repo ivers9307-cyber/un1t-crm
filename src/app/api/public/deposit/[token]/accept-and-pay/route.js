@@ -170,6 +170,8 @@ export async function POST(request, props) {
           ? isoDurationFromSeconds((new Date(car.deposit_token_expires_at).getTime() - Date.now()) / 1000)
           : null,
         customer: { email: car.buyer_email, fullName: car.buyer_name },
+        // REVPAY.13 — reuse this buyer's Revolut customer (found-or-created by email).
+        db,
         merchantReference: `car:${car.id}`,
         statementDescriptorSuffix: 'DEPOSIT',
       })

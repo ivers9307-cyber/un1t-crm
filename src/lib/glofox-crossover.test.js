@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   findGlofoxCrossoverContact, recordGlofoxCrossover, glofoxCrossoverContactIds, glofoxStudioOrCrossoverFilter,
-  scopeToGlofoxStudio, glofoxLinkLocationsByContact, contactAtGlofoxStudio,
+  scopeToGlofoxStudio, glofoxLinkLocationsByContact, contactAtGlofoxStudio, MAX_SCOPE_IDS,
 } from './glofox-crossover.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
 
@@ -201,10 +201,33 @@ describe('reader helpers (ORGCONTACTS.2: read contact_studios)', () => {
   }
   const row = (contact_id, location_id, over = {}) => ({ contact_id, location_id, kind: 'client', status: 'active', source: 'glofox', ...over })
 
-  it('glofoxCrossoverContactIds lists the contacts with a Glofox relationship at the studio (deduped, any status); a failed read is an error', async () => {
-    const db = studioDb([row('c1', LOC), row('c1', LOC, { status: 'ended' }), row('c2', LOC, { source: 'un1t_online' }), row('c3', 'hatch')])
+  // GLOFOX414.1 — the ids ride in the request URL, so only the true crossovers.
+  const viewDb = (rows, { error = null } = {}) => {
+    const db = fakeDb({ studio_contacts: rows }, error ? { errors: { 'studio_contacts:select': error } } : {})
+    const from = db.from
+    db.from = (table) => { const c = from(table); c.order = () => c; c.range = () => c; return c }
+    return db
+  }
+  const viewRow = (id, studio_location_id, over = {}) => ({ id, studio_location_id, studio_source: 'glofox', studio_is_crossover: true, ...over })
+
+  it('glofoxCrossoverContactIds lists only the crossover contacts with a Glofox relationship at the studio (deduped); a failed read is an error', async () => {
+    const db = viewDb([
+      viewRow('c1', LOC), viewRow('c1', LOC),
+      viewRow('c-home', LOC, { studio_is_crossover: false }),
+      viewRow('c2', LOC, { studio_source: 'un1t_online' }),
+      viewRow('c3', 'hatch'),
+    ])
     expect(await glofoxCrossoverContactIds(db, LOC)).toEqual({ ids: ['c1'] })
-    expect((await glofoxCrossoverContactIds(studioDb([], { error: { message: 'down' } }), LOC)).error).toMatch(/down/)
+    expect((await glofoxCrossoverContactIds(viewDb([], { error: { message: 'down' } }), LOC)).error).toMatch(/down/)
+  })
+
+  it('glofoxCrossoverContactIds refuses more ids than a request URL can carry (an error, never a 414)', async () => {
+    const many = Array.from({ length: MAX_SCOPE_IDS + 1 }, (_, i) => viewRow(`c${i}`, LOC))
+    const out = await glofoxCrossoverContactIds(viewDb(many), LOC)
+    expect(out.ids).toEqual([])
+    expect(out.error).toMatch(/more than/)
+    const ok = await glofoxCrossoverContactIds(viewDb(many.slice(0, MAX_SCOPE_IDS)), LOC)
+    expect(ok.ids).toHaveLength(MAX_SCOPE_IDS)
   })
 
   it('glofoxStudioOrCrossoverFilter / scopeToGlofoxStudio', () => {

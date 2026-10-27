@@ -21,8 +21,8 @@ const CODE = 'Resource not available, empty result cant be processed'
 
 function result(st) {
   if (st.table === 'locations') return { data: st.single ? LOC : [LOC], error: null }
-  // ORGCONTACTS.2 — the studio's Glofox relationships (contact_studios; none unless a test sets them).
-  if (st.table === 'contact_studios') return { data: (h.crossover || []).map((r) => ({ source: 'glofox', ...r })), error: null }
+  // GLOFOX414.1 — the studio's crossover contacts (studio_contacts; none unless a test sets them).
+  if (st.table === 'studio_contacts') return { data: (h.crossover || []).map((r) => ({ id: r.contact_id })), error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'insert') return { data: { id: 'run-1' }, error: null }
   if (st.table === 'glofox_sync_runs' && st.op === 'update') { h.runUpdates.push(st.payload); return { data: null, error: null } }
   if (st.table === 'contacts' && st.op === 'update') { h.contactUpdates.push({ id: st.eqId, patch: st.payload }); return { data: null, error: null } }
@@ -61,7 +61,7 @@ vi.mock('@/lib/glofox', async (importOriginal) => ({
 }))
 
 import { GET } from './route.js'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { extractMemberProfile } from '@/lib/glofox-sync'
 
@@ -163,7 +163,7 @@ describe('GET /api/cron/glofox-attendance-refresh — MEMBERRESULT.1', () => {
 })
 
 describe('GET /api/cron/glofox-attendance-refresh — REGISTRYREAD.1b unreadable settings', () => {
-  it('records the true text on the failed location row, calls no Glofox, and still stamps the heartbeat', async () => {
+  it('records the true text on the failed location row, calls no Glofox, and withholds the heartbeat (GLOFOX414.1)', async () => {
     const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
     const { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } = await import('@/lib/glofox-settings-read')
 
@@ -174,19 +174,20 @@ describe('GET /api/cron/glofox-attendance-refresh — REGISTRYREAD.1b unreadable
     expect(h.runUpdates.at(-1)).toMatchObject({ status: 'failed', first_error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE })
     expect(fetch).not.toHaveBeenCalled()
     expect(h.contactUpdates).toEqual([])
-    expect(stampHeartbeat).toHaveBeenCalledWith('glofox-attendance-refresh', expect.any(Object))
+    expect(out.success).toBe(false)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
   })
 
-  it('CREDITSREAD.1 — a run where every location failed says so in last_outcome (not all zeros)', async () => {
+  it('GLOFOX414.1 — a failed location withholds the stamp and logs why, structurally', async () => {
     const { glofoxCredentialsForLocation } = await import('@/lib/glofox')
+    const { GLOFOX_SETTINGS_UNREADABLE_MESSAGE } = await import('@/lib/glofox-settings-read')
     glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', readError: null }) // the seam's discovery read
       .mockResolvedValueOnce({ branchId: null, apiKey: null, apiToken: null, readError: 'glofox_settings_unreadable' })
     await GET(req())
-    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
-    const [name, outcome] = stampHeartbeat.mock.calls[0]
-    expect(name).toBe('glofox-attendance-refresh')
-    expect(outcome.failed_locations).toBe(1)
-    expect(outcome.refreshed).toBe(0)
+    expect(stampHeartbeat).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith('glofox-attendance-refresh', expect.stringContaining('not stamped'), {
+      failed: [{ locationId: 'loc-1', error: GLOFOX_SETTINGS_UNREADABLE_MESSAGE }],
+    })
   })
 
   it('CREDITSREAD.1 — a healthy run records failed_locations: 0', async () => {
