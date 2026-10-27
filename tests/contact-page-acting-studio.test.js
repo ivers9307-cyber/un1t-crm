@@ -19,7 +19,7 @@ describe('CARDLENS.6 — the contact page acts at the acting studio', () => {
 
   it.each([
     ['channel flags', /contactChannelFlags\(user, actingId\)/],
-    ['work gates', /contactWorkGates\(user, contact, \{ actingLocationId: actingId \}\)/],
+    ['work gates', /const actingWork = contactWorkGates\(user, contact, \{ actingLocationId: actingId \}\)/],
     ['composer sends for it', /<ContactComposer[^>]*contactLocationId=\{actingId\}[^>]*sendLocationId=\{actingId\}/],
     ['Timeline actions', /<ContactActions[^>]*locationId=\{actingId\}/],
     ['header kebab (task, sequence)', /<ContactHeaderBand[^>]*actingLocationId=\{actingId\}/],
@@ -34,7 +34,7 @@ describe('CARDLENS.6 — the contact page acts at the acting studio', () => {
   // contact's primary studio, so the Glofox/consultation Book card stays there
   // and shows when the page acts there (un1t.online books per studio below).
   it('the Glofox/consultation Book card is the primary studio\'s, shown when acting there', () => {
-    expect(src).toMatch(/work\.canBook && actingId === contact\.location_id && \( <ContactBookingCard contactId=\{contact\.id\} locationId=\{contact\.location_id\}/)
+    expect(src).toMatch(/work\.canBook && !lensAll && actingId === contact\.location_id && \( <ContactBookingCard contactId=\{contact\.id\} locationId=\{contact\.location_id\}/)
     expect(src).toMatch(/from\('event_types'\)[^;]*\.eq\('location_id', contact\.location_id\)/)
     expect(src).not.toContain('bookHereWithGlofox')
   })

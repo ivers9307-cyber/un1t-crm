@@ -12,6 +12,7 @@ import ContactStudiosCard from './ContactStudiosCard'
 import Un1tPaymentsCard from './Un1tPaymentsCard'
 import StudioMembershipCard from './StudioMembershipCard'
 import ChangePrimaryStudio from './ChangePrimaryStudio'
+import StudioConsentCard from './StudioConsentCard'
 import { visitOriginLabel } from '@/lib/visit-origin'
 
 function InfoRow({ label, value }) {
@@ -23,7 +24,7 @@ function InfoRow({ label, value }) {
   )
 }
 
-export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] }, glofoxMode, memberships = [], actingId = null, lensAll = false }) {
+export default function ContactWhoRail({ contact, person, identityEmails, identityPhones, canEditPrefs, canLinkAccounts = false, contactStudios = [], canReadStudioCards = false, canRehome = false, un1tBilling = { studios: [] }, glofoxMode, memberships = [], actingId = null, lensAll = false, studioConsent = null }) {
   // CARDLENS.8 — a person at two or more studios gets one membership card per
   // studio (the acting one, or every one under All studios) in place of the
   // Studios, un1t.online payments and Glofox cards; the strip above the page
@@ -115,6 +116,11 @@ export default function ContactWhoRail({ contact, person, identityEmails, identi
           glofoxMembershipStatus={contact.glofox_membership_status}
         />
       )}
+
+      {/* CARDLENS.10 — marketing consent per studio (read-only); the page
+          builds it only for a person at two or more studios the viewer can
+          act at. */}
+      {studioConsent && <StudioConsentCard studios={studioConsent.studios} rows={studioConsent.rows} />}
     </>
   )
 }

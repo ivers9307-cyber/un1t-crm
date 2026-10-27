@@ -204,6 +204,35 @@ export default async function ContactDetailPage(props) {
   } catch { un1tStudios = [] }
   const bookableEventTypes = eventTypesRes?.data || []
 
+  // PROFILE-ARREARS.1 — grouped contacts use the cross-account aggregate,
+  // ungrouped ones the per-contact figure (the Overdue chase-list's source).
+  const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
+  // CARDLENS.8 — one membership view per studio (the strip, the left rail).
+  // Fewer than two studios: the page shows its old cards.
+  const memberships = studioMemberships({ contact, studioRows: contactStudios.rows, un1tClients, un1tBilling, glofoxArrearsCents })
+  // "All studios" shows every studio and acts at none (Richard 2026-10-27).
+  const lensAll = memberships.length >= 2 && searchParams?.studio === 'all'
+  // CARDLENS.10 — the lens filters what the page lists: for a person at two or
+  // more studios, looking at one, only that studio's rows (a row with no
+  // studio always shows). One studio, or All studios: everything.
+  const filtering = memberships.length >= 2 && !lensAll
+  const inLens = (row) => !filtering || !row?.location_id || row.location_id === actingId
+
+  // CARDLENS.10 — marketing consent per studio (WhatsApp STOP / START and
+  // email consent are per studio), read-only, only at studios the viewer can
+  // act at. Flags only: never the unsubscribe token. null rows = a failed read.
+  let studioConsent = null
+  if (memberships.length >= 2 && actingOptions.length >= 2) {
+    const { data: consentRows, error: consentErr } = await db.from('contact_location_preferences')
+      .select('location_id, email_marketing, whatsapp_marketing')
+      .eq('contact_id', contact.id)
+      .in('location_id', actingOptions.map((o) => o.locationId))
+    studioConsent = {
+      studios: actingOptions.map((o) => ({ locationId: o.locationId, name: studioNames[o.locationId] || o.name })),
+      rows: consentErr ? null : (consentRows || []),
+    }
+  }
+
   // CHURN-CONTACT.1 — make the contact page prospective, not just a
   // retrospective timeline: surface the SAME at-risk signal the radar
   // uses (so it follows the person), and what's queued to happen next.
@@ -259,13 +288,13 @@ export default async function ContactDetailPage(props) {
     // Postmark delivery/engagement state, so "what have we emailed and
     // did it land?" is answerable without leaving the contact page.
     db.from('email_sends')
-      .select('id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
+      .select('id, location_id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
       .eq('contact_id', id)
       .order('sent_at', { ascending: false, nullsFirst: false })
       .limit(8),
   ])
   const activeSequences = seqRes.data || []
-  const messages = buildMessageHistory(emailRes.data || [])
+  const messages = buildMessageHistory((emailRes.data || []).filter(inLens))
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
   // DRAWER.4 — ad-hoc email channel.
@@ -317,7 +346,9 @@ export default async function ContactDetailPage(props) {
   // primary studio's admins, an organisation admin or a master.
   const actions = contactActionGates(user, contact, { relationshipStudioIds: contactStudios.rows.map((r) => r.location_id) })
   // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
-  const work = contactWorkGates(user, contact, { actingLocationId: actingId })
+  const actingWork = contactWorkGates(user, contact, { actingLocationId: actingId })
+  // CARDLENS.10 — All studios acts nowhere: pick a studio to note, task or enrol.
+  const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false } : actingWork
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
@@ -398,7 +429,7 @@ export default async function ContactDetailPage(props) {
 
   // Build unified timeline from notes + activities, sorted by date
   // (DRAWER.1 — the merge moved to contact-view so the drawer shares it).
-  const timeline = mergeTimeline(notes, activities)
+  const timeline = mergeTimeline(notes.filter(inLens), activities.filter(inLens))
 
   // PERSON-LINK.1 — at-a-glance lifetime metrics. Prefer the unified
   // person aggregate when the contact is grouped, else fall back to the
@@ -411,14 +442,7 @@ export default async function ContactDetailPage(props) {
   //    cross-member LTV roll-up), so we keep the primary contact's figure
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
-  const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
   const metricArrearsCents = mergeArrearsCents(glofoxArrearsCents, un1tBilling)
-
-  // CARDLENS.8 — one membership view per studio (the strip, the left rail).
-  // Fewer than two studios: the page shows its old cards.
-  const memberships = studioMemberships({ contact, studioRows: contactStudios.rows, un1tClients, un1tBilling, glofoxArrearsCents })
-  // "All studios" shows every studio and acts at none (Richard 2026-10-27).
-  const lensAll = memberships.length >= 2 && searchParams?.studio === 'all'
   // CARDLENS.9 — the header follows the lens: that studio's figures, or the
   // sum under All studios; today's figures when there are no memberships.
   const lensId = lensAll ? 'all' : actingId
@@ -522,6 +546,7 @@ export default async function ContactDetailPage(props) {
             memberships={memberships}
             actingId={actingId}
             lensAll={lensAll}
+            studioConsent={studioConsent}
           />
         </div>
 
@@ -531,21 +556,28 @@ export default async function ContactDetailPage(props) {
           {/* #message anchor — PersonActionBar's "Message" action
               deep-links here (/contacts/[id]#message). */}
           <div id="message" className="scroll-mt-4">
-            <ContactComposer
-              contactId={contact.id}
-              contactName={contact.first_name || contact.name}
-              contactLocationId={actingId}
-              sendLocationId={actingId}
-              contactEmail={contact.email || null}
-              canWhatsApp={canWhatsApp}
-              canEmail={canEmail}
-              hasWaPhone={!!(contact.wa_phone || contact.phone)}
-              hasEmail={!!contact.email}
-              emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
-              whatsappWindowOpen={whatsappWindowOpen}
-              whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
-              templates={composerTemplates}
-            />
+            {/* CARDLENS.10 — All studios acts nowhere: the strip picks the studio. */}
+            {lensAll ? (
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-sm text-un1t-subtle">Viewing all studios. Pick a studio above to send a message or add a note.</p>
+              </div>
+            ) : (
+                <ContactComposer
+                  contactId={contact.id}
+                  contactName={contact.first_name || contact.name}
+                  contactLocationId={actingId}
+                  sendLocationId={actingId}
+                  contactEmail={contact.email || null}
+                  canWhatsApp={canWhatsApp}
+                  canEmail={canEmail}
+                  hasWaPhone={!!(contact.wa_phone || contact.phone)}
+                  hasEmail={!!contact.email}
+                  emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
+                  whatsappWindowOpen={whatsappWindowOpen}
+                  whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
+                  templates={composerTemplates}
+                />
+            )}
           </div>
 
           {/* Timeline. PERSON-LINK.1 — grouped contacts render the
@@ -605,7 +637,7 @@ export default async function ContactDetailPage(props) {
                 <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
               )}
               {waConversations.length === 0 && <p className="text-sm text-un1t-muted">No conversations</p>}
-              {waConversations.map(conv => (
+              {waConversations.filter(inLens).map(conv => (
                 <Link
                   key={conv.id}
                   href={`/communications/inbox?c=${conv.id}`}
@@ -632,7 +664,7 @@ export default async function ContactDetailPage(props) {
           )}
 
           {/* Past event registrations (CRM-native). */}
-          <PastEventsCard bookings={pastBookings} studioNames={studioNames} />
+          <PastEventsCard bookings={pastBookings.filter(inLens)} studioNames={studioNames} />
         </div>
 
         {/* What happens next. */}
@@ -642,8 +674,8 @@ export default async function ContactDetailPage(props) {
             attention={attention}
             openTasks={openTasks}
             sequences={activeSequences}
-            upcomingBookings={upcomingBookings}
-            deals={deals}
+            upcomingBookings={upcomingBookings.filter(inLens)}
+            deals={deals.filter(inLens)}
             admin={actions.admin}
             canReadStudioCards={work.canReadStudioCards}
             studioNames={studioNames}
@@ -655,7 +687,7 @@ export default async function ContactDetailPage(props) {
               studio (bookings/create and the Glofox book route judge it), so
               it shows while the page acts there; a un1t.online studio books
               through its own card, below, for the acting studio. */}
-          {work.canBook && actingId === contact.location_id && (
+          {work.canBook && !lensAll && actingId === contact.location_id && (
             <ContactBookingCard
               contactId={contact.id}
               locationId={contact.location_id}
@@ -665,7 +697,7 @@ export default async function ContactDetailPage(props) {
               waWindowOpen={whatsappWindowOpen}
             />
           )}
-          {un1tStudios.filter((s) => s.locationId === actingId).map((studio) => (
+          {!lensAll && un1tStudios.filter((s) => s.locationId === actingId).map((studio) => (
             <Un1tClassBookingCard
               key={studio.locationId}
               contactId={contact.id}
