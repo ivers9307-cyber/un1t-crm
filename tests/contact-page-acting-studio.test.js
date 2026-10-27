@@ -23,17 +23,20 @@ describe('CARDLENS.6 — the contact page acts at the acting studio', () => {
     ['composer sends for it', /<ContactComposer[^>]*contactLocationId=\{actingId\}[^>]*sendLocationId=\{actingId\}/],
     ['Timeline actions', /<ContactActions[^>]*locationId=\{actingId\}/],
     ['header kebab (task, sequence)', /<ContactHeaderBand[^>]*actingLocationId=\{actingId\}/],
-    ['Book card', /<ContactBookingCard[^>]*locationId=\{actingId\}/],
     ['studio bar', /<ActingStudioBar options=\{actingOptions\} actingId=\{actingId\}/],
     ['templates at that studio', /from\('whatsapp_templates'\)[^;]*\.eq\('location_id', actingId\)/],
-    ['event types at that studio', /from\('event_types'\)[^;]*\.eq\('location_id', actingId\)/],
     ['the WhatsApp window is that studio\'s thread', /waConversations\.find\(\(c\) => c\.location_id === actingId\)/],
     ['un1t.online booking only for that studio', /un1tStudios\.filter\(\(s\) => s\.locationId === actingId\)/],
   ])('%s', (_label, re) => {
     expect(src).toMatch(re)
   })
 
-  it('the Glofox Book card shows only where the acting studio runs Glofox or nothing', () => {
-    expect(src).toMatch(/work\.canBook && bookHereWithGlofox && \( <ContactBookingCard/)
+  // Review: /api/bookings/create and /api/glofox/classes/book judge the
+  // contact's primary studio, so the Glofox/consultation Book card stays there
+  // and shows when the page acts there (un1t.online books per studio below).
+  it('the Glofox/consultation Book card is the primary studio\'s, shown when acting there', () => {
+    expect(src).toMatch(/work\.canBook && actingId === contact\.location_id && \( <ContactBookingCard contactId=\{contact\.id\} locationId=\{contact\.location_id\}/)
+    expect(src).toMatch(/from\('event_types'\)[^;]*\.eq\('location_id', contact\.location_id\)/)
+    expect(src).not.toContain('bookHereWithGlofox')
   })
 })

@@ -145,15 +145,12 @@ export default async function ContactDetailPage(props) {
   const actingOptions = actingStudioOptions({ user, contact, studioRows: contactStudios.rows })
   const actingId = pickActingStudio({ options: actingOptions, requested: searchParams?.studio, activeLocationId: user.activeLocation?.id, primaryLocationId: contact.location_id })
     || contact.location_id
-  const actingSource = actingOptions.find((o) => o.locationId === actingId)?.source ?? null
-  // The Glofox/consultation Book card needs a studio that runs Glofox or no
-  // membership system; a un1t.online studio books through its own card. An
-  // unknown source keeps the card, as before.
-  const bookHereWithGlofox = actingSource !== 'un1t_online'
 
-  // BOOK-ON-PROFILE.1 — bookable consultation event types at the acting
-  // studio, so the profile's Book card matches the inbox Book tab.
-  const eventTypesRes = await db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', actingId).eq('active', true).order('name')
+  // BOOK-ON-PROFILE.1 — bookable consultation event types for the contact's
+  // studio, so the profile's Book card matches the inbox Book tab. The card
+  // books at the primary studio (its routes judge it), so these are the
+  // primary's even when the page acts elsewhere.
+  const eventTypesRes = await db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name')
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
   // commitment terms) from the studio membership catalog by plan name.
@@ -629,10 +626,14 @@ export default async function ContactDetailPage(props) {
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or
               Glofox class, same engine as the inbox Book tab. */}
-          {work.canBook && bookHereWithGlofox && (
+          {/* CARDLENS.6 — the Glofox/consultation card books at the primary
+              studio (bookings/create and the Glofox book route judge it), so
+              it shows while the page acts there; a un1t.online studio books
+              through its own card, below, for the acting studio. */}
+          {work.canBook && actingId === contact.location_id && (
             <ContactBookingCard
               contactId={contact.id}
-              locationId={actingId}
+              locationId={contact.location_id}
               glofoxMemberId={contact.glofox_member_id || null}
               eventTypes={bookableEventTypes}
               waConversationId={latestWaConversation?.id || null}

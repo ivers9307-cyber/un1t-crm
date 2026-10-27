@@ -64,6 +64,7 @@ beforeEach(() => {
     contacts: [{ id: C1, location_id: LOC_B }],
     profile_locations: [{ profile_id: P1, location_id: LOC_B }],
     activities: [],
+    contact_studios: [],
   }
   createServerClient.mockImplementation(() => trackedDb())
 })
@@ -133,6 +134,24 @@ describe('POST /api/activities/tasks', () => {
     const res = await createTask(req({ ...BODY, contact_id: C1 }))
     expect(res.status).toBe(404)
     expect((await res.json()).error).toMatch(/not at this studio/i)
+    expect(tables.activities).toEqual([])
+  })
+
+  // CARDLENS.6 review — the contact page's Task acts at the ACTING studio: a
+  // contact whose primary is A, with a relationship at B, takes a task at B.
+  it('a contact at another studio WITH a relationship row at this one: 200, the task lands here', async () => {
+    tables.contacts[0].location_id = LOC_A
+    tables.contact_studios = [{ contact_id: C1, location_id: LOC_B, status: 'ended' }]
+    const res = await createTask(req({ ...BODY, contact_id: C1 }))
+    expect(res.status).toBe(200)
+    expect(tables.activities[0]).toMatchObject({ contact_id: C1, location_id: LOC_B })
+  })
+
+  it('the relationship read fails: refused, nothing written', async () => {
+    tables.contacts[0].location_id = LOC_A
+    createServerClient.mockImplementation(() => dbFailing('contact_studios', { data: null, error: { message: 'boom' } }))
+    const res = await createTask(req({ ...BODY, contact_id: C1 }))
+    expect(res.status).toBe(500)
     expect(tables.activities).toEqual([])
   })
 

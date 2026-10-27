@@ -1,5 +1,6 @@
-// CARDLENS.6 — contactWorkGates with an acting studio. Note, Task, Sequence and
-// Book follow the studio the page acts at (their routes take location_id);
+// CARDLENS.6 — contactWorkGates with an acting studio. Note, Task and Sequence
+// follow the studio the page acts at (their routes take location_id); Book
+// stays at the primary (bookings/create and the Glofox book route judge it);
 // everything whose route still judges the primary studio stays there.
 import { describe, it, expect } from 'vitest'
 import { contactWorkGates, contactChannelFlags } from './contact-page-gates'
@@ -10,9 +11,9 @@ const CONTACT = { id: 'c0000000-0000-4000-8000-000000000001', location_id: LOC_A
 const B_MANAGER = person({ [LOC_B]: { role: 'manager' } }, LOC_B)
 
 describe('contactWorkGates — actingLocationId', () => {
-  it('a manager at B acting at B can note, task, enrol and book', () => {
+  it('a manager at B acting at B can note, task and enrol', () => {
     const g = contactWorkGates(B_MANAGER, CONTACT, { actingLocationId: LOC_B })
-    expect(g).toMatchObject({ canNote: true, canTask: true, canSequence: true, canBook: true })
+    expect(g).toMatchObject({ canNote: true, canTask: true, canSequence: true })
   })
 
   it('without an acting studio the same viewer gets nothing (judged at the primary, as before)', () => {
@@ -22,7 +23,7 @@ describe('contactWorkGates — actingLocationId', () => {
 
   it('the gates whose routes judge the primary stay at the primary', () => {
     const g = contactWorkGates(B_MANAGER, CONTACT, { actingLocationId: LOC_B })
-    expect(g).toMatchObject({ canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false, canReadConsent: false, canReadStudioCards: false })
+    expect(g).toMatchObject({ canBook: false, canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false, canReadConsent: false, canReadStudioCards: false })
   })
 
   it('channel flags at the acting studio', () => {

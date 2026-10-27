@@ -28,7 +28,7 @@ describe('ROLEUI.2 — the contact page wires contactWorkGates into each compone
     ['Activity', /<ContactActions[^>]*canTask=\{work\.canTask\}/],
     ['Sequence', /<ContactActions[^>]*canSequence=\{work\.canSequence\}/],
     ['Start WhatsApp', /\{work\.canStartWhatsApp && \( <StartWhatsAppButton/],
-    ['the Book card', /\{work\.canBook && bookHereWithGlofox && \( <ContactBookingCard/],
+    ['the Book card', /\{work\.canBook && actingId === contact\.location_id && \( <ContactBookingCard/],
     ['the consent history', /\{work\.canReadConsent && \( <div className="mt-8"> <ContactConsentHistoryCard/],
     ['Marketing preferences (UN1TDUAL)', /<ContactWhoRail[^>]*canReadStudioCards=\{work\.canReadStudioCards\}/],
     ['Events + HR devices (UN1TDUAL)', /<ContactNextRail[^>]*canReadStudioCards=\{work\.canReadStudioCards\}/],
