@@ -24,8 +24,9 @@ describe('ROLEUI.1 — phone contact screen', () => {
     expect(code.match(/\bcanMobile\(/g) || []).toEqual([])
   })
 
-  it('reads the contact\'s WhatsApp thread with no client gate (RLS decides at the thread\'s studio)', () => {
-    expect(code).toMatch(/getWhatsAppThreadForContact\(id\)/)
+  // CARDLENS-M.3 — the reader lists the latest thread per studio now.
+  it('reads the contact\'s WhatsApp threads with no client gate (RLS decides at the thread\'s studio)', () => {
+    expect(code).toMatch(/listWhatsAppThreadsForContact\(id\)/)
     expect(code).not.toMatch(/canOpenWhatsAppThread/)
   })
 

@@ -47,12 +47,19 @@ vi.mock('@/lib/permissions', () => {
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/contact-un1t-billing', () => ({ loadUn1tBilling: vi.fn() }))
+// CARDLENS-M.1 — the crossover half of the gate (a contact_studios row at one
+// of the caller's studios). Off unless a test says otherwise.
+vi.mock('@/lib/contact-crossovers', () => ({ canViewContact: vi.fn() }))
+// CARDLENS-M.2 / M.3 — the phone extras (own tests in contact-phone-extras.test.js).
+const PHONE_EXTRAS = { glofox_card: { mode: 'linked', studio_name: 'UN1T Stillorgan' }, studio_tags: { loc1: 'Stillorgan', h: 'Hatch Street' }, glofox_note_push: true }
+vi.mock('@/lib/contact-phone-extras', () => ({ loadPhoneContactExtras: vi.fn(async () => PHONE_EXTRAS) }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
+import { canViewContact } from '@/lib/contact-crossovers'
 
 const NO_BILLING = { studios: [], overdue: false, arrearsCentsByCurrency: {}, amountUnreported: false, amountNotEur: false }
 
@@ -89,6 +96,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   hasPermission.mockReturnValue(false)
   loadUn1tBilling.mockResolvedValue(NO_BILLING)
+  canViewContact.mockResolvedValue(false)
 })
 
 describe('GET /api/contacts/[id]/command-centre', () => {
@@ -112,6 +120,41 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     }))
     const res = await GET(req(), props)
     expect(res.status).toBe(404)
+  })
+
+  it('CARDLENS-M.1: a crossover viewer (relationship row at their studio) gets the bundle, minus the Book tab and with every flag off', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u2', locations: [{ id: 'hatch' }] })
+    canViewContact.mockResolvedValue(true)
+    // This file's permission mock ignores the studio; the real at-the-contact
+    // decision for a non-member is false, which tests/role-sweep pins.
+    const db = mockDb({
+      contacts: { data: CONTACT, error: null },
+      activities: { data: [{ id: 'a1' }], error: null },
+      event_types: { data: [{ id: 'et1' }], error: null },
+      notes: { data: [{ id: 'n1', content: 'x', created_at: '2026-10-20T10:00:00Z' }], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req('?scope=drawer'), props)
+    const j = await res.json()
+    expect(res.status).toBe(200)
+    expect(canViewContact).toHaveBeenCalledWith(db, expect.objectContaining({ id: 'u2' }), CONTACT)
+    expect(j.activities).toHaveLength(1)
+    expect(j.notes).toHaveLength(1)
+    expect(j.event_types).toEqual([])
+    expect(db.__queried).not.toContain('event_types')
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false, note: false })
+    expect(j.composer_templates).toEqual([])
+    expect(j.glofox_card).toEqual(PHONE_EXTRAS.glofox_card)
+    expect(j.studio_tags).toEqual(PHONE_EXTRAS.studio_tags)
+    expect(j.glofox_note_push).toBe(true)
+  })
+
+  it('CARDLENS-M.1: a member of the contact\'s studio never needs the crossover probe', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    createServerClient.mockReturnValue(mockDb({ contacts: { data: CONTACT, error: null } }))
+    const res = await GET(req(), props)
+    expect(res.status).toBe(200)
+    expect(canViewContact).not.toHaveBeenCalled()
   })
 
   it('base scope keeps the original bundle shape, plus triage signals', async () => {
@@ -407,7 +450,7 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j.notes).toHaveLength(1)
     expect(j.sequences).toHaveLength(1)
     expect(j.wa).toMatchObject({ window_open: true, window_expires_at: future })
-    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false })
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false, note: false })
     // no `whatsapp` permission → template table never touched
     expect(db.__queried).not.toContain('whatsapp_templates')
     expect(j.composer_templates).toEqual([])
@@ -427,7 +470,17 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     createServerClient.mockReturnValue(db)
     const res = await GET(req('?scope=drawer'), props)
     const j = await res.json()
-    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: true })
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: true, note: false })
+  })
+
+  // CARDLENS-M.4 — the phone shows its note composer only on this flag:
+  // POST /api/contacts/[id]/notes decides `contacts` at the contact's studio.
+  it('drawer permissions carry note: the contacts permission at the contact', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    hasPermission.mockImplementation((_u, perm) => perm === 'contacts')
+    createServerClient.mockReturnValue(mockDb({ contacts: { data: CONTACT, error: null } }))
+    const j = await (await GET(req('?scope=drawer'), props)).json()
+    expect(j.permissions).toEqual({ whatsapp: false, email: false, kudos: false, note: true })
   })
 
   it('drawer scope loads composer templates when the caller can WhatsApp', async () => {

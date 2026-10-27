@@ -13,18 +13,27 @@
 // composer's sendable UTILITY templates, and the caller's channel
 // permissions.
 //
-// IDOR gate mirrors consent-log: resolve the contact's studio, check
-// it against the caller's locations, and answer 404 (not 403) on a
-// miss so contact ids can't be enumerated.
+// IDOR gate: the contact page's rule (canViewContact: a member of the
+// contact's studio, a crossover viewer whose studio holds a contact_studios
+// row for the person, or a master), answering 404 (not 403) on a miss so
+// contact ids can't be enumerated. CARDLENS-M.1 — it used to be membership of
+// the contact's studio only, so a Hatch Street coach opening a
+// Stillorgan-primary Hatch member on the phone got a 404 here: no timeline and
+// no buttons, while the web page opened. A crossover viewer gets what the web
+// page shows them: the bookable event types (the Book tab, membership only on
+// the web) stay off, and the channel and kudos flags, judged at the contact's
+// studio, come out false.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { contactChannelFlags, canLoadContactConsultations } from '@/lib/contact-page-gates'
+import { contactChannelFlags, canLoadContactConsultations, canAddContactNote, isMemberOfContactStudio } from '@/lib/contact-page-gates'
+import { canViewContact } from '@/lib/contact-crossovers'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
+import { loadPhoneContactExtras } from '@/lib/contact-phone-extras'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,8 +59,8 @@ export async function GET(request, props) {
   if (!contact) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, contact.location_id)
-  if (guard) {
+  const isMember = isMemberOfContactStudio(user, contact.location_id)
+  if (!isMember && !(await canViewContact(db, user, contact))) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
@@ -93,11 +102,13 @@ export async function GET(request, props) {
       .eq('contact_id', params.id)
       .order('created_at', { ascending: false })
       .limit(MAX_ACTIVITIES),
-    db.from('event_types')
-      .select('id, name, slug, duration_minutes, availability, active')
-      .eq('location_id', contact.location_id)
-      .eq('active', true)
-      .order('name', { ascending: true }),
+    isMember
+      ? db.from('event_types')
+        .select('id, name, slug, duration_minutes, availability, active')
+        .eq('location_id', contact.location_id)
+        .eq('active', true)
+        .order('name', { ascending: true })
+      : { data: [], error: null },
     loadContactArrears(db, params.id),
     fetchLatestNote(),
     loadUn1tBilling(db, user, params.id),
@@ -158,7 +169,7 @@ export async function GET(request, props) {
   const scope = new URL(request.url).searchParams.get('scope')
   let drawerExtras = null
   if (scope === 'drawer') {
-    const [notesRes, seqRes, waRes] = await Promise.all([
+    const [notesRes, seqRes, waRes, phoneExtras] = await Promise.all([
       db.from('notes')
         .select('*')
         .eq('contact_id', params.id)
@@ -177,6 +188,9 @@ export async function GET(request, props) {
         .eq('location_id', contact.location_id)
         .order('last_message_at', { ascending: false })
         .limit(1),
+      // CARDLENS-M.2 / M.3 — the phone's Glofox card mode and studio tags.
+      // Never rejects; a failed read answers the pre-CARDLENS-M screen.
+      loadPhoneContactExtras(db, contact),
     ])
     const latestWa = (waRes.data || [])[0] || null
 
@@ -221,7 +235,23 @@ export async function GET(request, props) {
       // web `consultations` permission at the contact's location). The staff
       // phone's contact screen reads every flag here instead of judging its
       // buttons at the active studio.
-      permissions: { ...channels, kudos: canLoadContactConsultations(user, contact.location_id) },
+      // CARDLENS-M.4 — `note` is POST /api/contacts/[id]/notes's decision
+      // (`contacts` at the contact's studio); the phone used to show its note
+      // composer to everyone and let the route refuse the post.
+      permissions: {
+        ...channels,
+        kudos: canLoadContactConsultations(user, contact.location_id),
+        note: canAddContactNote(user, contact.location_id),
+      },
+      // CARDLENS-M.2 — { mode: 'linked'|'pushable'|'hidden', studio_name }:
+      // the phone hides the Glofox card where the person has no Glofox account
+      // and their studio does not run Glofox (a Hatch Street un1t.online member).
+      glofox_card: phoneExtras.glofox_card,
+      // CARDLENS-M.3 — location id → short studio name, {} for one studio.
+      studio_tags: phoneExtras.studio_tags,
+      // CARDLENS-M.4 — whether a note posted from this screen also lands in
+      // the member's Glofox timeline (the composer's hint).
+      glofox_note_push: phoneExtras.glofox_note_push,
     }
   }
 

@@ -24,7 +24,7 @@
 //                       here; a direct insert would skip the Glofox push.
 //   • kudos           → POST /api/contacts/[id]/kudos via api() (web
 //                       SendKudosCard's route; consultations-gated there).
-//   • bookings / WhatsApp thread → direct Supabase, same RLS posture the
+//   • bookings / WhatsApp threads → direct Supabase, same RLS posture the
 //                       Bookings tab and WhatsApp inbox already rely on.
 import { supabase } from './supabase'
 import { api } from './api'
@@ -188,7 +188,7 @@ export function sendContactKudos(contactId, { message, emoji } = {}) {
 export async function listBookingsForContact(contactId) {
   if (!contactId) return { success: false, error: 'contactId required' }
   const { data, error } = await supabase.from('bookings')
-    .select('id, booking_date, start_time, end_time, status, event_type:event_types(name, color)')
+    .select('id, location_id, booking_date, start_time, end_time, status, event_type:event_types(name, color)')
     .eq('contact_id', contactId)
     .order('booking_date', { ascending: true })
     .order('start_time', { ascending: true })
@@ -198,21 +198,22 @@ export async function listBookingsForContact(contactId) {
 }
 
 /**
- * The contact's most recent WhatsApp conversation, if any — powers the
- * "open thread" row that deep-links into /whatsapp/[conversationId].
- * Direct read; RLS gates on the mobile `whatsapp` permission (mig 219),
- * matching the gate on the inbox itself. No contacts embed (scalar
- * columns only), so the ≥2-FK PGRST201 trap doesn't apply.
+ * The contact's WhatsApp conversations, newest first (CARDLENS-M.3: one per
+ * studio number, so the screen lists each studio's latest thread with its
+ * tag instead of one unlabelled row). Direct read; RLS returns only the
+ * threads at studios where the caller holds the mobile `whatsapp` permission
+ * (wa_conv_select), matching the inbox. No contacts embed (scalar columns
+ * only), so the >=2-FK PGRST201 trap doesn't apply.
  */
-export async function getWhatsAppThreadForContact(contactId) {
+export async function listWhatsAppThreadsForContact(contactId) {
   if (!contactId) return { success: false, error: 'contactId required' }
   const { data, error } = await supabase.from('whatsapp_conversations')
-    .select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status')
+    .select('id, location_id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status')
     .eq('contact_id', contactId)
     .order('last_message_at', { ascending: false, nullsFirst: false })
-    .limit(1)
+    .limit(20)
   if (error) return { success: false, error: error.message }
-  return { success: true, data: (data || [])[0] || null }
+  return { success: true, data: data || [] }
 }
 
 /** new_lead → "New lead" for display. */

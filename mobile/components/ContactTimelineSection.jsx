@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { Button, Tabs } from './ui'
 import { colors } from '../lib/colors'
 import { createContactNote } from '../lib/contacts-api'
+import StudioTag from './StudioTag'
 import {
   mergeTimeline, timelineFilterGroup, TIMELINE_FILTERS,
   isGlofoxSynced, timelineIconMeta,
@@ -79,7 +80,7 @@ function NoteComposer({ contactId, syncsToGlofox, onCreated }) {
   )
 }
 
-function TimelineItem({ item, isLast }) {
+function TimelineItem({ item, isLast, studioName }) {
   const meta = timelineIconMeta(item.activityType)
   const body = item.content || item.note || item.description || ''
   const showSubject = item.kind === 'activity' && item.activityType !== 'note' && item.subject
@@ -97,6 +98,7 @@ function TimelineItem({ item, isLast }) {
                 <Text className="text-[10px] font-medium text-slate-700">Glofox</Text>
               </View>
             )}
+            <StudioTag name={studioName} />
           </View>
           <Text className="text-xs text-un1t-muted">{fmtItemDate(item.date)}</Text>
         </View>
@@ -118,14 +120,17 @@ function TimelineItem({ item, isLast }) {
 /**
  * @param {object} props
  * @param {string}  props.contactId
- * @param {boolean} props.syncsToGlofox  contact is Glofox-linked (composer hint)
+ * @param {boolean} props.syncsToGlofox  a note posted here also lands in Glofox (composer hint)
+ * @param {boolean} [props.canNote]      CARDLENS-M.4 — show the note composer (the route's decision)
  * @param {Array|null} props.notes       null while the bundle is loading
  * @param {Array|null} props.activities
  * @param {string|null} props.loadError
  * @param {() => void} props.onRefresh   re-fetch the bundle after a note post
+ * @param {(locationId: string|null) => string|null} [props.studioNameFor]
+ *   CARDLENS-M.3 — a row's studio tag (null for a one-studio person)
  */
 export default function ContactTimelineSection({
-  contactId, syncsToGlofox, notes, activities, loadError, onRefresh,
+  contactId, syncsToGlofox, notes, activities, loadError, onRefresh, studioNameFor = () => null, canNote = true,
 }) {
   const [filter, setFilter] = useState('all')
   const loading = notes == null && activities == null && !loadError
@@ -140,7 +145,7 @@ export default function ContactTimelineSection({
         Notes & activity
       </Text>
 
-      <NoteComposer contactId={contactId} syncsToGlofox={syncsToGlofox} onCreated={onRefresh} />
+      {canNote && <NoteComposer contactId={contactId} syncsToGlofox={syncsToGlofox} onCreated={onRefresh} />}
 
       <View className="mt-3 mb-2">
         <Tabs tabs={TIMELINE_FILTERS} value={filter} onChange={setFilter} />
@@ -159,6 +164,7 @@ export default function ContactTimelineSection({
               key={`${item.kind}-${item.id ?? i}`}
               item={item}
               isLast={i === items.length - 1}
+              studioName={studioNameFor(item.location_id)}
             />
           ))
         )}
