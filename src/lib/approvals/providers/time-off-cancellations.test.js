@@ -166,7 +166,8 @@ describe('through the registry: the tab and the badge agree, per role', () => {
 
   it('the phone-surface count leaves out exactly the web-only providers', () => {
     // PAIDTRIAL.2 added trial_purchases: decided on the web Approvals tab only.
-    expect(APPROVALS_PROVIDERS.filter((p) => p.noPhoneSurface).map((p) => p.key).sort()).toEqual(['time_off_cancellations', 'trial_purchases'])
+    // CORPPROMO.1 added corp_promo_claims, web-only too.
+    expect(APPROVALS_PROVIDERS.filter((p) => p.noPhoneSurface).map((p) => p.key).sort()).toEqual(['corp_promo_claims', 'time_off_cancellations', 'trial_purchases'])
   })
 
   it('follows bundle_team like the rest of the scheduling reviews', async () => {

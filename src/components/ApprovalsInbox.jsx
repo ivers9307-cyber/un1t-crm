@@ -18,6 +18,7 @@ import Link from 'next/link'
 import { RefreshCw, ChevronRight } from 'lucide-react'
 import AgentRequestDecideCard from '@/components/AgentRequestDecideCard'
 import TrialPurchaseReviewCard from '@/components/TrialPurchaseReviewCard'
+import CorpPromoClaimCard from '@/components/CorpPromoClaimCard'
 
 function formatDateTime(s) {
   if (!s) return '—'
@@ -193,6 +194,16 @@ function ProviderList({ provider, loading, onItemDecided }) {
             item={it}
             onDecided={() => onItemDecided?.(provider.key)}
           />
+        ))}
+      </div>
+    )
+  }
+  // CORPPROMO.1 — a /corp claim whose credits need a hand: Mark handled in place.
+  if (provider.key === 'corp_promo_claims') {
+    return (
+      <div className="space-y-3">
+        {provider.items.map((it) => (
+          <CorpPromoClaimCard key={it.id} item={it} onDecided={() => onItemDecided?.(provider.key)} />
         ))}
       </div>
     )

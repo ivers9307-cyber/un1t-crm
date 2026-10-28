@@ -696,6 +696,7 @@ function BlockEditPanel(props) {
     case 'lead_form':   return <LeadFormEdit    {...props} />
     case 'class_funnel': return <ClassFunnelEdit {...props} />
     case 'paid_trial':  return <PaidTrialEdit   {...props} />
+    case 'corp_promo':  return <CorpPromoEdit   {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -1081,6 +1082,62 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
 // string, coerced to cents on write (same reasoning as ClassFunnelEdit). The
 // Glofox product is REQUIRED: the page sells nothing until both ids are set.
 // Exported for its test (PaidTrialEdit.test.jsx).
+// CORPPROMO.1 — the words of a /corp promo. The studio, credits and expiry
+// are fixed per promo in src/lib/corp-promos.js; tokens {credits},
+// {expires_on}, {first_name} and {studio_name} are filled when shown.
+const CORP_PROMO_TEXTS = [
+  ['eyebrow', 'Eyebrow', 60, 1],
+  ['heading', 'Heading', 200, 1],
+  ['subhead', 'Sub-copy', 400, 2],
+  ['cta_label', 'Button label', 40, 1],
+  ['consent_label', 'Consent checkbox text', 400, 3],
+  ['done_title', 'Claimed — title', 120, 1],
+  ['done_body', 'Claimed — message ({credits}, {expires_on})', 400, 2],
+  ['already_claimed_text', 'Already claimed — message', 400, 3],
+  ['trained_text', 'Trained here before — message', 400, 3],
+  ['trial_used_text', 'Free trial already used — message', 400, 3],
+  ['active_member_text', 'Already a member — message', 400, 3],
+  ['help_text', 'Needs a check by the team — message', 400, 3],
+  ['unavailable_text', 'Offer switched off — message', 200, 2],
+  ['email_subject', 'Confirmation email — subject', 200, 1],
+  ['email_body', 'Confirmation email — body ({first_name}, {credits}, {expires_on}, {studio_name})', 1200, 4],
+]
+
+export function CorpPromoEdit({ block, onUpdate }) {
+  const ticks = Array.isArray(block.ticks) ? block.ticks : []
+  const setTick = (i, v) => {
+    const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
+    next[i] = v
+    onUpdate({ ticks: next })
+  }
+  return (
+    <>
+      <Field label="Promo" hint="Blank applies these words to every /corp promo at this studio. The credits and their expiry are fixed per promo.">
+        <Input value={block.promo_key || ''} onChange={(v) => onUpdate({ promo_key: v.trim() })} maxLength={60} placeholder="hatch-3-free" />
+      </Field>
+      {CORP_PROMO_TEXTS.slice(0, 3).map(([key, label, max, rows]) => (
+        <Field key={key} label={label}>
+          {rows > 1
+            ? <Textarea value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} rows={rows} />
+            : <Input value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} />}
+        </Field>
+      ))}
+      <Field label="What's included" hint="Three ticks on the card. Blank lines are skipped.">
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => <Input key={i} value={ticks[i] || ''} onChange={(v) => setTick(i, v)} maxLength={120} />)}
+        </div>
+      </Field>
+      {CORP_PROMO_TEXTS.slice(3).map(([key, label, max, rows]) => (
+        <Field key={key} label={label}>
+          {rows > 1
+            ? <Textarea value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} rows={rows} />
+            : <Input value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} />}
+        </Field>
+      ))}
+    </>
+  )
+}
+
 export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
   const isUn1tOnline = membershipSource === 'un1t_online'
   const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))

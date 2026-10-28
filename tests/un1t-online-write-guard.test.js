@@ -400,11 +400,12 @@ export function chargeCustomOutsideFee(key, sf) {
 
 /**
  * TRIALREGRANT.1 — "line N" of each /credits/grant outside the ops module's
- * regrantTrialCredits and outside the transport's ENDPOINTS table.
+ * regrantTrialCredits (and, CORPPROMO.1, grantPromoCredits) and outside the
+ * transport's ENDPOINTS table.
  */
 export function creditsGrantOutsideRegrant(key, sf) {
   return literalHits(sf, /credits\/grant/)
-    .filter((h) => !(key === OPS && h.chain.includes('regrantTrialCredits')) && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
+    .filter((h) => !(key === OPS && (h.chain.includes('regrantTrialCredits') || h.chain.includes('grantPromoCredits'))) && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
     .map((h) => `${key}:${h.line}`)
 }
 
@@ -414,6 +415,27 @@ export function creditsGrantOutsideRegrant(key, sf) {
  * there. Anywhere else (another file, an export, a call from another
  * primitive, a reference passed around) is a violation.
  */
+/**
+ * CORPPROMO.1 — "line N" of each mention of grantPromoCredits that is not its
+ * declaration in the ops module or a mention in the one fulfilment module
+ * (src/lib/corp-promo-claim.js, which imports it and passes it as a test seam).
+ */
+export const PROMO_GRANT_CALLER = 'src/lib/corp-promo-claim.js'
+export function promoGrantOutsideClaim(key, sf) {
+  const out = []
+  const visit = (node) => {
+    if (ts.isIdentifier(node) && node.text === 'grantPromoCredits') {
+      const parent = node.parent
+      const isDeclaration = key === OPS && ts.isFunctionDeclaration(parent) && parent.name === node
+      const inCaller = key === PROMO_GRANT_CALLER
+      if (!(isDeclaration || inCaller)) out.push(`${key}:${lineOf(sf, node)}`)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return out
+}
+
 export function regrantOutsideGrantTrial(key, sf) {
   const out = []
   const visit = (node) => {
@@ -811,10 +833,10 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
   const sendFiles = () => filesMentioning(/\bsend\b/)
   const policyTable = () => frozenTable(parsedFile(allSources().find((e) => e.key === TRANSPORT)), 'UN1T_OP_POLICY')
 
-  it('the policy table is the one the spec fixes: book, cancel, move, create_client verify; forgot_password, trial, trial_regrant never; checkout, fee_charge idempotent', () => {
+  it('the policy table is the one the spec fixes: book, cancel, move, create_client verify; forgot_password, trial, trial_regrant, promo_grant never; checkout, fee_charge idempotent', () => {
     expect(policyTable()).toEqual({
       book: 'verify', cancel: 'verify', create_client: 'verify', forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
-      fee_charge: 'idempotent', move: 'verify',
+      fee_charge: 'idempotent', move: 'verify', promo_grant: 'never',
     })
   })
 
@@ -829,12 +851,12 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it('the scan really sees the ops module\'s ten sends (an empty result is not a broken scanner)', () => {
+  it('the scan really sees the ops module\'s eleven sends (an empty result is not a broken scanner)', () => {
     const ops = sendFiles().find((e) => e.key === OPS)
     expect(ops).toBeTruthy()
     const calls = writerSendCalls(ops.sf, { writeSide: true })
     expect(calls.map((c) => `${c.verb} ${c.path}`).sort()).toEqual([
-      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /bookings/:id/move', 'POST /credits/grant', 'POST /purchases/charge',
+      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /bookings/:id/move', 'POST /credits/grant', 'POST /credits/grant', 'POST /purchases/charge',
       'POST /purchases/charge-custom', 'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
     ])
     // UN1TMOVE.1: the move is op move, re-sent only when its check read says absent.
@@ -846,6 +868,9 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     // TRIALREGRANT.1: the credit re-grant is op trial_regrant, never re-sent.
     const regrant = calls.filter((c) => c.op === 'trial_regrant')
     expect(regrant.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /credits/grant never'])
+    // CORPPROMO.1: the /corp promo grant is op promo_grant, never re-sent.
+    const promo = calls.filter((c) => c.op === 'promo_grant')
+    expect(promo.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /credits/grant never'])
     expect(calls.every((c) => c.optsReadable && c.op != null && c.policy != null)).toBe(true)
     // UN1TWRITE.10: the trial's charge and free checkout are op trial, never re-sent.
     const trial = calls.filter((c) => c.op === 'trial')
@@ -908,6 +933,12 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(files.flatMap((e) => creditsGrantOutsideRegrant(e.key, e.sf))).toEqual([])
     const ops = allSources().find((e) => e.key === OPS)
     expect(literalHits(parsedFile(ops), /credits\/grant/).filter((h) => h.chain.includes('regrantTrialCredits')).length).toBeGreaterThan(0)
+  })
+
+  it('CORPPROMO.1: grantPromoCredits is declared in the ops module and used only by the /corp fulfilment module', () => {
+    const files = filesMentioning(/grantPromoCredits/)
+    expect(files.map((e) => e.key)).toEqual(expect.arrayContaining([OPS, PROMO_GRANT_CALLER]))
+    expect(files.flatMap((e) => promoGrantOutsideClaim(e.key, e.sf))).toEqual([])
   })
 
   it('TRIALREGRANT.1: regrantTrialCredits is unexported, declared in the ops module and called only from grantTrial', () => {

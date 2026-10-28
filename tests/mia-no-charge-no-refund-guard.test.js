@@ -158,11 +158,12 @@ export function bannedKeyViolations(key, sf) {
 }
 // TRIALREGRANT.1 — /credits/grant only inside D's regrantTrialCredits, and in
 // the transport's ENDPOINTS allowlist.
-const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: 'regrantTrialCredits', [TRANSPORT]: 'ENDPOINTS' })
+// CORPPROMO.1 — and inside grantPromoCredits (the /corp promo grant).
+const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: ['regrantTrialCredits', 'grantPromoCredits'], [TRANSPORT]: ['ENDPOINTS'] })
 export function creditsGrantViolations(key, sf) {
-  const within = Object.hasOwn(CREDITS_GRANT_ALLOWED, key) ? CREDITS_GRANT_ALLOWED[key] : null
+  const within = Object.hasOwn(CREDITS_GRANT_ALLOWED, key) ? CREDITS_GRANT_ALLOWED[key] : []
   return literalHits(sf, CREDITS_GRANT)
-    .filter((h) => !(within && h.names.includes(within)))
+    .filter((h) => !within.some((name) => h.names.includes(name)))
     .map((h) => `${key}:${h.line} (/credits/grant)`)
 }
 export function refundPathViolations(key, sf) {
