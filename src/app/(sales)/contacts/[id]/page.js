@@ -20,6 +20,8 @@ import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import ContactBookingCard from '@/components/ContactBookingCard'
 import Un1tClassBookingCard from '@/components/Un1tClassBookingCard'
+import ContactClassFeesCard from '@/components/ContactClassFeesCard'
+import { canUseClassFees } from '@/lib/class-fees-access'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
@@ -700,6 +702,9 @@ export default async function ContactDetailPage(props) {
               waWindowOpen={whatsappWindowOpen}
             />
           )}
+          {!lensAll && un1tStudios.filter((s) => s.locationId === actingId && canUseClassFees(user, s.locationId)).map((studio) => (
+            <ContactClassFeesCard key={`fees-${studio.locationId}`} contactId={contact.id} locationId={studio.locationId} studioName={studio.studioName} />
+          ))}
           {!lensAll && un1tStudios.filter((s) => s.locationId === actingId).map((studio) => (
             <Un1tClassBookingCard
               key={studio.locationId}

@@ -286,8 +286,8 @@ export const ALL_NAV = [
   // (members)'s `live` tab (/live) — a hub tab whose href lives
   // outside that hub's own route group and sidebar territory.
   { href: '/money', label: 'Money', icon: Wallet,
-    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses'],
-    extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'],
+    anyPermission: ['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses', 'class_fees'],
+    extraActivePaths: ['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales', '/class-fees'],
     section: 'money' },
 
   // ── Marketing hub ─────────────────────────────────────────────

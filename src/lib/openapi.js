@@ -539,6 +539,67 @@ registry.registerPath({
   },
 })
 
+// FEES.1 — late-cancellation and no-show fees at un1t.online studios.
+registry.registerPath({
+  method: 'get',
+  path: '/api/class-fees',
+  tags: ['Class fees'],
+  summary: 'List the class fees of one un1t.online studio',
+  description: 'Session auth + the class_fees permission at the studio. Query location_id and tab (due | outstanding | undecided | history). Rows carry the member name, the class, the charge description and the status; undecided lists bookings still marked booked after the class (never charged).',
+  responses: {
+    200: { description: 'Rows, the studio fee settings and its zone' },
+    400: { description: 'Missing location_id or an unknown tab', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/{id}/waive',
+  tags: ['Class fees'],
+  summary: 'Waive one class fee',
+  description: 'Session auth + class_fees at the studio. Only a fee that is pending, scheduled for retry or outstanding can be waived (409 otherwise). A fee at another studio answers 404.',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), reason: z.string().min(1).max(500) }) } } } },
+  responses: {
+    200: { description: 'Waived' },
+    404: { description: 'No such fee at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Being charged, charged or already waived', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/retry',
+  tags: ['Class fees'],
+  summary: "Retry a member's owed class fees",
+  description: "Session auth + class_fees at the studio. One un1t.online \"Charge custom amount\" attempt per fee that is scheduled for retry or outstanding, on the member's default card, each with its own class description. Rate-limited to 3 a minute per member.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), contact_id: z.string() }) } } } },
+  responses: {
+    200: { description: 'One outcome per fee attempted' },
+    429: { description: 'A retry for this member just ran', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/class-fees/contact',
+  tags: ['Class fees'],
+  summary: 'The class fees one member owes at one studio',
+  description: 'Session auth + class_fees at the studio. Query location_id and contact_id. Open fees (pending, charging, scheduled for retry, outstanding) and the owed total.',
+  responses: { 200: { description: 'Open fees and owed_cents' } },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/class-fees/settings',
+  tags: ['Class fees'],
+  summary: 'Save the class-fee settings of one studio',
+  description: "Master or owner at the studio. Switch fees on, pause charging, set the late-cancel and no-show amounts in cents and the review email recipients. The late-cancel window is un1t.online's own.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), enabled: z.boolean(), charging_paused: z.boolean(), late_cancel_fee_cents: z.number().int(), no_show_fee_cents: z.number().int(), review_emails: z.array(z.string()) }) } } } },
+  responses: { 200: { description: 'Saved settings' }, 403: { description: 'Not master or owner at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/offer-purchases/{id}/fulfil',

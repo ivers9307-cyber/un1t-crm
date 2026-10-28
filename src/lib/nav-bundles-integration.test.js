@@ -94,11 +94,11 @@ function resolvesForOwner(features, key) {
 }
 
 describe('final-review fix 1 — bundle_money:false closes Money chrome entirely for an owner', () => {
-  it('sanity: the real Money anyPermission union is the expected 7 keys, incl. the 3 approvals_* keys', () => {
+  it('sanity: the real Money anyPermission union is the expected 8 keys, incl. the 3 approvals_* keys', () => {
     expect(moneyEntry).toBeTruthy()
     expect(moneyEntry.anyPermission).toEqual([
       'accounting_hub', 'invoices_inbox', 'card_receipts', 'orders',
-      'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses',
+      'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses', 'class_fees',
     ])
   })
 
