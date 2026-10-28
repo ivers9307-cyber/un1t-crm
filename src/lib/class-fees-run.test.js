@@ -251,3 +251,42 @@ describe('FEES.2 — forgiveness in the nightly run', () => {
     expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toContain('2 fee(s) forgiven automatically')
   })
 })
+
+describe('FEES.3 — the dry run never charges', () => {
+  const paused = (pausedFlag) => baseTables({
+    locations: [{ id: LOC, name: 'Hatch', organization_id: 'org-1', membership_source: 'un1t_online', settings: {
+      un1t_online: { writes_enabled: true, fees: { enabled: true, charging_paused: pausedFlag, late_cancel_fee_cents: 1000, no_show_fee_cents: 1500, review_emails: ['ops@hatch.test'], forgiveness: NO_FORGIVENESS } },
+    } }],
+  })
+
+  it('a paused night writes previews; un-pausing later still charges none of them', async () => {
+    const db = makeDb(paused(true))
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    expect(fees(db).filter((f) => f.penalty === 'fee').map((f) => f.status)).toEqual(['preview', 'preview'])
+    db.store.locations[0].settings.un1t_online.fees.charging_paused = false
+    const ctx = await readClassFeeContext(db, LOC)
+    chargeClassFee.mockResolvedValue({ verdict: 'done', id: 'tx' })
+    const out = await chargeDueClassFees(db, { locationId: LOC, nowMs: Date.parse('2026-11-05T17:05:00Z'), settings: ctx.settings, zone: ctx.zone })
+    expect(out.attempted).toBe(0)
+    expect(chargeClassFee).not.toHaveBeenCalled()
+  })
+
+  it('the paused email says dry run and lists the previews', async () => {
+    const db = makeDb(paused(true))
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    const ctx = await readClassFeeContext(db, LOC)
+    await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT, undecidedCount: 0 })
+    const mail = sendTransactionalEmail.mock.calls[0][0]
+    expect(mail.subject).toBe('Class fees for Wed 28 Oct (dry run): 2 would be charged')
+    expect(mail.htmlBody).toContain('no member is emailed while charging is paused')
+  })
+
+  it('an appealed fee is never picked up by the charge run', async () => {
+    const db = makeDb(paused(false))
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    for (const f of fees(db).filter((x) => x.penalty === 'fee')) Object.assign(f, { status: 'appealed', appealed_at: 'x', appeal_reason: 'illness' })
+    const ctx = await readClassFeeContext(db, LOC)
+    const out = await chargeDueClassFees(db, { locationId: LOC, nowMs: Date.parse('2026-10-29T17:05:00Z'), settings: ctx.settings, zone: ctx.zone })
+    expect(out.attempted).toBe(0)
+  })
+})

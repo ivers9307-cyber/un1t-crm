@@ -283,3 +283,16 @@ Ordered by impact on how fair the policy feels to members:
   - member visibility;
   - reporting;
   - the phone screen.
+
+## FEES.3 (28 Oct 2026)
+
+- **Dry-run fix.** Fees found while charging is paused are `preview` and are never charged. Mig 784 turned the dry run's existing `pending` rows into previews; before this, un-pausing would have charged the whole dry week at the next 17:00.
+- **Member notice email.** Switch: `fees.notice_enabled`, off by default.
+  - Sent at 23:00, only while charging is on.
+  - The text is operator-editable, using placeholders.
+  - Uses the transactional consent rules, so bounced or complained addresses and administrative opt-outs are skipped.
+- **Appeals.** Switch: `fees.appeals_enabled`, off by default.
+  - The link lives at `/fee-appeal/<token>`, and only the token's sha256 is stored.
+  - It goes in the notice when both switches are on; staff can also copy it from the review page when the notice is off.
+  - An appeal holds the fee (`appealed`) until staff waive it or click "Charge anyway".
+- **Richard's choices:** hold the fee on appeal; send no notices during the dry run; keep the two switches independent.

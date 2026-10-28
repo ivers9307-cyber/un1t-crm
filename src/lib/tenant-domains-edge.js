@@ -126,6 +126,7 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
     '/class-pay/', '/h/', '/host', '/host-connect/', '/api/host/', '/embed/',
     // MIAHATCH.6 — the page un1t.online's hosted checkout returns a member to:
     '/pay-done/',
+    '/fee-appeal/',
   ]),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',

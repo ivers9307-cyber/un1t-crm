@@ -13,6 +13,7 @@ import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { readClassFeeContext, detectClassFees, sendReviewEmail, chargeDueClassFees } from '@/lib/class-fees-run'
+import { sendMemberNotices } from '@/lib/class-fees-member'
 import { localHourIn } from '@/lib/class-fees'
 import { logError } from '@/lib/log'
 
@@ -36,7 +37,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Could not list locations' }, { status: 500 })
   }
 
-  const outcome = { studios: 0, fees_off: 0, detected_runs: 0, inserted: 0, forgiven: 0, emails: 0, charge_runs: 0, charged: 0, retry_scheduled: 0, outstanding: 0, in_doubt: 0, failed: 0, deferred_budget: 0 }
+  const outcome = { studios: 0, fees_off: 0, detected_runs: 0, inserted: 0, forgiven: 0, notices: 0, emails: 0, charge_runs: 0, charged: 0, retry_scheduled: 0, outstanding: 0, in_doubt: 0, failed: 0, deferred_budget: 0 }
   for (const [i, loc] of (eligible || []).entries()) {
     if (Date.now() - started > BUDGET_MS) { outcome.deferred_budget = eligible.length - i; break }
     outcome.studios++
@@ -49,10 +50,20 @@ export async function GET(request) {
         outcome.detected_runs++
         outcome.inserted += found.inserted
         outcome.forgiven += found.forgiven
+        // FEES.3 — the members first (only with the notice on and charging on),
+        // so the staff email can count them. A failure here never stops it.
+        let notices = { sent: 0 }
+        try {
+          notices = await sendMemberNotices(db, { locationId: loc.id, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs })
+        } catch (err) {
+          logError(CRON_NAME, 'member notices failed', { locationId: loc.id, code: err?.code ?? err?.name ?? 'threw' })
+        }
+        outcome.notices += notices.sent
         const mail = await sendReviewEmail(db, {
           locationId: loc.id, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs,
           undecidedCount: found.undecided.length,
           forgivenCount: found.forgiven,
+          noticesSent: notices.sent,
         })
         if (mail.sent) outcome.emails++
       }

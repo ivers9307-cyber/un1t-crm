@@ -174,6 +174,8 @@ export const BRANDS = [
       // one; the 32-byte token in the path is the only credential. Raw
       // startsWith, so the trailing slash: only /pay-done/<token> resolves.
       '/pay-done/',
+      // FEES.3: the member's class-fee appeal link (/fee-appeal/<token>).
+      '/fee-appeal/',
     ],
     rootHandler: 'rewrite',
     rootRewriteTo: '/welcome',

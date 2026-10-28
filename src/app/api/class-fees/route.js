@@ -14,7 +14,8 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 
 const TAB_STATUSES = Object.freeze({
-  due: ['pending', 'charging'],
+  // FEES.3 — a dry-run preview and an appealed (held) fee sit with the due ones.
+  due: ['preview', 'pending', 'charging', 'appealed'],
   outstanding: ['retry_scheduled', 'outstanding'],
   history: ['charged', 'waived', 'recorded'],
 })

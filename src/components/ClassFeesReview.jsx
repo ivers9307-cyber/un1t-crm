@@ -16,6 +16,8 @@ const TABS = [
 
 const KIND = { late_cancel: 'Late cancel', no_show: 'No-show' }
 const STATUS = {
+  preview: { label: 'Dry run, not charged', cls: 'bg-gray-500/10 text-gray-700' },
+  appealed: { label: 'Appealed, on hold', cls: 'bg-violet-500/10 text-violet-700' },
   pending: { label: 'To charge', cls: 'bg-blue-500/10 text-blue-700' },
   charging: { label: 'Charging', cls: 'bg-amber-500/10 text-amber-700' },
   retry_scheduled: { label: 'Retry scheduled', cls: 'bg-amber-500/10 text-amber-700' },
@@ -25,7 +27,9 @@ const STATUS = {
   recorded: { label: 'Credit kept', cls: 'bg-gray-500/10 text-gray-700' },
   undecided: { label: 'Not marked', cls: 'bg-amber-500/10 text-amber-700' },
 }
-const WAIVABLE = new Set(['pending', 'retry_scheduled', 'outstanding'])
+const WAIVABLE = new Set(['preview', 'pending', 'retry_scheduled', 'outstanding', 'appealed'])
+const APPEALABLE = new Set(['pending', 'retry_scheduled', 'outstanding'])
+const APPEAL_REASON = { illness: 'Ill', injury: 'Injured', emergency: 'Emergency', other: 'Something else' }
 const euro = (c) => `€${(Number(c || 0) / 100).toFixed(2)}`
 
 export default function ClassFeesReview({ locationId, canEditSettings }) {
@@ -37,6 +41,28 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [waiving, setWaiving] = useState(null)
+  const [rowMsg, setRowMsg] = useState({})
+
+  async function rowAction(r, path, done) {
+    setRowMsg((m) => ({ ...m, [r.id]: 'Working…' }))
+    try {
+      const res = await fetch(`/api/class-fees/${r.id}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: locationId }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
+      setRowMsg((m) => ({ ...m, [r.id]: done(json.data) }))
+    } catch (e) {
+      setRowMsg((m) => ({ ...m, [r.id]: e.message || 'Failed' }))
+    }
+  }
+  const chargeAnyway = (r) => rowAction(r, 'charge-anyway', () => { load(); return 'Back to charging: taken at the next hourly run.' })
+  const appealLink = (r) => rowAction(r, 'appeal-link', (d) => {
+    try { navigator.clipboard?.writeText(d.url) } catch { /* the link is shown anyway */ }
+    return `Appeal link copied: ${d.url}`
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -70,7 +96,7 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
         <p className="text-sm rounded-lg bg-amber-500/10 text-amber-700 px-3 py-2">Class fees are switched off at this studio. Nothing is listed or charged until an owner switches them on below.</p>
       )}
       {settings?.enabled && settings.chargingPaused && (
-        <p className="text-sm rounded-lg bg-amber-500/10 text-amber-700 px-3 py-2">Charging is paused: fees are listed and emailed, but nothing is charged.</p>
+        <p className="text-sm rounded-lg bg-amber-500/10 text-amber-700 px-3 py-2">Charging is paused (dry run): fees are listed and emailed to you as &quot;Dry run, not charged&quot;. They stay uncharged after you switch charging on; only fees found from then on are charged, and members are emailed only then.</p>
       )}
 
       <div className="flex rounded-lg border border-un1t-border overflow-hidden w-fit">
@@ -123,6 +149,13 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
                       )}
                       {r.failure_message && <div className="text-xs text-red-700">{r.failure_message}</div>}
                       {r.status === 'waived' && r.waived_reason && <div className="text-xs text-un1t-subtle">Waived: {r.waived_reason}</div>}
+                      {r.appealed_at && (
+                        <div className="text-xs text-violet-700">
+                          Appeal: {APPEAL_REASON[r.appeal_reason] || r.appeal_reason}{r.appeal_text ? `, "${r.appeal_text}"` : ''}
+                        </div>
+                      )}
+                      {r.notice_sent_at && <div className="text-xs text-un1t-subtle">Member emailed</div>}
+                      {rowMsg[r.id] && <div className="text-xs text-un1t-subtle break-all">{rowMsg[r.id]}</div>}
                     </td>
                     <td className="px-3 py-2 text-right">{r.penalty === 'credit_forfeit' ? 'Credit' : r.amount_cents ? euro(r.amount_cents) : ''}</td>
                     <td className="px-3 py-2">
@@ -131,9 +164,17 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
                       {r.status === 'retry_scheduled' && r.next_attempt_at && <div className="text-xs text-un1t-subtle mt-1">Retry {when(r.next_attempt_at)}</div>}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {WAIVABLE.has(r.status) && (
-                        <Button type="button" variant="secondary" size="sm" onClick={() => setWaiving(r)}>Waive</Button>
-                      )}
+                      <div className="flex flex-col items-end gap-1">
+                        {WAIVABLE.has(r.status) && (
+                          <Button type="button" variant="secondary" size="sm" onClick={() => setWaiving(r)}>Waive</Button>
+                        )}
+                        {r.status === 'appealed' && (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => chargeAnyway(r)}>Charge anyway</Button>
+                        )}
+                        {settings?.appealsEnabled && APPEALABLE.has(r.status) && r.penalty === 'fee' && (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => appealLink(r)}>Appeal link</Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -215,6 +256,11 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
       monthly_cap: settings.forgiveness.monthlyCap.on,
       monthly_cap_count: settings.forgiveness.monthlyCap.cap,
     },
+    notice_enabled: settings.noticeEnabled,
+    appeals_enabled: settings.appealsEnabled,
+    notice_subject: settings.noticeSubject,
+    notice_body: settings.noticeBody,
+    appeal_line: settings.appealLine,
   }))
   const setFg = (k, v) => setForm((f) => ({ ...f, fg: { ...f.fg, [k]: v } }))
   const [busy, setBusy] = useState(false)
@@ -246,6 +292,11 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
             first_offence_days: Number(form.fg.first_offence_days),
             monthly_cap_count: Number(form.fg.monthly_cap_count),
           },
+          notice_enabled: form.notice_enabled,
+          appeals_enabled: form.appeals_enabled,
+          notice_subject: form.notice_subject,
+          notice_body: form.notice_body,
+          appeal_line: form.appeal_line,
         }),
       })
       const json = await res.json()
@@ -293,6 +344,27 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
           <ForgiveRow disabled={!canEdit} checked={form.fg.monthly_cap} onCheck={(v) => setFg('monthly_cap', v)}
             label="Monthly limit per member" num={form.fg.monthly_cap_count} onNum={(v) => setFg('monthly_cap_count', v)} unit="fees a month at most" />
           <p className="text-xs text-un1t-subtle">A forgiven fee shows on History as waived, with the rule that forgave it.</p>
+        </fieldset>
+        <fieldset className="sm:col-span-2 space-y-3">
+          <legend className="text-sm font-medium text-un1t-text mb-1">Members</legend>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" disabled={!canEdit} checked={form.notice_enabled} onChange={(e) => setForm({ ...form, notice_enabled: e.target.checked })} />
+            Email each member about their fee at {String(settings.detectHour).padStart(2, '0')}:00 (only while charging is on)
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" disabled={!canEdit} checked={form.appeals_enabled} onChange={(e) => setForm({ ...form, appeals_enabled: e.target.checked })} />
+            Let members appeal a fee (an appeal holds it until you decide)
+          </label>
+          <p className="text-xs text-un1t-subtle">The two work on their own: with the email off you can still copy an appeal link from a fee and send it yourself.</p>
+          <Field id="notice-subject" label="Email subject">
+            {(p) => <input {...p} disabled={!canEdit} value={form.notice_subject} onChange={(e) => setForm({ ...form, notice_subject: e.target.value })} className={input} />}
+          </Field>
+          <Field id="notice-body" label="Email text" hint="Placeholders: {first_name} {what} {what_lower} {class} {class_time} {amount} {charge_time} {studio}. A blank line starts a new paragraph.">
+            {(p) => <textarea {...p} rows={6} disabled={!canEdit} value={form.notice_body} onChange={(e) => setForm({ ...form, notice_body: e.target.value })} className={input} />}
+          </Field>
+          <Field id="appeal-line" label="Appeal line (added when appeals are on)" hint="Must include {appeal_link}.">
+            {(p) => <textarea {...p} rows={2} disabled={!canEdit} value={form.appeal_line} onChange={(e) => setForm({ ...form, appeal_line: e.target.value })} className={input} />}
+          </Field>
         </fieldset>
         <p className="text-xs text-un1t-subtle sm:col-span-2">
           A cancellation is late inside un1t.online&apos;s own cancellation window. The list is made at {String(settings.detectHour).padStart(2, '0')}:00 and fees are charged at {String(settings.chargeHour).padStart(2, '0')}:00 the next day; a refused charge is tried once more 7 days later. Pack members who lose a credit are recorded, never charged.

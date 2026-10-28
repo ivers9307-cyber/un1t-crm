@@ -36,6 +36,12 @@ export const ClassFeeSettingsSchema = z.object({
     monthly_cap: z.boolean(),
     monthly_cap_count: z.number().int().min(1).max(31),
   }).optional(),
+  // FEES.3 — two independent switches and the member's notice copy.
+  notice_enabled: z.boolean().optional(),
+  appeals_enabled: z.boolean().optional(),
+  notice_subject: z.string().trim().max(150).optional(),
+  notice_body: z.string().trim().max(2000).optional(),
+  appeal_line: z.string().trim().max(500).optional(),
 })
 
 export async function PUT(request) {
@@ -43,7 +49,10 @@ export async function PUT(request) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const validation = await validateBody(request, ClassFeeSettingsSchema)
   if (!validation.ok) return validation.response
-  const { location_id: locationId, forgiveness, ...fees } = validation.data
+  const { location_id: locationId, forgiveness, notice_enabled, appeals_enabled, notice_subject, notice_body, appeal_line, ...fees } = validation.data
+  // Only what the client sent; an empty copy field means "use the default".
+  const memberSide = Object.fromEntries(Object.entries({ notice_enabled, appeals_enabled, notice_subject, notice_body, appeal_line })
+    .filter(([, v]) => v !== undefined))
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
   const roleGuard = guardMasterOrOwner(user, locationId)
@@ -64,6 +73,7 @@ export async function PUT(request) {
           no_show_fee_cents: fees.no_show_fee_cents,
           review_emails: fees.review_emails.map((e) => e.toLowerCase()),
           ...(forgiveness ? { forgiveness } : {}),
+          ...memberSide,
         },
       },
     }

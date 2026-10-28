@@ -581,6 +581,43 @@ describe('MIAHATCH.6 — /pay-done is public on every host', () => {
   })
 })
 
+// ── 7d. FEES.3 — the class-fee appeal page is public on every host ──
+//
+// A member opens <customer base>/fee-appeal/<token> from their fee notice (or
+// a link staff sent). No session, and the base is the studio's customer host,
+// so all FOUR lists must carry it.
+
+describe('FEES.3 — /fee-appeal is public on every host', () => {
+  const APPEAL = '/fee-appeal/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4'
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const host of [CRM_HOST, MARKETING_HOST, TENANT_HOST]) {
+    it(`${host} admits ${APPEAL} anonymously without a rewrite`, async () => {
+      const res = await proxy(makeReq({ host, path: APPEAL }))
+      expect(rewrittenTo(res), `${APPEAL} fell through to the /welcome fallback on ${host}`).toBe(null)
+      expect(admitted(res), `${APPEAL} is not admitted on ${host}`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+  }
+
+  it('AppShell renders the page with no session', () => {
+    pathnameImpl = APPEAL
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/fee-appeal is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name /fee-appeal/ explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/fee-appeal/'`).toContain('/fee-appeal/')
+    }
+  })
+})
+
 // ── 8. W1.L2 — the customer flow is complete on a tenant domain ───────
 //
 // W1.L1 gave every organisation an automatic <slug>.repset.ie host whose
