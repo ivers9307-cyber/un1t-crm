@@ -27,13 +27,16 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { contactChannelFlags, canLoadContactConsultations, canAddContactNote, isMemberOfContactStudio } from '@/lib/contact-page-gates'
+import {
+  contactChannelFlags, canLoadContactConsultations, canAddContactNote, canAddContactTask,
+  canSendCancellationForm, isMemberOfContactStudio,
+} from '@/lib/contact-page-gates'
 import { canViewContact } from '@/lib/contact-crossovers'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadUn1tBilling } from '@/lib/contact-un1t-billing'
-import { loadPhoneContactExtras } from '@/lib/contact-phone-extras'
+import { loadPhoneContactExtras, phoneActingLens } from '@/lib/contact-phone-extras'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -166,10 +169,11 @@ export async function GET(request, props) {
 
   // DRAWER.2 — extra fields for the pipeline contact drawer only, so
   // the inbox's base bundle stays exactly as cheap as before.
-  const scope = new URL(request.url).searchParams.get('scope')
+  const searchParams = new URL(request.url).searchParams
+  const scope = searchParams.get('scope')
   let drawerExtras = null
   if (scope === 'drawer') {
-    const [notesRes, seqRes, waRes, phoneExtras] = await Promise.all([
+    const [notesRes, seqRes, phoneExtras] = await Promise.all([
       db.from('notes')
         .select('*')
         .eq('contact_id', params.id)
@@ -180,18 +184,30 @@ export async function GET(request, props) {
         .eq('contact_id', params.id)
         .eq('status', 'active')
         .order('next_step_at', { ascending: true }),
-      // WAORGNUMBER.4 (R3) — the composer sends on the HOME studio's thread,
-      // so its window is the one the drawer shows.
-      db.from('whatsapp_conversations')
-        .select('id, window_expires_at, last_message_at')
-        .eq('contact_id', params.id)
-        .eq('location_id', contact.location_id)
-        .order('last_message_at', { ascending: false })
-        .limit(1),
       // CARDLENS-M.2 / M.3 — the phone's Glofox card mode and studio tags.
       // Never rejects; a failed read answers the pre-CARDLENS-M screen.
       loadPhoneContactExtras(db, contact),
     ])
+
+    // CARDLENS-M.6 — the ACTING studio (`?studio=`, sent by the staff phone
+    // since M-B): the studio its buttons are judged at and its composer sends
+    // for, the web contact page's rule. No `studio` param (the pipeline
+    // drawer, an older phone) keeps everything at the contact's primary
+    // studio, as before. 'all' acts nowhere.
+    const lens = phoneActingLens({ user, contact, studioRows: phoneExtras.studioRows, requested: searchParams.get('studio') })
+    const actingId = lens.actingId
+    const primaryId = contact.location_id
+
+    // WAORGNUMBER.4 (R3) — the composer sends on the acting studio's thread
+    // (the HOME studio's without a lens), so its window is the one shown.
+    const waRes = actingId
+      ? await db.from('whatsapp_conversations')
+        .select('id, window_expires_at, last_message_at')
+        .eq('contact_id', params.id)
+        .eq('location_id', actingId)
+        .order('last_message_at', { ascending: false })
+        .limit(1)
+      : { data: [] }
     const latestWa = (waRes.data || [])[0] || null
 
     // Composer template list — the same UTILITY + APPROVED +
@@ -199,15 +215,16 @@ export async function GET(request, props) {
     // when the caller can send WhatsApp at all.
     let composerTemplates = []
     // ROLESWEEP.1c — the drawer's channel flags are the send routes' own
-    // decision: the web OR the mobile toggle at the CONTACT's location (the
-    // composer sends from there), not the active studio. The contact page
-    // reads the same helper, so the two composers agree.
-    const channels = contactChannelFlags(user, contact.location_id)
+    // decision: the web OR the mobile toggle at the studio the composer sends
+    // for (the acting studio; the CONTACT's without a lens), not the active
+    // studio. The contact page reads the same helper, so the two composers
+    // agree. All studios sends nowhere.
+    const channels = actingId ? contactChannelFlags(user, actingId) : { whatsapp: false, email: false }
     if (channels.whatsapp) {
       const { data: rawTemplates } = await db
         .from('whatsapp_templates')
         .select('name, language, components, status, category')
-        .eq('location_id', contact.location_id)
+        .eq('location_id', actingId)
         .eq('category', 'UTILITY')
         .eq('status', 'APPROVED')
         .order('name', { ascending: true })
@@ -238,10 +255,15 @@ export async function GET(request, props) {
       // CARDLENS-M.4 — `note` is POST /api/contacts/[id]/notes's decision
       // (`contacts` at the contact's studio); the phone used to show its note
       // composer to everyone and let the route refuse the post.
+      // CARDLENS-M.6 — `note` and `task` (POST /api/activities/tasks) are
+      // judged at the acting studio, like the web page's contactWorkGates;
+      // kudos (coach data) and the cancellation form stay at the primary.
       permissions: {
         ...channels,
-        kudos: canLoadContactConsultations(user, contact.location_id),
-        note: canAddContactNote(user, contact.location_id),
+        kudos: canLoadContactConsultations(user, primaryId),
+        note: actingId ? canAddContactNote(user, actingId) : false,
+        task: actingId ? canAddContactTask(user, actingId) : false,
+        cancel_form: lens.lens === 'all' ? false : canSendCancellationForm(user, primaryId),
       },
       // CARDLENS-M.2 — { mode: 'linked'|'pushable'|'hidden', studio_name }:
       // the phone hides the Glofox card where the person has no Glofox account
@@ -251,7 +273,16 @@ export async function GET(request, props) {
       studio_tags: phoneExtras.studio_tags,
       // CARDLENS-M.4 — whether a note posted from this screen also lands in
       // the member's Glofox timeline (the composer's hint).
-      glofox_note_push: phoneExtras.glofox_note_push,
+      // CARDLENS.5 copies only a note filed at the primary studio.
+      glofox_note_push: phoneExtras.glofox_note_push && actingId === primaryId,
+      // CARDLENS-M.6 — the lens the phone draws: the acting studio (null under
+      // All studios) and the studios it may switch to. Names are the full
+      // location names; the phone shortens them with studio_tags.
+      lens: lens.lens,
+      acting_studio: actingId
+        ? { location_id: actingId, name: lens.options.find((o) => o.locationId === actingId)?.name || null, platform: lens.options.find((o) => o.locationId === actingId)?.source || null }
+        : null,
+      studio_options: lens.options.map((o) => ({ location_id: o.locationId, name: o.name, platform: o.source, primary: o.primary })),
     }
   }
 

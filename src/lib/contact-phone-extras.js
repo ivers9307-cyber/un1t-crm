@@ -11,6 +11,7 @@ import { loadContactStudios } from './contact-studios-display.js'
 import { membershipSourceState } from './membership/source.js'
 import { glofoxCardMode } from './contact-platforms.js'
 import { studioTagNames } from '@shared/contact-studio-labels'
+import { actingStudioOptions, pickActingStudio } from './contact-acting-studio.js'
 
 /**
  * Pure shaper.
@@ -44,7 +45,37 @@ export function shapePhoneContactExtras({ contact, studioRows, primarySource }) 
 }
 
 /**
- * @returns {Promise<ReturnType<typeof shapePhoneContactExtras>>}
+ * CARDLENS-M.6 — the studio the phone's contact screen acts at, the web
+ * page's rule (src/lib/contact-acting-studio.js).
+ *   requested null      a phone older than M-B: no lens, the primary studio
+ *                       judges everything exactly as before
+ *   'default'           the web page's default: the viewer's active studio,
+ *                       else the primary, else the first shared studio
+ *   'all'               All studios: view only, acts nowhere
+ *   a location id       that studio when it is an option, else the default
+ * A viewer who shares no studio with the person acts at the primary, which
+ * judges them as before (every flag off).
+ *
+ * @returns {{ lens: 'legacy'|'studio'|'all', actingId: string|null,
+ *   options: Array<{ locationId: string, name: string, source: string|null, primary: boolean }> }}
+ */
+export function phoneActingLens({ user, contact, studioRows, requested }) {
+  const primaryId = contact?.location_id || null
+  const options = actingStudioOptions({ user, contact, studioRows })
+  if (requested == null || requested === '') return { lens: 'legacy', actingId: primaryId, options }
+  if (requested === 'all') return { lens: 'all', actingId: null, options }
+  const actingId = pickActingStudio({
+    options,
+    requested: requested === 'default' ? null : requested,
+    activeLocationId: user?.activeLocation?.id || null,
+    primaryLocationId: primaryId,
+  }) || primaryId
+  return { lens: 'studio', actingId, options }
+}
+
+/**
+ * @returns {Promise<ReturnType<typeof shapePhoneContactExtras> & { studioRows: object[] }>}
+ *   studioRows is for the route's own use (the acting lens); never send it on
  */
 export async function loadPhoneContactExtras(db, contact) {
   const [studios, source] = await Promise.all([
@@ -52,5 +83,6 @@ export async function loadPhoneContactExtras(db, contact) {
     membershipSourceState(db, contact?.location_id).catch(() => null),
   ])
   const primarySource = !source || source.state === 'unknown' ? null : (source.source ?? null)
-  return shapePhoneContactExtras({ contact, studioRows: studios?.rows || [], primarySource })
+  const studioRows = studios?.rows || []
+  return { ...shapePhoneContactExtras({ contact, studioRows, primarySource }), studioRows }
 }

@@ -13,8 +13,10 @@ import { api } from './api'
  *
  * @returns {Promise<{success, data?: { whatsapp: { windowOpen, windowExpiresAt }, templates: object[] }, error?}>}
  */
-export function getMessagingContext(contactId) {
-  return api(`/api/contacts/${contactId}/messaging`)
+export function getMessagingContext(contactId, { locationId = null } = {}) {
+  // CARDLENS-M.8 — the acting studio's window and templates; omitted = primary.
+  const q = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
+  return api(`/api/contacts/${contactId}/messaging${q}`)
 }
 
 /**
@@ -22,8 +24,10 @@ export function getMessagingContext(contactId) {
  * (only delivers inside the open 24h window) or { templateName } for
  * an approved utility template (delivers anytime).
  */
-export function sendContactWhatsApp(contactId, { text, templateName } = {}) {
+export function sendContactWhatsApp(contactId, { text, templateName, locationId = null } = {}) {
   const body = templateName ? { template_name: templateName } : { text }
+  // CARDLENS-M.8 — send for the acting studio (its number, its thread).
+  if (locationId) body.location_id = locationId
   return api(`/api/contacts/${contactId}/whatsapp`, { method: 'POST', body })
 }
 
@@ -33,8 +37,11 @@ export function sendContactWhatsApp(contactId, { text, templateName } = {}) {
  * The route gates on the web `email` OR mobile `email` permission and
  * rejects bounced / complained / unsubscribed addresses.
  */
-export function sendContactEmail(contactId, { subject, body } = {}) {
-  return api(`/api/contacts/${contactId}/email`, { method: 'POST', body: { subject, body } })
+export function sendContactEmail(contactId, { subject, body, locationId = null } = {}) {
+  const payload = { subject, body }
+  // CARDLENS-M.8 — the acting studio's branding and send row.
+  if (locationId) payload.location_id = locationId
+  return api(`/api/contacts/${contactId}/email`, { method: 'POST', body: payload })
 }
 
 /**

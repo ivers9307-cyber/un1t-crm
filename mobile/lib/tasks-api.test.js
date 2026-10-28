@@ -24,7 +24,11 @@ vi.mock('./supabase', () => {
   return { supabase: { from: (t) => { calls.table = t; return chain } } }
 })
 
-import { createTask } from './tasks-api'
+// CARDLENS-M.9 — createContactTask posts through the route; `./api` pulls Expo.
+const apiCalls = []
+vi.mock('./api', () => ({ api: vi.fn(async (path, opts) => { apiCalls.push([path, opts]); return { success: true, data: { id: 'task-2' } } }) }))
+
+import { createTask, createContactTask } from './tasks-api'
 
 const LOC = '00000000-0000-4000-8000-000000000001'
 
@@ -61,5 +65,26 @@ describe('createTask', () => {
     expect((await createTask({ locationId: LOC, subject: '   ' })).success).toBe(false)
     expect((await createTask({ locationId: null, subject: 'x' })).success).toBe(false)
     expect(calls.insert).toBe(null)
+  })
+})
+
+describe('createContactTask (CARDLENS-M.9)', () => {
+  it('posts to the tasks route with the contact and the acting studio, never a direct insert', async () => {
+    apiCalls.length = 0
+    const res = await createContactTask({ locationId: LOC, contactId: 'c1', subject: '  Chase the pack payment ', priority: 'high' })
+    expect(res.success).toBe(true)
+    expect(calls.table).toBeNull()
+    expect(apiCalls).toEqual([['/api/activities/tasks', {
+      method: 'POST',
+      body: { location_id: LOC, contact_id: 'c1', subject: 'Chase the pack payment', assignee_id: null, due_date: null, priority: 'high' },
+    }]])
+  })
+
+  it('refuses without a contact, a studio or a subject', async () => {
+    apiCalls.length = 0
+    expect((await createContactTask({ locationId: LOC, subject: 'x' })).success).toBe(false)
+    expect((await createContactTask({ contactId: 'c1', subject: 'x' })).success).toBe(false)
+    expect((await createContactTask({ locationId: LOC, contactId: 'c1', subject: '  ' })).success).toBe(false)
+    expect(apiCalls).toEqual([])
   })
 })

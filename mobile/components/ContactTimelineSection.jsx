@@ -26,7 +26,7 @@ function fmtItemDate(iso) {
   })
 }
 
-function NoteComposer({ contactId, syncsToGlofox, onCreated }) {
+function NoteComposer({ contactId, syncsToGlofox, onCreated, noteLocationId, studioName }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -39,7 +39,7 @@ function NoteComposer({ contactId, syncsToGlofox, onCreated }) {
     setBusy(true)
     setError(null)
     setFlash(null)
-    const res = await createContactNote(contactId, trimmed)
+    const res = await createContactNote(contactId, trimmed, { locationId: noteLocationId })
     setBusy(false)
     if (!res?.success) {
       setError(res?.error || 'Could not save the note')
@@ -64,6 +64,7 @@ function NoteComposer({ contactId, syncsToGlofox, onCreated }) {
       />
       <View className="flex-row items-center justify-between mt-2">
         <Text className="text-[11px] text-un1t-muted flex-1 mr-2">
+          {studioName ? `Files at ${studioName}. ` : ''}
           {syncsToGlofox ? 'Also posts to the member’s Glofox timeline.' : 'Visible to staff on web and mobile.'}
         </Text>
         <Button
@@ -122,6 +123,8 @@ function TimelineItem({ item, isLast, studioName }) {
  * @param {string}  props.contactId
  * @param {boolean} props.syncsToGlofox  a note posted here also lands in Glofox (composer hint)
  * @param {boolean} [props.canNote]      CARDLENS-M.4 — show the note composer (the route's decision)
+ * @param {string|null} [props.noteLocationId] CARDLENS-M.8 — file notes at this studio (null: the primary)
+ * @param {string|null} [props.noteStudioName] CARDLENS-M.8 — its short name, for the composer's hint
  * @param {Array|null} props.notes       null while the bundle is loading
  * @param {Array|null} props.activities
  * @param {string|null} props.loadError
@@ -131,6 +134,7 @@ function TimelineItem({ item, isLast, studioName }) {
  */
 export default function ContactTimelineSection({
   contactId, syncsToGlofox, notes, activities, loadError, onRefresh, studioNameFor = () => null, canNote = true,
+  noteLocationId = null, noteStudioName = null,
 }) {
   const [filter, setFilter] = useState('all')
   const loading = notes == null && activities == null && !loadError
@@ -145,7 +149,15 @@ export default function ContactTimelineSection({
         Notes & activity
       </Text>
 
-      {canNote && <NoteComposer contactId={contactId} syncsToGlofox={syncsToGlofox} onCreated={onRefresh} />}
+      {canNote && (
+        <NoteComposer
+          contactId={contactId}
+          syncsToGlofox={syncsToGlofox}
+          onCreated={onRefresh}
+          noteLocationId={noteLocationId}
+          studioName={noteStudioName}
+        />
+      )}
 
       <View className="mt-3 mb-2">
         <Tabs tabs={TIMELINE_FILTERS} value={filter} onChange={setFilter} />

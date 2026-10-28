@@ -8,15 +8,24 @@ const ALL = { whatsapp: true, email: true, kudos: true }
 const FULL_CONTACT = { phone: '+353870000000', wa_phone: '+353870000000', email: 'member.one@example.com' }
 const NONE = {
   whatsapp: false, email: false,
-  cancelFormEmail: false, cancelFormWhatsApp: false, cancelForm: false, kudos: false, note: false,
+  cancelFormEmail: false, cancelFormWhatsApp: false, cancelForm: false, kudos: false, note: false, task: false,
 }
 
 describe('contactActionFlags', () => {
   it('shows each action the server allows for a contact with the address it needs', () => {
     expect(contactActionFlags(ALL, FULL_CONTACT)).toEqual({
       whatsapp: true, email: true,
-      cancelFormEmail: true, cancelFormWhatsApp: true, cancelForm: true, kudos: true, note: true,
+      cancelFormEmail: true, cancelFormWhatsApp: true, cancelForm: true, kudos: true, note: true, task: false,
     })
+  })
+
+  it('CARDLENS-M.8: Task follows `task`; the cancel form follows `cancel_form` (the primary) once the server sends it', () => {
+    expect(contactActionFlags({ ...ALL, task: true }, FULL_CONTACT).task).toBe(true)
+    // Acting at Hatch with no channels there, the form is still allowed at the primary.
+    const atHatch = contactActionFlags({ whatsapp: false, email: false, cancel_form: true }, FULL_CONTACT)
+    expect(atHatch).toMatchObject({ whatsapp: false, email: false, cancelForm: true, cancelFormEmail: true, cancelFormWhatsApp: true })
+    expect(contactActionFlags({ ...ALL, cancel_form: false }, FULL_CONTACT).cancelForm).toBe(false)
+    expect(contactActionFlags({ cancel_form: true }, { email: null, phone: null }).cancelForm).toBe(false)
   })
 
   it('CARDLENS-M.4: the note composer follows `note`; a server without the key shows it as before', () => {
