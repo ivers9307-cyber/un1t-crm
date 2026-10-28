@@ -1,6 +1,15 @@
 // UN1TSYNC.6 — the un1t.online → CRM sync engine for one studio.
 //
-// One run is a FULL pull (the API ignores `updated_since`), in this order:
+// One run pulls every list (the API ignores `updated_since`), in this order.
+// UN1TINCR.1: bookings and transactions, the two lists that grow without
+// bound and that no reader judges by freshness, are read as a head (every
+// row created in the last UN1T_WINDOW_DAYS, newest first) plus a slice of
+// UN1T_SWEEP_PAGES pages of the whole history, oldest first, from a cursor
+// kept in the last ok run's counts.sweep, so old rows are still re-read on a
+// rolling cycle. While a list is shorter than the window the head reads it
+// all and nothing changes. Every other list stays a full read, because the
+// freshness rule (un1t-online-freshness.js) and the membership endings read
+// a row missing from the latest pull as gone upstream.
 //
 //   1. Open a un1t_sync_runs row (status 'running'). At most ONE runs per
 //      studio (UN1THARD.1, mig 735's partial unique index): a second run's
@@ -100,6 +109,20 @@ export const UN1T_LISTS = Object.freeze([
   '/invoices',
   '/bookings',
 ])
+
+// UN1TINCR.1 — the incremental lists (see the header). A booking is made at
+// most ~30 days before its class (un1t.online generates series a month
+// ahead) and settles at the class, so 60 days covers every row that still
+// changes; the sweep catches a late edit to anything older.
+export const UN1T_WINDOWED_LISTS = Object.freeze(['/transactions', '/bookings'])
+export const UN1T_WINDOW_DAYS = 60
+export const UN1T_SWEEP_PAGES = 2
+// The page cap for a full list (100 rows a page). At 60 requests a minute a
+// 150-page list is about 2.5 minutes of a run, inside the cron's 300 s.
+export const UN1T_FULL_LIST_MAX_PAGES = 150
+// A full list past this many rows (60% of the cap) puts a warning on the
+// connection, months before the cap would refuse a run.
+export const UN1T_HEADROOM_ROWS = Math.floor(UN1T_FULL_LIST_MAX_PAGES * 100 * 0.6)
 
 const PLATFORM = 'un1t_online'
 const CHUNK = 200
@@ -299,7 +322,7 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
   // 3. Who the token is.
   let self
   try {
-    client = clientFactory({ token: conn.accessToken })
+    client = clientFactory({ token: conn.accessToken, maxPages: UN1T_FULL_LIST_MAX_PAGES })
     self = await client.getSelf()
   } catch (err) {
     if (err instanceof Un1tAuthError) {
@@ -322,11 +345,23 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
 
   // 4. Pull every list before any write.
   const pulled = {}
+  const since = new Date(startedAt.getTime() - UN1T_WINDOW_DAYS * 86_400_000).toISOString()
+  const cursors = await readSweepCursors(db, locationId)
+  counts.window = { since }
+  counts.sweep = {}
+  counts.headroom = {}
   for (const path of UN1T_LISTS) {
     const meta = LIST_META[path]
     let res
     try {
-      res = await client.listAll(path)
+      if (UN1T_WINDOWED_LISTS.includes(path)) {
+        res = await pullWindowed(client, path, { since, fromPage: cursors[meta.name] ?? 1 })
+        counts.window[meta.name] = res.window
+        if (res.sweep) counts.sweep[meta.name] = res.sweep
+      } else {
+        res = await client.listAll(path)
+        if (Number(res?.total) > UN1T_HEADROOM_ROWS) counts.headroom[meta.name] = Number(res.total)
+      }
     } catch (err) {
       if (err instanceof Un1tAuthError) {
         return failure('auth', `GET ${path}: ${messageOf(err)}`, { status: 'action_needed', last_error: AUTH_ERROR, ...tokenFields })
@@ -459,7 +494,9 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
 
     // 6c. The history window (UN1THARD.2). Informational: a failed count is
     // recorded and never changes the run's status or the connection's.
-    counts.history = await measureHistory(db, { locationId, mapped, nowIso })
+    // A windowed bookings pull only vouches for the rows created in its window.
+    const windowSince = counts.window.bookings && !counts.window.bookings.full ? since : null
+    counts.history = await measureHistory(db, { locationId, mapped, nowIso, windowSince })
     if (Object.values(counts.history).some((h) => h.absent_from_pull > 0)) {
       logInfo('un1t-online-sync', 'the mirror holds rows this pull did not return (rolling window or upstream delete)', {
         locationId, runId, history: counts.history,
@@ -542,9 +579,14 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
   const conflictN = cc.conflict || 0
   const ambiguousN = cc.ambiguous_email || 0
   const unmatched = failedN + conflictN + ambiguousN
-  const warning = unmatched > 0
-    ? `Synced, but ${unmatched} un1t.online member${unmatched === 1 ? '' : 's'} could not be matched to contacts (${failedN} failed, ${conflictN} conflicts, ${ambiguousN} ambiguous emails).`
-    : null
+  const warnings = []
+  if (unmatched > 0) {
+    warnings.push(`Synced, but ${unmatched} un1t.online member${unmatched === 1 ? '' : 's'} could not be matched to contacts (${failedN} failed, ${conflictN} conflicts, ${ambiguousN} ambiguous emails).`)
+  }
+  for (const [name, total] of Object.entries(counts.headroom)) {
+    warnings.push(`The un1t.online ${name} list has ${total} rows; a sync stops at ${UN1T_FULL_LIST_MAX_PAGES * 100}. Ask un1t.online for an updated_since filter on it.`)
+  }
+  const warning = warnings.length > 0 ? warnings.join(' ') : null
   return finish({
     ok: true,
     firstError: null,
@@ -555,9 +597,11 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
 /**
  * Step 6c. Per dated table: rows held at this location that this pull did not
  * return (synced_at older than this run's start), and the oldest row pulled.
- * @returns {Promise<Record<string, { absent_from_pull: number|null, oldest_pulled: string|null, error?: string }>>}
+ * `windowSince` (UN1TINCR.1): a windowed bookings pull vouches only for the
+ * rows created since it, so only those are counted (and it is recorded).
+ * @returns {Promise<Record<string, { absent_from_pull: number|null, oldest_pulled: string|null, window_since?: string, error?: string }>>}
  */
-async function measureHistory(db, { locationId, mapped, nowIso }) {
+async function measureHistory(db, { locationId, mapped, nowIso, windowSince = null }) {
   const out = {}
   for (const [table, dateCol] of Object.entries(HISTORY_TABLES)) {
     const rows = Array.isArray(mapped[table]) ? mapped[table] : []
@@ -566,14 +610,81 @@ async function measureHistory(db, { locationId, mapped, nowIso }) {
       const v = r[dateCol]
       if (typeof v === 'string' && v !== '' && (oldest === null || v < oldest)) oldest = v
     }
-    const { count, error } = await db
+    const windowed = table === 'un1t_bookings' && windowSince
+    let query = db
       .from(table)
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
       .lt('synced_at', nowIso)
+    if (windowed) query = query.gte('remote_created_at', windowSince)
+    const { count, error } = await query
+    const base = windowed ? { window_since: windowSince } : {}
     out[table] = error
-      ? { absent_from_pull: null, oldest_pulled: oldest, error: messageOf(error) }
-      : { absent_from_pull: Number.isFinite(count) ? count : null, oldest_pulled: oldest }
+      ? { absent_from_pull: null, oldest_pulled: oldest, ...base, error: messageOf(error) }
+      : { absent_from_pull: Number.isFinite(count) ? count : null, oldest_pulled: oldest, ...base }
+  }
+  return out
+}
+
+/**
+ * UN1TINCR.1 — one windowed list: the head (every row created since `since`,
+ * newest first), then, when the head stopped short of the end, a sweep slice
+ * of UN1T_SWEEP_PAGES pages oldest first from `fromPage`. Rows are merged by
+ * id (the head's copy kept). A head that reached the end read everything, so
+ * no sweep runs and the cursor stays. Throws what listAll throws.
+ */
+async function pullWindowed(client, path, { since, fromPage }) {
+  const head = await client.listAll(path, { newerThan: since })
+  const headRows = Array.isArray(head?.rows) ? head.rows : []
+  if (head?.truncated || !head?.stoppedEarly) {
+    return {
+      rows: headRows,
+      total: head?.total,
+      truncated: Boolean(head?.truncated),
+      window: { head: headRows.length, sweep: 0, full: !head?.truncated },
+      sweep: { from_page: fromPage, next_page: fromPage, pages: Number(head?.pages) || 1 },
+    }
+  }
+  const slice = await client.listAll(path, { ascending: true, startPage: fromPage, pageLimit: UN1T_SWEEP_PAGES })
+  const sliceRows = Array.isArray(slice?.rows) ? slice.rows : []
+  const pages = Number(slice?.pages) || Number(head.pages) || 1
+  const next = fromPage + UN1T_SWEEP_PAGES > pages ? 1 : fromPage + UN1T_SWEEP_PAGES
+  const ids = new Set(headRows.map((r) => r?.id).filter((id) => id != null))
+  const rows = [...headRows, ...sliceRows.filter((r) => r?.id == null || !ids.has(r.id))]
+  return {
+    rows,
+    total: head.total,
+    truncated: false,
+    window: { head: headRows.length, sweep: sliceRows.length, full: false },
+    sweep: { from_page: fromPage, next_page: next, pages },
+  }
+}
+
+/**
+ * UN1TINCR.1 — where each windowed list's sweep starts: the next_page the
+ * last ok run recorded. Never fails the run: an unreadable or missing cursor
+ * starts at page 1 (the sweep is a refresh, so starting over costs nothing).
+ * @returns {Promise<Record<string, number>>}
+ */
+async function readSweepCursors(db, locationId) {
+  const { data, error } = await db
+    .from('un1t_sync_runs')
+    .select('counts')
+    .eq('location_id', locationId)
+    .eq('status', 'ok')
+    .order('started_at', { ascending: false })
+    .limit(1)
+  if (error) {
+    logWarn('un1t-online-sync', 'could not read the last sweep position; sweeping from page 1', { locationId, err: safeErr(error) })
+    return {}
+  }
+  const sweep = Array.isArray(data) && data[0]?.counts?.sweep
+  const out = {}
+  if (sweep && typeof sweep === 'object') {
+    for (const [name, s] of Object.entries(sweep)) {
+      const n = Number(s?.next_page)
+      if (Number.isInteger(n) && n > 0) out[name] = n
+    }
   }
   return out
 }

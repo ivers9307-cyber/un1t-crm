@@ -192,27 +192,55 @@ export function createUn1tClient({
   // `requireList: true` (opt-in; the sync leaves it off) makes a page whose
   // `data` is not an array an Un1tApiError instead of "no rows". Only reachable
   // after get() accepted a 2xx, so the status is 200; the message names no body.
-  async function listAll(path, { requireList = false } = {}) {
+  //
+  // UN1TINCR.1 — lists come newest first by created_at, and
+  // `sort=created_at&order=asc` reverses them (neither is in the published
+  // spec; probed live 28 Oct 2026, and `updated_at` sorts are ignored).
+  //   • `newerThan` (ISO): stop after the first page whose oldest row was
+  //     created before it, so every row created at or after it has been read.
+  //     Only while the rows really are newest first: one row out of order, or
+  //     one with no readable created_at, sets `orderBroken` and the walk goes
+  //     on to the last page, so a changed order is a full read, never a gap.
+  //   • `ascending`: created_at oldest first.
+  //   • `startPage` / `pageLimit`: read at most pageLimit pages from startPage
+  //     (a slice; the end of the list is not truncation).
+  async function listAll(path, { requireList = false, newerThan = null, ascending = false, startPage = 1, pageLimit = null } = {}) {
     const sep = path.includes('?') ? '&' : '?'
+    const sort = ascending ? 'sort=created_at&order=asc&' : ''
+    const cutoff = newerThan == null ? null : Date.parse(newerThan)
+    const first = Number.isInteger(startPage) && startPage > 0 ? startPage : 1
     const rows = []
     const seen = new Set()
     let total = 0
-    let pages = 1
+    let pages = first
+    let read = 0
     let truncated = false
+    let stoppedEarly = false
+    let orderBroken = false
+    let prevCreated = null
 
-    for (let p = 1; p <= pages; p++) {
-      if (p > maxPages) {
+    for (let p = first; p <= pages; p++) {
+      if (pageLimit != null && read >= pageLimit) break
+      if (read >= maxPages) {
         truncated = true
         break
       }
-      const body = await get(`${path}${sep}page=${p}&pageSize=${PAGE_SIZE}`)
+      const body = await get(`${path}${sep}${sort}page=${p}&pageSize=${PAGE_SIZE}`)
+      read += 1
       if (requireList && !Array.isArray(body.data)) {
         throw new Un1tApiError('un1t.online sent a page whose data is not a list (HTTP 200)', { status: 200, code: 'not_a_list' })
       }
       const pagination = body.pagination || {}
       pages = Number(pagination.pages) || 1
       total = Number(pagination.total) || 0
+      let pageOldest = null
       for (const row of body.data || []) {
+        const created = Date.parse(row?.created_at)
+        if (!Number.isFinite(created) || (prevCreated != null && created > prevCreated)) orderBroken = true
+        if (Number.isFinite(created)) {
+          prevCreated = created
+          pageOldest = created
+        }
         // An insert between page fetches shifts the window and repeats a row.
         if (row && row.id != null) {
           if (seen.has(row.id)) continue
@@ -220,8 +248,12 @@ export function createUn1tClient({
         }
         rows.push(row)
       }
+      if (Number.isFinite(cutoff) && !orderBroken && pageOldest != null && pageOldest < cutoff) {
+        stoppedEarly = p < pages
+        break
+      }
     }
-    return { rows, total, truncated }
+    return { rows, total, truncated, pages, stoppedEarly, orderBroken }
   }
 
   function stats() {

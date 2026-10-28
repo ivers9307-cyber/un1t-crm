@@ -729,12 +729,16 @@ export async function createUn1tWriter(
     return cappedClients.get(maxPages)
   }
 
-  /** Every page of a list (at most `maxPages`); a walk cut short throws. */
-  async function readAll(path, { maxPages } = {}) {
+  /**
+   * Every page of a list (at most `maxPages`); a walk cut short throws.
+   * `newerThan` (UN1TINCR.1) stops once every row created since it is read
+   * (listAll's newest-first head; a list out of order is read whole).
+   */
+  async function readAll(path, { maxPages, newerThan } = {}) {
     requireConnected()
     let out
     try {
-      out = await clientFor(maxPages).listAll(path)
+      out = await clientFor(maxPages).listAll(path, newerThan ? { newerThan } : undefined)
     } catch (err) {
       if (err instanceof Un1tAuthError) dropPermissions()
       throw err
