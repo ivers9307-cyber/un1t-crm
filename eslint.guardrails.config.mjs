@@ -190,6 +190,8 @@ const config = [
     //    the same one, with the same default: never trade a possible duplicate
     //    for a certain silent loss.
     files: [
+      // CORPPROMO.1 — the /corp claim path: every write checked from day one.
+      'src/lib/corp-promo-*.js', 'src/app/api/public/corp-claims/**', 'src/app/api/corp-promo-claims/**',
       'src/lib/campaign-sender.js',
       'src/app/api/cron/run-campaigns/route.js',
       'src/lib/race-confirmations.js',

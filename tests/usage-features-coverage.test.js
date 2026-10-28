@@ -18,7 +18,7 @@ const ROOT = path.resolve(__dirname, '..')
 const WEB_NOT_STAFF = new Set([
   'api', 'auth', 'login', 'reset-password', 'book', 'event', 'event-pay', 'race', 'race-pay',
   'class-pay', 'tv', 'present', 'unsubscribe', 'preferences', 'view-email', 'deposit', 'welcome',
-  'free-class', 'start', 'trial', 'offers', 'privacy', 'terms', 'legal', 'technical',
+  'free-class', 'start', 'trial', 'corp', 'offers', 'privacy', 'terms', 'legal', 'technical',
   'account-deletion', 'givers', 'studio-login', 'embed', 'bca', 'host-connect', 'host', 'h',
   'use-the-app', 'cancel', 'pay-done', 'fee-appeal', 'pay-link',
 ])
