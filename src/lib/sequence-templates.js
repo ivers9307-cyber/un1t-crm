@@ -675,7 +675,10 @@ export const SEQUENCE_TEMPLATES = [
     re_enrolment_cooldown_days: 14,
     send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
     steps: [
-      { step_type: 'wait', delay_days: 0, delay_hours: 0 },
+      // DUNWAIT.1: step 1's own delay is never applied (an enrolment starts
+      // at it), so this lead-in only makes the next step's delay count; 1
+      // minute, not 0, because the builder refuses to publish a zero wait.
+      { step_type: 'wait', delay_days: 0, delay_hours: 0, delay_minutes: 1 },
       {
         step_type: 'whatsapp',
         delay_days: 0,
@@ -744,7 +747,10 @@ export const SEQUENCE_TEMPLATES = [
     re_enrolment_cooldown_days: 14,
     send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
     steps: [
-      { step_type: 'wait', delay_days: 0, delay_hours: 0 },
+      // DUNWAIT.1: step 1's own delay is never applied (an enrolment starts
+      // at it), so this lead-in only makes the next step's delay count; 1
+      // minute, not 0, because the builder refuses to publish a zero wait.
+      { step_type: 'wait', delay_days: 0, delay_hours: 0, delay_minutes: 1 },
       {
         step_type: 'whatsapp',
         delay_days: 1,
