@@ -553,6 +553,33 @@ describe('PAYLINK.8b \u2014 payment_cta email copy reads cleanly with and withou
 // install: a drip designed to run over seven days became a burst of sends
 // inside the hour.
 //
+// DUNWAIT.1 — the flow builder refuses to publish a `wait` with no delay
+// ("wait needs a non-zero delay"), so a template carrying one installs as a
+// draft nobody can publish. The two overdue-payment templates led with a
+// zero wait, and deleting it is NOT the fix: an enrolment starts at step 1
+// with step 1's own delay never applied, so that leading wait is what lets
+// the first message's delay count. It is 1 minute instead (the value
+// Stillorgan's live copy was hand-edited to), which is just as ignored.
+describe('DUNWAIT.1 — no template has a wait step the builder cannot publish', () => {
+  it('every wait step carries a non-zero delay', () => {
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      tpl.steps.forEach((s, i) => {
+        if (s.step_type !== 'wait') return
+        const total = (s.delay_days || 0) + (s.delay_hours || 0) + (s.delay_minutes || 0)
+        expect(total, `${tpl.id} step ${i + 1} is a zero-length wait`).toBeGreaterThan(0)
+      })
+    }
+  })
+
+  it('the overdue-payment reminders still lead with a wait, so the first message keeps its delay', () => {
+    for (const id of ['overdue_payment_dunning', 'overdue_payment_dunning_un1t']) {
+      const steps = getTemplate(id).steps
+      expect(steps[0], `${id} step 1`).toMatchObject({ step_type: 'wait', delay_minutes: 1 })
+      expect(steps[1].step_type, `${id} step 2`).toBe('whatsapp')
+    }
+  })
+})
+
 // This is the guard in both directions: install a template, open it in the
 // builder, publish it — the member gets the messages at the same moments.
 describe('FLOW-DELAY.1 — every gallery template survives a builder round trip unchanged in timing', () => {
