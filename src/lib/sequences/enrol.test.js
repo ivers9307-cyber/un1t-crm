@@ -200,6 +200,24 @@ describe('enrolContacts — active dedup (tier 1)', () => {
     expect(typeof inserts[0][0].next_step_at).toBe('string')
   })
 
+  it('startStepOrder writes current_step_order on a fresh insert, default 0', async () => {
+    const first = mockDb()
+    createServerClient.mockReturnValue(first.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['a'], startStepOrder: 1 })
+    expect(first.inserts[0][0].current_step_order).toBe(1)
+    const second = mockDb()
+    createServerClient.mockReturnValue(second.db)
+    await enrolContacts({ sequenceId: 's1', contactIds: ['a'] })
+    expect(second.inserts[0][0].current_step_order).toBe(0)
+  })
+
+  it('throws on a negative or non-integer startStepOrder', async () => {
+    const { db } = mockDb()
+    createServerClient.mockReturnValue(db)
+    await expect(enrolContacts({ sequenceId: 's1', contactIds: ['a'], startStepOrder: -1 })).rejects.toThrow(/startStepOrder/)
+    await expect(enrolContacts({ sequenceId: 's1', contactIds: ['a'], startStepOrder: 1.5 })).rejects.toThrow(/startStepOrder/)
+  })
+
   it('passes through sourceType + sourceRef', async () => {
     const { db, inserts } = mockDb()
     createServerClient.mockReturnValue(db)

@@ -20,7 +20,7 @@
 // don't swallow errors at the boundary).
 
 import { createServerClient } from '@/lib/supabase'
-import { logWarn } from '@/lib/log'
+import { logWarn, logError } from '@/lib/log'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
 import { contactInStudioOrganisation } from '../contact-studio-link.js'
@@ -795,6 +795,55 @@ export async function triggerSequencesForContactCreated(contactId, { locationId 
     }
   } catch (e) {
     logWarn('sequences', `contact_created trigger failed for ${contactId}`, { err: e })
+  }
+}
+
+// ── un1t_account_created (UN1TWELCOME.2) ─────────────────────────
+//
+// Called once per new un1t.online account by the welcome sweep. Unlike
+// the best-effort siblings above, it RETURNS its outcome: the sweep
+// counts failures, so a read error or throw is logged and reported as
+// { ok: false, reason }, never swallowed. Dedupe is enrolContacts' own
+// (unique sequence_id + contact_id, ON CONFLICT DO NOTHING).
+//
+// crmMade: the CRM created the account and already sent step 1 (the
+// credentials email), so the welcome sequence starts at step 1.
+
+/**
+ * @param {object} db  service-role client
+ * @param {{ contactId: string, locationId: string, crmMade?: boolean, un1tUserId: string }} args
+ * @returns {Promise<{ ok: true, enrolled: number } | { ok: false, reason: string }>}
+ */
+export async function triggerSequencesForUn1tAccountCreated(db, { contactId, locationId, crmMade = false, un1tUserId }) {
+  try {
+    const { data: sequences, error } = await db
+      .from('email_sequences')
+      .select('id, audience_filter')
+      .eq('location_id', locationId)
+      .eq('trigger_type', 'un1t_account_created')
+      .eq('status', 'active')
+    if (error) {
+      logError('sequences', 'un1t_account_created sequences unreadable', { locationId, err: error.message })
+      return { ok: false, reason: `sequences_unreadable: ${error.message}` }
+    }
+
+    let enrolled = 0
+    for (const seq of sequences || []) {
+      const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
+      if (!matches) continue
+      const res = await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: 'un1t_account_created',
+        sourceRef: un1tUserId,
+        startStepOrder: crmMade ? 1 : 0,
+      })
+      enrolled += res?.enrolled || 0
+    }
+    return { ok: true, enrolled }
+  } catch (e) {
+    logError('sequences', 'un1t_account_created trigger failed', { contactId, locationId, err: e })
+    return { ok: false, reason: e?.message || String(e) }
   }
 }
 

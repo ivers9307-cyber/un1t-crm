@@ -13,6 +13,7 @@ const triggerLabels = {
   manual: 'Manual enrollment', booking_created: 'Booking created', first_booking: 'First booking',
   status_change: 'Status change', pipeline_stage_change: 'Pipeline stage change',
   membership_state_change: 'Membership state change', contact_created: 'New lead created',
+  un1t_account_created: 'New un1t.online account',
   event_reminder: 'Event reminder', tag_added: 'Tag added',
   segment_added: 'Segment entered', segment_removed: 'Segment exited',
   race_registered: 'Race registered', race_finished: 'Race finished',

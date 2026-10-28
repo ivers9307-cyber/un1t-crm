@@ -37,6 +37,7 @@ const TRIGGER_OPTIONS = [
   ['manual', 'Manual — you enrol contacts yourself'],
   ['audience_match', 'Everyone who matches the audience below — and anyone who starts matching later'],
   ['contact_created', 'When a new lead is created'],
+  ['un1t_account_created', 'When a new un1t.online account is created'],
   ['booking_created', 'When a booking is created'],
   ['first_booking', 'On a contact’s first booking'],
   ['pipeline_stage_change', 'When the pipeline stage changes'],

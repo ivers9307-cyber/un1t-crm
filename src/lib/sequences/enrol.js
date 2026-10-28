@@ -44,6 +44,9 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  *   ('manual', 'trigger:status_change', 'trigger:race_finished', etc.)
  * @param {string} [args.sourceRef]            Free-form ref to whatever
  *   caused the enrolment (booking id, race-registration id, etc.)
+ * @param {number} [args.startStepOrder=0]  UN1TWELCOME.2 — the `current_step_order`
+ *   a FRESH insert starts at (a non-negative integer, else it throws), so a
+ *   caller can skip step 1. The DUNNING re-activation path always restarts at 0.
  * @param {boolean} [args.allowReenrol=false]  DUNNING.2 — re-activate a
  *   contact's TERMINAL enrolment row (completed / exited) in place when the
  *   sequence's cooldown has passed and the sourceRef differs from the last
@@ -70,8 +73,11 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  */
 export async function enrolContacts({
   sequenceId, contactIds, sourceType = 'manual', sourceRef = null, allowReenrol = false,
-  metadata = null,
+  metadata = null, startStepOrder = 0,
 }) {
+  if (!Number.isInteger(startStepOrder) || startStepOrder < 0) {
+    throw new Error(`enrolContacts: startStepOrder must be a non-negative integer, got ${startStepOrder}`)
+  }
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     return { enrolled: 0, skipped: 0, reactivated: 0 }
   }
@@ -220,7 +226,7 @@ export async function enrolContacts({
     .map(contactId => ({
       sequence_id: sequenceId,
       contact_id: contactId,
-      current_step_order: 0,
+      current_step_order: startStepOrder,
       status: 'active',
       next_step_at: new Date().toISOString(), // fire on next cron tick
       source_type: sourceType,

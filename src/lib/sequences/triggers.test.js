@@ -21,12 +21,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock all the things triggers.js depends on.
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
-vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('./audience.js', () => ({ contactMatchesSequenceAudience: vi.fn() }))
 vi.mock('./enrol.js', () => ({ enrolContacts: vi.fn() }))
 
 const { createServerClient } = await import('@/lib/supabase')
-const { logWarn } = await import('@/lib/log')
+const { logWarn, logError } = await import('@/lib/log')
 const { contactMatchesSequenceAudience } = await import('./audience.js')
 const { enrolContacts } = await import('./enrol.js')
 const triggers = await import('./triggers.js')
@@ -34,6 +34,7 @@ const triggers = await import('./triggers.js')
 beforeEach(() => {
   createServerClient.mockReset()
   logWarn.mockReset()
+  logError.mockReset()
   contactMatchesSequenceAudience.mockReset()
   enrolContacts.mockReset()
   // Default: every contact matches the audience filter.
@@ -950,5 +951,62 @@ describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
       await triggers.triggerSequencesForDealPlacement('c1', dealResult, OPTS)
       expect(enrolContacts).not.toHaveBeenCalled()
     })
+  })
+})
+
+// ── un1t_account_created (UN1TWELCOME.2) ────────────────────────
+
+describe('triggerSequencesForUn1tAccountCreated', () => {
+  const args = { contactId: 'c1', locationId: 'loc-1', crmMade: false, un1tUserId: 'u1' }
+
+  it('enrols into each matching active sequence from step 0', async () => {
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-1', audience_filter: null }] } })
+    const res = await triggers.triggerSequencesForUn1tAccountCreated(db, args)
+    expect(res).toEqual({ ok: true, enrolled: 1 })
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 'seq-1',
+      contactIds: ['c1'],
+      sourceType: 'un1t_account_created',
+      sourceRef: 'u1',
+      startStepOrder: 0,
+    })
+  })
+
+  it('starts at step 1 when the CRM made the account', async () => {
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-1', audience_filter: null }] } })
+    await triggers.triggerSequencesForUn1tAccountCreated(db, { ...args, crmMade: true })
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ startStepOrder: 1 }))
+  })
+
+  it('returns enrolled 0 when there are no sequences', async () => {
+    const db = mockDb({ email_sequences: { list: [] } })
+    expect(await triggers.triggerSequencesForUn1tAccountCreated(db, args)).toEqual({ ok: true, enrolled: 0 })
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('does not enrol a contact outside the audience', async () => {
+    contactMatchesSequenceAudience.mockResolvedValue(false)
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-1', audience_filter: { a: 1 } }] } })
+    expect(await triggers.triggerSequencesForUn1tAccountCreated(db, args)).toEqual({ ok: true, enrolled: 0 })
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('returns ok:false and logs when the sequences read fails', async () => {
+    const db = { from: () => {
+      const b = { select: () => b, eq: () => b, then: (f) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(f) }
+      return b
+    } }
+    const res = await triggers.triggerSequencesForUn1tAccountCreated(db, args)
+    expect(res.ok).toBe(false)
+    expect(res.reason).toMatch(/boom/)
+    expect(logError).toHaveBeenCalled()
+  })
+
+  it('returns ok:false when enrolment throws', async () => {
+    enrolContacts.mockRejectedValue(new Error('insert failed'))
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-1', audience_filter: null }] } })
+    const res = await triggers.triggerSequencesForUn1tAccountCreated(db, args)
+    expect(res).toEqual({ ok: false, reason: 'insert failed' })
+    expect(logError).toHaveBeenCalled()
   })
 })
