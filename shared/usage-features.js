@@ -94,6 +94,7 @@ const WEB_PREFIXES = [
   ['/accounting', 'accounting'],
   ['/orders', 'orders'],
   ['/offer-sales', 'orders'],
+  ['/class-fees', 'orders'],
   ['/cars', 'cars'],
   ['/events', 'events'],
   ['/hyrox', 'races'],

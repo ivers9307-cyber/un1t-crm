@@ -159,6 +159,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // Mig 092 split: orders used to inherit `events|car_processing`
   // OR via the sidebar. Standalone key lets a location hide /orders
   // even if they have race events or car processing on.
+  { key: 'class_fees', label: 'Class fees',                      hint: 'Review the nightly late-cancellation and no-show fees at a un1t.online studio, waive them before they are charged, and retry an outstanding fee from the member profile. Owner/master/manager by default.' },
   { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
   // SPEND.P3 — company-card receipts. Permission gates SUBMISSION (who
@@ -346,6 +347,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     presentations: true,
+    class_fees: true,
     orders: true, car_processing: true,
     card_receipts: true,
     invoices_inbox: true,
@@ -379,6 +381,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
+    class_fees: false,
     orders: false, car_processing: false,         // financial views off by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
@@ -416,6 +419,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
+    class_fees: false,
     orders: false, car_processing: false,
     card_receipts: false,
     invoices_inbox: false,
@@ -452,6 +456,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: true,
+    class_fees: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
@@ -487,6 +492,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // off — those are owner/master decisions.
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     presentations: true,
+    class_fees: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
@@ -522,6 +528,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // master-only on first install; owners can opt-in per user.
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     presentations: true,
+    class_fees: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices

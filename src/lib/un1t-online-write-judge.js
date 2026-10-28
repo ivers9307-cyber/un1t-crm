@@ -23,7 +23,7 @@
 //   asked for) or un1t.online's code beside the already-booked hint. Always
 //   branch on `verdict`.
 
-export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant'])
+export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge'])
 const OPS = new Set(UN1T_WRITE_OPS)
 
 // From the token's `GET /api-token` permissions[]. Fail closed.
@@ -38,6 +38,9 @@ export const REQUIRED_PERMISSIONS = Object.freeze({
   // permission's name follows the snapshot's <resource>:create pattern; it is
   // NOT quoted from the OpenAPI snapshot (the spec never listed this call).
   trial_regrant: Object.freeze(['credits:create', 'credits:read']),
+  // FEES.1 — POST /purchases/charge-custom (purchases:create, from the 28 Oct
+  // dev docs) after the card check, GET /payment-methods/client/{id}.
+  fee_charge: Object.freeze(['purchases:create', 'payment_methods:read']),
 })
 
 /**
@@ -171,7 +174,7 @@ function cancelMatches(body, bookingId) {
 // The id each op is judged on, read from the body without judging it.
 function opIdIn(op, data) {
   if (!data) return null
-  if (op === 'trial') return idOf(data.transactionId)
+  if (op === 'trial' || op === 'fee_charge') return idOf(data.transactionId)
   if (op === 'checkout') return typeof data.checkoutUrl === 'string' && data.checkoutUrl ? data.checkoutUrl : null
   if (op === 'book' || op === 'create_client' || op === 'cancel') return idOf(data.id)
   return null
@@ -257,6 +260,13 @@ export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_R
         return verdict('unknown')
       }
       const id = idOf(data?.transactionId)
+      return id ? verdict('done', { id }) : verdict('unknown')
+    }
+    case 'fee_charge': {
+      // FEES.1 — charge-custom answers 201 { success: true, data: { transactionId } }
+      // (proven on prod 28 Oct 2026). A 2xx without the id is unknown: the
+      // same idempotency-key settles it.
+      const id = isObj(body) && body.success === true ? idOf(data?.transactionId) : null
       return id ? verdict('done', { id }) : verdict('unknown')
     }
     case 'checkout':

@@ -63,9 +63,9 @@ describe('chain order mirrors each hub tab strip', () => {
     ])
   })
 
-  it('Money: the five in-hub tabs, then the two (team) reviewer doors last', () => {
+  it('Money: the six in-hub tabs, then the two (team) reviewer doors last', () => {
     expect(order('/money')).toEqual([
-      '/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales',
+      '/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales', '/class-fees',
       '/schedule/invoices', '/schedule/expenses',
     ])
   })

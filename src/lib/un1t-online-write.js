@@ -114,6 +114,10 @@ export const UN1T_OP_POLICY = Object.freeze({
   trial: 'never',
   checkout: 'idempotent',
   trial_regrant: 'never',
+  // FEES.1 — charge-custom carries an idempotency-key that un1t.online honours
+  // (a replay of the same key returned the same transaction, 28 Oct 2026), so
+  // an unclear answer is re-sent once with the SAME key.
+  fee_charge: 'idempotent',
 })
 
 // The policy for `op`; a caller-given one must match. TypeError otherwise.
@@ -166,6 +170,10 @@ const ENDPOINTS = Object.freeze([
   },
   // Inside grantTrial's regrantTrialCredits only (TRIALREGRANT.1): never re-sent.
   { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
+  // Inside chargeClassFee only (FEES.1, Richard's decision 28 Oct 2026): a
+  // staff-reviewed late-cancel or no-show fee on the member's default card.
+  // Never paymentMethodId: the default card is the only card it charges.
+  { method: 'POST', path: /^\/purchases\/charge-custom$/, ops: ['fee_charge'], keys: ['userId', 'amount', 'currency', 'description'], needsKey: true },
 ])
 const BANNED_BODY_KEYS = Object.freeze(['bypassCredit', 'forceRefund', 'promoCode'])
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -229,6 +237,7 @@ function dataFor(op, body) {
   const data = isObj(body) && isObj(body.data) ? body.data : null
   if (op === 'book' || op === 'cancel') return data ? pickBooking(data) : null
   if (op === 'checkout' || op === 'trial') return data ? { free: data.free === true } : null
+  if (op === 'fee_charge') return null
   return null
 }
 

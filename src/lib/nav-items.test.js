@@ -137,8 +137,8 @@ describe('Money hub', () => {
 
   it('the Money hub entry ORs its member permissions and lights on member paths', () => {
     const money = ALL_NAV.find(i => i.href === '/money')
-    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses'])
-    expect(money.extraActivePaths).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales'])
+    expect(money.anyPermission).toEqual(['accounting_hub', 'invoices_inbox', 'card_receipts', 'orders', 'approvals_offer_purchases', 'approvals_contractor_invoices', 'approvals_fte_expenses', 'class_fees'])
+    expect(money.extraActivePaths).toEqual(['/accounting', '/invoices', '/card-receipts', '/orders', '/offer-sales', '/class-fees'])
   })
 
   // DEEP.4 Task 1 (4A) — the two review tabs added to (money)/layout.js

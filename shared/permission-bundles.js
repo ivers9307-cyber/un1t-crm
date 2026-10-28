@@ -176,6 +176,7 @@ export const KEY_BUNDLES = Object.freeze({
 
   // ---- bundle_money — src/lib/nav-items.js '/money' anyPermission ----
   orders: ['bundle_money'],
+  class_fees: ['bundle_money'],
   card_receipts: ['bundle_money'],
   invoices_inbox: ['bundle_money'],
   accounting_hub: ['bundle_money'],

@@ -863,6 +863,7 @@ describe('fix round 1', () => {
     expect(UN1T_OP_POLICY).toEqual({
       book: 'verify', cancel: 'verify', create_client: 'verify',
       forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
+      fee_charge: 'idempotent',
     })
     expect(Object.isFrozen(UN1T_OP_POLICY)).toBe(true)
   })

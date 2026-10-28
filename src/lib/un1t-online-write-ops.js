@@ -1206,3 +1206,86 @@ export async function grantTrial(db, args = {}, deps = {}) {
   if (isTrialUsed(checked)) return { outcome: 'ineligible', reason: 'trial_used' }
   return { outcome: 'needs_staff', reason: trialFailed(checked.code), message: checked.message ?? null, ledgerId: checked.ledgerId ?? null }
 }
+
+// ── chargeClassFee (FEES.1) ─────────────────────────────────────────────────
+
+export const FEE_NO_CARD = 'NO_CARD_ON_FILE'
+const FEE_NO_CARD_TEXT = 'This client has no usable card on file in un1t.online, so nothing was charged.'
+const MAX_FEE_CHARGE_CENTS = 100_000
+
+/**
+ * Does the person hold a usable default card? One budget-counted read.
+ * true / false, or null when the read failed or could not be understood
+ * ("could not look", never "no card").
+ */
+async function readHasUsableCard(writer, un1tUserId) {
+  let cards
+  try {
+    cards = await writer.read(`/payment-methods/client/${encodeURIComponent(un1tUserId)}`)
+  } catch (err) {
+    logWarn(LOG_MODULE, 'card read failed', fields({ locationId: writer.locationId, op: 'fee_charge', code: err?.code ?? 'card_read_failed' }))
+    return null
+  }
+  if (!Array.isArray(cards)) return null
+  return cards.some((c) => isObj(c) && c.is_expired !== true && (c.is_default === true || cards.length === 1))
+}
+
+/**
+ * Charge one late-cancel or no-show fee to the member's default card in
+ * un1t.online (POST /purchases/charge-custom). Called ONLY by the class-fees
+ * run (origin 'fee_run') and the staff retry route (origin 'staff'); never by
+ * Mia (tests/mia-no-charge-no-refund-guard.test.js).
+ *
+ * - A fresh attempt first reads the member's cards: none usable is refused
+ *   NO_CARD_ON_FILE with nothing sent; a failed read refuses retryable.
+ *   A resumed attempt (`resume`) skips the read: its key may already have
+ *   taken the money, and only the same key can say so.
+ * - The key is fee:<loc>:<feeId>:<attempt>, also the idempotency-key header,
+ *   under policy 'idempotent': an unclear answer is re-sent once with the
+ *   same key, and an open attempt is resumed with it.
+ *
+ * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, feeId: string,
+ *   attempt: number, amountCents: number, description: string, origin: 'fee_run'|'staff',
+ *   actor?: { id: string }|null, resume?: boolean }} args
+ * @returns {Promise<object>} Un1tWriteResult; done: id = the un1t.online transaction id.
+ */
+export async function chargeClassFee(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter } = deps
+  const {
+    locationId, contactId = null, un1tUserId, feeId, attempt, amountCents, description,
+    origin, actor = null, resume = false,
+  } = args
+  requireBareId('chargeClassFee', 'un1tUserId', un1tUserId)
+  requireBareId('chargeClassFee', 'feeId', feeId)
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > MAX_FEE_CHARGE_CENTS) {
+    throw new TypeError('chargeClassFee: amountCents must be a whole number of cents from 1 to 100000')
+  }
+  requireText('chargeClassFee', 'description', description)
+  if (origin !== 'fee_run' && origin !== 'staff') throw new TypeError("chargeClassFee: origin must be 'fee_run' or 'staff'")
+
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'fee_charge')
+  if (refused) return refused
+  const body = { userId: un1tUserId, amount: amountCents, currency: 'eur', description: String(description).slice(0, 200) }
+  writer.assertAllowed('fee_charge', 'POST', '/purchases/charge-custom', body)
+
+  if (!resume) {
+    const hasCard = await readHasUsableCard(writer, un1tUserId)
+    if (hasCard === null) {
+      return withLedger(refusalResult('card_read_failed', 'un1t.online did not answer the card check, so nothing was charged. It will be tried again.', { retryable: true }))
+    }
+    if (hasCard === false) return withLedger(result('refused', { code: FEE_NO_CARD, message: FEE_NO_CARD_TEXT }))
+  }
+
+  const key = ledgerKey.fee(locationId, feeId, attempt)
+  return attemptWrite(db, writer, {
+    attempt: {
+      op: 'fee_charge', key, contactId, un1tUserId, target: feeId,
+      origin, originRef: feeId, actorUserId: actorIdOf(actor),
+    },
+    policy: 'idempotent',
+    send: (row) => writer.send('POST', '/purchases/charge-custom', {
+      body, policy: 'idempotent', idempotencyKey: key, op: 'fee_charge', origin, ledgerId: row.id,
+    }),
+  })
+}

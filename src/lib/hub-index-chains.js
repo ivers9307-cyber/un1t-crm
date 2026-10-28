@@ -164,6 +164,7 @@ export const HUB_INDEX_CHAINS = Object.freeze({
       // rather than merely noted, so the step cannot double-bounce.
       { keys: ['orders'], roles: MANAGER_ROLES, target: '/orders' },
       { keys: ['approvals_offer_purchases'], target: '/offer-sales' },
+      { keys: ['class_fees'], target: '/class-fees' },
       { keys: ['approvals_contractor_invoices'], target: '/schedule/invoices' },
       { keys: ['approvals_fte_expenses'], target: '/schedule/expenses' },
     ]),

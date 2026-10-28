@@ -125,6 +125,10 @@ export const CLOSED_FUNCTIONS = [
     why: 'every staff member\'s app usage totals; read only by the master-only report routes (USAGE.1)' },
   { fn: 'public.app_usage_last_active', args: '(uuid[])', closedBy: 779,
     why: 'any staff member\'s last app use; read only by the master-only report routes (USAGE.1)' },
+  { fn: 'public.un1t_bookings_stamp_cancelled_at', args: '()', closedBy: 781,
+    why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
+  { fn: 'public.class_fees_touch', args: '()', closedBy: 781,
+    why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
 ]
 
 /** The client roles a closed function is closed to. */
