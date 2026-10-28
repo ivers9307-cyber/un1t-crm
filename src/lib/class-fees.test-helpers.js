@@ -31,13 +31,19 @@ export function makeDb(tables) {
         if (s.op === 'upsert' || s.op === 'insert') {
           const out = []
           for (const p of [].concat(s.payload)) {
-            const dupe = rows().find((r) => r.location_id === p.location_id && r.un1t_booking_id === p.un1t_booking_id)
+            const keys = (s.opts?.onConflict || 'location_id,un1t_booking_id').split(',')
+            const dupe = rows().find((r) => keys.every((k) => r[k] === p[k]))
             if (dupe && s.opts?.ignoreDuplicates) continue
             const row = { id: `id-${++seq}`, attempts: 0, ...p }
             rows().push(row)
             out.push({ ...row })
           }
           return { data: out, error: null }
+        }
+        if (s.op === 'delete') {
+          const hit = rows().filter(match)
+          store[name] = rows().filter((r) => !hit.includes(r))
+          return { data: hit.map((r) => ({ ...r })), error: null }
         }
         if (s.op === 'update') {
           const hit = rows().filter(match)
@@ -54,6 +60,7 @@ export function makeDb(tables) {
         insert(p) { s.op = 'insert'; s.payload = p; return api },
         upsert(p, o) { s.op = 'upsert'; s.payload = p; s.opts = o; return api },
         update(p) { s.op = 'update'; s.payload = p; return api },
+        delete() { s.op = 'delete'; return api },
         eq(c, v) { s.filters.push(['eq', c, v]); return api },
         in(c, v) { s.filters.push(['in', c, v]); return api },
         is(c, v) { s.filters.push(['is', c, v]); return api },

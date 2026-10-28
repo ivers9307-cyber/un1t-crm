@@ -621,6 +621,35 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/class-fees/exemptions',
+  tags: ['Class fees'],
+  summary: "List a studio's members who are never charged class fees",
+  description: 'Session auth + class_fees at the studio. Query location_id.',
+  responses: { 200: { description: 'OK' }, 403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/exemptions',
+  tags: ['Class fees'],
+  summary: 'Never charge a member class fees',
+  description: "Session auth + class_fees at the studio. Adds the member to the studio's never-charged list and waives every fee they owe or are due there. 404 for a contact outside the studio's organisation.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), contact_id: z.string(), note: z.string().max(500).optional() }) } } } },
+  responses: { 200: { description: 'OK' }, 403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/class-fees/exemptions',
+  tags: ['Class fees'],
+  summary: 'Remove a member from the never-charged list',
+  description: 'Session auth + class_fees at the studio. Past fees are not changed.',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), contact_id: z.string() }) } } } },
+  responses: { 200: { description: 'OK' }, 403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
   method: 'put',
   path: '/api/class-fees/settings',
   tags: ['Class fees'],

@@ -842,7 +842,7 @@ async function classOfBooking(db, ctx, studio, row, input) {
  * FEES.2 — the late-cancel quote for one booking, or null when it could not
  * be worked out (a failed read never stops a cancellation).
  */
-async function quoteLateCancel(db, studio, reader, row, bookingId, startsAt) {
+async function quoteLateCancel(db, studio, reader, row, bookingId, startsAt, contactId = null) {
   const readWindowHours = async () => {
     if (!reader?.ok || !reader.studioId) return null
     const s = await reader.getOne(`/studios/${encodeURIComponent(reader.studioId)}`)
@@ -853,6 +853,7 @@ async function quoteLateCancel(db, studio, reader, row, bookingId, startsAt) {
     return await lateCancelQuote(db, {
       locationId: studio.locationId,
       un1tUserId: studio.un1tUserId,
+      contactId,
       bookingId,
       eventId: row ? (liveEventId(row) ?? null) : null,
       startsAt,
@@ -911,7 +912,7 @@ export async function un1tCancelBooking(ctx, input, studio) {
   // member hears it first, and Mia cancels only on an explicit second call
   // with confirm_late_fee. An unreadable quote never blocks the cancel.
   if (input?.confirm_late_fee !== true) {
-    const quote = await quoteLateCancel(db, studio, reader, row, bookingId, startsAt)
+    const quote = await quoteLateCancel(db, studio, reader, row, bookingId, startsAt, executingContactOf(ctx, studio))
     if (quote?.applies) {
       return { cancelled: false, needs_confirmation: 'late_cancel_fee', class_name: className, class_time: classTime, message: lateCancelWarning(quote) }
     }

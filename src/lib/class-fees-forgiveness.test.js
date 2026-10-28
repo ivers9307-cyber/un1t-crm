@@ -98,6 +98,8 @@ describe('decideForgiveness', () => {
     expect(decide1(noShow(), { ...noFacts(), prior: [prior(30)] }, rules)).toBeNull()
     expect(decide1(noShow(), { ...noFacts(), prior: [prior(61)] }, rules)).toBe('first_offence')
     expect(decide1(noShow(), { ...noFacts(), prior: [prior(30, { status: 'waived', waive_rule: 'swap' })] }, rules)).toBe('first_offence')
+    // FEES.4: neither is a fee waived because the member was exempt.
+    expect(decide1(noShow(), { ...noFacts(), prior: [prior(30, { status: 'waived', waive_rule: 'exempt' })] }, rules)).toBe('first_offence')
     // A re-run sees its own row among the prior fees: never counted against itself.
     expect(decide1(noShow(), { ...noFacts(), prior: [prior(0, { un1t_booking_id: 'b1' })] }, rules)).toBe('first_offence')
   })

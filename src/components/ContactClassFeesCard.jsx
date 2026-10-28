@@ -55,9 +55,41 @@ export default function ContactClassFeesCard({ contactId, locationId, studioName
     }
   }
 
-  const fees = data?.fees || []
-  if (!fees.length) return null
+  async function toggleExempt(on) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const res = await fetch('/api/class-fees/exemptions', {
+        method: on ? 'POST' : 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: locationId, contact_id: contactId }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
+      await load()
+    } catch (e) {
+      setMsg(e.message || 'Could not update')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!data) return null
+  const fees = data.fees || []
   const owed = fees.filter((f) => OWED.has(f.status))
+
+  // FEES.4 — with nothing owed, the card is just the never-charge switch.
+  if (!fees.length) {
+    return (
+      <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-un1t-border bg-un1t-surface px-3 py-2 text-sm">
+        <span className="text-un1t-subtle">{data.exempt ? 'Never charged class fees here' : 'Class fees apply here'}</span>
+        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => toggleExempt(!data.exempt)}>
+          {data.exempt ? 'Remove exemption' : 'Never charge'}
+        </Button>
+        {msg && <span className="text-xs text-red-700">{msg}</span>}
+      </div>
+    )
+  }
 
   return (
     <Card
@@ -81,6 +113,9 @@ export default function ContactClassFeesCard({ contactId, locationId, studioName
           </li>
         ))}
       </ul>
+      <div className="mt-3">
+        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => toggleExempt(true)}>Never charge this member</Button>
+      </div>
       {owed.length > 0 && (
         <div className="mt-4 flex items-center gap-3">
           <Button type="button" size="sm" disabled={busy} onClick={retry}>{busy ? 'Charging…' : 'Retry charge'}</Button>
