@@ -271,6 +271,15 @@ describe('FEES.3 — the dry run never charges', () => {
     expect(chargeClassFee).not.toHaveBeenCalled()
   })
 
+  it('a paused night also turns a leftover pending fee (written by older code) into a preview', async () => {
+    const db = makeDb(paused(true))
+    db.store.class_fees.push({ id: 'old', location_id: LOC, status: 'pending', penalty: 'fee', un1t_booking_id: 'old-b', un1t_user_id: 'u9', starts_at: '2026-10-27T18:30:00.000Z', class_day: '2026-10-27' })
+    db.store.class_fees.push({ id: 'other-studio', location_id: 'loc-2', status: 'pending', penalty: 'fee', un1t_booking_id: 'x', un1t_user_id: 'u9', starts_at: '2026-10-27T18:30:00.000Z', class_day: '2026-10-27' })
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    expect(fees(db).find((f) => f.id === 'old').status).toBe('preview')
+    expect(fees(db).find((f) => f.id === 'other-studio').status).toBe('pending')
+  })
+
   it('the paused email says dry run and lists the previews', async () => {
     const db = makeDb(paused(true))
     await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })

@@ -95,6 +95,19 @@ export async function detectClassFees(db, { locationId, nowMs = Date.now() }, de
   const writer = await writerFactory(db, locationId)
   const windowHours = await readWindowHours(writer)
 
+  // FEES.3 — while charging is paused nothing at the studio may be left due:
+  // a pending fee written by older code (before previews existed) becomes a
+  // preview too, so un-pausing can never charge the dry run.
+  if (settings.chargingPaused) {
+    const { error: pvErr } = await db
+      .from('class_fees')
+      .update({ status: 'preview' })
+      .eq('location_id', locationId)
+      .eq('status', 'pending')
+      .select('id')
+    if (pvErr) throw Object.assign(new Error(`class fees: preview sweep failed (${pvErr.code ?? 'no code'})`), { code: pvErr.code })
+  }
+
   const today = dateKeyIn(nowMs, zone)
   const fromMs = dayStartMsIn(addDaysIn(today, -1, zone), zone)
   const events = await selectAll((from, to) => db
