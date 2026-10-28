@@ -23,7 +23,7 @@
 //   asked for) or un1t.online's code beside the already-booked hint. Always
 //   branch on `verdict`.
 
-export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move'])
+export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'promo_grant'])
 const OPS = new Set(UN1T_WRITE_OPS)
 
 // From the token's `GET /api-token` permissions[]. Fail closed.
@@ -44,6 +44,9 @@ export const REQUIRED_PERMISSIONS = Object.freeze({
   // UN1TMOVE.1 — POST /bookings/{id}/move (x-permission bookings:update in the
   // OpenAPI snapshot), then its check read GET /bookings/{id} (bookings:read).
   move: Object.freeze(['bookings:update', 'bookings:read']),
+  // CORPPROMO.1 — POST /credits/grant (x-permission credits:create in the
+  // 28 Oct dev docs), then the credits read.
+  promo_grant: Object.freeze(['credits:create', 'credits:read']),
 })
 
 /**
@@ -287,6 +290,7 @@ export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_R
     case 'checkout':
       return isHttpsUrl(data?.checkoutUrl) ? verdict('done', { id: data.checkoutUrl }) : verdict('unknown')
     case 'trial_regrant':
+    case 'promo_grant':
       // TRIALREGRANT.1 — POST /credits/grant answers { success, data }: done
       // only on an explicit success:true (the batch id when one is given).
       // Anything else is unknown, and the credits read decides.

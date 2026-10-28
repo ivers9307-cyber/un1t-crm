@@ -56,6 +56,8 @@ export const ledgerKey = Object.freeze({
     `trial:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('productId', productId)}:${part('method', method)}`,
   // TRIALREGRANT.1 (mig 760): one credit re-grant per person per studio, ever.
   regrant: (loc, un1tUserId) => `trial_regrant:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}`,
+  // CORPPROMO.1 (mig 787): one grant per person per promo per studio.
+  promo: (loc, un1tUserId, promoKey) => `promo_grant:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('promoKey', promoKey)}`,
   book: (loc, un1tUserId, eventId) => `book:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('eventId', eventId)}`,
   cancel: (loc, bookingId) => `cancel:${part('loc', loc)}:${part('bookingId', bookingId)}`,
   // UN1TMOVE.1: one key per booking and target class. A done row is not final
@@ -129,6 +131,8 @@ export async function beginAttempt(
   // A re-grant row names its person (mig 760 regrant_user_check and the
   // one-regrant index key on it).
   if (op === 'trial_regrant' && !un1tUserId) throw new TypeError('beginAttempt: a trial_regrant needs un1tUserId')
+  // A promo grant names its person and its promo (mig 787 promo_grant_check).
+  if (op === 'promo_grant' && (!un1tUserId || !target)) throw new TypeError('beginAttempt: a promo_grant needs un1tUserId and target')
   // A fee charge names its person and its fee (mig 781 fee_target_check).
   if (op === 'fee_charge' && (!un1tUserId || !target)) throw new TypeError('beginAttempt: a fee_charge needs un1tUserId and target')
   // UN1TMOVE.2 (mig 786): only a move row carries late_window (a CHECK), and

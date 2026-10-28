@@ -123,6 +123,9 @@ export const UN1T_OP_POLICY = Object.freeze({
   // (the target event, booked) from one that did not (still the original
   // event, booked); only the second is sent again.
   move: 'verify',
+  // CORPPROMO.1 — POST /credits/grant for a /corp promo: never re-sent; the
+  // credits read decides an unclear answer.
+  promo_grant: 'never',
 })
 
 // The policy for `op`; a caller-given one must match. TypeError otherwise.
@@ -176,8 +179,9 @@ const ENDPOINTS = Object.freeze([
     method: 'POST', path: /^\/purchases\/checkout$/, ops: ['checkout', 'trial'],
     keys: ['productId', 'successUrl', 'cancelUrl', 'userId'], needsKey: true,
   },
-  // Inside grantTrial's regrantTrialCredits only (TRIALREGRANT.1): never re-sent.
-  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
+  // Inside grantTrial's regrantTrialCredits (TRIALREGRANT.1) and grantPromoCredits
+  // (CORPPROMO.1) only: never re-sent.
+  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant', 'promo_grant'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
   // Inside chargeClassFee only (FEES.1, Richard's decision 28 Oct 2026): a
   // staff-reviewed late-cancel or no-show fee on the member's default card.
   // Never paymentMethodId: the default card is the only card it charges.
@@ -246,6 +250,13 @@ function dataFor(op, body) {
   if (op === 'book' || op === 'cancel' || op === 'move') return data ? pickBooking(data) : null
   if (op === 'checkout' || op === 'trial') return data ? { free: data.free === true } : null
   if (op === 'fee_charge') return null
+  // CORPPROMO.1 — the granted batch's expiry and balance, nothing else.
+  if (op === 'promo_grant') {
+    return data ? {
+      expiresAt: typeof data.expires_at === 'string' && data.expires_at ? data.expires_at : null,
+      remaining: Number.isSafeInteger(data.remaining) ? data.remaining : null,
+    } : null
+  }
   return null
 }
 
