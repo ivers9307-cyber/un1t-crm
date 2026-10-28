@@ -126,6 +126,11 @@ const nextConfig = {
     return [
       { source: '/churn-radar', destination: '/dashboard/churn-radar', permanent: false },
       { source: '/lead-radar',  destination: '/dashboard/lead-radar',  permanent: false },
+      // CORPPROMO.3 — /corporate is a second name for the /corp promo page
+      // (Richard, 28 Oct 2026). 307 so it can be re-pointed; the query string
+      // (utm_campaign per partner company) is carried over by Next.
+      { source: '/corporate', destination: '/corp', permanent: false },
+      { source: '/corporate/:promo', destination: '/corp/:promo', permanent: false },
       // Pride Training Club: the Aug 2 link is out in the wild (socials,
       // old posts) and should land people on the next date. 307 on purpose
       // — the Aug 2 event still exists and is still published, so this is
