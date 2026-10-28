@@ -5,6 +5,7 @@ function cmp(op, a, b) {
   if (op === 'eq') return String(a) === String(b)
   if (op === 'lte') return a != null && String(a) <= String(b)
   if (op === 'lt') return a != null && String(a) < String(b)
+  if (op === 'gt') return a != null && String(a) > String(b)
   if (op === 'gte') return a != null && String(a) >= String(b)
   return false
 }
@@ -59,6 +60,7 @@ export function makeDb(tables) {
         gte(c, v) { s.filters.push(['gte', c, v]); return api },
         lte(c, v) { s.filters.push(['lte', c, v]); return api },
         lt(c, v) { s.filters.push(['lt', c, v]); return api },
+        gt(c, v) { s.filters.push(['gt', c, v]); return api },
         or(e) { s.ors = parseOr(e); return api },
         order() { return api },
         limit() { return api },

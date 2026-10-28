@@ -9,6 +9,7 @@ import {
   buildFeeRow,
   patchAfterCharge,
   localHourIn,
+  renderFeeNotice,
 } from './class-fees.js'
 
 const DUB = 'Europe/Dublin'
@@ -196,5 +197,56 @@ describe('patchAfterCharge', () => {
 
   it('unknown stays charging for the same key', () => {
     expect(patchAfterCharge({ verdict: 'unknown' }, { ...ctx, prevStatus: 'pending', origin: 'fee_run' }).status).toBe('charging')
+  })
+})
+
+describe('FEES.3 — previews, switches and the member notice', () => {
+  const settingsOf = (fees) => classFeeSettingsFrom({ un1t_online: { fees: { late_cancel_fee_cents: 1000, no_show_fee_cents: 2000, ...fees } } })
+  const row = (settings) => buildFeeRow({
+    locationId: 'loc', contactId: 'c1', zone: DUB, nowMs: at('2026-10-28T23:05:00Z'),
+    booking: { un1t_id: 'b1', un1t_user_id: 'u1' },
+    event: { un1t_id: 'e1', title: 'Strength', starts_at: '2026-10-28T18:30:00Z' },
+    settings, classified: { kind: 'no_show', minutesBeforeStart: null, cancelledAt: null }, penalty: 'fee',
+  })
+
+  it('a fee found while charging is paused is a preview, never pending', () => {
+    expect(row(settingsOf({ charging_paused: true })).status).toBe('preview')
+    expect(row(settingsOf({ charging_paused: false })).status).toBe('pending')
+  })
+
+  it('the notice and the appeal switch on and off on their own, both off by default', () => {
+    expect(settingsOf({})).toMatchObject({ noticeEnabled: false, appealsEnabled: false })
+    expect(settingsOf({ notice_enabled: true })).toMatchObject({ noticeEnabled: true, appealsEnabled: false })
+    expect(settingsOf({ appeals_enabled: true })).toMatchObject({ noticeEnabled: false, appealsEnabled: true })
+    expect(settingsOf({ notice_enabled: 'true', appeals_enabled: 1 })).toMatchObject({ noticeEnabled: false, appealsEnabled: false })
+  })
+
+  it('blank copy falls back to the defaults', () => {
+    const s = settingsOf({ notice_subject: '  ', notice_body: '' })
+    expect(s.noticeSubject).toBe('{what} fee for {class}')
+    expect(s.noticeBody).toMatch(/\{amount\}/)
+  })
+
+  it('renders the notice; the appeal line only with a link', () => {
+    const settings = settingsOf({})
+    const fee = { kind: 'no_show', class_title: 'Strength', starts_at: '2026-10-28T18:30:00Z', amount_cents: 2000, charge_due_at: '2026-10-29T17:00:00Z' }
+    const plain = renderFeeNotice(fee, { settings, zone: DUB, firstName: 'Ann', studioName: 'UN1T Hatch Street', appealUrl: null })
+    expect(plain.subject).toBe('No-show fee for Strength')
+    expect(plain.text).toContain('Hi Ann,')
+    expect(plain.text).toContain('a no-show for Strength on Wed 28 Oct, 18:30')
+    expect(plain.text).toContain('a fee of €20 will be charged')
+    expect(plain.text).toContain('at Thu 29 Oct, 17:00')
+    expect(plain.text).toContain('UN1T Hatch Street')
+    expect(plain.text).not.toContain('appeal')
+    const withLink = renderFeeNotice(fee, { settings, zone: DUB, firstName: '', studioName: 'S', appealUrl: 'https://x.test/fee-appeal/tok' })
+    expect(withLink.text).toContain('Hi there,')
+    expect(withLink.text).toContain('https://x.test/fee-appeal/tok')
+    expect(withLink.text).toContain('before Thu 29 Oct, 17:00')
+  })
+
+  it('an unknown placeholder is left as written', () => {
+    const settings = settingsOf({ notice_body: 'Hello {nickname}, {amount}' })
+    const fee = { kind: 'no_show', class_title: 'X', starts_at: '2026-10-28T18:30:00Z', amount_cents: 1250, charge_due_at: null }
+    expect(renderFeeNotice(fee, { settings, zone: DUB, appealUrl: null }).text).toBe('Hello {nickname}, €12.50')
   })
 })

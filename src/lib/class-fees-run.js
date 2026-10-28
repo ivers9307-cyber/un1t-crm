@@ -38,7 +38,7 @@ const ID_CHUNK = 100
 const CHARGE_BATCH = 40
 
 const FEE_COLUMNS =
-  'id, location_id, contact_id, un1t_user_id, un1t_booking_id, un1t_event_id, class_title, starts_at, class_day, kind, cancelled_at, minutes_before_start, penalty, amount_cents, currency, charge_description, status, attempts, charge_due_at, next_attempt_at, charge_started_at, charged_at, un1t_transaction_id, failure_code, failure_message, waived_by, waived_reason, waived_at, waive_rule, created_at, updated_at'
+  'id, location_id, contact_id, un1t_user_id, un1t_booking_id, un1t_event_id, class_title, starts_at, class_day, kind, cancelled_at, minutes_before_start, penalty, amount_cents, currency, charge_description, status, attempts, charge_due_at, next_attempt_at, charge_started_at, charged_at, un1t_transaction_id, failure_code, failure_message, waived_by, waived_reason, waived_at, waive_rule, notice_sent_at, appeal_reason, appeal_text, appealed_at, created_at, updated_at'
 
 const chunk = (arr, n) => {
   const out = []
@@ -94,6 +94,19 @@ export async function detectClassFees(db, { locationId, nowMs = Date.now() }, de
   const { settings, zone } = ctx
   const writer = await writerFactory(db, locationId)
   const windowHours = await readWindowHours(writer)
+
+  // FEES.3 — while charging is paused nothing at the studio may be left due:
+  // a pending fee written by older code (before previews existed) becomes a
+  // preview too, so un-pausing can never charge the dry run.
+  if (settings.chargingPaused) {
+    const { error: pvErr } = await db
+      .from('class_fees')
+      .update({ status: 'preview' })
+      .eq('location_id', locationId)
+      .eq('status', 'pending')
+      .select('id')
+    if (pvErr) throw Object.assign(new Error(`class fees: preview sweep failed (${pvErr.code ?? 'no code'})`), { code: pvErr.code })
+  }
 
   const today = dateKeyIn(nowMs, zone)
   const fromMs = dayStartMsIn(addDaysIn(today, -1, zone), zone)
@@ -218,12 +231,17 @@ const euro = (cents) => `€${(Number(cents || 0) / 100).toFixed(2)}`
  * The review email for one studio. Pure: { subject, htmlBody }.
  * Never names a member in the subject; the body names them for staff.
  */
-export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, undecided, outstandingCount, reviewUrl, chargeLabel, forgiven = 0 }) {
+export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, undecided, outstandingCount, reviewUrl, chargeLabel, forgiven = 0, dryRun = false, noticesSent = 0 }) {
   const total = dueFees.reduce((s, f) => s + (f.amount_cents || 0), 0)
-  const subject = `Class fees for ${dayLabel}: ${dueFees.length} to charge at ${chargeLabel}`
+  const subject = dryRun
+    ? `Class fees for ${dayLabel} (dry run): ${dueFees.length} would be charged`
+    : `Class fees for ${dayLabel}: ${dueFees.length} to charge at ${chargeLabel}`
   const rows = dueFees.map((f) => `<tr><td style="padding:4px 8px">${escapeHtml(f.member_name || 'Member')}</td><td style="padding:4px 8px">${escapeHtml(classFeeKindLabel(f.kind))}</td><td style="padding:4px 8px">${escapeHtml(f.charge_description || '')}</td><td style="padding:4px 8px;text-align:right">${escapeHtml(euro(f.amount_cents))}</td></tr>`).join('')
   const htmlBody = [
-    `<p>${escapeHtml(studioName)}: ${dueFees.length} fee(s) totalling ${escapeHtml(euro(total))} will be charged at ${escapeHtml(chargeLabel)} unless waived.</p>`,
+    dryRun
+      ? `<p>${escapeHtml(studioName)} (dry run, charging paused): ${dueFees.length} fee(s) totalling ${escapeHtml(euro(total))} would be charged. Nothing is charged and no member is emailed while charging is paused.</p>`
+      : `<p>${escapeHtml(studioName)}: ${dueFees.length} fee(s) totalling ${escapeHtml(euro(total))} will be charged at ${escapeHtml(chargeLabel)} unless waived.</p>`,
+    noticesSent ? `<p>${noticesSent} member(s) were emailed about their fee.</p>` : '',
     dueFees.length ? `<table style="border-collapse:collapse;font-size:14px">${rows}</table>` : '<p>No fees to charge tonight.</p>',
     recorded ? `<p>${recorded} pack credit(s) kept by un1t.online (recorded only, nothing charged).</p>` : '',
     forgiven ? `<p>${forgiven} fee(s) forgiven automatically by the studio's rules (see History).</p>` : '',
@@ -235,14 +253,19 @@ export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, unde
 }
 
 /** Send the nightly review email. Never throws; returns { sent, reason? }. */
-export async function sendReviewEmail(db, { locationId, location, settings, zone, nowMs, undecidedCount, forgivenCount = 0 }) {
+export async function sendReviewEmail(db, { locationId, location, settings, zone, nowMs, undecidedCount, forgivenCount = 0, noticesSent = 0 }) {
   if (!settings.reviewEmails.length) return { sent: false, reason: 'no_recipients' }
   try {
-    const { data: due, error } = await db
+    // A paused night lists its previews (yesterday and today only: a preview
+    // is never charged, so older ones would repeat every night).
+    const dryRun = settings.chargingPaused
+    let dueQ = db
       .from('class_fees')
       .select('id, contact_id, kind, amount_cents, charge_description')
       .eq('location_id', locationId)
-      .eq('status', 'pending')
+      .eq('status', dryRun ? 'preview' : 'pending')
+    if (dryRun) dueQ = dueQ.gte('class_day', addDaysIn(dateKeyIn(nowMs, zone), -1, zone))
+    const { data: due, error } = await dueQ
       .order('starts_at')
       .limit(500)
     if (error) throw error
@@ -266,6 +289,8 @@ export async function sendReviewEmail(db, { locationId, location, settings, zone
       recorded: recorded || 0,
       undecided: undecidedCount || 0,
       forgiven: forgivenCount || 0,
+      dryRun,
+      noticesSent,
       outstandingCount: outstanding || 0,
       reviewUrl: `${getAppUrl()}/class-fees`,
       chargeLabel: `${String(settings.chargeHour).padStart(2, '0')}:00 tomorrow`,

@@ -71,7 +71,7 @@ export default function ContactClassFeesCard({ contactId, locationId, studioName
             <div>
               <div className="text-un1t-text">{f.charge_description}</div>
               <div className="text-xs text-un1t-subtle">
-                {euro(f.amount_cents)} · {f.status === 'outstanding' ? 'Outstanding' : f.status === 'retry_scheduled' ? 'Retry scheduled' : f.status === 'charging' ? 'Charging' : 'Charged tonight unless waived'}
+                {euro(f.amount_cents)} · {f.status === 'outstanding' ? 'Outstanding' : f.status === 'retry_scheduled' ? 'Retry scheduled' : f.status === 'charging' ? 'Charging' : f.status === 'appealed' ? 'Appealed, on hold' : 'Charged at the next charge time unless waived'}
               </div>
               {f.failure_message && <div className="text-xs text-red-700">{f.failure_message}</div>}
             </div>

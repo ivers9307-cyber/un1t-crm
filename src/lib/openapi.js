@@ -591,6 +591,36 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/{id}/charge-anyway',
+  tags: ['Class fees'],
+  summary: 'Charge an appealed class fee after all',
+  description: 'Session auth + class_fees at the studio. Sends an appealed (held) fee back to pending, due now; the next hourly run charges it. 404 for a fee at another studio, 409 when it is not appealed.',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string() }) } } } },
+  responses: { 200: { description: 'Back to pending' }, 409: { description: 'Not appealed', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/{id}/appeal-link',
+  tags: ['Class fees'],
+  summary: 'Make an appeal link for one class fee',
+  description: "Session auth + class_fees at the studio, with appeals switched on there. Returns a fresh /fee-appeal/<token> link on the studio's customer host for staff to send the member (works with the member notice email off). Each call replaces the previous link.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string() }) } } } },
+  responses: { 200: { description: 'The link' }, 409: { description: 'Appeals off, or the fee can no longer be appealed', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/fee-appeal',
+  tags: ['Class fees'],
+  summary: "A member's appeal against a class fee",
+  description: 'Public; the token is the credential (only its sha256 is stored). Holds the fee (status appealed) until staff waive it or charge it anyway. Rate-limited per IP and per token; every refusal answers the same 404.',
+  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string(), reason: z.enum(['illness', 'injury', 'emergency', 'other']), text: z.string().max(1000).optional() }) } } } },
+  responses: { 200: { description: 'Appeal recorded' }, 404: { description: 'Unknown, closed or switched-off link', content: { 'application/json': { schema: ErrorResponse } } }, 429: { description: 'Too many attempts', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
   method: 'put',
   path: '/api/class-fees/settings',
   tags: ['Class fees'],

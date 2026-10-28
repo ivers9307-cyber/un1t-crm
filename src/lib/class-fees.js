@@ -19,11 +19,14 @@ import { formatInZone, dateKeyIn, addDaysIn, zonedWallClockToInstant, instantToZ
 import { classForgivenessFrom } from './class-fees-forgiveness.js'
 
 export const CLASS_FEE_KINDS = Object.freeze(['late_cancel', 'no_show'])
-export const CLASS_FEE_STATUSES = Object.freeze(['pending', 'waived', 'charging', 'charged', 'retry_scheduled', 'outstanding', 'recorded'])
+export const CLASS_FEE_STATUSES = Object.freeze(['preview', 'pending', 'waived', 'charging', 'charged', 'retry_scheduled', 'outstanding', 'recorded', 'appealed'])
 /** A fee is owed (and shows on the profile) in these statuses. */
-export const OPEN_FEE_STATUSES = Object.freeze(['pending', 'charging', 'retry_scheduled', 'outstanding'])
-/** Staff may waive from these; never once charging or charged. */
-export const WAIVABLE_STATUSES = Object.freeze(['pending', 'retry_scheduled', 'outstanding'])
+export const OPEN_FEE_STATUSES = Object.freeze(['pending', 'charging', 'retry_scheduled', 'outstanding', 'appealed'])
+/** Staff may waive from these; never once charging or charged. FEES.3: a
+ *  dry-run preview and an appealed fee too. */
+export const WAIVABLE_STATUSES = Object.freeze(['preview', 'pending', 'retry_scheduled', 'outstanding', 'appealed'])
+/** FEES.3 — a member may appeal a fee that is still to be charged or owed. */
+export const APPEALABLE_STATUSES = Object.freeze(['pending', 'retry_scheduled', 'outstanding'])
 /** Staff may retry the charge from these. */
 export const RETRYABLE_STATUSES = Object.freeze(['retry_scheduled', 'outstanding'])
 
@@ -48,7 +51,9 @@ const centsOr0 = (v) => (Number.isInteger(v) && v > 0 && v <= MAX_FEE_CENTS ? v 
  * unreadable is off. Only the literal true turns `enabled` on.
  * @returns {{ enabled: boolean, chargingPaused: boolean, lateCancelFeeCents: number,
  *   noShowFeeCents: number, reviewEmails: string[], detectHour: number, chargeHour: number,
- *   retryDays: number, forgiveness: ReturnType<typeof classForgivenessFrom> }}
+ *   retryDays: number, forgiveness: ReturnType<typeof classForgivenessFrom>,
+ *   noticeEnabled: boolean, appealsEnabled: boolean, noticeSubject: string, noticeBody: string,
+ *   appealLine: string }}
  */
 export function classFeeSettingsFrom(settings) {
   const block = isObj(settings) && isObj(settings.un1t_online) && isObj(settings.un1t_online.fees)
@@ -69,8 +74,29 @@ export function classFeeSettingsFrom(settings) {
     chargeHour: hourOr(block.charge_hour, CLASS_FEE_DEFAULTS.chargeHour),
     retryDays: CLASS_FEE_DEFAULTS.retryDays,
     forgiveness: classForgivenessFrom(block),
+    // FEES.3 — two independent switches (Richard, 28 Oct): the member notice
+    // email and the appeal link. Both off unless literally true.
+    noticeEnabled: block.notice_enabled === true,
+    appealsEnabled: block.appeals_enabled === true,
+    noticeSubject: copyOr(block.notice_subject, DEFAULT_NOTICE_SUBJECT, 150),
+    noticeBody: copyOr(block.notice_body, DEFAULT_NOTICE_BODY, 2000),
+    appealLine: copyOr(block.appeal_line, DEFAULT_APPEAL_LINE, 500),
   }
 }
+
+const copyOr = (v, d, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : d)
+
+// FEES.3 — the member notice, operator-editable in /class-fees settings.
+// Placeholders: {first_name} {what} {what_lower} {class} {class_time}
+// {amount} {charge_time} {studio}. The appeal line adds {appeal_link} and is sent
+// only while appeals are switched on.
+export const DEFAULT_NOTICE_SUBJECT = '{what} fee for {class}'
+export const DEFAULT_NOTICE_BODY = [
+  'Hi {first_name},',
+  'Our records show a {what_lower} for {class} on {class_time}. Under the studio\'s cancellation policy a fee of {amount} will be charged to the card on your account at {charge_time}.',
+  'Thanks,\n{studio}',
+].join('\n\n')
+export const DEFAULT_APPEAL_LINE = 'If something came up, such as illness, an injury or an emergency, tell us before {charge_time} and we\'ll look at it: {appeal_link}'
 
 const statusOf = (v) => String(v ?? '').trim().toLowerCase()
 const isCancelled = (s) => s === 'cancelled' || s === 'canceled'
@@ -187,7 +213,9 @@ export function buildFeeRow({ locationId, contactId, booking, event, classified,
     amount_cents: amount,
     currency: 'eur',
     charge_description: feeDescription({ kind: classified.kind, classTitle: event.title, startsAt: event.starts_at, zone }),
-    status: 'pending',
+    // FEES.3 — found while charging is paused (the dry run): a preview, listed
+    // and emailed to staff, never charged.
+    status: settings.chargingPaused ? 'preview' : 'pending',
     charge_due_at: nextLocalHourAfter(nowMs, settings.chargeHour, zone),
   }
 }
@@ -230,4 +258,34 @@ export function patchAfterCharge(result, { prevStatus, origin, nowMs, settings, 
   }
   // unknown: stays charging; the next run resumes the SAME idempotency key.
   return { ...failure, status: 'charging' }
+}
+
+/** "Sat 1 Nov, 17:00" in the studio's zone. Pure. */
+export function noticeTimeLabel(instant, zone) {
+  const day = formatInZone(instant, zone, { weekday: 'short', day: 'numeric', month: 'short' }).replace(/,/g, '')
+  const time = formatInZone(instant, zone, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  return `${day}, ${time}`
+}
+
+/**
+ * FEES.3 — the member's notice: { subject, text } with the placeholders
+ * filled. Plain text; the caller escapes it into HTML. Pure.
+ */
+export function renderFeeNotice(fee, { settings, zone, firstName, studioName, appealUrl }) {
+  const what = classFeeKindLabel(fee.kind)
+  const values = {
+    first_name: (firstName || '').trim() || 'there',
+    what,
+    what_lower: what.toLowerCase(),
+    class: fee.class_title || 'your class',
+    class_time: noticeTimeLabel(fee.starts_at, zone),
+    amount: `€${(fee.amount_cents / 100).toFixed(2).replace(/\.00$/, '')}`,
+    charge_time: fee.charge_due_at ? noticeTimeLabel(fee.charge_due_at, zone) : 'the next charge run',
+    studio: studioName || 'The studio',
+    appeal_link: appealUrl || '',
+  }
+  const fill = (t) => t.replace(/\{([a-z_]+)\}/g, (m, k) => (Object.hasOwn(values, k) ? values[k] : m))
+  const parts = [fill(settings.noticeBody)]
+  if (appealUrl) parts.push(fill(settings.appealLine))
+  return { subject: fill(settings.noticeSubject).slice(0, 150), text: parts.join('\n\n') }
 }
