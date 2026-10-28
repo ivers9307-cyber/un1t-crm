@@ -35,6 +35,13 @@ describe('lateCancelQuote', () => {
     expect(await lateCancelQuote(makeDb(tables()), args({ readWindowHours: async () => null }))).toEqual({ applies: false, reason: 'no_window' })
   })
 
+  it('an exempt member is never warned', async () => {
+    const t = tables({ prior: [anOffence] })
+    t.class_fee_exemptions = [{ id: 'x', location_id: LOC, contact_id: 'c1' }]
+    expect(await lateCancelQuote(makeDb(t), args({ contactId: 'c1' }))).toEqual({ applies: false, reason: 'exempt' })
+    expect((await lateCancelQuote(makeDb(t), args({ contactId: 'c2' }))).applies).toBe(true)
+  })
+
   it('a first offence is forgiven by default, so no warning', async () => {
     expect(await lateCancelQuote(makeDb(tables()), args())).toEqual({ applies: false, reason: 'forgiven:first_offence' })
   })

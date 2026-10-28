@@ -299,3 +299,25 @@ describe('FEES.3 — the dry run never charges', () => {
     expect(out.attempted).toBe(0)
   })
 })
+
+describe('FEES.4 — never-charged members', () => {
+  it('an exempt member\'s offence is written as waived with rule exempt; others are unaffected', async () => {
+    const db = makeDb(baseTables({ class_fee_exemptions: [{ id: 'x1', location_id: LOC, contact_id: 'c1' }] }))
+    const out = await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    expect(out.forgiven).toBe(1)
+    expect(fees(db).find((f) => f.un1t_booking_id === 'b-noshow')).toMatchObject({ status: 'waived', waive_rule: 'exempt' })
+    expect(fees(db).find((f) => f.un1t_booking_id === 'b-late').status).toBe('pending')
+  })
+
+  it('a member exempted after the fee was found is never charged by the 17:00 run', async () => {
+    const db = makeDb(baseTables())
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    db.store.class_fee_exemptions = [{ id: 'x1', location_id: LOC, contact_id: 'c1' }]
+    const ctx = await readClassFeeContext(db, LOC)
+    chargeClassFee.mockResolvedValue({ verdict: 'done', id: 'tx' })
+    const out = await chargeDueClassFees(db, { locationId: LOC, nowMs: Date.parse('2026-10-29T17:05:00Z'), settings: ctx.settings, zone: ctx.zone })
+    expect(out.attempted).toBe(1)
+    expect(chargeClassFee.mock.calls.map(([, a]) => a.contactId)).toEqual(['c2'])
+    expect(fees(db).find((f) => f.un1t_booking_id === 'b-noshow')).toMatchObject({ status: 'waived', waive_rule: 'exempt' })
+  })
+})

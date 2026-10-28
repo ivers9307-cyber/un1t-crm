@@ -26,6 +26,7 @@ import {
 } from './class-fees.js'
 import { getLocationZone, dateKeyIn, addDaysIn, dayStartMsIn, formatInZone } from './location-time.js'
 import { loadForgivenessFacts, decideForgiveness, forgivenessReason } from './class-fees-forgiveness.js'
+import { exemptContactIds, waiveFeesOfExempt, EXEMPT_REASON } from './class-fees-exemptions.js'
 import { selectAll } from './select-all.js'
 import { sendTransactionalEmail } from './postmark.js'
 import { escapeHtml } from './html-escape.js'
@@ -203,8 +204,19 @@ export async function detectClassFees(db, { locationId, nowMs = Date.now() }, de
 
 /** Mark the forgiven fee rows (in place) and count them. */
 async function forgive(db, { locationId, zone, settings, rows, nowMs }) {
-  const fees = rows.filter((r) => r.penalty === 'fee')
-  if (!fees.length) return 0
+  const all = rows.filter((r) => r.penalty === 'fee')
+  if (!all.length) return 0
+  // FEES.4 — an exempt member is never charged: waived first, by name.
+  const exempt = await exemptContactIds(db, locationId, all.map((r) => r.contact_id))
+  const at0 = new Date(nowMs).toISOString()
+  let exempted = 0
+  for (const r of all) {
+    if (!r.contact_id || !exempt.has(r.contact_id)) continue
+    Object.assign(r, { status: 'waived', waive_rule: 'exempt', waived_reason: EXEMPT_REASON, waived_at: at0, waived_by: null })
+    exempted++
+  }
+  const fees = all.filter((r) => r.waive_rule !== 'exempt')
+  if (!fees.length) return exempted
   const offences = fees.map((r) => ({
     bookingId: r.un1t_booking_id, un1tUserId: r.un1t_user_id, eventId: r.un1t_event_id,
     kind: r.kind, startsAt: r.starts_at, cancelledAt: r.cancelled_at,
@@ -220,7 +232,18 @@ async function forgive(db, { locationId, zone, settings, rows, nowMs }) {
     Object.assign(r, { status: 'waived', waive_rule: rule, waived_reason: forgivenessReason(rule), waived_at: at, waived_by: null })
     n++
   }
-  return n
+  return n + exempted
+}
+
+/**
+ * FEES.4 — the fees of members exempted since they were found are waived,
+ * never claimed. → the fees still to charge.
+ */
+async function dropExempt(db, locationId, fees, nowMs) {
+  const exempt = await exemptContactIds(db, locationId, fees.map((f) => f.contact_id))
+  if (!exempt.size) return fees
+  await waiveFeesOfExempt(db, { locationId, contactIds: [...exempt], nowMs })
+  return fees.filter((f) => !f.contact_id || !exempt.has(f.contact_id))
 }
 
 // ── the nightly email ─────────────────────────────────────────────────────
@@ -422,7 +445,7 @@ export async function chargeDueClassFees(db, { locationId, nowMs = Date.now(), s
     .limit(CHARGE_BATCH)
   if (error) throw Object.assign(new Error(`class fees: due read failed (${error.code ?? 'no code'})`), { code: error.code })
   const outcomes = []
-  for (const fee of data || []) {
+  for (const fee of await dropExempt(db, locationId, data || [], nowMs)) {
     const claimed = await claimFee(db, fee, { nowIso })
     if (!claimed) continue
     outcomes.push(await chargeClaimed(db, claimed, { prevStatus: fee.status, origin: 'fee_run', actor: null, settings, zone, nowMs }, deps))
@@ -478,7 +501,7 @@ export async function retryContactFees(db, { locationId, contactId, actor, nowMs
   if (error) throw Object.assign(new Error(`class fees: retry read failed (${error.code ?? 'no code'})`), { code: error.code })
   const nowIso = new Date(nowMs).toISOString()
   const outcomes = []
-  for (const fee of data || []) {
+  for (const fee of await dropExempt(db, locationId, data || [], nowMs)) {
     const claimed = await claimFee(db, fee, { nowIso })
     if (!claimed) continue
     outcomes.push(await chargeClaimed(db, claimed, {

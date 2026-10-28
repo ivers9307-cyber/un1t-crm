@@ -11,6 +11,7 @@
 import { classFeeSettingsFrom, penaltyFor } from './class-fees.js'
 import { loadForgivenessFacts, decideForgiveness } from './class-fees-forgiveness.js'
 import { getLocationZone } from './location-time.js'
+import { exemptContactIds } from './class-fees-exemptions.js'
 
 /**
  * @param {object} db service-role client
@@ -22,7 +23,7 @@ import { getLocationZone } from './location-time.js'
  *   | { applies: true, penalty: 'credit_forfeit', windowHours: number, swapMinutes: number|null }>}
  *   Throws on a database error; the caller decides what an unreadable quote means.
  */
-export async function lateCancelQuote(db, { locationId, un1tUserId, bookingId, eventId, startsAt, creditCharged, readWindowHours, nowMs = Date.now() }) {
+export async function lateCancelQuote(db, { locationId, un1tUserId, contactId = null, bookingId, eventId, startsAt, creditCharged, readWindowHours, nowMs = Date.now() }) {
   const { data: loc, error } = await db
     .from('locations')
     .select('id, settings')
@@ -31,6 +32,8 @@ export async function lateCancelQuote(db, { locationId, un1tUserId, bookingId, e
   if (error) throw Object.assign(new Error(`late-cancel quote: location read failed (${error.code ?? 'no code'})`), { code: error.code })
   const settings = classFeeSettingsFrom(loc?.settings)
   if (!settings.enabled) return { applies: false, reason: 'fees_off' }
+  // FEES.4 — an exempt member is never charged, so never warned.
+  if (contactId && (await exemptContactIds(db, locationId, [contactId])).has(contactId)) return { applies: false, reason: 'exempt' }
 
   const startMs = Date.parse(startsAt ?? '')
   if (!Number.isFinite(startMs)) return { applies: false, reason: 'no_start' }

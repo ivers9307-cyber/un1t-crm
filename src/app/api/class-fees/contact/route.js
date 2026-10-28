@@ -7,6 +7,7 @@ import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 import { canUseClassFees } from '@/lib/class-fees-access'
 import { contactOpenFees } from '@/lib/class-fees-run'
+import { exemptContactIds } from '@/lib/class-fees-exemptions'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -26,10 +27,11 @@ export async function GET(request) {
   const db = createServerClient()
   try {
     const fees = await contactOpenFees(db, { locationId, contactId })
+    const exempt = (await exemptContactIds(db, locationId, [contactId])).has(contactId)
     const owed = fees.filter((f) => f.status === 'retry_scheduled' || f.status === 'outstanding')
     return NextResponse.json({
       success: true,
-      data: { fees, owed_cents: owed.reduce((s, f) => s + (f.amount_cents || 0), 0) },
+      data: { fees, exempt, owed_cents: owed.reduce((s, f) => s + (f.amount_cents || 0), 0) },
     })
   } catch (err) {
     logError('class-fees', 'contact read failed', { locationId, code: err?.code ?? null })
