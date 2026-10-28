@@ -160,16 +160,23 @@ export const UN1T_CLIENT_WALK_MAX_PAGES = 8
 
 /**
  * Every un1t.online client whose email is this one: a walk of
- * `GET /users/clients` (no search parameter exists, so the address never goes
- * in a URL), compared trimmed, lower-cased and exact, at most
- * UN1T_CLIENT_WALK_MAX_PAGES pages. Throws when the walk fails or is cut
- * short (code 'truncated'): "could not look" is never "no match".
+ * `GET /users/clients` (the address never goes in a URL: un1t.online's
+ * undocumented `q` filter would put it there), compared trimmed, lower-cased
+ * and exact, at most UN1T_CLIENT_WALK_MAX_PAGES pages. Throws when the walk
+ * fails or is cut short (code 'truncated'): "could not look" is never "no
+ * match".
+ *
+ * `createdSince` (UN1TINCR.1): only clients created since then (the list is
+ * newest first, so the walk stops there and stays a page or two however big
+ * the studio grows). A caller passes it only when every older client is
+ * already answered elsewhere: the account flow's mirror steps after a sync,
+ * or a create's check read, whose account is the newest.
  * @returns {Promise<{ matches: string[] }>}
  */
-export async function findClientByEmail(writer, email, { maxPages = UN1T_CLIENT_WALK_MAX_PAGES } = {}) {
+export async function findClientByEmail(writer, email, { maxPages = UN1T_CLIENT_WALK_MAX_PAGES, createdSince = null } = {}) {
   const want = normEmail(email)
   if (!want) throw new TypeError('findClientByEmail: email is required')
-  const rows = await writer.readAll('/users/clients', { maxPages })
+  const rows = await writer.readAll('/users/clients', createdSince ? { maxPages, newerThan: createdSince } : { maxPages })
   const matches = new Set()
   for (const r of Array.isArray(rows) ? rows : []) {
     if (isObj(r) && normEmail(r.email) === want && idText(r.id)) matches.add(idText(r.id))
@@ -497,8 +504,13 @@ export async function createClient(db, args = {}, deps = {}) {
   writer.assertAllowed('create_client', 'POST', '/users/clients', body)
   const secrets = [password, email, ...(body.phone ? [body.phone, ...phoneForms(body.phone)] : [])]
 
+  // A check read after this call's send looks only at clients created since
+  // shortly before it (the account it made is the newest; 10 minutes covers
+  // clock skew). A resumed attempt from an earlier call has no send time
+  // here, so it walks every client.
   const verify = async () => {
-    const { matches } = await findClientByEmail(writer, email)
+    const createdSince = requestedAt ? new Date(Date.parse(requestedAt) - 10 * 60_000).toISOString() : null
+    const { matches } = await findClientByEmail(writer, email, createdSince ? { createdSince } : undefined)
     if (matches.length === 1) return { state: 'landed', id: matches[0] }
     return matches.length === 0 ? 'absent' : 'unknown'
   }

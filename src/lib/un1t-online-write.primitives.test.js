@@ -1176,6 +1176,35 @@ describe('the dedupe reads', () => {
     const failed = await writerWith({ 'GET /users/clients': [res(500, {})] })
     await expect(findClientByEmail(failed.writer, EMAIL)).rejects.toThrow()
   })
+
+  it('UN1TINCR.1: createdSince walks newest first only back to that time, and never puts the email in a URL', async () => {
+    const pg = (p, data) => res(200, { success: true, pagination: { total: 250, page: p, pages: 3, pageSize: 100 }, data })
+    const routes = {
+      'GET /users/clients': [
+        pg(1, [
+          { id: 'u-new', email: EMAIL, created_at: '2026-10-28T12:00:00.000Z' },
+          { id: 'u-older', email: 'x@example.test', created_at: '2026-10-01T12:00:00.000Z' },
+        ]),
+        pg(2, [{ id: 'u-ancient', email: EMAIL, created_at: '2026-08-01T12:00:00.000Z' }]),
+      ],
+    }
+    const { t, writer } = await writerWith(routes)
+    await expect(findClientByEmail(writer, EMAIL, { createdSince: '2026-10-20T00:00:00.000Z' })).resolves.toEqual({ matches: ['u-new'] })
+    expect(t.fetchImpl.count('GET /users/clients')).toBe(1)
+    for (const c of t.fetchImpl.calls) expect(decodeURIComponent(c.url)).not.toContain(EMAIL)
+  })
+
+  it('UN1TINCR.1: without createdSince the walk still reads every page', async () => {
+    const pg = (p, data) => res(200, { success: true, pagination: { total: 2, page: p, pages: 2, pageSize: 100 }, data })
+    const { t, writer } = await writerWith({
+      'GET /users/clients': [
+        pg(1, [{ id: 'u-new', email: 'x@example.test', created_at: '2026-10-28T12:00:00.000Z' }]),
+        pg(2, [{ id: 'u-ancient', email: EMAIL, created_at: '2026-08-01T12:00:00.000Z' }]),
+      ],
+    })
+    await expect(findClientByEmail(writer, EMAIL)).resolves.toEqual({ matches: ['u-ancient'] })
+    expect(t.fetchImpl.count('GET /users/clients')).toBe(2)
+  })
 })
 
 describe('UN1TWRITE.22 — a write that timed out', () => {

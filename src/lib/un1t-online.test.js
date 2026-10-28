@@ -410,6 +410,106 @@ describe('createUn1tClient', () => {
     })
   })
 
+  // UN1TINCR.1 — the incremental reads. Lists come newest first by created_at
+  // (probed live 28 Oct 2026), and `sort=created_at&order=asc` reverses them.
+  describe('listAll newerThan (newest-first head)', () => {
+    // Rows r<from>..r<to>, created one minute apart, newest first.
+    const dated = (from, to, startIso = '2026-10-28T12:00:00.000Z') => {
+      const base = Date.parse(startIso)
+      const out = []
+      for (let i = from; i <= to; i++) out.push({ id: `r${i}`, created_at: new Date(base - (i - 1) * 60_000).toISOString() })
+      return out
+    }
+
+    it('stops after the first page whose oldest row is older than the cutoff', async () => {
+      const rows = dated(1, 300)
+      const cutoff = rows[149].created_at // r150
+      const { client, fetchImpl } = setup([
+        page(rows.slice(0, 100), 1, 3, 300),
+        page(rows.slice(100, 200), 2, 3, 300),
+      ])
+      const out = await client.listAll('/bookings', { newerThan: cutoff })
+      expect(fetchImpl.calls).toHaveLength(2)
+      expect(out.rows).toHaveLength(200)
+      expect(out).toMatchObject({ stoppedEarly: true, orderBroken: false, truncated: false, pages: 3, total: 300 })
+    })
+
+    it('a page whose oldest row equals the cutoff does not stop the walk', async () => {
+      const rows = dated(1, 150)
+      const { client, fetchImpl } = setup([page(rows.slice(0, 100), 1, 2, 150), page(rows.slice(100), 2, 2, 150)])
+      const out = await client.listAll('/bookings', { newerThan: rows[99].created_at })
+      expect(fetchImpl.calls).toHaveLength(2)
+      expect(out.stoppedEarly).toBe(false)
+    })
+
+    it('walks every page when the order is not newest first (never stops on a guess)', async () => {
+      const rows = dated(1, 300).reverse() // oldest first
+      const { client, fetchImpl } = setup([
+        page(rows.slice(0, 100), 1, 3, 300),
+        page(rows.slice(100, 200), 2, 3, 300),
+        page(rows.slice(200), 3, 3, 300),
+      ])
+      const out = await client.listAll('/bookings', { newerThan: rows[250].created_at })
+      expect(fetchImpl.calls).toHaveLength(3)
+      expect(out).toMatchObject({ stoppedEarly: false, orderBroken: true })
+      expect(out.rows).toHaveLength(300)
+    })
+
+    it('a row with no readable created_at breaks the order (walks everything)', async () => {
+      const rows = dated(1, 200)
+      rows[50] = { id: 'r51' }
+      const { client, fetchImpl } = setup([page(rows.slice(0, 100), 1, 2, 200), page(rows.slice(100), 2, 2, 200)])
+      const out = await client.listAll('/bookings', { newerThan: rows[10].created_at })
+      expect(fetchImpl.calls).toHaveLength(2)
+      expect(out).toMatchObject({ stoppedEarly: false, orderBroken: true })
+    })
+
+    it('the page cap still truncates a head that never reaches the cutoff', async () => {
+      const rows = dated(1, 300)
+      const { client } = setup([page(rows.slice(0, 100), 1, 3, 300), page(rows.slice(100, 200), 2, 3, 300)], { maxPages: 2 })
+      const out = await client.listAll('/bookings', { newerThan: '2000-01-01T00:00:00.000Z' })
+      expect(out).toMatchObject({ truncated: true, stoppedEarly: false })
+    })
+
+    it('without newerThan nothing changes: every page, no early stop', async () => {
+      const rows = dated(1, 150)
+      const { client, fetchImpl } = setup([page(rows.slice(0, 100), 1, 2, 150), page(rows.slice(100), 2, 2, 150)])
+      const out = await client.listAll('/bookings')
+      expect(fetchImpl.calls).toHaveLength(2)
+      expect(out.stoppedEarly).toBe(false)
+    })
+  })
+
+  describe('listAll ascending + startPage/pageLimit (the sweep slice)', () => {
+    it('asks for created_at ascending before the page parameters', async () => {
+      const { client, fetchImpl } = setup([page([], 1, 1, 0)])
+      await client.listAll('/bookings', { ascending: true })
+      expect(fetchImpl.calls[0].url).toBe('https://api.un1t.online/bookings?sort=created_at&order=asc&page=1&pageSize=100')
+    })
+
+    it('reads only pageLimit pages from startPage and reports the page count', async () => {
+      const { client, fetchImpl } = setup([page(rowsOf(301, 400), 4, 9, 850), page(rowsOf(401, 500), 5, 9, 850)])
+      const out = await client.listAll('/bookings', { ascending: true, startPage: 4, pageLimit: 2 })
+      expect(fetchImpl.calls.map((c) => new URL(c.url).searchParams.get('page'))).toEqual(['4', '5'])
+      expect(out).toMatchObject({ pages: 9, total: 850, truncated: false })
+      expect(out.rows).toHaveLength(200)
+    })
+
+    it('stops at the last page when the slice runs past it', async () => {
+      const { client, fetchImpl } = setup([page(rowsOf(801, 850), 9, 9, 850)])
+      const out = await client.listAll('/bookings', { startPage: 9, pageLimit: 2 })
+      expect(fetchImpl.calls).toHaveLength(1)
+      expect(out.rows).toHaveLength(50)
+    })
+
+    it('a start past the end reads one empty page and returns the real page count', async () => {
+      const { client, fetchImpl } = setup([page([], 12, 9, 850)])
+      const out = await client.listAll('/bookings', { startPage: 12, pageLimit: 2 })
+      expect(fetchImpl.calls).toHaveLength(1)
+      expect(out).toMatchObject({ rows: [], pages: 9 })
+    })
+  })
+
   it('exports the rate-limit header helpers', () => {
     const h = new Headers({ 'x-ratelimit-reset': '4', 'x-ratelimit-remaining': '0' })
     expect(headerNumber(h, 'x-ratelimit-remaining')).toBe(0)
