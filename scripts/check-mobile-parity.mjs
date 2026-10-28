@@ -88,6 +88,7 @@ const WEB_ONLY_OK = {
   fleet_restart:  'FLEET-CMD.1 P1 is desktop-only (Richard). Mobile is planned as P3 — see the spec; this exemption is temporary.',
   fleet_admin:    'Reboot/shutdown/redeploy are deliberate, low-frequency actions taken at a desk. No mobile screen planned.',
   class_fees: 'FEES.1: nightly fee review and waive at a un1t.online studio, and the outstanding-fee retry on the web contact page. No phone screen yet (planned as FEES.2).',
+  un1t_comp_credits: "UN1TCOMP.1: complimentary un1t.online credits from the web contact page's Hatch card. No phone screen in this change.",
   presentations:  'Desktop authoring + present-from-laptop surface; the public viewer is a plain URL opened on a screen. No mobile screen.',
   // MOBILE-RADAR: churn_radar + lead_radar now have a read-only mobile
   // glance (More tab → Radar). The full triage dashboards stay

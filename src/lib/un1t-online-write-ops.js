@@ -1,7 +1,8 @@
 // UN1TWRITE.6 — the un1t.online write primitives: book, cancel, moveBooking
-// (UN1TMOVE.1), createClient, forgotPassword, createCheckoutLink and grantTrial
+// (UN1TMOVE.1), createClient, forgotPassword, createCheckoutLink, grantTrial
 // (UN1TWRITE.10; with its one-off credit re-grant, regrantTrialCredits,
-// TRIALREGRANT.1). Split out of un1t-online-write.js (the transport), which they
+// TRIALREGRANT.1), chargeClassFee (FEES.1) and grantCompCredits (staff's
+// complimentary credits, UN1TCOMP.1). Split out of un1t-online-write.js (the transport), which they
 // call ONLY through createUn1tWriter, plus the ledger and the mirror
 // (un1t-online-mirror-write.js).
 
@@ -23,11 +24,12 @@ import { getLocationZone } from './location-time.js'
 import { sameStudioDay, wasMovedInLateWindow, UN1T_LATE_MOVE_CODES } from './un1t-online-late-move.js'
 import { un1tOnlineReads } from './membership/reads/un1t-online.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
+import { COMP_CREDIT_LIMITS, COMP_CREDIT_REASON_KEYS, compNoteProblem, isDateKey } from './un1t-comp-credits.js'
 import { logError, logInfo, logWarn } from './log'
 
 const LOG_MODULE = 'un1t-online-write'
 const C = UN1T_WRITE_CODES
-const { result, refusalResult, withLedger, pickBooking, logFields: fields } = _un1tWriteInternals
+const { result, refusalResult, withLedger, pickBooking, pickCompBatch, logFields: fields } = _un1tWriteInternals
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 //
@@ -305,9 +307,10 @@ async function safely(fn, meta) {
 /**
  * openAttempt → send → finishAttempt → onDone. `send(row)` is the primitive's
  * own writer.send call (each states its policy literally). `onDone(result)`
- * returns fields to merge into a done result (data, conflict).
+ * returns fields to merge into a done result (data, conflict). `finishExtra(result)`
+ * returns op-specific ledger fields for finishAttempt (UN1TCOMP.1: the expiry).
  */
-async function attemptWrite(db, writer, { attempt, policy, verify, send, secrets = [], onDone }) {
+async function attemptWrite(db, writer, { attempt, policy, verify, send, secrets = [], onDone, finishExtra }) {
   const meta = { locationId: writer.locationId, op: attempt.op, origin: attempt.origin }
   const opened = await writer.openAttempt(attempt, { policy, verify })
   if (opened.result) {
@@ -333,6 +336,7 @@ async function attemptWrite(db, writer, { attempt, policy, verify, send, secrets
     code: r.code ?? null,
     message: r.message == null ? null : scrubMessage(r.message, secrets) || null,
     recovered: r.recovered ?? null,
+    ...(finishExtra ? finishExtra(r) : {}),
   })
   const out = withLedger(r, row.id)
   if (r.verdict !== 'done' || !onDone) return out
@@ -1515,5 +1519,143 @@ export async function chargeClassFee(db, args = {}, deps = {}) {
     send: (row) => writer.send('POST', '/purchases/charge-custom', {
       body, policy: 'idempotent', idempotencyKey: key, op: 'fee_charge', origin, ledgerId: row.id,
     }),
+  })
+}
+
+// ── grantCompCredits (UN1TCOMP.1) ──────────────────────────────────────────
+//
+// Richard, 28 Oct 2026: staff with the un1t_comp_credits permission may add
+// complimentary class credits, with a use-by date, to a member's un1t.online
+// account from the contact page. The same POST /credits/grant as the trial
+// re-grant, as its own op (comp_credits, mig 787) so the re-grant's once-ever
+// rule is untouched. Staff only (origin 'staff', an actor): Mia never reaches
+// it (tests/mia-no-charge-no-refund-guard.test.js).
+
+/**
+ * Did a complimentary grant land? One budget-counted GET
+ * /credits/ledgers/{userId}/{studioId}: an admin batch of exactly `amount`,
+ * created since the send, whose expires_at is within a day of
+ * sentAt + expiresInDays → landed (its id and the batch). A readable batch
+ * list with none → absent. No batch list in the answer, a candidate batch
+ * whose dates cannot be read, or a failed read → unknown. Never throws.
+ *
+ * The batch list's key is not in the OpenAPI snapshot (the spec documents
+ * the grant's answer, GrantCreditsResponseDto, not the ledger's batches), so
+ * `batches` and `credit_batches` are read and anything else is unknown: an
+ * unfamiliar answer is never "absent".
+ * @returns {Promise<{ state: 'landed'|'absent'|'unknown', id: string|null, batch: object|null }>}
+ */
+export async function findLandedCompGrant(writer, { un1tUserId, amount, expiresInDays, sentAt } = {}) {
+  const unknown = { state: 'unknown', id: null, batch: null }
+  let ledger
+  try {
+    ledger = await writer.read(`/credits/ledgers/${encodeURIComponent(un1tUserId)}/${encodeURIComponent(writer.studioId)}`)
+  } catch (err) {
+    logWarn(LOG_MODULE, 'complimentary credits check read failed', fields({ locationId: writer.locationId, op: 'comp_credits', code: err?.code ?? 'credits_read_failed' }))
+    return unknown
+  }
+  const list = isObj(ledger) ? (Array.isArray(ledger.batches) ? ledger.batches : Array.isArray(ledger.credit_batches) ? ledger.credit_batches : null) : null
+  if (!list) return unknown
+  const sentMs = msOf(sentAt)
+  if (!Number.isFinite(sentMs)) return unknown
+  const wantExpiry = sentMs + expiresInDays * 86_400_000
+  let doubt = false
+  for (const raw of list) {
+    if (!isObj(raw)) continue
+    const b = pickCompBatch(raw)
+    if (String(b.source ?? '').trim().toLowerCase() !== 'admin' || b.original_amount !== amount) continue
+    const created = msOf(b.created_at)
+    const expires = msOf(b.expires_at)
+    if (!Number.isFinite(created) || !Number.isFinite(expires)) { doubt = true; continue }
+    if (created < sentMs - UN1T_LANDED_SKEW_MS) continue
+    if (Math.abs(expires - wantExpiry) > 86_400_000) continue
+    return { state: 'landed', id: idText(b.id), batch: b }
+  }
+  return doubt ? unknown : { state: 'absent', id: null, batch: null }
+}
+
+// The second fence: the route validates the same limits first. A value off
+// them is a programming error, so it throws before anything is read or sent.
+function requireCompArgs(a) {
+  const fn = 'comp credits'
+  requireBareId(fn, 'un1tUserId', a.un1tUserId)
+  requireText(fn, 'requestId', a.requestId)
+  const L = COMP_CREDIT_LIMITS
+  if (!Number.isInteger(a.amount) || a.amount < L.minCredits || a.amount > L.maxCredits) throw new TypeError(`${fn}: amount must be a whole number from ${L.minCredits} to ${L.maxCredits}`)
+  if (!Number.isInteger(a.expiresInDays) || a.expiresInDays < L.minDays || a.expiresInDays > L.maxDays) throw new TypeError(`${fn}: expiresInDays must be a whole number from ${L.minDays} to ${L.maxDays}`)
+  if (!isDateKey(a.useBy)) throw new TypeError(`${fn}: useBy must be a YYYY-MM-DD day`)
+  if (!COMP_CREDIT_REASON_KEYS.includes(a.reason)) throw new TypeError(`${fn}: unknown reason`)
+  if (a.note != null && typeof a.note !== 'string') throw new TypeError(`${fn}: note must be text`)
+  if (compNoteProblem(a.note)) throw new TypeError(`${fn}: ${compNoteProblem(a.note)}`)
+  if (a.origin !== 'staff') throw new TypeError(`${fn}: only staff add complimentary credits`)
+  if (!actorIdOf(a.actor)) throw new TypeError(`${fn}: the member of staff (actor) is required`)
+}
+
+/**
+ * UN1TCOMP.1 — add `amount` complimentary credits, usable for
+ * `expiresInDays` days, to a member's un1t.online account: ONE POST
+ * /credits/grant { userId, amount, expiresInDays }, op comp_credits, ledgered
+ * first (key comp:<loc>:<un1tUser>:<requestId>, also the idempotency-key
+ * header) with the actor, the amount, the use-by day, the reason and the team
+ * note. Judged on the body and never re-sent (policy never): after a 5xx or
+ * no reply findLandedCompGrant reports a landing (done, landed_after_5xx),
+ * and anything else is unknown, which staff check in un1t.online. On done the
+ * client's credit balance is refreshed in the mirror, and the result's data
+ * is the batch (its expires_at is what staff see).
+ *
+ * Throw contract as the other primitives: the switch, the token and the
+ * budget RESOLVE as refusals (nothing sent, no ledger row); it rejects only
+ * with a TypeError (an argument off the limits, the wrong origin, no actor),
+ * Un1tSettingsReadError or a ledger database error before anything was sent.
+ *
+ * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, amount: number,
+ *   expiresInDays: number, useBy: string, reason: string, note?: string|null, requestId: string,
+ *   origin: 'staff', actor: { id: string } }} args
+ * @param {{ writerFactory?: typeof createUn1tWriter, now?: () => Date }} [deps]
+ * @returns {Promise<object>} Un1tWriteResult with ledgerId.
+ */
+export async function grantCompCredits(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
+  requireCompArgs(args)
+  const { locationId, contactId = null, un1tUserId, amount, expiresInDays, useBy, reason, requestId, origin, actor } = args
+  const note = plainText(args.note)
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'comp_credits')
+  if (refused) return refused
+  const body = { userId: un1tUserId, amount, expiresInDays }
+  writer.assertAllowed('comp_credits', 'POST', '/credits/grant', body)
+  const key = ledgerKey.comp(locationId, un1tUserId, requestId)
+
+  // Set just before the send; NaN on a resume (the old send time is not
+  // ours to know), so a resumed check read is unknown, never a guess.
+  let sentAt = NaN
+  let landed = null
+  const verify = async () => {
+    const chk = await findLandedCompGrant(writer, { un1tUserId, amount, expiresInDays, sentAt })
+    if (chk.state === 'landed') landed = chk.batch
+    return chk
+  }
+  const batchOf = (r) => (r.data ?? landed ?? null)
+  return attemptWrite(db, writer, {
+    attempt: {
+      op: 'comp_credits', key, contactId, un1tUserId, target: null, origin, originRef: null, actorUserId: actorIdOf(actor),
+      comp: { amount, expiresInDays, useBy, reason, note },
+    },
+    policy: 'never',
+    verify,
+    send: (row) => {
+      sentAt = now().getTime()
+      return writer.send('POST', '/credits/grant', {
+        body, policy: 'never', idempotencyKey: key, verify, op: 'comp_credits', origin, ledgerId: row.id, expect: { amount },
+      })
+    },
+    finishExtra: (r) => (r.verdict === 'done' ? { compExpiresAt: batchOf(r)?.expires_at ?? null } : {}),
+    onDone: async (r) => {
+      const data = batchOf(r)
+      await applyUn1tWriteToMirror(db, {
+        op: 'comp_credits', locationId, contactId, un1tUserId, studioId: writer.studioId, ledgerId: r.ledgerId,
+      }, mirrorDeps(writer, now))
+      return { data }
+    },
   })
 }

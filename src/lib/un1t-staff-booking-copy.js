@@ -19,5 +19,12 @@ export const UN1T_STAFF_COPY = Object.freeze({
   cancelAfterLateMove: "This booking was moved inside the studio's late-cancel window, so the CRM will not cancel it (that would dodge the late-cancel fee). Nothing was sent. If it really must go, cancel it in the un1t.online console.",
   lateCheckUnreadable: 'The late-cancel window could not be checked just now, so nothing was sent. Try again in a minute.',
   moveUnverified: 'The CRM moved this booking to that class before, and un1t.online could not confirm it is still there. Check the booking in un1t.online before trying again.',
+  // UN1TCOMP.1 — complimentary credits from the Hatch card.
+  compOff: (studio) => `un1t.online writes are off at ${studio}, so no credits were added.`,
+  compForbidden: 'You do not have permission to add complimentary credits at this studio.',
+  compAdded: (n, until) => `Added ${n} credit${n === 1 ? '' : 's'} in un1t.online${until ? `, usable until ${until}` : ''}.`,
+  compUnknown: 'un1t.online did not answer clearly, so the CRM cannot say whether the credits were added. Check the client in un1t.online before trying again.',
+  compRefused: 'un1t.online refused the credits.',
+  compZoneUnreadable: "Could not read this studio's clock just now, so no credits were added. Try again.",
 })
 

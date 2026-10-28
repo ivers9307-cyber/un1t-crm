@@ -743,6 +743,17 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when a class booking is moved to another class: when you approve a move the agent drafted, and when staff move it from the contact page with the chat confirmation ticked. <code>{'{from}'}</code> and <code>{'{to}'}</code> become each class with its day and time. Leave blank to use the default shown.</p>
         </div>
 
+        {/* UN1TCOMP.1 — sent when staff add complimentary un1t.online credits
+            from the contact page with the WhatsApp box ticked. Default mirrors
+            src/lib/book-chat-copy.js. */}
+        <div>
+          <FieldLabel tag={sourceTag(['comp_credits_confirmation_text'])}>Complimentary credits message</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.comp_credits_confirmation_text || ''}
+            onChange={e => setField('comp_credits_confirmation_text', e.target.value)}
+            placeholder="Good news, we've added {credits} to your {studio} account, use them by {date}. See you soon." />
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when staff add complimentary credits from the contact page with the WhatsApp box ticked (only while the WhatsApp window is open). <code>{'{credits}'}</code> becomes how many credits were added, <code>{'{date}'}</code> the use-by day and <code>{'{studio}'}</code> the studio name. Leave blank to use the default shown.</p>
+        </div>
+
         {/* EVENT-MOVE.7 — in-thread texts once staff decide the agent's event
             move request. Defaults mirror notify.js. */}
         <div>

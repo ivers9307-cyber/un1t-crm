@@ -6,9 +6,10 @@
 // What the transport guarantees (spec 6.1, global constraints):
 // - It sends the allowlisted calls (ENDPOINTS) and nothing else, with the snapshot
 //   body keys and never bypassCredit / forceRefund / promoCode (POST
-//   /credits/grant is grantTrial's credit re-grant only, TRIALREGRANT.1,
-//   Richard's decision 20 Oct 2026; POST /bookings/{id}/move is moveBooking's,
-//   UN1TMOVE.1). Anything else
+//   /credits/grant is grantTrial's credit re-grant, TRIALREGRANT.1, Richard's
+//   decision 20 Oct 2026, and staff's complimentary credits, grantCompCredits,
+//   UN1TCOMP.1, Richard's decision 28 Oct 2026; POST /bookings/{id}/move is
+//   moveBooking's, UN1TMOVE.1). Anything else
 //   is a TypeError before any request: a programming error, nothing sent.
 // - Every write first passes ensureOp: writes switched on, the token's
 //   studio is this location's external_account_id, the op's permissions are
@@ -123,6 +124,10 @@ export const UN1T_OP_POLICY = Object.freeze({
   // (the target event, booked) from one that did not (still the original
   // event, booked); only the second is sent again.
   move: 'verify',
+  // UN1TCOMP.1 — staff's complimentary credits. un1t.online's spec has no
+  // idempotency-key on POST /credits/grant, so it is never re-sent: after a
+  // 5xx or no reply the credits ledger read can only report a landing.
+  comp_credits: 'never',
 })
 
 // The policy for `op`; a caller-given one must match. TypeError otherwise.
@@ -176,8 +181,10 @@ const ENDPOINTS = Object.freeze([
     method: 'POST', path: /^\/purchases\/checkout$/, ops: ['checkout', 'trial'],
     keys: ['productId', 'successUrl', 'cancelUrl', 'userId'], needsKey: true,
   },
-  // Inside grantTrial's regrantTrialCredits only (TRIALREGRANT.1): never re-sent.
-  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
+  // Inside grantTrial's regrantTrialCredits (TRIALREGRANT.1) and staff's
+  // grantCompCredits (UN1TCOMP.1) only: never re-sent. The key header is sent
+  // (each attempt's ledger key) but un1t.online's spec does not promise it.
+  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant', 'comp_credits'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
   // Inside chargeClassFee only (FEES.1, Richard's decision 28 Oct 2026): a
   // staff-reviewed late-cancel or no-show fee on the member's default card.
   // Never paymentMethodId: the default card is the only card it charges.
@@ -246,13 +253,27 @@ function dataFor(op, body) {
   if (op === 'book' || op === 'cancel' || op === 'move') return data ? pickBooking(data) : null
   if (op === 'checkout' || op === 'trial') return data ? { free: data.free === true } : null
   if (op === 'fee_charge') return null
+  // UN1TCOMP.1: the batch un1t.online made (its expiry is what staff are shown).
+  if (op === 'comp_credits') return data ? pickCompBatch(data) : null
   return null
 }
 
+const scalarOr = (v) => (isScalar(v) && v !== '' ? v : null)
+// A credit batch's own scalars (GrantCreditsResponseDto, or one batch of the
+// credits ledger), and nothing else.
+function pickCompBatch(d) {
+  return {
+    id: scalarOr(d.id),
+    source: scalarOr(d.source),
+    original_amount: typeof d.original_amount === 'number' ? d.original_amount : null,
+    remaining: typeof d.remaining === 'number' ? d.remaining : null,
+    expires_at: typeof d.expires_at === 'string' && d.expires_at ? d.expires_at : null,
+    created_at: typeof d.created_at === 'string' && d.created_at ? d.created_at : null,
+  }
+}
 // What the judge, mapBooking and C's class_bookings mapper read from a
 // booking, flat or nested, and nothing else: the answer can embed the user
 // (email, phone, name) and guest details.
-const scalarOr = (v) => (isScalar(v) && v !== '' ? v : null)
 function pickBooking(d) {
   const nestedId = (o) => (isObj(o) ? o.id : undefined)
   const out = {
@@ -849,4 +870,4 @@ export async function createUn1tWriter(
  * only (the primitives build their results the same way the transport does).
  * Not an API: nothing else imports it.
  */
-export const _un1tWriteInternals = Object.freeze({ result, refusalResult, withLedger, pickBooking, logFields: fields })
+export const _un1tWriteInternals = Object.freeze({ result, refusalResult, withLedger, pickBooking, pickCompBatch, logFields: fields })

@@ -77,6 +77,7 @@ export const INHERITABLE_SCALAR_KEYS = Object.freeze([
   'booking_confirmation_text',
   'cancellation_confirmation_text',
   'class_move_confirmation_text',
+  'comp_credits_confirmation_text',
   'event_move_confirmation_text',
   'event_move_failed_text',
   'booking_issue_handoff_text',

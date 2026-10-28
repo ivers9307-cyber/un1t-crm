@@ -62,6 +62,9 @@ export const ledgerKey = Object.freeze({
   // (a booking can be moved back and forth), so moveBooking confirms it with
   // its check read before it trusts it.
   move: (loc, bookingId, eventId) => `move:${part('loc', loc)}:${part('bookingId', bookingId)}:${part('eventId', eventId)}`,
+  // UN1TCOMP.1 (mig 787): one key per form submission (the card's request id),
+  // so a double click is one grant and the next grant is a new key.
+  comp: (loc, un1tUserId, requestId) => `comp:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('requestId', requestId)}`,
   // FEES.1: one key per charge ATTEMPT of one class fee (the idempotency-key
   // header too). A refused attempt took no money, so the next attempt is a new
   // key; a re-send within one attempt reuses it.
@@ -110,7 +113,7 @@ function dbError(what, error) {
  */
 export async function beginAttempt(
   db,
-  { locationId, contactId, un1tUserId, op, origin, originRef, actorUserId, key, target, method, termsAcceptedAt, termsSource, lateWindow },
+  { locationId, contactId, un1tUserId, op, origin, originRef, actorUserId, key, target, method, termsAcceptedAt, termsSource, lateWindow, comp },
 ) {
   if (!locationId || !op || !origin || !key) {
     throw new TypeError('beginAttempt: locationId, op, origin and key are required')
@@ -135,6 +138,13 @@ export async function beginAttempt(
   // a move names the booking it moves (the cancel paths read it by target).
   if (op === 'move' && !target) throw new TypeError('beginAttempt: a move needs target (the booking it moves)')
   if (lateWindow === true && op !== 'move') throw new TypeError('beginAttempt: only a move carries lateWindow')
+  // UN1TCOMP.1 (mig 787 comp_fields_check): a complimentary grant names its
+  // person, the member of staff, and what was given, why and until when; no
+  // other op carries those columns.
+  if (op === 'comp_credits' && (!un1tUserId || !actorUserId || origin !== 'staff' || !comp)) {
+    throw new TypeError('beginAttempt: a comp_credits row needs un1tUserId, actorUserId, origin staff and comp')
+  }
+  if (comp !== undefined && op !== 'comp_credits') throw new TypeError('beginAttempt: only comp_credits carries comp')
   const { data, error } = await db
     .from('un1t_write_events')
     .insert({
@@ -152,6 +162,13 @@ export async function beginAttempt(
       terms_accepted_at: termsAcceptedAt ?? null,
       terms_source: termsSource ?? null,
       ...(op === 'move' ? { late_window: lateWindow === true } : {}),
+      ...(op === 'comp_credits' ? {
+        comp_amount: comp.amount,
+        comp_expires_in_days: comp.expiresInDays,
+        comp_use_by: comp.useBy,
+        comp_reason: comp.reason,
+        comp_note: comp.note ?? null,
+      } : {}),
     })
     .select(LEDGER_COLUMNS)
     .single()
@@ -187,7 +204,7 @@ export async function beginAttempt(
  * and it never throws: the caller already holds the verdict.
  * Only the fields given are written, plus finished_at.
  */
-export async function finishAttempt(db, id, { stage, un1tRef, httpStatus, code, message, recovered, checkoutUrl } = {}) {
+export async function finishAttempt(db, id, { stage, un1tRef, httpStatus, code, message, recovered, checkoutUrl, compExpiresAt } = {}) {
   try {
     if (!FINISH_STAGES.has(stage)) {
       // The caller's value is not echoed: only contract fields are logged.
@@ -201,6 +218,8 @@ export async function finishAttempt(db, id, { stage, un1tRef, httpStatus, code, 
     if (message !== undefined) patch.message = message == null ? null : capMessage(message)
     if (recovered !== undefined) patch.recovered = recovered
     if (checkoutUrl !== undefined) patch.checkout_url = checkoutUrl
+    // UN1TCOMP.1: the expiry un1t.online answered a done grant with.
+    if (compExpiresAt !== undefined) patch.comp_expires_at = compExpiresAt
 
     // done (and refused) is final: only a row still sent or unknown is finished.
     const { data, error } = await db

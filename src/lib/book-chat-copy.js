@@ -61,6 +61,32 @@ export function moveChatConfirmationText({ from, to, template } = {}) {
   return plain(out).trim()
 }
 
+// UN1TCOMP.1 — "we've added complimentary credits", the line the Hatch card
+// drops into an open WhatsApp thread after staff add complimentary credits
+// (when its box is ticked): the studio's
+// settings.customer_agent.comp_credits_confirmation_text, else this default.
+// {credits} is "2 complimentary credits", {date} the use-by day ("Thu 5 Nov"),
+// {studio} the studio's name. A placeholder with nothing to say is dropped
+// with its clause (", use them by {date}"), never left showing.
+export const DEFAULT_COMP_CHAT_TEXT = "Good news, we've added {credits} to your {studio} account, use them by {date}. See you soon."
+
+/**
+ * @param {{ credits?: number, date?: string, studio?: string, template?: string|null }} args
+ * @returns {string}
+ */
+export function compCreditsChatText({ credits, date, studio, template } = {}) {
+  const base = String(template || '').trim() || DEFAULT_COMP_CHAT_TEXT
+  const n = Number.isInteger(credits) && credits > 0 ? credits : null
+  const what = n == null ? '' : `${n} complimentary credit${n === 1 ? '' : 's'}`
+  const d = String(date || '').trim()
+  const st = String(studio || '').trim()
+  let out = base
+  out = what ? out.replace(/\{credits\}/g, what) : out.replace(/\s*\{credits\}/g, '')
+  out = d ? out.replace(/\{date\}/g, d) : out.replace(/,\s*[^,.!?]*\{date\}/g, '').replace(/\s*\{date\}/g, '')
+  out = st ? out.replace(/\{studio\}/g, st) : out.replace(/\s*\{studio\}/g, '')
+  return plain(out).trim()
+}
+
 /**
  * The studio's operator-set booking confirmation text, for a booking route to
  * hand the panel. { template: null, error: null } = unset (the default
@@ -77,6 +103,11 @@ export async function readBookChatTemplate(db, locationId) {
 /** UN1TMOVE.2 — as readBookChatTemplate, for the class move confirmation. */
 export async function readMoveChatTemplate(db, locationId) {
   return readChatTemplate(db, locationId, 'class_move_confirmation_text')
+}
+
+/** UN1TCOMP.1 — as readBookChatTemplate, for the complimentary credits message. */
+export async function readCompChatTemplate(db, locationId) {
+  return readChatTemplate(db, locationId, 'comp_credits_confirmation_text')
 }
 
 async function readChatTemplate(db, locationId, key) {

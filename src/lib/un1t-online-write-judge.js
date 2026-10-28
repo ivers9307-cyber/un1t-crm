@@ -23,7 +23,7 @@
 //   asked for) or un1t.online's code beside the already-booked hint. Always
 //   branch on `verdict`.
 
-export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move'])
+export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'comp_credits'])
 const OPS = new Set(UN1T_WRITE_OPS)
 
 // From the token's `GET /api-token` permissions[]. Fail closed.
@@ -44,6 +44,9 @@ export const REQUIRED_PERMISSIONS = Object.freeze({
   // UN1TMOVE.1 — POST /bookings/{id}/move (x-permission bookings:update in the
   // OpenAPI snapshot), then its check read GET /bookings/{id} (bookings:read).
   move: Object.freeze(['bookings:update', 'bookings:read']),
+  // UN1TCOMP.1 — staff's complimentary credits: the same POST /credits/grant
+  // as the trial re-grant, then its check read (the credits ledger).
+  comp_credits: Object.freeze(['credits:create', 'credits:read']),
 })
 
 /**
@@ -291,6 +294,15 @@ export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_R
       // only on an explicit success:true (the batch id when one is given).
       // Anything else is unknown, and the credits read decides.
       return isObj(body) && body.success === true ? verdict('done', { id: idOf(data?.id) }) : verdict('unknown')
+    case 'comp_credits': {
+      // UN1TCOMP.1 — the same answer (GrantCreditsResponseDto under data):
+      // done only on an explicit success:true, and never when the batch it
+      // names holds another amount than we asked for (that is not our grant).
+      if (!(isObj(body) && body.success === true)) return verdict('unknown')
+      const amount = data?.original_amount
+      if (amount !== undefined && amount !== null && Number(amount) !== Number(want.amount)) return verdict('unknown', { code: MISMATCH })
+      return verdict('done', { id: idOf(data?.id) })
+    }
     default:
       return verdict('unknown')
   }
