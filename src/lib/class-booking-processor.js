@@ -18,7 +18,7 @@ import { isHandBookedEventId, isManualEventId, isUn1tEventId } from '@/lib/manua
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
-import { notifyFlowBookingOutcome } from '@/lib/whatsapp-flow/booking-notice'
+import { notifyFlowBookingOutcome, readPaidTrialReply } from '@/lib/whatsapp-flow/booking-notice'
 
 // TZ.7: the class's start (an instant, from Glofox or the studio's timetable)
 // labelled on the STUDIO's clock, for the approval card and the customer's
@@ -44,6 +44,21 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // past its own send, or fails a booking outcome.
 async function flowNotice(db, request, args) {
   try { await notifyFlowBookingOutcome(db, request, args) } catch (e) { logWarn('cbp', 'flow outcome notice failed', { requestId: request?.id ?? null, err: e }) }
+}
+
+// PAIDTRIALONLY.1 — the studio has retired the free trial (its paid trial
+// reply is set): someone new is not booked and gets no account or trial. A
+// Flow customer is sent the reply (its paid trial link); a website row, which
+// has no thread, is only closed and logged (the website funnel is retired).
+// The row ends 'failed', which the dedupe index ignores, so the same person
+// books normally once they have bought the trial.
+export async function closeWithPaidTrialReply(db, request, text, { stamp = setStatus, notify = notifyFlowBookingOutcome } = {}) {
+  let notice
+  try { notice = await notify(db, request, { outcome: 'paid_trial', text }) } catch (e) { notice = { flow: false, sent: false, reason: 'error' }; logWarn('cbp', 'paid trial reply failed', { requestId: request?.id ?? null, err: e }) }
+  const lastError = notice?.flow ? (notice.sent ? 'paid_trial_offered' : 'paid_trial_reply_not_sent') : 'paid_trial_only_not_flow'
+  if (lastError !== 'paid_trial_offered') logWarn('cbp', 'new customer not booked (paid trial only) and not told in a Flow thread', { requestId: request?.id ?? null, locationId: request?.location_id ?? null, code: lastError })
+  await stamp(db, request.id, { status: 'failed', last_error: lastError })
+  return { outcome: 'failed', detail: lastError }
 }
 
 async function setStatus(db, id, fields) {
@@ -555,6 +570,10 @@ export async function processClassBookingRequest(db, request) {
     // "there is no such person" is exactly the confident negative a mint
     // rests on. Fail safe to a human.
     if (person.readFailed) return toReview('account_check_failed')
+    // PAIDTRIALONLY.1 — no free trial where the studio sells a paid one. A
+    // failed read throws: the queue retries rather than mint a free trial.
+    const paidTrialText = await readPaidTrialReply(db, request.location_id)
+    if (paidTrialText) return closeWithPaidTrialReply(db, request, paidTrialText)
     // Truly brand-new (not found in Glofox, no sibling anywhere) → create +
     // grant the trial credit. Only a clean create/link is safe;
     // 'needs_review'/'failed' → staff.
@@ -620,7 +639,13 @@ export async function processClassBookingRequest(db, request) {
       // of this person: a corroborated sibling may already hold a balance
       // (the same rescue the attended path makes). Only a person-wide empty
       // goes to review.
-      if (!(await rescueSiblingBalance())) return toReview('needs_credit_grant')
+      if (!(await rescueSiblingBalance())) {
+        // PAIDTRIALONLY.1 — never attended and nothing to book with: where the
+        // free trial is retired, this is the paid trial, not a credit grant.
+        const paidTrialText = await readPaidTrialReply(db, request.location_id)
+        if (paidTrialText) return closeWithPaidTrialReply(db, request, paidTrialText)
+        return toReview('needs_credit_grant')
+      }
     }
   }
 

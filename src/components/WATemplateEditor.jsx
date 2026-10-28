@@ -425,7 +425,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       : type === 'PHONE_NUMBER'
       ? { type: 'PHONE_NUMBER', text: '', phone_number: '' }
       : type === 'FLOW'
-      ? { type: 'FLOW', text: '', flow_id: '', navigate_screen: '' }
+      ? { type: 'FLOW', text: '', flow_id: '', flow_action: 'data_exchange' }
       : { type: 'QUICK_REPLY', text: '' }
     setButtons([...buttons, newButton])
   }
@@ -868,14 +868,26 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                           disabled={(isSubmitted && !canResubmit)}
                           className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                         />
-                        <input
-                          type="text"
-                          value={btn.navigate_screen || ''}
-                          onChange={e => updateButton(i, { navigate_screen: e.target.value })}
-                          placeholder="Entry screen id (e.g. PATH)"
+                        <select
+                          aria-label="How the Flow opens"
+                          value={String(btn.flow_action || '').toLowerCase() === 'data_exchange' ? 'data_exchange' : 'navigate'}
+                          onChange={e => updateButton(i, { flow_action: e.target.value })}
                           disabled={(isSubmitted && !canResubmit)}
-                          className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
-                        />
+                          className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text focus:outline-none disabled:opacity-50"
+                        >
+                          <option value="data_exchange">Opens through the booking endpoint (data exchange)</option>
+                          <option value="navigate">Opens on a fixed screen</option>
+                        </select>
+                        {String(btn.flow_action || '').toLowerCase() !== 'data_exchange' && (
+                          <input
+                            type="text"
+                            value={btn.navigate_screen || ''}
+                            onChange={e => updateButton(i, { navigate_screen: e.target.value })}
+                            placeholder="Entry screen id (e.g. PATH)"
+                            disabled={(isSubmitted && !canResubmit)}
+                            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
+                          />
+                        )}
                       </>
                     )}
                   </div>

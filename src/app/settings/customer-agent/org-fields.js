@@ -72,6 +72,8 @@ export const ORG_FIELD_GROUPS = [
         placeholder: DEFAULT_FLOW_BOOKING_HOLDING_TEXT, help: 'Sent when a class booked through the WhatsApp booking form could not be completed automatically and goes to the team in Approvals.' },
       { id: 'flow_booking_duplicate_text', paths: ['flow_booking_duplicate_text'], kind: 'text', maxLength: 500, label: 'Booking form sent twice message (WhatsApp)',
         placeholder: DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT, help: 'Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead.' },
+      { id: 'flow_paid_trial_text', paths: ['flow_paid_trial_text'], kind: 'text', maxLength: 500, label: 'Booking form paid trial reply (WhatsApp)',
+        placeholder: '', help: 'When set, someone new to the studio who books through the WhatsApp booking form is not booked and gets no free trial: they are sent this message instead. Put the paid trial link in it. Leave blank to book them with the free trial as before.' },
       { id: 'approval_decline_text', paths: ['approval_decline_text'], kind: 'text', maxLength: 500, label: 'Request declined message',
         placeholder: "Sorry, we couldn't complete that request this time. The team will be in touch to help." },
       { id: 'welcome_greeting', paths: ['welcome_greeting'], kind: 'textarea', maxLength: 500, label: 'Welcome greeting (sent when someone opens the chat without typing)',
