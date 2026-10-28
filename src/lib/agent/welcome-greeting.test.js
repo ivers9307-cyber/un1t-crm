@@ -142,7 +142,7 @@ describe('maybeSendWelcomeGreeting', () => {
     await maybeSendWelcomeGreeting(db, CTX)
     expect(getLocationBranding).toHaveBeenCalledWith(db, 'loc1')
     const sent = sendTextMessage.mock.calls[0][1]
-    expect(sent).toBe("Hi, I'm Ava, the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+    expect(sent).toBe("Hi, I'm Ava, the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a class or a consultation.")
     expect(sent).not.toMatch(/UN1T/)
   })
 
@@ -160,8 +160,8 @@ describe('maybeSendWelcomeGreeting', () => {
   })
 
   it('with no agent name the greeting still reads naturally', () => {
-    expect(defaultWelcomeGreeting({ brand: 'Gym A' })).toBe("Hi, I'm the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
-    expect(defaultWelcomeGreeting({ agentName: 'Mia' })).toBe("Hi, I'm Mia, the studio's assistant. Ask me anything, or tell me if you'd like to book a free class or a consultation.")
+    expect(defaultWelcomeGreeting({ brand: 'Gym A' })).toBe("Hi, I'm the studio's assistant at Gym A. Ask me anything, or tell me if you'd like to book a class or a consultation.")
+    expect(defaultWelcomeGreeting({ agentName: 'Mia' })).toBe("Hi, I'm Mia, the studio's assistant. Ask me anything, or tell me if you'd like to book a class or a consultation.")
   })
 
   it('scrubs an em dash out of an operator-set greeting before sending', async () => {

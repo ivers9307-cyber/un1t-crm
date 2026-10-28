@@ -1,5 +1,5 @@
-// First-touch WhatsApp welcome for paid-campaign leads (e.g. the Meta
-// "3 free classes" ad → /free-class page). The instant a campaign lead
+// First-touch WhatsApp welcome for paid-campaign leads (the Meta lead
+// ads; /free-class itself redirects to /trial since 28 Oct 2026). The instant a campaign lead
 // submits the form, send them an APPROVED template that asks how they'd
 // like to start (consultation vs first class) via quick-reply buttons.
 // When they tap one, the inbound reply opens the 24h window and the Mia

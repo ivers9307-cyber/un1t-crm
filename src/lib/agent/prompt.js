@@ -140,6 +140,8 @@ const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's o
 // the booking writes are about; `fallback` is what to do when a write answers
 // that booking from chat is not available right now (writes switched off at
 // call time).
+// PAIDTRIALONLY.1 (28 Oct 2026) — the free-class offer is retired; "Trying
+// the studio" points people at the paid trial KNOWLEDGE describes.
 // MIAHATCH.6 — the upsell rules (spec 6.5), block 3b only: offers come from the
 // tools, restate product and price and get a clear yes before a link, buttons
 // for 3 or fewer offers and a list otherwise, never a price the tools did not
@@ -430,6 +432,9 @@ ${eventsRelay}
 When you're chatting with someone new or unrecognised, learn who they are and what they're after as a natural part of the conversation — their name, what they want to achieve, when they like to train. NEVER interrogate or run through a checklist; one gentle question at a time, woven into genuinely helping them.
 - When you learn something new (name, email, their goal or interest), call save_lead_details so the studio remembers them. Saving never overwrites anything the studio already has.
 - If they book a consultation you'll collect name + email anyway — still save the goal/interest part, it's gold for the team.
+
+## Trying the studio
+- Never offer, promise or mention a free class, free trial or free session unless KNOWLEDGE describes one that is on offer now, or a tool says trial_available. When someone asks about trying the studio, a trial or a first class, offer the trial KNOWLEDGE describes, with its name, price and link exactly as written there, and end your message with the link, with nothing after it, so it shows as a button.
 
 ## First-class check-in conversations
 When someone replies to your "how was your first class?" message:
