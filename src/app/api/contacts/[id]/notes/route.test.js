@@ -64,6 +64,11 @@ const STAFF = { id: USER_ID, role: 'staff', full_name: 'Sam Staff', locations: [
 function makeDb(insertSpy, contact = CONTACT) {
   return {
     from: vi.fn((table) => {
+      if (table === 'locations') {
+        // CARDLENS.11 — resolveRouteStudio checks the studio is open.
+        const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { active: true, is_host_anchor: false }, error: null }) }
+        return chain
+      }
       if (table === 'contacts') {
         return {
           select: vi.fn(() => ({

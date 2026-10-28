@@ -28,7 +28,8 @@ const PLATFORMS = new Set(['glofox', 'un1t_online'])
  * @property {number|null} ltvCents
  * @property {number|null} owedCents    EUR; null when unknown or not reported
  * @property {boolean} overdue
- * @property {boolean} amountUnreported
+ * @property {boolean} amountUnreported  some overdue row has no EUR amount
+ * @property {boolean} amountNotEur      …and every such row has a known foreign amount
  * @property {string|null} syncedAt
  */
 
@@ -73,6 +74,7 @@ export function studioMemberships({ contact, studioRows, un1tClients = [], un1tB
       owedCents: null,
       overdue: false,
       amountUnreported: false,
+      amountNotEur: false,
       syncedAt: null,
     }
     if (platform === 'glofox') out.push({ ...base, ...glofoxFacts(contact, glofoxArrearsCents) })
@@ -117,13 +119,20 @@ function un1tFacts(row, client, billing) {
   if (billing) {
     const dues = billing.pastDues || []
     let eur = 0
-    let unreported = false
+    let noAmount = 0
+    let foreign = 0
     for (const p of dues) {
-      if (overdueAmountKind(p) === 'eur') eur += p.amountCents
-      else unreported = true
+      const kind = overdueAmountKind(p)
+      if (kind === 'eur') eur += p.amountCents
+      else if (kind === 'not_eur') foreign += 1
+      else noAmount += 1
     }
+    const unreported = noAmount + foreign > 0
     out.overdue = dues.length > 0
     out.amountUnreported = unreported
+    // CARDLENS.11 — loadUn1tBilling's rule: "not in EUR" only when every such
+    // row at least has a known foreign-currency amount.
+    out.amountNotEur = unreported && noAmount === 0
     out.owedCents = dues.length === 0 ? 0 : (eur > 0 ? eur : null)
   }
   return out

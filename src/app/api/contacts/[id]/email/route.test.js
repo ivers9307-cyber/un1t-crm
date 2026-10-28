@@ -77,6 +77,11 @@ function mockDb({ contact, contactError = null, locPref = { email_marketing: tru
       const select = vi.fn(() => ({ eq: eq1 }))
       return { select }
     }
+    if (table === 'locations') {
+      // CARDLENS.11 — resolveRouteStudio checks the studio is open.
+      const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { active: true, is_host_anchor: false }, error: null }) }
+      return chain
+    }
     if (table === 'contacts') {
       const single = vi.fn(() => Promise.resolve(contactError ? { data: null, error: contactError } : { data: contact, error: null }))
       const eq = vi.fn(() => ({ single }))

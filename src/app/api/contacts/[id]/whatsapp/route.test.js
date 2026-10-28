@@ -115,6 +115,11 @@ function echoInsert() {
 function makeDb(messageInsertSpy, { contact = CONTACT, conversation = CONVERSATION } = {}) {
   return {
     from: vi.fn((table) => {
+      if (table === 'locations') {
+        // CARDLENS.11 — resolveRouteStudio checks the studio is open.
+        const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { active: true, is_host_anchor: false }, error: null }) }
+        return chain
+      }
       if (table === 'contacts') {
         return {
           select: () => ({

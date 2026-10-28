@@ -46,7 +46,8 @@ export function lensMetrics({ memberships = [], lensId, base, deals = [] }) {
   }
   const target = memberships.find((m) => m.locationId === lensId)
   if (!target) return { ...base }
-  const dealsHere = deals.filter((d) => d?.location_id === lensId).length
+  // The deals the rail lists (inLens keeps one with no studio).
+  const dealsHere = deals.filter((d) => !d?.location_id || d.location_id === lensId).length
   if (target.platform === 'glofox') {
     return { ...base, arrearsCents: base.glofoxArrearsCents ?? null, deals: dealsHere, un1t: null }
   }
@@ -58,7 +59,7 @@ export function lensMetrics({ memberships = [], lensId, base, deals = [] }) {
       ltvCents: target.ltvCents,
       arrearsCents: target.owedCents,
       deals: dealsHere,
-      un1t: target.overdue ? { overdue: true, amountUnreported: Boolean(target.amountUnreported), amountNotEur: false } : null,
+      un1t: target.overdue ? { overdue: true, amountUnreported: Boolean(target.amountUnreported), amountNotEur: Boolean(target.amountNotEur) } : null,
     }
   }
   return { ...base, attended: null, lastAttendedAt: null, ltvCents: null, arrearsCents: null, deals: dealsHere, un1t: null }
