@@ -86,12 +86,19 @@ async function clientAt(db, locationId, un1tUserIds) {
 // margin. null (never synced, or unreadable) is a walk over every client.
 const SYNC_MARGIN_MS = 30 * 60_000
 async function walkSince(db, locationId) {
-  const { data, error } = await db
-    .from('un1t_clients')
-    .select('synced_at')
-    .eq('location_id', locationId)
-    .order('synced_at', { ascending: false })
-    .limit(1)
+  let data
+  let error
+  try {
+    ({ data, error } = await db
+      .from('un1t_clients')
+      .select('synced_at')
+      .eq('location_id', locationId)
+      .order('synced_at', { ascending: false })
+      .limit(1))
+  } catch (err) {
+    // Only a narrowing: a read that throws is a walk over every client.
+    error = { code: err?.code ?? null }
+  }
   if (error) {
     logWarn(LOG, 'could not read the last client sync; walking every client', { locationId, code: error.code ?? null })
     return null

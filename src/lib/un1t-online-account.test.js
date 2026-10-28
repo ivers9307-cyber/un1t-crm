@@ -107,6 +107,18 @@ describe('findUn1tAccount', () => {
     expect(deps.findClientByEmail).toHaveBeenCalledWith(expect.anything(), 'jane@x.ie', { createdSince: '2026-10-28T11:30:00.000Z' })
   })
 
+  it('UN1TINCR.1: a last-sync read that throws is a walk over every client, never an error', async () => {
+    const db = makeDb()
+    const from = db.from
+    db.from = (t) => {
+      const b = from(t)
+      if (t === 'un1t_clients') b.order = () => { throw new Error('no order on this client') }
+      return b
+    }
+    await findUn1tAccount(db, { locationId: LOC, organizationId: ORG, contact: contact() }, deps)
+    expect(deps.findClientByEmail).toHaveBeenLastCalledWith(expect.anything(), 'jane@x.ie')
+  })
+
   it('UN1TINCR.1: fullWalk (and a studio never synced) reads every client', async () => {
     tables.un1t_clients = [{ location_id: LOC, un1t_user_id: 'u-a', synced_at: '2026-10-28T12:00:00.000Z' }]
     await findUn1tAccount(makeDb(), { locationId: LOC, organizationId: ORG, contact: contact(), fullWalk: true }, deps)
