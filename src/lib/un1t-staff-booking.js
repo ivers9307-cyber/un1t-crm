@@ -1,5 +1,6 @@
 // UN1TWRITE.14 — the shared gate and answer mapping for the staff un1t.online
-// class routes (/api/un1t-online/classes, …/book, …/cancel).
+// class routes (/api/un1t-online/classes, …/book, …/cancel, and UN1TMOVE.1's
+// …/move).
 //
 // Access is judged on the BOOKING studio (the un1t.online studio the class
 // runs at), never on the contact's home studio: a Stillorgan contact can be
@@ -15,6 +16,22 @@ import { UN1T_WRITE_CODES } from './un1t-online-write.js'
 import { UN1T_STAFF_COPY } from './un1t-staff-booking-copy.js'
 
 const C = UN1T_WRITE_CODES
+// moveBooking's code for a done move on the ledger the check read could not
+// confirm (UN1T_MOVE_CODES.PRIOR_MOVE_UNVERIFIED; named here so this module,
+// which the routes share, does not import the write ops).
+const MOVE_UNVERIFIED = 'move_unverified'
+// UN1TMOVE.2 — the late-window rule's codes (UN1T_LATE_MOVE_CODES), in staff words.
+const LATE_RULE_COPY = Object.freeze({
+  move_late_other_day: UN1T_STAFF_COPY.moveLateOtherDay,
+  cancel_after_late_move: UN1T_STAFF_COPY.cancelAfterLateMove,
+  move_window_unreadable: UN1T_STAFF_COPY.lateCheckUnreadable,
+  cancel_late_move_unreadable: UN1T_STAFF_COPY.lateCheckUnreadable,
+})
+const REFUSED_TEXT = Object.freeze({
+  book: 'un1t.online refused the booking.',
+  cancel: 'un1t.online refused the cancellation.',
+  move: 'un1t.online refused the move.',
+})
 
 export { UN1T_STAFF_COPY }
 
@@ -65,7 +82,7 @@ export async function gateUn1tStaffBooking(db, user, { locationId, contactId }) 
 }
 
 /**
- * A book or cancel result as the route's answer.
+ * A book, cancel or move result as the route's answer.
  * done → 200; budget spent → 429; a permission missing, an attempt in flight
  * or any refusal → 409 with un1t.online's (scrubbed) words; unknown → 502
  * with the unknown copy (or the unconfirmed-already-booked copy).
@@ -81,12 +98,14 @@ export function staffWriteAnswer(r, { op }) {
   if (r.verdict === 'unknown') {
     const error = r.code === C.ALREADY_BOOKED_UNVERIFIED
       ? UN1T_STAFF_COPY.alreadyBookedUnverified
-      : r.code === C.BOOKING_NOT_THIS_CLIENT && r.message ? r.message : UN1T_STAFF_COPY.unknown
+      : r.code === MOVE_UNVERIFIED
+        ? UN1T_STAFF_COPY.moveUnverified
+        : r.code === C.BOOKING_NOT_THIS_CLIENT && r.message ? r.message : UN1T_STAFF_COPY.unknown
     return { status: 502, body: { success: false, code: r.code ?? 'outcome_unknown', error, ledger_id: r.ledgerId ?? null } }
   }
   if (r.code === C.RATE_BUDGET || r.code === C.RATE_LIMITED) {
     return { status: 429, body: { success: false, code: r.code, error: UN1T_STAFF_COPY.busy } }
   }
-  const error = r.message || (op === 'book' ? 'un1t.online refused the booking.' : 'un1t.online refused the cancellation.')
+  const error = LATE_RULE_COPY[r.code] || r.message || REFUSED_TEXT[op] || REFUSED_TEXT.cancel
   return { status: 409, body: { success: false, code: r.code ?? null, error, ledger_id: r.ledgerId ?? null } }
 }

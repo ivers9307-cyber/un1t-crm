@@ -815,6 +815,14 @@ async function reelectSiblingWithCredits({
   return probes.find((p) => p.entitled)?.account || null
 }
 
+// UN1TMOVE.1 — move_class_booking with a booking or class that is not
+// un1t.online's: nothing is read or sent.
+const MOVE_NOT_UN1T = Object.freeze({
+  moved: false,
+  error: 'not_a_un1t_booking',
+  message: 'move_class_booking only moves a "un1t:" booking to a "un1t:" class at the same studio, so nothing was changed. For any other booking, confirm both halves with the customer, then cancel_class_booking and book_class.',
+})
+
 // MIAHATCH.2 — book_class / cancel_class_booking named a `un1t:` id. Only
 // the dual block offers those tools beside un1t.online reads; there the
 // member's un1t.online studio answers with its chat_booking_unavailable_text
@@ -874,6 +882,20 @@ export async function executeBookingTool(toolName, input, ctx) {
     const { requestRefund, un1tStudioForBooking } = await import('./un1t-booking')
     const studio = await un1tActionStudio(db, ctx, input?.booking_id, un1tStudioForBooking)
     return studio ? requestRefund(ctx, input, studio) : { ...TOOL_NOT_AT_THIS_STUDIO }
+  }
+
+  // UN1TMOVE.1 — move_class_booking is offered in block 3b only (refused above
+  // everywhere else): ONE D moveBooking at the un1t.online studio that holds
+  // the booking (un1t-booking.js, loaded lazily). Both ids must be `un1t:`; a
+  // Glofox booking reschedules as cancel then book, so anything else is
+  // refused before any read.
+  if (toolName === 'move_class_booking') {
+    if (ctx?.turn?.block !== 'un1t_full') return { ...TOOL_NOT_AT_THIS_STUDIO }
+    const ids = [input?.booking_id, input?.event_id]
+    if (!ids.every((v) => typeof v === 'string' && v.startsWith(UN1T_ID_PREFIX))) return { ...MOVE_NOT_UN1T }
+    const { un1tMoveBooking, un1tStudioForBooking } = await import('./un1t-booking')
+    const studio = await un1tActionStudio(db, ctx, input.booking_id, un1tStudioForBooking)
+    return studio ? un1tMoveBooking(ctx, input, studio) : { ...TOOL_NOT_AT_THIS_STUDIO }
   }
 
   // MIAHATCH.2 — a `un1t:` event or booking id is a un1t.online class. Outside

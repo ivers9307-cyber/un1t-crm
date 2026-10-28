@@ -8,7 +8,7 @@ import { agentConfirmationTemplates } from './notify'
 import { STILLORGAN_BLOB, ORG_LAYER, withOrgLayer } from './settings-fixtures.test-helpers'
 
 const LOC = 'a0000000-0000-0000-0000-0000000000a1'
-const NONE = { booking: null, cancellation: null, decline: null, eventMove: null, eventMoveFailed: null }
+const NONE = { booking: null, cancellation: null, classMove: null, decline: null, eventMove: null, eventMoveFailed: null }
 
 function db({ customerAgent, org = null, locationError = null }) {
   const result = locationError
@@ -22,6 +22,8 @@ describe('agentConfirmationTemplates — resolved settings', () => {
     expect(await agentConfirmationTemplates(db({ customerAgent: STILLORGAN_BLOB, org: ORG_LAYER }), LOC)).toEqual({
       booking: 'Org booked {class}.',
       cancellation: 'Org cancelled {class}.',
+      // UN1TMOVE.2
+      classMove: 'Org moved {from} to {to}.',
       decline: 'Org decline.',
       eventMove: 'Org moved {event}.',
       eventMoveFailed: 'Org move failed: {reason}.',

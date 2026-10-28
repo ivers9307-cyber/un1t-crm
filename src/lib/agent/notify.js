@@ -26,6 +26,15 @@ export const DEFAULT_BOOKING_CONFIRMATION_TEXT =
 export const DEFAULT_CANCELLATION_CONFIRMATION_TEXT =
   'All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon.'
 
+// UN1TMOVE.2 — sent when a un1t.online class booking is moved (staff Move,
+// or an approved move card). Operator-editable
+// (settings.customer_agent.class_move_confirmation_text); this is the
+// fallback. {from} and {to} render each class's name, day and time; a clause
+// with nothing to say is dropped. src/lib/book-chat-copy.js renders the same
+// text for the staff panel (DEFAULT_MOVE_CHAT_TEXT equals this; pinned).
+export const DEFAULT_CLASS_MOVE_CONFIRMATION_TEXT =
+  'All sorted, your booking has been moved from {from} to {to}. See you there.'
+
 // MIA-BOOK.1 — what Mia tells the customer when Glofox rejects a booking for
 // an account-shaped reason and the attempt becomes a pending approval.
 // Operator-editable (settings.customer_agent.booking_issue_handoff_text).
@@ -68,6 +77,25 @@ export function buildBookingConfirmationText({ className, classTime, template } 
     String(template || '').trim() || DEFAULT_BOOKING_CONFIRMATION_TEXT,
     className, classTime,
   )
+}
+
+/**
+ * UN1TMOVE.2 — "your booking was moved", from one class to another. Pure.
+ * @param {{ from?: string, to?: string, template?: string|null }} [args]
+ */
+export function buildClassMoveConfirmationText({ from, to, template } = {}) {
+  const base = String(template || '').trim() || DEFAULT_CLASS_MOVE_CONFIRMATION_TEXT
+  return stripEmDashes(fillClassMove(base, from, to)).trim()
+}
+
+/** {from} / {to} filled; an empty one drops its "from {from}" / "to {to}" clause. Pure. */
+export function fillClassMove(base, from, to) {
+  const f = String(from || '').trim()
+  const t = String(to || '').trim()
+  let out = String(base)
+  out = f ? out.replace(/\{from\}/g, f) : out.replace(/\s*\bfrom\s+\{from\}/gi, '').replace(/\s*\{from\}/g, '')
+  out = t ? out.replace(/\{to\}/g, t) : out.replace(/\s*\bto\s+\{to\}/gi, '').replace(/\s*\{to\}/g, '')
+  return out
 }
 
 /** AGENT-CANCEL.1 — in-thread confirmation once an approved cancellation executes. */
@@ -136,7 +164,7 @@ export function buildEventMoveFailedText({ error, template } = {}) {
  * @returns {Promise<{booking: string|null, cancellation: string|null, decline: string|null, eventMove: string|null, eventMoveFailed: string|null}>}
  */
 export async function agentConfirmationTemplates(db, locationId) {
-  const none = { booking: null, cancellation: null, decline: null, eventMove: null, eventMoveFailed: null }
+  const none = { booking: null, cancellation: null, classMove: null, decline: null, eventMove: null, eventMoveFailed: null }
   if (!locationId) return none
   try {
     // MIAORG.1 — DEFAULTS <- org <- studio, so an org-wide confirmation text
@@ -147,6 +175,7 @@ export async function agentConfirmationTemplates(db, locationId) {
     return {
       booking: String(s.booking_confirmation_text || '').trim() || null,
       cancellation: String(s.cancellation_confirmation_text || '').trim() || null,
+      classMove: String(s.class_move_confirmation_text || '').trim() || null,
       decline: String(s.approval_decline_text || '').trim() || null,
       eventMove: String(s.event_move_confirmation_text || '').trim() || null,
       eventMoveFailed: String(s.event_move_failed_text || '').trim() || null,

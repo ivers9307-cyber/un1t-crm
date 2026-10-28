@@ -11,7 +11,7 @@ import {
 } from './auto-reply'
 import {
   UN1T_TOOL_DESCRIPTIONS, UN1T_DUAL_TOOL_DESCRIPTIONS, UN1T_FULL_TOOL_DESCRIPTIONS, UN1T_WRITE_TOOL_NAMES, UN1T_PURCHASE_TOOL_NAMES,
-  REQUEST_REFUND_TOOL, deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint,
+  REQUEST_REFUND_TOOL, MOVE_CLASS_BOOKING_TOOL, deriveUn1tReadTools, deriveUn1tFullTools, selectToolBlock, withCacheBreakpoint,
 } from './tool-blocks'
 import { planTurnTools, resolveTurnPlan, turnForPlan } from './turn-studios'
 import { logWarn } from '@/lib/log'
@@ -171,8 +171,8 @@ describe('the un1t full block (3b)', () => {
   const NEW_IN_FULL = ['book_class', 'cancel_class_booking']
   const PURCHASE = ['list_purchase_options', 'send_purchase_link', 'check_my_purchase']
 
-  it('is the dual block plus request_refund and the three purchase tools, in the same order', () => {
-    expect(names(CACHED_UN1T_FULL_TOOLS)).toEqual([...names(CACHED_UN1T_READ_DUAL_TOOLS), 'request_refund', ...PURCHASE])
+  it('is the dual block plus move_class_booking, request_refund and the three purchase tools, in the same order', () => {
+    expect(names(CACHED_UN1T_FULL_TOOLS)).toEqual([...names(CACHED_UN1T_READ_DUAL_TOOLS), 'move_class_booking', 'request_refund', ...PURCHASE])
     expect(names(deriveUn1tFullTools(ALL_AGENT_TOOLS))).toEqual(names(CACHED_UN1T_FULL_TOOLS))
     expect(new Set(PURCHASE)).toEqual(new Set(UN1T_PURCHASE_TOOL_NAMES))
     expect(PURCHASE_TOOL_NAMES).toEqual(UN1T_PURCHASE_TOOL_NAMES)
@@ -216,6 +216,21 @@ describe('the un1t full block (3b)', () => {
     expect(agentToolsFor({ ...turn, channel: 'instagram' })).toBe(CACHED_NO_BOOKING_TOOLS)
   })
 
+  // UN1TMOVE.1 — one call moves a un1t.online booking (never cancel then book).
+  it('move_class_booking: booking_id, event_id and starts_at all required (no optional parameter), un1t ids only, never a word about how full', () => {
+    expect(MOVE_CLASS_BOOKING_TOOL.name).toBe('move_class_booking')
+    expect(MOVE_CLASS_BOOKING_TOOL.input_schema).toMatchObject({ type: 'object', required: ['booking_id', 'event_id', 'starts_at'] })
+    expect(Object.keys(MOVE_CLASS_BOOKING_TOOL.input_schema.properties).sort()).toEqual(['booking_id', 'event_id', 'starts_at'])
+    expect(MOVE_CLASS_BOOKING_TOOL.description).toMatch(/moved only when/i)
+    expect(MOVE_CLASS_BOOKING_TOOL.description).toMatch(/never cancel and book/i)
+    const json = JSON.stringify(MOVE_CLASS_BOOKING_TOOL)
+    expect(json).toMatch(/un1t:/)
+    expect(json).not.toMatch(/[—–]/)
+    expect(json).not.toMatch(/limited|spaces|capacity|glofox/i)
+    const inBlock = CACHED_UN1T_FULL_TOOLS.find((x) => x.name === 'move_class_booking')
+    expect(inBlock).toEqual(MOVE_CLASS_BOOKING_TOOL)
+  })
+
   it('request_refund: reason required, booking_id optional; neutral words that never promise a refund', () => {
     expect(REQUEST_REFUND_TOOL.name).toBe('request_refund')
     expect(REQUEST_REFUND_TOOL.input_schema).toMatchObject({ type: 'object', required: ['reason'] })
@@ -252,7 +267,7 @@ describe('the un1t full block (3b)', () => {
   })
 
   it('every other tool is the dual block\'s own object; the full list is never touched', () => {
-    for (const t of CACHED_UN1T_FULL_TOOLS.slice(0, -4)) {
+    for (const t of CACHED_UN1T_FULL_TOOLS.slice(0, -5)) {
       if (NEW_IN_FULL.includes(t.name)) continue
       const dualTool = deriveUn1tReadTools(ALL_AGENT_TOOLS, { dual: true }).find((x) => x.name === t.name)
       expect(JSON.stringify(t), t.name).toBe(JSON.stringify(dualTool))
@@ -404,7 +419,7 @@ describe('refuseToolForTurn', () => {
   it('invented tools: send_purchase_link, check_my_purchase, list_purchase_options, request_refund refused in glofox, no_booking, un1t_read and un1t_read_dual, before any db call', () => {
     const db = throwingDb()
     for (const block of ['glofox', 'no_booking', 'un1t_read', 'un1t_read_dual']) {
-      for (const name of [...UN1T_PURCHASE_TOOL_NAMES, 'request_refund']) {
+      for (const name of [...UN1T_PURCHASE_TOOL_NAMES, 'request_refund', 'move_class_booking']) {
         expect(refuseToolForTurn(name, { db, turn: turn(block) })).toMatchObject({ error: 'not_available_at_this_studio' })
       }
     }
@@ -486,18 +501,19 @@ describe('refuseToolForTurn', () => {
   it('invented tools: request_refund and book_class refused in un1t_read, allowed in un1t_full, before any db call', () => {
     const db = throwingDb()
     const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
-    for (const name of ['request_refund', 'book_class', 'cancel_class_booking']) {
+    for (const name of ['request_refund', 'book_class', 'cancel_class_booking', 'move_class_booking']) {
       expect(refuseToolForTurn(name, { db, turn: turn('un1t_read') }), name).toEqual(TOOL_NOT_AT_THIS_STUDIO)
       expect(refuseToolForTurn(name, { db, turn: full }), name).toBeNull()
     }
     expect(refuseToolForTurn('request_refund', { db, turn: turn('un1t_read_dual') })).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+    expect(refuseToolForTurn('move_class_booking', { db, turn: turn('un1t_read_dual') })).toEqual(TOOL_NOT_AT_THIS_STUDIO)
     expect(db.from).not.toHaveBeenCalled()
   })
 
   it('the refusal rule matches what un1t_full offers (block names agree with the executor)', () => {
     const full = { block: 'un1t_full', answerable: [hatch], channel: 'whatsapp', un1tWrites: true }
     const offered = new Set(names(CACHED_UN1T_FULL_TOOLS))
-    const every = [...new Set([...names(ALL_AGENT_TOOLS), 'request_refund', ...UN1T_PURCHASE_TOOL_NAMES])]
+    const every = [...new Set([...names(ALL_AGENT_TOOLS), 'request_refund', 'move_class_booking', ...UN1T_PURCHASE_TOOL_NAMES])]
     for (const name of every) {
       expect(refuseToolForTurn(name, { turn: full }) !== null, `un1t_full/${name}`).toBe(!offered.has(name))
     }
@@ -514,6 +530,7 @@ describe('refuseToolForTurn', () => {
     const ctx = { db, verifiedContactId: 'c1', locationId: HATCH_ID, turn: turn('un1t_read') }
     expect(await executeBookingTool('book_class', { event_id: 'x' }, ctx)).toEqual(TOOL_NOT_AT_THIS_STUDIO)
     expect(await executeBookingTool('cancel_class_booking', { booking_id: 'x' }, ctx)).toEqual(TOOL_NOT_AT_THIS_STUDIO)
+    expect(await executeBookingTool('move_class_booking', { booking_id: 'un1t:x', event_id: 'un1t:y' }, ctx)).toEqual(TOOL_NOT_AT_THIS_STUDIO)
     expect(await executeAccountTool('send_purchase_link', {}, ctx)).toEqual(TOOL_NOT_AT_THIS_STUDIO)
     expect(db.from).not.toHaveBeenCalled()
   })

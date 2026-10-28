@@ -120,6 +120,8 @@ function fakeDb(tables = {}, { fail = {} } = {}) {
       gte: (c, v) => { st.filters.push((r) => r[c] >= v); return b },
       lte: (c, v) => { st.filters.push((r) => r[c] <= v); return b },
       contains: (c, obj) => { st.filters.push((r) => Object.entries(obj).every(([k, v]) => r[c]?.[k] === v)); return b },
+      // `col->>key` JSON paths resolve into the jsonb column; is(…, null) only.
+      is: (c, v) => { const [col, key] = c.split('->>'); st.filters.push((r) => (key ? r[col]?.[key] : r[col]) == v); return b },
       order: (c, { ascending = true } = {}) => { st.order = [c, ascending]; return b },
       range: (a, z) => { st.range = [a, z]; return b },
       limit: (n) => { st.limit = n; return b },
@@ -561,6 +563,20 @@ describe('un1tBookClass', () => {
     expect(h.book).not.toHaveBeenCalled()
   })
 
+  it('UN1TMOVE.1: a pending MOVE card into the same class is never reused as a booking card', async () => {
+    const moveCard = {
+      id: 'req-move', location_id: HATCH, contact_id: HATCH_CONTACT, kind: 'class_booking', status: 'pending',
+      details: { provider: 'un1t_online', event_id: EVENT, move_from_booking_id: 'bk-old' },
+    }
+    const { db, inserts } = fakeDb({ agent_membership_requests: [moveCard] })
+    const ctx = ctxFor(db, { settings: { ...HATCH_SETTINGS, booking_mode: 'draft' }, threadLocationId: STILLORGAN })
+    const r = await un1tBookClass(ctx, input(), hatch(), deps())
+    expect(r).toMatchObject({ booked: false, pending_approval: true })
+    const [card] = requestRows(inserts)
+    expect(card, 'a fresh booking card, not the move card').toBeTruthy()
+    expect(card.row.details.move_from_booking_id).toBeUndefined()
+  })
+
   it('passes a bare eventId (prefix stripped), origin mia and originRef = request id; never bypassCredit', async () => {
     const { db, inserts } = fakeDb()
     await un1tBookClass(ctxFor(db), input(), hatch({ contactIds: [SIBLING_CONTACT, HATCH_CONTACT] }), deps())
@@ -820,6 +836,29 @@ describe('un1tCancelBooking', () => {
     const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
     expect(r).toEqual({ cancelled: true, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
     expect(requestRows(inserts)[0].row.details).toMatchObject({ starts_at: null, class_name: 'Fictional Hatch HIIT', class_time: LABEL })
+  })
+
+  // UN1TMOVE.2 — a booking moved inside the late window is never cancelled.
+  it('a booking moved inside the late-cancel window: refused moved_late, no card, no cancel(); an unreadable ledger refuses too', async () => {
+    const late = { id: 'w-1', location_id: HATCH, op: 'move', late_window: true, stage: 'done', target: BOOKING, un1t_ref: BOOKING }
+    for (const settings of [HATCH_SETTINGS, { ...HATCH_SETTINGS, booking_mode: 'draft' }]) {
+      const { db, inserts } = fakeDb({ un1t_write_events: [late] })
+      const r = await un1tCancelBooking(ctxFor(db, { settings }), cinput({ confirm_late_fee: true }), hatch())
+      expect(r).toMatchObject({ cancelled: false, refused: 'moved_late' })
+      expect(r.message).toMatch(/cannot be cancelled/)
+      expect(inserts).toEqual([])
+    }
+    const { db, inserts } = fakeDb({}, { fail: { un1t_write_events: { select: true } } })
+    expect(await un1tCancelBooking(ctxFor(db), cinput(), hatch())).toMatchObject({ cancelled: false, error: 'CANCELLATION_UNCERTAIN', reason: 'late_move_unreadable' })
+    expect(inserts).toEqual([])
+    expect(h.cancel).not.toHaveBeenCalled()
+  })
+
+  it("D's cancel refusal cancel_after_late_move is relayed as moved_late (the row closes failed)", async () => {
+    h.cancel.mockResolvedValueOnce(refused('cancel_after_late_move', 'x'))
+    const { db, updates } = fakeDb()
+    expect(await un1tCancelBooking(ctxFor(db), cinput(), hatch())).toMatchObject({ cancelled: false, refused: 'moved_late' })
+    expect(lastUpdate(updates).patch).toMatchObject({ status: 'failed', details: { reason: 'moved_late' } })
   })
 
   it('late-cancel refusal relayed, never promises a credit', async () => {

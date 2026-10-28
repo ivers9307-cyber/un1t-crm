@@ -58,6 +58,10 @@ export const ledgerKey = Object.freeze({
   regrant: (loc, un1tUserId) => `trial_regrant:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}`,
   book: (loc, un1tUserId, eventId) => `book:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('eventId', eventId)}`,
   cancel: (loc, bookingId) => `cancel:${part('loc', loc)}:${part('bookingId', bookingId)}`,
+  // UN1TMOVE.1: one key per booking and target class. A done row is not final
+  // (a booking can be moved back and forth), so moveBooking confirms it with
+  // its check read before it trusts it.
+  move: (loc, bookingId, eventId) => `move:${part('loc', loc)}:${part('bookingId', bookingId)}:${part('eventId', eventId)}`,
   // FEES.1: one key per charge ATTEMPT of one class fee (the idempotency-key
   // header too). A refused attempt took no money, so the next attempt is a new
   // key; a re-send within one attempt reuses it.
@@ -106,7 +110,7 @@ function dbError(what, error) {
  */
 export async function beginAttempt(
   db,
-  { locationId, contactId, un1tUserId, op, origin, originRef, actorUserId, key, target, method, termsAcceptedAt, termsSource },
+  { locationId, contactId, un1tUserId, op, origin, originRef, actorUserId, key, target, method, termsAcceptedAt, termsSource, lateWindow },
 ) {
   if (!locationId || !op || !origin || !key) {
     throw new TypeError('beginAttempt: locationId, op, origin and key are required')
@@ -127,6 +131,10 @@ export async function beginAttempt(
   if (op === 'trial_regrant' && !un1tUserId) throw new TypeError('beginAttempt: a trial_regrant needs un1tUserId')
   // A fee charge names its person and its fee (mig 781 fee_target_check).
   if (op === 'fee_charge' && (!un1tUserId || !target)) throw new TypeError('beginAttempt: a fee_charge needs un1tUserId and target')
+  // UN1TMOVE.2 (mig 786): only a move row carries late_window (a CHECK), and
+  // a move names the booking it moves (the cancel paths read it by target).
+  if (op === 'move' && !target) throw new TypeError('beginAttempt: a move needs target (the booking it moves)')
+  if (lateWindow === true && op !== 'move') throw new TypeError('beginAttempt: only a move carries lateWindow')
   const { data, error } = await db
     .from('un1t_write_events')
     .insert({
@@ -143,6 +151,7 @@ export async function beginAttempt(
       method: method ?? null,
       terms_accepted_at: termsAcceptedAt ?? null,
       terms_source: termsSource ?? null,
+      ...(op === 'move' ? { late_window: lateWindow === true } : {}),
     })
     .select(LEDGER_COLUMNS)
     .single()

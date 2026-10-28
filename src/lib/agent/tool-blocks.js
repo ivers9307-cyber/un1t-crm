@@ -5,9 +5,9 @@
 // built here from the same full list: `un1t_read` (a member at a un1t.online
 // studio only: no booking writes), `un1t_read_dual` (the person is also
 // answerable at a Glofox studio, so the Glofox booking tools stay) and
-// `un1t_full` (MIAHATCH.5, block 3b: the dual block plus request_refund, with
-// book_class and cancel_class_booking working at either studio, then the three
-// purchase tools from MIAHATCH.6; WhatsApp, writes_enabled and the studio's Mia
+// `un1t_full` (MIAHATCH.5, block 3b: the dual block plus move_class_booking
+// (UN1TMOVE.1) and request_refund, with book_class and cancel_class_booking
+// working at either studio, then the three purchase tools from MIAHATCH.6; WhatsApp, writes_enabled and the studio's Mia
 // switch only). Each is derived ONCE by the
 // caller, so the prompt-cache prefix never moves between turns.
 //
@@ -128,8 +128,8 @@ export const UN1T_FULL_TOOL_DESCRIPTIONS = Object.freeze({
     'was cancelled: tell the customer the fee or lost credit it describes and ask again; call it once more with ' +
     'confirm_late_fee true only after a clear yes. If the system refuses (for example a late ' +
     'cancellation, or a class that already happened), relay its reason honestly, and never promise a refund or a credit ' +
-    'back. For a reschedule, confirm both the cancellation and the new class with the customer first, then cancel and ' +
-    'book the new one.',
+    'back. To reschedule a "un1t:" booking, use move_class_booking instead. To reschedule any other booking, confirm both ' +
+    'the cancellation and the new class with the customer first, then cancel and book the new one.',
 })
 
 const UN1T_FULL_SCHEMA_TEXT = Object.freeze({
@@ -149,6 +149,32 @@ function reworded(schema, texts) {
   }
   return { ...schema, properties }
 }
+
+// UN1TMOVE.1 — a reschedule at the un1t.online studio in ONE call (never a
+// cancel then a book, which can lose the credit or the spot in between).
+// Block 3b only. Every input is required (the optional-parameter budget does
+// not move): the booking from list_my_upcoming_bookings and the class from
+// list_upcoming_classes, both "un1t:" ids. A Glofox booking still reschedules
+// as cancel then book. No em or en dashes; never a word about how full a class is.
+export const MOVE_CLASS_BOOKING_TOOL = Object.freeze({
+  name: 'move_class_booking',
+  description:
+    "Move one of the VERIFIED member's upcoming un1t.online bookings to another class at the same studio, in one step " +
+    '(a reschedule). For a "un1t:" booking, never cancel and book to reschedule: use this instead, so they cannot lose ' +
+    'their place or their credit in between. Restate the class they are leaving and the new class with its day and time ' +
+    'in one question and get a clear yes before calling. Say it is moved only when this tool\'s result says moved. If it ' +
+    'says the team will confirm, say exactly that and that they keep their original class until then; if it failed ' +
+    '(class full, too late, or anything else), relay that honestly: their original booking still stands.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      booking_id: { type: 'string', description: 'The "un1t:" booking_id from list_my_upcoming_bookings, copied exactly.' },
+      event_id: { type: 'string', description: 'The new class\'s "un1t:" event_id from list_upcoming_classes, copied exactly.' },
+      starts_at: { type: 'string', description: 'The new class\'s starts_at exactly as list_upcoming_classes gave it.' },
+    },
+    required: ['booking_id', 'event_id', 'starts_at'],
+  },
+})
 
 // MIAHATCH.5 — a refund request goes to the team as a staff approval card
 // (R2: never automatic, no code issues a refund). The executor arrives in a
@@ -179,7 +205,8 @@ export const REQUEST_REFUND_TOOL = Object.freeze({
 /**
  * Block 3b's tools (MIAHATCH.5): the dual read block (every tool of the full
  * list, the reads re-described), with book_class and cancel_class_booking
- * re-described for either studio, then request_refund, then `extraTools`
+ * re-described for either studio, then move_class_booking (UN1TMOVE.1), then
+ * request_refund, then `extraTools`
  * (MIAHATCH.6: the three purchase tools, purchase-tools.js, by default). A
  * re-described tool is a new object; the input is never touched. Pure.
  */
@@ -189,7 +216,7 @@ export function deriveUn1tFullTools(tools, { extraTools = PURCHASE_TOOLS } = {})
     if (!description) return t
     return { ...t, description, input_schema: reworded(t.input_schema, UN1T_FULL_SCHEMA_TEXT[t.name] || {}) }
   })
-  return [...dual.map(withLateFeeConfirm), REQUEST_REFUND_TOOL, ...extraTools]
+  return [...dual.map(withLateFeeConfirm), MOVE_CLASS_BOOKING_TOOL, REQUEST_REFUND_TOOL, ...extraTools]
 }
 
 // FEES.2 — block 3b's cancel takes one more optional input: the member's

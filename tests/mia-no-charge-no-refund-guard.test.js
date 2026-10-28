@@ -62,7 +62,9 @@ const NEVER_ALLOWLISTED = /un1t|\/agent\/|purchase|pay-done|mia/i
 
 // Mia's agent modules may take only these from D's write ops (no charge, no client writes).
 const AGENT_DIR = 'src/lib/agent/'
-const AGENT_OPS_ALLOWED = Object.freeze(['book', 'cancel', 'createCheckoutLink', 'grantTrial'])
+// moveBooking (UN1TMOVE.1): a reschedule in one call. It charges and refunds
+// nothing: POST /bookings/{id}/move { eventId }, and un1t.online carries the credit over.
+const AGENT_OPS_ALLOWED = Object.freeze(['book', 'cancel', 'moveBooking', 'createCheckoutLink', 'grantTrial'])
 
 // ── Parsing ────────────────────────────────────────────────────────────────
 const parse = (text, file = 'scan.jsx') => {

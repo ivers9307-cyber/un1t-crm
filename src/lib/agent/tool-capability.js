@@ -87,14 +87,15 @@ export const TOOL_NOT_AT_THIS_STUDIO = Object.freeze({
 // refuses them in every block that does not offer them.
 // book_class and cancel_class_booking are Glofox tools today: they appear here
 // because on a un1t.online turn they are WRITES, gated like the rest.
-export const UN1T_WRITE_TOOL_NAMES = Object.freeze(new Set(['book_class', 'cancel_class_booking', 'request_refund']))
+// move_class_booking (UN1TMOVE.1) is a un1t.online write only: block 3b alone offers it.
+export const UN1T_WRITE_TOOL_NAMES = Object.freeze(new Set(['book_class', 'cancel_class_booking', 'move_class_booking', 'request_refund']))
 export const UN1T_PURCHASE_TOOL_NAMES = Object.freeze(new Set(['list_purchase_options', 'send_purchase_link', 'check_my_purchase']))
 
 // Per block, the tools NOT offered in it (the executor-side mirror of the
 // block's name list; tool-blocks.test.js proves the two agree). An exclusion
 // list rather than an inclusion one so this stays a leaf module: the offered
 // list lives with the tool definitions, which import this file.
-const UN1T_ONLY = ['request_refund', ...UN1T_PURCHASE_TOOL_NAMES]
+const UN1T_ONLY = ['request_refund', 'move_class_booking', ...UN1T_PURCHASE_TOOL_NAMES]
 const NOT_OFFERED_IN_BLOCK = Object.freeze({
   glofox: new Set(UN1T_ONLY),
   no_booking: new Set([...BOOKING_SYSTEM_TOOL_NAMES, ...UN1T_ONLY]),
@@ -103,7 +104,7 @@ const NOT_OFFERED_IN_BLOCK = Object.freeze({
   un1t_read: new Set(['book_class', 'cancel_class_booking', ...UN1T_ONLY]),
   un1t_read_dual: new Set([...UN1T_ONLY]),
   // MIAHATCH.5 / MIAHATCH.6 — block 3b offers every tool: the writes
-  // (book_class, cancel_class_booking, request_refund) and the three purchase
+  // (book_class, cancel_class_booking, move_class_booking, request_refund) and the three purchase
   // tools. They still run only on WhatsApp with un1tWrites (refuseToolForTurn).
   un1t_full: new Set(),
 })

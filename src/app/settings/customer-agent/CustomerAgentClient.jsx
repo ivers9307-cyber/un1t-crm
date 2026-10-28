@@ -732,6 +732,17 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a cancellation the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
         </div>
 
+        {/* UN1TMOVE.2 — sent when a un1t.online class booking is moved: staff
+            Move (with the chat confirmation ticked) or an approved move card.
+            Default mirrors src/lib/agent/notify.js. */}
+        <div>
+          <FieldLabel tag={sourceTag(['class_move_confirmation_text'])}>Class move confirmation message</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.class_move_confirmation_text || ''}
+            onChange={e => setField('class_move_confirmation_text', e.target.value)}
+            placeholder="All sorted, your booking has been moved from {from} to {to}. See you there." />
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when a class booking is moved to another class: when you approve a move the agent drafted, and when staff move it from the contact page with the chat confirmation ticked. <code>{'{from}'}</code> and <code>{'{to}'}</code> become each class with its day and time. Leave blank to use the default shown.</p>
+        </div>
+
         {/* EVENT-MOVE.7 — in-thread texts once staff decide the agent's event
             move request. Defaults mirror notify.js. */}
         <div>

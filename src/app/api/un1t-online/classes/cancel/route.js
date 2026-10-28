@@ -3,7 +3,9 @@
 // Cancel a contact's un1t.online booking from the staff Book panel. Same gate
 // as the book route; the booking must be THIS contact's at THIS studio in the
 // mirror (un1t_bookings), else 404. Then the `cancel` primitive (an empty
-// body, never a refund flag) with origin 'staff' and the actor.
+// body, never a refund flag) with origin 'staff' and the actor. UN1TMOVE.2:
+// the primitive refuses a booking moved inside the late-cancel window (and
+// refuses when it cannot tell), answered here as a 409 in staff words.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'

@@ -28,7 +28,8 @@
 //                MIA_NO_CREDITS, in Mia's words rather than D's trial copy.
 //   confirm      on 'actioned' (a real write, not a record), ONE in-thread
 //                confirmation via sendAgentThreadMessage with the operator's
-//                booking or cancellation text. Its answer is recorded on the
+//                booking, cancellation or (UN1TMOVE.2, a move card) class
+//                move text. Its answer is recorded on the
 //                card (details.confirmation): a closed 24h window is recorded,
 //                never retried, and no send outcome changes the card's status.
 //
@@ -145,9 +146,19 @@ async function sendConfirmation(db, row, details) {
     const notify = await import('@/lib/agent/notify')
     const templates = await notify.agentConfirmationTemplates(db, row.location_id)
     const args = { className: details?.class_name, classTime: details?.class_time }
+    // UN1TMOVE.2 — a move card (class_booking + move_from_booking_id) says
+    // the booking was moved, from the old class to the new, in the studio's
+    // editable class_move_confirmation_text.
+    const label = (...parts) => parts.map((p) => (typeof p === 'string' ? p.trim() : '')).filter(Boolean).join(', ')
     const text = row.kind === 'class_cancellation'
       ? notify.buildCancellationConfirmationText({ ...args, template: templates?.cancellation })
-      : notify.buildBookingConfirmationText({ ...args, template: templates?.booking })
+      : details?.move_from_booking_id
+        ? notify.buildClassMoveConfirmationText({
+          from: label(details.move_from_class_name, details.move_from_class_time),
+          to: label(details?.class_name, details?.class_time),
+          template: templates?.classMove,
+        })
+        : notify.buildBookingConfirmationText({ ...args, template: templates?.booking })
     const res = await notify.sendAgentThreadMessage(db, { channel: row.channel, conversationId: row.conversation_id, text })
     if (res?.sent === true) return { sent: true }
     return { sent: false, reason: res?.reason || 'not_sent' }
