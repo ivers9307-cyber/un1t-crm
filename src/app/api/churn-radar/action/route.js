@@ -22,6 +22,9 @@
 //                   idempotent (a member already mid-sequence is a
 //                   no-op). The dunning sequence is set in churn-radar
 //                   settings (locations.dunning_sequence_id).
+//                   UN1TDUN.1: at a un1t.online studio the debt comes from
+//                   the un1t.online mirror and the run carries our short
+//                   pay link (src/lib/un1t-dunning.js); Glofox is not read.
 //   snoozed       — hide the member from the radar for snooze_days
 //                   (default 14).
 //   dismissed     — CHURN-CLEAN.1: permanently reclassify this contact
@@ -50,6 +53,7 @@ import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { isWhatsAppNumberMissing, noNumberSwitchedOnMessage } from '@/lib/whatsapp-number-missing'
 import { enrolContacts } from '@/lib/sequences'
 import { capturePaymentForRun, refreshActiveRunPayment } from '@/lib/dunning-payment'
+import { maybeEnrolUn1tDunning } from '@/lib/un1t-dunning'
 import { isMembershipInvoice } from '@/lib/glofox-arrears'
 import { paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
@@ -90,9 +94,29 @@ function isoDatePlus(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 }
 
-// UN1TRADAR.3 — the payment_reminder refusals (a un1t.online studio; a crossover).
-const PAYMENT_REMINDER_UN1T = 'Payment reminders are not available for un1t.online studios yet.'
+// UN1TRADAR.3 — the payment_reminder refusal for a crossover.
 const PAYMENT_REMINDER_NOT_HOME = "Payment reminders go from the member's home studio."
+// The refusal copy both branches share.
+const NO_DUNNING_SEQUENCE = 'No dunning sequence is set up yet — pick one in the churn-radar settings first.'
+const SEQUENCE_UNAVAILABLE = 'The configured dunning sequence is no longer available — re-pick it in settings.'
+const NOT_BEHIND = "This member isn't behind on payment, so no reminder was sent."
+const sequencePaused = (name) => `Your dunning sequence "${name}" is paused — activate it before sending reminders.`
+
+// UN1TDUN.1 — maybeEnrolUn1tDunning's refusals → the same responses the
+// Glofox branch gives. `already` reasons answer 200 already_enrolled.
+const UN1T_ALREADY = new Set(['already_enrolled', 'active_run_other_invoice', 'not_reenrolled'])
+function un1tReminderRefusal(res) {
+  const r = res?.reason
+  if (r === 'no_dunning_sequence') return [400, NO_DUNNING_SEQUENCE]
+  if (r === 'sequence_unavailable' || r === 'not_un1t_studio') return [400, SEQUENCE_UNAVAILABLE]
+  if (r === 'sequence_paused') return [400, sequencePaused(res.sequence_name || '')]
+  if (r === 'past_due_unreadable' || r === 'enrolment_unreadable' || r === 'location_unreadable') {
+    return [502, "Could not read the member's invoices. Try again shortly."]
+  }
+  if (r === 'threw') return [502, 'Could not start the dunning sequence.']
+  // not_behind, not_membership_invoice, no_open_invoice, cancelling, member_paused
+  return [409, NOT_BEHIND]
+}
 
 // WAORGNUMBER.4 (R8) — the 409 for a radar studio with no WhatsApp number
 // switched on, naming it: "No WhatsApp number is switched on at {studio}." A
@@ -219,9 +243,12 @@ export async function POST(request) {
   // behind (a reminder must never reach a paying member), then enrols
   // them. enrolContacts is idempotent — a re-click on a member already
   // mid-sequence is a no-op, not a double-send.
+  // UN1TDUN.1 — true once the un1t.online branch below has handled the click;
+  // the Glofox branch after it then does not run.
+  let un1tReminderDone = false
   if (action === 'payment_reminder') {
-    // UN1TRADAR.3 — the reminder reads glofox_invoices and mints a Glofox pay
-    // link: refused at a un1t.online studio (the button is hidden there too).
+    // UN1TRADAR.3 — the Glofox branch reads glofox_invoices and mints a Glofox
+    // pay link, so the studio's membership source decides the branch.
     let source
     try {
       ({ source } = await radarReadsFor(db, locationId))
@@ -229,9 +256,29 @@ export async function POST(request) {
       logWarn('churn-radar', 'membership source unreadable', { locationId, code: err?.code ?? null })
       return NextResponse.json({ success: false, error: SOURCE_UNREADABLE }, { status: 503 })
     }
+    // UN1TDUN.1 — at a un1t.online studio the debt is re-derived from the
+    // un1t.online mirror (never the client, never Glofox) and the run carries
+    // our short pay link: maybeEnrolUn1tDunning does both. Manual, so it runs
+    // with automatic starts off, as the Glofox branch below does. The debt is
+    // this studio's own un1t.online invoice, so a member whose contact lives
+    // at another studio is chased here too (the crossover refusal below is
+    // about Glofox billing columns, which are the home studio's).
     if (source === 'un1t_online') {
-      return NextResponse.json({ success: false, error: PAYMENT_REMINDER_UN1T }, { status: 409 })
+      const res = await maybeEnrolUn1tDunning(db, locationId, contactId, { manual: true })
+      if (UN1T_ALREADY.has(res?.reason)) {
+        // Already mid-run on this debt: idempotent no-op, no new audit row.
+        invalidateRadar('churn', locationId)
+        return NextResponse.json({ success: true, data: { action, already_enrolled: true } })
+      }
+      if (!(res?.enrolled > 0)) {
+        const [status, error] = un1tReminderRefusal(res)
+        return NextResponse.json({ success: false, error }, { status })
+      }
+      logRow.note = note || `Dunning (overdue) → ${res.sequence_name || 'dunning sequence'}`
+      un1tReminderDone = true
     }
+  }
+  if (action === 'payment_reminder' && !un1tReminderDone) {
     // A crossover's billing columns and invoices are its home studio's: never
     // drive this studio's dunning from them.
     if (contact.location_id !== locationId) {
@@ -246,7 +293,7 @@ export async function POST(request) {
     if (!seqId) {
       return NextResponse.json({
         success: false,
-        error: 'No dunning sequence is set up yet — pick one in the churn-radar settings first.',
+        error: NO_DUNNING_SEQUENCE,
       }, { status: 400 })
     }
 
@@ -287,7 +334,7 @@ export async function POST(request) {
     if (!kind) {
       return NextResponse.json({
         success: false,
-        error: "This member isn't behind on payment, so no reminder was sent.",
+        error: NOT_BEHIND,
       }, { status: 409 })
     }
 
@@ -301,13 +348,13 @@ export async function POST(request) {
     if (!seq || seq.location_id !== locationId) {
       return NextResponse.json({
         success: false,
-        error: 'The configured dunning sequence is no longer available — re-pick it in settings.',
+        error: SEQUENCE_UNAVAILABLE,
       }, { status: 400 })
     }
     if (seq.status !== 'active') {
       return NextResponse.json({
         success: false,
-        error: `Your dunning sequence "${seq.name}" is paused — activate it before sending reminders.`,
+        error: sequencePaused(seq.name),
       }, { status: 400 })
     }
 

@@ -618,6 +618,50 @@ describe('FEES.3 — /fee-appeal is public on every host', () => {
   })
 })
 
+// ── 7e. UN1TDUN.1 — the un1t.online short pay link is public on every host ──
+//
+// A member opens <customer base>/pay-link/<token> from a WhatsApp payment
+// reminder (the template's URL button). No session, and the base is the
+// studio's customer host, so all FOUR lists must carry it.
+
+describe('UN1TDUN.1 — /pay-link is public on every host', () => {
+  const PAY = '/pay-link/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9r'
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  for (const host of [CRM_HOST, MARKETING_HOST, TENANT_HOST]) {
+    it(`${host} admits ${PAY} anonymously without a rewrite`, async () => {
+      const res = await proxy(makeReq({ host, path: PAY }))
+      expect(rewrittenTo(res), `${PAY} fell through to the /welcome fallback on ${host}`).toBe(null)
+      expect(admitted(res), `${PAY} is not admitted on ${host}`).toBe(true)
+      expect(ssrClient.auth.getUser).not.toHaveBeenCalled()
+    })
+  }
+
+  it('AppShell renders the page with no session', () => {
+    pathnameImpl = PAY
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/pay-link is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing brand and the tenant defaults name /pay-link/ explicitly', () => {
+    for (const [label, allowed] of [['un1t-marketing', marketingBrand().allowedPaths], ['DB_BRAND_DEFAULTS', DB_BRAND_DEFAULTS.allowedPaths]]) {
+      expect(allowed, `${label} lost '/pay-link/'`).toContain('/pay-link/')
+    }
+  })
+
+  it('only /pay-link/ is public: a look-alike segment is not', async () => {
+    for (const path of ['/pay-linkage/x', '/pay/other']) {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} must not inherit the exemption`).toBe(false)
+    }
+  })
+})
+
 // ── 8. W1.L2 — the customer flow is complete on a tenant domain ───────
 //
 // W1.L1 gave every organisation an automatic <slug>.repset.ie host whose

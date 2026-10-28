@@ -51,6 +51,9 @@
 //   7b. Write the membership facts onto those rows (mig 770; the sync is the
 //      one writer of membership_plan / _status / _since / _ended_at).
 //   7c. Start this studio's contact_created sequences for new signups.
+//   7d. Payment reminders (UN1TDUN.1, un1t-dunning.js): exit the reminder
+//      runs whose invoice was settled and start them for members newly
+//      behind on a membership invoice. Informational, like 6b.
 //   8. Record the outcome on the connection; 9. close the run row.
 //
 // NEVER DELETES. Nothing in a run issues a delete: a row absent from a pull
@@ -554,6 +557,14 @@ export async function runUn1tSync(db, locationId, { clientFactory = createUn1tCl
       newlyLinked: resolved.newlyLinked || [],
       nowIso,
     })
+
+    // 7d. UN1TDUN.1 — payment reminders. There is no un1t.online webhook, so
+    // this run is the detector: exit the runs whose invoice is no longer open,
+    // then (auto-enrol on) start the studio's dunning sequence for members
+    // newly behind on a membership invoice. Reads this run's fresh mirror
+    // rows; un1t.online itself is not called. Informational like 6b: a
+    // failure is counted and logged, never the run's status.
+    counts.dunning = await runDunningStep(db, { locationId, runId, membershipSource: loc.membership_source })
   } catch (err) {
     const msg = `un1t.online sync failed: ${messageOf(err)}`
     logError('un1t-online-sync', 'unexpected exception in a sync run', { locationId, runId, err: safeErr(err) })
@@ -998,4 +1009,26 @@ async function fireSignupTriggers({ locationId, membershipSource, newlyLinked, n
     }
   }
   return { fired, joined: toFire.filter((n) => n.homeLocationId !== locationId).length, stale, already_here: alreadyHere, over_cap: overCap }
+}
+
+/**
+ * Step 7d (UN1TDUN.1). Only where the studio's membership source is
+ * un1t.online. Never throws and never fails the run: the step's own error
+ * (or a throw) is recorded in counts.dunning and logged.
+ */
+async function runDunningStep(db, { locationId, runId, membershipSource }) {
+  if (membershipSource !== 'un1t_online') return { skipped: 'membership_source' }
+  let res
+  try {
+    const { runUn1tDunningStep } = await import('./un1t-dunning.js')
+    res = await runUn1tDunningStep(db, { locationId })
+  } catch (err) {
+    res = { error: messageOf(err) }
+  }
+  if (res?.error || res?.exit_error) {
+    logWarn('un1t-online-sync', 'payment reminder step failed', {
+      locationId, runId, error: res.error ?? null, exitError: res.exit_error ?? null,
+    })
+  }
+  return res
 }

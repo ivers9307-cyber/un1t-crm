@@ -194,6 +194,10 @@ export async function proxy(request) {
   // `${baseUrl}/race/<slug>/confirmed`. So the audience is a customer in
   // WhatsApp and a payer coming back from a card form — neither can ever
   // have a session.
+  // /pay-link/ — UN1TDUN.1. The short pay link in a un1t.online payment
+  // reminder (WhatsApp URL button). The member has no session; the random
+  // token in the path is the only credential, and the page only redirects to
+  // the invoice's hosted payment page. Trailing slash: /pay/<other> stays gated.
   // /pay-done/ — MIAHATCH.6. Where un1t.online's hosted checkout returns a
   // member after paying for a link Mia sent (?c=1 on cancel). The member has
   // no session; the 32-byte token in the path is the only credential, and the
@@ -215,7 +219,7 @@ export async function proxy(request) {
   // reschedule) from the {{manage_url}} link in booking confirmation and
   // reminder emails; the signed token in the path is its only credential.
   // Already under '/book/', listed on its own for the same reason.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/trial', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/trial', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/']
 
   // Public paths matched EXACTLY (or as a parent segment), not as a bare
   // prefix — for entries where a same-stem sibling route must NOT inherit the

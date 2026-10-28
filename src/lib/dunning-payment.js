@@ -6,6 +6,9 @@
 //
 // Shape (jsonb, snake_case like the rest of metadata):
 //   { invoice_id, link, link_suffix, amount, currency, retriable, fetched_at, error }
+// UN1TDUN.1 — a un1t.online run carries the same shape plus
+// `platform: 'un1t_online'` (un1t-dunning.js builds it; the Glofox shape has
+// no platform key). The presend gate and the card-update wording branch on it.
 // `link` is null unless Glofox said the invoice is payable by link; the
 // senders then fall back to the card-update wording (email) or a recorded
 // skip (WhatsApp, whose approved template needs the button suffix).
@@ -22,6 +25,13 @@ import { formatMoneyMinor } from '@/lib/money-format'
 import { logWarn } from '@/lib/log'
 
 const CARD_UPDATE_WORDING = 'update your card in the Glofox app'
+// UN1TDUN.1 — a un1t.online run (payment.platform 'un1t_online') names that
+// app instead. A constant like the Glofox wording above.
+const UN1T_CARD_UPDATE_WORDING = 'update your card in the un1t.online app'
+
+function cardUpdateWording(payment) {
+  return payment?.platform === 'un1t_online' ? UN1T_CARD_UPDATE_WORDING : CARD_UPDATE_WORDING
+}
 
 function lastPathSegment(url) {
   const idx = url.lastIndexOf('/')
@@ -97,8 +107,9 @@ function escapeHtml(s) {
 /** Pure: the `{{payment_cta}}` fragment. */
 export function paymentCtaHtml(payment) {
   const link = payment?.link
-  if (typeof link !== 'string' || !link.startsWith('https://')) return CARD_UPDATE_WORDING
-  return `<a href="${escapeHtml(link)}">pay it now</a>, it takes a few seconds, or ${CARD_UPDATE_WORDING}`
+  const wording = cardUpdateWording(payment)
+  if (typeof link !== 'string' || !link.startsWith('https://')) return wording
+  return `<a href="${escapeHtml(link)}">pay it now</a>, it takes a few seconds, or ${wording}`
 }
 
 /** Pure: the `{{pay_amount_phrase}}` fragment — ' of €209' or ''. */
@@ -196,6 +207,17 @@ export async function dunningPresendGate(db, { enrollment, contact, sequence } =
       return typeof v === 'string' ? v.trim() : ''
     })()
     if (!invoiceId) return PROCEED
+    // UN1TDUN.1 — a un1t.online run is judged against the un1t.online mirror
+    // (un1t-dunning.js), never Glofox: a contact can hold a Glofox member id
+    // from another studio, and asking Glofox about a un1t invoice id would
+    // read "not on the overdue list" as settled. Branched before any Glofox
+    // read; same fail-open rules (the un1t gate never throws, and a throw here
+    // is caught below).
+    if (paymentFromEnrollment(enrollment)?.platform === 'un1t_online') {
+      if (!isTransactionalEnrolment(enrollment)) return PROCEED
+      const { un1tDunningPresendGate } = await import('@/lib/un1t-dunning')
+      return await un1tDunningPresendGate(db, { enrollment, contact, sequence })
+    }
     const memberId = contact?.glofox_member_id
     if (!memberId) return PROCEED
     if (!isTransactionalEnrolment(enrollment)) return PROCEED
