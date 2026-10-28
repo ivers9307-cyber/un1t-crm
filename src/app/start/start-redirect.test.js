@@ -8,6 +8,7 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => { throw new E
 
 import StartPage from './page'
 import StudioStartPage from './[path]/page'
+import FreeClassPage from '../free-class/page'
 
 describe('/start redirects', () => {
   beforeEach(() => { mocks.redirect.mockClear() })
@@ -25,5 +26,10 @@ describe('/start redirects', () => {
   it('/start/stillorgan goes to /trial with Stillorgan preselected', async () => {
     await expect(StudioStartPage({ searchParams: Promise.resolve({ fbclid: 'y' }), params: Promise.resolve({ path: 'stillorgan' }) })).rejects.toThrow(/^NEXT_REDIRECT:\/trial\?studio=stillorgan&fbclid=y$/)
     expect(mocks.redirect).toHaveBeenCalledWith('/trial?studio=stillorgan&fbclid=y')
+  })
+
+  it('/free-class goes to /trial with Stillorgan preselected and the query kept', async () => {
+    await expect(FreeClassPage({ searchParams: Promise.resolve({ utm_source: 'meta' }) })).rejects.toThrow(/^NEXT_REDIRECT:\/trial\?studio=stillorgan&utm_source=meta$/)
+    expect(mocks.redirect).toHaveBeenCalledWith('/trial?studio=stillorgan&utm_source=meta')
   })
 })

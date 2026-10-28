@@ -1,3 +1,6 @@
+// Richard, 28 Oct 2026: the free-class offer is retired; /trial sells the paid trial at both studios.
+// This page now redirects to /trial with Stillorgan preselected and the ad query kept.
+// To bring it back, delete the redirect(...) line in the default export.
 // /free-class — UN1T Stillorgan paid-traffic campaign landing page.
 //
 // Dedicated landing page for the Meta "3 free classes" ad. The CRM's
@@ -24,6 +27,8 @@
 // this paid LP out of organic search so it doesn't compete with the
 // main marketing site.
 
+import { redirect } from 'next/navigation'
+import { trialRedirectFor } from '@/lib/trial-studios'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
@@ -128,7 +133,9 @@ export const metadata = {
   },
 }
 
-export default async function FreeClassPage() {
+export default async function FreeClassPage(props) {
+  const sp = await props?.searchParams
+  redirect(trialRedirectFor('stillorgan', sp))
   const logoUrl = await getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO)
   // W1.S1b — this page is UN1T Group's own (Appendix A `keep`): its footer and
   // wordmark come from UN1T Group's configured chrome (resolveOrgChrome,
