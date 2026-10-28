@@ -12,6 +12,7 @@ const TABS = [
   { key: 'outstanding', label: 'Outstanding' },
   { key: 'undecided', label: 'Undecided' },
   { key: 'history', label: 'History' },
+  { key: 'exempt', label: 'Never charged' },
 ]
 
 const KIND = { late_cancel: 'Late cancel', no_show: 'No-show' }
@@ -41,10 +42,27 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [waiving, setWaiving] = useState(null)
+  const [exempt, setExempt] = useState([])
+
+  async function setExemption(contactId, on) {
+    const res = await fetch('/api/class-fees/exemptions', {
+      method: on ? 'POST' : 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: locationId, contact_id: contactId }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
+    await load()
+    return json.data
+  }
   const [rowMsg, setRowMsg] = useState({})
 
-  async function rowAction(r, path, done) {
+  async function rowAction(r, path, done, custom = null) {
     setRowMsg((m) => ({ ...m, [r.id]: 'Working…' }))
+    if (custom) {
+      try { const out = await custom(); setRowMsg((m) => ({ ...m, [r.id]: out })) } catch (e) { setRowMsg((m) => ({ ...m, [r.id]: e.message || 'Failed' })) }
+      return
+    }
     try {
       const res = await fetch(`/api/class-fees/${r.id}/${path}`, {
         method: 'POST',
@@ -68,7 +86,13 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/class-fees?location_id=${encodeURIComponent(locationId)}&tab=${tab}`)
+      if (tab === 'exempt') {
+        const ex = await fetch(`/api/class-fees/exemptions?location_id=${encodeURIComponent(locationId)}`)
+        const exJson = await ex.json()
+        if (!ex.ok || !exJson.success) throw new Error(exJson.error || `HTTP ${ex.status}`)
+        setExempt(exJson.data.rows || [])
+      }
+      const res = await fetch(`/api/class-fees?location_id=${encodeURIComponent(locationId)}&tab=${tab === 'exempt' ? 'due' : tab}`)
       const json = await res.json()
       if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
       setRows(json.data.rows || [])
@@ -116,7 +140,11 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
         <p className="text-sm text-un1t-subtle">These bookings are still marked booked after the class. Mark them attended or no-show in un1t.online; they are never charged while unmarked.</p>
       )}
 
-      {loading ? <Loading /> : error ? (
+      {tab === 'exempt' && !loading && !error && (
+        <ExemptList rows={exempt} onRemove={(cid) => setExemption(cid, false)} />
+      )}
+
+      {tab === 'exempt' ? null : loading ? <Loading /> : error ? (
         <p className="text-sm text-red-700">{error}</p>
       ) : rows.length === 0 ? (
         <EmptyState title="Nothing here" description={tab === 'due' ? 'No fees are waiting to be charged.' : 'No rows to show.'} />
@@ -170,6 +198,9 @@ export default function ClassFeesReview({ locationId, canEditSettings }) {
                         )}
                         {r.status === 'appealed' && (
                           <Button type="button" variant="ghost" size="sm" onClick={() => chargeAnyway(r)}>Charge anyway</Button>
+                        )}
+                        {r.contact_id && r.penalty === 'fee' && WAIVABLE.has(r.status) && (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => rowAction(r, null, null, () => setExemption(r.contact_id, true).then((d) => `Never charged from now on${d?.waived ? ` (${d.waived} fee(s) waived)` : ''}.`))}>Never charge</Button>
                         )}
                         {settings?.appealsEnabled && APPEALABLE.has(r.status) && r.penalty === 'fee' && (
                           <Button type="button" variant="ghost" size="sm" onClick={() => appealLink(r)}>Appeal link</Button>
@@ -404,5 +435,32 @@ function ForgiveRow({ disabled, checked, onCheck, label, num, onNum, unit }) {
         </span>
       )}
     </div>
+  )
+}
+
+function ExemptList({ rows, onRemove }) {
+  const [msg, setMsg] = useState(null)
+  return (
+    <Card padding="none">
+      <p className="text-sm text-un1t-subtle px-3 py-2 border-b border-un1t-border">
+        These members are never charged a class fee here. Their late cancels and no-shows still show on History as waived. Add someone with &quot;Never charge&quot; on a fee or on their contact page.
+      </p>
+      {rows.length === 0 ? (
+        <p className="text-sm text-un1t-subtle px-3 py-4">Nobody yet.</p>
+      ) : (
+        <ul>
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-3 px-3 py-2 border-b border-un1t-border last:border-0 text-sm">
+              <div>
+                <a className="text-un1t-accent hover:underline" href={`/contacts/${r.contact_id}`}>{r.member_name || r.member_email || 'Member'}</a>
+                {r.note && <div className="text-xs text-un1t-subtle">{r.note}</div>}
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onRemove(r.contact_id).catch((e) => setMsg(e.message))}>Remove</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {msg && <p className="text-xs text-red-700 px-3 py-2">{msg}</p>}
+    </Card>
   )
 }

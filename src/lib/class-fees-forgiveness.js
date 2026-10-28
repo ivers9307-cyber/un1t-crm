@@ -213,7 +213,8 @@ export function decideForgiveness({ offences, facts, rules, zone }) {
   const feeMonth = new Map()
   const push = (map, k, v) => { if (!map.has(k)) map.set(k, []); map.get(k).push(v) }
   for (const p of prior) {
-    if (p.waive_rule !== 'swap') push(offenceAt, p.un1t_user_id, { at: ms(p.starts_at), booking: p.un1t_booking_id })
+    // FEES.4: an exempt member's waived fee is not held against them either.
+    if (p.waive_rule !== 'swap' && p.waive_rule !== 'exempt') push(offenceAt, p.un1t_user_id, { at: ms(p.starts_at), booking: p.un1t_booking_id })
     if (OWED.includes(p.status)) push(feeMonth, p.un1t_user_id, { month: String(p.class_day).slice(0, 7), booking: p.un1t_booking_id })
   }
 

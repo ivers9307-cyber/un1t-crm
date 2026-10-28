@@ -296,3 +296,13 @@ Ordered by impact on how fair the policy feels to members:
   - It goes in the notice when both switches are on; staff can also copy it from the review page when the notice is off.
   - An appeal holds the fee (`appealed`) until staff waive it or click "Charge anyway".
 - **Richard's choices:** hold the fee on appeal; send no notices during the dry run; keep the two switches independent.
+
+## FEES.4 (28 Oct 2026)
+
+**The never-charged list:** a per-studio whitelist (`class_fee_exemptions`, mig 785), managed on the `/class-fees` "Never charged" tab, with a "Never charge" button on each fee and on the member's contact card.
+
+- **What it does:** exempt members are never charged and never warned by Mia.
+- **Their offences:** still written, as waived with rule `exempt`, so they show on History. These do not count as an offence for the first-offence rule.
+- **Adding someone:** waives everything they owe or are due at that studio.
+- **Removing someone:** leaves past fees as they are.
+- **Safety:** the 17:00 run and the staff Retry both re-check the list before charging.
