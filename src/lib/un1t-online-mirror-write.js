@@ -48,6 +48,9 @@
 //   un1t.online answered a NEW booking id, the old one is re-read and written
 //   as a cancel's is, so the old class does not keep showing them booked.
 // - checkout: nothing (no money has moved). trial: Task 10.
+// - comp_credits (UN1TCOMP.1): the credits refresh only (one GET
+//   /credits/ledgers/{userId}/{studioId} → un1t_clients), as book and cancel
+//   refresh them, so the card shows the new balance at once.
 
 import { mapBooking, mapClient } from './un1t-online-map.js'
 import { mapUn1tBookingToClassBooking } from './un1t-online-bookings.js'
@@ -72,7 +75,7 @@ function meta({ locationId, op, ledgerId }, code) {
  * Bring the un1t_* mirror in step with a done write.
  *
  * @param {object} db service-role client
- * @param {{ op: 'book'|'cancel'|'move'|'create_client'|'trial'|'checkout', locationId: string,
+ * @param {{ op: 'book'|'cancel'|'move'|'create_client'|'trial'|'checkout'|'comp_credits', locationId: string,
  *   contactId?: string|null, un1tUserId?: string|null, studioId?: string|null,
  *   data?: object|null, requestedAt?: string|null, ledgerId?: string|null,
  *   fromBookingId?: string|null }} args
@@ -89,11 +92,15 @@ function meta({ locationId, op, ledgerId }, code) {
 export async function applyUn1tWriteToMirror(db, args, { read, now = () => new Date() } = {}) {
   const op = args?.op
   if (op === 'checkout') return { ok: true }
-  if (op !== 'book' && op !== 'cancel' && op !== 'move' && op !== 'create_client' && op !== 'trial') {
+  if (op !== 'book' && op !== 'cancel' && op !== 'move' && op !== 'create_client' && op !== 'trial' && op !== 'comp_credits') {
     throw new TypeError(`applyUn1tWriteToMirror: unknown op '${op}'`)
   }
   if (!args.locationId) throw new TypeError('applyUn1tWriteToMirror: locationId is required')
   const stamp = now().toISOString()
+  if (op === 'comp_credits') {
+    if (typeof read !== 'function') throw new TypeError('applyUn1tWriteToMirror: read is required for comp_credits')
+    return { ok: await refreshCredits(db, args, { read, stamp }) }
+  }
   if (op === 'create_client') return mirrorCreate(db, args, stamp)
   if (op === 'trial') return mirrorTrial(db, args, { read, stamp })
   const out = await mirrorBooking(db, args, { read, stamp })

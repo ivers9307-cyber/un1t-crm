@@ -4,7 +4,11 @@
 // write modules, reached by Mia through grantTrial, and /credits/grant
 // (TRIALREGRANT.1, Richard's decision 20 Oct 2026: the one-off trial credit
 // re-grant) stands only inside regrantTrialCredits in D's ops module (and the
-// transport's ENDPOINTS allowlist), which only grantTrial calls.
+// transport's ENDPOINTS allowlist), which only grantTrial calls, inside
+// grantPromoCredits (CORPPROMO.1, the /corp promo grant, used only by
+// src/lib/corp-promo-claim.js), and inside grantCompCredits (UN1TCOMP.1, Richard's decision 28 Oct 2026: staff's
+// complimentary credits), which no agent module may import, name or reach
+// through the 'comp_credits' op.
 // A refund is a record-only refund_request card (fileRefundCard) that staff
 // act on by hand in un1t.online.
 //
@@ -65,6 +69,14 @@ const AGENT_DIR = 'src/lib/agent/'
 // moveBooking (UN1TMOVE.1): a reschedule in one call. It charges and refunds
 // nothing: POST /bookings/{id}/move { eventId }, and un1t.online carries the credit over.
 const AGENT_OPS_ALLOWED = Object.freeze(['book', 'cancel', 'moveBooking', 'createCheckoutLink', 'grantTrial'])
+// UN1TCOMP.1 — staff's complimentary credits are never Mia's: no agent module
+// names the primitive (anywhere in an identifier or a literal) or its op (as a
+// whole word: the customer_agent setting comp_credits_confirmation_text is
+// copy the card sends, not the op).
+const AGENT_NEVER_NAMES = Object.freeze([
+  Object.freeze({ name: 'grantCompCredits', re: /grantCompCredits/ }),
+  Object.freeze({ name: 'comp_credits', re: /(^|[^A-Za-z0-9_])comp_credits(?![A-Za-z0-9_])/ }),
+])
 
 // ── Parsing ────────────────────────────────────────────────────────────────
 const parse = (text, file = 'scan.jsx') => {
@@ -156,15 +168,28 @@ export function bannedKeyViolations(key, sf) {
     .filter((h) => !(key === BANNED_KEYS_DECLARED_IN.file && h.vars.includes(BANNED_KEYS_DECLARED_IN.name)))
     .map((h) => `${key}:${h.line} (${h.name})`)
 }
-// TRIALREGRANT.1 — /credits/grant only inside D's regrantTrialCredits, and in
-// the transport's ENDPOINTS allowlist.
-// CORPPROMO.1 — and inside grantPromoCredits (the /corp promo grant).
-const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: ['regrantTrialCredits', 'grantPromoCredits'], [TRANSPORT]: ['ENDPOINTS'] })
+// TRIALREGRANT.1 / CORPPROMO.1 / UN1TCOMP.1 — /credits/grant only inside D's
+// regrantTrialCredits, grantPromoCredits (the /corp promo grant) and
+// grantCompCredits (staff's complimentary credits), and in the transport's
+// ENDPOINTS allowlist.
+const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: Object.freeze(['regrantTrialCredits', 'grantPromoCredits', 'grantCompCredits']), [TRANSPORT]: Object.freeze(['ENDPOINTS']) })
 export function creditsGrantViolations(key, sf) {
   const within = Object.hasOwn(CREDITS_GRANT_ALLOWED, key) ? CREDITS_GRANT_ALLOWED[key] : []
   return literalHits(sf, CREDITS_GRANT)
     .filter((h) => !within.some((name) => h.names.includes(name)))
     .map((h) => `${key}:${h.line} (/credits/grant)`)
+}
+/** UN1TCOMP.1 — "line N" of each identifier or literal in an agent module naming staff's complimentary credits. */
+export function agentCompViolations(key, sf) {
+  if (!key.startsWith(AGENT_DIR)) return []
+  const out = []
+  const visit = (node) => {
+    const text = ts.isIdentifier(node) ? node.text : literalText(node)
+    if (text != null) for (const { name, re } of AGENT_NEVER_NAMES) if (re.test(text)) out.push(`${key}:${lineOf(sf, node)} (${name})`)
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return out
 }
 export function refundPathViolations(key, sf) {
   if (Object.hasOwn(REFUND_PATH_ALLOWED, key)) return []
@@ -237,17 +262,18 @@ describe('the rules, on fixtures', () => {
     expect(refundPathViolations('src/lib/revolut.js', sf)).toEqual([])
   })
 
-  it('/credits/grant outside D\'s regrantTrialCredits (and the transport allowlist), and /purchases/charge outside D\'s write modules', () => {
+  it('/credits/grant outside D\'s regrantTrialCredits and grantCompCredits (and the transport allowlist), and /purchases/charge outside D\'s write modules', () => {
     const sf = parse("send('POST', '/credits/grant')\nsend('POST', '/purchases/charge')\nconst u = `/purchases/charge`")
     expect(creditsGrantViolations('src/x.js', sf)).toEqual(['src/x.js:1 (/credits/grant)'])
     const grant = parse([
       "async function regrantTrialCredits() { return send('POST', '/credits/grant') }",
       "async function grantTrial() { return send('POST', '/credits/grant') }",
       "const ENDPOINTS = [{ path: /^\\/credits\\/grant$/ }]",
+      "export async function grantCompCredits() { return send('POST', '/credits/grant') }",
     ].join('\n'))
     expect(creditsGrantViolations(OPS, grant).map((v) => v.split(' ')[0])).toEqual([`${OPS}:2`, `${OPS}:3`])
-    expect(creditsGrantViolations(TRANSPORT, grant).map((v) => v.split(' ')[0])).toEqual([`${TRANSPORT}:1`, `${TRANSPORT}:2`])
-    expect(creditsGrantViolations('src/lib/agent/x.js', grant)).toHaveLength(3)
+    expect(creditsGrantViolations(TRANSPORT, grant).map((v) => v.split(' ')[0])).toEqual([`${TRANSPORT}:1`, `${TRANSPORT}:2`, `${TRANSPORT}:4`])
+    expect(creditsGrantViolations('src/lib/agent/x.js', grant)).toHaveLength(4)
     expect(chargeViolations('src/lib/agent/x.js', sf).map((v) => v.split(' ')[0])).toEqual(['src/lib/agent/x.js:2', 'src/lib/agent/x.js:3'])
     expect(chargeViolations(OPS, sf)).toEqual([])
     expect(chargeViolations(TRANSPORT, sf)).toEqual([])
@@ -262,6 +288,23 @@ describe('the rules, on fixtures', () => {
     ].join('\n'))
     expect(agentOpsViolations('src/lib/agent/x.js', sf)).toEqual(['src/lib/agent/x.js:1 (createClient)', 'src/lib/agent/x.js:2 (*)', 'src/lib/agent/x.js:3 (import())'])
     expect(agentOpsViolations('src/app/api/x/route.js', sf)).toEqual([])
+    // UN1TCOMP.1: staff's complimentary credits are never on the agent's list.
+    expect(AGENT_OPS_ALLOWED).not.toContain('grantCompCredits')
+    const comp = parse("import { grantCompCredits } from '@/lib/un1t-online-write-ops'")
+    expect(agentOpsViolations('src/lib/agent/x.js', comp)).toEqual(['src/lib/agent/x.js:1 (grantCompCredits)'])
+  })
+
+  it('UN1TCOMP.1: an agent module naming grantCompCredits or the comp_credits op, in code or a string', () => {
+    const sf = parse([
+      'const f = ops.grantCompCredits',
+      "const op = 'comp_credits'",
+      '// grantCompCredits in a comment',
+      "const fine = 'book'",
+      "const copy = 'comp_credits_confirmation_text'",
+      "const q = `op = comp_credits`",
+    ].join('\n'))
+    expect(agentCompViolations('src/lib/agent/x.js', sf)).toEqual(['src/lib/agent/x.js:1 (grantCompCredits)', 'src/lib/agent/x.js:2 (comp_credits)', 'src/lib/agent/x.js:6 (comp_credits)'])
+    expect(agentCompViolations('src/app/api/un1t-online/credits/comp/route.js', sf)).toEqual([])
   })
 
   it('the refund allowlist names only files outside un1t.online, Mia and the purchase flow', () => {
@@ -280,8 +323,13 @@ describe('src/, shared/ and supabase/functions/ (non-test)', { timeout: WHOLE_TR
     expect(bad).toEqual([])
   })
 
-  it('/credits/grant only inside D\'s regrantTrialCredits (and the transport allowlist)', () => {
+  it('/credits/grant only inside D\'s regrantTrialCredits and grantCompCredits (and the transport allowlist)', () => {
     const bad = mentioning(/credits(\/|\\\/)grant/).flatMap((e) => creditsGrantViolations(e.key, e.sf))
+    expect(bad).toEqual([])
+  })
+
+  it('UN1TCOMP.1: no agent module names grantCompCredits or the comp_credits op', () => {
+    const bad = mentioning(/grantCompCredits|comp_credits/).flatMap((e) => agentCompViolations(e.key, e.sf))
     expect(bad).toEqual([])
   })
 

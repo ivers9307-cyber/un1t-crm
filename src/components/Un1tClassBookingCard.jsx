@@ -12,11 +12,15 @@
 // moved" text (class_move_confirmation_text, handed back as chat_template)
 // into the open WhatsApp thread when the confirmation is ticked, exactly as
 // BookPanel does for a booking: best effort, it never undoes the move.
+// UN1TCOMP.1 — on the credits line, "Add complimentary credits" for staff who
+// hold un1t_comp_credits at this studio (Un1tCompCredits), and the grants
+// already given here; a done grant re-reads the balance and the list.
 
 import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { CalendarPlus } from 'lucide-react'
 import BookPanel from '@/components/BookPanel'
+import Un1tCompCredits from '@/components/Un1tCompCredits'
 import { UN1T_STAFF_COPY } from '@/lib/un1t-staff-booking-copy'
 import { moveChatConfirmationText } from '@/lib/book-chat-copy'
 
@@ -128,6 +132,7 @@ export default function Un1tClassBookingCard({ contactId, locationId, studioName
   const classes = info?.classes || []
   const asOf = info?.credits?.as_of ? fmtWhen(info.credits.as_of) : null
   const upcoming = info?.upcoming || []
+  const comp = info?.comp || null
 
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
@@ -135,10 +140,23 @@ export default function Un1tClassBookingCard({ contactId, locationId, studioName
         <CalendarPlus size={12} /> Book a class at {studioName}
       </h3>
       {credits && (
-        <p className="text-xs text-un1t-text mb-3">
+        <p className="text-xs text-un1t-text mb-2">
           {credits}
           {asOf ? <span className="text-un1t-muted"> (as of {asOf})</span> : null}
         </p>
+      )}
+      {comp && info?.zone && (comp.can_grant || (comp.given || []).length > 0) && (
+        <Un1tCompCredits
+          contactId={contactId}
+          locationId={locationId}
+          studioName={studioName}
+          zone={info.zone}
+          canGrant={comp.can_grant === true}
+          given={comp.given}
+          canWhatsApp={canWhatsApp}
+          waConversationId={waConversationId}
+          onGranted={reload}
+        />
       )}
       <BookPanel
         contactId={contactId}

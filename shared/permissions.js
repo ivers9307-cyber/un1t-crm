@@ -160,6 +160,11 @@ export const WEB_PERMISSIONS = Object.freeze([
   // OR via the sidebar. Standalone key lets a location hide /orders
   // even if they have race events or car processing on.
   { key: 'class_fees', label: 'Class fees',                      hint: 'Review the nightly late-cancellation and no-show fees at a un1t.online studio, waive them before they are charged, and retry an outstanding fee from the member profile. Owner/master/manager by default.' },
+  // UN1TCOMP.1 (Richard, 28 Oct 2026) — the Hatch card's "Add complimentary
+  // credits" on the contact page: free class credits with a use-by date
+  // written to the member's un1t.online account. Resolved at the booking
+  // studio. Web-only (no phone screen; scripts/check-mobile-parity.mjs).
+  { key: 'un1t_comp_credits', label: 'Add complimentary credits',  hint: "Add free class credits, with a use-by date and a reason, to a member's un1t.online account from the contact page. Owner/master/manager/reception by default." },
   { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
   // SPEND.P3 — company-card receipts. Permission gates SUBMISSION (who
@@ -348,6 +353,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     presentations: true,
     class_fees: true,
+    un1t_comp_credits: true,
     orders: true, car_processing: true,
     card_receipts: true,
     invoices_inbox: true,
@@ -382,6 +388,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
     class_fees: false,
+    un1t_comp_credits: false,
     orders: false, car_processing: false,         // financial views off by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
@@ -420,6 +427,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
     class_fees: false,
+    un1t_comp_credits: true,
     orders: false, car_processing: false,
     card_receipts: false,
     invoices_inbox: false,
@@ -457,6 +465,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: true,
     class_fees: false,
+    un1t_comp_credits: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
@@ -493,6 +502,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     presentations: true,
     class_fees: true,
+    un1t_comp_credits: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
@@ -529,6 +539,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     presentations: true,
     class_fees: true,
+    un1t_comp_credits: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices

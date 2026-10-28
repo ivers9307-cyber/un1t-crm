@@ -1,6 +1,6 @@
 // UN1TWRITE.14 — the shared gate and answer mapping for the staff un1t.online
-// class routes (/api/un1t-online/classes, …/book, …/cancel, and UN1TMOVE.1's
-// …/move).
+// class routes (/api/un1t-online/classes, …/book, …/cancel, UN1TMOVE.1's
+// …/move) and UN1TCOMP.1's /api/un1t-online/credits/comp.
 //
 // Access is judged on the BOOKING studio (the un1t.online studio the class
 // runs at), never on the contact's home studio: a Stillorgan contact can be
@@ -31,6 +31,7 @@ const REFUSED_TEXT = Object.freeze({
   book: 'un1t.online refused the booking.',
   cancel: 'un1t.online refused the cancellation.',
   move: 'un1t.online refused the move.',
+  comp: UN1T_STAFF_COPY.compRefused,
 })
 
 export { UN1T_STAFF_COPY }
@@ -39,7 +40,7 @@ export { UN1T_STAFF_COPY }
  * @returns {Promise<{ ok: true, contact: object, un1tUserId: string, studioName: string }
  *   | { ok: false, status: 400|401|403|404|503, error: string }>}
  */
-export async function gateUn1tStaffBooking(db, user, { locationId, contactId }) {
+export async function gateUn1tStaffBooking(db, user, { locationId, contactId, offText = UN1T_STAFF_COPY.off }) {
   if (!user) return { ok: false, status: 401, error: 'Unauthorised' }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return { ok: false, status: guard.status, error: 'You do not have access to this studio.' }
@@ -53,7 +54,7 @@ export async function gateUn1tStaffBooking(db, user, { locationId, contactId }) 
   }
   const studioName = s.studioName || 'this studio'
   if (s.membershipSource !== 'un1t_online' || !s.settings.writesEnabled) {
-    return { ok: false, status: 400, error: UN1T_STAFF_COPY.off(studioName) }
+    return { ok: false, status: 400, error: offText(studioName) }
   }
 
   // `id` is the primary key.
@@ -82,7 +83,7 @@ export async function gateUn1tStaffBooking(db, user, { locationId, contactId }) 
 }
 
 /**
- * A book, cancel or move result as the route's answer.
+ * A book, cancel, move or (UN1TCOMP.1) comp credits result as the route's answer.
  * done → 200; budget spent → 429; a permission missing, an attempt in flight
  * or any refusal → 409 with un1t.online's (scrubbed) words; unknown → 502
  * with the unknown copy (or the unconfirmed-already-booked copy).
@@ -90,6 +91,14 @@ export async function gateUn1tStaffBooking(db, user, { locationId, contactId }) 
  */
 export function staffWriteAnswer(r, { op }) {
   if (r.verdict === 'done') {
+    if (op === 'comp') {
+      // UN1TCOMP.1: the batch un1t.online made; its expiry is what staff see.
+      const d = r.data && typeof r.data === 'object' ? r.data : {}
+      return {
+        status: 200,
+        body: { success: true, data: { batch_id: r.id ?? null, expires_at: d.expires_at ?? null, recovered: r.recovered ?? null, ledger_id: r.ledgerId ?? null } },
+      }
+    }
     const data = op === 'book'
       ? { un1t_booking_id: r.id ?? null, already_booked: r.alreadyBooked === true, message: r.alreadyBooked ? UN1T_STAFF_COPY.alreadyBooked : null }
       : { un1t_booking_id: r.id ?? null }
@@ -100,7 +109,9 @@ export function staffWriteAnswer(r, { op }) {
       ? UN1T_STAFF_COPY.alreadyBookedUnverified
       : r.code === MOVE_UNVERIFIED
         ? UN1T_STAFF_COPY.moveUnverified
-        : r.code === C.BOOKING_NOT_THIS_CLIENT && r.message ? r.message : UN1T_STAFF_COPY.unknown
+        : op === 'comp'
+          ? UN1T_STAFF_COPY.compUnknown
+          : r.code === C.BOOKING_NOT_THIS_CLIENT && r.message ? r.message : UN1T_STAFF_COPY.unknown
     return { status: 502, body: { success: false, code: r.code ?? 'outcome_unknown', error, ledger_id: r.ledgerId ?? null } }
   }
   if (r.code === C.RATE_BUDGET || r.code === C.RATE_LIMITED) {

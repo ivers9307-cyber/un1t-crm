@@ -42,6 +42,10 @@ export const DEFAULTS = {
   // or an approved move card). {from} and {to} render each class's name, day
   // and time. Null → the code default in lib/agent/notify.js.
   class_move_confirmation_text: null,
+  // UN1TCOMP.1 — sent when staff add complimentary un1t.online credits from
+  // the contact page with the WhatsApp box ticked. {credits}, {date} and
+  // {studio}. Null → the code default in lib/book-chat-copy.js.
+  comp_credits_confirmation_text: null,
   // EVENT-MOVE.7 — sent in-thread when staff approve Mia's event move
   // ({event}) or the approved move is refused ({reason}). Null → the code
   // defaults in lib/agent/notify.js.
@@ -201,6 +205,7 @@ export const SettingsSchema = z.object({
   booking_confirmation_text: z.string().max(500).nullable().optional(),
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
   class_move_confirmation_text: z.string().max(500).nullable().optional(),
+  comp_credits_confirmation_text: z.string().max(500).nullable().optional(),
   event_move_confirmation_text: z.string().max(500).nullable().optional(),
   event_move_failed_text: z.string().max(500).nullable().optional(),
   booking_issue_handoff_text: z.string().max(500).nullable().optional(),
@@ -417,6 +422,7 @@ function buildFullBlob(data) {
     booking_confirmation_text: data.booking_confirmation_text?.trim() || null,
     cancellation_confirmation_text: data.cancellation_confirmation_text?.trim() || null,
     class_move_confirmation_text: data.class_move_confirmation_text?.trim() || null,
+    comp_credits_confirmation_text: data.comp_credits_confirmation_text?.trim() || null,
     event_move_confirmation_text: data.event_move_confirmation_text?.trim() || null,
     event_move_failed_text: data.event_move_failed_text?.trim() || null,
     booking_issue_handoff_text: data.booking_issue_handoff_text?.trim() || null,

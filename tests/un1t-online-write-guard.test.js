@@ -6,9 +6,13 @@
 //      a policy and one of the nine allowed endpoints, the endpoints and body
 //      keys the CRM never sends appear nowhere in src/, POST /credits/grant
 //      only inside regrantTrialCredits, called only from grantTrial
-//      (TRIALREGRANT.1, Richard's decision 20 Oct 2026), the write modules
-//      hold no PUT or DELETE verb, and only the ops module reaches the
-//      transport's internals.
+//      (TRIALREGRANT.1, Richard's decision 20 Oct 2026), inside
+//      grantPromoCredits, called only from src/lib/corp-promo-claim.js
+//      (CORPPROMO.1), and inside grantCompCredits, called only from the staff
+//      route
+//      src/app/api/un1t-online/credits/comp/route.js (UN1TCOMP.1, Richard's
+//      decision 28 Oct 2026), the write modules hold no PUT or DELETE verb,
+//      and only the ops module reaches the transport's internals.
 //
 // How things are found: files are parsed with the TypeScript parser and the
 // facts are read off the AST (imports, call expressions, identifiers, string,
@@ -23,8 +27,8 @@
 // banned names may appear: /purchases/charge and /credits/grant inside the
 // ENDPOINTS table and bypassCredit / forceRefund / promoCode inside
 // BANNED_BODY_KEYS. Everything else is a violation (but /purchases/charge
-// inside grantTrial and /credits/grant inside regrantTrialCredits), and the
-// pins below fix those two tables as they are.
+// inside grantTrial and /credits/grant inside regrantTrialCredits and
+// grantCompCredits), and the pins below fix those two tables as they are.
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -37,6 +41,12 @@ const WHOLE_REPO_TIMEOUT_MS = 120_000
 
 const TRANSPORT = 'src/lib/un1t-online-write.js'
 const OPS = 'src/lib/un1t-online-write-ops.js'
+// UN1TCOMP.1: the one file that may call grantCompCredits.
+const COMP_ROUTE = 'src/app/api/un1t-online/credits/comp/route.js'
+// The ops-module functions /credits/grant may stand in: the trial re-grant
+// (TRIALREGRANT.1), the /corp promo grant (CORPPROMO.1) and staff's
+// complimentary credits (UN1TCOMP.1). Nothing else.
+const CREDITS_GRANT_FUNCTIONS = Object.freeze(['regrantTrialCredits', 'grantPromoCredits', 'grantCompCredits'])
 
 // ── Parsing ────────────────────────────────────────────────────────────────
 const parse = (text, file = 'scan.jsx') => {
@@ -261,7 +271,9 @@ export const ALLOWED_WRITES = Object.freeze([
   'POST /auth/forgot-password',
   'POST /purchases/charge',
   'POST /purchases/checkout',
-  // TRIALREGRANT.1: grantTrial's one-off credit re-grant only.
+  // TRIALREGRANT.1: grantTrial's one-off credit re-grant, CORPPROMO.1:
+  // grantPromoCredits, the /corp promo grant, and UN1TCOMP.1:
+  // grantCompCredits, staff's complimentary credits. Nothing else.
   'POST /credits/grant',
   // FEES.1: chargeClassFee's staff-reviewed late-cancel / no-show fee only.
   'POST /purchases/charge-custom',
@@ -361,8 +373,9 @@ export function sendsOffAllowlist(label, sf, opts = { writeSide: true }) {
 // ── 3. Banned endpoints, keys, verbs, internals ────────────────────────────
 // Nowhere in src/ outside tests. reset-password is the un1t.online one,
 // /users/{id}/reset-password; the CRM's own /reset-password page is not.
-// /credits/grant is fenced on its own (creditsGrantOutsideRegrant): it may
-// stand only inside regrantTrialCredits (TRIALREGRANT.1).
+// /credits/grant is fenced on its own (creditsGrantOutsideAllowed): it may
+// stand only inside regrantTrialCredits (TRIALREGRANT.1), grantPromoCredits
+// (CORPPROMO.1) and grantCompCredits (UN1TCOMP.1).
 const BANNED_ENDPOINTS = [
   { label: '/refunds', re: /\/refunds/ },
   // FEES.1: charge-custom itself is fenced on its own (chargeCustomOutsideFee):
@@ -399,14 +412,43 @@ export function chargeCustomOutsideFee(key, sf) {
 }
 
 /**
- * TRIALREGRANT.1 — "line N" of each /credits/grant outside the ops module's
- * regrantTrialCredits (and, CORPPROMO.1, grantPromoCredits) and outside the
- * transport's ENDPOINTS table.
+ * TRIALREGRANT.1 / CORPPROMO.1 / UN1TCOMP.1 — "line N" of each /credits/grant
+ * outside the ops module's regrantTrialCredits, grantPromoCredits and
+ * grantCompCredits (the function itself, by name: a look-alike name is a
+ * violation) and outside the transport's ENDPOINTS table.
  */
-export function creditsGrantOutsideRegrant(key, sf) {
+export function creditsGrantOutsideAllowed(key, sf) {
   return literalHits(sf, /credits\/grant/)
-    .filter((h) => !(key === OPS && (h.chain.includes('regrantTrialCredits') || h.chain.includes('grantPromoCredits'))) && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
+    .filter((h) => !(key === OPS && CREDITS_GRANT_FUNCTIONS.some((f) => h.chain.includes(f))) && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
     .map((h) => `${key}:${h.line}`)
+}
+
+/**
+ * UN1TCOMP.1 — "line N" of each mention of grantCompCredits that is not its
+ * own exported declaration in the ops module, or its import and a call in the
+ * staff route (COMP_ROUTE). A call from another primitive, another route, an
+ * agent module, a re-export or a string naming it is a violation.
+ */
+export function compGrantOutsideRoute(key, sf) {
+  const out = []
+  const visit = (node) => {
+    if (ts.isIdentifier(node) && node.text === 'grantCompCredits') {
+      const parent = node.parent
+      const isExportedDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node
+        && (parent.modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+      const isImport = ts.isImportSpecifier(parent) && !parent.propertyName && parent.name === node
+        && ts.isImportDeclaration(parent.parent?.parent?.parent) && /un1t-online-write-ops(\.js)?$/.test(parent.parent.parent.parent.moduleSpecifier.text)
+      const isCall = ts.isCallExpression(parent) && parent.expression === node
+      const allowed = (key === OPS && isExportedDeclaration) || (key === COMP_ROUTE && (isImport || isCall))
+      if (!allowed) out.push(`${key}:${lineOf(sf, node)}`)
+    } else {
+      const text = literalText(node)
+      if (text != null && text.includes('grantCompCredits')) out.push(`${key}:${lineOf(sf, node)}`)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return out
 }
 
 /**
@@ -646,7 +688,7 @@ describe('the banned-name scanners (canaries)', () => {
     expect(bannedEndpointHits('x.js', sf).map((h) => h.split(' ')[0])).toEqual(['x.js:3', 'x.js:4', 'x.js:5', 'x.js:6', 'x.js:7', 'x.js:8'])
   })
 
-  it('/credits/grant stands only inside regrantTrialCredits in the ops module (and the transport ENDPOINTS table)', () => {
+  it('/credits/grant stands only inside regrantTrialCredits, grantPromoCredits and grantCompCredits in the ops module (and the transport ENDPOINTS table)', () => {
     const sf = parse([
       "const ENDPOINTS = [{ path: /^\\/credits\\/grant$/ }]",
       "async function regrantTrialCredits() { return writer.send('POST', '/credits/grant', {}) }",
@@ -654,10 +696,38 @@ describe('the banned-name scanners (canaries)', () => {
       "const top = `/credits/grant`",
       "// '/credits/grant' in a comment",
       "const regrantTrialCredits2 = () => '/credits/grant'",
+      "export async function grantCompCredits() { return writer.send('POST', '/credits/grant', {}) }",
+      "export async function grantCompCredits2() { return '/credits/grant' }",
+      "export async function book() { return '/credits/grant' }",
+      "export async function grantPromoCredits() { return writer.send('POST', '/credits/grant', {}) }",
     ].join('\n'))
-    expect(creditsGrantOutsideRegrant('src/x.js', sf)).toEqual(['src/x.js:1', 'src/x.js:2', 'src/x.js:3', 'src/x.js:4', 'src/x.js:6'])
-    expect(creditsGrantOutsideRegrant(OPS, sf)).toEqual([`${OPS}:1`, `${OPS}:3`, `${OPS}:4`, `${OPS}:6`])
-    expect(creditsGrantOutsideRegrant(TRANSPORT, sf)).toEqual([`${TRANSPORT}:2`, `${TRANSPORT}:3`, `${TRANSPORT}:4`, `${TRANSPORT}:6`])
+    expect(creditsGrantOutsideAllowed('src/x.js', sf)).toEqual(['src/x.js:1', 'src/x.js:2', 'src/x.js:3', 'src/x.js:4', 'src/x.js:6', 'src/x.js:7', 'src/x.js:8', 'src/x.js:9', 'src/x.js:10'])
+    expect(creditsGrantOutsideAllowed(OPS, sf)).toEqual([`${OPS}:1`, `${OPS}:3`, `${OPS}:4`, `${OPS}:6`, `${OPS}:8`, `${OPS}:9`])
+    expect(creditsGrantOutsideAllowed(TRANSPORT, sf)).toEqual([`${TRANSPORT}:2`, `${TRANSPORT}:3`, `${TRANSPORT}:4`, `${TRANSPORT}:6`, `${TRANSPORT}:7`, `${TRANSPORT}:8`, `${TRANSPORT}:9`, `${TRANSPORT}:10`])
+  })
+
+  it('grantCompCredits is declared exported in the ops module and imported and called only by the staff route', () => {
+    const decl = parse([
+      'export async function grantCompCredits() { return 1 }',
+      'export async function book() { return grantCompCredits() }',
+      "const name = 'grantCompCredits'",
+      'export { grantCompCredits as gcc }',
+    ].join('\n'))
+    expect(compGrantOutsideRoute(OPS, decl)).toEqual([`${OPS}:2`, `${OPS}:3`, `${OPS}:4`])
+    expect(compGrantOutsideRoute('src/lib/agent/x.js', decl)).toEqual(['src/lib/agent/x.js:1', 'src/lib/agent/x.js:2', 'src/lib/agent/x.js:3', 'src/lib/agent/x.js:4'])
+    // Unexported in the ops module is a violation too (the route could not reach it, so something else does).
+    expect(compGrantOutsideRoute(OPS, parse('async function grantCompCredits() { return 1 }'))).toEqual([`${OPS}:1`])
+    const route = parse([
+      "import { grantCompCredits } from '@/lib/un1t-online-write-ops'",
+      'export async function POST() { return grantCompCredits(db, {}) }',
+      "import { grantCompCredits as g } from '@/lib/un1t-online-write-ops'",
+      "import { grantCompCredits as other } from '@/lib/elsewhere'",
+      'const f = grantCompCredits',
+    ].join('\n'))
+    expect(compGrantOutsideRoute(COMP_ROUTE, route)).toEqual([`${COMP_ROUTE}:3`, `${COMP_ROUTE}:4`, `${COMP_ROUTE}:5`])
+    expect(compGrantOutsideRoute('src/app/api/other/route.js', route)).toEqual([
+      'src/app/api/other/route.js:1', 'src/app/api/other/route.js:2', 'src/app/api/other/route.js:3', 'src/app/api/other/route.js:4', 'src/app/api/other/route.js:5',
+    ])
   })
 
   it('regrantTrialCredits is declared unexported in the ops module and called only inside grantTrial', () => {
@@ -833,10 +903,10 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
   const sendFiles = () => filesMentioning(/\bsend\b/)
   const policyTable = () => frozenTable(parsedFile(allSources().find((e) => e.key === TRANSPORT)), 'UN1T_OP_POLICY')
 
-  it('the policy table is the one the spec fixes: book, cancel, move, create_client verify; forgot_password, trial, trial_regrant, promo_grant never; checkout, fee_charge idempotent', () => {
+  it('the policy table is the one the spec fixes: book, cancel, move, create_client verify; forgot_password, trial, trial_regrant, promo_grant, comp_credits never; checkout, fee_charge idempotent', () => {
     expect(policyTable()).toEqual({
       book: 'verify', cancel: 'verify', create_client: 'verify', forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
-      fee_charge: 'idempotent', move: 'verify', promo_grant: 'never',
+      fee_charge: 'idempotent', move: 'verify', promo_grant: 'never', comp_credits: 'never',
     })
   })
 
@@ -851,12 +921,12 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it('the scan really sees the ops module\'s eleven sends (an empty result is not a broken scanner)', () => {
+  it('the scan really sees the ops module\'s twelve sends (an empty result is not a broken scanner)', () => {
     const ops = sendFiles().find((e) => e.key === OPS)
     expect(ops).toBeTruthy()
     const calls = writerSendCalls(ops.sf, { writeSide: true })
     expect(calls.map((c) => `${c.verb} ${c.path}`).sort()).toEqual([
-      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /bookings/:id/move', 'POST /credits/grant', 'POST /credits/grant', 'POST /purchases/charge',
+      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /bookings/:id/move', 'POST /credits/grant', 'POST /credits/grant', 'POST /credits/grant', 'POST /purchases/charge',
       'POST /purchases/charge-custom', 'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
     ])
     // UN1TMOVE.1: the move is op move, re-sent only when its check read says absent.
@@ -871,6 +941,11 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     // CORPPROMO.1: the /corp promo grant is op promo_grant, never re-sent.
     const promo = calls.filter((c) => c.op === 'promo_grant')
     expect(promo.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /credits/grant never'])
+    // UN1TCOMP.1: staff's complimentary credits are op comp_credits, never re-sent.
+    const comp = calls.filter((c) => c.op === 'comp_credits')
+    expect(comp.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /credits/grant never'])
+    // The only three ops that send POST /credits/grant.
+    expect([...new Set(calls.filter((c) => c.path === '/credits/grant').map((c) => c.op))].sort()).toEqual(['comp_credits', 'promo_grant', 'trial_regrant'])
     expect(calls.every((c) => c.optsReadable && c.op != null && c.policy != null)).toBe(true)
     // UN1TWRITE.10: the trial's charge and free checkout are op trial, never re-sent.
     const trial = calls.filter((c) => c.op === 'trial')
@@ -928,11 +1003,27 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(literalHits(ops.sf, /charge-custom/).some((h) => h.chain.includes('chargeClassFee'))).toBe(true)
   })
 
-  it('TRIALREGRANT.1: /credits/grant appears only inside regrantTrialCredits in the ops module (and the transport allowlist), and it is there', () => {
+  it('TRIALREGRANT.1 / UN1TCOMP.1: /credits/grant appears only inside regrantTrialCredits and grantCompCredits in the ops module (and the transport allowlist), once in each', () => {
     const files = filesMentioning(/credits(\/|\\\/)grant/)
-    expect(files.flatMap((e) => creditsGrantOutsideRegrant(e.key, e.sf))).toEqual([])
+    expect(files.flatMap((e) => creditsGrantOutsideAllowed(e.key, e.sf))).toEqual([])
     const ops = allSources().find((e) => e.key === OPS)
-    expect(literalHits(parsedFile(ops), /credits\/grant/).filter((h) => h.chain.includes('regrantTrialCredits')).length).toBeGreaterThan(0)
+    const hits = literalHits(parsedFile(ops), /credits\/grant/)
+    for (const f of CREDITS_GRANT_FUNCTIONS) expect(hits.filter((h) => h.chain.includes(f)).length, f).toBeGreaterThan(0)
+  })
+
+  it('UN1TCOMP.1: grantCompCredits is exported from the ops module and imported and called only by the staff route', () => {
+    const files = filesMentioning(/grantCompCredits/)
+    // Comments may name it (the transport's header does); the AST scan decides.
+    expect(files.map((e) => e.key)).toEqual(expect.arrayContaining([COMP_ROUTE, OPS]))
+    expect(files.flatMap((e) => compGrantOutsideRoute(e.key, e.sf))).toEqual([])
+    const route = parsedFile(allSources().find((e) => e.key === COMP_ROUTE))
+    const calls = []
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'grantCompCredits') calls.push(node)
+      ts.forEachChild(node, visit)
+    }
+    visit(route)
+    expect(calls.length).toBe(1)
   })
 
   it('CORPPROMO.1: grantPromoCredits is declared in the ops module and used only by the /corp fulfilment module', () => {

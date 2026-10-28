@@ -7,6 +7,11 @@
 // mirror and their upcoming bookings there. Gated by gateUn1tStaffBooking:
 // access at the BOOKING studio, writes on, the contact in its organisation
 // with a un1t.online account there.
+// UN1TCOMP.1 — also the Hatch card's complimentary credits block: whether
+// this member of staff may add them here (un1t_comp_credits at the studio),
+// the grants already given to this person at this studio (done, and in doubt
+// marked unconfirmed), and the studio's zone, so the card's use-by maths runs
+// on the studio's clock.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
@@ -16,6 +21,8 @@ import { gateUn1tStaffBooking } from '@/lib/un1t-staff-booking'
 import { getLocationZone, formatInZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
+import { canGrantCompCredits } from '@/lib/un1t-comp-credits-access'
+import { compReasonLabel } from '@/lib/un1t-comp-credits'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,6 +31,50 @@ const WINDOW_DAYS = 14
 const LIMIT = 200
 const DAY_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short' })
 const TIME_OPTS = Object.freeze({ hour: '2-digit', minute: '2-digit', hour12: false })
+// The card's "Complimentary credits given" list: the newest few are plenty.
+const COMP_GIVEN_LIMIT = 50
+
+const firstName = (full) => (typeof full === 'string' && full.trim() ? full.trim().split(/\s+/)[0] : null)
+
+/**
+ * UN1TCOMP.1 — this person's complimentary grants at this studio from the
+ * write ledger (done, and unknown as unconfirmed; a refused one gave
+ * nothing), with the first name of who gave each. A failed read is logged
+ * and the list is left out (null), never shown as "none given".
+ */
+async function compGiven(db, { locationId, un1tUserId }) {
+  const { data: rows, error } = await db
+    .from('un1t_write_events')
+    .select('id, stage, created_at, actor_user_id, comp_amount, comp_reason, comp_use_by, comp_expires_at')
+    .eq('location_id', locationId)
+    .eq('op', 'comp_credits')
+    .eq('un1t_user_id', un1tUserId)
+    .in('stage', ['done', 'unknown'])
+    .order('created_at', { ascending: false })
+    .limit(COMP_GIVEN_LIMIT)
+  if (error) {
+    logWarn('un1t-staff-classes', 'complimentary credits read failed', { locationId, err: error })
+    return null
+  }
+  const actorIds = [...new Set((rows || []).map((r) => r.actor_user_id).filter(Boolean))]
+  let names = new Map()
+  if (actorIds.length > 0) {
+    // By id: a tombstoned profile keeps its full_name (mig 622), so history still names them.
+    const { data: people, error: pErr } = await db.from('profiles').select('id, full_name').in('id', actorIds)
+    if (pErr) logWarn('un1t-staff-classes', 'complimentary credits staff names read failed', { locationId, err: pErr })
+    names = new Map((people || []).map((p) => [p.id, firstName(p.full_name)]))
+  }
+  return (rows || []).map((r) => ({
+    id: r.id,
+    at: r.created_at,
+    amount: r.comp_amount,
+    reason: compReasonLabel(r.comp_reason),
+    use_by: r.comp_use_by,
+    expires_at: r.comp_expires_at ?? null,
+    by: names.get(r.actor_user_id) ?? null,
+    confirmed: r.stage === 'done',
+  }))
+}
 
 export async function GET(request) {
   const user = await getCurrentUser()
@@ -123,5 +174,10 @@ export async function GET(request) {
       .sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)))
   }
 
-  return NextResponse.json({ success: true, data: { classes, credits, upcoming, spots_note: 'as of last sync' } })
+  const comp = {
+    can_grant: canGrantCompCredits(user, locationId),
+    given: await compGiven(db, { locationId, un1tUserId: gate.un1tUserId }),
+  }
+
+  return NextResponse.json({ success: true, data: { classes, credits, upcoming, spots_note: 'as of last sync', zone, comp } })
 }

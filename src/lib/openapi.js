@@ -12291,9 +12291,9 @@ registry.registerPath({
   tags: ['Bookings'],
   security: [{ CookieAuth: [] }],
   summary: 'Staff: un1t.online classes, credits and upcoming bookings for a contact',
-  description: 'Scheduled classes at the booking studio in the next 14 days (spots left for staff, community classes labelled), the contact\'s credits from the mirror and their upcoming bookings there. Access is judged on the booking studio.',
+  description: 'Scheduled classes at the booking studio in the next 14 days (spots left for staff, community classes labelled), the contact\'s credits from the mirror and their upcoming bookings there, the studio\'s zone, and comp: { can_grant (un1t_comp_credits at the studio), given (this person\'s done and unconfirmed complimentary grants there, with who gave each) }. Access is judged on the booking studio.',
   request: { query: z.object({ location_id: uuidLike, contact_id: uuidLike }) },
-  responses: { 200: { description: '{ classes, credits, upcoming, spots_note }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } }, ...Un1tStaffGate },
+  responses: { 200: { description: '{ classes, credits, upcoming, spots_note, zone, comp }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } }, ...Un1tStaffGate },
 })
 registry.registerPath({
   method: 'post',
@@ -12342,6 +12342,41 @@ registry.registerPath({
     429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
     ...Un1tStaffGate,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/un1t-online/credits/comp',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: add complimentary un1t.online credits to a contact',
+  description: 'Session auth + the un1t_comp_credits permission at the booking studio (owner, manager and reception by default; role templates honoured), then the class routes\' gate (writes on, the contact in the studio\'s organisation with an account there: 404 otherwise). 1 to 10 credits, a use-by day from tomorrow to a year ahead on the studio\'s clock (expiresInDays = whole calendar days to it), a reason from the fixed list, an optional plain note (<= 200 characters, no email address or phone number). One un1t.online credit grant, ledgered as op comp_credits and never re-sent: after a 5xx or no reply the credits ledger read reports a landing, anything else answers 502. maxDuration 120.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            contact_id: uuidLike,
+            location_id: uuidLike,
+            request_id: uuidLike,
+            amount: z.number().int().min(1).max(10),
+            use_by: z.string().describe('YYYY-MM-DD, the studio\'s calendar day'),
+            reason: z.enum(['goodwill', 'injury', 'class_cancelled', 'referral_reward', 'other']),
+            note: z.string().max(200).nullable().optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    ...Un1tStaffGate,
+    200: { description: '{ batch_id, expires_at (un1t.online\'s), recovered, amount, use_by, message, chat_template, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'A value off the limits, or un1t.online writes off at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing un1t_comp_credits at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'un1t.online refused (its words), a token permission missing, or the same request in flight', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'un1t.online did not answer clearly: check the client in un1t.online', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
