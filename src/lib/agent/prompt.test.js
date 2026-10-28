@@ -744,17 +744,19 @@ describe('un1t.online prompt variants', () => {
     expect(render('read', false, null)).not.toMatch(/Say which studio each answer is for/)
   })
 
-  it('MIAHATCH.3: the single-studio read variant has its own overdue payment rules, with no pay link', () => {
+  it('MIAHATCH.3 / UN1TDUN.1: the single-studio read variant has its own overdue payment rules; the only link is the tool\'s pay_link', () => {
     const out = render('read', false, null)
     expect(out).toMatch(/## Overdue payments/)
     expect(out).toMatch(/call get_my_payment_reminder BEFORE answering/)
     expect(out).toMatch(/"am I paid up"/)
-    expect(out).toMatch(/Overdue payments at the un1t\.online studio are chased by the studio itself\. There is no pay link for them, and you never send or invent one/)
-    expect(out).toMatch(/update the card on file at the un1t\.online studio, they can do it in the un1t\.online app, or the team can help/)
+    expect(out).toMatch(/Overdue payments at the un1t\.online studio are chased by the studio itself, which may send a WhatsApp reminder with a link to pay\. You never make up a payment link: the only one you may ever send for the un1t\.online studio is the pay_link get_my_payment_reminder gives, exactly as it gives it\./)
+    expect(out).toMatch(/If has_reminder is true: the studio sent them a payment reminder on WhatsApp[^\n]*If has_reminder is false: never say a reminder was sent\./)
+    expect(out).toMatch(/when the tool gives pay_link, send it in plain text[^\n]*When there is no pay_link, never send any other link\./)
+    expect(out).toMatch(/update the card on file at the un1t\.online studio, they can pay through pay_link when the tool gives one, do it in the un1t\.online app, or the team can help/)
     expect(out).toMatch(/never state an amount or a date the tool did not give/)
     expect(out).toMatch(/still_overdue is 'unknown': never guess/)
     // The Glofox-only wording does not leak into the single-studio un1t render.
-    expect(out).not.toMatch(/Pay now|send pay_link|first_sent_at|Glofox/)
+    expect(out).not.toMatch(/Pay now|first_sent_at|Glofox/)
     // The old blanket "hand off any payment reminder question" lines are gone.
     expect(out).not.toMatch(/You do NOT have their price, payment history or billing standing\./)
     expect(out).not.toMatch(/asks about a payment reminder or a failed payment/)
@@ -763,8 +765,9 @@ describe('un1t.online prompt variants', () => {
 
   it('MIAHATCH.3 fix 1: the dual render scopes the no-pay-link rule to the named un1t studio and carries the Glofox rules for the other section', () => {
     const named = renderCustomerAgentBasePrompt(UN1T_SOURCE, { bookings: false, bookingUrl: null, un1tVariant: 'read', multiStudio: true, un1tStudioName: 'Hatch Street' })
-    expect(named).toMatch(/Overdue payments at Hatch Street are chased by the studio itself\. There is no pay link for them/)
-    expect(named).toMatch(/update the card on file at Hatch Street, they can do it in the un1t\.online app/)
+    expect(named).toMatch(/Overdue payments at Hatch Street are chased by the studio itself, which may send a WhatsApp reminder with a link to pay/)
+    expect(named).toMatch(/the only one you may ever send for Hatch Street is the pay_link get_my_payment_reminder gives/)
+    expect(named).toMatch(/update the card on file at Hatch Street, they can pay through pay_link when the tool gives one, do it in the un1t\.online app/)
     expect(named).not.toMatch(/There is no pay link for these payments/)
     expect(named).toMatch(/If the answer lists more than one studio, say which studio each part is for/)
     expect(named).toMatch(/The rules that follow apply only to the section of the answer for the Glofox studio, which can carry its own reminder details and pay link\. They never apply to the section for Hatch Street\./)

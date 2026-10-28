@@ -176,6 +176,8 @@ export const BRANDS = [
       '/pay-done/',
       // FEES.3: the member's class-fee appeal link (/fee-appeal/<token>).
       '/fee-appeal/',
+      // UN1TDUN.1: the short pay link in a un1t.online payment reminder (/pay-link/<token>).
+      '/pay-link/',
     ],
     rootHandler: 'rewrite',
     rootRewriteTo: '/welcome',

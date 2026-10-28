@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForContactCreated: vi.fn() }))
+vi.mock('./un1t-dunning.js', () => ({ runUn1tDunningStep: vi.fn(async () => ({ enrolled: 0, already: 0, exited: 0, skipped: 0 })) }))
 
 import { runUn1tSync, UN1T_LISTS, STALE_RUN_MS, pickFreshSignups, SIGNUP_MAX_AGE_DAYS } from './un1t-online-sync.js'
 import { logError, logWarn, logInfo } from './log'
@@ -9,6 +10,7 @@ import { Un1tAuthError, Un1tApiError } from './un1t-online.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
 import { tokenFingerprint } from './un1t-online-token.js'
 import { triggerSequencesForContactCreated } from './sequences/triggers.js'
+import { runUn1tDunningStep } from './un1t-dunning.js'
 
 const ORG = 'org-1'
 const HATCH = 'loc-hatch'
@@ -1525,5 +1527,69 @@ describe('contact_studios dual-write (ORGCONTACTS.1)', () => {
     expect(r.counts.memberships).toMatchObject({ active: 1, rows_missing: 1 })
     expect(r.counts.contact_studios).toEqual({ member: 0, client: 0, failed: 3 })
     expect(logError).toHaveBeenCalledWith('un1t-online-sync', expect.stringMatching(/contact_studios/), expect.objectContaining({ locationId: HATCH }))
+  })
+})
+
+// UN1TDUN.1 — step 7d: payment reminders at a un1t.online studio. The step
+// itself (un1t-dunning.js) is faked at its module boundary and tested on its
+// own; here: it runs only at a un1t.online studio, after the mirror is
+// written, and is informational (never the run's status).
+describe('runUn1tSync — payment reminders (step 7d, UN1TDUN.1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    runUn1tDunningStep.mockImplementation(async () => ({ enrolled: 0, already: 0, exited: 0, skipped: 0 }))
+  })
+
+  it('runs at a un1t.online studio after this pull is mirrored, and records its counts', async () => {
+    const { db, tables } = makeDb(baseSeed())
+    let invoicesAtCall = null
+    runUn1tDunningStep.mockImplementation(async () => {
+      invoicesAtCall = (tables.un1t_invoices || []).map((r) => r.un1t_id)
+      return { enrolled: 1, already: 2, exited: 1, skipped: 0 }
+    })
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(runUn1tDunningStep).toHaveBeenCalledTimes(1)
+    expect(runUn1tDunningStep).toHaveBeenCalledWith(db, { locationId: HATCH })
+    expect(invoicesAtCall).toEqual(['i1'])
+    expect(r.counts.dunning).toEqual({ enrolled: 1, already: 2, exited: 1, skipped: 0 })
+    expect(runRow(tables).counts.dunning).toEqual({ enrolled: 1, already: 2, exited: 1, skipped: 0 })
+  })
+
+  it('a studio whose membership source is not un1t.online never runs it', async () => {
+    const seed = baseSeed()
+    seed.locations[0].membership_source = 'glofox'
+    const { db } = makeDb(seed)
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(runUn1tDunningStep).not.toHaveBeenCalled()
+    expect(r.counts.dunning).toEqual({ skipped: 'membership_source' })
+  })
+
+  it('a step that reports an error or throws is recorded and logged; the run stays ok and connected', async () => {
+    for (const impl of [
+      async () => ({ enrolled: 0, already: 0, exited: 0, skipped: 0, error: 'past_due_unreadable' }),
+      async () => { throw new Error('dunning blew up') },
+    ]) {
+      logWarn.mockClear()
+      runUn1tDunningStep.mockImplementation(impl)
+      const { db, tables } = makeDb(baseSeed())
+      const { factory } = makeClient({ self: SELF, lists: fixtureLists() })
+      const r = await runUn1tSync(db, HATCH, opts(factory))
+      expect(r.ok).toBe(true)
+      expect(r.counts.dunning.error).toBeTruthy()
+      expect(runRow(tables).status).toBe('ok')
+      expect(connRow(tables).status).toBe('connected')
+      expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', 'payment reminder step failed', expect.objectContaining({ locationId: HATCH }))
+    }
+  })
+
+  it('a run refused before the mirror is written never runs it', async () => {
+    const { db } = makeDb(baseSeed())
+    const { factory } = makeClient({ self: SELF, lists: fixtureLists(), listErrors: { '/invoices': new Error('boom') } })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(false)
+    expect(runUn1tDunningStep).not.toHaveBeenCalled()
   })
 })

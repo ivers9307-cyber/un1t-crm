@@ -50,7 +50,8 @@ export const UN1T_TOOL_DESCRIPTIONS = Object.freeze({
     '"how many classes have I done", "when did I last come in".',
   get_my_payment_reminder:
     "Check whether the verified customer has a payment that is overdue at their studio, and since when and " +
-    'for how much when known. Reports only whether a payment is overdue and never gives a pay link. Call this ' +
+    'for how much when known, and whether the studio has sent them a payment reminder. Gives a pay link only ' +
+    'when the studio\'s own reminder carries one. Call this ' +
     'before answering anything about a payment reminder, a failed payment or "I\'ve paid". Only works after ' +
     'verify_identity has succeeded this conversation.',
   list_upcoming_classes:
@@ -62,13 +63,15 @@ export const UN1T_TOOL_DESCRIPTIONS = Object.freeze({
 })
 
 // The dual block's own text for the payment reminder: its answer has one section per
-// studio, and only the un1t.online studio's is guaranteed to carry no pay link.
+// studio. UN1TDUN.1: the un1t.online studio's section carries a pay link only
+// when the studio's own reminder run does (our short link, never Stripe's).
 export const UN1T_DUAL_TOOL_DESCRIPTIONS = Object.freeze({
   get_my_payment_reminder:
     'Check whether the verified customer has a payment that is overdue. The answer has one section per studio. ' +
     "The un1t.online studio's section reports only whether a payment is overdue, and since when and for how much " +
-    "when known, and never has a pay link. Another studio's section may say whether a reminder was sent and may " +
-    'carry its own pay link. Call this before answering anything about a payment reminder, a failed payment or ' +
+    "when known, and whether the studio has sent a reminder, with a pay link only when that reminder carries one. " +
+    "Another studio's section may say whether a reminder was sent and may carry its own pay link. Call this " +
+    'before answering anything about a payment reminder, a failed payment or ' +
     '"I\'ve paid". Only works after verify_identity has succeeded this conversation.',
 })
 
