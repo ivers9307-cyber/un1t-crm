@@ -473,6 +473,35 @@ registry.registerPath({
   },
 })
 
+const CorpPromoClaim = z.object({
+  promo: z.string().openapi({ example: 'hatch-3-free', description: 'A promo key from src/lib/corp-promos.js; it decides the studio, credits and expiry.' }),
+  first_name: z.string(),
+  last_name: z.string(),
+  email: z.string().email(),
+  phone: z.string(),
+  consent: z.literal(true),
+  terms_accepted: z.boolean().openapi({ description: "The studio's un1t.online terms and waiver tick; required (true)." }),
+  attribution: z.object({ utm_source: z.string().optional(), utm_campaign: z.string().optional(), utm_content: z.string().optional(), utm_term: z.string().optional(), fbclid: z.string().optional(), fbp: z.string().optional() }).optional(),
+  lead_event_id: z.string().optional(),
+  visit: z.object({ referrer: z.string().optional(), landing_path: z.string().optional() }).optional(),
+}).openapi('CorpPromoClaim')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/corp-claims',
+  tags: ['Public'],
+  summary: 'Claim a /corp corporate promo (CORPPROMO.1)',
+  request: { body: { content: { 'application/json': { schema: CorpPromoClaim } } } },
+  description: "Anonymous. Rate-limited to 8 per promo per IP per 15 min. Nothing is ever charged. The promo key decides the studio, the credits and their expiry (never the body). Captures the lead like /trial (contact, lead_source, attribution, consent, deal, Meta Lead). Refused before anything reaches un1t.online (200 { success: false, code, error }): active_member; already_claimed, free_trial_used (the email OR mobile already had a free trial at the studio) or trained (any non-cancelled booking or membership history at the studio). Otherwise inserts a corp_promo_claims row, finds or creates the un1t.online account and grants the credits with POST /credits/grant: 200 { success: true, data: { credits, expires_at, title, message } }, or 200 code help_filed when un1t.online refused or answered unclearly (staff get an approvals card).",
+  responses: {
+    200: { description: 'Granted, or a refusal state: active_member, already_claimed, free_trial_used, trained, holds_credits, help_filed' },
+    400: { description: 'Validation failed, not_available (unknown or switched-off promo, writes off) or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Lead capture failed', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: a read failed or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/public/trial-purchases/help',
