@@ -105,9 +105,14 @@ describe('agent tool schemas', () => {
   // required). list_purchase_options and check_my_purchase take none. 3b is
   // now 37, five past the Glofox block; strict tool use for 3b would mean
   // shedding 13 optional parameters against the API's 24, so it stays off.
+  //
+  // NOTE (FEES.2): raised by one more, cancel_class_booking's optional
+  // confirm_late_fee (block 3b only): the member's go-ahead after Mia states
+  // the late-cancellation fee. It cannot be required (most cancels are in
+  // time). 3b is now 38.
   it('reports the optional-parameter budget for every block', () => {
     const GLOFOX_CEILING = 32
-    const UN1T_FULL_CEILING = GLOFOX_CEILING + 1 + 4
+    const UN1T_FULL_CEILING = GLOFOX_CEILING + 1 + 4 + 1
     const blocks = {
       glofox: CACHED_ACCOUNT_TOOLS,
       no_booking: CACHED_NO_BOOKING_TOOLS,

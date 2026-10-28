@@ -16,6 +16,7 @@
 // read live), never a CRM setting: members see one rule.
 
 import { formatInZone, dateKeyIn, addDaysIn, zonedWallClockToInstant, instantToZonedParts } from './location-time.js'
+import { classForgivenessFrom } from './class-fees-forgiveness.js'
 
 export const CLASS_FEE_KINDS = Object.freeze(['late_cancel', 'no_show'])
 export const CLASS_FEE_STATUSES = Object.freeze(['pending', 'waived', 'charging', 'charged', 'retry_scheduled', 'outstanding', 'recorded'])
@@ -47,7 +48,7 @@ const centsOr0 = (v) => (Number.isInteger(v) && v > 0 && v <= MAX_FEE_CENTS ? v 
  * unreadable is off. Only the literal true turns `enabled` on.
  * @returns {{ enabled: boolean, chargingPaused: boolean, lateCancelFeeCents: number,
  *   noShowFeeCents: number, reviewEmails: string[], detectHour: number, chargeHour: number,
- *   retryDays: number }}
+ *   retryDays: number, forgiveness: ReturnType<typeof classForgivenessFrom> }}
  */
 export function classFeeSettingsFrom(settings) {
   const block = isObj(settings) && isObj(settings.un1t_online) && isObj(settings.un1t_online.fees)
@@ -67,6 +68,7 @@ export function classFeeSettingsFrom(settings) {
     detectHour: hourOr(block.detect_hour, CLASS_FEE_DEFAULTS.detectHour),
     chargeHour: hourOr(block.charge_hour, CLASS_FEE_DEFAULTS.chargeHour),
     retryDays: CLASS_FEE_DEFAULTS.retryDays,
+    forgiveness: classForgivenessFrom(block),
   }
 }
 
