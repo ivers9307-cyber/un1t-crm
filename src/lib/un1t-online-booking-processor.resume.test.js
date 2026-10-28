@@ -46,6 +46,7 @@ function setup() {
   const writerFactory = vi.fn((d, loc) => createUn1tWriter(d, loc, { fetchImpl, sleep: async () => {} }))
   const deps = {
     writerFactory,
+    readPaidTrialReply: async () => null,
     grantTrial: (db, args, d) => grantTrial(db, args, { ...d, trialEligibility: async () => ({ success: true, data: { eligible: true, reasons: [] } }) }),
     sendUn1tAccountEmail: vi.fn(async () => ({ sent: true, channel: 'email' })),
     sendManualBookingConfirmEmail: vi.fn(async () => ({ sent: true, channel: 'email' })),

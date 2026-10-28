@@ -275,3 +275,31 @@ describe('flowButtonIndex / flowButtonComponentFor (WATPLSEND.1)', () => {
     expect(flowButtonComponentFor([{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Go', url: 'https://example.test' }] }], 'c1.l1')).toBeNull()
   })
 })
+
+// PAIDTRIALONLY.1 — the booking Flow is a data-exchange Flow: its button opens
+// through our endpoint, so it has no entry screen (a navigate button on it is
+// what broke the Flow for six weeks in 2026).
+describe('data-exchange Flow buttons', () => {
+  const flow = (over = {}) => ({ type: 'FLOW', text: 'Book a class', flow_id: '123', ...over })
+
+  it('needs no entry screen', () => {
+    expect(templateButtonsError([flow({ flow_action: 'data_exchange' })])).toBeNull()
+    expect(templateButtonsError([flow({ flow_action: 'DATA_EXCHANGE' })])).toBeNull()
+  })
+
+  it('a navigate Flow still needs one', () => {
+    expect(templateButtonsError([flow()])).toMatch(/entry screen/)
+  })
+
+  it('goes to Meta as data_exchange with no navigate_screen', () => {
+    expect(normalizeButtonsForMeta([flow({ flow_action: 'DATA_EXCHANGE', navigate_screen: 'PATH' })])).toEqual([
+      { type: 'FLOW', text: 'Book a class', flow_id: '123', flow_action: 'data_exchange' },
+    ])
+  })
+
+  it('a navigate Flow keeps its screen', () => {
+    expect(normalizeButtonsForMeta([flow({ navigate_screen: 'PATH' })])).toEqual([
+      { type: 'FLOW', text: 'Book a class', flow_id: '123', navigate_screen: 'PATH' },
+    ])
+  })
+})

@@ -11,7 +11,9 @@
 //                 walk), else create with the request's recorded acceptance
 //   4 credits     a balance, unlimited, or an active subscription in the
 //                 mirror skips the trial; a failed read throws (retry)
-//   5 trial       grantTrial: granted → book; ineligible → E's hand-off, else
+//   5 trial       PAIDTRIALONLY.1: with the studio's paid trial reply set,
+//                 no trial: the Flow customer is sent the reply, row failed;
+//                 grantTrial: granted → book; ineligible → E's hand-off, else
 //                 the trial-used email, row failed, a record-only card;
 //                 needs_staff → its card; retry → throw
 //   6 book        done / already booked → row booked, 'un1t:<id>'; refused →
@@ -70,6 +72,10 @@ async function defaultFlowNotice(...args) {
   const { notifyFlowBookingOutcome } = await import('./whatsapp-flow/booking-notice.js')
   return notifyFlowBookingOutcome(...args)
 }
+async function defaultPaidTrialReply(...args) {
+  const { readPaidTrialReply } = await import('./whatsapp-flow/booking-notice.js')
+  return readPaidTrialReply(...args)
+}
 async function defaultWebsite(...args) {
   const { sendWebsiteConversion } = await import('./meta-capi.js')
   return sendWebsiteConversion(...args)
@@ -90,6 +96,7 @@ function depsOf(deps = {}) {
     sendCtwaConversion: deps.sendCtwaConversion ?? defaultCtwa,
     sendWebsiteConversion: deps.sendWebsiteConversion ?? defaultWebsite,
     notifyFlowBookingOutcome: deps.notifyFlowBookingOutcome ?? defaultFlowNotice,
+    readPaidTrialReply: deps.readPaidTrialReply ?? defaultPaidTrialReply,
     now: deps.now ?? (() => Date.now()),
   }
 }
@@ -181,7 +188,7 @@ export async function un1tAfterBooking(db, { request, contact, account, settings
  *   | { kind: 'retry', code: string, executingContactId?: string, steps: object }
  *   | { kind: 'trial_used', account: object, executingContactId: string, steps: object }>}
  */
-export async function un1tBookOnce(db, { request, contact, organizationId, eventId, origin, originRef, actor, writer, trialMode = 'normal' }, deps = {}) {
+export async function un1tBookOnce(db, { request, contact, organizationId, eventId, origin, originRef, actor, writer, trialMode = 'normal', paidTrialText = null }, deps = {}) {
   const d = depsOf(deps)
   const steps = {}
   const opDeps = { writerFactory: async () => writer }
@@ -214,6 +221,10 @@ export async function un1tBookOnce(db, { request, contact, organizationId, event
 
   if (hasCredits || hasMembership) {
     steps.trial = hasCredits ? 'skipped_credits' : 'skipped_membership'
+  } else if (paidTrialText) {
+    // PAIDTRIALONLY.1 — the studio sells a paid trial instead: no free one.
+    steps.trial = 'paid_trial_only'
+    return { kind: 'paid_trial', executingContactId, steps }
   } else if (trialMode === 'credits_only') {
     steps.trial = 'unverified_no_credits'
     return { kind: 'card', reason: 'un1t_trial_unverified', executingContactId, steps }
@@ -309,16 +320,32 @@ async function runFunnel(db, request, ctx, deps, holder) {
   }
   if (typeof contact.email !== 'string' || !contact.email.trim()) return card('no_email')
 
+  // PAIDTRIALONLY.1 — read before any write: an unreadable setting retries
+  // rather than give a free trial the studio may have retired.
+  let paidTrialText
+  try {
+    paidTrialText = await d.readPaidTrialReply(db, request.location_id)
+  } catch {
+    throw retry('paid_trial_reply_unreadable')
+  }
+
   // One writer for the whole job.
   const writer = await d.writerFactory(db, request.location_id)
   const once = await un1tBookOnce(db, {
-    request, contact, organizationId, eventId, origin: 'funnel', originRef: request.id, actor: null, writer,
+    request, contact, organizationId, eventId, origin: 'funnel', originRef: request.id, actor: null, writer, paidTrialText,
   }, deps)
   Object.assign(steps, once.steps)
   executingContactId = once.executingContactId ?? null
   holder.executingContactId = executingContactId
   if (once.kind === 'retry') throw retry(once.code)
   if (once.kind === 'card') return card(once.reason)
+  if (once.kind === 'paid_trial') {
+    const { closeWithPaidTrialReply } = await import('./class-booking-processor.js')
+    return closeWithPaidTrialReply(db, request, paidTrialText, {
+      stamp: (_db, id, fields) => stampRow(db, id, { ...fields, un1t_steps: steps }),
+      notify: d.notifyFlowBookingOutcome,
+    })
+  }
   if (once.kind === 'trial_used') {
     const hand = await d.trialUsedHandoff(db, { request, contact, locationId: request.location_id }).catch(() => ({ handled: false }))
     if (hand?.handled) {

@@ -63,6 +63,7 @@ beforeEach(() => {
   deps = {
     writerFactory: vi.fn(async () => writer),
     ensureUn1tAccount: track('account', { kind: 'created', un1tUserId: 'usr-1', executingContactId: 'c-1' }),
+    readPaidTrialReply: vi.fn(async () => null),
     grantTrial: track('trial', { outcome: 'granted', method: 'charge', ledgerId: 'l-t' }),
     book: track('book', done()),
     runSetPasswordStep: track('set_password', { explanation: 'sent', forgotPassword: 'done' }),
@@ -273,5 +274,37 @@ describe('processUn1tClassBookingRequest — the WhatsApp Flow outcome (FLOWACK.
   it('with no notifier injected, a website row (no Flow thread) sends nothing and still books', async () => {
     const r = await run()
     expect(r.outcome).toBe('booked')
+  })
+})
+
+// PAIDTRIALONLY.1 — where the studio has set its paid trial reply, nobody is
+// given a free trial: a person with nothing to book with is sent the reply.
+describe('processUn1tClassBookingRequest — paid trial only (PAIDTRIALONLY.1)', () => {
+  const REPLY = 'New here? Start with the 14 Day Reset: https://x.test/trial?studio=hatch'
+
+  it('no credits, no membership: no trial and no booking; the Flow customer gets the reply; row failed', async () => {
+    deps.readPaidTrialReply.mockResolvedValue(REPLY)
+    deps.notifyFlowBookingOutcome = vi.fn(async () => ({ flow: true, sent: true }))
+    const out = await run()
+    expect(out).toEqual({ outcome: 'failed', detail: 'paid_trial_offered' })
+    expect(deps.grantTrial).not.toHaveBeenCalled()
+    expect(deps.book).not.toHaveBeenCalled()
+    expect(deps.notifyFlowBookingOutcome).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'q-1' }), { outcome: 'paid_trial', text: REPLY })
+    expect(lastRow()).toMatchObject({ status: 'failed', last_error: 'paid_trial_offered' })
+    expect(lastRow().un1t_steps).toMatchObject({ trial: 'paid_trial_only' })
+  })
+
+  it('credits on the account still book when the reply is set', async () => {
+    deps.readPaidTrialReply.mockResolvedValue(REPLY)
+    writer.read.mockResolvedValue({ balance: 3, is_unlimited: false })
+    const out = await run()
+    expect(out.outcome).toBe('booked')
+    expect(deps.grantTrial).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable reply setting is a retry, before any write', async () => {
+    deps.readPaidTrialReply.mockRejectedValue(new Error('unreadable'))
+    await expect(run()).rejects.toBeInstanceOf(Un1tFunnelRetry)
+    expect(deps.ensureUn1tAccount).not.toHaveBeenCalled()
   })
 })
