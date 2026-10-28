@@ -25,7 +25,7 @@ const HERO_IMAGE =
 const CTA_HREF = '#corp'
 
 export const corpMetadata = {
-  title: 'Corporate offer',
+  title: 'Exclusive Corporate Offer',
   description: 'A free offer for our partner companies. Claim it in under a minute.',
   robots: { index: false, follow: false },
 }

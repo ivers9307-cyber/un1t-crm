@@ -23,6 +23,10 @@ describe('corpPromoCopyFromBlocks', () => {
     expect(corpPromoCopyFromBlocks([], 'hatch-3-free')).toEqual({ ...CORP_PROMO_COPY_DEFAULT, ticks: [...CORP_PROMO_COPY_DEFAULT.ticks] })
   })
 
+  it('the card title defaults to Exclusive Corporate Offer', () => {
+    expect(corpPromoCopyFromBlocks([], 'hatch-3-free').title).toBe('Exclusive Corporate Offer')
+  })
+
   it('blank fields fall back; filled ones win; blank ticks skipped', () => {
     const copy = corpPromoCopyFromBlocks([{ type: 'corp_promo', heading: 'Hello', cta_label: '  ', ticks: ['One', ''] }], 'hatch-3-free')
     expect(copy.heading).toBe('Hello')
