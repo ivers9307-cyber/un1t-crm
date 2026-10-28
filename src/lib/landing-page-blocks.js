@@ -20,6 +20,7 @@
 import { z } from 'zod'
 import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
 import { PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
+import { CORP_PROMO_COPY_DEFAULT } from '@/lib/corp-promos'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -272,6 +273,17 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   event_source_url: '',
 })
 
+// CORPPROMO.1 — the words of a /corp promo (src/lib/corp-promos.js). The
+// grant itself (studio, credits, expiry) is fixed in that registry; this block
+// holds only what the visitor reads. promo_key '' ⇒ every promo at this studio.
+const CORP_PROMO_DEFAULT = () => ({
+  id:        newBlockId(),
+  type:      'corp_promo',
+  promo_key: '',
+  ...CORP_PROMO_COPY_DEFAULT,
+  ticks:     [...CORP_PROMO_COPY_DEFAULT.ticks],
+})
+
 const STATS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'stats',
@@ -319,6 +331,7 @@ export const BLOCK_TYPES = [
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
   { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
   { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan, or the un1t.online product, is put on their account.', factory: PAID_TRIAL_DEFAULT },
+  { type: 'corp_promo',  label: 'Corporate promo (/corp)', description: 'The words of a free corporate offer at /corp (e.g. 3 free classes). The credits and their expiry are fixed per promo; this edits what visitors read.', factory: CORP_PROMO_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
