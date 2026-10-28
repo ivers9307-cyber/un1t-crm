@@ -27,7 +27,7 @@ export function defaultWelcomeGreeting({ agentName, brand } = {}) {
   const b = String(brand || '').trim()
   const who = name ? `I'm ${name}, the studio's assistant` : "I'm the studio's assistant"
   const where = b ? ` at ${b}` : ''
-  return `Hi, ${who}${where}. Ask me anything, or tell me if you'd like to book a free class or a consultation.`
+  return `Hi, ${who}${where}. Ask me anything, or tell me if you'd like to book a class or a consultation.`
 }
 
 /**
@@ -59,7 +59,7 @@ export const DEFAULT_CHAT_BOOKING_UNAVAILABLE_NO_LINK_TEXT = "I can't book class
 export const DEFAULT_PURCHASE_OFFER_INTRO_TEXT = "You've used all your classes. Here's how to keep training with us:"
 export const DEFAULT_PURCHASE_LINK_TEXT = "Here's your secure payment link for {product}. Once it goes through I'll book you into {class}."
 export const DEFAULT_PURCHASE_LINK_NO_CLASS_TEXT = "Here's your secure payment link for {product}. I'll let you know when it's done."
-export const DEFAULT_TRIAL_USED_TEXT = "It looks like you've had your free trial with us before, so here are the ways to keep training:"
+export const DEFAULT_TRIAL_USED_TEXT = "It looks like you've had your trial with us before, so here are the ways to keep training:"
 export const DEFAULT_REFUND_REQUEST_TEXT = "I've passed that to the team, they'll look at it and get back to you."
 // MIAFIX.1 — sent as the turn hands the thread to the team (the member asked
 // for a different product while this link is still open), so it asks nothing.

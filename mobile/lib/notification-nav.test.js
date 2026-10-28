@@ -174,6 +174,13 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'checklist_compliance', instance_id: 'x' })).toBe('/(tabs)/dashboard')
   })
 
+  // SHELLYALERTS.3 — key rejected / offline / power fault all open Smart plugs.
+  it('routes Shelly alerts to the Smart plugs screen', () => {
+    for (const kind of ['key_rejected', 'offline', 'fault']) {
+      expect(routeForNotification({ type: 'shelly_alert', kind, device_id: 'x' })).toBe('/shelly')
+    }
+  })
+
   it('deliberately does not navigate for the admin delivery test', () => {
     expect(routeForNotification({ type: 'admin_test_push' })).toBe(null)
   })

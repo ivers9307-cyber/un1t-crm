@@ -421,6 +421,7 @@ describe('GET /api/shelly/discover — the row shape', () => {
       gen: 2,
       online: true,
       supported: true,
+      kind: 'switch',
       adopted: null,
     })
   })

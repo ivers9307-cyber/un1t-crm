@@ -176,3 +176,88 @@ export async function api(path, options = {}) {
   }
   return json
 }
+
+// ── SHELLYGROUPS.9 — Shelly groups ─────────────────────────────────────────
+// Thin wrappers over api(), so every call carries authHeaders() (the
+// impersonation header included) and api()'s envelope rules: the toggle's
+// HTTP 429 `success:true, pending:true` body reaches the caller UNCHANGED, and
+// mobile/lib/shelly.js reads `applied` / `pending` off it.
+
+/** GET /api/shelly/groups → `{ success, groups: [{ …, device_ids, now }] }`. */
+export function listShellyGroups(locationId) {
+  return api('/api/shelly/groups', { locationId })
+}
+
+/**
+ * POST /api/shelly/groups/<id>/toggle with `{ state: 'on'|'off'|'auto', until? }`.
+ * An absent `until` is OMITTED, not sent as null: the route then computes
+ * midnight in the STUDIO's zone ("Until midnight").
+ * → `{ success, applied: 'all'|'partial'|'none', pending_device_ids, pending_members, message?, group }`
+ */
+export function toggleShellyGroup(groupId, { state, until } = {}, locationId) {
+  const body = until ? { state, until } : { state }
+  return api(`/api/shelly/groups/${encodeURIComponent(groupId)}/toggle`, { method: 'POST', body, locationId })
+}
+
+/**
+ * How many devices on the studio's Shelly account could be adopted and are
+ * not: rows from GET /api/shelly/discover with `supported === true` and
+ * `adopted == null`. Returns NULL when the list could not be read — an unread
+ * list is unknown, never "nothing to adopt". Called once per screen open (the
+ * discover route reads Shelly's cloud live).
+ *
+ * @returns {Promise<number|null>}
+ */
+//
+// Cached per location for UNADOPTED_TTL_MS, module-level, so re-focusing the
+// screen (back from a sub-screen, an app switch) costs at most one Shelly
+// cloud call per five minutes per studio. Only a READ answer is cached: an
+// unreadable list (null) is asked again on the next focus. `{ fresh: true }`
+// (pull-to-refresh: the operator asked for now) skips the cache and refills it.
+export const UNADOPTED_TTL_MS = 5 * 60_000
+const unadoptedCache = new Map()
+
+/** Test seam: forget every cached count. */
+export function _resetUnadoptedShellyCache() { unadoptedCache.clear() }
+
+export async function countUnadoptedShelly(locationId, { fresh = false } = {}) {
+  const hit = fresh ? null : unadoptedCache.get(locationId)
+  if (hit && Date.now() - hit.at < UNADOPTED_TTL_MS) return hit.count
+  const r = await api('/api/shelly/discover', { locationId })
+  if (r?.success !== true || !Array.isArray(r.devices)) return null
+  const count = r.devices.filter((d) => d?.supported === true && d?.adopted == null).length
+  unadoptedCache.set(locationId, { at: Date.now(), count })
+  return count
+}
+
+/**
+ * SHELLYGROUPS.10 — the studio's classes still to start today, for the Smart
+ * plugs header's "next class 18:00 BU1LD". A direct RLS-scoped read
+ * (class_occurrences_location_scoped_select, the same table and policy the
+ * Studio dashboard's Today strip reads); the window is the STUDIO's day from
+ * nextClassWindow in mobile/lib/shelly.js. Returns NULL when the read failed,
+ * so the header omits the part rather than claiming "no more classes".
+ * Called once per screen open, never on the poll: nextClassLabel picks the
+ * next one at render time.
+ *
+ * @param {string} locationId
+ * @param {{ fromIso: string, toIso: string }} window
+ * @returns {Promise<object[]|null>}
+ */
+export async function listClassesRemainingToday(locationId, { fromIso, toIso }) {
+  try {
+    const { data, error } = await supabase
+      .from('class_occurrences')
+      .select('name, program, starts_at, cancelled_at')
+      .eq('location_id', locationId)
+      .gte('starts_at', fromIso)
+      .lt('starts_at', toIso)
+      .is('cancelled_at', null)
+      .order('starts_at')
+      .limit(50)
+    if (error) return null
+    return Array.isArray(data) ? data : []
+  } catch {
+    return null
+  }
+}

@@ -29,6 +29,7 @@ const STAFF_TYPES = [
   'wa_quality', 'number_health', 'flow_health', 'template_status',
   'email_inbound',
   'shift_offer', 'shift_offer_taken', // REPLACE.1b — ride category 'swap'
+  'shelly_alert', // SHELLYALERTS.3 — rides category 'shelly_alert'
 ]
 
 const CUSTOMER_TYPES = [

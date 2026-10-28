@@ -32,13 +32,14 @@ const MODULE = 'shelly-device'
 
 // An ALLOWLIST, and the SAME one the list and adopt responses use (imported by
 // src/app/api/shelly/devices/route.js) so the surface can never describe a
-// device differently depending on which route answered. `adopted_by` is
+// device differently depending on which route answered. `group_id` (mig 776,
+// SHELLYGROUPS.5) is what lets the page sort a device under its group. `adopted_by` is
 // deliberately absent: it is a staff user id the UI never shows, and a column
 // added to the table later must not start appearing in a response because
 // nobody remembered to subtract it. (No secrets live on this table — the
 // allowlist is about contract stability, not about the key.)
 export const DEVICE_COLUMNS =
-  'id, location_id, device_id, channel, name, model, gen, zone, enabled, schedule_mode, ' +
+  'id, location_id, group_id, device_id, channel, kind, name, model, gen, zone, enabled, schedule_mode, ' +
   'fixed_windows, class_rule, override, last_applied, last_state, last_seen_at, created_at, updated_at'
 
 /**
@@ -103,6 +104,10 @@ export function requestTz(user) {
  * authority here (it is the location every route scoped its query by), and a
  * stale embed on the connection row must not win over it.
  */
-export function withLocationTz(conn, user) {
-  return { ...conn, locations: { timezone: user?.activeLocation?.timezone ?? null } }
+//
+// `safetyTimers` (SHELLYTIMERS.5): the studio's safety-timer switch, read
+// server-side by the caller (loadSafetyTimers). Grafted beside the zone so
+// the engine reads both from one place; anything but true is off.
+export function withLocationTz(conn, user, { safetyTimers = false } = {}) {
+  return { ...conn, locations: { timezone: user?.activeLocation?.timezone ?? null, safety_timers: safetyTimers === true } }
 }

@@ -13,6 +13,7 @@ const DEFAULT_TRIAL_USED_TEXT = "It looks like you've already had a trial with u
 const DEFAULT_ACTIVE_MEMBER_TEXT = "It looks like you already have an active membership at UN1T Hatch Street, which already covers your classes. If that's not right, tap I need help and the team will be in touch."
 const DEFAULT_HELP_CTA_LABEL = 'I need help'
 const DEFAULT_HELP_SENT_TEXT = 'Thanks. The team will be in touch shortly.'
+const DEFAULT_SCROLL_CUE_LABEL = 'Learn more about the studio'
 
 // TRIALSTUDIO.10 — what a Hatch Street buyer back from un1t.online's checkout
 // reads while the 2-minute cron settles the purchase off the 15-minute
@@ -50,6 +51,7 @@ export function paidTrialCopyFromBlock(b) {
     helpCtaLabel: str(block.help_cta_label) || DEFAULT_HELP_CTA_LABEL,
     helpSentText: str(block.help_sent_text) || DEFAULT_HELP_SENT_TEXT,
     pendingBody: str(block.pending_body) || PAID_TRIAL_PENDING_BODY,
+    scrollCueLabel: str(block.scroll_cue_label) || DEFAULT_SCROLL_CUE_LABEL,
   }
 }
 
@@ -88,7 +90,7 @@ export function paidTrialAccountEmailCopy(blockOrBlocks) {
  *   membershipId: string|null, planCode: string|null, un1tProductId: string|null,
  *   tag: string, leadSource: string, eventSourceUrl: string,
  *   studioLabel: string, trialUsedText: string, activeMemberText: string,
- *   helpCtaLabel: string, helpSentText: string, pendingBody: string, block: object }}
+ *   helpCtaLabel: string, helpSentText: string, pendingBody: string, scrollCueLabel: string, block: object }}
  */
 export function paidTrialConfigFromBlocks(blocks, landingPath, { product = null } = {}) {
   const path = resolveLandingPath(landingPath)

@@ -21,6 +21,14 @@
 //     (device_id, channel) is UNIQUE across the estate, moving a plug to
 //     another studio is NECESSARILY remove-then-adopt. The message names the
 //     loss; Task 6's two-step confirm names it before the click.
+//   * A GROUPED DEVICE'S SCHEDULE IS LOCKED (SHELLYGROUPS.5). While a device
+//     is in a group the GROUP's enabled and schedule govern it
+//     (effectiveTarget), so its own `enabled`, `schedule_mode`,
+//     `fixed_windows` and `class_rule` are invisible — and they would come
+//     back to life the moment it left the group. The spec rule is that leaving
+//     a group can never revive a stale, invisible schedule: joining clears the
+//     device's schedule, and this route refuses to write one back while it is
+//     grouped (409 `grouped`). A rename is still fine.
 //
 // locationId ALWAYS comes from withAuth's ctx, and every write pins it in the
 // WHERE clause rather than reading the row back and comparing — a guessed id
@@ -30,7 +38,8 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError } from '@/lib/log'
-import { loadDevice, DEVICE_COLUMNS } from '@/lib/shelly/device-load'
+import { loadDevice, DEVICE_COLUMNS, requestTz } from '@/lib/shelly/device-load'
+import { withSafetyTimerNotice } from '@/lib/shelly/safety-notice'
 import { ShellyDevicePatch } from '@/lib/shelly/schemas'
 
 export const runtime = 'nodejs'
@@ -42,6 +51,15 @@ const MODULE = 'shelly-device'
 // render it without re-typing it, and so a test can assert the route and the
 // card say the same thing.
 export const DISABLE_NOTICE = 'Schedule switched off — the plug stays as it is until you toggle it'
+// SHELLYTIMERS.6: when the relay we switched on carries a safety timer (an
+// armed cap_at, or a running timer the plug reported), that "stays as it is"
+// holds only until the timer, so the notice gains one sentence saying when
+// (withSafetyTimerNotice, in the studio's zone).
+
+// The refusal for a schedule edit on a grouped device (see the header).
+export const GROUPED_MESSAGE =
+  "This device follows its group's schedule — change the group, or take the device out of the group first"
+const SCHEDULE_FIELDS = ['enabled', 'schedule_mode', 'fixed_windows', 'class_rule']
 
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
@@ -54,7 +72,7 @@ const notFound = () => bad('Not found', 404)
  */
 export const PATCH = withAuth(
   { permission: 'device_control', schema: ShellyDevicePatch },
-  async ({ db, locationId, input, params }) => {
+  async ({ user, db, locationId, input, params }) => {
     const loaded = await loadDevice(db, locationId, params?.id)
     if (!loaded.ok) {
       if (loaded.status === 404) return notFound()
@@ -62,6 +80,10 @@ export const PATCH = withAuth(
       return bad('Could not load this device', 500)
     }
     const device = loaded.device
+
+    if (device.group_id && SCHEDULE_FIELDS.some((f) => input[f] !== undefined)) {
+      return bad(GROUPED_MESSAGE, 409, { code: 'grouped' })
+    }
 
     // Read from the row as it was BEFORE this patch: `last_applied.action` is
     // the record of what WE last did to the relay, so an `on` there means the
@@ -107,7 +129,7 @@ export const PATCH = withAuth(
     return NextResponse.json({
       success: true,
       device: row,
-      ...(leavesRelayOn ? { notice: DISABLE_NOTICE } : {}),
+      ...(leavesRelayOn ? { notice: withSafetyTimerNotice(DISABLE_NOTICE, [device], Date.now(), requestTz(user), 'It') } : {}),
     })
   },
 )

@@ -69,7 +69,7 @@ const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_d
 // it keeps today's menu; the pipeline page always passes it.
 // TZ.16 (D3 = A) — `timezone` is the board's studio zone; the next-class chip
 // reads in it, with the abbreviation only when the viewer's browser is elsewhere.
-export default function DealCard({ deal, locationId, timezone = null, stageName, onOpenContact, manual = false, canTask = true }) {
+export default function DealCard({ deal, locationId, timezone = null, stageName, stageSlug = null, onOpenContact, manual = false, canTask = true }) {
   const viewerZone = useViewerZone()
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
@@ -117,7 +117,11 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
               contactId={contact.id}
               locationId={locationId}
               actions={personActionsFor(CARD_ACTIONS[manual ? 'manual' : 'derived'], { canTask })}
-              isCold={contact.pipeline_stage_slug === 'cold_lead'}
+              // HATCHCOLD.2 — this board's column, not the home studio's slug
+              // (contacts.pipeline_stage_slug), which differs for a contact
+              // whose home is another studio.
+              isCold={(stageSlug ?? contact.pipeline_stage_slug) === 'cold_lead'}
+              boardLocationId={locationId}
             />
           )}
         </div>

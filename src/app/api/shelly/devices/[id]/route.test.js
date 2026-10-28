@@ -15,7 +15,7 @@
 //  4. REMOVING NAMES THE LOSS. shelly_energy_daily cascades from the device
 //     row; the message says so.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -28,11 +28,11 @@ vi.mock('@/lib/auth', async (importOriginal) => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 
-import { PATCH, DELETE, DISABLE_NOTICE } from './route.js'
+import { PATCH, DELETE, DISABLE_NOTICE, GROUPED_MESSAGE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import {
-  LOC_A, LOC_B, DEV_A, DEV_B, BAD_ID, OWNER_A, MANAGER_A, STAFF_A,
+  LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_A, OWNER_NY, MANAGER_A, STAFF_A,
   deviceRow, makeDb, updatesTo, deletesFrom, jsonReq, req, ctxFor,
 } from '../../shelly-routes.test-helpers.js'
 
@@ -236,6 +236,46 @@ describe('PATCH /api/shelly/devices/[id] — failures', () => {
   })
 })
 
+describe('PATCH /api/shelly/devices/[id] — a device in a group', () => {
+  // The group's schedule governs a member (effectiveTarget), so a member's own
+  // schedule fields are invisible while it is grouped — and would come back to
+  // life the moment it left. Refused, so leaving a group can never revive one.
+  beforeEach(() => useDb(bothLocations({ group_id: GRP_A, schedule_mode: 'none', fixed_windows: [] })))
+
+  for (const [field, value] of [
+    ['enabled', false],
+    ['schedule_mode', 'fixed'],
+    ['fixed_windows', [{ days: [1], on: '07:00', off: '09:00' }]],
+    ['class_rule', { lead_min: 20 }],
+  ]) {
+    it(`409s grouped for ${field}, and writes nothing`, async () => {
+      const res = await PATCH(patchReq({ [field]: value }), ctxFor(DEV_A))
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body).toMatchObject({ success: false, code: 'grouped', error: GROUPED_MESSAGE })
+      expect(updatesTo(db, 'shelly_devices')).toEqual([])
+    })
+  }
+
+  it('409s a mixed body that carries a schedule field alongside a name', async () => {
+    const res = await PATCH(patchReq({ name: 'Fan', enabled: true }), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    expect(updatesTo(db, 'shelly_devices')).toEqual([])
+  })
+
+  // (`zone` is not a PATCH key at all — ShellyDevicePatch is strict.)
+  it('still allows a rename', async () => {
+    const res = await PATCH(patchReq({ name: 'Fan' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    expect((await res.json()).device).toMatchObject({ name: 'Fan', group_id: GRP_A })
+  })
+
+  it('an ungrouped device still takes schedule edits', async () => {
+    useDb(bothLocations())
+    expect((await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).status).toBe(200)
+  })
+})
+
 describe('DELETE /api/shelly/devices/[id]', () => {
   it('removes the row and names the energy history it took with it', async () => {
     const res = await DELETE(delReq(), ctxFor(DEV_A))
@@ -276,5 +316,35 @@ describe('DELETE /api/shelly/devices/[id]', () => {
     getCurrentUser.mockResolvedValue(STAFF_A)
     expect((await DELETE(delReq(), ctxFor(DEV_A))).status).toBe(403)
     expect(deletesFrom(db, 'shelly_devices')).toEqual([])
+  })
+})
+
+// SHELLYTIMERS.6 — "stays as it is" holds only until a pending safety timer.
+describe('PATCH /api/shelly/devices/[id] — the disable notice names a pending safety timer', () => {
+  const NOW = Date.parse('2026-08-23T12:00:00.000Z')
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW) })
+  afterEach(() => vi.useRealTimers())
+  const onWith = (extra) => ({ last_applied: { key: 'w:1', action: 'on', reason: 'window_open', at: '2026-08-23T07:00:00.000Z', ...extra } })
+
+  it('an armed cap_at in the future: the time, in the studio zone', async () => {
+    useDb(bothLocations(onWith({ cap_at: '2026-08-23T20:30:00.000Z' })))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(body.notice).toBe(`${DISABLE_NOTICE}. It still switches itself off by 21:30 (safety timer).`)
+    getCurrentUser.mockResolvedValue(OWNER_NY)
+    useDb(bothLocations(onWith({ cap_at: '2026-08-23T20:30:00.000Z' })))
+    const ny = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(ny.notice).toMatch(/by 16:30 \(safety timer\)\.$/)
+  })
+
+  it('a running timer the plug reported (last_state.timer_until) counts too', async () => {
+    useDb(bothLocations({ ...onWith({}), last_state: { online: true, output: true, timer_until: '2026-08-23T13:15:00.000Z' } }))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(body.notice).toMatch(/by 14:15 \(safety timer\)\.$/)
+  })
+
+  it('a cap that has passed leaves the plain notice', async () => {
+    useDb(bothLocations(onWith({ cap_at: '2026-08-23T11:00:00.000Z' })))
+    const body = await (await PATCH(patchReq({ enabled: false }), ctxFor(DEV_A))).json()
+    expect(body.notice).toBe(DISABLE_NOTICE)
   })
 })

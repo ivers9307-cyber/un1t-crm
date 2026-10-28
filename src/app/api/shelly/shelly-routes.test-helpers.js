@@ -30,6 +30,9 @@ export const STAFF_ID = 'cccccccc-1111-4111-8111-cccccccccccc'
 
 export const DEV_A = 'd0000000-0000-4000-8000-00000000000a'
 export const DEV_B = 'd0000000-0000-4000-8000-00000000000b'
+// SHELLYGROUPS.5 — groups, one per studio by default.
+export const GRP_A = '90000000-0000-4000-8000-00000000000a'
+export const GRP_B = '90000000-0000-4000-8000-00000000000b'
 export const BAD_ID = 'not-a-uuid'
 
 export const HOST = 'shelly-68-eu.shelly.cloud'
@@ -95,6 +98,26 @@ export const deviceRow = (over = {}) => ({
   ...over,
 })
 
+// A shelly_groups row as the table holds it (mig 776), created_by included so
+// an allowlist assertion is about the route's select list.
+export const groupRow = (over = {}) => ({
+  id: GRP_A,
+  location_id: LOC_A,
+  name: 'Gym floor',
+  icon: 'bulb',
+  sort_order: 0,
+  enabled: false,
+  schedule_mode: 'none',
+  fixed_windows: [],
+  class_rule: {},
+  override: null,
+  last_applied: null,
+  created_by: OWNER_ID,
+  created_at: '2026-08-20T09:00:00.000Z',
+  updated_at: '2026-08-20T09:00:00.000Z',
+  ...over,
+})
+
 // The full seven-field shape mig 562 requires of every last_state writer.
 export const fullState = (over = {}) => ({
   online: true,
@@ -141,6 +164,16 @@ export function project(row, cols) {
   const out = {}
   for (const col of splitCols(cols)) {
     const embed = col.match(/^([A-Za-z_]+)(?:!\w+)?\(/)
+    // `alias:col->a->b` (a JSON path, as the safety-timer switch reads it):
+    // the alias is the key, and the path is walked into the jsonb column.
+    const aliased = !embed && col.match(/^([A-Za-z_]+):(.+)$/)
+    if (aliased) {
+      const [base, ...path] = aliased[2].split('->').map((x) => x.trim())
+      let v = row[base]
+      for (const k of path) v = v && typeof v === 'object' ? v[k] : undefined
+      out[aliased[1]] = v === undefined ? null : v
+      continue
+    }
     const key = embed ? embed[1] : col
     out[key] = row[key] === undefined ? null : row[key]
   }
@@ -166,6 +199,7 @@ export function makeDb(cfg = {}) {
     selectError: cfg.selectError || {},
     updateError: cfg.updateError || {},
     deleteError: cfg.deleteError || {},
+    insertError: cfg.insertError || {},
   }
   const calls = { selects: [], updates: [], deletes: [], inserts: [] }
 
@@ -189,17 +223,44 @@ export function makeDb(cfg = {}) {
       ? rowVal.slice(0, 10)
       : rowVal
 
+  // PostgREST ilike: % and _ are wildcards, a backslash escapes the next
+  // character, and the match is case-insensitive. Modelled for real (not as
+  // lower(a) === lower(b)) so an unescaped `_` in a name is caught here.
+  const ilikeRx = (pat) => {
+    let src = ''
+    const str = String(pat)
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i]
+      if (ch === '\\' && i + 1 < str.length) { src += str[++i].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); continue }
+      if (ch === '%') { src += '.*'; continue }
+      if (ch === '_') { src += '.'; continue }
+      src += ch.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+    }
+    return new RegExp(`^${src}$`, 'is')
+  }
+
   const matches = (row, st) =>
     Object.entries(st.filters).every(([k, v]) => row[k] === v) &&
+    Object.entries(st.neqs).every(([k, v]) => row[k] !== v) &&
+    Object.entries(st.iss).every(([k, v]) => (v === null ? row[k] == null : row[k] === v)) &&
+    Object.entries(st.ilikes).every(([k, v]) => row[k] != null && ilikeRx(v).test(String(row[k]))) &&
+    Object.entries(st.lt).every(([k, v]) => rangeValue(row[k], v) < v) &&
     Object.entries(st.ins).every(([k, v]) => (v || []).includes(row[k])) &&
     Object.entries(st.gte).every(([k, v]) => rangeValue(row[k], v) >= v) &&
     Object.entries(st.lte).every(([k, v]) => rangeValue(row[k], v) <= v)
 
   function hits(st) {
     let out = tableRows(st.table).filter((r) => matches(r, st))
-    for (const [col, opts] of st.orders) {
-      const dir = opts?.ascending === false ? -1 : 1
-      out = [...out].sort((a, b) => (a[col] > b[col] ? dir : a[col] < b[col] ? -dir : 0))
+    // ORDER BY a, b: a decides, b breaks its ties (not "the last .order() wins").
+    if (st.orders.length) {
+      out = [...out].sort((a, b) => {
+        for (const [col, opts] of st.orders) {
+          const dir = opts?.ascending === false ? -1 : 1
+          if (a[col] > b[col]) return dir
+          if (a[col] < b[col]) return -dir
+        }
+        return 0
+      })
     }
     if (st.limit != null) out = out.slice(0, st.limit)
     return out
@@ -230,7 +291,22 @@ export function makeDb(cfg = {}) {
     return { removed: list.length - kept.length, error: null }
   }
 
+  let seq = 0
+  function insertRows(st) {
+    const err = errorFor(conf.insertError, st)
+    if (err) return { rows: null, error: err }
+    const list = Array.isArray(st.payload) ? st.payload : [st.payload]
+    const made = list.map((p) => ({ id: `ins-${st.table}-${++seq}`, ...p }))
+    tableRows(st.table).push(...made)
+    return { rows: made, error: null }
+  }
+
   function terminalRow(st, { strict }) {
+    if (st.op === 'insert') {
+      const { rows, error } = insertRows(st)
+      if (error) return { data: null, error }
+      return { data: project(rows[0], st.cols), error: null }
+    }
     if (st.op === 'update') {
       const { rows, error } = writeRows(st)
       if (error) return { data: null, error }
@@ -253,6 +329,11 @@ export function makeDb(cfg = {}) {
   }
 
   function terminalList(st) {
+    if (st.op === 'insert') {
+      const { rows, error } = insertRows(st)
+      if (error) return { data: null, error }
+      return { data: rows.map((r) => project(r, st.cols)), error: null }
+    }
     if (st.op === 'update') {
       const { rows, error } = writeRows(st)
       if (error) return { data: null, count: null, error }
@@ -272,19 +353,23 @@ export function makeDb(cfg = {}) {
     from(table) {
       const st = {
         table, op: 'select', cols: null, selectOpts: null,
-        filters: {}, ins: {}, gte: {}, lte: {}, orders: [], limit: null, payload: null,
+        filters: {}, ins: {}, gte: {}, lte: {}, lt: {}, neqs: {}, iss: {}, ilikes: {}, orders: [], limit: null, payload: null,
       }
       const b = {
         select: (cols, opts) => {
           st.cols = cols
           if (opts) st.selectOpts = opts
-          if (st.op === 'select') calls.selects.push(st)
+          if (st.op === 'select' && !calls.selects.includes(st)) calls.selects.push(st)
           return b
         },
         eq: (col, val) => { st.filters[col] = val; return b },
         in: (col, vals) => { st.ins[col] = vals; return b },
         gte: (col, val) => { st.gte[col] = val; return b },
         lte: (col, val) => { st.lte[col] = val; return b },
+        lt: (col, val) => { st.lt[col] = val; return b },
+        neq: (col, val) => { st.neqs[col] = val; return b },
+        is: (col, val) => { st.iss[col] = val; return b },
+        ilike: (col, val) => { st.ilikes[col] = val; return b },
         order: (col, opts) => { st.orders.push([col, opts]); return b },
         limit: (n) => { st.limit = n; return b },
         update: (payload) => { st.op = 'update'; st.payload = payload; calls.updates.push(st); return b },
@@ -303,6 +388,7 @@ export function makeDb(cfg = {}) {
 export const updatesTo = (db, table) => db.calls.updates.filter((u) => u.table === table)
 export const deletesFrom = (db, table) => db.calls.deletes.filter((d) => d.table === table)
 export const selectsFrom = (db, table) => db.calls.selects.filter((s) => s.table === table)
+export const insertsTo = (db, table) => db.calls.inserts.filter((i) => i.table === table)
 
 /** A Request for a route that takes no body. */
 export const req = (url = 'http://localhost/api/shelly/x', init = {}) => new Request(url, { method: 'POST', ...init })

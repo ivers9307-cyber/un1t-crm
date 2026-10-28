@@ -132,7 +132,91 @@ export function parseGroupsResult(body) {
 // different tag, so "did this cost two requests" survives the rewrite.
 const withRetried = (out, res) => (res && res.retried ? { ...out, retried: true } : out)
 
-export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep, now = Date.now, minGapMs = MIN_GAP_MS } = {}) {
+// SHELLYERR.1 — Shelly's error vocabulary, from Communication v2.0-beta.
+//
+// THE DOCUMENTED SHAPE IS NON-2xx. A single-device command failure answers
+// 400 DEVICE_OFFLINE / DEVICE_INVALID_CHANNEL / BAD_REQUEST …, 404
+// DEVICE_NOT_FOUND / INSTANCE_NOT_FOUND or 500 UNEXPECTED_SUBSERVICE_ERROR,
+// each with an `{ error }` body. Until SHELLYERR.1 this file read `error` only
+// on a 2xx, so the documented shape arrived as an anonymous `kind:'http'`: an
+// offline plug told the operator "Shelly cloud is not answering", and its code
+// never reached a log line. Prod has never recorded which shape it really
+// sends (no failure has been logged with a status), so BOTH are read the same.
+//
+// PERMANENT means waiting cannot fix it: the request itself is wrong for this
+// device. The cron still re-plans it every tick (an unstamped command is
+// retried by design), so the flag is for what the operator is TOLD — never
+// "it will follow when it is back online" for a plug that never will.
+export const SHELLY_PERMANENT_CODES = new Set([
+  'BAD_REQUEST', 'DEVICE_INVALID_CHANNEL', 'DEVICE_INVALID_MODE', 'DEVICE_NOT_FOUND', 'DEVICE_UNSUPPORTED_COMMAND',
+])
+// The two codes the docs pin on Shelly's own servers ("problem with the server
+// handling the device", "internal subservice failure"). They are the cloud, not
+// the plug, so they keep the cloud's tag — 'http' — and its copy.
+const SHELLY_SIDE_CODES = new Set(['INSTANCE_NOT_FOUND', 'UNEXPECTED_SUBSERVICE_ERROR'])
+// A code comes out of a response body, and callers log it; a body is never
+// logged whole, so neither is an unbounded string out of one.
+const CODE_MAX = 64
+
+function errorCodeOf(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+  return typeof body.error === 'string' ? body.error.slice(0, CODE_MAX) : null
+}
+
+// The set/ endpoints' failure rewrite, for a 2xx AND a non-2xx error body.
+// null = "not an error body; pass the result through". auth, rate_limited,
+// network and config keep their own tags whatever the body says: those are
+// facts about the key, the budget or the host, and the reconcile's brakes key
+// off them.
+function commandFailure(res) {
+  if (!res || (!res.ok && res.kind !== 'http')) return null
+  const code = errorCodeOf(res.body)
+  if (code === null) return null
+  return withRetried({
+    ok: false,
+    kind: SHELLY_SIDE_CODES.has(code) ? 'http' : 'device',
+    code,
+    statusCode: res.statusCode,
+    permanent: SHELLY_PERMANENT_CODES.has(code),
+  }, res)
+}
+
+// SHELLYTIMERS.1 — the safety-net timer. Every set/ command accepts
+// `toggle_after` (seconds): after the delay the DEVICE flips itself to the
+// opposite of `on`, with no cloud and no cron involved. That is the whole
+// point: if this CRM dies with a room switched on, the plug still switches
+// itself off.
+//
+// Two refusals, both answered before any request is spent (`kind:
+// 'invalid_timer'`, statusCode 0 like every other caller-bug tag):
+//  • anything but a positive finite number of seconds (>= 1). A silently
+//    dropped timer is a safety net that is quietly absent, so it is refused
+//    rather than omitted. A fraction is rounded UP — never shorter than asked.
+//  • a timer on an OFF command. It would flip the relay back ON after the
+//    delay: an "off" that turns a room on later, which is never what a
+//    caller means.
+// Absent (undefined or null) means "no timer" and the body is byte-for-byte
+// what it was before this existed.
+const invalidTimer = () => ({ ok: false, kind: 'invalid_timer', statusCode: 0 })
+function timerOf(opts, on) {
+  const t = opts && typeof opts === 'object' ? opts.toggleAfterSec : undefined
+  if (t === undefined || t === null) return { ok: true, field: {} }
+  if (typeof t !== 'number' || !Number.isFinite(t) || t < 1 || !on) return { ok: false }
+  return { ok: true, field: { toggle_after: Math.ceil(t) } }
+}
+
+// What an interactive press (the device toggle, the group switch) passes as
+// `max429Retries` (see below). One constant so the two switches cannot drift.
+export const INTERACTIVE_429_RETRIES = 3
+
+// `max429Retries` (SHELLYBUSY.1): how many times one call re-sends after a
+// 429, each wait one RETRY_429_AFTER_MS longer than the last. The default of 1
+// is the cron's: it owns a whole tick's budget and must not stall it. A staff
+// press passes more, because its one request most often collides with the
+// cron's read of the same account and a single 1.1 s retry can land on the
+// cron's next call — the press then reads "Shelly is busy" for a request that
+// would have gone through a second later.
+export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep, now = Date.now, minGapMs = MIN_GAP_MS, max429Retries = 1 } = {}) {
   // Re-validated HERE, not just at the column CHECK. The CHECK only protects
   // rows that were persisted; probeConnection tests an operator-PASTED
   // connection that has not been saved yet, so a pasted
@@ -145,8 +229,8 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
   let lastCallAt = -Infinity
 
   // NOTE ON `statusCode: 0` — it is OVERLOADED. It means "no HTTP exchange
-  // happened", and that covers network, config, too_many_ids, invalid_ids
-  // and the empty-list short-circuit. Callers MUST branch on `kind`; a
+  // happened", and that covers network, config, too_many_ids, invalid_ids,
+  // invalid_timer and the empty-list short-circuit. Callers MUST branch on `kind`; a
   // branch on statusCode alone reads a caller bug as a dropped line.
   const configFailure = () => ({ ok: false, kind: 'config', statusCode: 0 })
 
@@ -215,11 +299,11 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       const wait = minGapMs - (now() - lastCallAt)
       if (wait > 0) await sleep(wait)
       let res = await once(path, body, opts)
-      if (!res.ok && res.kind === 'rate_limited') {
+      for (let attempt = 1; attempt <= max429Retries && !res.ok && res.kind === 'rate_limited'; attempt++) {
         // Never shorter than the configured gap: an injected minGapMs above
         // the default is a deliberately slower budget, and a fixed 1100 ms
         // retry would quietly undercut it.
-        await sleep(Math.max(RETRY_429_AFTER_MS, minGapMs))
+        await sleep(Math.max(RETRY_429_AFTER_MS, minGapMs) * attempt)
         res = { ...(await once(path, body, opts)), retried: true }
       }
       return res
@@ -257,28 +341,50 @@ export function createShellyClient(conn, { fetchImpl = fetch, sleep = realSleep,
       // Tagged 'http' rather than 'device' on purpose: the read path's
       // black-hole stop and the "Shelly unreachable (kind)" copy both key off
       // the kinds `get` can yield, and 'device' belongs to the set/ endpoints.
-      if (res.ok && res.body && typeof res.body === 'object' && !Array.isArray(res.body)
-        && typeof res.body.error === 'string') {
-        return withRetried({ ok: false, kind: 'http', code: res.body.error, statusCode: res.statusCode }, res)
+      // SHELLYERR.1: a non-2xx error body stays 'http' for the same reason,
+      // and carries its code like the 2xx one does.
+      const code = res.ok || res.kind === 'http' ? errorCodeOf(res.body) : null
+      if (code !== null) {
+        return withRetried({ ok: false, kind: 'http', code, statusCode: res.statusCode }, res)
       }
       return res
     },
-    setSwitch: async (deviceId, channel, on) => {
-      const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on })
-      if (res.ok && res.body && typeof res.body.error === 'string') {
-        return withRetried({ ok: false, kind: 'device', code: res.body.error, statusCode: res.statusCode }, res)
-      }
-      return res
+    // `opts.toggleAfterSec` (optional): the safety-net timer — see timerOf.
+    setSwitch: async (deviceId, channel, on, opts) => {
+      const timer = timerOf(opts, !!on)
+      if (!timer.ok) return invalidTimer()
+      const res = await call('/v2/devices/api/set/switch', { id: deviceId, channel: Number(channel) || 0, on: !!on, ...timer.field })
+      return commandFailure(res) ?? res
     },
-    setGroups: async (groupIds, on) => {
-      const res = await call('/v2/devices/api/set/groups', { switch: { ids: groupIds, command: { on: !!on } } })
+    // `on` ONLY — never brightness/mode/colour: a light keeps its own level.
+    setLight: async (deviceId, channel, on, opts) => {
+      const timer = timerOf(opts, !!on)
+      if (!timer.ok) return invalidTimer()
+      const res = await call('/v2/devices/api/set/light', { id: deviceId, channel: Number(channel) || 0, on: !!on, ...timer.field })
+      return commandFailure(res) ?? res
+    },
+    // `groups` is a bare string[] (switch ids, the original shape) or
+    // { switch?: string[], light?: string[] }. Empty kinds are dropped; if
+    // none remain no request is spent. One timer per call: it rides inside
+    // every kind's command, so callers batch by timer (reconcile.js).
+    setGroups: async (groups, on, opts) => {
+      const timer = timerOf(opts, !!on)
+      if (!timer.ok) return invalidTimer()
+      const kinds = Array.isArray(groups) ? { switch: groups } : groups || {}
+      const body = {}
+      for (const kind of ['switch', 'light']) {
+        const ids = kinds[kind]
+        if (Array.isArray(ids) && ids.length > 0) body[kind] = { ids, command: { on: !!on, ...timer.field } }
+      }
+      if (Object.keys(body).length === 0) return { ok: true, statusCode: 0, failed: {} }
+      const res = await call('/v2/devices/api/set/groups', body)
+      // Mirror setSwitch: a body carrying a top-level error fails the WHOLE
+      // batch — the docs return group-level validation and server errors as an
+      // HTTP error, not in failedCommands. Reporting it as { ok: true, failed:
+      // {} } would read as "every command landed" for a call where none did.
+      const failure = commandFailure(res)
+      if (failure) return failure
       if (!res.ok) return res
-      // Mirror setSwitch: a 2xx carrying a top-level error is a device
-      // failure. Reporting it as { ok: true, failed: {} } would read as
-      // "every command landed" for a call where none of them did.
-      if (res.body && typeof res.body.error === 'string') {
-        return withRetried({ ok: false, kind: 'device', code: res.body.error, statusCode: res.statusCode }, res)
-      }
       const parsed = parseGroupsResult(res.body)
       // An unreadable failedCommands is a failed batch, not an empty one — the
       // caller must retry rather than stamp. 'http' keeps it inside the kinds

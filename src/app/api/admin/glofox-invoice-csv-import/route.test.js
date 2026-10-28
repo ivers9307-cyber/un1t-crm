@@ -23,8 +23,8 @@ vi.mock('@/lib/supabase', () => ({
       b.or = (v) => { q.ors.push(v); return b }
       b.range = (from, to) => { q.range = [from, to]; return b }
       b.then = (resolve) => {
-        if (table === 'contact_studios') {
-          return resolve(h.crossoverErr ? { data: null, error: h.crossoverErr } : { data: h.crossover.map((r) => ({ source: 'glofox', ...r })), error: null })
+        if (table === 'studio_contacts') {
+          return resolve(h.crossoverErr ? { data: null, error: h.crossoverErr } : { data: h.crossover.map((r) => ({ id: r.contact_id })), error: null })
         }
         if (table === 'contacts') {
           h.contactQueries.push(q)

@@ -236,7 +236,9 @@ describe('the un1t full block (3b)', () => {
       const tool = CACHED_UN1T_FULL_TOOLS.find((t) => t.name === name)
       const glofoxTool = ALL_AGENT_TOOLS.find((t) => t.name === name)
       expect(tool.description).toBe(UN1T_FULL_TOOL_DESCRIPTIONS[name])
-      expect(Object.keys(tool.input_schema.properties)).toEqual(Object.keys(glofoxTool.input_schema.properties))
+      // FEES.2: 3b's cancel adds exactly one optional input, confirm_late_fee.
+      const extra = name === 'cancel_class_booking' ? ['confirm_late_fee'] : []
+      expect(Object.keys(tool.input_schema.properties)).toEqual([...Object.keys(glofoxTool.input_schema.properties), ...extra])
       expect(tool.input_schema.required).toEqual(glofoxTool.input_schema.required)
       const json = JSON.stringify(tool)
       expect(json, name).not.toMatch(/[—–]/)

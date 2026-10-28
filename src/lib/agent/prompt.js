@@ -140,6 +140,8 @@ const READ_EVENTS_RELAY = "- Use list_upcoming_events when someone asks what's o
 // the booking writes are about; `fallback` is what to do when a write answers
 // that booking from chat is not available right now (writes switched off at
 // call time).
+// PAIDTRIALONLY.1 (28 Oct 2026) — the free-class offer is retired; "Trying
+// the studio" points people at the paid trial KNOWLEDGE describes.
 // MIAHATCH.6 — the upsell rules (spec 6.5), block 3b only: offers come from the
 // tools, restate product and price and get a clear yes before a link, buttons
 // for 3 or fewer offers and a list otherwise, never a price the tools did not
@@ -153,6 +155,7 @@ function un1tUpsellLines({ name, multiStudio }) {
     `- When book_class says needs_purchase, or a verified member asks to buy classes or a membership${at}, show the offers from that result or from list_purchase_options. Introduce them with the tool's wording. Give each offer's title and price_label exactly as the tool gives them, and its blurb when it helps. Never invent, round or change a price, and never offer anything the tool did not list.`,
     '- FREE TRIAL: offer the free trial first, before the paid offers, only when book_class or list_purchase_options says trial_available is true. Never say "free trial" or offer one otherwise. When they want it, get a clear yes, then call send_purchase_link with offer_id "trial" (and the class, when they wanted one). Say the trial is on their account, or that a class is booked, only when that tool says so. When it says trial_used, send its text and then its offers.',
     '- With 3 or fewer offers, offer them as tap choices, one per offer. With more, list them in your message. Never show more offers than the tool gave you.',
+    '- MEMBERSHIP: when they ask to join, for "the membership" or for a membership payment link without naming a product, they mean the monthly membership: call list_purchase_options and use its monthly membership offer. When they have already asked you for that link (for example their earlier link expired and they want it resent), that request is their yes: call send_purchase_link with that offer now, without asking again.',
     '- When they pick one, restate the product and its price and get a clear yes before you call send_purchase_link with its offer_id. When they wanted a class, pass that class too (its event_id, class_name, class_time and starts_at as list_upcoming_classes gave them). Never send a link on an ambiguous message.' + (multiStudio ? ` Buying from chat is only for ${name || 'the un1t.online studio'}; for the other studio, hand off.` : ''),
     "- The offer_id you pass to send_purchase_link MUST be an offer_id that list_purchase_options (or book_class's needs_purchase offers) returned in this conversation, copied exactly. Never invent, guess or build one from a product name: call list_purchase_options first.",
     '- When list_purchase_options gives open_link, a payment link for that product is already waiting. If the customer is asking for a different product than that one, call send_purchase_link with that product\'s offer_id now, in the same turn: no new link is made and it hands them to the team, so in that turn only you need no restating and no yes first. Only when they are just asking what is available, mention their link for that product is waiting and never offer to send a link for a different product. Never call send_purchase_link for a product they did not ask for.',
@@ -430,6 +433,9 @@ When you're chatting with someone new or unrecognised, learn who they are and wh
 - When you learn something new (name, email, their goal or interest), call save_lead_details so the studio remembers them. Saving never overwrites anything the studio already has.
 - If they book a consultation you'll collect name + email anyway — still save the goal/interest part, it's gold for the team.
 
+## Trying the studio
+- Never offer, promise or mention a free class, free trial or free session unless KNOWLEDGE describes one that is on offer now, or a tool says trial_available. When someone asks about trying the studio, a trial or a first class, offer the trial KNOWLEDGE describes, with its name, price and link exactly as written there, and end your message with the link, with nothing after it, so it shows as a button.
+
 ## First-class check-in conversations
 When someone replies to your "how was your first class?" message:
 ${positiveCheckin}
@@ -559,6 +565,7 @@ function todayWithWeekday(today) {
  * @param {string} [opts.trialUsedClassLine] MIAHATCH.6: buildTrialUsedClassLine's output (un1t_full turns only); uncached suffix only
  * @param {string|null}[opts.trialDoneLine] TRIALDONE.6: trialDoneLineFor's output (the studio's trial-done brief); uncached suffix only
  * @param {string} [opts.otherStudiosBlock] MIAFIX.1: buildOtherStudiosBlock's output; uncached suffix only
+ * @param {string} [opts.studioChoiceBlock] MIAASKSTUDIO.1: buildStudioChoiceBlock's output; uncached suffix only
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -650,6 +657,9 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // turn, with their booking links (buildOtherStudiosBlock). Uncached; absent
   // or empty, both parts are byte-identical to before.
   if (typeof opts.otherStudiosBlock === 'string' && opts.otherStudiosBlock.trim()) volatileParts.push(opts.otherStudiosBlock.trim())
+  // MIAASKSTUDIO.1 — accounts at several studios, active at none: ask which
+  // (buildStudioChoiceBlock). Uncached; absent, both parts are unchanged.
+  if (typeof opts.studioChoiceBlock === 'string' && opts.studioChoiceBlock.trim()) volatileParts.push(opts.studioChoiceBlock.trim())
 
   // MIAHATCH.2 E-4: facts for an answerable studio that is not the thread's.
   // Volatile (uncached) only: the stable block above never sees them, so its

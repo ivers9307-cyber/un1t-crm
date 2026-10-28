@@ -124,7 +124,9 @@ export const UN1T_FULL_TOOL_DESCRIPTIONS = Object.freeze({
   cancel_class_booking:
     "Cancel one of the VERIFIED member's upcoming bookings from list_my_upcoming_bookings, at whichever studio it is at. " +
     'Restate the exact class and day and time and get a clear yes before calling; never cancel on an ambiguous message. ' +
-    "Say it is cancelled only when this tool's result says it is cancelled. If the system refuses (for example a late " +
+    "Say it is cancelled only when this tool's result says it is cancelled. If the result says needs_confirmation, nothing " +
+    'was cancelled: tell the customer the fee or lost credit it describes and ask again; call it once more with ' +
+    'confirm_late_fee true only after a clear yes. If the system refuses (for example a late ' +
     'cancellation, or a class that already happened), relay its reason honestly, and never promise a refund or a credit ' +
     'back. For a reschedule, confirm both the cancellation and the new class with the customer first, then cancel and ' +
     'book the new one.',
@@ -187,7 +189,19 @@ export function deriveUn1tFullTools(tools, { extraTools = PURCHASE_TOOLS } = {})
     if (!description) return t
     return { ...t, description, input_schema: reworded(t.input_schema, UN1T_FULL_SCHEMA_TEXT[t.name] || {}) }
   })
-  return [...dual, REQUEST_REFUND_TOOL, ...extraTools]
+  return [...dual.map(withLateFeeConfirm), REQUEST_REFUND_TOOL, ...extraTools]
+}
+
+// FEES.2 — block 3b's cancel takes one more optional input: the member's
+// go-ahead after Mia told them the late-cancellation fee or the lost credit.
+// Optional by nature (most cancels are in time), counted in tool-schemas.test.js.
+export const CONFIRM_LATE_FEE_PROPERTY = Object.freeze({
+  type: 'boolean',
+  description: 'Only after a needs_confirmation answer for this booking AND the customer clearly said they still want to cancel: true.',
+})
+function withLateFeeConfirm(tool) {
+  if (tool.name !== 'cancel_class_booking') return tool
+  return { ...tool, input_schema: { ...tool.input_schema, properties: { ...tool.input_schema.properties, confirm_late_fee: CONFIRM_LATE_FEE_PROPERTY } } }
 }
 
 /**

@@ -14,7 +14,7 @@
 //
 // What's actually left here (verified against src/app/admin/*):
 //   tenants, plans, tenant-domains, health, matrix, bridges,
-//   studio-devices — all master-only at the page level.
+//   studio-devices, app-usage (USAGE.1) — all master-only at the page level.
 //   webhook-dead-letter — master-OR-owner at the page level.
 //   fleet — master (isMaster bypass) or per-location fleet_restart/
 //     fleet_admin holder; the page itself does the per-device filtering

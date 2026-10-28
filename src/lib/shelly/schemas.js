@@ -102,16 +102,22 @@ export const MIN_AUTH_KEY_LENGTH = 16
 export const MAX_CLASS_LEAD_LAG_MIN = 180
 
 // The engine's own fallbacks, from src/lib/schedule/desired-state.js
-// (DEFAULT_LEAD_MIN / DEFAULT_LAG_MIN) and mig 562's class_rule column comment
+// (DEFAULT_LEAD_MIN / DEFAULT_LAG_MIN / DEFAULT_MERGE_GAP_MIN) and mig 562's class_rule column comment
 // ("defaults 15/10"). They are RE-TYPED, not imported, because this module must
-// stay import-light (see the header) — desired-state.js does not export them
-// and pulls in the timezone helpers. schemas.test.js pins the mirror by running
+// stay import-light (see the header): desired-state.js exports only
+// DEFAULT_MERGE_GAP_MIN (lead and lag are module-private there), and importing
+// it at all would pull in the timezone helpers. schemas.test.js pins the mirror by running
 // the real resolveDayWindows over both an absent class_rule and a
 // default-parsed one and asserting identical windows, so a drift in either file
 // fails the suite instead of silently shifting every class-mode plug by 15
 // minutes.
 export const DEFAULT_LEAD_MIN = 15
 export const DEFAULT_LAG_MIN = 10
+export const DEFAULT_MERGE_GAP_MIN = 30
+// Frozen, and every default below is a FRESH copy of it: a default handed out
+// by reference is one array shared by every parse, so a caller that mutated
+// its parsed rule would rewrite the next caller's default.
+export const ALL_DAYS = Object.freeze([1, 2, 3, 4, 5, 6, 7])
 
 // One recurring on/off window: WindowBase with the same-boundary rule applied
 // last (Shelly uses the bare shape, so there is nothing to .extend() first).
@@ -127,9 +133,11 @@ export const ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY.check, {
   message: NOT_SAME_BOUNDARY.message,
 })
 
-// schedule_mode 'class' follows the LOCATION-WIDE timetable: on `lead_min`
-// before the day's first class starts, off `lag_min` after the last one ends
-// (resolveDayWindows). Those two field names are the only thing the engine
+// schedule_mode 'class' follows the LOCATION-WIDE timetable: one window per
+// class, on `lead_min` before it starts and off `lag_min` after it ends;
+// windows whose gap is <= `merge_gap_min` are joined into one, and only
+// classes starting on a weekday in `days` (ISO 1=Mon..7=Sun, local) count
+// (resolveDayWindows). Those four field names are the only thing the engine
 // reads out of class_rule — anything else stored here is inert.
 //
 // The defaults MATCH THE ENGINE rather than being 0: mig 562 defaults the
@@ -138,10 +146,26 @@ export const ShellyWindow = WindowBase.refine(NOT_SAME_BOUNDARY.check, {
 // merely touched class_rule silently deleted the pre-heat — no error, nothing
 // in the UI to explain why the room went cold. That is the "silent wrong
 // value" shape. An operator who genuinely wants no lead sends 0 and gets 0.
+const classRuleFields = {
+  lead_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN),
+  lag_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN),
+  merge_gap_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN),
+  days: z.array(z.number().int().min(1).max(7))
+    .min(1, 'Pick at least one day')
+    .refine((d) => new Set(d).size === d.length, { message: 'Days must be unique' }),
+}
 export const ShellyClassRule = z.object({
-  lead_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_LEAD_MIN),
-  lag_min: z.number().int().min(0).max(MAX_CLASS_LEAD_LAG_MIN).default(DEFAULT_LAG_MIN),
+  lead_min: classRuleFields.lead_min.default(DEFAULT_LEAD_MIN),
+  lag_min: classRuleFields.lag_min.default(DEFAULT_LAG_MIN),
+  merge_gap_min: classRuleFields.merge_gap_min.default(DEFAULT_MERGE_GAP_MIN),
+  days: classRuleFields.days.default(() => [...ALL_DAYS]),
 })
+
+// The group PATCH's class_rule: the same bounds, NO defaults. The route merges
+// it onto the stored rule and validates the merged result with ShellyClassRule,
+// so `{ lead_min: 20 }` changes the lead and nothing else — defaulted here, it
+// would silently reset days and merge_gap_min to the engine's.
+export const ShellyClassRulePatch = z.object(classRuleFields).partial()
 
 // Connect / re-paste. `auth_key` is OPTIONAL and has NO minimum: an operator
 // re-pasting the server host of an already-connected studio must not have to
@@ -187,6 +211,10 @@ export const ShellyAdoptBody = z.object({
     .regex(SHELLY_DEVICE_ID, { message: "That doesn't look like a Shelly device id" })
     .transform((s) => s.toLowerCase()),
   channel: z.number().int().min(0).max(7).default(0),
+  // SHELLYLIGHT.3 — a HINT, never the answer. The route stores the kind the
+  // live reading shows on this channel; the body only breaks a tie when the
+  // reading lists both a switch and a light there (or shows nothing at all).
+  kind: z.enum(['switch', 'light']).default('switch'),
   name: z.string().trim().min(1, { message: 'Give the device a name' }).max(80).optional(),
 }).strict()
 
@@ -290,4 +318,101 @@ export const ShellyOverride = z.object({
   until: z.string().datetime(),
   set_by: uuidLike,
   set_at: z.string().datetime(),
+})
+
+// ——— SHELLYGROUPS.5 — groups ————————————————————————————————————————————
+//
+// A group carries the SAME schedule vocabulary a device carries (mig 776's
+// header: the mig 562 column comments hold unchanged), so its fields are built
+// from the same parts — ShellyWindow, windowsOverlapIssue, ShellyClassRule —
+// rather than re-typed. Two copies of "what is a valid window" is how a group
+// and a device would eventually disagree about one.
+
+// mig 776's CHECK (icon IN (...)) — the five glyphs the UI draws.
+export const SHELLY_GROUP_ICONS = ['bulb', 'fan', 'tv', 'plug', 'droplet']
+// mig 776's CHECK (char_length(name) BETWEEN 1 AND 60).
+export const MAX_GROUP_NAME = 60
+// Display order is a small integer; the bound is a body-size guard.
+const MAX_SORT_ORDER = 10_000
+
+const groupName = z.string().trim()
+  .min(1, { message: 'Give the group a name' })
+  .max(MAX_GROUP_NAME, { message: `Keep the group name to ${MAX_GROUP_NAME} characters` })
+
+const groupFields = {
+  icon: z.enum(SHELLY_GROUP_ICONS),
+  sort_order: z.number().int().min(0).max(MAX_SORT_ORDER),
+  enabled: z.boolean(),
+  schedule_mode: z.enum(['none', 'fixed', 'class']),
+  fixed_windows: z.array(ShellyWindow).max(MAX_FIXED_WINDOWS).superRefine(windowsOverlapIssue),
+  class_rule: ShellyClassRule,
+}
+
+// Create. Only the name is required; the icon defaults here (and in the
+// column) to a bulb, and every schedule field falls to mig 776's defaults
+// (enabled false, mode none) when absent — a new group is inert until someone
+// gives it a schedule, the same rule an adopted device follows. `.strict()`:
+// an unknown key is a typo or a stale client, and NO body ever carries a
+// location_id — the route uses the session's.
+export const ShellyGroupCreate = z.object({
+  name: groupName,
+  icon: groupFields.icon.default('bulb'),
+  sort_order: groupFields.sort_order.optional(),
+  enabled: groupFields.enabled.optional(),
+  schedule_mode: groupFields.schedule_mode.optional(),
+  fixed_windows: groupFields.fixed_windows.optional(),
+  class_rule: groupFields.class_rule.optional(),
+}).strict()
+
+// PATCH: every field optional, strict, and an empty body is 'Nothing to
+// update' rather than a no-op UPDATE that reports success (the device rule).
+export const ShellyGroupPatch = z.object({
+  name: groupName.optional(),
+  icon: groupFields.icon.optional(),
+  sort_order: groupFields.sort_order.optional(),
+  enabled: groupFields.enabled.optional(),
+  schedule_mode: groupFields.schedule_mode.optional(),
+  fixed_windows: groupFields.fixed_windows.optional(),
+  // Partial and merged by the route (ShellyClassRulePatch).
+  class_rule: ShellyClassRulePatch.optional(),
+})
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' })
+
+// PUT …/devices: the group's WHOLE membership, replacing what was there. An
+// empty list empties the group. Capped at the location's device cap (a group
+// cannot hold more devices than the location can), and a duplicate id is
+// refused rather than silently collapsed: it is a client bug worth seeing.
+export const ShellyGroupMembers = z.object({
+  device_ids: z.array(uuidLike)
+    .max(MAX_DEVICES_PER_LOCATION, { message: `A group can hold at most ${MAX_DEVICES_PER_LOCATION} devices` })
+    .refine((ids) => new Set(ids.map((s) => String(s).toLowerCase())).size === ids.length, {
+      message: 'Each device can be listed once',
+    }),
+}).strict()
+
+// The group switch takes EXACTLY the device toggle's body: the same three
+// states, the same optional `until` normalised to UTC-Z at the edge, the same
+// presets on the client (until midnight = no `until`, 1 h / 3 h = an explicit
+// one) and the same MAX_OVERRIDE_HOURS bound applied by the route. One schema
+// object rather than a copy, so the two switches can never accept different
+// shapes.
+export const ShellyGroupToggle = ShellyToggleBody
+
+// GET /api/shelly/preview?date=YYYY-MM-DD. Absent or blank => the route uses
+// today in the location's zone (the ShellyEnergyQuery preprocess, same
+// reason). The date must be a REAL calendar day: '2026-02-30' matches the
+// pattern but the engine's day maths would throw on it, so it is checked by
+// round-tripping through UTC (a date-only value has no zone to get wrong).
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+const isRealDate = (s) => {
+  if (!DATE_ONLY.test(s)) return false
+  const d = new Date(`${s}T00:00:00.000Z`)
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+export const ShellyPreviewQuery = z.object({
+  date: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : v),
+    z.string().refine(isRealDate, { message: 'Pick a date as YYYY-MM-DD' }).optional(),
+  ),
 })

@@ -77,6 +77,8 @@ export function compactDecisionMeta(trace = {}) {
   // MIAHATCH.2 — the tool block the turn's last request sent (glofox,
   // no_booking, un1t_read, un1t_read_dual, un1t_full): a name, nothing else.
   if (typeof trace.toolBlock === 'string' && trace.toolBlock) meta.tool_block = trace.toolBlock.slice(0, 20)
+  // MIAASKSTUDIO.1 — the studio the customer named this turn (choose_studio): an id only.
+  if (typeof trace.chosenStudioId === 'string' && trace.chosenStudioId) meta.chosen_studio = trace.chosenStudioId
   return Object.keys(meta).length ? meta : null
 }
 

@@ -11,7 +11,7 @@
 // failure one layer up.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, cleanup, act } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, act, fireEvent, within } from '@testing-library/react'
 import ShellyDevicesClient, { refreshSummary, syncNamesSummary } from './ShellyDevicesClient.jsx'
 
 const CONNECTION = {
@@ -103,7 +103,7 @@ describe('ShellyDevicesClient — Glofox status unknown', () => {
     script([[okConn(), okDevices()]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected={false} glofoxUnknown canManageConnection />)
     await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
-    const radio = screen.getByLabelText('Class timetable')
+    const radio = screen.getByLabelText('Follow classes')
     expect(radio.disabled).toBe(true)
     expect(radio.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
   })
@@ -188,22 +188,22 @@ describe('ShellyDevicesClient — a failed poll keeps the last good render', () 
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
     await waitFor(() => expect(screen.getByText('Couldn’t read the Shelly connection — retrying')).toBeTruthy())
     expect(screen.queryByRole('button', { name: /^Connect$/ })).toBeNull()
-    // "No plugs adopted yet" is a statement about the STUDIO. We did not read
+    // "No devices adopted yet" is a statement about the STUDIO. We did not read
     // the devices, so we are not entitled to make it.
-    expect(screen.queryByText(/No plugs adopted yet/)).toBeNull()
+    expect(screen.queryByText(/No devices adopted yet/)).toBeNull()
   })
 
   it('claims "no plugs" only once the devices read has actually succeeded', async () => {
     script([[okConn(), okDevices({ devices: [] })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
-    await waitFor(() => expect(screen.getByText(/No plugs adopted yet/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/No devices adopted yet/)).toBeTruthy())
   })
 
   it('a devices read that fails while the connection reads fine makes no claim either', async () => {
     script([[okConn(), json(500, { success: false, error: 'Could not load your Shelly devices' })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
     await waitFor(() => expect(screen.getByText('Couldn’t refresh — retrying')).toBeTruthy())
-    expect(screen.queryByText(/No plugs adopted yet/)).toBeNull()
+    expect(screen.queryByText(/No devices adopted yet/)).toBeNull()
     // The connection panel is unaffected — that read worked.
     expect(screen.getByText('Connected')).toBeTruthy()
   })
@@ -433,7 +433,7 @@ describe('ShellyDevicesClient — Use Shelly names', () => {
   it('is hidden when the studio has no plugs — there is nothing to name', async () => {
     script([[okConn(), okDevices({ devices: [] })]])
     render(<ShellyDevicesClient locationName="Stillorgan" glofoxConnected canManageConnection />)
-    await waitFor(() => expect(screen.getByText(/No plugs adopted yet/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/No devices adopted yet/)).toBeTruthy())
     expect(screen.queryByRole('button', { name: /Use Shelly names/ })).toBeNull()
   })
 
@@ -536,5 +536,166 @@ describe('ShellyDevicesClient — Use Shelly names', () => {
     await openSync()
     await act(async () => { screen.getByRole('button', { name: /Only unnamed plugs/ }).click() })
     await waitFor(() => expect(screen.getByText('Shelly rejected the stored key — re-paste it from the Shelly app')).toBeTruthy())
+  })
+})
+
+// ——— SHELLYGROUPS.8 — the page redesign ——————————————————————————————
+describe('ShellyDevicesClient — groups first, then "Not in a group"', () => {
+  const G = (over) => ({
+    icon: 'bulb', enabled: false, schedule_mode: 'none', fixed_windows: [], class_rule: {}, override: null,
+    device_ids: [], now: { on_count: 0, member_count: 0, mode: 'none', until: null, next_on: null }, ...over,
+  })
+  const FRONT = { ...DEVICE, id: 'row-2', device_id: '112233445566', name: 'Front light', group_id: 'g-b' }
+  const UNGROUPED = { ...DEVICE, group_id: null }
+
+  // One fetch for every route the page reads. `groups` is mutable so a test
+  // can change what the next GET answers.
+  function page({ groups, devices = [UNGROUPED, FRONT], discover = json(200, { success: true, devices: [] }), onPost } = {}) {
+    const state = { groups }
+    global.fetch = vi.fn(async (url, init = {}) => {
+      const u = String(url)
+      const method = init.method || 'GET'
+      if (u === '/api/shelly/connection') return okConn()
+      if (u === '/api/shelly/devices') return okDevices({ devices })
+      if (u === '/api/shelly/groups' && method === 'GET') return json(200, { success: true, groups: state.groups })
+      if (u === '/api/shelly/groups' && method === 'POST') return onPost(JSON.parse(init.body), state)
+      if (u === '/api/shelly/discover') return typeof discover === 'function' ? discover() : discover
+      if (u.startsWith('/api/shelly/preview')) return json(200, { success: true, date: '2026-10-26', groups: [], classes: [] })
+      return json(200, { success: true })
+    })
+    return state
+  }
+
+  const twoGroups = () => [
+    G({ id: 'g-a', name: 'Zeta', sort_order: 2 }),
+    G({ id: 'g-b', name: 'Studio lights', sort_order: 1, device_ids: ['row-2'], now: { on_count: 0, member_count: 1, mode: 'none', until: null, next_on: null } }),
+    G({ id: 'g-c', name: 'Alpha', sort_order: 2 }),
+  ]
+
+  // Each group card's one switch (role=button + aria-pressed, labelled "<name>: <state>").
+  const groupSwitches = () => screen.getAllByRole('button').filter((b) => /^[^:]+: (On|Off|No devices|\d+ of \d+ on)$/.test(b.getAttribute('aria-label') || ''))
+
+  it('lists the group cards by sort_order then name, then the ungrouped devices', async () => {
+    page({ groups: twoGroups() })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Studio lights: / })).toBeTruthy())
+    const order = groupSwitches().map((s) => s.getAttribute('aria-label').split(':')[0])
+    expect(order).toEqual(['Studio lights', 'Alpha', 'Zeta'])
+
+    const notGrouped = screen.getByRole('region', { name: 'Not in a group' })
+    expect(within(notGrouped).getByText('Sauna plug')).toBeTruthy()
+    // A grouped device is not in the ungrouped section.
+    expect(within(notGrouped).queryByText('Front light')).toBeNull()
+    // The group cards come before the ungrouped section in the document.
+    const firstSwitch = groupSwitches()[0]
+    expect(firstSwitch.compareDocumentPosition(notGrouped) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('a grouped device\'s own card says which group it follows', async () => {
+    page({ groups: twoGroups() })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Devices in groups/ })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /Devices in groups/ }))
+    expect(screen.getByText('Follows Studio lights')).toBeTruthy()
+  })
+
+  it('"New group" creates through POST and the card appears without a reload', async () => {
+    const state = page({
+      groups: [],
+      onPost: (body, st) => {
+        const created = G({ id: 'g-new', name: body.name, sort_order: 0 })
+        st.groups = [created]
+        return json(201, { success: true, group: { ...created, now: undefined } })
+      },
+    })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New group' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'New group' }))
+    fireEvent.change(screen.getByLabelText('New group name'), { target: { value: 'Changing rooms' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create group' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Changing rooms: / })).toBeTruthy())
+    const post = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/shelly/groups' && i?.method === 'POST')
+    expect(JSON.parse(post[1].body)).toEqual({ name: 'Changing rooms' })
+    expect(state.groups).toHaveLength(1)
+  })
+
+  // SHELLYALERTS.4 — the deleted group's card is gone before its own result
+  // line could be read, so the DELETE's message (which names a pending safety
+  // timer) is shown by the page, in the groups section.
+  it('deleting a group shows the server’s message once the card is gone', async () => {
+    const message = 'Group removed. Its devices stay as they are until you switch them. A light the schedule switched on still switches itself off by 21:30 (safety timer).'
+    const state = page({ groups: twoGroups() })
+    const base = global.fetch
+    global.fetch = vi.fn(async (url, init = {}) => {
+      if (String(url) === '/api/shelly/groups/g-b' && init.method === 'DELETE') {
+        state.groups = state.groups.filter((g) => g.id !== 'g-b')
+        return json(200, { success: true, message })
+      }
+      return base(url, init)
+    })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Studio lights: / })).toBeTruthy())
+    const card = screen.getByRole('button', { name: 'Rename Studio lights' }).closest('.space-y-3')
+    fireEvent.click(within(card).getByRole('button', { name: 'Delete group' }))
+    fireEvent.click(within(card).getAllByRole('button', { name: 'Delete group' }).at(-1))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Studio lights: / })).toBeNull())
+    const groupsRegion = screen.getByRole('region', { name: 'Groups' })
+    expect(within(groupsRegion).getByRole('status').textContent).toBe(message)
+  })
+
+  it('a taken name keeps the form open and says so', async () => {
+    page({ groups: [], onPost: () => json(409, { success: false, error: 'A group with that name already exists here', code: 'name_taken' }) })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New group' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'New group' }))
+    fireEvent.change(screen.getByLabelText('New group name'), { target: { value: 'Fans' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create group' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('A group with that name already exists'))
+    expect(screen.getByLabelText('New group name')).toBeTruthy()
+  })
+
+  it('a banner counts the supported devices on the account that are not set up here', async () => {
+    page({
+      groups: [],
+      discover: json(200, {
+        success: true,
+        devices: [
+          { device_id: 'x1', channel: 0, supported: true, adopted: null },
+          { device_id: 'x2', channel: 0, supported: true, adopted: null },
+          { device_id: 'x3', channel: 0, supported: true, adopted: 'here' },
+          { device_id: 'x4', channel: 0, supported: true, adopted: 'elsewhere' },
+          { device_id: 'x5', channel: 0, supported: false, adopted: null },
+          { device_id: 'x6', channel: 0, supported: null, adopted: null },
+        ],
+      }),
+    })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(screen.getByText(/2 devices on your Shelly account aren.t set up here/)).toBeTruthy())
+    const link = screen.getByRole('link', { name: /Set them up/ })
+    expect(link.getAttribute('href')).toBe('#shelly-discover')
+    expect(document.getElementById('shelly-discover')).toBeTruthy()
+  })
+
+  it('reads discover ONCE per page open, never on the 30 s poll', async () => {
+    vi.useFakeTimers()
+    page({ groups: [], discover: json(200, { success: true, devices: [{ device_id: 'x1', channel: 0, supported: true, adopted: null }] }) })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText(/1 device on your Shelly account isn.t set up here/)).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    const discovers = global.fetch.mock.calls.filter(([u]) => String(u) === '/api/shelly/discover')
+    const devicesReads = global.fetch.mock.calls.filter(([u]) => String(u) === '/api/shelly/devices')
+    expect(devicesReads.length).toBeGreaterThanOrEqual(3)
+    expect(discovers).toHaveLength(1)
+  })
+
+  it('a failed discover just hides the banner', async () => {
+    page({ groups: [], discover: json(502, { success: false, error: 'Shelly cloud is not answering' }) })
+    render(<ShellyDevicesClient locationName="Stillorgan" locationTz="Europe/Dublin" glofoxConnected canManageConnection />)
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u]) => String(u) === '/api/shelly/discover')).toBe(true))
+    await waitFor(() => expect(screen.getByText('Sauna plug')).toBeTruthy())
+    expect(screen.queryByText(/on your Shelly account/)).toBeNull()
   })
 })

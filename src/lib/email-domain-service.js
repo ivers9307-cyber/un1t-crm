@@ -88,9 +88,9 @@ async function upsertRow(db, orgId, patch) {
 // Fold a shaped Postmark domain response into the row's verification
 // state. status → 'live' only when BOTH records verify; a disabled/failed
 // row is not silently reactivated by a verify pass.
-// `lastError` is the webhook step's message when that step failed on this
+// `hookFailure` is the webhook step's cause when that step failed on this
 // pass (W1.E3) — it must survive this write so the status endpoint shows it.
-function persistDomainState(db, orgId, row, shaped, lastError = null) {
+function persistDomainState(db, orgId, row, shaped, hookFailure = null) {
   const status = domainIsFullyVerified(shaped)
     ? 'live'
     : (row.status === 'disabled' || row.status === 'failed' ? row.status : 'verifying')
@@ -102,8 +102,21 @@ function persistDomainState(db, orgId, row, shaped, lastError = null) {
     return_path_cname_value: shaped.returnPathCnameValue ?? row.return_path_cname_value,
     return_path_verified: shaped.returnPathVerified,
     status,
-    last_error: lastError,
+    last_error: webhookFailureMessage(hookFailure, status),
   })
+}
+
+/**
+ * The last_error an org admin reads in red when the webhook step failed:
+ * what did not happen, the cause in brackets, and the button to press. The
+ * wizard labels that button 'Re-check DNS' once the domain is live and
+ * 'Verify' before, so the copy is built from the status written with it.
+ * @returns {string|null} null when there was no failure
+ */
+export function webhookFailureMessage(cause, status) {
+  if (!cause) return null
+  const button = status === 'live' ? 'Re-check DNS' : 'Verify'
+  return `Event webhooks were not registered on the sending server (${cause}). Press ${button} to retry.`
 }
 
 /**
@@ -112,9 +125,9 @@ function persistDomainState(db, orgId, row, shaped, lastError = null) {
  * Idempotent: a stamped row is left alone; a NULL stamp (never done, or a
  * failed earlier pass) runs both helpers again, and they only create what is
  * missing. A failure is NOT fatal to provisioning or verification: it is
- * logged structurally and returned as `error` so the caller writes it to
- * last_error, and the stamp stays NULL so the next provision OR verify call
- * retries. The server token is read off the row and never logged.
+ * logged structurally and returned as `error` (the cause) so the caller writes
+ * it to last_error via webhookFailureMessage, and the stamp stays NULL so the
+ * next provision OR verify call retries. The server token is read off the row and never logged.
  *
  * @returns {Promise<{ row: object, error: string|null }>}
  */
@@ -125,11 +138,10 @@ async function ensureServerWebhooksRecorded(db, orgId, row) {
     await ensureTenantServerWebhooks(row.postmark_server_token)
   } catch (e) {
     const message = e?.message || 'Postmark webhook registration failed.'
-    // The raw message goes to the structured log for ops; what reaches
-    // last_error is rendered in red to the org admin by EmailDomainWizard,
-    // so it says what did not happen and what to press.
+    // The raw message goes to the structured log for ops; the caller wraps it
+    // for last_error (webhookFailureMessage), once the status is known.
     logWarn('tenant-email-domain', 'server streams/webhook registration failed; will retry on the next provision or verify', { orgId, err: message })
-    return { row, error: `Event webhooks were not registered on the sending server (${message}). Press Verify to retry.` }
+    return { row, error: message }
   }
   const stamped = await upsertRow(db, orgId, { webhooks_registered_at: new Date().toISOString() })
   return { row: stamped, error: null }
@@ -274,6 +286,7 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
     if (!shaped.id) throw new Error('Postmark did not return a domain id.')
   }
 
+  const status = domainIsFullyVerified(shaped) ? 'live' : 'verifying'
   return upsertRow(db, orgId, {
     postmark_domain_id: shaped.id,
     sending_domain: sendingDomain,
@@ -285,8 +298,8 @@ export async function provisionEmailDomain(db, { orgId, orgName, sendingDomain, 
     return_path_domain: shaped.returnPathDomain,
     return_path_cname_value: shaped.returnPathCnameValue,
     return_path_verified: shaped.returnPathVerified,
-    status: domainIsFullyVerified(shaped) ? 'live' : 'verifying',
-    last_error: hooks.error,
+    status,
+    last_error: webhookFailureMessage(hooks.error, status),
   })
 }
 

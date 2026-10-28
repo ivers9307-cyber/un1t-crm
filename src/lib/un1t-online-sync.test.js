@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForContactCreated: vi.fn() }))
 
-import { runUn1tSync, UN1T_LISTS, STALE_RUN_MS, pickFreshSignups, SIGNUP_MAX_AGE_DAYS } from './un1t-online-sync.js'
+import {
+  runUn1tSync, UN1T_LISTS, STALE_RUN_MS, pickFreshSignups, SIGNUP_MAX_AGE_DAYS,
+  UN1T_WINDOWED_LISTS, UN1T_WINDOW_DAYS, UN1T_SWEEP_PAGES, UN1T_FULL_LIST_MAX_PAGES, UN1T_HEADROOM_ROWS,
+} from './un1t-online-sync.js'
 import { logError, logWarn, logInfo } from './log'
 import { Un1tAuthError, Un1tApiError } from './un1t-online.js'
 import { ilikeMatches } from './like-escape.test-helpers.js'
@@ -47,6 +50,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       if (kind === 'ilike') return ilikeMatches(val, row[col])
       if (kind === 'lt') return row[col] != null && String(row[col]) < String(val)
       if (kind === 'gt') return row[col] != null && Date.parse(row[col]) > Date.parse(val)
+      if (kind === 'gte') return row[col] != null && Date.parse(row[col]) >= Date.parse(val)
       if (kind === 'is') return val === null ? row[col] == null : row[col] === val
       return true
     })
@@ -72,7 +76,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
         if (failSelect.includes(table)) return { data: null, error: { message: `${table} read boom` } }
         let out = rows.filter((r) => matches(r, s.filters))
         if (s.head) return { data: null, count: out.length, error: null }
-        if (s.order) out = [...out].sort((a, b) => String(a[s.order]).localeCompare(String(b[s.order])))
+        if (s.order) out = [...out].sort((a, b) => String(a[s.order]).localeCompare(String(b[s.order])) * (s.desc ? -1 : 1))
         if (s.range) out = out.slice(s.range[0], s.range[1] + 1)
         if (s.limit != null) out = out.slice(0, s.limit)
         out = out.map((r) => ({ ...r }))
@@ -127,6 +131,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       select(_cols, o) { if (o?.head) s.head = true; return api },
       lt(c, v) { s.filters.push(['lt', c, v]); return api },
       gt(c, v) { s.filters.push(['gt', c, v]); return api },
+      gte(c, v) { s.filters.push(['gte', c, v]); return api },
       is(c, v) { s.filters.push(['is', c, v]); return api },
       insert(p) { s.op = 'insert'; s.payload = p; return api },
       upsert(p, o) { s.op = 'upsert'; s.payload = p; s.options = o || null; return api },
@@ -135,7 +140,7 @@ function makeDb(seed = {}, { failUpsert = [], failUpdate = [], failSelect = [], 
       eq(c, v) { s.filters.push(['eq', c, v]); return api },
       in(c, v) { s.filters.push(['in', c, v]); return api },
       ilike(c, v) { s.filters.push(['ilike', c, v]); return api },
-      order(c) { s.order = c; return api },
+      order(c, o) { s.order = c; s.desc = o?.ascending === false; return api },
       range(a, b) { s.range = [a, b]; return api },
       limit(n) { s.limit = n; return api },
       maybeSingle() { s.single = true; return api },
@@ -298,7 +303,7 @@ describe('runUn1tSync', () => {
     expect(r.ok).toBe(true)
     expect(r.reason).toBeUndefined()
     expect(r.runId).toBeTruthy()
-    expect(factory).toHaveBeenCalledWith({ token: 'un1t_secret_token_value' })
+    expect(factory).toHaveBeenCalledWith({ token: 'un1t_secret_token_value', maxPages: UN1T_FULL_LIST_MAX_PAGES })
 
     expect(r.counts.tables).toEqual({
       un1t_products: lists['/products'].length,
@@ -1525,5 +1530,174 @@ describe('contact_studios dual-write (ORGCONTACTS.1)', () => {
     expect(r.counts.memberships).toMatchObject({ active: 1, rows_missing: 1 })
     expect(r.counts.contact_studios).toEqual({ member: 0, client: 0, failed: 3 })
     expect(logError).toHaveBeenCalledWith('un1t-online-sync', expect.stringMatching(/contact_studios/), expect.objectContaining({ locationId: HATCH }))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// UN1TINCR.1 — bookings and transactions are read incrementally.
+// ---------------------------------------------------------------------------
+describe('runUn1tSync — incremental bookings and transactions (UN1TINCR.1)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const SINCE = new Date(NOW.getTime() - UN1T_WINDOW_DAYS * 86_400_000).toISOString()
+  const OLD = '2026-06-01T09:00:00.000Z' // before the window
+  const NEW = '2026-10-15T09:00:00.000Z' // inside it
+
+  // A client whose windowed lists answer per call shape: the head (newerThan)
+  // and the sweep (ascending + startPage) each get their own scripted result.
+  function makeIncrClient({ lists = fixtureLists(), windowed = {}, totals = {} } = {}) {
+    const calls = []
+    const client = {
+      async getSelf() { calls.push({ path: '/api-token' }); return SELF },
+      async listAll(path, o) {
+        calls.push({ path, opts: o })
+        const w = windowed[path]
+        if (w && o?.newerThan) return { truncated: false, orderBroken: false, ...w.head }
+        if (w && o?.ascending) {
+          if (w.sweepError) throw w.sweepError
+          return { truncated: false, stoppedEarly: false, ...w.sweep }
+        }
+        const rows = lists[path] || []
+        return { rows, total: totals[path] ?? rows.length, truncated: false, pages: 1, stoppedEarly: false }
+      },
+      stats() { return { requests: calls.length, waitedMs: 0, retries: 0 } },
+    }
+    return { factory: vi.fn(() => client), calls }
+  }
+  const booking = (id, created) => ({ id, user_id: 'u1', event_id: 'e1', status: 'booked', studio_id: STUDIO, created_at: created })
+  const tx = (id, created) => ({ id, user_id: 'u1', amount: 100, studio_id: STUDIO, created_at: created })
+  const priorRun = (sweep) => ({ id: 'run-prev', location_id: HATCH, status: 'ok', started_at: '2026-10-16T09:45:00.000Z', counts: { sweep } })
+
+  it('windows exactly bookings and transactions; every other list stays a full read', async () => {
+    expect(UN1T_WINDOWED_LISTS).toEqual(['/transactions', '/bookings'])
+    const { db } = makeDb(baseSeed())
+    const { factory, calls } = makeIncrClient()
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    for (const c of calls.filter((x) => x.path !== '/api-token')) {
+      if (UN1T_WINDOWED_LISTS.includes(c.path)) expect(c.opts).toEqual({ newerThan: SINCE })
+      else expect(c.opts).toBeUndefined()
+    }
+  })
+
+  it('a head past the window, then a sweep slice from the stored cursor, both written', async () => {
+    const { db, tables } = makeDb(baseSeed({ un1t_sync_runs: [priorRun({ bookings: { from_page: 3, next_page: 5, pages: 10 } })] }))
+    const { factory, calls } = makeIncrClient({
+      windowed: {
+        '/bookings': {
+          head: { rows: [booking('b-new', NEW), booking('b-edge', OLD)], total: 1000, pages: 10, stoppedEarly: true },
+          sweep: { rows: [booking('b-old', OLD), booking('b-edge', OLD)], total: 1000, pages: 10 },
+        },
+      },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(calls).toContainEqual({ path: '/bookings', opts: { ascending: true, startPage: 5, pageLimit: UN1T_SWEEP_PAGES } })
+    expect(tables.un1t_bookings.map((b) => b.un1t_id).sort()).toEqual(['b-edge', 'b-new', 'b-old'])
+    expect(r.counts.pulled.bookings).toBe(3)
+    expect(r.counts.sweep.bookings).toEqual({ from_page: 5, next_page: 7, pages: 10 })
+    expect(r.counts.window).toMatchObject({ since: SINCE, bookings: { head: 2, sweep: 2, full: false } })
+  })
+
+  it('the sweep wraps to page 1 after the last page', async () => {
+    const { db } = makeDb(baseSeed({ un1t_sync_runs: [priorRun({ transactions: { from_page: 7, next_page: 9, pages: 10 } })] }))
+    const { factory, calls } = makeIncrClient({
+      windowed: {
+        '/transactions': {
+          head: { rows: [tx('t-new', NEW)], total: 950, pages: 10, stoppedEarly: true },
+          sweep: { rows: [tx('t-old', OLD)], total: 950, pages: 10 },
+        },
+      },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(calls).toContainEqual({ path: '/transactions', opts: { ascending: true, startPage: 9, pageLimit: UN1T_SWEEP_PAGES } })
+    expect(r.counts.sweep.transactions).toEqual({ from_page: 9, next_page: 1, pages: 10 })
+  })
+
+  it('a head that read the whole list sweeps nothing and keeps the cursor (today\'s Hatch)', async () => {
+    const { db } = makeDb(baseSeed({ un1t_sync_runs: [priorRun({ bookings: { from_page: 1, next_page: 3, pages: 6 } })] }))
+    const { factory, calls } = makeIncrClient({
+      windowed: { '/bookings': { head: { rows: [booking('b1', NEW)], total: 1, pages: 1, stoppedEarly: false } } },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(calls.filter((c) => c.path === '/bookings')).toHaveLength(1)
+    expect(r.counts.sweep.bookings).toEqual({ from_page: 3, next_page: 3, pages: 1 })
+    expect(r.counts.window.bookings).toEqual({ head: 1, sweep: 0, full: true })
+  })
+
+  it('no earlier run, or an unreadable one, starts the sweep at page 1 and never fails the run', async () => {
+    const { db } = makeDb(baseSeed(), { failSelect: ['un1t_sync_runs'] })
+    const { factory, calls } = makeIncrClient({
+      windowed: {
+        '/bookings': {
+          head: { rows: [booking('b-new', NEW)], total: 500, pages: 5, stoppedEarly: true },
+          sweep: { rows: [booking('b-old', OLD)], total: 500, pages: 5 },
+        },
+      },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(calls).toContainEqual({ path: '/bookings', opts: { ascending: true, startPage: 1, pageLimit: UN1T_SWEEP_PAGES } })
+    expect(logWarn).toHaveBeenCalledWith('un1t-online-sync', expect.stringContaining('sweep position'), expect.objectContaining({ locationId: HATCH }))
+  })
+
+  it('a truncated head refuses the run with nothing written', async () => {
+    const { db, log } = makeDb(baseSeed())
+    const { factory } = makeIncrClient({
+      windowed: { '/bookings': { head: { rows: [booking('b1', NEW)], total: 99999, pages: 999, truncated: true, stoppedEarly: false } } },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r).toMatchObject({ ok: false, reason: 'truncated' })
+    expect(upserts(log)).toEqual([])
+  })
+
+  it('a failed sweep read refuses the run with nothing written', async () => {
+    const { db, log } = makeDb(baseSeed())
+    const { factory } = makeIncrClient({
+      windowed: {
+        '/bookings': {
+          head: { rows: [booking('b1', NEW)], total: 500, pages: 5, stoppedEarly: true },
+          sweepError: new Un1tApiError('un1t.online answered HTTP 500 after 3 retries', { status: 500 }),
+        },
+      },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r).toMatchObject({ ok: false, reason: 'api' })
+    expect(upserts(log)).toEqual([])
+  })
+
+  it('a windowed pull counts only held bookings created inside the window as absent', async () => {
+    const heldOld = { id: 'h1', location_id: HATCH, un1t_id: 'b-ancient', remote_created_at: OLD, synced_at: '2026-10-01T00:00:00.000Z' }
+    const heldNew = { id: 'h2', location_id: HATCH, un1t_id: 'b-gone', remote_created_at: NEW, synced_at: '2026-10-01T00:00:00.000Z' }
+    const { db } = makeDb(baseSeed({ un1t_bookings: [heldOld, heldNew] }))
+    const { factory } = makeIncrClient({
+      windowed: {
+        '/bookings': {
+          head: { rows: [booking('b-new', NEW)], total: 700, pages: 7, stoppedEarly: true },
+          sweep: { rows: [], total: 700, pages: 7 },
+        },
+      },
+    })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.counts.history.un1t_bookings).toMatchObject({ absent_from_pull: 1, window_since: SINCE })
+  })
+
+  it('a full list nearing the page cap warns on the connection while the run stays ok', async () => {
+    const { db, tables } = makeDb(baseSeed())
+    const { factory } = makeIncrClient({ totals: { '/events': UN1T_HEADROOM_ROWS + 1 } })
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(r.ok).toBe(true)
+    expect(connRow(tables).status).toBe('connected')
+    expect(connRow(tables).last_error).toMatch(/events/)
+    expect(connRow(tables).last_error).toMatch(String(UN1T_FULL_LIST_MAX_PAGES * 100))
+    expect(r.counts.headroom).toEqual({ events: UN1T_HEADROOM_ROWS + 1 })
+  })
+
+  it('no list near the cap: no warning', async () => {
+    const { db, tables } = makeDb(baseSeed())
+    const { factory } = makeIncrClient()
+    const r = await runUn1tSync(db, HATCH, opts(factory))
+    expect(connRow(tables).last_error).toBeNull()
+    expect(r.counts.headroom).toEqual({})
   })
 })

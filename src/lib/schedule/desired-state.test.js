@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDayWindows, resolveServeWindows, desiredState } from './desired-state.js'
+import { resolveDayWindows, resolveServeWindows, desiredState, DEFAULT_MERGE_GAP_MIN } from './desired-state.js'
 
 // All instants are UTC ISO; Dublin is UTC+1 on these July dates (IST).
 const DAY = '2026-07-06' // a Monday
@@ -40,24 +40,78 @@ describe('resolveDayWindows — fixed', () => {
 })
 
 describe('resolveDayWindows — class', () => {
-  it('lead/lag around first and last non-cancelled occurrence', () => {
-    const w = resolveDayWindows(classDevice, DAY, [occ('06:00', '06:45'), occ('18:30', '19:15')])
-    expect(w).toHaveLength(1)
-    expect(w[0].on_at).toBe(T('06:00') - 15 * 60 * 1000)
-    expect(w[0].off_at).toBe(T('19:15') + 10 * 60 * 1000)
+  const MIN = 60 * 1000
+  const rule = (extra = {}) => ({ ...classDevice, class_rule: { lead_min: 15, lag_min: 10, merge_gap_min: 30, ...extra } })
+  const SAT = '2026-07-11' // a Saturday
+  const occOn = (day, on, off) => ({
+    starts_at: new Date(`${day}T${on}:00+01:00`).toISOString(),
+    ends_at: new Date(`${day}T${off}:00+01:00`).toISOString(),
+    cancelled_at: null,
+  })
+
+  it('back-to-back classes join into one window', () => {
+    const w = resolveDayWindows(rule(), DAY, [occ('06:00', '06:45'), occ('07:00', '07:45')])
+    expect(w).toEqual([{ on_at: T('05:45'), off_at: T('07:55') }])
+  })
+  it('classes far apart get one window each, sorted', () => {
+    const w = resolveDayWindows(rule(), DAY, [occ('09:30', '10:15'), occ('06:00', '06:45')])
+    expect(w).toEqual([
+      { on_at: T('05:45'), off_at: T('06:55') },
+      { on_at: T('09:15'), off_at: T('10:25') },
+    ])
+  })
+  it('a gap of exactly merge_gap_min joins; one minute more does not', () => {
+    // first window ends 06:55; next on_at = start - 15
+    const joins = resolveDayWindows(rule(), DAY, [occ('06:00', '06:45'), occ('07:10', '07:55')]) // on 06:55 -> gap 0
+    expect(joins).toHaveLength(1)
+    const at30 = resolveDayWindows(rule(), DAY, [occ('06:00', '06:45'), occ('07:40', '08:25')]) // on 07:25 -> gap 30
+    expect(at30).toEqual([{ on_at: T('05:45'), off_at: T('08:35') }])
+    const at31 = resolveDayWindows(rule(), DAY, [occ('06:00', '06:45'), occ('07:41', '08:26')]) // gap 31
+    expect(at31).toHaveLength(2)
+    expect(at31[0].off_at).toBe(T('06:55'))
+  })
+  it('overlapping classes join', () => {
+    const w = resolveDayWindows(rule(), DAY, [occ('06:00', '07:00'), occ('06:30', '06:50')])
+    expect(w).toEqual([{ on_at: T('05:45'), off_at: T('07:10') }])
+  })
+  it('a long class swallowing a later short one keeps the longer end', () => {
+    const w = resolveDayWindows(rule(), DAY, [occ('06:00', '09:00'), occ('06:30', '06:50')])
+    expect(w).toEqual([{ on_at: T('05:45'), off_at: T('09:10') }])
+  })
+  it('merge_gap_min 0 keeps windows with any gap separate, still joins touching ones', () => {
+    const r = rule({ merge_gap_min: 0 })
+    expect(resolveDayWindows(r, DAY, [occ('06:00', '06:45'), occ('07:11', '08:00')])).toHaveLength(2)
+    expect(resolveDayWindows(r, DAY, [occ('06:00', '06:45'), occ('07:10', '08:00')])).toHaveLength(1)
+  })
+  it('days filter: Saturday dropped for Mon-Fri, same input on Monday kept', () => {
+    const r = rule({ days: [1, 2, 3, 4, 5] })
+    expect(resolveDayWindows(r, SAT, [occOn(SAT, '08:00', '08:45')])).toEqual([])
+    expect(resolveDayWindows(r, DAY, [occ('08:00', '08:45')])).toHaveLength(1)
+  })
+  it('days filter reads the occurrence local weekday, not the UTC one', () => {
+    // Sat 00:30 Dublin (IST) is still Friday 23:30 UTC; local day is Saturday.
+    const r = rule({ days: [5] })
+    expect(resolveDayWindows(r, SAT, [occOn(SAT, '00:30', '01:15')], 'Europe/Dublin')).toEqual([])
+    const sat = rule({ days: [6] })
+    expect(resolveDayWindows(sat, SAT, [occOn(SAT, '00:30', '01:15')], 'Europe/Dublin')).toHaveLength(1)
+  })
+  it('absent days means every day', () => {
+    expect(resolveDayWindows(rule(), SAT, [occOn(SAT, '08:00', '08:45')])).toHaveLength(1)
   })
   it('cancelled occurrences are ignored', () => {
-    const w = resolveDayWindows(classDevice, DAY, [occ('06:00', '06:45', true), occ('10:00', '10:45')])
-    expect(w[0].on_at).toBe(T('10:00') - 15 * 60 * 1000)
+    const w = resolveDayWindows(rule(), DAY, [occ('06:00', '06:45', true), occ('10:00', '10:45')])
+    expect(w).toEqual([{ on_at: T('10:00') - 15 * MIN, off_at: T('10:45') + 10 * MIN }])
   })
   it('no occurrences → no windows', () => {
     expect(resolveDayWindows(classDevice, DAY, [])).toEqual([])
   })
-  it('missing lead/lag default to 15/10', () => {
+  it('missing lead/lag/merge default to 15/10/30', () => {
     const bare = { ...classDevice, class_rule: {} }
-    const w = resolveDayWindows(bare, DAY, [occ('09:00', '09:45')])
-    expect(w[0].on_at).toBe(T('09:00') - 15 * 60 * 1000)
-    expect(w[0].off_at).toBe(T('09:45') + 10 * 60 * 1000)
+    const w = resolveDayWindows(bare, DAY, [occ('09:00', '09:45'), occ('10:30', '11:00')])
+    expect(w).toEqual([{ on_at: T('09:00') - 15 * MIN, off_at: T('11:00') + 10 * MIN }])
+  })
+  it('exports DEFAULT_MERGE_GAP_MIN = 30', () => {
+    expect(DEFAULT_MERGE_GAP_MIN).toBe(30)
   })
 })
 

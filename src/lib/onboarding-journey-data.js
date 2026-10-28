@@ -53,8 +53,9 @@ const DAY_MS = 86_400_000
 const STATUS_RANK = { at_risk: 0, behind: 1, on_track: 2, expired: 3, completed: 4 }
 
 /** Read the location row: its journey config (defaults 42/9) and, TZ.13, its
- *  zone — the members' home studio zone their journey days are counted in. */
-async function fetchJourneyConfig(db, locationId) {
+ *  zone — the members' home studio zone their journey days are counted in.
+ *  Exported for the un1t.online lane (onboarding-journey-un1t.js). */
+export async function fetchJourneyConfig(db, locationId) {
   const { data, error } = await db
     .from('locations')
     .select('id, notification_config, timezone')
@@ -94,7 +95,7 @@ function inWindowAttendance(joinedAt, rows, windowDays, zone) {
  * Returns Map<contactId, { action, at }>; empty on any DB error so the
  * lane still renders without the touch column.
  */
-async function fetchLastTouch(db, locationId, nowMs) {
+export async function fetchLastTouch(db, locationId, nowMs) {
   const since = new Date(nowMs - TOUCH_WINDOW_DAYS * DAY_MS).toISOString()
   const byContact = new Map()
   try {
@@ -162,6 +163,37 @@ function worstFirst(a, b) {
   return a.contactId < b.contactId ? -1 : a.contactId > b.contactId ? 1 : 0
 }
 
+/** The lane's earliest possible join instant: windowDays + the tail before now. */
+export function laneSinceIso(config, nowMs) {
+  return new Date(nowMs - (config.windowDays + LANE_TAIL_DAYS) * DAY_MS).toISOString()
+}
+
+/**
+ * Score each member and sort the lane worst-first. Shared by the Glofox lane
+ * below and the un1t.online lane, so both pace members the same way.
+ *
+ * @param {Array<{id: string, name: string|null, joined_at: string}>} members
+ * @param {Map<string, Array<{starts_at: string}>>} attendance  by contact id
+ * @param {Map<string, {action: string, at: string}>} lastTouch  by contact id
+ */
+export function buildJourneyLane({ members, attendance, lastTouch, config, zone, nowMs }) {
+  const lane = []
+  for (const m of members) {
+    const attendedAt = inWindowAttendance(m.joined_at, attendance.get(m.id) || [], config.windowDays, zone)
+    const row = journeyStatus({ joinedAt: m.joined_at, attendedAt, now: nowMs, config }, zone)
+    if (!row) continue // unparseable joined_at — nothing to pace
+    lane.push({
+      contactId: m.id,
+      name: m.name || 'Member',
+      joinedAt: m.joined_at,
+      ...row,
+      lastTouch: lastTouch.get(m.id) || null,
+    })
+  }
+  lane.sort(worstFirst)
+  return lane
+}
+
 /**
  * The /pulse journey lane: every member (fetchMembers statuses — member /
  * credit_member) at the location whose joined_at falls in the last
@@ -178,7 +210,7 @@ function worstFirst(a, b) {
 export async function loadJourneyLane(db, locationId, nowMs = Date.now()) {
   // The lane lists the location's own members, so their home zone is its zone.
   const { config, zone } = await fetchJourneyConfig(db, locationId)
-  const sinceIso = new Date(nowMs - (config.windowDays + LANE_TAIL_DAYS) * DAY_MS).toISOString()
+  const sinceIso = laneSinceIso(config, nowMs)
 
   const members = await selectAll((from, to) => db
     .from('contacts')
@@ -196,21 +228,7 @@ export async function loadJourneyLane(db, locationId, nowMs = Date.now()) {
     fetchLastTouch(db, locationId, nowMs),
   ])
 
-  const lane = []
-  for (const m of members) {
-    const attendedAt = inWindowAttendance(m.joined_at, attendance.get(m.id) || [], config.windowDays, zone)
-    const row = journeyStatus({ joinedAt: m.joined_at, attendedAt, now: nowMs, config }, zone)
-    if (!row) continue // unparseable joined_at — nothing to pace
-    lane.push({
-      contactId: m.id,
-      name: m.name || 'Member',
-      joinedAt: m.joined_at,
-      ...row,
-      lastTouch: lastTouch.get(m.id) || null,
-    })
-  }
-  lane.sort(worstFirst)
-  return { config, lane }
+  return { config, lane: buildJourneyLane({ members, attendance, lastTouch, config, zone, nowMs }) }
 }
 
 /**

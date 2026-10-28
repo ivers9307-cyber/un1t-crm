@@ -126,7 +126,7 @@ describe('POST /api/shelly/refresh — what it hands the engine', () => {
     // Nothing on this path resolves a zone today — the graft is consistency
     // with the two routes that do, so a zone-dependent step added later starts
     // out correct instead of silently on Dublin time.
-    expect(conn.locations).toEqual({ timezone: 'America/New_York' })
+    expect(conn.locations).toEqual({ timezone: 'America/New_York', safety_timers: false })
     // It builds its own client from this object, so the key has to be on it.
     expect(conn.auth_key).toBe(STORED_KEY)
     expect(typeof ctx.now).toBe('function')

@@ -42,7 +42,7 @@ vi.mock('@/lib/shelly/reconcile', async (importOriginal) => {
 import { POST, HOLDS_NOTICE } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { runNowForDevice } from '@/lib/shelly/reconcile'
 import { logWarn } from '@/lib/log'
 import { overrideKey } from '@/lib/shelly/plan'
@@ -50,8 +50,8 @@ import { AUTH_ERROR } from '@/lib/shelly/connections'
 import { MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
 import { nextLocalMidnightMs } from '@/lib/tz-time'
 import {
-  LOC_A, LOC_B, DEV_A, DEV_B, BAD_ID, OWNER_ID, OWNER_A, OWNER_NY, STAFF_A, SHELLY_ID, STORED_KEY,
-  deviceRow, connectionRow, fullState, makeDb, updatesTo, jsonReq, ctxFor,
+  LOC_A, LOC_B, DEV_A, DEV_B, GRP_A, BAD_ID, OWNER_ID, OWNER_A, OWNER_NY, STAFF_A, SHELLY_ID, STORED_KEY,
+  deviceRow, groupRow, connectionRow, fullState, makeDb, updatesTo, jsonReq, ctxFor,
 } from '../../../shelly-routes.test-helpers.js'
 
 const NOW = Date.parse('2026-08-23T12:00:00.000Z')
@@ -77,9 +77,11 @@ function useDb(cfg) {
   createServerClient.mockReturnValue(db)
   return db
 }
+let setLight
 function useCloud(result = { ok: true, statusCode: 200 }) {
   setSwitch = vi.fn().mockResolvedValue(result)
-  createShellyClient.mockReturnValue({ setSwitch })
+  setLight = vi.fn().mockResolvedValue(result)
+  createShellyClient.mockReturnValue({ setSwitch, setLight })
   return setSwitch
 }
 const rowA = () => db.rowsIn('shelly_devices').find((r) => r.id === DEV_A)
@@ -180,6 +182,15 @@ describe('POST …/toggle — when the override expires', () => {
   })
 })
 
+describe('POST …/toggle — riding out the cron (SHELLYBUSY.1)', () => {
+  it('builds its client with three 429 retries, so a press that lands on the cron read is not "busy"', async () => {
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    expect(INTERACTIVE_429_RETRIES).toBe(3)
+    expect(createShellyClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ max429Retries: INTERACTIVE_429_RETRIES }))
+  })
+})
+
 describe('POST …/toggle — intent before command', () => {
   it('the override is ON THE ROW by the time setSwitch is called', async () => {
     let seen
@@ -202,6 +213,32 @@ describe('POST …/toggle — intent before command', () => {
     useDb(world({ channel: 2 }))
     await POST(toggleReq({ state: 'off' }), ctxFor(DEV_A))
     expect(setSwitch).toHaveBeenCalledWith(SHELLY_ID, 2, false)
+  })
+
+  // SHELLYLIGHT.3 — a light is a `light:N` component: set/switch would name
+  // something the dimmer does not have.
+  it('drives a kind:light device through setLight, never setSwitch', async () => {
+    useDb(world({ kind: 'light', channel: 1 }))
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(setLight).toHaveBeenCalledWith(SHELLY_ID, 1, true)
+    expect(setSwitch).not.toHaveBeenCalled()
+    expect(body.applied).toBe(true)
+  })
+
+  it('a light keeps its brightness in the optimistic last_state (set/light sends `on` only)', async () => {
+    useDb(world({ kind: 'light', last_state: { ...fullState(), brightness: 70 } }))
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(rowA().last_state).toMatchObject({ output: true, brightness: 70, source: 'manual', apower: null })
+  })
+
+  it('a never-read light lands brightness:null, and a switch never grows the key', async () => {
+    useDb(world({ kind: 'light' }))
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(rowA().last_state.brightness).toBeNull()
+    useDb(world())
+    useCloud()
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect('brightness' in rowA().last_state).toBe(false)
   })
 
   it('pins the location on the override write', async () => {
@@ -290,6 +327,28 @@ describe('POST …/toggle — when the command does not land', () => {
     expect(body.message).toMatch(/back online/i)
     expect(rowA().override).toMatchObject({ state: 'on' })
     expect(body.device.override).toMatchObject({ state: 'on' })
+  })
+
+  // SHELLYERR.1 — the DOCUMENTED offline shape is a 400; the client now tags it
+  // 'device' exactly like the 2xx one, so the operator gets the same sentence.
+  it('a documented 400 DEVICE_OFFLINE reads as offline, not as the cloud not answering', async () => {
+    useCloud({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 400, permanent: false })
+    const body = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ applied: false, pending: true, code: 'pending', kind: 'device' })
+    expect(body.message).toMatch(/back online/i)
+  })
+
+  it('a code waiting cannot fix is never promised to follow "when it is back online"', async () => {
+    useCloud({ ok: false, kind: 'device', code: 'DEVICE_INVALID_CHANNEL', statusCode: 400, permanent: true })
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, applied: false, pending: true, code: 'device_refused', kind: 'device', shelly_code: 'DEVICE_INVALID_CHANNEL' })
+    expect(body.message).toContain('DEVICE_INVALID_CHANNEL')
+    expect(body.message).not.toMatch(/back online|within a minute/i)
+    // The intent is still saved — the cron keeps trying, and a fix in the
+    // Shelly app (re-pairing the plug) lets it land.
+    expect(rowA().override).toMatchObject({ state: 'on' })
   })
 
   it('a rate limit is a 429 — and still pending', async () => {
@@ -392,7 +451,7 @@ describe('POST …/toggle — back to auto', () => {
     // The engine reads its zone from conn.locations — loadConnectionWithKey
     // does not select one, so without the graft this studio would resolve on
     // Dublin time.
-    expect(conn.locations).toEqual({ timezone: 'America/New_York' })
+    expect(conn.locations).toEqual({ timezone: 'America/New_York', safety_timers: false })
     // …and the device it plans against must not still carry the override we
     // just cleared, or it would immediately re-apply it.
     expect(device.override).toBeNull()
@@ -498,5 +557,173 @@ describe('POST …/toggle — back to auto', () => {
     runNowForDevice.mockResolvedValue({ ok: true, noop: true })
     const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
     expect(body).toMatchObject({ applied: null, reason: 'disabled' })
+  })
+})
+
+// SHELLYGROUPS.5 — a device in a group. "Back to schedule" means back to the
+// GROUP's schedule (its own was cleared when it joined), so the group is read
+// first and handed to the engine; a group that cannot be read refuses BEFORE
+// the override is cleared, rather than running the device on an empty schedule
+// of its own.
+describe('POST …/toggle — a device in a group', () => {
+  const ov = { state: 'on', until: '2026-08-24T00:00:00.000Z', set_by: OWNER_ID, set_at: NOW_ISO }
+  const groupWorld = (groupOver = {}, groups = null) => {
+    const w = world({ group_id: GRP_A, enabled: false, schedule_mode: 'none', fixed_windows: [], override: ov })
+    w.rows.shelly_groups = groups ?? [groupRow({ enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [7], on: '07:00', off: '21:00' }], ...groupOver })]
+    return w
+  }
+
+  it('auto hands the engine the group, and the cleared device', async () => {
+    useDb(groupWorld())
+    runNowForDevice.mockResolvedValue({ ok: true, action: 'on', reason: 'run_now' })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ success: true, applied: 'on' })
+    const [, , device, deps] = runNowForDevice.mock.calls[0]
+    expect(device.override).toBeNull()
+    expect(deps.group).toMatchObject({ id: GRP_A, schedule_mode: 'fixed' })
+  })
+
+  it('auto with an unreadable group is 409 group_unavailable, and the override stays', async () => {
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    const res = await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('group_unavailable')
+    expect(rowA().override).toEqual(ov)
+    expect(runNowForDevice).not.toHaveBeenCalled()
+  })
+
+  it('a noop under a group with no schedule answers from the GROUP’s fields', async () => {
+    useDb(groupWorld({ enabled: false }))
+    runNowForDevice.mockResolvedValue({ ok: true, noop: true })
+    const body = await (await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))).json()
+    expect(body).toMatchObject({ applied: null, reason: 'disabled' })
+  })
+
+  it('on/off judges "holds until changed" on the group’s schedule', async () => {
+    useDb(groupWorld())
+    const managed = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(managed.holds_until_changed).toBe(false)
+    useDb(groupWorld({ schedule_mode: 'none' }))
+    useCloud()
+    const unmanaged = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(unmanaged.holds_until_changed).toBe(true)
+  })
+
+  it('on/off with an unreadable group still switches, but claims nothing about holding', async () => {
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    const applied = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(applied.status).toBe(200)
+    const body = await applied.json()
+    expect(body).toMatchObject({ applied: true, holds_until_changed: false })
+    expect(body).not.toHaveProperty('notice')
+
+    useDb({ ...groupWorld(), selectError: { shelly_groups: { message: 'pg down' } } })
+    useCloud({ ok: false, kind: 'device', statusCode: 200 })
+    const pending = await (await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))).json()
+    expect(pending).toMatchObject({ pending: true, holds_until_changed: false })
+    expect(pending).not.toHaveProperty('notice')
+  })
+})
+
+// SHELLYTIMERS.3 — the device-side safety net on a manual press. A MANAGED
+// device's ON carries toggle_after up to until + 30 min (rounded up to the
+// minute) and the stamp records cap_at; an unmanaged device, a member whose
+// group we cannot read, and every OFF press carry none.
+describe('POST …/toggle — the safety-net timer', () => {
+  const MIN = 60_000
+  // The studio's switch ON (SHELLYTIMERS.5): a locations row the route reads
+  // one json path of. Off is the default — see the describe after this one.
+  const timersOn = (w) => ({ ...w, rows: { ...w.rows, locations: [{ id: LOC_A, settings: { shelly: { safety_timers: true } } }] } })
+  beforeEach(() => { useDb(timersOn(world())) })
+  const capFor = (untilMs) => {
+    const capMs = Math.ceil((untilMs + 30 * MIN) / MIN) * MIN
+    return { toggleAfterSec: Math.ceil((capMs - NOW) / 1000), capAt: new Date(capMs).toISOString() }
+  }
+
+  it('a managed ON press arms until + 30 min and stamps cap_at', async () => {
+    const until = NOW + 2 * HOUR
+    await POST(toggleReq({ state: 'on', until: new Date(until).toISOString() }), ctxFor(DEV_A))
+    expect(setSwitch).toHaveBeenCalledWith(SHELLY_ID, 0, true, { toggleAfterSec: 9000 })
+    expect(rowA().last_applied.cap_at).toBe(capFor(until).capAt)
+  })
+
+  it('the default expiry (the location\'s midnight) is armed from the same until the override carries', async () => {
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    const until = Date.parse(rowA().override.until)
+    expect(setSwitch).toHaveBeenCalledWith(SHELLY_ID, 0, true, { toggleAfterSec: capFor(until).toggleAfterSec })
+    expect(rowA().last_applied.cap_at).toBe(capFor(until).capAt)
+  })
+
+  it('an OFF press carries no timer (it would flip the room back on) and stamps no cap_at', async () => {
+    await POST(toggleReq({ state: 'off' }), ctxFor(DEV_A))
+    expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, false])
+    expect(rowA().last_applied).not.toHaveProperty('cap_at')
+  })
+
+  for (const over of [{ enabled: false }, { enabled: true, schedule_mode: 'none' }]) {
+    it(`an UNMANAGED device (${JSON.stringify(over)}) gets no timer — the copy promises it holds until changed`, async () => {
+      useDb(timersOn(world(over)))
+      await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+      expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+      expect(rowA().last_applied).not.toHaveProperty('cap_at')
+    })
+  }
+
+  it('a member is armed on its GROUP\'s schedule; an unmanaged or unreadable group arms nothing', async () => {
+    const memberWorld = (groupOver, extra = {}) => {
+      const w = world({ group_id: GRP_A, enabled: false, schedule_mode: 'none', fixed_windows: [] })
+      w.rows.shelly_groups = [groupRow(groupOver)]
+      return timersOn({ ...w, ...extra })
+    }
+    useDb(memberWorld({ enabled: true, schedule_mode: 'fixed', fixed_windows: [{ days: [7], on: '07:00', off: '21:00' }] }))
+    useCloud()
+    await POST(toggleReq({ state: 'on', until: new Date(NOW + HOUR).toISOString() }), ctxFor(DEV_A))
+    expect(setSwitch).toHaveBeenCalledWith(SHELLY_ID, 0, true, { toggleAfterSec: 5400 })
+
+    useDb(memberWorld({ enabled: true, schedule_mode: 'none' }))
+    useCloud()
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+
+    useDb(memberWorld({ enabled: true, schedule_mode: 'fixed' }, { selectError: { shelly_groups: { message: 'pg down' } } }))
+    useCloud()
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+  })
+
+  it('a command that did not land stamps nothing, cap_at included', async () => {
+    useCloud({ ok: false, kind: 'device', code: 'DEVICE_OFFLINE', statusCode: 200 })
+    await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(rowA().last_applied).toBeNull()
+  })
+})
+
+// SHELLYTIMERS.5 — the switch OFF (the default): the press is byte-identical
+// to the pre-timer route, whatever the locations row says short of `true`.
+describe('POST …/toggle — safety timers switched off', () => {
+  const withSetting = (settings) => ({ ...world(), rows: { ...world().rows, locations: [{ id: LOC_A, settings }] } })
+  for (const settings of [null, {}, { shelly: {} }, { shelly: { safety_timers: false } }, { shelly: { safety_timers: 'true' } }]) {
+    it(`settings ${JSON.stringify(settings)}: no toggle_after, no cap_at`, async () => {
+      useDb(withSetting(settings))
+      await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+      expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+      expect(rowA().last_applied).toEqual({ key: overrideKey(rowA().override), action: 'on', reason: 'override', at: NOW_ISO })
+    })
+  }
+
+  it('an unreadable switch is off (the press still goes, unarmed)', async () => {
+    useDb({ ...withSetting({ shelly: { safety_timers: true } }), selectError: { locations: { message: 'pg down' } } })
+    const res = await POST(toggleReq({ state: 'on' }), ctxFor(DEV_A))
+    expect(res.status).toBe(200)
+    expect(setSwitch.mock.calls[0]).toEqual([SHELLY_ID, 0, true])
+  })
+
+  it("'auto' hands runNowForDevice the switch on the engine connection", async () => {
+    useDb(withSetting({ shelly: { safety_timers: true } }))
+    await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(runNowForDevice.mock.calls[0][1].locations.safety_timers).toBe(true)
+    useDb(world())
+    await POST(toggleReq({ state: 'auto' }), ctxFor(DEV_A))
+    expect(runNowForDevice.mock.calls[1][1].locations.safety_timers).toBe(false)
   })
 })

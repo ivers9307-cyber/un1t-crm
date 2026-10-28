@@ -251,7 +251,7 @@ export function fenceBreaches(entries, io) {
 // ── 2. Calls to the writer's send( ─────────────────────────────────────────
 const HTTP_VERB = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/i
 const POLICIES = ['verify', 'never', 'idempotent']
-// The seven writes the CRM may make, with `${…}` in a path read as :id.
+// The eight writes the CRM may make, with `${…}` in a path read as :id.
 export const ALLOWED_WRITES = Object.freeze([
   'POST /bookings',
   'PATCH /bookings/:id/cancel',
@@ -261,6 +261,8 @@ export const ALLOWED_WRITES = Object.freeze([
   'POST /purchases/checkout',
   // TRIALREGRANT.1: grantTrial's one-off credit re-grant only.
   'POST /credits/grant',
+  // FEES.1: chargeClassFee's staff-reviewed late-cancel / no-show fee only.
+  'POST /purchases/charge-custom',
 ])
 
 // A path argument as a template: a literal as is, `${…}` as :id, null for
@@ -361,7 +363,9 @@ export function sendsOffAllowlist(label, sf, opts = { writeSide: true }) {
 // stand only inside regrantTrialCredits (TRIALREGRANT.1).
 const BANNED_ENDPOINTS = [
   { label: '/refunds', re: /\/refunds/ },
-  { label: 'charge-custom', re: /charge-custom/ },
+  // FEES.1: charge-custom itself is fenced on its own (chargeCustomOutsideFee):
+  // it may stand only inside chargeClassFee. Its emailed-link sibling never.
+  { label: 'charge-custom/link', re: /charge-custom\/link/ },
   { label: 'payment-sheet', re: /payment-sheet/ },
   { label: 'mark-attendance', re: /mark-attendance/ },
   { label: '/users/{id}/reset-password', re: /\/users\/[^\s'"`]*reset-password/ },
@@ -376,8 +380,19 @@ export function bannedEndpointHits(label, sf) {
 
 /** "line N" of each /purchases/charge outside grantTrial and outside the transport's ENDPOINTS table. */
 export function chargeOutsideGrantTrial(key, sf) {
-  return literalHits(sf, /purchases\/charge/)
+  return literalHits(sf, /purchases\/charge(?!-)/)
     .filter((h) => !h.chain.includes('grantTrial') && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
+    .map((h) => `${key}:${h.line}`)
+}
+
+/**
+ * FEES.1 — "line N" of each charge-custom outside the ops module's
+ * chargeClassFee and outside the transport's ENDPOINTS table (Richard's
+ * decision 28 Oct 2026: the class fee is the only paid custom charge).
+ */
+export function chargeCustomOutsideFee(key, sf) {
+  return literalHits(sf, /charge-custom/)
+    .filter((h) => !(key === OPS && h.chain.includes('chargeClassFee')) && !(key === TRANSPORT && h.chain.includes('ENDPOINTS')))
     .map((h) => `${key}:${h.line}`)
 }
 
@@ -590,7 +605,7 @@ describe('the banned-name scanners (canaries)', () => {
       "// '/credits/grant' and /refunds and charge-custom",
       "const a = '/credits/grant'",
       'const b = `/refunds/${id}`',
-      'const c = /^\\/purchases\\/charge-custom$/',
+      'const c = /^\\/purchases\\/charge-custom\\/link$/',
       "const d = '/purchases/payment-sheet'",
       "const e = `/bookings/${id}/mark-attendance`",
       'const f = `/users/${id}/reset-password`',
@@ -789,9 +804,10 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
   const sendFiles = () => filesMentioning(/\bsend\b/)
   const policyTable = () => frozenTable(parsedFile(allSources().find((e) => e.key === TRANSPORT)), 'UN1T_OP_POLICY')
 
-  it('the policy table is the one the spec fixes: book, cancel, create_client verify; forgot_password, trial, trial_regrant never; checkout idempotent', () => {
+  it('the policy table is the one the spec fixes: book, cancel, create_client verify; forgot_password, trial, trial_regrant never; checkout, fee_charge idempotent', () => {
     expect(policyTable()).toEqual({
       book: 'verify', cancel: 'verify', create_client: 'verify', forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
+      fee_charge: 'idempotent',
     })
   })
 
@@ -801,19 +817,22 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it("every send( call's method and path template is one of the seven allowed writes", () => {
+  it("every send( call's method and path template is one of the eight allowed writes", () => {
     const bad = sendFiles().flatMap((e) => sendsOffAllowlist(e.key, e.sf, { writeSide: writeSideFile(e) }))
     expect(bad).toEqual([])
   })
 
-  it('the scan really sees the ops module\'s eight sends (an empty result is not a broken scanner)', () => {
+  it('the scan really sees the ops module\'s nine sends (an empty result is not a broken scanner)', () => {
     const ops = sendFiles().find((e) => e.key === OPS)
     expect(ops).toBeTruthy()
     const calls = writerSendCalls(ops.sf, { writeSide: true })
     expect(calls.map((c) => `${c.verb} ${c.path}`).sort()).toEqual([
       'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /credits/grant', 'POST /purchases/charge',
-      'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
+      'POST /purchases/charge-custom', 'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
     ])
+    // FEES.1: the class fee is op fee_charge, re-sent only with its own key.
+    const fee = calls.filter((c) => c.op === 'fee_charge')
+    expect(fee.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /purchases/charge-custom idempotent'])
     // TRIALREGRANT.1: the credit re-grant is op trial_regrant, never re-sent.
     const regrant = calls.filter((c) => c.op === 'trial_regrant')
     expect(regrant.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /credits/grant never'])
@@ -824,7 +843,7 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(trial.every((c) => c.policy === 'never')).toBe(true)
   })
 
-  it("the transport's own allowlist is pinned: exactly the seven writes, and the banned body keys it refuses", () => {
+  it("the transport's own allowlist is pinned: exactly the eight writes, and the banned body keys it refuses", () => {
     const sf = parsedFile(allSources().find((e) => e.key === TRANSPORT))
     const entries = []
     const visit = (node) => {
@@ -860,10 +879,18 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it('/refunds, charge-custom, payment-sheet, mark-attendance and /users/{id}/reset-password appear nowhere in src/ outside tests', () => {
-    const bad = filesMentioning(/\/refunds|charge-custom|payment-sheet|mark-attendance|reset-password/)
+  it('/refunds, charge-custom/link, payment-sheet, mark-attendance and /users/{id}/reset-password appear nowhere in src/ outside tests', () => {
+    const bad = filesMentioning(/\/refunds|charge-custom\/link|payment-sheet|mark-attendance|reset-password/)
       .flatMap((e) => bannedEndpointHits(e.key, e.sf))
     expect(bad).toEqual([])
+  })
+
+  it('FEES.1: charge-custom appears only inside chargeClassFee in the ops module (and the transport allowlist), and it is there', () => {
+    const files = filesMentioning(/charge-custom/)
+    expect(files.flatMap((e) => chargeCustomOutsideFee(e.key, e.sf))).toEqual([])
+    const ops = files.find((e) => e.key === OPS)
+    expect(ops).toBeTruthy()
+    expect(literalHits(ops.sf, /charge-custom/).some((h) => h.chain.includes('chargeClassFee'))).toBe(true)
   })
 
   it('TRIALREGRANT.1: /credits/grant appears only inside regrantTrialCredits in the ops module (and the transport allowlist), and it is there', () => {

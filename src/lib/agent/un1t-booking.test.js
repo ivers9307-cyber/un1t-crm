@@ -5,7 +5,7 @@
 // and the mirror is a recording fake db. Fictional ids only (the repo is public).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const h = vi.hoisted(() => ({ book: null, cancel: null, fileRefundCard: null, reader: null }))
+const h = vi.hoisted(() => ({ book: null, cancel: null, fileRefundCard: null, reader: null, quote: null }))
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/un1t-online-write-ops', async () => {
@@ -33,6 +33,11 @@ vi.mock('./un1t-member-read', async (importOriginal) => ({
   openUn1tMemberReader: vi.fn(async () => h.reader),
 }))
 vi.mock('./approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => {}) }))
+// FEES.2 — the late-cancel quote: fees off unless a test sets h.quote.
+vi.mock('@/lib/class-fees-quote', async (importOriginal) => ({
+  ...(await importOriginal()),
+  lateCancelQuote: vi.fn(async (...args) => (h.quote ? h.quote(...args) : { applies: false, reason: 'fees_off' })),
+}))
 
 import { UN1T_WRITE_CODES as C } from '@/lib/un1t-online-write'
 import { logError, logWarn } from '@/lib/log'
@@ -734,6 +739,46 @@ describe('un1tCancelBooking', () => {
     }
     expect(h.cancel).not.toHaveBeenCalled()
     expect(notifyAgentApprovalRequest).not.toHaveBeenCalled()
+  })
+
+  it('FEES.2: inside the window with fees on, nothing is cancelled until the member confirms the fee', async () => {
+    h.quote = vi.fn(async () => ({ applies: true, penalty: 'fee', amountCents: 1000, windowHours: 2, swapMinutes: 30 }))
+    try {
+      const { db, inserts } = fakeDb()
+      const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+      expect(r).toMatchObject({ cancelled: false, needs_confirmation: 'late_cancel_fee' })
+      expect(r.message).toMatch(/€10 late-cancellation fee/)
+      expect(r.message).toMatch(/within 30 minutes of cancelling, no fee is charged/)
+      expect(r.message).toMatch(/confirm_late_fee true/)
+      expect(h.cancel).not.toHaveBeenCalled()
+      expect(inserts).toEqual([])
+      const args = h.quote.mock.calls[0][1]
+      expect(args).toMatchObject({ locationId: HATCH, un1tUserId: USER, bookingId: BOOKING, eventId: EVENT })
+      expect(typeof args.readWindowHours).toBe('function')
+
+      // The member said yes: the second call cancels without asking again.
+      const again = await un1tCancelBooking(ctxFor(db), cinput({ confirm_late_fee: true }), hatch())
+      expect(again).toMatchObject({ cancelled: true })
+      expect(h.cancel).toHaveBeenCalledTimes(1)
+      expect(h.quote).toHaveBeenCalledTimes(1)
+    } finally {
+      h.quote = null
+    }
+  })
+
+  it('FEES.2: a pack member hears the credit is lost; a quote that cannot be read never blocks the cancel', async () => {
+    h.quote = vi.fn(async () => ({ applies: true, penalty: 'credit_forfeit', windowHours: 1, swapMinutes: null }))
+    try {
+      const { db } = fakeDb()
+      const r = await un1tCancelBooking(ctxFor(db), cinput(), hatch())
+      expect(r.message).toMatch(/1 hour cancellation window/)
+      expect(r.message).toMatch(/class credit they used for it will not be given back/)
+      h.quote = vi.fn(async () => { throw new Error('db down') })
+      expect(await un1tCancelBooking(ctxFor(db), cinput(), hatch())).toMatchObject({ cancelled: true })
+      expect(h.cancel).toHaveBeenCalledTimes(1)
+    } finally {
+      h.quote = null
+    }
   })
 
   it('a TRUNCATED live list without the booking is no proof of absence: D decides', async () => {

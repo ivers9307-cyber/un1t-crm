@@ -20,7 +20,7 @@ const RESULT_KEYS = ['alreadyBooked', 'code', 'id', 'message', 'verdict']
 
 describe('UN1T_WRITE_OPS', () => {
   it('lists the seven ops (trial_regrant since TRIALREGRANT.1), frozen', () => {
-    expect(UN1T_WRITE_OPS).toEqual(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant'])
+    expect(UN1T_WRITE_OPS).toEqual(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge'])
     expect(Object.isFrozen(UN1T_WRITE_OPS)).toBe(true)
   })
 })
@@ -291,6 +291,7 @@ describe('permissions', () => {
       checkout: ['purchases:create', 'products:read'],
       forgot_password: [],
       trial_regrant: ['credits:create', 'credits:read'],
+      fee_charge: ['purchases:create', 'payment_methods:read'],
     })
     expect(Object.keys(REQUIRED_PERMISSIONS).sort()).toEqual([...UN1T_WRITE_OPS].sort())
     expect(Object.isFrozen(REQUIRED_PERMISSIONS)).toBe(true)

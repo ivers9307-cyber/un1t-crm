@@ -34,10 +34,14 @@ import {
 import { validateBody } from '@/lib/validate'
 import { applyMergeTags, sendTransactionalEmail } from '@/lib/postmark'
 import { getLocationBranding } from '@/lib/location-branding'
+import { uuidLike } from '@/lib/schemas'
+import { resolveRouteStudio } from '@/lib/contact-acting-studio'
 
 export const runtime = 'nodejs'
 
 const EmailBodySchema = z.object({
+  // CARDLENS.5 — the acting studio; omitted = the contact's primary studio.
+  location_id: uuidLike.optional(),
   subject: z.string().min(1).max(300),
   body: z.string().min(1).max(20000),
 })
@@ -83,7 +87,7 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, EmailBodySchema)
   if (!validation.ok) return validation.response
-  const { subject, body } = validation.data
+  const { subject, body, location_id: requestedStudio } = validation.data
 
   const { id: contactId } = params
   const db = createServerClient()
@@ -98,11 +102,19 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  // IDOR guard — caller must be assigned to the contact's location.
-  const guard = assertLocationAccessOr404(user, contact.location_id)
+  // CARDLENS.5 — the studio this send is FOR: the body's location_id when the
+  // person has a contact_studios row there and the caller belongs to it (404
+  // otherwise, 503 on a failed read), else the primary as before. Consent,
+  // brand, send and log below are all that studio's.
+  const studio = await resolveRouteStudio(db, user, contact, requestedStudio)
+  if (studio.response) return studio.response
+  const studioId = studio.locationId
+
+  // IDOR guard — caller must be assigned to the studio.
+  const guard = assertLocationAccessOr404(user, studioId)
   if (guard) return guard
   // ROLESWEEP.1c — web OR mobile `email` judged at the contact's location.
-  if (!hasPermissionForLocation(user, contact.location_id, 'email') && !hasMobilePermissionForLocation(user, contact.location_id, 'email')) {
+  if (!hasPermissionForLocation(user, studioId, 'email') && !hasMobilePermissionForLocation(user, studioId, 'email')) {
     return NextResponse.json({ success: false, error: 'Forbidden — email not enabled at this location for your role' }, { status: 403 })
   }
 
@@ -124,7 +136,7 @@ export async function POST(request, props) {
     .from('contact_location_preferences')
     .select('email_marketing')
     .eq('contact_id', contact.id)
-    .eq('location_id', contact.location_id)
+    .eq('location_id', studioId)
     .maybeSingle()
   if (locPref?.email_marketing !== true) {
     return NextResponse.json({
@@ -138,8 +150,11 @@ export async function POST(request, props) {
   // Merge tags ({{first_name}} etc.) on both subject and body — same tag
   // set as the SMS/email surfaces.
   // W1.S1a — {{company_name}} is the contact location's configured brand.
-  const { companyName } = await getLocationBranding(db, contact.location_id)
-  const mergeCtx = { location_name: contact.locations?.name || '', company_name: companyName || '' }
+  const { companyName, locationName } = await getLocationBranding(db, studioId)
+  const mergeCtx = {
+    location_name: (studioId === contact.location_id ? contact.locations?.name : locationName) || '',
+    company_name: companyName || '',
+  }
   const renderedSubject = applyMergeTags(subject, contact, mergeCtx)
   const renderedBody = applyMergeTags(body, contact, mergeCtx)
 
@@ -149,7 +164,7 @@ export async function POST(request, props) {
       subject: renderedSubject,
       htmlBody: textToHtml(renderedBody),
       contactId: contact.id,
-      locationId: contact.location_id,
+      locationId: studioId,
       tag: 'contact_adhoc',
     })
   } catch (e) {
@@ -163,7 +178,7 @@ export async function POST(request, props) {
   // pattern; the activityIcons map gracefully handles unknown types.
   await db.from('activities').insert({
     contact_id: contact.id,
-    location_id: contact.location_id,
+    location_id: studioId,
     type: 'email_sent',
     subject: `Email sent: ${renderedSubject}`.slice(0, 200),
     note: renderedBody,

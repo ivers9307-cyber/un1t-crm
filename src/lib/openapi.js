@@ -29,6 +29,7 @@ import {
   studioPurposeTemplateSchema,
   studioConsentCopySchema,
   studioBlastSignoffSchema,
+  usageEventsSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
@@ -58,6 +59,12 @@ import {
   ShellyToggleBody as ShellyToggleBodyRaw,
   ShellyEnergyQuery as ShellyEnergyQueryRaw,
   ShellySyncNamesBody as ShellySyncNamesBodyRaw,
+  ShellyGroupCreate as ShellyGroupCreateRaw,
+  ShellyGroupPatch as ShellyGroupPatchRaw,
+  ShellyGroupMembers as ShellyGroupMembersRaw,
+  ShellyGroupToggle as ShellyGroupToggleRaw,
+  ShellyPreviewQuery as ShellyPreviewQueryRaw,
+  SHELLY_GROUP_ICONS,
   MAX_DEVICES_PER_LOCATION, MAX_FIXED_WINDOWS, MAX_OVERRIDE_HOURS, MIN_AUTH_KEY_LENGTH,
 } from '@/lib/shelly/schemas'
 
@@ -530,6 +537,126 @@ registry.registerPath({
     200: { description: 'Status returned' },
     404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
   },
+})
+
+// FEES.1 — late-cancellation and no-show fees at un1t.online studios.
+registry.registerPath({
+  method: 'get',
+  path: '/api/class-fees',
+  tags: ['Class fees'],
+  summary: 'List the class fees of one un1t.online studio',
+  description: 'Session auth + the class_fees permission at the studio. Query location_id and tab (due | outstanding | undecided | history). Rows carry the member name, the class, the charge description and the status; undecided lists bookings still marked booked after the class (never charged).',
+  responses: {
+    200: { description: 'Rows, the studio fee settings and its zone' },
+    400: { description: 'Missing location_id or an unknown tab', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/{id}/waive',
+  tags: ['Class fees'],
+  summary: 'Waive one class fee',
+  description: 'Session auth + class_fees at the studio. Only a fee that is pending, scheduled for retry or outstanding can be waived (409 otherwise). A fee at another studio answers 404.',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), reason: z.string().min(1).max(500) }) } } } },
+  responses: {
+    200: { description: 'Waived' },
+    404: { description: 'No such fee at this studio', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Being charged, charged or already waived', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/retry',
+  tags: ['Class fees'],
+  summary: "Retry a member's owed class fees",
+  description: "Session auth + class_fees at the studio. One un1t.online \"Charge custom amount\" attempt per fee that is scheduled for retry or outstanding, on the member's default card, each with its own class description. Rate-limited to 3 a minute per member.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), contact_id: z.string() }) } } } },
+  responses: {
+    200: { description: 'One outcome per fee attempted' },
+    429: { description: 'A retry for this member just ran', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/class-fees/contact',
+  tags: ['Class fees'],
+  summary: 'The class fees one member owes at one studio',
+  description: 'Session auth + class_fees at the studio. Query location_id and contact_id. Open fees (pending, charging, scheduled for retry, outstanding) and the owed total.',
+  responses: { 200: { description: 'Open fees and owed_cents' } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/{id}/charge-anyway',
+  tags: ['Class fees'],
+  summary: 'Charge an appealed class fee after all',
+  description: 'Session auth + class_fees at the studio. Sends an appealed (held) fee back to pending, due now; the next hourly run charges it. 404 for a fee at another studio, 409 when it is not appealed.',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string() }) } } } },
+  responses: { 200: { description: 'Back to pending' }, 409: { description: 'Not appealed', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/{id}/appeal-link',
+  tags: ['Class fees'],
+  summary: 'Make an appeal link for one class fee',
+  description: "Session auth + class_fees at the studio, with appeals switched on there. Returns a fresh /fee-appeal/<token> link on the studio's customer host for staff to send the member (works with the member notice email off). Each call replaces the previous link.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string() }) } } } },
+  responses: { 200: { description: 'The link' }, 409: { description: 'Appeals off, or the fee can no longer be appealed', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/fee-appeal',
+  tags: ['Class fees'],
+  summary: "A member's appeal against a class fee",
+  description: 'Public; the token is the credential (only its sha256 is stored). Holds the fee (status appealed) until staff waive it or charge it anyway. Rate-limited per IP and per token; every refusal answers the same 404.',
+  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string(), reason: z.enum(['illness', 'injury', 'emergency', 'other']), text: z.string().max(1000).optional() }) } } } },
+  responses: { 200: { description: 'Appeal recorded' }, 404: { description: 'Unknown, closed or switched-off link', content: { 'application/json': { schema: ErrorResponse } } }, 429: { description: 'Too many attempts', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/class-fees/exemptions',
+  tags: ['Class fees'],
+  summary: "List a studio's members who are never charged class fees",
+  description: 'Session auth + class_fees at the studio. Query location_id.',
+  responses: { 200: { description: 'OK' }, 403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/class-fees/exemptions',
+  tags: ['Class fees'],
+  summary: 'Never charge a member class fees',
+  description: "Session auth + class_fees at the studio. Adds the member to the studio's never-charged list and waives every fee they owe or are due there. 404 for a contact outside the studio's organisation.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), contact_id: z.string(), note: z.string().max(500).optional() }) } } } },
+  responses: { 200: { description: 'OK' }, 403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/class-fees/exemptions',
+  tags: ['Class fees'],
+  summary: 'Remove a member from the never-charged list',
+  description: 'Session auth + class_fees at the studio. Past fees are not changed.',
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), contact_id: z.string() }) } } } },
+  responses: { 200: { description: 'OK' }, 403: { description: 'Missing class_fees at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/class-fees/settings',
+  tags: ['Class fees'],
+  summary: 'Save the class-fee settings of one studio',
+  description: "Master or owner at the studio. Switch fees on, pause charging, set the late-cancel and no-show amounts in cents and the review email recipients. The late-cancel window is un1t.online's own.",
+  request: { body: { content: { 'application/json': { schema: z.object({ location_id: z.string(), enabled: z.boolean(), charging_paused: z.boolean(), late_cancel_fee_cents: z.number().int(), no_show_fee_cents: z.number().int(), review_emails: z.array(z.string()) }) } } } },
+  responses: { 200: { description: 'Saved settings' }, 403: { description: 'Not master or owner at the studio', content: { 'application/json': { schema: ErrorResponse } } } },
 })
 
 registry.registerPath({
@@ -4093,6 +4220,9 @@ registry.registerPath({
         'application/json': {
           schema: z.object({
             content: z.string().min(1).max(20_000),
+            // CARDLENS.5 — file the note at another studio the person has a
+            // relationship with (404 unless they do and the caller belongs there).
+            location_id: uuidLike.optional(),
           }).openapi('ContactNoteCreateBody'),
         },
       },
@@ -4109,6 +4239,26 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/contacts/{id}/messaging',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Composer context for a contact: WhatsApp 24h window and sendable UTILITY templates',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({
+      location_id: uuidLike.optional().openapi({ description: 'CARDLENS-M.7 — the studio the composer sends for; another studio than the primary needs a contact_studios row there and caller membership (404 otherwise, 503 on a failed check)' }),
+    }),
+  },
+  responses: {
+    200: { description: 'Composer context', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({ whatsapp: z.object({ windowOpen: z.boolean(), windowExpiresAt: z.string().nullable() }), templates: z.array(z.object({ name: z.string(), language: z.string(), bodyText: z.string() })) }) }) } } },
+    403: { description: 'No WhatsApp permission at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found, or a studio the caller may not act at', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The contact studios check failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/contacts/{id}/command-centre',
   tags: ['Contacts'],
   security: [{ CookieAuth: [] }],
@@ -4117,6 +4267,7 @@ registry.registerPath({
     params: z.object({ id: uuidLike }),
     query: z.object({
       scope: z.enum(['drawer']).optional().openapi({ description: 'drawer — extend the bundle for the pipeline contact drawer' }),
+      studio: z.string().optional().openapi({ description: 'CARDLENS-M.6 (drawer scope) — the acting studio: default | all | a location id. Omitted: the contact\'s primary studio judges, as before.' }),
     }),
   },
   responses: {
@@ -4135,7 +4286,16 @@ registry.registerPath({
             composer_templates: z.array(z.object({
               name: z.string(), language: z.string(), bodyText: z.string(), sendable: z.boolean(),
             })).optional(),
-            permissions: z.object({ whatsapp: z.boolean(), email: z.boolean(), kudos: z.boolean() }).optional(),
+            permissions: z.object({
+              whatsapp: z.boolean(), email: z.boolean(), kudos: z.boolean(),
+              note: z.boolean(), task: z.boolean(), cancel_form: z.boolean(),
+            }).optional(),
+            glofox_card: z.object({ mode: z.enum(['linked', 'pushable', 'hidden']), studio_name: z.string().nullable() }).optional(),
+            studio_tags: z.record(z.string()).optional(),
+            glofox_note_push: z.boolean().optional(),
+            lens: z.enum(['legacy', 'studio', 'all']).optional(),
+            acting_studio: z.object({ location_id: z.string(), name: z.string().nullable(), platform: z.string().nullable() }).nullable().optional(),
+            studio_options: z.array(z.object({ location_id: z.string(), name: z.string(), platform: z.string().nullable(), primary: z.boolean() })).optional(),
           }).openapi('ContactCommandCentreBundle'),
         },
       },
@@ -8441,6 +8601,8 @@ const ShellyAdoptBody = ShellyAdoptBodyRaw.extend({}).openapi('ShellyAdoptBody',
     + 'up to four rows sharing one device_id. name is optional: the Shelly account\'s own name is used when it is '
     + 'omitted, and a device with neither is stored with name null (the card composes a placeholder at render '
     + 'time — a synthesised name is indistinguishable from a human\'s the moment anyone looks at the row). '
+    + 'kind (switch | light, default switch) is the kind the discovery row showed; the route stores the live '
+    + 'reading\'s kind. '
     + 'Unknown keys are REJECTED: `channel` has a default, so a body carrying `chanel: 3` would otherwise drop '
     + 'the unknown key, default to 0 and silently adopt the WRONG RELAY.',
 })
@@ -8507,6 +8669,7 @@ const ShellyDeviceState = z.object({
   apower: z.number().nullable(),
   aenergy_wh: z.number().nullable(),
   temperature_c: z.number().nullable(),
+  brightness: z.number().nullable().optional(),
   source: z.string().nullable(),
   at: z.string().datetime(),
 }).openapi('ShellyDeviceState', {
@@ -8521,12 +8684,15 @@ const ShellyDeviceState = z.object({
 const ShellyDevice = z.object({
   id: uuidLike,
   location_id: uuidLike,
+  // SHELLYGROUPS.5 (mig 776): the group this channel follows, or null.
+  group_id: uuidLike.nullable(),
   device_id: z.string(),
   channel: z.number().int(),
   name: z.string().nullable(),
   model: z.string().nullable(),
   gen: z.number().int().nullable(),
   zone: z.string().nullable(),
+  kind: z.enum(['switch', 'light']),
   enabled: z.boolean(),
   schedule_mode: z.enum(['none', 'fixed', 'class']),
   fixed_windows: z.array(ShellyWindow),
@@ -8588,7 +8754,9 @@ const ShellyErrorResponse = ErrorResponse.extend({
     'device_cap', 'adopted_here', 'adopted', 'not_on_account',
     'unsupported', 'bad_channel', 'bad_host', 'bad_device',
     'no_schedule', 'disabled', 'occurrences', 'rate_limited',
-    'unexpected_noop',
+    'unexpected_noop', 'device_refused',
+    // SHELLYGROUPS.5
+    'name_taken', 'group_limit', 'group_unavailable', 'member_overrides_not_cleared', 'partial', 'grouped',
     // pass-through client/engine failure tags (502s)
     'config', 'network', 'http', 'device',
     'invalid_ids', 'too_many_ids', 'bad_clock', 'unreachable',
@@ -8603,6 +8771,10 @@ const ShellyErrorResponse = ErrorResponse.extend({
   // it is whatever client.js tagged, and pinning it here would make a new tag
   // a spec violation rather than a log line.
   kind: z.string().optional(),
+  // SHELLYERR.1 — Shelly's own error string (DEVICE_OFFLINE, DEVICE_NOT_FOUND,
+  // …), truncated, on a run-now the device refused. Free string for the same
+  // reason as `kind`.
+  shelly_code: z.string().nullable().optional(),
 }).openapi('ShellyErrorResponse')
 
 const ShellyConnectionPublic = z.object({
@@ -8660,6 +8832,7 @@ const ShellyDiscoveredRow = z.object({
   gen: z.number().int().nullable(),
   online: z.boolean(),
   supported: z.boolean().nullable(),
+  kind: z.enum(['switch', 'light']),
   reason: z.enum(['gen1', 'no_switch']).optional(),
   adopted: z.enum(['here', 'elsewhere']).nullable(),
   elsewhere_location_name: z.string().optional(),
@@ -8718,9 +8891,10 @@ const ShellyToggleResponse = z.object({
   device: ShellyDevice,
   applied: z.union([z.literal(true), z.literal(false), z.enum(['on', 'off']), z.null()]),
   pending: z.literal(true).optional(),
-  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending']).optional(),
+  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending', 'device_refused']).optional(),
   kind: z.string().optional(),
   message: z.string().optional(),
+  shelly_code: z.string().optional(),
   reason: ShellyActionReason.optional(),
   holds_until_changed: z.boolean().optional(),
   notice: z.string().optional(),
@@ -8729,7 +8903,8 @@ const ShellyToggleResponse = z.object({
     + 'state. (a) applied: true — the relay physically moved. (b) applied: false with pending: true — the '
     + 'override IS SAVED and the relay has not moved; the cron applies a live override to every adopted device, '
     + 'enabled or not, so this is a delay, not a loss. `code` says what to tell the operator (key_rejected → '
-    + 're-paste, rate_limited → busy, bad_host → fix the connection settings, pending → offline) and `message` '
+    + 're-paste, rate_limited → busy, bad_host → fix the connection settings, pending → offline, device_refused → Shelly refused the request '
+    + 'itself (its code in `shelly_code`; no wait fixes it, so the copy never says the plug will follow)) and `message` '
     + 'carries the copy. Painting the new state optimistically here would show a plug as ON while it is '
     + 'physically off. (c) state "auto" — applied is the action taken ("on"/"off", reason "run_now") or null with a '
     + '`reason` of exactly TWO values: disabled ("the schedule is switched off") or no_schedule ("there is '
@@ -9057,6 +9232,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id, an id at another location, or a row that was deleted between the read and the write — ALL THREE answer the identical body, which is what makes ids un-enumerable', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code `grouped`: the device is in a group, and the patch carries a schedule field (`enabled`, `schedule_mode`, `fixed_windows`, `class_rule`). The group\'s schedule governs it; change the group, or take the device out first. A rename is still allowed.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'Database error', content: { 'application/json': { schema: ShellyErrorResponse } } },
   },
 })
@@ -9121,7 +9297,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id, an id at another location, or a row deleted mid-request — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
-    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "not_connected" (link an account first). On the "auto" path only, also code: "group_unavailable" (the device is in a group that could not be read; refused BEFORE the override is cleared) and code: "key_rejected" — the run-now that follows the cleared override hit a rejected key; the body still carries `device` with the override already gone, and the copy says the device is back on its schedule.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     429: {
       description: 'TWO DIFFERENT BODIES AT THIS STATUS. On the on/off path it is the pending SUCCESS body — '
         + 'success:true, pending:true, code:"rate_limited" — because the override is saved and the cron will '
@@ -9159,7 +9335,7 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ShellyErrorResponse } } },
     403: { description: 'Missing device_control permission', content: { 'application/json': { schema: ShellyErrorResponse } } },
     404: { description: 'Malformed id or an id at another location — one identical body', content: { 'application/json': { schema: ShellyErrorResponse } } },
-    409: { description: 'code: "no_schedule" (checked FIRST — there is nothing to apply); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed)', content: { 'application/json': { schema: ShellyErrorResponse } } },
+    409: { description: 'code: "group_unavailable" (the device is in a group and the group could not be read — refused rather than run on the device\'s own schedule, which joining cleared); "no_schedule" (checked FIRST — there is nothing to apply; judged on the GROUP\'s schedule for a member); "disabled" (the schedule is switched off; turn it on first); "not_connected"; or "key_rejected" (Shelly refused the stored key, which also parks the connection at action_needed); "device" (the plug did not take the command, e.g. DEVICE_OFFLINE — retry once it is back) or "device_refused" (a code waiting cannot fix, e.g. DEVICE_NOT_FOUND), both with Shelly\'s code in `shelly_code`', content: { 'application/json': { schema: ShellyErrorResponse } } },
     429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'The device or connection read failed; code: "bad_device" (the row has no usable device id/channel — remove it and adopt it again); or code: "unexpected_noop", the unreachable case kept LOUD on purpose — the two 409s above take every state the forced planner can decline, so a no-op arriving here means the planner and this route disagree about what force means, and a cheerful applied:null would bury that under a green tick', content: { 'application/json': { schema: ShellyErrorResponse } } },
     502: { description: 'code "occurrences" (today\'s timetable could not be read — a class-mode device is refused rather than switched off on the strength of an empty day) or the client\'s failure tag for an unreachable cloud', content: { 'application/json': { schema: ShellyErrorResponse } } },
@@ -9255,6 +9431,263 @@ registry.registerPath({
     429: { description: 'code: "rate_limited" — the shared 1 request/second account budget; retry in a few seconds. Nothing is written, for the same reason as the 409s.', content: { 'application/json': { schema: ShellyErrorResponse } } },
     500: { description: 'The connection or the device list could not be read', content: { 'application/json': { schema: ShellyErrorResponse } } },
     502: { description: 'Shelly stopped answering mid-read (code carries the client\'s failure tag). The names already resolved ARE WRITTEN FIRST and the body carries the same counters as the 200 plus partial: true — a far end that may stay unreachable must not cost a completed batch its renames.', content: { 'application/json': { schema: ShellyErrorResponse.extend({ total: z.number().int().optional(), updated: z.number().int().optional(), unchanged: z.number().int().optional(), unresolved: z.number().int().optional(), write_failures: z.number().int().optional(), partial: z.literal(true).optional() }).openapi('ShellySyncNamesPartialError') } } },
+  },
+})
+
+// ============================================================================
+// Shelly groups (SHELLYGROUPS.5) — a named set of channels at one location,
+// scheduled and switched as one. Same permission, tag, envelope convention and
+// 404 rule as the device routes above; no route accepts a location_id.
+// ============================================================================
+
+const ShellyGroupCreate = ShellyGroupCreateRaw.extend({}).openapi('ShellyGroupCreate', {
+  description: 'Create a group. Only name is required; icon defaults to "bulb" and the schedule fields default to '
+    + 'mig 776\'s (enabled false, schedule_mode "none"), so a new group is inert. Names are unique per location '
+    + 'case-insensitively. Strict: an unknown key (a location_id included) is a 400.',
+})
+const ShellyGroupPatch = ShellyGroupPatchRaw.extend({}).openapi('ShellyGroupPatch', {
+  description: 'Every field optional, strict, and an empty body is a 400 ("Nothing to update"). The schedule fields '
+    + 'mean exactly what they mean on a device (ShellyDevicePatch): class_rule is { lead_min, lag_min, '
+    + 'merge_gap_min, days }. It is PARTIAL here: merged onto the stored rule, the merged rule validated (a 400 '
+    + 'names the field), with defaults 15 / 10 / 30 / every day for anything neither side has.',
+})
+const ShellyGroupMembers = ShellyGroupMembersRaw.extend({}).openapi('ShellyGroupMembers', {
+  description: 'The group\'s WHOLE membership, replacing what was there; [] empties it. At most '
+    + MAX_DEVICES_PER_LOCATION + ' ids, each listed once.',
+})
+const ShellyGroupToggle = ShellyGroupToggleRaw.extend({}).openapi('ShellyGroupToggle', {
+  description: 'Exactly the device toggle body (ShellyToggleBody): state on | off | auto, and an optional `until` '
+    + '(any ISO offset, normalised to UTC) bounded at ' + MAX_OVERRIDE_HOURS + ' hours. No `until` = the '
+    + 'location\'s next local midnight.',
+})
+const ShellyPreviewQuery = ShellyPreviewQueryRaw.extend({}).openapi('ShellyPreviewQuery', {
+  description: 'date: a real calendar date, YYYY-MM-DD, in the location\'s calendar; absent or blank = today there.',
+})
+
+const ShellyGroupNow = z.object({
+  on_count: z.number().int(),
+  member_count: z.number().int(),
+  mode: z.enum(['override', 'window', 'idle', 'none']),
+  until: z.string().datetime().nullable(),
+  next_on: z.string().datetime().nullable(),
+  windows_unread: z.literal(true).optional(),
+}).openapi('ShellyGroupNow', {
+  description: 'What the group is doing now (describeGroupNow). on_count counts members whose LAST READING says '
+    + 'output true — an unknown reading is not on. mode: "override" (a live group override; until = its end), '
+    + '"none" (disabled or no schedule), "window" (inside a resolved window; until = its end) or "idle" (next_on = '
+    + 'the next window today, or null). windows_unread: the timetable could not be read for a class-mode group, '
+    + 'so no times are claimed.',
+})
+
+const ShellyGroup = z.object({
+  id: uuidLike,
+  location_id: uuidLike,
+  name: z.string(),
+  icon: z.enum(SHELLY_GROUP_ICONS),
+  sort_order: z.number().int(),
+  enabled: z.boolean(),
+  schedule_mode: z.enum(['none', 'fixed', 'class']),
+  fixed_windows: z.array(ShellyWindow),
+  class_rule: z.object({
+    lead_min: z.number().int().optional(),
+    lag_min: z.number().int().optional(),
+    merge_gap_min: z.number().int().optional(),
+    days: z.array(z.number().int()).optional(),
+  }),
+  override: z.object({
+    state: z.enum(['on', 'off']),
+    until: z.string().datetime(),
+    set_by: uuidLike,
+    set_at: z.string().datetime(),
+  }).nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+}).openapi('ShellyGroup', {
+  description: 'One group — GROUP_COLUMNS (src/lib/shelly/effective.js) minus last_applied, the engine\'s '
+    + 'exactly-once bookkeeping. created_by is never returned.',
+})
+
+const ShellyGroupListed = ShellyGroup.extend({
+  device_ids: z.array(uuidLike),
+  now: ShellyGroupNow,
+}).openapi('ShellyGroupListed')
+
+const ShellyGroupToggleResponse = z.object({
+  success: z.literal(true),
+  applied: z.union([z.enum(['all', 'partial', 'none']), z.null()]),
+  pending_device_ids: z.array(uuidLike),
+  pending: z.literal(true).optional(),
+  code: z.enum(['key_rejected', 'rate_limited', 'bad_host', 'pending', 'device_refused']).optional(),
+  kind: z.string().optional(),
+  message: z.string().optional(),
+  // Alongside code "device_refused": Shelly's own permanent error string.
+  shelly_code: z.string().optional(),
+  // On/off path, when not every member landed: why, per member. `permanent`
+  // true = Shelly refused it with a code waiting cannot fix (check the device
+  // in the Shelly app); false = it will follow once it answers.
+  pending_members: z.array(z.object({
+    device_id: uuidLike,
+    code: z.string(),
+    shelly_code: z.string().optional(),
+    permanent: z.boolean(),
+  })).optional(),
+  reason: z.enum(['disabled', 'no_schedule']).optional(),
+  results: z.array(z.object({
+    device_id: uuidLike,
+    applied: z.enum(['on', 'off']).nullable(),
+    reason: z.string().optional(),
+    code: z.string().optional(),
+    shelly_code: z.string().optional(),
+    permanent: z.boolean().optional(),
+  })).optional(),
+  holds_until_changed: z.boolean().optional(),
+  notice: z.string().optional(),
+  group: ShellyGroup,
+}).openapi('ShellyGroupToggleResponse')
+
+const groupErr = (description) => ({ description, content: { 'application/json': { schema: ShellyErrorResponse } } })
+const groupCommon = {
+  401: groupErr('Not signed in'),
+  403: groupErr('Missing device_control permission'),
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/groups',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'This location\'s Shelly groups, with members and what each is doing now (device_control)',
+  description: 'Sorted by sort_order, then name. `now` is resolved by the same engine call the cron makes for a '
+    + 'grouped device, for the location\'s day. A timetable that cannot be read does not fail the list: class-mode '
+    + 'groups carry windows_unread instead of an invented time.',
+  responses: {
+    200: { description: 'The groups', content: { 'application/json': { schema: z.object({ success: z.literal(true), groups: z.array(ShellyGroupListed) }).openapi('ShellyGroupListResponse') } } },
+    400: groupErr('Caller has no active location'),
+    ...groupCommon,
+    500: groupErr('The groups or their members could not be read'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/groups',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Create a Shelly group (device_control)',
+  request: { body: { content: { 'application/json': { schema: ShellyGroupCreate } } } },
+  responses: {
+    201: { description: 'Created, with device_ids []', content: { 'application/json': { schema: z.object({ success: z.literal(true), group: ShellyGroup.extend({ device_ids: z.array(uuidLike) }) }).openapi('ShellyGroupCreateResponse') } } },
+    400: groupErr('Validation failed (unknown key, bad icon, blank name) or no active location'),
+    ...groupCommon,
+    409: groupErr('code: "name_taken" (another group at this location has that name in any case; also the answer to a raw unique violation) or "group_limit" (the location holds the most groups the reconcile serves)'),
+    500: groupErr('Database error'),
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/shelly/groups/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Rename a group, change its icon or order, or edit its schedule (device_control)',
+  description: 'Writes settings only; no relay moves. Switching a running schedule off (or to "none") leaves every '
+    + 'member as it is, and the response then carries a `notice` saying so.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupPatch } } } },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), group: ShellyGroup, notice: z.string().optional() }).openapi('ShellyGroupPatchResponse') } } },
+    400: groupErr('Validation failed or no active location'),
+    ...groupCommon,
+    404: groupErr('Malformed id, an id at another location, or a row deleted mid-request — one identical body'),
+    409: groupErr('code: "name_taken"'),
+    500: groupErr('Database error'),
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/shelly/groups/{id}',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Remove a group (device_control)',
+  description: 'Members are released by the foreign key (ON DELETE SET NULL) and keep their rows and energy '
+    + 'history. Nothing is switched: they fall back to their own schedule, which joining cleared, so they stay as '
+    + 'they are.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Removed', content: { 'application/json': { schema: z.object({ success: z.literal(true), message: z.string() }).openapi('ShellyGroupDeleteResponse') } } },
+    400: groupErr('No active location'),
+    ...groupCommon,
+    404: groupErr('Malformed id or an id at another location — one identical body'),
+    500: groupErr('Database error'),
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/shelly/groups/{id}/devices',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Set a group\'s membership (device_control)',
+  description: 'Every id must be a device at the caller\'s location, or the whole request is a 404 and nothing '
+    + 'changes. A device joining has its own schedule cleared (schedule_mode "none", no windows, empty class '
+    + 'rule; enabled kept) and follows the group\'s; a device moving from another group simply joins. A device '
+    + 'leaving gets group_id null and nothing else. No relay is commanded.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupMembers } } } },
+  responses: {
+    200: { description: 'Saved', content: { 'application/json': { schema: z.object({ success: z.literal(true), group: ShellyGroup, device_ids: z.array(uuidLike), joined: z.array(uuidLike), left: z.array(uuidLike) }).openapi('ShellyGroupMembersResponse') } } },
+    400: groupErr('Validation failed (duplicate or malformed id, over the cap) or no active location'),
+    ...groupCommon,
+    404: groupErr('The group, or ANY listed device, is malformed, at another location or does not exist — one identical body, and nothing written'),
+    500: groupErr('A read or write failed; code "partial" when the joins landed and the removals did not'),
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/shelly/groups/{id}/toggle',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Switch a whole group on or off for a while, or hand it back to its schedule — the group wins (device_control)',
+  description: 'Order: (1) the group override is written (intent, before any command); (2) every member\'s own '
+    + 'device override is cleared — if that write fails the request is a 500 and nothing is sent; (3) ONE '
+    + 'set/groups call over the members, switches and lights together (none at all for an empty group); (4) each '
+    + 'member that landed is stamped; (5) members that did not land are listed in pending_device_ids — the cron '
+    + 'applies the group override to them. "auto" clears the group override and the member overrides, then runs '
+    + 'each member through the group\'s schedule now, one at a time.',
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: ShellyGroupToggle } } } },
+  responses: {
+    200: { description: 'applied "all" (every member moved, or the group is empty), "partial" (some members are pending — named in pending_device_ids) or "none" (the batch did not land; the override IS saved). Not-all answers carry `pending_members` (code, shelly_code, permanent). On "auto": the group schedule is planned once and sent as ONE batch; per-member `results`, or applied null with reason disabled / no_schedule for a group with nothing to go back to. holds_until_changed true means the group is unmanaged and `until` bounds the banner, not the relays.', content: { 'application/json': { schema: ShellyGroupToggleResponse } } },
+    400: groupErr('Validation failed, `until` already passed or more than ' + MAX_OVERRIDE_HOURS + ' hours out, or no active location'),
+    ...groupCommon,
+    404: groupErr('Malformed id or an id at another location — one identical body; nothing written'),
+    409: groupErr('code: "not_connected" — nothing written'),
+    429: { description: 'code "rate_limited" on the on/off path: the SUCCESS body (success:true, applied "none", pending) — the override is saved; back off rather than re-press', content: { 'application/json': { schema: ShellyGroupToggleResponse } } },
+    500: groupErr('A read failed, the group override write failed (nothing was switched), or code "member_overrides_not_cleared" (the group override is saved/cleared but members keep their own switch; nothing was sent)'),
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/shelly/preview',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'One day of the schedule: classes and each group\'s windows (device_control)',
+  description: 'Computed by the same engine call the cron makes (resolveServeWindows on each group for the '
+    + 'location\'s day, fixed windows including the previous evening\'s tail). The date must be within 60 days '
+    + 'of today. ignored_overrides lists groups with a live override the strip does not draw.',
+  request: { query: ShellyPreviewQuery },
+  responses: {
+    200: { description: 'The day', content: { 'application/json': { schema: z.object({
+      success: z.literal(true),
+      date: z.string(),
+      classes: z.array(z.object({ starts_at: z.string().datetime(), ends_at: z.string().datetime().nullable(), name: z.string().nullable() })),
+      groups: z.array(z.object({ id: uuidLike, windows: z.array(z.object({ on_at: z.string().datetime(), off_at: z.string().datetime() })) })),
+      ignored_overrides: z.array(uuidLike),
+    }).openapi('ShellyPreviewResponse') } } },
+    400: groupErr('A malformed or impossible date, a date more than 60 days away, or no active location'),
+    ...groupCommon,
+    500: groupErr('The groups could not be read'),
+    502: groupErr('code "occurrences" — the timetable for that day could not be read; never drawn as an empty day'),
   },
 })
 
@@ -11884,6 +12317,69 @@ registry.registerPath({
 import { unstable_cache } from 'next/cache'
 
 let cachedSpec = null
+
+// USAGE.1 — app usage: the staff trackers' ingest and the platform console's
+// master-only report (/admin/app-usage).
+registry.registerPath({
+  method: 'post',
+  path: '/api/usage/events',
+  tags: ['App usage'],
+  summary: 'Record one app usage batch (session + feature visits) from a staff phone or browser',
+  description: 'Session cookie or mobile Bearer JWT. Masters, view-as and support sessions answer recorded:false and write nothing. Times are clamped to the server clock; ids are client-minted so a re-send upserts.',
+  security: [{ CookieAuth: [] }],
+  request: { body: { content: { 'application/json': { schema: usageEventsSchema } } } },
+  responses: {
+    200: { description: '{ recorded: true, visits } or { recorded: false, reason }' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Not recorded; the client keeps the batch and retries', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/app-usage',
+  tags: ['App usage'],
+  summary: 'App usage report: people or features for a range (master only)',
+  security: [{ CookieAuth: [] }],
+  request: {
+    query: z.object({
+      range: z.enum(['today', '7d', '30d', '90d', '12m']).optional(),
+      platform: z.enum(['all', 'phone', 'web']).optional(),
+      organization_id: uuidLike.optional(),
+      location_id: uuidLike.optional(),
+      view: z.enum(['people', 'features']).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Rows and totals' },
+    400: { description: 'Studio outside the chosen organisation', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master (or viewing as someone)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/app-usage/{profileId}',
+  tags: ['App usage'],
+  summary: "One person's app usage by feature, and one day's session timeline (master only)",
+  security: [{ CookieAuth: [] }],
+  request: {
+    params: z.object({ profileId: uuidLike }),
+    query: z.object({
+      range: z.enum(['today', '7d', '30d', '90d', '12m']).optional(),
+      platform: z.enum(['all', 'phone', 'web']).optional(),
+      organization_id: uuidLike.optional(),
+      location_id: uuidLike.optional(),
+      day: isoDate.optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Feature rows, the timeline and whether the day is still within the 90-day detail window' },
+    403: { description: 'Not a master (or viewing as someone)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown person, or outside the chosen organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 function buildSpec() {
   const generator = new OpenApiGeneratorV31(registry.definitions)

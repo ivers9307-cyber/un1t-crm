@@ -159,6 +159,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // Mig 092 split: orders used to inherit `events|car_processing`
   // OR via the sidebar. Standalone key lets a location hide /orders
   // even if they have race events or car processing on.
+  { key: 'class_fees', label: 'Class fees',                      hint: 'Review the nightly late-cancellation and no-show fees at a un1t.online studio, waive them before they are charged, and retry an outstanding fee from the member profile. Owner/master/manager by default.' },
   { key: 'orders',     label: 'Orders',                          hint: 'Unified revenue view across race signups + car deposits (mig 085). Refund + retry-recovery flows live here.' },
   { key: 'car_processing', label: 'Car Processing',             hint: 'Tesla import tracker (CCF Autos). Off by default at user level — enable per user.' },
   // SPEND.P3 — company-card receipts. Permission gates SUBMISSION (who
@@ -346,6 +347,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     presentations: true,
+    class_fees: true,
     orders: true, car_processing: true,
     card_receipts: true,
     invoices_inbox: true,
@@ -379,6 +381,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
+    class_fees: false,
     orders: false, car_processing: false,         // financial views off by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
@@ -416,6 +419,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
+    class_fees: false,
     orders: false, car_processing: false,
     card_receipts: false,
     invoices_inbox: false,
@@ -452,6 +456,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: true,
+    class_fees: false,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
@@ -487,6 +492,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // off — those are owner/master decisions.
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
     presentations: true,
+    class_fees: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
@@ -522,6 +528,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // master-only on first install; owners can opt-in per user.
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
     presentations: true,
+    class_fees: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
@@ -769,6 +776,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // nobody else (bit app_update and test within a day of each other).
   { key: 'notify_inspection_due',     label: '… Equipment inspections due', hint: 'Notify on your studio inspection day when equipment is due to be checked', mobileOnly: true, isNotify: true },
   { key: 'notify_inspection_overdue', label: '… Inspections not done',      hint: 'Notify owners when equipment was due for inspection and no one submitted it', mobileOnly: true, isNotify: true },
+  // SHELLYALERTS.2 — Shelly smart-plug health (owners + managers by default):
+  // the studio's key stopped working, a device offline 15 minutes, or a
+  // device reporting a power fault. Registered for the same fails-closed
+  // reason as the two above.
+  { key: 'notify_shelly_alert', label: '… Smart plug alerts', hint: 'Shelly key rejected, a device offline for 15 minutes, or a power fault', mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -809,6 +821,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_checklist_overdue: true, notify_checklist_compliance: true,
     notify_issue_submitted: true, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: true,
+    notify_shelly_alert: true,
   },
   staff: {
     hyrox: false,
@@ -854,6 +867,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // own reports.
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: false,
   },
   // Reception — staff-level mobile access + the WhatsApp inbox and
   // the operator bookings view (today/tomorrow is the desk's core
@@ -894,6 +908,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_checklist_overdue: true, notify_checklist_compliance: false,
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: false,
   },
   head_coach: {
     hyrox: true,
@@ -936,6 +951,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // routing) but can be granted via per-user opt-in.
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: false,
   },
   manager: {
     hyrox: true,
@@ -980,6 +996,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // routing) but resolved stays on (parity-superset of staff).
     notify_issue_submitted: false, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: false,
+    notify_shelly_alert: true,
   },
   owner: {
     hyrox: true,
@@ -1024,6 +1041,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // the studio" routing decision in REPORT-ISSUE.1).
     notify_issue_submitted: true, notify_issue_resolved: true,
     notify_inspection_due: true, notify_inspection_overdue: true,
+    notify_shelly_alert: true,
   },
 })
 

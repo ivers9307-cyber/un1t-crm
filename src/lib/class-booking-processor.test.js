@@ -17,6 +17,8 @@ vi.mock('@/lib/glofox', async (importOriginal) => {
     GLOFOX_BOOKING_MODEL: 'event',
   }
 })
+// PAIDTRIALONLY.1 — the studio's paid trial reply is not set here: new people mint with the trial.
+vi.mock('@/lib/whatsapp-flow/booking-notice', async (o) => ({ ...(await o()), readPaidTrialReply: vi.fn(async () => null) }))
 vi.mock('@/lib/glofox-sync', () => ({ computeCreditsRemaining: vi.fn(() => 3) }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'created', glofox_member_id: 'gm1' })) }))
 vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })), CLASS_CONFIRM_TEMPLATE: 'booking_class_confirmed_' }))

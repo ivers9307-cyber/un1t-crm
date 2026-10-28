@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId,
+  normaliseGetItem, normaliseGetItems, normaliseAllStatus, stateFromReading, stateChanged, groupId,
   resolveDeviceName, nameShapeDiagnostic, rawItemsOf, rawItemId,
   normaliseDeviceListNames, deviceListShapeDiagnostic,
 } from './status'
@@ -22,7 +22,7 @@ describe('normaliseGetItems', () => {
   it('normalises a Plug S with every field, lowercasing the id', () => {
     const [d] = normaliseGetItems([plugS])
     expect(d).toMatchObject({ device_id: 'a8032abe41fc', online: true, gen: 2, model: 'SNPL-00112EU', name: 'Treadmill 1', supported: true })
-    expect(d.channels).toEqual([{ channel: 0, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in' }])
+    expect(d.channels).toEqual([{ kind: 'switch', brightness: null, channel: 0, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in' }])
   })
   it('expands a Pro 4PM into four channels', () => {
     const [d] = normaliseGetItems([pro4pm])
@@ -212,6 +212,40 @@ describe('parser deviations from the plan draft, pinned (SHELLY.4b)', () => {
 // app, and no warning out of the adopt route — `settings` came back and the
 // label was not where nameFrom looks. These pin the wider net, and pin the
 // diagnostic that will tell us which arm the live account actually needs.
+
+// SHELLYLIGHTNAMES.1 — a 4-light RGBW PM names each output under light:N, the
+// way a Pro 4PM names switch:N. Live gate 2026-10-26: Stillorgan's two
+// controllers adopted as eight rows wearing the box name (one row with none).
+describe('resolveDeviceName for lights (SHELLYLIGHTNAMES.1)', () => {
+  const item = (over) => ({ id: 'aabbccddeeff', gen: 2, online: 1, status: {}, ...over })
+  const fourLights = (names) => item({
+    settings: {
+      DeviceInfo: { name: 'Box' },
+      ...Object.fromEntries(names.map((n, i) => [`light:${i}`, { name: n }])),
+    },
+  })
+
+  it('a multi-light device names each light from its own light:N', () => {
+    const it4 = fourLights(['Mirror', 'Ceiling', 'Lockers', 'Showers'])
+    expect(resolveDeviceName(it4, 2, 'light')).toBe('Lockers')
+    expect(resolveDeviceName(it4, 3, 'light')).toBe('Showers')
+  })
+
+  it('a light with no output name falls back to the box name, like a relay', () => {
+    expect(resolveDeviceName(fourLights(['Mirror', null, 'Lockers', 'Showers']), 1, 'light')).toBe('Box')
+  })
+
+  it('rgbw:0 / rgb:0 name channel 0 of a single-light profile when nothing box-level exists', () => {
+    expect(resolveDeviceName(item({ settings: { 'rgbw:0': { name: 'Strip' } } }), 0, 'light')).toBe('Strip')
+    expect(resolveDeviceName(item({ settings: { 'rgb:0': { name: 'Strip' } } }), 0, 'light')).toBe('Strip')
+  })
+
+  it('a switch never reads a light label, and the default kind is switch', () => {
+    const both = item({ settings: { 'switch:0': { name: 'Relay A' }, 'switch:1': { name: 'Relay B' }, 'light:0': { name: 'Lamp' } } })
+    expect(resolveDeviceName(both, 0)).toBe('Relay A')
+    expect(resolveDeviceName(both, 0, 'light')).toBe('Lamp')
+  })
+})
 
 describe('resolveDeviceName (SHELLY-NAMES.1)', () => {
   const item = (over) => ({ id: 'aabbccddeeff', gen: 2, online: 1, status: {}, ...over })
@@ -526,5 +560,165 @@ describe('deviceListShapeDiagnostic (SHELLY-NAMES.3) — keys only, never values
     expect(deviceListShapeDiagnostic({ isok: true, data: {} })).toMatchObject({ devicesType: 'undefined', entryCount: 0 })
     expect(deviceListShapeDiagnostic(null)).toMatchObject({ bodyKeys: [], dataKeys: [], devicesType: 'undefined', entryCount: 0 })
     expect(deviceListShapeDiagnostic({ data: { devices: [7] } })).toMatchObject({ devicesType: 'array', entryCount: 1, entryKeys: [] })
+  })
+})
+
+describe('light components (SHELLYLIGHT.1)', () => {
+  it('reads light:N components as lights with brightness', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: {
+      'light:0': { output: true, brightness: 40, apower: 12.5, aenergy: { total: 3 } },
+      'light:1': { output: false, brightness: 100 } } })
+    expect(r.supported).toBe(true)
+    expect(r.channels).toEqual([
+      expect.objectContaining({ kind: 'light', channel: 0, output: true, brightness: 40, apower: 12.5, aenergy_wh: 3 }),
+      expect.objectContaining({ kind: 'light', channel: 1, output: false, brightness: 100, apower: null }),
+    ])
+  })
+  it('reads rgb:0 and rgbw:0 profiles as a single light on channel 0', () => {
+    for (const key of ['rgb:0', 'rgbw:0']) {
+      const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { [key]: { output: true, brightness: 70 } } })
+      expect(r.channels).toEqual([expect.objectContaining({ kind: 'light', channel: 0, output: true, brightness: 70 })])
+    }
+  })
+  it('keeps one row when a device reports both rgb:0 and rgbw:0 (rgbw wins)', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: {
+      'rgb:0': { output: false, brightness: 10 }, 'rgbw:0': { output: true, brightness: 90 } } })
+    expect(r.channels).toEqual([expect.objectContaining({ kind: 'light', channel: 0, output: true, brightness: 90 })])
+  })
+  it('lists switches and lights together', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'switch:0': { output: true }, 'light:0': { output: false, brightness: 5 } } })
+    expect(r.channels.map((c) => c.kind).sort()).toEqual(['light', 'switch'])
+  })
+  it('a switch channel carries kind switch and brightness null', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 3, online: 1, status: { 'switch:0': { output: true } } })
+    expect(r.channels[0]).toMatchObject({ kind: 'switch', brightness: null })
+  })
+  it('an absent brightness is null, not 0', () => {
+    const r = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'light:0': { output: true, brightness: null } } })
+    expect(r.channels[0].brightness).toBeNull()
+  })
+  it('discovery offers the RGBW PM (light only) as supported, one row per light', () => {
+    const rows = normaliseAllStatus({ data: { devices_status: { abc: { _dev_info: { gen: 2, code: 'SNDC-0D4P10WW' }, 'rgbw:0': { output: false } } } } })
+    expect(rows).toEqual([expect.objectContaining({ device_id: 'abc', channel: 0, kind: 'light', supported: true })])
+  })
+  it('stateFromReading matches on kind too, and keeps brightness', () => {
+    const reading = { online: true, channels: [{ kind: 'light', channel: 0, output: true, brightness: 55, apower: null, aenergy_wh: null, temperature_c: null, source: 'cloud' }] }
+    expect(stateFromReading(null, reading, 0, 'T', 'light')).toMatchObject({ online: true, output: true, brightness: 55 })
+    expect(stateFromReading(null, reading, 0, 'T', 'switch')).toMatchObject({ online: true, output: null })
+  })
+  it('a switch last_state carries no brightness; an offline light keeps its last one', () => {
+    const sw = normaliseGetItem({ id: 'abc', gen: 2, online: 1, status: { 'switch:0': { output: true } } })
+    expect(stateFromReading(null, sw, 0, 'T')).not.toHaveProperty('brightness')
+    const off = { online: false, channels: [] }
+    expect(stateFromReading({ brightness: 33, output: true }, off, 0, 'T', 'light')).toMatchObject({ online: false, output: true, brightness: 33 })
+  })
+  it('a brightness change alone is a state change', () => {
+    const a = { online: true, output: true, brightness: 40, apower: null, aenergy_wh: null, temperature_c: null, source: 'cloud', at: '2026-01-01T00:00:00Z' }
+    expect(stateChanged(a, { ...a, brightness: 41 })).toBe(true)
+    expect(stateChanged(a, { ...a })).toBe(false)
+  })
+})
+
+// SHELLYTIMERS.4 — the device's own running timer, read into last_state so the
+// live check can see a safety cap reached the plug.
+describe('timer_until (SHELLYTIMERS.4)', () => {
+  const STARTED = Date.parse('2026-07-06T10:00:00.000Z') / 1000
+  const withTimer = (sw) => ({ ...plugS, status: { 'switch:0': { ...plugS.status['switch:0'], ...sw } } })
+
+  it('a running timer lands as timer_until = started + duration (ISO)', () => {
+    const r = normaliseGetItems([withTimer({ timer_started_at: STARTED + 0.25, timer_duration: 5400, timer_type: 'toggle' })])[0]
+    expect(r.channels[0].timer_until).toBe('2026-07-06T11:30:00.250Z')
+    expect(stateFromReading(null, r, 0, 'T1')).toEqual({
+      online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', timer_until: '2026-07-06T11:30:00.250Z', at: 'T1',
+    })
+  })
+
+  it('a light reads it too', () => {
+    const r = normaliseGetItems([{ id: 'abcabcabcabc', gen: 2, online: 1, status: { 'light:0': { output: true, brightness: 50, timer_started_at: STARTED, timer_duration: 60 } } }])[0]
+    expect(stateFromReading(null, r, 0, 'T1', 'light').timer_until).toBe('2026-07-06T10:01:00.000Z')
+  })
+
+  it('no timer, or an unreadable one: the key is ABSENT (exact shape kept)', () => {
+    for (const sw of [{}, { timer_started_at: STARTED }, { timer_duration: 60 }, { timer_started_at: 'x', timer_duration: 60 },
+      { timer_started_at: STARTED, timer_duration: 0 }, { timer_started_at: STARTED, timer_duration: -5 }, { timer_started_at: 0, timer_duration: 60 },
+      { timer_started_at: STARTED, timer_duration: Infinity }, { timer_started_at: 1e20, timer_duration: 60 }]) {
+      const r = normaliseGetItems([withTimer(sw)])[0]
+      expect(r.channels[0]).not.toHaveProperty('timer_until')
+      expect(stateFromReading(null, r, 0, 'T1')).not.toHaveProperty('timer_until')
+    }
+  })
+
+  it('offline keeps a known timer_until; online with no timer drops it', () => {
+    const prev = { online: true, output: true, apower: 1, aenergy_wh: 1, temperature_c: 1, source: 'x', timer_until: '2026-07-06T11:30:00.000Z', at: 'T1' }
+    expect(stateFromReading(prev, normaliseGetItems([offline])[0], 0, 'T2').timer_until).toBe('2026-07-06T11:30:00.000Z')
+    expect(stateFromReading(prev, normaliseGetItems([plugS])[0], 0, 'T2')).not.toHaveProperty('timer_until')
+  })
+
+  it('stateChanged notices a timer starting, ending or moving', () => {
+    const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
+    const later = '2026-07-06T10:01:00.000Z'
+    expect(stateChanged(base, { ...base, at: later, timer_until: '2026-07-06T11:30:00.000Z' })).toBe(true)
+    expect(stateChanged({ ...base, timer_until: '2026-07-06T11:30:00.000Z' }, { ...base, at: later })).toBe(true)
+    expect(stateChanged({ ...base, timer_until: 'A' }, { ...base, at: later, timer_until: 'B' })).toBe(true)
+    expect(stateChanged({ ...base, timer_until: 'A' }, { ...base, at: later, timer_until: 'A' })).toBe(false)
+  })
+})
+
+// SHELLYALERTS.1 — the device's own power-fault flags (`errors` on a switch or
+// a light), read into last_state so the alert pass can push about them.
+describe('errors (SHELLYALERTS.1)', () => {
+  const withSw = (sw) => ({ ...plugS, status: { 'switch:0': { ...plugS.status['switch:0'], ...sw } } })
+
+  it('a fault lands as errors: a sorted, de-duplicated list of strings', () => {
+    const r = normaliseGetItems([withSw({ errors: ['overtemp', 'overpower', 'overtemp'] })])[0]
+    expect(r.channels[0].errors).toEqual(['overpower', 'overtemp'])
+    expect(stateFromReading(null, r, 0, 'T1')).toEqual({
+      online: true, output: true, apower: 412.3, aenergy_wh: 11679.5, temperature_c: 41.2, source: 'WS_in', errors: ['overpower', 'overtemp'], at: 'T1',
+    })
+  })
+
+  it('a light reads it too', () => {
+    const r = normaliseGetItems([{ id: 'abcabcabcabc', gen: 2, online: 1, status: { 'light:0': { output: false, brightness: 50, errors: ['overvoltage'] } } }])[0]
+    expect(stateFromReading(null, r, 0, 'T1', 'light').errors).toEqual(['overvoltage'])
+  })
+
+  it('no errors, an empty list or junk: the key is ABSENT (exact shape kept)', () => {
+    for (const sw of [{}, { errors: [] }, { errors: null }, { errors: 'overpower' }, { errors: [1, null, '', '  ', {}] }, { errors: {} }]) {
+      const r = normaliseGetItems([withSw(sw)])[0]
+      expect(r.channels[0]).not.toHaveProperty('errors')
+      expect(stateFromReading(null, r, 0, 'T1')).not.toHaveProperty('errors')
+    }
+  })
+
+  it('junk entries are dropped, real ones kept and trimmed; the list is capped', () => {
+    const r = normaliseGetItems([withSw({ errors: [' overpower ', 7, '', 'undervoltage'] })])[0]
+    expect(r.channels[0].errors).toEqual(['overpower', 'undervoltage'])
+    const many = normaliseGetItems([withSw({ errors: Array.from({ length: 30 }, (_, i) => `e${String(i).padStart(2, '0')}`) })])[0]
+    expect(many.channels[0].errors).toHaveLength(8)
+    const long = normaliseGetItems([withSw({ errors: ['x'.repeat(200)] })])[0]
+    expect(long.channels[0].errors[0]).toHaveLength(40)
+  })
+
+  it('known power faults are kept first, so the cap never drops one behind junk (review item 7)', () => {
+    const junk = Array.from({ length: 12 }, (_, i) => `aa${String(i).padStart(2, '0')}`)
+    const r = normaliseGetItems([withSw({ errors: [...junk, 'undervoltage', 'overpower'] })])[0]
+    expect(r.channels[0].errors).toHaveLength(8)
+    expect(r.channels[0].errors.slice(0, 2)).toEqual(['overpower', 'undervoltage'])
+    expect(r.channels[0].errors.slice(2)).toEqual(junk.slice(0, 6))
+  })
+
+  it('offline keeps known errors; online with none drops them', () => {
+    const prev = { online: true, output: false, apower: 0, aenergy_wh: 1, temperature_c: 1, source: 'x', errors: ['overpower'], at: 'T1' }
+    expect(stateFromReading(prev, normaliseGetItems([offline])[0], 0, 'T2').errors).toEqual(['overpower'])
+    expect(stateFromReading(prev, normaliseGetItems([plugS])[0], 0, 'T2')).not.toHaveProperty('errors')
+  })
+
+  it('stateChanged notices a fault appearing, clearing or changing', () => {
+    const base = { online: true, output: true, apower: 100, aenergy_wh: 10, temperature_c: 40, source: 'x', at: '2026-07-06T10:00:00.000Z' }
+    const later = '2026-07-06T10:01:00.000Z'
+    expect(stateChanged(base, { ...base, at: later, errors: ['overpower'] })).toBe(true)
+    expect(stateChanged({ ...base, errors: ['overpower'] }, { ...base, at: later })).toBe(true)
+    expect(stateChanged({ ...base, errors: ['overpower'] }, { ...base, at: later, errors: ['overpower', 'overtemp'] })).toBe(true)
+    expect(stateChanged({ ...base, errors: ['overpower'] }, { ...base, at: later, errors: ['overpower'] })).toBe(false)
   })
 })

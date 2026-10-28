@@ -95,6 +95,33 @@ async function studioCopy(db, locationId) {
 
 const operatorText = (settings, key) => (typeof settings?.[key] === 'string' ? settings[key].trim() : '')
 
+/** PAIDTRIALONLY.1 — the studio's paid trial reply could not be read. The queue retries it. */
+export class PaidTrialReplyReadError extends Error {
+  constructor(reason) {
+    super(`paid trial reply unreadable (${reason})`)
+    this.name = 'PaidTrialReplyReadError'
+    this.code = 'paid_trial_reply_unreadable'
+  }
+}
+
+/**
+ * PAIDTRIALONLY.1 — the studio's flow_paid_trial_text, or null when it is not
+ * set (new people are booked with the free trial, as before). Unlike
+ * studioCopy this never falls back: an unreadable setting THROWS, so the
+ * queue retries rather than give a free trial the studio may have retired.
+ * @returns {Promise<string|null>}
+ * @throws {PaidTrialReplyReadError}
+ */
+export async function readPaidTrialReply(db, locationId) {
+  const { resolveAgentSettings } = await import('@/lib/agent/settings-resolve')
+  const resolved = await resolveAgentSettings(db, locationId)
+  if (!resolved?.ok) throw new PaidTrialReplyReadError(resolved?.reason || 'unknown')
+  const text = operatorText(resolved.settings, 'flow_paid_trial_text')
+  if (!text) return null
+  const { stripEmDashes } = await import('@/lib/agent/core')
+  return stripEmDashes(text).trim() || null
+}
+
 async function confirmationText(settings, { className, classTime }) {
   const { buildBookingConfirmationText } = await import('@/lib/agent/notify')
   return buildBookingConfirmationText({ className, classTime, template: operatorText(settings, 'booking_confirmation_text') || null })
@@ -201,9 +228,11 @@ async function linkCardToThread(db, { approvalId, conversationId, log }) {
  *   needs_review  link the staff card (approvalId) to the thread, then the
  *                 holding line
  *   failed        the holding line; with no card behind it, logged at error
+ *   paid_trial    PAIDTRIALONLY.1: `text` (the studio's paid trial reply);
+ *                 nothing was booked and there is no card
  * @returns {Promise<{ flow: boolean, sent: boolean, stamped?: boolean, reason?: string }>}
  */
-export async function notifyFlowBookingOutcome(db, request, { outcome, approvalId = null, classTime = null } = {}) {
+export async function notifyFlowBookingOutcome(db, request, { outcome, approvalId = null, classTime = null, text: givenText = null } = {}) {
   const log = { requestId: request?.id ?? null, locationId: request?.location_id ?? null, outcome }
   try {
     const thread = await findFlowThread(db, request)
@@ -214,13 +243,19 @@ export async function notifyFlowBookingOutcome(db, request, { outcome, approvalI
     // approve/decline notices, and a lost stamp must not lose the line.
     let stamped
     if (approvalId) stamped = await linkCardToThread(db, { approvalId, conversationId, log })
-    else if (outcome !== 'booked') {
+    else if (outcome !== 'booked' && outcome !== 'paid_trial') {
       logError(LOG, 'Flow booking ended with no staff card; the customer is told the team will confirm', { ...log, conversationId })
     }
 
     const { settings, timezone } = await studioCopy(db, request.location_id)
     let text
-    if (outcome === 'booked') {
+    if (outcome === 'paid_trial') {
+      text = String(givenText || '').trim()
+      if (!text) {
+        logError(LOG, 'paid trial outcome with no text; nothing sent', { ...log, conversationId })
+        return { flow: true, sent: false, reason: 'no_text' }
+      }
+    } else if (outcome === 'booked') {
       let label = classTime
       if (!label) {
         const { classLabel } = await import('@/lib/class-booking-processor')

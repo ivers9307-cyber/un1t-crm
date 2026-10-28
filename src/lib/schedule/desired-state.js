@@ -15,8 +15,9 @@
 //     name THROWS a RangeError. This engine is the pure core: it has no
 //     way to interpret 'Europe/Dubln' and does not invent one.
 //   • That throw can only reach a path that resolves a wall-clock, which
-//     means FIXED mode. A disabled device, schedule_mode 'none', a live
-//     override and CLASS mode never touch the zone at all — class windows
+//     means FIXED mode (or CLASS mode with a restricted `days` list, which reads
+//     the occurrence's local weekday). A disabled device, schedule_mode 'none', a live
+//     override and unrestricted CLASS mode never touch the zone at all — class windows
 //     come from occurrence INSTANTS, which are already absolute — so they
 //     answer normally even when handed a garbage zone. That is not
 //     tolerance, it is just that nothing asked.
@@ -50,14 +51,17 @@
 // the LOCATION-WIDE timetable (class_occurrences has no zone column —
 // mirrors class-climate exactly). Class windows are derived from
 // occurrence INSTANTS, which are already absolute, so `tz` moves fixed
-// windows only.
+// windows only — plus the class `days` filter, which reads each
+// occurrence's LOCAL weekday in `tz` (only when days is restricted).
+// Class mode makes one window per class (start - lead .. end + lag), joined
+// when the gap to the next is <= merge_gap_min.
 
 // TZ.10 — the zone maths is @shared/zoned-time's (tz-time was its shim). Not
 // @/lib/location-time: SonosScheduleClient imports this engine into the
 // browser bundle, and location-time carries the DB side. Every caller passes
 // the location's zone (tests/climate-zone-callers.test.js); the default below
 // is only the engine's convention for "no zone given".
-import { addDaysISO, zonedWallClockToInstant, strictDayStartMsIn as dayStartMsInTz, DEFAULT_TZ } from '@shared/zoned-time'
+import { addDaysISO, zonedWallClockToInstant, strictDayStartMsIn as dayStartMsInTz, dateKeyIn, DEFAULT_TZ } from '@shared/zoned-time'
 
 // tz-time's wallMsInTz, kept exact: HH:MM only (zonedWallClockToInstant also
 // takes a Postgres TIME's HH:MM:SS, which a window boundary never is).
@@ -66,6 +70,10 @@ const wallMsInTz = (dateStr, hhmm, tz) => (HHMM.test(String(hhmm ?? '')) ? zoned
 
 const DEFAULT_LEAD_MIN = 15
 const DEFAULT_LAG_MIN = 10
+// Class mode switches per class; gaps up to this many minutes between one
+// class's lag and the next class's lead are bridged (no off/on flap).
+// Mirrored in src/lib/shelly/schemas.js, pinned by schemas.test.js.
+export const DEFAULT_MERGE_GAP_MIN = 30
 
 // "No zone given" → Dublin. Deliberately NOT a validity check: anything else is
 // handed to Intl as-is, so an invalid name surfaces as a RangeError rather than
@@ -125,16 +133,30 @@ export function resolveDayWindows(device, dateStr, occurrences = [], tz = DEFAUL
   }
 
   if (device.schedule_mode === 'class') {
-    const live = (occurrences || []).filter(o => o && !o.cancelled_at)
-    if (!live.length) return []
-    const starts = live.map(o => new Date(o.starts_at).getTime())
-    const ends = live.map(o => new Date(o.ends_at || o.starts_at).getTime())
-    const lead = Number(device.class_rule?.lead_min ?? DEFAULT_LEAD_MIN)
-    const lag = Number(device.class_rule?.lag_min ?? DEFAULT_LAG_MIN)
-    return [{
-      on_at: Math.min(...starts) - lead * 60 * 1000,
-      off_at: Math.max(...ends) + lag * 60 * 1000,
-    }]
+    const rule = device.class_rule || {}
+    const lead = Number(rule.lead_min ?? DEFAULT_LEAD_MIN) * 60 * 1000
+    const lag = Number(rule.lag_min ?? DEFAULT_LAG_MIN) * 60 * 1000
+    const gap = Number(rule.merge_gap_min ?? DEFAULT_MERGE_GAP_MIN) * 60 * 1000
+    // Weekday filter. A full (or absent) set needs no zone, so class mode
+    // still answers for a garbage zone unless the operator restricted days.
+    const days = Array.isArray(rule.days) && rule.days.length && rule.days.length < 7 ? rule.days : null
+    const spans = []
+    for (const o of occurrences || []) {
+      if (!o || o.cancelled_at) continue
+      const start = new Date(o.starts_at).getTime()
+      if (Number.isNaN(start)) continue
+      if (days && !days.includes(isoDow(dateKeyIn(start, zone)))) continue
+      const end = new Date(o.ends_at || o.starts_at).getTime()
+      spans.push({ on_at: start - lead, off_at: (Number.isNaN(end) ? start : end) + lag })
+    }
+    spans.sort((x, y) => x.on_at - y.on_at)
+    const out = []
+    for (const w of spans) {
+      const last = out[out.length - 1]
+      if (last && w.on_at - last.off_at <= gap) last.off_at = Math.max(last.off_at, w.off_at)
+      else out.push({ ...w })
+    }
+    return out
   }
 
   return []

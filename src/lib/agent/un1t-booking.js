@@ -78,6 +78,7 @@ import { parseAgentId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { openUn1tMemberReader, fetchLiveUn1tBookings, fetchLiveEntitlement } from './un1t-member-read'
 import { UN1T_BOOKED_STATUS, UN1T_EVENT_SCHEDULED_STATUS, zoneFor } from './un1t-tools'
+import { lateCancelQuote, lateCancelWarning } from '@/lib/class-fees-quote'
 
 const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
@@ -838,13 +839,42 @@ async function classOfBooking(db, ctx, studio, row, input) {
 }
 
 /**
+ * FEES.2 — the late-cancel quote for one booking, or null when it could not
+ * be worked out (a failed read never stops a cancellation).
+ */
+async function quoteLateCancel(db, studio, reader, row, bookingId, startsAt, contactId = null) {
+  const readWindowHours = async () => {
+    if (!reader?.ok || !reader.studioId) return null
+    const s = await reader.getOne(`/studios/${encodeURIComponent(reader.studioId)}`)
+    const h = Number(s?.default_cancelation_window_hours)
+    return Number.isFinite(h) && h > 0 ? h : null
+  }
+  try {
+    return await lateCancelQuote(db, {
+      locationId: studio.locationId,
+      un1tUserId: studio.un1tUserId,
+      contactId,
+      bookingId,
+      eventId: row ? (liveEventId(row) ?? null) : null,
+      startsAt,
+      creditCharged: row?.credit_charged === true,
+      readWindowHours,
+    })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'late-cancel quote failed; cancelling without a warning', { locationId: studio.locationId, op: 'cancel_quote', status: null, errClass: err?.name, code: err?.code ?? null })
+    return null
+  }
+}
+
+/**
  * cancel_class_booking for a `un1t:` booking id at one un1t.online studio.
  *
  * @param {object} ctx tool context (db, verifiedContactId, locationId, zone,
  *   settings, actionStudio, channel, conversationId, nameHint)
- * @param {{ booking_id: string, class_name?: string, class_time?: string }} input
+ * @param {{ booking_id: string, class_name?: string, class_time?: string, confirm_late_fee?: boolean }} input
  * @param {import('./member-studios').MemberStudio} studio the answerable un1t.online studio
  * @returns {Promise<object>} one of: { cancelled: true, class_name, class_time },
+ *   { cancelled: false, needs_confirmation: 'late_cancel_fee', message } (FEES.2: nothing sent),
  *   { cancelled: false, error: 'CANCELLATION_UNCERTAIN', reason: 'not_found'|'read_failed' },
  *   { cancelled: false, refused: 'late_cancel'|'already_happened', message },
  *   { cancelled: false, pending_approval: true }, { cancelled: false, try_again: true },
@@ -877,6 +907,16 @@ export async function un1tCancelBooking(ctx, input, studio) {
   }
 
   const { className, classTime, startsAt } = await classOfBooking(db, ctx, studio, row, input)
+
+  // FEES.2 — inside the studio's window, a fee (or the credit) is lost: the
+  // member hears it first, and Mia cancels only on an explicit second call
+  // with confirm_late_fee. An unreadable quote never blocks the cancel.
+  if (input?.confirm_late_fee !== true) {
+    const quote = await quoteLateCancel(db, studio, reader, row, bookingId, startsAt, executingContactOf(ctx, studio))
+    if (quote?.applies) {
+      return { cancelled: false, needs_confirmation: 'late_cancel_fee', class_name: className, class_time: classTime, message: lateCancelWarning(quote) }
+    }
+  }
   const executingContactId = executingContactOf(ctx, studio)
   const mode = modeOf(settings)
   const details = (extra = {}) => ({

@@ -34,6 +34,13 @@
 //     forces, so the planner cannot answer a no-op for a managed device, and
 //     SHELLY-UI.9b removed the string that claimed otherwise.
 //
+//  5. A GROUPED DEVICE FOLLOWS ITS GROUP (SHELLYGROUPS.8). Its own
+//     enabled/schedule columns are not what runs it, and the PATCH route
+//     refuses schedule fields on it (409 `grouped`), so the card shows
+//     "Follows <group>" in place of the editor and the "Schedule on" box, and
+//     judges "managed" (the presets, the hint, Run now) on the GROUP. The
+//     on/off switch, energy, rename and remove stay: they are the device's.
+//
 // Two destructive-ish actions are two-step: Remove (the energy history goes
 // with the row — ON DELETE CASCADE, mig 562) and, on the connection panel,
 // Disconnect.
@@ -95,8 +102,10 @@ const DURATIONS = [
 const placeholderName = (device) => `${device.model || 'Shelly'} · ${String(device.device_id || '').slice(-4)}`
 
 // The relay, as a word. The tri-state is the whole point — see rule 1.
-function outputLabel(output) {
-  if (output === true) return 'On'
+function outputLabel(output, brightness, kind) {
+  // A light says how bright it is; a switch never does, even if a stray
+  // brightness key rode in on its state.
+  if (output === true) return kind === 'light' && typeof brightness === 'number' ? `On · ${Math.round(brightness)}%` : 'On'
   if (output === false) return 'Off'
   return 'Unknown'
 }
@@ -139,7 +148,7 @@ export function overrideUntilLabel(iso, nowMs, tz = DEFAULT_TZ) {
   return `${weekday} ${time}`
 }
 
-export default function ShellyDeviceCard({ device, connected, locationTz = DEFAULT_TZ, glofoxConnected, glofoxUnknown = false, onChanged }) {
+export default function ShellyDeviceCard({ device, group = null, connected, locationTz = DEFAULT_TZ, glofoxConnected, glofoxUnknown = false, onChanged }) {
   const [renaming, setRenaming] = useState(false)
   const [nameDraft, setNameDraft] = useState(device.name || '')
   // WHICH action is in flight, not merely "an action is". A boolean would put
@@ -160,8 +169,17 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
 
   const nowMs = Date.now()
   const health = deviceHealth(device, { connected, nowMs })
-  const managed = Boolean(device.enabled) && device.schedule_mode !== 'none'
+  // Rule 5: a member is judged on its group. A group we have not read yet is
+  // not assumed managed: no countdown is promised on a guess.
+  const grouped = Boolean(device.group_id)
+  const scheduleOwner = grouped ? group : device
+  const managed = Boolean(scheduleOwner?.enabled) && scheduleOwner?.schedule_mode !== 'none'
   const state = device.last_state || {}
+  // SHELLYNOPOWER.1 — some hardware meters nothing (Stillorgan's Men's
+  // Changing Room RGBW PM reports neither watts nor an energy counter). Only an
+  // ONLINE reading with both absent says so; an offline row's nulls are "we
+  // heard nothing", not "it cannot meter" (status.js rule 2).
+  const noPower = state.online === true && state.apower == null && state.aenergy_wh == null
   // The route's answer when we have one, our own predicate otherwise. They
   // agree by construction (both read `enabled` and `schedule_mode`), so this
   // only matters in the window where the row on screen is older than the
@@ -343,8 +361,10 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
 
   const runNowTitle = connected === false
     ? 'Connect your Shelly account first'
-    : device.schedule_mode === 'none' ? 'This plug has no schedule to apply'
-      : !device.enabled ? 'Turn the schedule on first' : undefined
+    : grouped ? (managed ? undefined : 'Its group has no schedule to apply')
+      : device.schedule_mode === 'none' ? 'This plug has no schedule to apply'
+        : !device.enabled ? 'Turn the schedule on first' : undefined
+  const runNowDisabled = connected === false || (grouped ? !managed : (!device.enabled || device.schedule_mode === 'none'))
 
   const resultClass = result?.tone === 'error'
     ? 'text-red-700'
@@ -402,9 +422,9 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
 
       {/* ——— what it is doing ————————————————————————————————————— */}
       <p className="text-xs text-un1t-subtle">
-        <span className="font-medium text-un1t-text">{outputLabel(state.output)}</span>
+        <span className="font-medium text-un1t-text">{outputLabel(state.output, state.brightness, device.kind)}</span>
         {' · '}
-        {typeof state.apower === 'number' ? `${Math.round(state.apower)} W` : '—'}
+        {typeof state.apower === 'number' ? `${Math.round(state.apower)} W` : noPower ? 'Doesn’t report power' : '—'}
         {state.at ? ` · ${formatRelative(state.at)}` : ''}
       </p>
 
@@ -446,7 +466,10 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
           </>
         )}
       </div>
-      {!managed && <p className="text-xs text-un1t-subtle">{UNMANAGED_HINT}</p>}
+      {!managed && !grouped && <p className="text-xs text-un1t-subtle">{UNMANAGED_HINT}</p>}
+      {!managed && grouped && group && (
+        <p className="text-xs text-un1t-subtle">No schedule runs {group.name} — this device stays as you set it until you change it.</p>
+      )}
 
       {result && (
         <p className={`flex items-start gap-1 text-xs ${resultClass}`} role="status">
@@ -457,47 +480,60 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
 
       {/* ——— the schedule ————————————————————————————————————————— */}
       <div className="border-t border-un1t-border/60 pt-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <label
-            className="inline-flex items-center gap-1.5 text-xs text-un1t-text"
-            title={canEnable ? undefined
-              : glofoxUnknown && device.schedule_mode === 'class' ? GLOFOX_UNKNOWN_HINT
-                : 'Add a window (or connect a membership source with a class schedule for class mode) first'}
-          >
-            <input
-              type="checkbox"
-              checked={Boolean(device.enabled)}
-              // Only the ENABLE direction needs a schedule to enable; turning
-              // one off must never be blocked by the state it is in.
-              disabled={busy === 'enabled' || (!device.enabled && !canEnable)}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            Schedule on
-          </label>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon={Play}
-            loading={busy === 'run'}
-            // `connected === false`, NOT `!== true`: an UNKNOWN connection is
-            // our read failing, not the studio's, and the whole point of that
-            // third state is that it disables nothing. If it turns out there
-            // really is no connection, run-now answers its own 409
-            // `not_connected` with copy the operator can act on.
-            disabled={!device.enabled || device.schedule_mode === 'none' || connected === false}
-            title={runNowTitle}
-            onClick={runNow}
-          >
-            Run now
-          </Button>
-        </div>
-        <div className="mt-2">
-          <ShellyScheduleEditor device={device} glofoxConnected={glofoxConnected} glofoxUnknown={glofoxUnknown} onSave={patch} />
-        </div>
+        {grouped ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="rounded-full bg-un1t-muted/10 px-2 py-0.5 text-[11px] font-medium text-un1t-subtle">
+              {group?.name ? `Follows ${group.name}` : 'Follows its group'}
+            </span>
+            <Button size="sm" variant="ghost" icon={Play} loading={busy === 'run'} disabled={runNowDisabled} title={runNowTitle} onClick={runNow}>
+              Run now
+            </Button>
+          </div>
+        ) : (
+          <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label
+              className="inline-flex items-center gap-1.5 text-xs text-un1t-text"
+              title={canEnable ? undefined
+                : glofoxUnknown && device.schedule_mode === 'class' ? GLOFOX_UNKNOWN_HINT
+                  : 'Add a window (or connect a membership source with a class schedule for class mode) first'}
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(device.enabled)}
+                // Only the ENABLE direction needs a schedule to enable; turning
+                // one off must never be blocked by the state it is in.
+                disabled={busy === 'enabled' || (!device.enabled && !canEnable)}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              Schedule on
+            </label>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Play}
+              loading={busy === 'run'}
+              // `connected === false`, NOT `!== true`: an UNKNOWN connection is
+              // our read failing, not the studio's, and the whole point of that
+              // third state is that it disables nothing. If it turns out there
+              // really is no connection, run-now answers its own 409
+              // `not_connected` with copy the operator can act on.
+              disabled={runNowDisabled}
+              title={runNowTitle}
+              onClick={runNow}
+            >
+              Run now
+            </Button>
+          </div>
+          <div className="mt-2">
+            <ShellyScheduleEditor device={device} glofoxConnected={glofoxConnected} glofoxUnknown={glofoxUnknown} onSave={patch} />
+          </div>
+          </>
+        )}
       </div>
 
       {/* ——— energy ——————————————————————————————————————————————— */}
-      <div className="border-t border-un1t-border/60 pt-3">
+      {!noPower && <div className="border-t border-un1t-border/60 pt-3">
         <button
           type="button"
           onClick={() => setShowEnergy((v) => !v)}
@@ -510,7 +546,7 @@ export default function ShellyDeviceCard({ device, connected, locationTz = DEFAU
         {/* Mounted only when open — the fetch lives in the chart, so a page of
             ten devices costs zero energy queries until someone asks. */}
         {showEnergy && <div className="mt-2"><ShellyEnergyChart deviceId={device.id} /></div>}
-      </div>
+      </div>}
 
       {/* ——— remove ——————————————————————————————————————————————— */}
       <div className="border-t border-un1t-border/60 pt-3">

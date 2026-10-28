@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeTimeline, timelineFilterGroup, deriveNeedsAttention } from './contact-view'
+import { mergeTimeline, timelineFilterGroup, deriveNeedsAttention, studioNameMap } from './contact-view'
 
 describe('mergeTimeline', () => {
   it('merges notes and activities newest-first with type tags', () => {
@@ -97,5 +97,26 @@ describe('deriveNeedsAttention', () => {
       openTasks: [{ id: 't1', subject: 'Call', due_date: '2026-07-10' }],
     })
     expect(items).toEqual([])
+  })
+})
+
+describe('studioNameMap (CARDLENS.2)', () => {
+  const row = (id, name) => ({ location_id: id, location: { name } })
+  it('maps each studio to a short name when the person has two or more', () => {
+    expect(studioNameMap([row('s', 'UN1T Stillorgan'), row('h', 'UN1T Hatch Street')]))
+      .toEqual({ s: 'Stillorgan', h: 'Hatch Street' })
+  })
+  it('is empty for a person with one studio, so no tag renders', () => {
+    expect(studioNameMap([row('s', 'UN1T Stillorgan')])).toEqual({})
+    expect(studioNameMap([])).toEqual({})
+    expect(studioNameMap(null)).toEqual({})
+  })
+  it('keeps full names when they share no leading word', () => {
+    expect(studioNameMap([row('a', 'CCF Autos'), row('s', 'UN1T Stillorgan')]))
+      .toEqual({ a: 'CCF Autos', s: 'UN1T Stillorgan' })
+  })
+  it('never shortens a name to nothing', () => {
+    expect(studioNameMap([row('a', 'UN1T'), row('b', 'UN1T Hatch Street')]))
+      .toEqual({ a: 'UN1T', b: 'UN1T Hatch Street' })
   })
 })

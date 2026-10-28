@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resolveDayWindows } from '@/lib/schedule/desired-state'
+import { resolveDayWindows, DEFAULT_MERGE_GAP_MIN as ENGINE_MERGE_GAP_MIN } from '@/lib/schedule/desired-state'
 import { MAX_DEVICES } from './reconcile'
 import { normaliseShellyHost } from './client'
 import {
@@ -12,6 +12,8 @@ import {
   MAX_CLASS_LEAD_LAG_MIN,
   DEFAULT_LEAD_MIN,
   DEFAULT_LAG_MIN,
+  DEFAULT_MERGE_GAP_MIN,
+  ALL_DAYS,
   ShellyWindow,
   ShellyClassRule,
   ShellyConnectionPut,
@@ -21,6 +23,13 @@ import {
   ShellyEnergyQuery,
   ShellySyncNamesBody,
   ShellyOverride,
+  ShellyGroupCreate,
+  ShellyGroupPatch,
+  ShellyGroupMembers,
+  ShellyGroupToggle,
+  ShellyPreviewQuery,
+  SHELLY_GROUP_ICONS,
+  MAX_GROUP_NAME,
 } from './schemas'
 
 const win = (over = {}) => ({ days: [1], on: '09:00', off: '17:00', ...over })
@@ -144,7 +153,10 @@ describe('ShellyWindow', () => {
 
 describe('ShellyClassRule', () => {
   it('defaults to the engine fallbacks, not zero', () => {
-    expect(ShellyClassRule.parse({})).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN })
+    expect(ShellyClassRule.parse({})).toEqual({ lead_min: 15, lag_min: 10, merge_gap_min: 30, days: [1, 2, 3, 4, 5, 6, 7] })
+    expect(ShellyClassRule.parse({})).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: ALL_DAYS })
+    expect(DEFAULT_MERGE_GAP_MIN).toBe(30)
+    expect(DEFAULT_MERGE_GAP_MIN).toBe(ENGINE_MERGE_GAP_MIN)
     expect(DEFAULT_LEAD_MIN).toBe(15)
     expect(DEFAULT_LAG_MIN).toBe(10)
   })
@@ -168,8 +180,51 @@ describe('ShellyClassRule', () => {
     expect(defaulted[0].off_at).toBe(Date.parse('2026-08-24T10:10:00.000Z'))
   })
 
+  it('merge_gap_min is bounded 0..180 and an int', () => {
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 0 }).success).toBe(true)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 180 }).success).toBe(true)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 181 }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: -1 }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ merge_gap_min: 1.5 }).success).toBe(false)
+  })
+
+  it('days: refuses empty with a human message, out-of-range, and duplicates', () => {
+    const empty = ShellyClassRule.safeParse({ days: [] })
+    expect(empty.success).toBe(false)
+    expect(empty.error.issues[0].message).toBe('Pick at least one day')
+    expect(ShellyClassRule.safeParse({ days: [8] }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ days: [0] }).success).toBe(false)
+    expect(ShellyClassRule.safeParse({ days: [1, 1] }).success).toBe(false)
+    expect(ShellyClassRule.parse({ days: [1, 3] }).days).toEqual([1, 3])
+  })
+
+  it('ALL_DAYS is frozen, and every default is a fresh copy of it', () => {
+    expect(Object.isFrozen(ALL_DAYS)).toBe(true)
+    const one = ShellyClassRule.parse({}).days
+    const two = ShellyClassRule.parse({}).days
+    expect(one).toEqual(ALL_DAYS)
+    expect(one).not.toBe(ALL_DAYS)
+    expect(one).not.toBe(two)
+    // A caller mutating its parsed rule cannot reach the next caller's default.
+    one.push(8)
+    expect(ShellyClassRule.parse({}).days).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('a default-parsed rule resolves the same windows as an absent one, with several classes and days', () => {
+    const occurrences = [
+      { starts_at: '2026-08-24T06:00:00.000Z', ends_at: '2026-08-24T06:45:00.000Z' },
+      { starts_at: '2026-08-24T07:10:00.000Z', ends_at: '2026-08-24T08:00:00.000Z' },
+      { starts_at: '2026-08-24T17:00:00.000Z', ends_at: '2026-08-24T18:00:00.000Z' },
+    ]
+    const base = { enabled: true, schedule_mode: 'class' }
+    const absent = resolveDayWindows(base, '2026-08-24', occurrences)
+    const defaulted = resolveDayWindows({ ...base, class_rule: ShellyClassRule.parse({}) }, '2026-08-24', occurrences)
+    expect(defaulted).toEqual(absent)
+    expect(absent).toHaveLength(2)
+  })
+
   it('accepts an explicit zero — an operator who wants no lead gets no lead', () => {
-    expect(ShellyClassRule.parse({ lead_min: 0, lag_min: 0 })).toEqual({ lead_min: 0, lag_min: 0 })
+    expect(ShellyClassRule.parse({ lead_min: 0, lag_min: 0 })).toEqual({ lead_min: 0, lag_min: 0, merge_gap_min: 30, days: ALL_DAYS })
   })
 
   it('bounds lead and lag at both edges', () => {
@@ -393,7 +448,7 @@ describe('ShellyDevicePatch', () => {
   it('applies the class-rule defaults through the patch', () => {
     const r = ShellyDevicePatch.safeParse({ schedule_mode: 'class', class_rule: {} })
     expect(r.success).toBe(true)
-    expect(r.data.class_rule).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN })
+    expect(r.data.class_rule).toEqual({ lead_min: DEFAULT_LEAD_MIN, lag_min: DEFAULT_LAG_MIN, merge_gap_min: DEFAULT_MERGE_GAP_MIN, days: ALL_DAYS })
   })
 
   it('rejects an out-of-range class rule through the patch, at the nested path', () => {
@@ -554,5 +609,102 @@ describe('ShellyOverride', () => {
   it('rejects a set_by that is not uuid-shaped', () => {
     expect(ShellyOverride.safeParse({ ...valid, set_by: 'system' }).success).toBe(false)
     expect(ShellyOverride.safeParse({ ...valid, set_by: '' }).success).toBe(false)
+  })
+})
+
+// ================================================================== SHELLYGROUPS.5
+describe('ShellyGroupCreate', () => {
+  it('takes a name, defaults the icon, and trims', () => {
+    const r = ShellyGroupCreate.safeParse({ name: '  Gym floor ' })
+    expect(r.success).toBe(true)
+    expect(r.data).toEqual({ name: 'Gym floor', icon: 'bulb' })
+  })
+  it('refuses a blank or over-long name with operator copy', () => {
+    expect(issuesOf(ShellyGroupCreate.safeParse({ name: '  ' }))[0].message).toBe('Give the group a name')
+    expect(ShellyGroupCreate.safeParse({ name: rep(MAX_GROUP_NAME) }).success).toBe(true)
+    expect(ShellyGroupCreate.safeParse({ name: rep(MAX_GROUP_NAME + 1) }).success).toBe(false)
+  })
+  it('only knows the five icons', () => {
+    for (const icon of SHELLY_GROUP_ICONS) expect(ShellyGroupCreate.safeParse({ name: 'x', icon }).success).toBe(true)
+    expect(ShellyGroupCreate.safeParse({ name: 'x', icon: 'rocket' }).success).toBe(false)
+  })
+  it('is strict: an unknown key (or a location_id) is a 400, never dropped', () => {
+    expect(ShellyGroupCreate.safeParse({ name: 'x', location_id: 'a0000000-0000-0000-0000-000000000001' }).success).toBe(false)
+  })
+  it('accepts a schedule using the device vocabulary', () => {
+    const r = ShellyGroupCreate.safeParse({ name: 'x', enabled: true, schedule_mode: 'class', class_rule: {} })
+    expect(r.success).toBe(true)
+    expect(r.data.class_rule).toEqual({ lead_min: 15, lag_min: 10, merge_gap_min: 30, days: ALL_DAYS })
+  })
+})
+
+describe('ShellyGroupPatch', () => {
+  it('400s an empty patch', () => {
+    expect(issuesOf(ShellyGroupPatch.safeParse({}))[0].message).toBe('Nothing to update')
+  })
+  it('re-uses the window overlap check', () => {
+    const r = ShellyGroupPatch.safeParse({ fixed_windows: [win(), win({ on: '10:00', off: '12:00' })] })
+    expect(r.success).toBe(false)
+  })
+  it('takes sort_order and refuses a negative one', () => {
+    expect(ShellyGroupPatch.safeParse({ sort_order: 3 }).success).toBe(true)
+    expect(ShellyGroupPatch.safeParse({ sort_order: -1 }).success).toBe(false)
+  })
+  it('is strict', () => {
+    expect(ShellyGroupPatch.safeParse({ nmae: 'typo' }).success).toBe(false)
+  })
+  // The route MERGES a partial rule onto the stored one, so the patch schema
+  // must not fill defaults: { lead_min: 20 } defaulted would reset days and
+  // merge_gap_min to the engine's.
+  it('takes a PARTIAL class_rule without filling defaults', () => {
+    expect(ShellyGroupPatch.parse({ class_rule: { lead_min: 20 } }).class_rule).toEqual({ lead_min: 20 })
+  })
+  it('still bounds every class_rule field', () => {
+    expect(ShellyGroupPatch.safeParse({ class_rule: { lead_min: 181 } }).success).toBe(false)
+    expect(ShellyGroupPatch.safeParse({ class_rule: { days: [] } }).success).toBe(false)
+    expect(ShellyGroupPatch.safeParse({ class_rule: { days: [1, 1] } }).success).toBe(false)
+  })
+})
+
+describe('ShellyGroupMembers', () => {
+  const A = 'd0000000-0000-4000-8000-00000000000a'
+  const B = 'd0000000-0000-4000-8000-00000000000b'
+  it('takes a list of ids, empty included (that empties the group)', () => {
+    expect(ShellyGroupMembers.safeParse({ device_ids: [A, B] }).success).toBe(true)
+    expect(ShellyGroupMembers.safeParse({ device_ids: [] }).success).toBe(true)
+  })
+  it('refuses duplicates, junk and more than the device cap', () => {
+    expect(ShellyGroupMembers.safeParse({ device_ids: [A, A] }).success).toBe(false)
+    expect(ShellyGroupMembers.safeParse({ device_ids: ['nope'] }).success).toBe(false)
+    const many = Array.from({ length: MAX_DEVICES_PER_LOCATION + 1 }, (_, i) => `d0000000-0000-4000-8000-${String(i).padStart(12, '0')}`)
+    expect(ShellyGroupMembers.safeParse({ device_ids: many }).success).toBe(false)
+  })
+  it('is strict', () => {
+    expect(ShellyGroupMembers.safeParse({ device_ids: [], extra: 1 }).success).toBe(false)
+  })
+})
+
+describe('ShellyGroupToggle', () => {
+  it('is the device toggle body: state, optional until normalised to Z', () => {
+    const r = ShellyGroupToggle.safeParse({ state: 'on', until: '2026-08-23T18:00:00+01:00' })
+    expect(r.data).toEqual({ state: 'on', until: '2026-08-23T17:00:00.000Z' })
+    expect(ShellyGroupToggle.safeParse({ state: 'auto' }).success).toBe(true)
+    expect(ShellyGroupToggle.safeParse({ state: 'toggle' }).success).toBe(false)
+    expect(ShellyGroupToggle.safeParse({ state: 'on', untill: 'x' }).success).toBe(false)
+  })
+})
+
+describe('ShellyPreviewQuery', () => {
+  it('absorbs an absent or blank date', () => {
+    expect(ShellyPreviewQuery.parse({ date: null })).toEqual({})
+    expect(ShellyPreviewQuery.parse({ date: '' })).toEqual({})
+  })
+  it('takes a real calendar date only', () => {
+    expect(ShellyPreviewQuery.parse({ date: '2026-10-31' })).toEqual({ date: '2026-10-31' })
+    for (const bad of ['2026-02-30', '2026-13-01', '31/10/2026', '2026-10-31T00:00', 'today']) {
+      const r = ShellyPreviewQuery.safeParse({ date: bad })
+      expect(r.success, bad).toBe(false)
+      expect(issuesOf(r)[0].message).toBe('Pick a date as YYYY-MM-DD')
+    }
   })
 })

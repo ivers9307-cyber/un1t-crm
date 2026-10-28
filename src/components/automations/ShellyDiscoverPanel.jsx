@@ -70,7 +70,7 @@ export default function ShellyDiscoverPanel({ adoptedIds, onAdopted }) {
     setAdoptError(null)
     const res = await fetchJson(
       '/api/shelly/devices',
-      jsonBody('POST', { device_id: row.device_id, channel: row.channel }),
+      jsonBody('POST', { device_id: row.device_id, channel: row.channel, kind: row.kind || 'switch' }),
     )
     setAdopting(null)
     if (!res.ok || res.json?.success === false) {
@@ -147,6 +147,7 @@ export default function ShellyDiscoverPanel({ adoptedIds, onAdopted }) {
                   return (
                     <div key={key} className="flex flex-wrap items-center gap-2">
                       <span className="text-xs text-un1t-text">Channel {r.channel}</span>
+                      {r.kind === 'light' && <span className={CHIP_GREY}>Light</span>}
                       {adoptedHere && <span className={CHIP_GREY}>Adopted here</span>}
                       {!adoptedHere && r.adopted === 'elsewhere' && (
                         <span className={CHIP_AMBER}>

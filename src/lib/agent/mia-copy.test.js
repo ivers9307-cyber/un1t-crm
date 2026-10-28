@@ -35,7 +35,7 @@ describe('MIA_HATCH_COPY', () => {
 const SLICE2_DEFAULTS = {
   purchase_offer_intro_text: "You've used all your classes. Here's how to keep training with us:",
   purchase_link_text: "Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.",
-  trial_used_text: "It looks like you've had your free trial with us before, so here are the ways to keep training:",
+  trial_used_text: "It looks like you've had your trial with us before, so here are the ways to keep training:",
   refund_request_text: "I've passed that to the team, they'll look at it and get back to you.",
   purchase_link_open_text: "You already have a payment link waiting for {product}. I've asked the team to help you switch, they'll be in touch shortly.",
   purchase_paid_booked_text: "Payment received, thank you! You're booked into {class}. See you there.",

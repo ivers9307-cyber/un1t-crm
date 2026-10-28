@@ -48,16 +48,75 @@ function parseGen(raw) {
   return m ? Number(m[1]) : null
 }
 
-function channelFromSwitch(n, sw) {
+// A relay (`switch`) or a dimmable output (`light`) reads the same fields; a
+// light adds `brightness` (0-100). Absent is not zero (rule 1): a switch has
+// no brightness at all, and a light that omits or nulls it is "unknown", so
+// both land as null, never 0 (a 0 would claim "dimmed to nothing").
+function channelFromComponent(kind, n, sw) {
   const s = isObj(sw) ? sw : {}
+  const timerUntil = timerUntilOf(s)
+  const errors = errorsOf(s)
   return {
+    kind,
     channel: n,
     output: typeof s.output === 'boolean' ? s.output : null,
+    brightness: kind === 'light' ? num(s.brightness) : null,
     apower: num(s.apower),
     aenergy_wh: num(s.aenergy?.total),
     temperature_c: num(s.temperature?.tC),
     source: str(s.source),
+    // Only while a timer runs: the key is ABSENT otherwise, so every row
+    // without one keeps the exact shape it always had.
+    ...(timerUntil ? { timer_until: timerUntil } : {}),
+    // Same exact-shape rule: present only while the device reports a fault.
+    ...(errors ? { errors } : {}),
   }
+}
+
+// SHELLYALERTS.1 — the DEVICE's own fault flags. A Gen2+ switch or light lists
+// `errors` (e.g. 'overpower', 'overtemp', 'overvoltage', 'undervoltage') only
+// while a protection has tripped. Strings only, trimmed, non-blank, de-duped
+// and in a fixed order (known power faults first, each part sorted, so the
+// alert key and stateChanged compare a set, not an arrival order),
+// capped in count and length so a hostile body cannot grow the row. Anything
+// else, or nothing left, is null: the key is then absent.
+const ERRORS_MAX = 8
+const ERROR_LEN_MAX = 40
+// The protections the alert pass pushes about (src/lib/shelly/alerts.js words
+// them). Kept FIRST before the cap, so eight junk codes can never push a real
+// power fault off the end of the list.
+export const POWER_FAULTS = Object.freeze(['overpower', 'overtemp', 'overvoltage', 'undervoltage'])
+function errorsOf(s) {
+  if (!Array.isArray(s.errors)) return null
+  const out = new Set()
+  for (const e of s.errors) {
+    if (typeof e !== 'string') continue
+    const t = e.trim().slice(0, ERROR_LEN_MAX)
+    if (t) out.add(t)
+  }
+  if (!out.size) return null
+  const all = [...out].sort()
+  return [...all.filter((e) => POWER_FAULTS.includes(e)), ...all.filter((e) => !POWER_FAULTS.includes(e))].slice(0, ERRORS_MAX)
+}
+
+// Two error lists as one comparable value (both are already in errorsOf order).
+const errorsKey = (v) => (Array.isArray(v) && v.length ? v.join('|') : null)
+
+// SHELLYTIMERS.4 — the DEVICE's own running timer (our safety cap, or any
+// toggle_after / auto-off). A Gen2+ switch or light reports
+// `timer_started_at` (unix SECONDS, may be fractional) and `timer_duration`
+// (seconds) only while a timer is running. Both must be positive finite
+// numbers; anything else is "no timer we can read", never a guess. This is
+// what proves live that a safety cap reached the device. `timer_type` is not
+// read: when it appears it does not change when the timer ends.
+function timerUntilOf(s) {
+  const started = s.timer_started_at
+  const duration = s.timer_duration
+  if (typeof started !== 'number' || !Number.isFinite(started) || started <= 0) return null
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) return null
+  const ms = Math.round((started + duration) * 1000)
+  const d = new Date(ms)
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
 
 // Canonical `switch:N` only. `\d+` would also take `switch:00`, which parses
@@ -72,16 +131,37 @@ const SWITCH_KEY_RE = /^switch:(0|[1-9]\d*)$/
 // sends, so they say nothing about what this one can do.
 const COMPONENT_INSTANCE_RE = /^[a-z][a-z0-9_]*:\d+$/
 
+// A dimmable output: `light:N` (Plus Dimmer, Mini Dimmer), or the single-light
+// `rgb:0` / `rgbw:0` profiles of a Plus RGBW PM. Same canonical-index rule as
+// SWITCH_KEY_RE, for the same duplicate-row reason.
+const LIGHT_KEY_RE = /^light:(0|[1-9]\d*)$/
+
+// Switches first (by channel), then lights (by channel): a device with both
+// lists both kinds. rgb:0 and rgbw:0 are one physical light in two profiles; if
+// a body reports both, rgbw wins and only one row is kept.
 function switchChannels(status) {
-  const out = []
-  for (const key of Object.keys(isObj(status) ? status : {})) {
-    const m = key.match(SWITCH_KEY_RE)
-    if (m) out.push(channelFromSwitch(Number(m[1]), status[key]))
+  const src = isObj(status) ? status : {}
+  const switches = []
+  const lights = new Map()
+  for (const key of Object.keys(src)) {
+    const sm = key.match(SWITCH_KEY_RE)
+    if (sm) { switches.push(channelFromComponent('switch', Number(sm[1]), src[key])); continue }
+    const lm = key.match(LIGHT_KEY_RE)
+    if (lm) lights.set(Number(lm[1]), channelFromComponent('light', Number(lm[1]), src[key]))
   }
-  return out.sort((a, b) => a.channel - b.channel)
+  if (!lights.has(0)) {
+    if (key0(src, 'rgbw:0')) lights.set(0, channelFromComponent('light', 0, src['rgbw:0']))
+    else if (key0(src, 'rgb:0')) lights.set(0, channelFromComponent('light', 0, src['rgb:0']))
+  }
+  const byChannel = (a, b) => a.channel - b.channel
+  return [...switches.sort(byChannel), ...[...lights.values()].sort(byChannel)]
 }
 
-// `no_switch` is judged on POSITIVE evidence — some component instance is
+// Present (even as an empty/odd value): the key is the evidence the component
+// exists, same as `switch:N`.
+const key0 = (src, k) => Object.prototype.hasOwnProperty.call(src, k)
+
+// `no_switch` (no switch AND no light) is judged on POSITIVE evidence — some component instance is
 // present and none of them is a switch — never on "the body had keys in it".
 // Key-counting looks equivalent and is not: an ordinary offline Plug S comes
 // back as `{_dev_info, cloud:{connected:false}}` (v1) or `{cloud:{}, sys:{}}`
@@ -132,26 +212,39 @@ export function rawItemId(item) {
   return raw ? raw.toLowerCase() : null
 }
 
-// Every `switch:N` key the item mentions, in EITHER half of the payload.
-// `status` alone is not enough: an offline device reports no switch components
-// at all (rule 2) while its `settings` still names all four of a 4PM's
-// outputs — and it is exactly the multi-output case that decides whether the
-// per-output label wins below.
-function switchKeys(item) {
+// Every output key of one KIND the item mentions, in EITHER half of the
+// payload. `status` alone is not enough: an offline device reports no
+// components at all (rule 2) while its `settings` still names all four of a
+// 4PM's outputs — and it is exactly the multi-output case that decides whether
+// the per-output label wins below. SHELLYLIGHTNAMES.1: lights count their own
+// `light:N` keys, so a 4-light RGBW PM names each light the way a 4PM names
+// each relay.
+function outputKeys(item, kind) {
+  const re = kind === 'light' ? LIGHT_KEY_RE : SWITCH_KEY_RE
   const out = new Set()
   for (const bag of [item?.status, item?.settings]) {
     for (const key of Object.keys(isObj(bag) ? bag : {})) {
-      if (SWITCH_KEY_RE.test(key)) out.add(key)
+      if (re.test(key)) out.add(key)
     }
   }
   return [...out]
 }
 
+// The per-output label for one channel of one kind. A light on channel 0 may
+// live under the single-light profiles instead (rgbw wins, as in the reader).
+function perOutputName(settings, kind, ch) {
+  if (kind !== 'light') return str(settings?.[`switch:${ch}`]?.name)
+  return str(settings?.[`light:${ch}`]?.name)
+    ?? (ch === 0 ? str(settings?.['rgbw:0']?.name) ?? str(settings?.['rgb:0']?.name) : null)
+}
+
 /**
  * SHELLY-NAMES.1 — where a Shelly device's human label actually lives.
  *
- * Takes the RAW v2 `get` item (not a normalised row) and the channel being
- * named; returns a trimmed, capped string or null. Pure.
+ * Takes the RAW v2 `get` item (not a normalised row), the channel being
+ * named and the row's kind ('switch' | 'light'; a light reads `light:N`, or
+ * `rgbw:0`/`rgb:0` on channel 0, where a relay reads `switch:N`); returns a
+ * trimmed, capped string or null. Pure.
  *
  * WHY IT IS WIDER THAN nameFrom. nameFrom reads two places
  * (settings.sys.device.name, settings.name) and that matched the documented
@@ -182,12 +275,12 @@ function switchKeys(item) {
  * NEVER returns '' — str() drops blanks, so a factory-blank name falls through
  * to the next source instead of being stored as a name a human chose.
  */
-export function resolveDeviceName(item, channel = 0) {
+export function resolveDeviceName(item, channel = 0, kind = 'switch') {
   const settings = isObj(item?.settings) ? item.settings : null
   const status = isObj(item?.status) ? item.status : null
   const ch = Number.isInteger(channel) && channel >= 0 ? channel : 0
-  const perChannel = str(settings?.[`switch:${ch}`]?.name)
-  const multiRelay = switchKeys(item).length >= 2
+  const perChannel = perOutputName(settings, kind, ch)
+  const multiRelay = outputKeys(item, kind).length >= 2
 
   const picked =
     (multiRelay ? perChannel : null)
@@ -429,13 +522,14 @@ export function normaliseAllStatus(body) {
     }
     // Still emit one row for a device with no channels: the adopt list has to
     // be able to show it and say why it cannot be adopted.
-    if (!channels.length) { rows.push({ ...base, channel: 0, output: null }); continue }
-    for (const c of channels) rows.push({ ...base, channel: c.channel, output: c.output })
+    if (!channels.length) { rows.push({ ...base, channel: 0, kind: 'switch', output: null }); continue }
+    for (const c of channels) rows.push({ ...base, channel: c.channel, kind: c.kind, output: c.output })
   }
   return rows
 }
 
-// next last_state for one adopted row. Offline: keep what we last knew
+// next last_state for one adopted row. `brightness` is part of a LIGHT's
+// state only: a switch's last_state keeps its original shape. Offline: keep what we last knew
 // about output/power, flip online, do NOT advance last_seen_at (caller).
 // A missing reading counts as offline — same conservative treatment, since
 // "we did not hear from it" is all either case actually tells us.
@@ -445,18 +539,25 @@ export function normaliseAllStatus(body) {
 // diffed across that span reads as "0 Wh consumed over N minutes", which is a
 // measurement we never made. Anything differencing energy over time must gate
 // on `online` first (the daily roll does, and is safe).
-export function stateFromReading(prev, reading, channel, atIso) {
+export function stateFromReading(prev, reading, channel, atIso, kind = 'switch') {
   const p = isObj(prev) ? prev : {}
   if (!reading?.online) {
-    return { online: false, output: p.output ?? null, apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
-      temperature_c: p.temperature_c ?? null, source: p.source ?? null, at: atIso }
+    // A known timer is kept like every other last-known value: the device is
+    // still counting it down even while we cannot hear from it.
+    return { online: false, output: p.output ?? null, ...(kind === 'light' ? { brightness: p.brightness ?? null } : {}), apower: p.apower ?? null, aenergy_wh: p.aenergy_wh ?? null,
+      temperature_c: p.temperature_c ?? null, source: p.source ?? null, ...(typeof p.timer_until === 'string' ? { timer_until: p.timer_until } : {}),
+      // A known fault is last-known too; it is cleared only by an online read.
+      ...(Array.isArray(p.errors) && p.errors.length ? { errors: p.errors } : {}), at: atIso }
   }
   // Online but this channel is gone (adopted channel 3, device now reports
   // 0-1): nulls, not stale values — the device is talking and not mentioning
   // it, which is different from having heard nothing.
   const list = Array.isArray(reading.channels) ? reading.channels : []
-  const c = list.find((x) => x?.channel === channel) || channelFromSwitch(channel, null)
-  return { online: true, output: c.output, apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source, at: atIso }
+  const c = list.find((x) => x?.channel === channel && (x?.kind ?? 'switch') === kind)
+    || channelFromComponent(kind, channel, null)
+  return { online: true, output: c.output, ...(kind === 'light' ? { brightness: c.brightness ?? null } : {}), apower: c.apower, aenergy_wh: c.aenergy_wh, temperature_c: c.temperature_c, source: c.source,
+    ...(c.timer_until ? { timer_until: c.timer_until } : {}),
+    ...(c.errors ? { errors: c.errors } : {}), at: atIso }
 }
 
 // Cheap fields are compared exactly; the measured ones get a deadband so a
@@ -480,6 +581,11 @@ const numChanged = (a, b, step) => (a == null) !== (b == null) || (a != null && 
 export function stateChanged(prev, next) {
   if (!isObj(prev) || !isObj(next)) return true
   if (prev.online !== next.online || prev.output !== next.output || prev.source !== next.source) return true
+  if ((prev.brightness ?? null) !== (next.brightness ?? null)) return true
+  // A timer starting, ending or being re-armed is a change (SHELLYTIMERS.4).
+  if ((prev.timer_until ?? null) !== (next.timer_until ?? null)) return true
+  // A fault appearing, clearing or changing is a change (SHELLYALERTS.1).
+  if (errorsKey(prev.errors) !== errorsKey(next.errors)) return true
   if (numChanged(prev.apower, next.apower, APOWER_DEADBAND_W)) return true
   if (numChanged(prev.aenergy_wh, next.aenergy_wh, ENERGY_STEP_WH)) return true
   if (numChanged(prev.temperature_c, next.temperature_c, TEMP_STEP_C)) return true

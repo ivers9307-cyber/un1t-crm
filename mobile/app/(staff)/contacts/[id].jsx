@@ -8,9 +8,10 @@
 //      class bookings — from the denormalised contact columns.
 //   4. CRM event bookings (upcoming/past), whatever RLS lets the caller
 //      read (the mobile `bookings` key at each booking's location).
-//   5. WhatsApp thread deep-link, when RLS returns one (wa_conv_select:
-//      mobile `whatsapp` at the thread's studio). INBOXLOC.1 moved the
-//      thread screen and its routes to the thread's studio too.
+//   5. WhatsApp thread deep-links, whatever RLS returns (wa_conv_select:
+//      mobile `whatsapp` at the thread's studio): the latest thread per
+//      studio, each tagged (CARDLENS-M.3). INBOXLOC.1 moved the thread
+//      screen and its routes to the thread's studio too.
 //   6. Note-first composer + merged notes+activities timeline with
 //      Glofox provenance chips (the drawer bundle route).
 //   7. Send kudos (web-consultations-gated, same as the web card).
@@ -21,16 +22,28 @@
 // contactActionFlags turns them into buttons. Nothing here asks canMobile at
 // the ACTIVE studio; see mobile/lib/contact-actions.js.
 //
+// CARDLENS-M.2 / M.3 — the bundle also says whether to draw the Glofox card
+// (a un1t.online member with no Glofox account gets none) and the short
+// studio names that tag threads, bookings and the timeline for a person at
+// two or more studios (mobile/lib/contact-platform-cards.js).
+//
+// CARDLENS-M.8 — the studio lens: the bundle is fetched with `studio=`
+// (default, then whatever the switcher picks), the server judges every button
+// at that ACTING studio, and WhatsApp, email, notes and tasks are sent for it
+// (location_id), the web contact page's rule. All studios acts nowhere. The
+// cancellation form and kudos stay at the primary studio.
+//
 // Editing contact fields stays on the web — this screen adds read
 // surfaces plus the note + kudos writes only.
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, ActivityIndicator, Pressable, Linking, Alert } from 'react-native'
 import { useLocalSearchParams, useFocusEffect, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {
   getContact, getContactCommandCentre, listBookingsForContact,
-  getWhatsAppThreadForContact, prettyStage, contactDisplayName,
+  listWhatsAppThreadsForContact, prettyStage, contactDisplayName,
 } from '../../../lib/contacts-api'
+import { glofoxCardView, studioTag, latestThreadPerStudio, notePostsToGlofox } from '../../../lib/contact-platform-cards'
 import { contactActionFlags } from '../../../lib/contact-actions'
 import { colors } from '../../../lib/colors'
 import { isoDate } from '../../../lib/dates'
@@ -44,6 +57,9 @@ import ContactComposeModal from '../../../components/ContactComposeModal'
 import ContactGlofoxCard from '../../../components/ContactGlofoxCard'
 import ContactTimelineSection from '../../../components/ContactTimelineSection'
 import SendKudosCard from '../../../components/SendKudosCard'
+import StudioTag from '../../../components/StudioTag'
+import ContactStudioSwitcher from '../../../components/ContactStudioSwitcher'
+import { lensView, DEFAULT_STUDIO } from '../../../lib/contact-studio-lens'
 
 const PAST_BOOKINGS_SHOWN = 8
 
@@ -79,7 +95,7 @@ function fmtBookingDate(dateStr) {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
-function BookingRow({ b, isLast }) {
+function BookingRow({ b, isLast, studioName }) {
   const meta = crmBookingStatusMeta(b.status)
   return (
     <View className={`flex-row items-center justify-between gap-2 px-4 py-3 ${isLast ? '' : 'border-b border-un1t-border'}`}>
@@ -87,10 +103,13 @@ function BookingRow({ b, isLast }) {
         <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
           {b.event_type?.name || 'Event'}
         </Text>
-        <Text className="text-xs text-un1t-subtle mt-0.5">
-          {fmtBookingDate(b.booking_date)}
-          {b.start_time ? ` · ${formatBookingTime(b.start_time)}` : ''}
-        </Text>
+        <View className="flex-row items-center gap-1.5 mt-0.5">
+          <Text className="text-xs text-un1t-subtle">
+            {fmtBookingDate(b.booking_date)}
+            {b.start_time ? ` · ${formatBookingTime(b.start_time)}` : ''}
+          </Text>
+          <StudioTag name={studioName} />
+        </View>
       </View>
       {meta && (
         <View className={`rounded-full px-2 py-0.5 ${meta.cls}`}>
@@ -101,7 +120,7 @@ function BookingRow({ b, isLast }) {
   )
 }
 
-function BookingsSection({ bookings }) {
+function BookingsSection({ bookings, studioNameFor }) {
   const todayStr = isoDate(new Date())
   const { upcoming, past } = splitCrmBookings(bookings, todayStr)
   if (upcoming.length === 0 && past.length === 0) return null
@@ -115,7 +134,7 @@ function BookingsSection({ bookings }) {
         <View className="bg-white border border-un1t-border rounded-2xl overflow-hidden">
           <Text className="text-[10px] uppercase tracking-wider text-un1t-muted px-4 pt-3 pb-1">Upcoming</Text>
           {upcoming.map((b, i) => (
-            <BookingRow key={b.id} b={b} isLast={i === upcoming.length - 1} />
+            <BookingRow key={b.id} b={b} isLast={i === upcoming.length - 1} studioName={studioNameFor(b.location_id)} />
           ))}
         </View>
       )}
@@ -123,7 +142,7 @@ function BookingsSection({ bookings }) {
         <View className={`bg-white border border-un1t-border rounded-2xl overflow-hidden ${upcoming.length > 0 ? 'mt-2' : ''}`}>
           <Text className="text-[10px] uppercase tracking-wider text-un1t-muted px-4 pt-3 pb-1">Past</Text>
           {pastShown.map((b, i) => (
-            <BookingRow key={b.id} b={b} isLast={i === pastShown.length - 1} />
+            <BookingRow key={b.id} b={b} isLast={i === pastShown.length - 1} studioName={studioNameFor(b.location_id)} />
           ))}
         </View>
       )}
@@ -131,35 +150,49 @@ function BookingsSection({ bookings }) {
   )
 }
 
-function WhatsAppThreadRow({ conversation, onPress }) {
+function WhatsAppThreadRow({ conversation, studioName, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={studioName ? `Open WhatsApp conversation at ${studioName}` : 'Open WhatsApp conversation'}
+      className="bg-white border border-un1t-border rounded-2xl px-4 py-3 flex-row items-center gap-3 active:opacity-70"
+    >
+      <Ionicons name="logo-whatsapp" size={20} color="#15803D" />
+      <View className="flex-1 min-w-0">
+        <Text className="text-sm text-un1t-text" numberOfLines={1}>
+          {conversation.last_message_direction === 'outbound' ? 'You: ' : ''}
+          {conversation.last_message_preview || 'No messages yet'}
+        </Text>
+        <View className="flex-row items-center gap-1.5 mt-0.5">
+          <Text className="text-[11px] text-un1t-muted">
+            {conversation.last_message_at ? relativeTime(conversation.last_message_at) : ''}
+          </Text>
+          <StudioTag name={studioName} />
+        </View>
+      </View>
+      {conversation.unread_count > 0 && (
+        <View className="bg-green-600 rounded-full w-5 h-5 items-center justify-center">
+          <Text className="text-[10px] font-bold text-white">{conversation.unread_count}</Text>
+        </View>
+      )}
+      <Ionicons name="chevron-forward" size={16} color={colors.muted} />
+    </Pressable>
+  )
+}
+
+function WhatsAppThreadsSection({ threads, studioNameFor, onOpen }) {
+  if (!threads.length) return null
   return (
     <View className="mt-5">
       <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle px-1 mb-2" accessibilityRole="header">
         WhatsApp
       </Text>
-      <Pressable
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel="Open WhatsApp conversation"
-        className="bg-white border border-un1t-border rounded-2xl px-4 py-3 flex-row items-center gap-3 active:opacity-70"
-      >
-        <Ionicons name="logo-whatsapp" size={20} color="#15803D" />
-        <View className="flex-1 min-w-0">
-          <Text className="text-sm text-un1t-text" numberOfLines={1}>
-            {conversation.last_message_direction === 'outbound' ? 'You: ' : ''}
-            {conversation.last_message_preview || 'No messages yet'}
-          </Text>
-          <Text className="text-[11px] text-un1t-muted mt-0.5">
-            {conversation.last_message_at ? relativeTime(conversation.last_message_at) : ''}
-          </Text>
-        </View>
-        {conversation.unread_count > 0 && (
-          <View className="bg-green-600 rounded-full w-5 h-5 items-center justify-center">
-            <Text className="text-[10px] font-bold text-white">{conversation.unread_count}</Text>
-          </View>
-        )}
-        <Ionicons name="chevron-forward" size={16} color={colors.muted} />
-      </Pressable>
+      <View className="gap-2">
+        {threads.map((c) => (
+          <WhatsAppThreadRow key={c.id} conversation={c} studioName={studioNameFor(c.location_id)} onPress={() => onOpen(c.id)} />
+        ))}
+      </View>
     </View>
   )
 }
@@ -181,8 +214,18 @@ export default function ContactDetail() {
   // A different contact on the same screen instance must never inherit the
   // previous contact's button flags: hide everything until its bundle lands.
   useEffect(() => { setActionPermissions(null) }, [id])
+  // CARDLENS-M.2 / M.3 — the whole drawer bundle: 'loading' until it lands,
+  // 'error' when the first read failed (the screen then renders as before).
+  const [bundle, setBundle] = useState('loading')
+  // CARDLENS-M.8 — the lens asked for; a ref so a reload reads the latest
+  // pick, and a sequence so a slow answer for the previous pick never lands
+  // over the current one.
+  const [studio, setStudio] = useState(DEFAULT_STUDIO)
+  const studioRef = useRef(DEFAULT_STUDIO)
+  const bundleSeq = useRef(0)
+  useEffect(() => { setBundle('loading'); setStudio(DEFAULT_STUDIO); studioRef.current = DEFAULT_STUDIO }, [id])
   const [bookings, setBookings] = useState([])
-  const [waConversation, setWaConversation] = useState(null)
+  const [waThreads, setWaThreads] = useState([])
   // MOBILE-CONTACT-SEND.1 — which channel composer (if any) is open.
   const [composeChannel, setComposeChannel] = useState(null)
 
@@ -219,21 +262,37 @@ export default function ContactDetail() {
   // Timeline bundle — the web drawer's one-round-trip route. Separate
   // from load() so the note composer can refresh just this slice.
   const loadTimeline = useCallback(async () => {
+    const seq = ++bundleSeq.current
     try {
-      const res = await getContactCommandCentre(id)
+      const res = await getContactCommandCentre(id, { studio: studioRef.current })
+      if (seq !== bundleSeq.current) return
       if (res?.success) {
         setNotes(Array.isArray(res.notes) ? res.notes : [])
         setActivities(Array.isArray(res.activities) ? res.activities : [])
         // A failed refresh keeps the last flags it read (the else below).
         setActionPermissions(res.permissions || null)
+        setBundle(res)
         setBundleError(null)
       } else {
         setBundleError(res?.error || 'Could not load the timeline')
+        setBundle((prev) => (prev && typeof prev === 'object' ? prev : 'error'))
       }
     } catch {
+      if (seq !== bundleSeq.current) return
       setBundleError('Could not load the timeline')
+      setBundle((prev) => (prev && typeof prev === 'object' ? prev : 'error'))
     }
   }, [id])
+
+  // CARDLENS-M.8 — a new lens hides every button until its own flags land
+  // (they are judged at the new studio).
+  function switchStudio(next) {
+    if (!next || next === studio) return
+    studioRef.current = next
+    setStudio(next)
+    setActionPermissions(null)
+    loadTimeline()
+  }
 
   const load = useCallback(async () => {
     const res = await getContact(id)
@@ -247,7 +306,7 @@ export default function ContactDetail() {
     // and the section renders nothing when empty, so no client gate: the old
     // active-studio one only hid rows RLS would have returned.
     listBookingsForContact(id).then(r => setBookings(Array.isArray(r?.data) ? r.data : [])).catch(() => {})
-    getWhatsAppThreadForContact(id).then(r => setWaConversation(r?.success ? (r.data || null) : null)).catch(() => {})
+    listWhatsAppThreadsForContact(id).then(r => setWaThreads(r?.success ? latestThreadPerStudio(r.data) : [])).catch(() => {})
   }, [id, loadTimeline])
 
   useFocusEffect(useCallback(() => { load().catch(() => {}) }, [load]))
@@ -257,6 +316,13 @@ export default function ContactDetail() {
   const stateChip = useMemo(() => glofoxStateMeta(contact?.glofox_membership_state), [contact])
   // GLOFOX-REACTIVE — "· resumes {date}" suffix on the paused state chip.
   const pauseResume = useMemo(() => glofoxPauseResumeLabel(contact), [contact])
+  const glofoxView = glofoxCardView(bundle, contact)
+  const studioNameFor = (locationId) => studioTag(bundle, locationId)
+  const lens = lensView(bundle)
+  // The studio sends and notes are FOR: the acting studio under a lens, else
+  // nothing (the routes then act at the primary, as before M-B).
+  const sendLocationId = lens.sendLocationId
+  const sendStudioName = lens.footer && !lens.isAll ? lens.actingLabel : null
 
   return (
     <View className="flex-1 bg-un1t-bg">
@@ -292,6 +358,8 @@ export default function ContactDetail() {
             )}
           </View>
 
+          <ContactStudioSwitcher lens={lens} onChange={switchStudio} />
+
           {/* Quick actions. Call stays a phone dial; WhatsApp / Email
               send through the platform's linked services (company
               sender), gated per-channel by the server's per-contact flags
@@ -303,6 +371,21 @@ export default function ContactDetail() {
             {/* CANCEL-FORM.6 — hand the member a single-use pause/cancel form
                 link. Channel choice via a native sheet; the route does the
                 rest (mint, deliver, log). Web has the richer modal. */}
+            {actions.task && (
+              <ActionButton
+                icon="checkbox-outline"
+                label="Task"
+                onPress={() => router.push({
+                  pathname: '/tasks/new',
+                  params: {
+                    contactId: id,
+                    contactName: contactDisplayName(contact),
+                    locationId: sendLocationId || contact.location_id,
+                    studioName: sendStudioName || '',
+                  },
+                })}
+              />
+            )}
             {actions.cancelForm && (
               <ActionButton icon="document-text-outline" label="Cancel form" onPress={() => offerCancellationForm()} />
             )}
@@ -318,28 +401,31 @@ export default function ContactDetail() {
           </View>
 
           {/* Glofox membership (plan, billing, engagement, classes) */}
-          <ContactGlofoxCard contact={contact} />
+          <ContactGlofoxCard contact={contact} view={glofoxView} />
 
           {/* CRM event bookings — whatever RLS returned; the section
               renders nothing when there are none. */}
-          <BookingsSection bookings={bookings} />
+          <BookingsSection bookings={bookings} studioNameFor={studioNameFor} />
 
-          {/* WhatsApp thread deep-link (whatever RLS returned, see above) */}
-          {waConversation && (
-            <WhatsAppThreadRow
-              conversation={waConversation}
-              onPress={() => router.push(`/whatsapp/${waConversation.id}`)}
-            />
-          )}
+          {/* WhatsApp thread deep-links (whatever RLS returned, see above) */}
+          <WhatsAppThreadsSection
+            threads={waThreads}
+            studioNameFor={studioNameFor}
+            onOpen={(conversationId) => router.push(`/whatsapp/${conversationId}`)}
+          />
 
           {/* Note composer + merged timeline */}
           <ContactTimelineSection
             contactId={id}
-            syncsToGlofox={Boolean(contact.glofox_member_id)}
+            syncsToGlofox={notePostsToGlofox(bundle, contact)}
+            canNote={actions.note}
+            noteLocationId={sendLocationId}
+            noteStudioName={sendStudioName}
             notes={notes}
             activities={activities}
             loadError={bundleError}
             onRefresh={loadTimeline}
+            studioNameFor={studioNameFor}
           />
 
           {/* Coach kudos (web consultations gate) */}
@@ -358,8 +444,11 @@ export default function ContactDetail() {
           // MOBILE-MAILPARITY.1 — the Email action's Mail path (web
           // PROFILE-MAIL.1): the contact's own studio and address, so the
           // send goes out from a studio account there, not the company sender.
-          contactLocationId={contact.location_id || null}
+          // CARDLENS-M.8 — the acting studio's accounts under a lens.
+          contactLocationId={sendLocationId || contact.location_id || null}
           contactEmail={contact.email || null}
+          sendLocationId={sendLocationId}
+          studioName={sendStudioName}
           onClose={() => { setComposeChannel(null); load().catch(() => {}) }}
         />
       )}

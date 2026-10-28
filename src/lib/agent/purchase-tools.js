@@ -28,8 +28,8 @@ export const SEND_PURCHASE_LINK_TOOL = Object.freeze({
     'needs_purchase offers), or give the free trial with offer_id "trial", only when a tool said trial_available. ' +
     "The offer_id MUST be one that list_purchase_options (or book_class's needs_purchase offers) returned in this " +
     'conversation, copied exactly; never invent, guess or build one from a product name. ' +
-    'Before calling this, restate the product and its price and get a clear yes; never call it ' +
-    'on an ambiguous message. When they wanted a class, also pass that class exactly as list_upcoming_classes gave it. ' +
+    'Before calling this, restate the product and its price and get a clear yes (a member who has already asked you ' +
+    'for that product\'s link has said yes); never call it on an ambiguous message. When they wanted a class, also pass that class exactly as list_upcoming_classes gave it. ' +
     'Only one payment link is open per member: for the same product the result resends it; if one is already waiting ' +
     'for a different product, no link is made and the conversation is handed to the team. ' +
     'Relay the result honestly. Never say they have paid until a tool says so. Only works after verify_identity has ' +

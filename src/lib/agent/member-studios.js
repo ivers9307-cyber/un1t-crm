@@ -164,17 +164,26 @@ const hasAccount = (s) => !!(s.un1tUserId || s.glofoxMemberId)
  *   'active'   — studios where the person is active AND the gate passes.
  *   'fallback' — none of those, but exactly one studio the person has an
  *                account at is answerable.
+ *   'chosen'   — MIAASKSTUDIO.1: none of those, accounts at several
+ *                answerable studios, and the customer told Mia which one
+ *                (`chosenLocationId`, kept on the conversation).
  *   'thread'   — neither: answerable is [] and the caller keeps today's
- *                thread-studio behaviour.
+ *                thread-studio behaviour. `choices` lists the studios when
+ *                it is because they hold accounts at several (Mia asks).
  * The thread studio is listed first. Pure.
  */
-export function answerableStudios(studios, threadLocationId) {
+export function answerableStudios(studios, threadLocationId, { chosenLocationId = null } = {}) {
   const list = studios || []
   const threadFirst = (arr) => [...arr].sort((a, b) => Number(b.locationId === threadLocationId) - Number(a.locationId === threadLocationId))
   const activeAnswerable = list.filter((s) => s.active && s.answerable)
   if (activeAnswerable.length) return { answerable: threadFirst(activeAnswerable), basis: 'active' }
   const withAccount = list.filter((s) => s.answerable && hasAccount(s))
   if (withAccount.length === 1) return { answerable: withAccount, basis: 'fallback' }
+  if (withAccount.length > 1) {
+    const chosen = chosenLocationId ? withAccount.find((s) => s.locationId === chosenLocationId) : null
+    if (chosen) return { answerable: [chosen], basis: 'chosen' }
+    return { answerable: [], basis: 'thread', choices: threadFirst(withAccount) }
+  }
   return { answerable: [], basis: 'thread' }
 }
 

@@ -87,8 +87,16 @@ import { normaliseGetItems, stateFromReading, stateChanged, groupId } from './st
 import { planDeviceAction, isLiveOverride } from './plan'
 import { rollDailyEnergy } from './energy'
 import { AUTH_ERROR, HOST_ERROR } from './connections'
+import { effectiveTarget, GROUP_COLUMNS } from './effective'
+import { safetyTimersOn } from './safety-timers'
+import { runShellyAlerts } from './alerts'
 
 const MODULE = 'shelly-reconcile'
+
+// A row's component kind (mig 775). Anything but 'light' is a switch: every row
+// adopted before the column existed is a relay, and the column's CHECK admits
+// only the two values, so the fallback only ever covers a row read without it.
+export const deviceKind = (d) => (d?.kind === 'light' ? 'light' : 'switch')
 
 // The spec's estate ceiling. Both selects ask for cap + 1 so "exactly at the
 // cap" can be told from "the limit silently dropped the rest" — the same
@@ -96,6 +104,8 @@ const MODULE = 'shelly-reconcile'
 // guessed.
 export const MAX_CONNECTIONS = 100
 export const MAX_DEVICES = 50
+// SHELLYGROUPS.4 — groups a location can hold, read cap + 1 like the rest.
+export const MAX_GROUPS = 50
 
 // Read batch size comes FROM the client, never a hardcoded 10: the client
 // refuses an over-long `get` outright (kind 'too_many_ids') rather than
@@ -113,10 +123,32 @@ export const ACTION_NEEDED_RETRY_MS = 15 * 60_000
 // requests a day out of an account budget its siblings are sharing.
 export const ERROR_RETRY_MS = 5 * 60_000
 
+// SHELLYALERTS — the alert pass is skipped when the sweep has less than this
+// left: it makes no Shelly call, but it does make ledger round trips, and an
+// alert the ledger has not claimed is simply sent on the next tick.
+export const ALERT_DEADLINE_MARGIN_MS = 10_000
+
 // Only used when `sleep` is not injected. The client keeps its own copy for its
 // own pacing; this one is for the gap BETWEEN two locations of one account,
 // which no single client can see.
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// SHELLYTIMERS.2 — the relay's output as THIS tick read it, for the planner's
+// re-arm guard (plan.js header): true / false only from a device that spoke
+// and named this channel; anything else is null, "not known", which the
+// planner never re-arms on. The row's stored last_state is NOT used — it is
+// the previous tick's.
+function relayOnFrom(reading, d) {
+  if (!reading?.online) return null
+  const out = stateFromReading(null, reading, d?.channel, '', deviceKind(d)).output
+  return out === true ? true : out === false ? false : null
+}
+
+// The last_applied stamp for a command that landed. `cap_at` only when the
+// command carried a timer: an absent cap_at is what "not armed" means.
+export const appliedStamp = (p, atIso) => ({
+  key: p.key, action: p.action, reason: p.reason, at: atIso, ...(p.capAt ? { cap_at: p.capAt } : {}),
+})
 
 // The energy carry window. rollDailyEnergy can only bank a gap into today while
 // the caller still hands it the last row, so THIS WINDOW IS THE REACH of that
@@ -161,6 +193,9 @@ export { AUTH_ERROR, HOST_ERROR }
 const COUNTER_KEYS = [
   'devices', 'reads', 'readFailures', 'rateLimited', 'stateWrites', 'energyWrites',
   'planned', 'applied', 'failed', 'authFailures', 'skippedClass', 'crashed',
+  // A grouped device not planned this tick because its group could not be
+  // read (or was not among the rows read). Never run on its own schedule.
+  'skippedGroup',
   // A location the tick never got to. Counted separately from `crashed` because
   // it is the sweep's own budget talking, not the location failing — and from
   // `failed`, which means a command we owed and did not send.
@@ -207,11 +242,8 @@ async function markConnection(db, conn, patch) {
 
 /**
  * Today's live class occurrences for one location, bounded to the LOCATION's
- * local day.
- *
- * The end bound is the next local midnight resolved in the zone, never
- * start + 24h: on a DST day the local day is 23 or 25 hours long, and a flat
- * +24h either drops the last class of the day or pulls in tomorrow's first one.
+ * local day. A thin wrapper over loadDayOccurrences for "the day `nowMs` falls
+ * on" — the cron and run-now both mean today.
  *
  * @returns {{ok: true, occurrences: Array} | {ok: false, error: string}}
  */
@@ -220,16 +252,39 @@ export async function loadTodayOccurrences(db, locationId, tz, nowMs) {
   // exported and PR 2's routes call it, so the clock is checked here rather
   // than trusting every future caller to have guarded first.
   if (!Number.isFinite(nowMs)) return { ok: false, error: 'unusable clock' }
-  const day = dayStrInTz(nowMs, tz)
-  const start = new Date(dayStartMsInTz(day, tz)).toISOString()
-  const end = new Date(dayStartMsInTz(addDaysISO(day, 1), tz)).toISOString()
+  return loadDayOccurrences(db, locationId, tz, dayStrInTz(nowMs, tz))
+}
+
+/**
+ * One LOCAL day's live class occurrences for one location (SHELLYGROUPS.5:
+ * the day preview asks for a date that is not today).
+ *
+ * The end bound is the next local midnight resolved in the zone, never
+ * start + 24h: on a DST day the local day is 23 or 25 hours long, and a flat
+ * +24h either drops the last class of the day or pulls in tomorrow's first one.
+ * `name` rides along for the preview's class lane; the engine ignores it.
+ *
+ * @param dayStr 'YYYY-MM-DD', the location's calendar day.
+ * @returns {{ok: true, occurrences: Array} | {ok: false, error: string}}
+ */
+export async function loadDayOccurrences(db, locationId, tz, dayStr) {
+  // strictDayStartMsIn answers null for a date that is not real (2026-02-30)
+  // or not a date at all. Refused here, before the query, so a caller can
+  // never bound a select by NaN.
+  const startMs = /^\d{4}-\d{2}-\d{2}$/.test(String(dayStr ?? '')) ? dayStartMsInTz(dayStr, tz) : null
+  const nextDay = startMs == null ? null : addDaysISO(dayStr, 1)
+  const endMs = nextDay == null ? null : dayStartMsInTz(nextDay, tz)
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return { ok: false, error: 'unusable day' }
+  const start = new Date(startMs).toISOString()
+  const end = new Date(endMs).toISOString()
   const { data, error } = await db
     .from('class_occurrences')
-    .select('starts_at, ends_at, cancelled_at')
+    .select('starts_at, ends_at, cancelled_at, name')
     .eq('location_id', locationId)
     .gte('starts_at', start)
     .lt('starts_at', end)
     .is('cancelled_at', null)
+    .order('starts_at')
     // cap + 1, like every other select in this file: "exactly at the cap" and
     // "the limit dropped the rest" are different facts, and only the sentinel
     // row makes them decidable. Without it a truncated timetable is silent, and
@@ -278,6 +333,10 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
 
   const readings = new Map()
   const covered = new Set()
+  // SHELLYALERTS.3 — what each row looks like AFTER this tick, for the alert
+  // pass. Only rows whose write LANDED: a failed write leaves the stored row
+  // as the truth.
+  const fresh = new Map()
   let reads = 0
   let readFailures = 0
   let rateLimited = 0
@@ -349,7 +408,7 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
       // readings.get() may be undefined — the account answered and did not
       // mention this device, which stateFromReading reads as offline while
       // KEEPING the last known measurements.
-      const next = stateFromReading(d.last_state, readings.get(key), d.channel, nowIso)
+      const next = stateFromReading(d.last_state, readings.get(key), d.channel, nowIso, deviceKind(d))
       if (!stateChanged(d.last_state, next)) continue
       const { error } = await db
         .from('shelly_devices')
@@ -363,7 +422,10 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
         })
         .eq('id', d.id)
       if (error) logWarn(MODULE, 'device state write failed', { locationId, deviceId: d.id, error: error.message })
-      else stateWrites++
+      else {
+        stateWrites++
+        fresh.set(d.id, { last_state: next, ...(next.online ? { last_seen_at: nowIso } : {}) })
+      }
     }
   }
 
@@ -393,14 +455,88 @@ export async function refreshLocationState(db, conn, devices, ctx = {}) {
     logWarn(MODULE, 'every device reads offline — check the v2 online field', { locationId, items })
   }
 
-  return { readings, covered, client, nowIso, reads, readFailures, rateLimited, stateWrites, auth, config, anyOk, lastKind, stalled, budgetHit }
+  return { readings, covered, fresh, client, nowIso, reads, readFailures, rateLimited, stateWrites, auth, config, anyOk, lastKind, stalled, budgetHit }
+}
+
+/**
+ * The location's groups, read once per tick. cap + 1 like every select here:
+ * over the cap is warned and the first MAX_GROUPS used, never silent.
+ *
+ * @returns {{ok: true, groups: Array} | {ok: false, error: string}}
+ */
+async function loadLocationGroups(db, locationId) {
+  const { data, error } = await db
+    .from('shelly_groups')
+    .select(GROUP_COLUMNS)
+    .eq('location_id', locationId)
+    .order('sort_order')
+    .order('name')
+    .limit(MAX_GROUPS + 1)
+  if (error) return { ok: false, error: error.message }
+  const rows = data || []
+  if (rows.length > MAX_GROUPS) {
+    logWarn(MODULE, 'group cap exceeded, excess groups skipped this tick', { locationId, cap: MAX_GROUPS })
+    return { ok: true, groups: rows.slice(0, MAX_GROUPS) }
+  }
+  return { ok: true, groups: rows }
+}
+
+/**
+ * SHELLYGROUPS.4 — pair every device with what it is planned against.
+ *
+ * An ungrouped device is its own target and costs no read: a location with no
+ * groups never queries shelly_groups. A grouped device follows effectiveTarget,
+ * EXCEPT in the three cases below, and in none of them does it fall back to its
+ * own row's schedule silently:
+ *  • the groups read failed → every grouped device is skipped for the tick
+ *    (its own schedule is not what staff set; running it could switch a room
+ *    the group holds open). Ungrouped devices still run.
+ *  • its group is not among the rows read (over the cap, or deleted between
+ *    the two reads; ON DELETE SET NULL clears group_id by the next tick) →
+ *    skipped, for the same reason.
+ *  • its group sits at another location → the group is IGNORED (the DB
+ *    forbids the mix; this is the last fence before a relay command) and the
+ *    device runs on its own row, which is what effectiveTarget returns.
+ *    Logged with ids only.
+ */
+async function resolveTargets(db, locationId, devices, nowMs, counters) {
+  const grouped = devices.filter((d) => d.group_id != null)
+  const ungrouped = (d) => ({ device: d, target: d })
+  if (!grouped.length) return devices.map(ungrouped)
+
+  const res = await loadLocationGroups(db, locationId)
+  if (!res.ok) {
+    counters.skippedGroup += grouped.length
+    logWarn(MODULE, 'groups load failed — grouped devices skipped this tick', { locationId, skipped: grouped.length, error: res.error })
+    return devices.filter((d) => d.group_id == null).map(ungrouped)
+  }
+
+  const groupsById = new Map(res.groups.map((g) => [g.id, g]))
+  const targets = []
+  let notLoaded = 0
+  for (const d of devices) {
+    if (d.group_id == null) { targets.push(ungrouped(d)); continue }
+    const g = groupsById.get(d.group_id)
+    if (!g) { notLoaded++; continue }
+    if (g.location_id !== d.location_id) {
+      logWarn(MODULE, 'group at another location — ignored', { locationId, deviceId: d.id, groupId: g.id })
+      targets.push(ungrouped(d))
+      continue
+    }
+    targets.push({ device: d, target: effectiveTarget(d, g, nowMs) })
+  }
+  if (notLoaded) {
+    counters.skippedGroup += notLoaded
+    logWarn(MODULE, 'group not loaded — grouped devices skipped this tick', { locationId, skipped: notLoaded })
+  }
+  return targets
 }
 
 /**
  * One location's whole tick. Never throws for a data-shaped reason; a genuine
  * crash is caught by the sweep, which logs it with the key redacted.
  *
- * @param ctx {{ now?, sleep?, makeClient?, loadOccurrences?, deadlineAt? }}
+ * @param ctx {{ now?, sleep?, makeClient?, loadOccurrences?, deadlineAt?, alerts? }} (alerts: SHELLYALERTS.3, defaults to runShellyAlerts)
  * @returns counters (never null — the sweep sums them)
  */
 export async function reconcileLocation(db, conn, ctx = {}) {
@@ -454,6 +590,31 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     now, nowMs, sleep: ctx.sleep, makeClient: ctx.makeClient, deadlineAt,
   })
   const { client, nowIso, readings, stalled } = state
+
+  // SHELLYALERTS.3 — the alert pass, LAST on every path that read: after the
+  // state writes and the connection status. It pushes nothing to Shelly (no
+  // budget spent) and it can never break this reconcile or the sweep: any
+  // throw is logged with ids only (the message redacted of the key).
+  //
+  // Review fixes: skipped within ALERT_DEADLINE_MARGIN_MS of the sweep's
+  // deadline (the ledger keeps the alert for the next tick), and device alerts
+  // (offline, fault) are planned only when a read LANDED this tick: on a
+  // refused key or a bad host nothing was learned about any device.
+  const deviceAlerts = state.anyOk && !state.auth && !state.config
+  const alertPass = async (keyRejected) => {
+    try {
+      if (now() > deadlineAt - ALERT_DEADLINE_MARGIN_MS) {
+        logWarn(MODULE, 'alert pass skipped — time budget nearly spent', { locationId })
+        return
+      }
+      const current = devices.map((d) => (state.fresh?.has(d.id) ? { ...d, ...state.fresh.get(d.id) } : d))
+      await (ctx.alerts || runShellyAlerts)(db, {
+        locationId, conn, devices: current, nowMs, tz, keyRejected, deviceAlerts, studioName: conn?.locations?.name ?? null,
+      })
+    } catch (e) {
+      logWarn(MODULE, 'alert pass failed', { locationId, err: redactSecret(e, conn?.auth_key) })
+    }
+  }
   counters.reads = state.reads
   counters.readFailures = state.readFailures
   counters.rateLimited = state.rateLimited
@@ -479,6 +640,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   if (auth) {
     counters.authFailures = 1
     await markConnection(db, conn, { status: 'action_needed', last_error: AUTH_ERROR, last_error_at: nowIso, updated_at: nowIso })
+    await alertPass(true)
     return counters
   }
   if (state.config) {
@@ -486,6 +648,8 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     // handled anyway — and NOT as 'error', which would retry a malformed host
     // forever. action_needed is the state that says "a human must retype this".
     await markConnection(db, conn, { status: 'action_needed', last_error: HOST_ERROR, last_error_at: nowIso, updated_at: nowIso })
+    // A bad host is not a rejected key: no key alert, the device alerts only.
+    await alertPass(false)
     return counters
   }
 
@@ -541,7 +705,11 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       // row holds a frozen counter, and differencing it books zero consumption
       // over a gap we never measured.
       if (!reading?.online) continue
-      const channel = (Array.isArray(reading.channels) ? reading.channels : []).find((c) => c?.channel === d.channel)
+      // Channel AND kind (SHELLYLIGHT.3): `light:0` and `switch:0` are
+      // different components, and a row must only ever sample its own.
+      const kind = deviceKind(d)
+      const channel = (Array.isArray(reading.channels) ? reading.channels : [])
+        .find((c) => c?.channel === d.channel && (c?.kind ?? 'switch') === kind)
       const total = channel?.aenergy_wh
       // Not a metering channel, or the measurement was momentarily absent.
       // status.js already guarantees null-or-finite here; the test is explicit
@@ -562,9 +730,18 @@ export async function reconcileLocation(db, conn, ctx = {}) {
   }
 
   // ---- 5. plan ------------------------------------------------------------
+  if (stalled) logWarn(MODULE, 'no read succeeded — commands skipped this tick', { locationId, kind: lastKind })
+
+  // SHELLYGROUPS.4 — what each device is judged against. A black-holed account
+  // is planned for but not commanded (header rule 6), so with `stalled` there
+  // is nothing to resolve and no group read is spent on it.
+  const targets = stalled ? [] : await resolveTargets(db, locationId, devices, nowMs, counters)
+
   let occurrences = []
   let classOk = true
-  if (devices.some((d) => d.enabled && d.schedule_mode === 'class')) {
+  // The EFFECTIVE schedule decides: a member of a class-mode group needs the
+  // timetable even when its own row says 'fixed' or 'none'.
+  if (targets.some(({ target: t }) => t.enabled && t.schedule_mode === 'class')) {
     const res = await loadOccurrences(db, locationId, tz, nowMs)
     if (res.ok) occurrences = res.occurrences
     else {
@@ -573,13 +750,13 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
   }
 
-  if (stalled) logWarn(MODULE, 'no read succeeded — commands skipped this tick', { locationId, kind: lastKind })
-
   const plans = []
+  // SHELLYTIMERS.5 — off unless the studio switched it on.
+  const timers = safetyTimersOn(conn?.locations?.safety_timers)
   // A black-holed account is planned for but not commanded (header rule 6):
   // iterating nothing leaves `planned` at 0, so the counters never claim work
   // that was never attempted, and no stamp is written for a command not sent.
-  for (const d of stalled ? [] : devices) {
+  for (const { device: d, target: t } of targets) {
     // With no timetable, a class device's windows resolve empty and rule 4
     // would CLOSE anything we had opened — a failed select would switch the
     // studio off. Skipping is the fail-open. A LIVE override is exempt: a
@@ -587,23 +764,44 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     // before the planner ever looks at a window. isLiveOverride is imported
     // rather than re-derived so a stale, expired override cannot defeat the
     // skip by merely existing.
-    if (d.enabled && d.schedule_mode === 'class' && !classOk && !isLiveOverride(d.override, nowMs)) {
+    // Judged on the EFFECTIVE target: the group's mode, and the override that
+    // won (device over group), so a live group override is exempt too.
+    if (t.enabled && t.schedule_mode === 'class' && !classOk && !isLiveOverride(t.override, nowMs)) {
       counters.skippedClass++
       continue
     }
-    const plan = planDeviceAction(d, nowMs, dateStr, occurrences, tz)
+    const plan = planDeviceAction(t, nowMs, dateStr, occurrences, tz, {
+      relayOn: relayOnFrom(readings.get(idKey(d.device_id)), d),
+      timers,
+    })
+    // The DEVICE row rides on: its id is what gets stamped, its device_id and
+    // channel are what gets commanded. effectiveTarget keeps those (and the
+    // device's own last_applied) unchanged, so the planner and the stamp agree.
     if (plan) plans.push({ device: d, ...plan })
   }
   counters.planned = plans.length
 
   // ---- 6. command, then stamp --------------------------------------------
-  // Two calls at most per location: every opening device in one setGroups, every
-  // closing device in another. `on` first — a window that opens and one that
-  // closes in the same tick should light the room before it darkens the other.
+  // One call per direction per TIMER: every closing device in one setGroups,
+  // and the opening devices in one setGroups per distinct safety cap
+  // (SHELLYTIMERS.2 — set/groups carries ONE toggle_after per call, and
+  // plan.js rounds caps to the minute so the devices of one window share
+  // one). Unarmed opens (an unmanaged target's override) are their own batch.
+  // `on` first — a window that opens and one that closes in the same tick
+  // should light the room before it darkens the other.
+  // Each call carries both kinds (SHELLYLIGHT.3): `{ switch: [...], light: [...] }`
+  // in ONE request, so a studio with lights spends no extra slot for them.
+  // failedCommands keys stay `<id>_<channel>` for both kinds, and a switch and
+  // a light never share an id and channel (mig 775), so one gid set reads both.
+  const batches = []
   for (const on of [true, false]) {
     const wanted = plans.filter((p) => p.action === (on ? 'on' : 'off'))
-    if (!wanted.length) continue
+    // An off never carries a timer (the planner never emits one on an off).
+    const byTimer = on ? Map.groupBy(wanted, (p) => p.toggleAfterSec ?? null) : new Map([[null, wanted]])
+    for (const [toggleAfterSec, group] of byTimer) if (group.length) batches.push({ on, toggleAfterSec, wanted: group })
+  }
 
+  for (const { on, toggleAfterSec, wanted } of batches) {
     const batch = []
     for (const p of wanted) {
       let gid
@@ -632,7 +830,13 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     }
 
     attempted = true
-    const res = await client.setGroups(batch.map((x) => x.gid), on)
+    const groups = {
+      switch: batch.filter((x) => deviceKind(x.device) === 'switch').map((x) => x.gid),
+      light: batch.filter((x) => deviceKind(x.device) === 'light').map((x) => x.gid),
+    }
+    const res = toggleAfterSec == null
+      ? await client.setGroups(groups, on)
+      : await client.setGroups(groups, on, { toggleAfterSec })
     // Symmetric with the read path: a retried success and an outright 429 are
     // the same signal about the account's budget, counted once either way.
     if (res.retried || (!res.ok && res.kind === 'rate_limited')) counters.rateLimited++
@@ -642,7 +846,12 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       // WHOLE batch failed (the client says so), not that some of it landed.
       counters.failed += batch.length
       lastKind = res.kind
-      logWarn(MODULE, 'command batch failed', { locationId, kind: res.kind, count: batch.length, on })
+      // `code` is Shelly's error string (truncated by the client); null when
+      // the body carried none. SHELLYERR.1.
+      logWarn(MODULE, 'command batch failed', {
+        locationId, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, count: batch.length, on,
+        toggleAfterSec: toggleAfterSec ?? null,
+      })
       if (res.kind === 'auth') { auth = true; break }
       if (res.kind === 'config') { hostBad = true; break }
       continue
@@ -679,7 +888,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
       }
       const { error } = await db
         .from('shelly_devices')
-        .update({ last_applied: { key: x.key, action: x.action, reason: x.reason, at: nowIso }, updated_at: nowIso })
+        .update({ last_applied: appliedStamp(x, nowIso), updated_at: nowIso })
         .eq('id', x.device.id)
       if (error) {
         // The relay DID move; only the stamp failed. Next tick re-plans the same
@@ -718,6 +927,7 @@ export async function reconcileLocation(db, conn, ctx = {}) {
     })
   }
 
+  await alertPass(auth)
   return counters
 }
 
@@ -735,6 +945,7 @@ export async function runShellyReconcile(db, deps = {}) {
     loadOccurrences = loadTodayOccurrences,
     budgetMs = 90_000,
     concurrency = 4,
+    alerts,
   } = deps
 
   const startedAt = now()
@@ -748,7 +959,12 @@ export async function runShellyReconcile(db, deps = {}) {
 
   const { data, error } = await db
     .from('shelly_connections')
-    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone)')
+    // The safety-timer switch rides as ONE json path (SHELLYTIMERS.5): never
+    // `settings` itself, which holds the location's credentials.
+    // (A literal, not SAFETY_TIMERS_SELECT interpolated, so check:select-columns
+    // can read it.)
+    // `name` (SHELLYALERTS.3) is the studio name an alert push carries.
+    .select('id, location_id, host, auth_key, auth_key_fingerprint, status, last_ok_at, last_error_at, locations(timezone, safety_timers:settings->shelly->safety_timers, name)')
     // ROTATION, not registration order: whoever has gone longest without a
     // successful tick goes first, so when the budget runs short the shortfall
     // moves around the estate instead of always landing on the same tail.
@@ -788,7 +1004,7 @@ export async function runShellyReconcile(db, deps = {}) {
   // must never license running it in parallel with one it might share a budget
   // with. Slow is recoverable, a 429 storm is not.
   const groups = [...Map.groupBy(active, (c) => String(c.auth_key_fingerprint ?? '')).values()]
-  const ctx = { now, sleep, makeClient, loadOccurrences, deadlineAt }
+  const ctx = { now, sleep, makeClient, loadOccurrences, deadlineAt, alerts }
   const totals = zeroCounters()
 
   const sleepFn = sleep || realSleep
@@ -842,6 +1058,11 @@ export async function runShellyReconcile(db, deps = {}) {
  * and by switching a device back to 'auto' — both mean "stop waiting for the
  * next tick and make the relay agree with the schedule".
  *
+ * `deps.group` (SHELLYGROUPS.4, optional): the device's shelly_groups row. When
+ * given, the device is planned through effectiveTarget exactly as the cron
+ * plans it; omitted (every caller before groups), behaviour is unchanged. A
+ * group at another location is ignored, logged with ids only.
+ *
  * @returns {{ok: true, action, reason} | {ok: true, noop: true} | {ok: false, kind, ...}}
  */
 export async function runNowForDevice(db, conn, device, deps = {}) {
@@ -850,6 +1071,7 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
     makeClient = createShellyClient,
     loadOccurrences = loadTodayOccurrences,
     sleep,
+    group = null,
   } = deps
 
   const tz = locationTz(conn)
@@ -867,8 +1089,23 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
   // the timetable read a device we could never command.
   if (!device?.device_id || !Number.isInteger(device?.channel)) return { ok: false, kind: 'bad_device' }
 
+  let target = device
+  if (group) {
+    if (group.id !== device.group_id) {
+      // A group handed in for a device that does not follow it (a stale read,
+      // a caller bug) must not run the device on another group's schedule.
+      logWarn(MODULE, 'group is not the device’s own — ignored', {
+        locationId: conn?.location_id, deviceId: device.id, groupId: group.id, deviceGroupId: device.group_id ?? null,
+      })
+    } else if (group.location_id !== device.location_id) {
+      logWarn(MODULE, 'group at another location — ignored', { locationId: conn?.location_id, deviceId: device.id, groupId: group.id })
+    } else {
+      target = effectiveTarget(device, group, nowMs)
+    }
+  }
+
   let occurrences = []
-  if (device?.enabled && device?.schedule_mode === 'class') {
+  if (target.enabled && target.schedule_mode === 'class') {
     const res = await loadOccurrences(db, conn?.location_id, tz, nowMs)
     // A forced action off an empty timetable would be an OFF the operator did
     // not ask for. Refuse and say why instead.
@@ -878,17 +1115,27 @@ export async function runNowForDevice(db, conn, device, deps = {}) {
 
   // force: the planner answers even when its own stamp says this key was
   // already applied — that is the entire point of the button.
-  const plan = planDeviceAction(device, nowMs, dateStr, occurrences, tz, { force: true })
+  const plan = planDeviceAction(target, nowMs, dateStr, occurrences, tz, {
+    force: true, timers: safetyTimersOn(conn?.locations?.safety_timers),
+  })
   if (!plan) return { ok: true, noop: true }
 
   const client = makeClient(conn, { sleep, now })
-  const res = await client.setSwitch(device.device_id, device.channel, plan.action === 'on')
-  if (!res.ok) return { ok: false, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null }
+  // A light is addressed through set/light; set/switch would name a component
+  // the device does not have. An armed `on` (SHELLYTIMERS.2) carries its
+  // safety cap; an off, or an unmanaged target's on, carries none.
+  const timer = plan.toggleAfterSec ? [{ toggleAfterSec: plan.toggleAfterSec }] : []
+  const res = deviceKind(device) === 'light'
+    ? await client.setLight(device.device_id, device.channel, plan.action === 'on', ...timer)
+    : await client.setSwitch(device.device_id, device.channel, plan.action === 'on', ...timer)
+  if (!res.ok) {
+    return { ok: false, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode ?? null, permanent: res.permanent === true }
+  }
 
   const nowIso = new Date(nowMs).toISOString()
   const { error } = await db
     .from('shelly_devices')
-    .update({ last_applied: { key: plan.key, action: plan.action, reason: plan.reason, at: nowIso }, updated_at: nowIso })
+    .update({ last_applied: appliedStamp(plan, nowIso), updated_at: nowIso })
     .eq('id', device.id)
   // Best-effort: the relay has already moved, and reporting failure would tell
   // the operator the switch did not happen when it did.

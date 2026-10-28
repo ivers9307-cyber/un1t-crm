@@ -87,6 +87,9 @@ export const DEFAULTS = {
   flow_booking_holding_text: null,
   // FLOWACK.1 review — a re-submit of a class already asked for.
   flow_booking_duplicate_text: null,
+  // PAIDTRIALONLY.1 — set: a brand-new person's Flow booking is not booked
+  // (no account, no free trial); they are sent this text, link included.
+  flow_paid_trial_text: null,
   // MIA-EXPIRY-QUIET.1 — booking_expired_text was RETIRED 2026-08-31. An
   // expired booking is now silent to the member (staff-push only), so there
   // is no customer copy left to edit. Stored values are ignored and dropped
@@ -214,6 +217,7 @@ export const SettingsSchema = z.object({
   flow_booking_ack_text: z.string().max(500).nullable().optional(),
   flow_booking_holding_text: z.string().max(500).nullable().optional(),
   flow_booking_duplicate_text: z.string().max(500).nullable().optional(),
+  flow_paid_trial_text: z.string().max(500).nullable().optional(),
   approval_decline_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
@@ -428,6 +432,7 @@ function buildFullBlob(data) {
     flow_booking_ack_text: data.flow_booking_ack_text?.trim() || null,
     flow_booking_holding_text: data.flow_booking_holding_text?.trim() || null,
     flow_booking_duplicate_text: data.flow_booking_duplicate_text?.trim() || null,
+    flow_paid_trial_text: data.flow_paid_trial_text?.trim() || null,
     approval_decline_text: data.approval_decline_text?.trim() || null,
     welcome_greeting: data.welcome_greeting?.trim() || null,
     link_button_text: data.link_button_text?.trim() || null,

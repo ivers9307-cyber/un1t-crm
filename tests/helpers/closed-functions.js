@@ -116,6 +116,19 @@ export const CLOSED_FUNCTIONS = [
     why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT OR UPDATE OR DELETE trigger on deals writing the closed contact_studios rows; a trigger fires without EXECUTE' },
   { fn: 'private.contact_studios_from_preferences', args: '()', closedBy: 764,
     why: 'ORGCONTACTS.1: SECURITY DEFINER AFTER INSERT trigger on contact_location_preferences writing the closed contact_studios row; a trigger fires without EXECUTE' },
+  // SHELLYGROUPS.2 (mig 776): a Shelly group and its members sit at one location.
+  { fn: 'private.shelly_devices_group_same_location', args: '()', closedBy: 776,
+    why: 'SHELLYGROUPS.2: BEFORE INSERT OR UPDATE OF group_id, location_id trigger on shelly_devices refusing a group from another location; a trigger fires without EXECUTE' },
+  { fn: 'private.shelly_groups_location_frozen', args: '()', closedBy: 776,
+    why: 'SHELLYGROUPS.2: BEFORE UPDATE OF location_id trigger on shelly_groups refusing a move (members would be stranded); a trigger fires without EXECUTE' },
+  { fn: 'public.app_usage_summary', args: '(date, date, uuid[], uuid)', closedBy: 779,
+    why: 'every staff member\'s app usage totals; read only by the master-only report routes (USAGE.1)' },
+  { fn: 'public.app_usage_last_active', args: '(uuid[])', closedBy: 779,
+    why: 'any staff member\'s last app use; read only by the master-only report routes (USAGE.1)' },
+  { fn: 'public.un1t_bookings_stamp_cancelled_at', args: '()', closedBy: 781,
+    why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
+  { fn: 'public.class_fees_touch', args: '()', closedBy: 781,
+    why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
 ]
 
 /** The client roles a closed function is closed to. */

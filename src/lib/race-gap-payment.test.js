@@ -28,7 +28,7 @@ const { resolveEventHost } = await import('./event-hosts')
 const { syncOrderFromRacePayment } = await import('./orders')
 const { emitEvent, applyTagRules, EVENT_TYPES } = await import('./contact-events')
 const { logError, logWarn } = await import('./log')
-const { createGapPayment, closeCustomerGapLinks } = await import('./race-gap-payment.js')
+const { createGapPayment, closeCustomerGapLinks, staffGapLinkExpiry } = await import('./race-gap-payment.js')
 const { markRacePaymentStatus, refreshRacePaymentFromProvider } = await import('./race-payments.js')
 const { sendGapPaidEmail } = await import('./race-confirmations')
 const { triggerSequencesForOrderStatus } = await import('./sequences')
@@ -141,7 +141,19 @@ describe('createGapPayment — a new link', () => {
       applicationFeeCents: 0,
     }))
   })
-  it('REVPAY.7: a staff link names the payer and the move, and lives 7 days (it is emailed and reused while pending)', async () => {
+  it('REVPAY.12: a staff link for an event with a readable start lives until that start', async () => {
+    // 1 Nov 2026 10:00 Dublin (GMT, after the clocks went back) = 10:00Z; now
+    // is 31 Oct 10:00Z, so 24 hours.
+    vi.useFakeTimers({ now: Date.parse('2026-10-31T10:00:00Z') })
+    try {
+      const race = { ...RACE, race_date: '2026-11-01', waves: [{ start_time: '11:00:00' }, { start_time: '10:00:00' }], locations: { id: 'L1', timezone: 'Europe/Dublin' } }
+      await createGapPayment(args({ race }))
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(createPayment.mock.calls[0][0].expirePendingAfter).toBe('PT24H')
+  })
+  it('REVPAY.7: a staff link names the payer and the move, and lives 7 days when the event start cannot be read', async () => {
     await createGapPayment(args())
     const a = createPayment.mock.calls[0][0]
     expect(a).toEqual(expect.objectContaining({
@@ -430,7 +442,7 @@ describe('refreshRacePaymentFromProvider — a move_gap payment completed by the
     sendGapPaidEmail.mockRejectedValueOnce(new Error('postmark down'))
     const out = await refreshRacePaymentFromProvider(dbWith(), GAP)
     expect(out).toBeTruthy()
-    expect(logError).toHaveBeenCalledWith('race-payments', expect.stringContaining('gap receipt'), expect.objectContaining({ paymentId: 'gp1' }))
+    expect(logError).toHaveBeenCalledWith('race-payment-completed', expect.stringContaining('gap receipt'), expect.objectContaining({ paymentId: 'gp1' }))
   })
 })
 
@@ -701,5 +713,44 @@ describe('landPendingMove — the paid amount against the move\'s own gap (revie
     expect(linkPatch(db).metadata.gap_mismatch).toEqual({ paid: 1000, gap: 600 })
     expect(logWarn).toHaveBeenCalled()
     expect(db.queries.find((q) => q.table === 'registration_moves').ops).toContainEqual(['eq', 'id', 'mvNew'])
+  })
+})
+
+describe('staffGapLinkExpiry — REVPAY.12', () => {
+  const NOW = Date.parse('2026-07-01T08:00:00Z') // 09:00 in Dublin (IST)
+  const ev = (over = {}) => ({ race_date: '2026-07-02', waves: [{ start_time: '09:30:00' }], locations: { id: 'L1', timezone: 'Europe/Dublin' }, ...over })
+
+  it('runs to the first wave on race day, wall clock in the studio zone (summer time included)', () => {
+    // 2 Jul 09:30 IST = 08:30Z, 24h30m after now.
+    expect(staffGapLinkExpiry(ev(), NOW)).toBe('PT24H30M')
+  })
+  it('takes the EARLIEST wave, whatever order the waves come in', () => {
+    expect(staffGapLinkExpiry(ev({ waves: [{ start_time: '12:00:00' }, { start_time: '09:30' }, { start_time: '10:00:00' }] }), NOW)).toBe('PT24H30M')
+  })
+  it('reads the event studio zone, not Dublin', () => {
+    // 2 Jul 09:30 in New York (EDT) = 13:30Z, 29h30m after now.
+    expect(staffGapLinkExpiry(ev({ locations: { id: 'L9', timezone: 'America/New_York' } }), NOW)).toBe('PT29H30M')
+  })
+  it('clamps a far event to the spec maximum, PT720H', () => {
+    expect(staffGapLinkExpiry(ev({ race_date: '2026-12-25' }), NOW)).toBe('PT720H')
+  })
+  it('clamps an imminent start to the spec minimum, PT1M', () => {
+    expect(staffGapLinkExpiry(ev({ race_date: '2026-07-01', waves: [{ start_time: '09:00:20' }] }), NOW)).toBe('PT1M')
+  })
+  it('keeps P7D once the event has started (the route does not refuse a past event)', () => {
+    expect(staffGapLinkExpiry(ev({ race_date: '2026-07-01', waves: [{ start_time: '08:00:00' }] }), NOW)).toBe('P7D')
+    expect(staffGapLinkExpiry(ev({ race_date: '2026-06-01' }), NOW)).toBe('P7D')
+  })
+  it.each([
+    ['no race_date', { race_date: null }],
+    ['no waves', { waves: [] }],
+    ['waves with no start time', { waves: [{ start_time: null }] }],
+    ['an unparseable time', { waves: [{ start_time: '25:99' }] }],
+    ['an unparseable date', { race_date: 'soon' }],
+  ])('falls back to P7D with %s', (_w, over) => {
+    expect(staffGapLinkExpiry(ev(over), NOW)).toBe('P7D')
+  })
+  it('falls back to P7D with no event at all', () => {
+    expect(staffGapLinkExpiry(null, NOW)).toBe('P7D')
   })
 })

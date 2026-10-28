@@ -2,14 +2,17 @@ import { createServerClient } from '@/lib/supabase'
 import { matchCatalogToPlan } from '@/lib/glofox-catalog'
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
+import { ArrowLeft, Mail, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { todayStrIn, getLocationZone, getLocationZones, DEFAULT_TZ } from '@/lib/location-time'
-import { canViewContact } from '@/lib/contact-crossovers'
+import { canViewContact, contactStudioIds } from '@/lib/contact-crossovers'
 import { canLoadContactConsultations, contactChannelFlags, contactActionGates, contactWorkGates, un1tBookingStudios } from '@/lib/contact-page-gates'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
+import { membershipSourceState } from '@/lib/membership/source'
+import { glofoxCardMode } from '@/lib/contact-platforms'
+import { actingStudioOptions, pickActingStudio } from '@/lib/contact-acting-studio'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
 // WAITLIST.6 — PIPELINES.5's board resolver, reused: never hardcode a pipeline.
 import { findPrimaryPipeline } from '@/lib/deal-lookup'
@@ -17,6 +20,8 @@ import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import ContactBookingCard from '@/components/ContactBookingCard'
 import Un1tClassBookingCard from '@/components/Un1tClassBookingCard'
+import ContactClassFeesCard from '@/components/ContactClassFeesCard'
+import { canUseClassFees } from '@/lib/class-fees-access'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
@@ -28,14 +33,18 @@ import { aggregatePerson } from '@/lib/person-aggregate'
 import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
 import { latestLinkForContact } from '@/lib/cancellation-form/links'
 import ContactWhoRail from '@/components/contact/ContactWhoRail'
+import StudioStrip from '@/components/contact/StudioStrip'
+import { studioMemberships } from '@/lib/contact-studio-memberships'
+import { lensMetrics, lensRisk } from '@/lib/contact-lens'
 import { loadContactStudios } from '@/lib/contact-studios-display'
 // HATCHPIPE.2 — un1t.online payments + overdue, scoped to the viewer's studios.
-import { loadUn1tBilling, un1tHeaderRisk, mergeArrearsCents } from '@/lib/contact-un1t-billing'
+import { loadUn1tBilling, mergeArrearsCents } from '@/lib/contact-un1t-billing'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
 import { relativeTime } from '@/components/contact/format'
-import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
+import { mergeTimeline, deriveNeedsAttention, studioNameMap } from '@/lib/contact-view'
+import StudioTag from '@/components/contact/StudioTag'
 // CONSULTATIONS SP1 — coach/web surface (mig 272 tables), permission-gated.
 import ContactGoalsCard from '@/components/ContactGoalsCard'
 import ConsultationsList from '@/components/ConsultationsList'
@@ -53,6 +62,7 @@ export const dynamic = 'force-dynamic'
 
 export default async function ContactDetailPage(props) {
   const params = await props.params;
+  const searchParams = await props.searchParams;
   const db = createServerClient()
   const user = await getCurrentUser()
   if (!user) redirect('/login')
@@ -89,15 +99,12 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, contactArrears, cancellationLink, primaryPipeline, un1tBilling, contactStudios, primarySourceState] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
-    db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
-    // BOOK-ON-PROFILE.1 — bookable consultation event types for this
-    // studio, so the profile's Book card matches the inbox Book tab.
-    db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name'),
+    db.from('whatsapp_conversations').select('id, location_id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
     // PROFILE-ARREARS.1 — this contact's open past-due total (netted), so the
     // profile shows the SAME arrears the Overdue chase-list flags. Previously
     // arrears were only computed for grouped contacts, so an ungrouped member
@@ -123,7 +130,31 @@ export default async function ContactDetailPage(props) {
     // ORGCONTACTS.2 — every studio the person has a relationship with
     // (contact_studios), the Studios card. Never throws; a failed read hides it.
     loadContactStudios(db, id, { primaryLocationId: contact.location_id }),
+    // CARDLENS.1 — which membership system the primary studio runs, for the
+    // Glofox card's mode. A failed read is null: the card behaves as before.
+    membershipSourceState(db, contact.location_id).catch(() => null),
   ])
+  // CARDLENS.2 — short studio names for the tags; empty for a one-studio person.
+  const studioNames = studioNameMap(contactStudios.rows)
+  const glofoxMode = glofoxCardMode({
+    contact,
+    primarySource: primarySourceState?.state === 'unknown' ? null : (primarySourceState?.source ?? null),
+  })
+
+  // CARDLENS.6 — the ACTING studio: the one this viewer messages, notes and
+  // books at (?studio=, else their active studio, the primary, the first
+  // shared one; src/lib/contact-acting-studio.js). A viewer who shares no
+  // studio with the person (a crossover viewer) acts at the primary, which
+  // judges them exactly as before.
+  const actingOptions = actingStudioOptions({ user, contact, studioRows: contactStudios.rows })
+  const actingId = pickActingStudio({ options: actingOptions, requested: searchParams?.studio, activeLocationId: user.activeLocation?.id, primaryLocationId: contact.location_id })
+    || contact.location_id
+
+  // BOOK-ON-PROFILE.1 — bookable consultation event types for the contact's
+  // studio, so the profile's Book card matches the inbox Book tab. The card
+  // books at the primary studio (its routes judge it), so these are the
+  // primary's even when the page acts elsewhere.
+  const eventTypesRes = await db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name')
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
   // commitment terms) from the studio membership catalog by plan name.
@@ -151,9 +182,15 @@ export default async function ContactDetailPage(props) {
   // member. Only the writes_enabled boolean leaves the settings (a JSON
   // path), never the settings object. Best-effort: no card on a failed read.
   let un1tStudios = []
+  // CARDLENS.8 — the same rows carry each studio's un1t.online counters for
+  // the membership cards, kept only where the viewer holds Contacts (the rule
+  // loadUn1tBilling applies to payments).
+  let un1tClients = []
   try {
     const { data: clientRows, error: clientErr } = await db.from('un1t_clients')
-      .select('location_id').eq('contact_id', contact.id).limit(50)
+      .select('location_id, last_attended_at, bookings_30d_attended, credit_balance, credit_unlimited, ltv_cents, synced_at').eq('contact_id', contact.id).limit(50)
+    const un1tVisible = new Set(contactStudioIds(user, [...new Set((user.locations || []).map((l) => l?.id).filter(Boolean))]))
+    if (!clientErr) un1tClients = (clientRows || []).filter((r) => un1tVisible.has(r.location_id))
     const ids = [...new Set((clientRows || []).map((r) => r.location_id).filter(Boolean))]
     if (!clientErr && ids.length > 0) {
       const { data: locs, error: locErr } = await db.from('locations')
@@ -168,6 +205,36 @@ export default async function ContactDetailPage(props) {
     }
   } catch { un1tStudios = [] }
   const bookableEventTypes = eventTypesRes?.data || []
+
+  // PROFILE-ARREARS.1 — grouped contacts use the cross-account aggregate,
+  // ungrouped ones the per-contact figure (the Overdue chase-list's source).
+  const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
+  // CARDLENS.8 — one membership view per studio (the strip, the left rail).
+  // Fewer than two studios: the page shows its old cards.
+  const memberships = studioMemberships({ contact, studioRows: contactStudios.rows, un1tClients, un1tBilling, glofoxArrearsCents })
+  // "All studios" shows every studio and acts at none (Richard 2026-10-27).
+  const lensAll = memberships.length >= 2 && searchParams?.studio === 'all'
+  // CARDLENS.10 — the lens filters what the page lists: for a person at two or
+  // more studios, looking at one, only that studio's rows (a row with no
+  // studio always shows). One studio, or All studios: everything.
+  // Never filter to a studio that has no membership card (its row missing).
+  const filtering = memberships.length >= 2 && !lensAll && memberships.some((m) => m.locationId === actingId)
+  const inLens = (row) => !filtering || !row?.location_id || row.location_id === actingId
+
+  // CARDLENS.10 — marketing consent per studio (WhatsApp STOP / START and
+  // email consent are per studio), read-only, only at studios the viewer can
+  // act at. Flags only: never the unsubscribe token. null rows = a failed read.
+  let studioConsent = null
+  if (memberships.length >= 2 && actingOptions.length >= 2) {
+    const { data: consentRows, error: consentErr } = await db.from('contact_location_preferences')
+      .select('location_id, email_marketing, whatsapp_marketing')
+      .eq('contact_id', contact.id)
+      .in('location_id', actingOptions.map((o) => o.locationId))
+    studioConsent = {
+      studios: actingOptions.map((o) => ({ locationId: o.locationId, name: studioNames[o.locationId] || o.name })),
+      rows: consentErr ? null : (consentRows || []),
+    }
+  }
 
   // CHURN-CONTACT.1 — make the contact page prospective, not just a
   // retrospective timeline: surface the SAME at-risk signal the radar
@@ -190,15 +257,16 @@ export default async function ContactDetailPage(props) {
   const arrearsCtx = contactArrears.count > 0 ? { pastDueIds: new Set([activityContact.id]) } : {}
   const churnClass = classifyContact(activityContact, arrearsCtx)
   const churnScored = churnClass === 'active' ? scoreMember(activityContact, Date.now()) : null
-  let risk = null
-  const un1tRisk = un1tHeaderRisk(un1tBilling)
-  if (churnClass === 'overdue') {
-    risk = { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
-  } else if (un1tRisk) {
-    risk = un1tRisk
-  } else if (churnScored) {
+  // CARDLENS.9 — the Glofox chips, split so the lens can pick (lensRisk,
+  // below): the chase-list overdue, else the radar's at-risk score. The
+  // un1t.online overdue is the lens's own (that studio, or the worst).
+  const glofoxOverdue = churnClass === 'overdue'
+    ? { label: 'Payment overdue', cls: 'bg-red-50 text-red-700 border-red-200', title: 'Membership locked in Glofox — on the Overdue chase-list.' }
+    : null
+  let glofoxChurn = null
+  if (churnScored) {
     const sigs = churnScored.signals.map((s) => `${s.label}: ${s.detail}`).join(' · ')
-    risk = churnScored.tier === 'high'
+    glofoxChurn = churnScored.tier === 'high'
       ? { label: 'At risk · High', cls: 'bg-red-50 text-red-700 border-red-200', title: sigs }
       : { label: churnScored.tier === 'medium' ? 'At risk · Medium' : 'At risk', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: sigs }
   }
@@ -223,21 +291,23 @@ export default async function ContactDetailPage(props) {
     // Postmark delivery/engagement state, so "what have we emailed and
     // did it land?" is answerable without leaving the contact page.
     db.from('email_sends')
-      .select('id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
+      .select('id, location_id, created_at, source_type, subject, status, sent_at, delivered_at, opened_at, clicked_at, bounced_at, bounce_type, complained_at')
       .eq('contact_id', id)
       .order('sent_at', { ascending: false, nullsFirst: false })
       .limit(8),
   ])
   const activeSequences = seqRes.data || []
-  const messages = buildMessageHistory(emailRes.data || [])
+  const messages = buildMessageHistory((emailRes.data || []).filter(inLens))
 
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
   // DRAWER.4 — ad-hoc email channel.
   // ROLESWEEP.1c — each flag is the send route's own decision: the web OR the
   // mobile toggle at the CONTACT's location, not the active studio. canWhatsApp
   // also gates the template read below.
-  const { whatsapp: canWhatsApp, email: canEmail } = contactChannelFlags(user, contact.location_id)
-  const latestWaConversation = waConversations[0] || null
+  const { whatsapp: canWhatsApp, email: canEmail } = contactChannelFlags(user, actingId)
+  // CARDLENS.6 — the 24h window and the Book card's thread are the acting
+  // studio's thread: a send for that studio files there (WAORGNUMBER.4).
+  const latestWaConversation = waConversations.find((c) => c.location_id === actingId) || null
   const whatsappWindowOpen = latestWaConversation?.window_expires_at
     ? new Date(latestWaConversation.window_expires_at) > new Date()
     : false
@@ -248,7 +318,7 @@ export default async function ContactDetailPage(props) {
     const { data: rawTemplates } = await db
       .from('whatsapp_templates')
       .select('name, language, components, status, category')
-      .eq('location_id', contact.location_id)
+      .eq('location_id', actingId)
       .eq('category', 'UTILITY')
       .eq('status', 'APPROVED')
       .order('name', { ascending: true })
@@ -279,7 +349,10 @@ export default async function ContactDetailPage(props) {
   // primary studio's admins, an organisation admin or a master.
   const actions = contactActionGates(user, contact, { relationshipStudioIds: contactStudios.rows.map((r) => r.location_id) })
   // ROLEUI.2 — the buttons that had no gate at all: same rule, same place.
-  const work = contactWorkGates(user, contact)
+  const actingWork = contactWorkGates(user, contact, { actingLocationId: actingId })
+  // CARDLENS.10 — All studios acts nowhere (Richard 2026-10-27): every write
+  // the page offers is off until a studio is picked.
+  const work = lensAll ? { ...actingWork, canNote: false, canTask: false, canSequence: false, canCancelForm: false, canCold: false, canLinkAccounts: false, canStartWhatsApp: false } : actingWork
   let consultationsTab = null
   if (canConsultations) {
     const [consultsRes, goalsRes, photosRes, scansRes, coachLinksRes] = await Promise.all([
@@ -360,7 +433,7 @@ export default async function ContactDetailPage(props) {
 
   // Build unified timeline from notes + activities, sorted by date
   // (DRAWER.1 — the merge moved to contact-view so the drawer shares it).
-  const timeline = mergeTimeline(notes, activities)
+  const timeline = mergeTimeline(notes.filter(inLens), activities.filter(inLens))
 
   // PERSON-LINK.1 — at-a-glance lifetime metrics. Prefer the unified
   // person aggregate when the contact is grouped, else fall back to the
@@ -373,10 +446,27 @@ export default async function ContactDetailPage(props) {
   //    cross-member LTV roll-up), so we keep the primary contact's figure
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
-  const glofoxArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
   const metricArrearsCents = mergeArrearsCents(glofoxArrearsCents, un1tBilling)
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
+
+  // CARDLENS.9 — the header follows the lens: that studio's figures, or the
+  // sum under All studios; today's figures when there are no memberships.
+  const lensId = lensAll ? 'all' : actingId
+  const headerMetrics = lensMetrics({ memberships, lensId, base: {
+    ltvCents,
+    arrearsCents: metricArrearsCents,
+    glofoxArrearsCents,
+    un1t: {
+      overdue: un1tBilling.overdue,
+      amountUnreported: un1tBilling.amountUnreported,
+      amountNotEur: un1tBilling.amountNotEur,
+    },
+    attended: metricAttended,
+    lastAttendedAt: person?.lastAttendedAt || contact.last_attended_at || null,
+    deals: metricDeals,
+  }, deals })
+  const risk = lensRisk({ lensId, memberships, glofoxOverdue, glofoxChurn, un1tBilling, names: studioNames })
 
   // Identity contact rows (emails + phones). When grouped, render the
   // deduped cross-account lists from the aggregate; else the contact's
@@ -420,6 +510,7 @@ export default async function ContactDetailPage(props) {
 
       <ContactHeaderBand
         contact={contact}
+        actingLocationId={actingId}
         person={person}
         risk={risk}
         journey={journey}
@@ -435,19 +526,12 @@ export default async function ContactDetailPage(props) {
         // WAITLIST.6 — a location with no readable primary board resolves null
         // here, which is FALSE, which is today's behaviour (Cold shown).
         manual={primaryPipeline?.mode === 'manual'}
-        metrics={{
-          ltvCents,
-          arrearsCents: metricArrearsCents,
-          un1t: {
-            overdue: un1tBilling.overdue,
-            amountUnreported: un1tBilling.amountUnreported,
-            amountNotEur: un1tBilling.amountNotEur,
-          },
-          attended: metricAttended,
-          deals: metricDeals,
-          currency: contact.lifetime_currency,
-        }}
+        metrics={{ ...headerMetrics, currency: contact.lifetime_currency }}
       />
+
+      {/* CARDLENS.8 — the studios, and which one this page acts at (or All);
+          nothing for a one-studio person. */}
+      <StudioStrip memberships={memberships} options={actingOptions} actingId={actingId} lensAll={lensAll} query={searchParams} />
 
       <div className="grid gap-5 items-start xl:grid-cols-[280px_minmax(0,1fr)_300px]">
         {/* Who they are — stacks under the working column on small screens. */}
@@ -463,6 +547,11 @@ export default async function ContactDetailPage(props) {
             canReadStudioCards={work.canReadStudioCards}
             canRehome={actions.admin.canRehome}
             un1tBilling={un1tBilling}
+            glofoxMode={glofoxMode}
+            memberships={memberships}
+            actingId={actingId}
+            lensAll={lensAll}
+            studioConsent={studioConsent}
           />
         </div>
 
@@ -472,20 +561,28 @@ export default async function ContactDetailPage(props) {
           {/* #message anchor — PersonActionBar's "Message" action
               deep-links here (/contacts/[id]#message). */}
           <div id="message" className="scroll-mt-4">
-            <ContactComposer
-              contactId={contact.id}
-              contactName={contact.first_name || contact.name}
-              contactLocationId={contact.location_id}
-              contactEmail={contact.email || null}
-              canWhatsApp={canWhatsApp}
-              canEmail={canEmail}
-              hasWaPhone={!!(contact.wa_phone || contact.phone)}
-              hasEmail={!!contact.email}
-              emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
-              whatsappWindowOpen={whatsappWindowOpen}
-              whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
-              templates={composerTemplates}
-            />
+            {/* CARDLENS.10 — All studios acts nowhere: the strip picks the studio. */}
+            {lensAll ? (
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-sm text-un1t-subtle">Viewing all studios. Pick a studio above to send a message or add a note.</p>
+              </div>
+            ) : (
+                <ContactComposer
+                  contactId={contact.id}
+                  contactName={contact.first_name || contact.name}
+                  contactLocationId={actingId}
+                  sendLocationId={actingId}
+                  contactEmail={contact.email || null}
+                  canWhatsApp={canWhatsApp}
+                  canEmail={canEmail}
+                  hasWaPhone={!!(contact.wa_phone || contact.phone)}
+                  hasEmail={!!contact.email}
+                  emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
+                  whatsappWindowOpen={whatsappWindowOpen}
+                  whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
+                  templates={composerTemplates}
+                />
+            )}
           </div>
 
           {/* Timeline. PERSON-LINK.1 — grouped contacts render the
@@ -495,13 +592,13 @@ export default async function ContactDetailPage(props) {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Timeline</h3>
               <ContactActions
                 contactId={contact.id}
-                locationId={contact.location_id}
+                locationId={actingId}
                 canNote={work.canNote}
                 canTask={work.canTask}
                 canSequence={work.canSequence}
               />
             </div>
-            <ContactTimeline timeline={timeline} person={person} showFilters />
+            <ContactTimeline timeline={timeline} person={person} showFilters studioNames={studioNames} />
           </div>
 
           {/* CONTACT-MSG.1 — Messages: what we've emailed / texted this
@@ -514,9 +611,7 @@ export default async function ContactDetailPage(props) {
               {messages.map((m) => (
                 <div key={m.id} className="flex items-center justify-between gap-2 py-2 border-b border-un1t-border last:border-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    {m.channel === 'email'
-                      ? <Mail size={13} className="text-un1t-subtle shrink-0" />
-                      : <MessageSquare size={13} className="text-un1t-subtle shrink-0" />}
+                    <Mail size={13} className="text-un1t-subtle shrink-0" />
                     <span className="text-sm truncate">{m.label}</span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -547,10 +642,10 @@ export default async function ContactDetailPage(props) {
                 <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
               )}
               {waConversations.length === 0 && <p className="text-sm text-un1t-muted">No conversations</p>}
-              {waConversations.map(conv => (
+              {waConversations.filter(inLens).map(conv => (
                 <Link
                   key={conv.id}
-                  href="/communications/inbox"
+                  href={`/communications/inbox?c=${conv.id}`}
                   className="block py-2 border-b border-un1t-border last:border-0 hover:bg-un1t-border/20 -mx-1 px-1 rounded transition-colors"
                 >
                   <div className="flex items-center justify-between">
@@ -558,6 +653,7 @@ export default async function ContactDetailPage(props) {
                       {conv.last_message_direction === 'outbound' && <span className="text-un1t-subtle">You: </span>}
                       {conv.last_message_preview || 'No messages'}
                     </p>
+                    <StudioTag locationId={conv.location_id} names={studioNames} />
                     {conv.unread_count > 0 && (
                       <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0 ml-2">
                         {conv.unread_count}
@@ -573,7 +669,7 @@ export default async function ContactDetailPage(props) {
           )}
 
           {/* Past event registrations (CRM-native). */}
-          <PastEventsCard bookings={pastBookings} />
+          <PastEventsCard bookings={pastBookings.filter(inLens)} studioNames={studioNames} />
         </div>
 
         {/* What happens next. */}
@@ -583,15 +679,20 @@ export default async function ContactDetailPage(props) {
             attention={attention}
             openTasks={openTasks}
             sequences={activeSequences}
-            upcomingBookings={upcomingBookings}
-            deals={deals}
+            upcomingBookings={upcomingBookings.filter(inLens)}
+            deals={deals.filter(inLens)}
             admin={actions.admin}
             canReadStudioCards={work.canReadStudioCards}
+            studioNames={studioNames}
           />
 
           {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or
               Glofox class, same engine as the inbox Book tab. */}
-          {work.canBook && (
+          {/* CARDLENS.6 — the Glofox/consultation card books at the primary
+              studio (bookings/create and the Glofox book route judge it), so
+              it shows while the page acts there; a un1t.online studio books
+              through its own card, below, for the acting studio. */}
+          {work.canBook && !lensAll && actingId === contact.location_id && (
             <ContactBookingCard
               contactId={contact.id}
               locationId={contact.location_id}
@@ -601,7 +702,10 @@ export default async function ContactDetailPage(props) {
               waWindowOpen={whatsappWindowOpen}
             />
           )}
-          {un1tStudios.map((studio) => (
+          {!lensAll && un1tStudios.filter((s) => s.locationId === actingId && canUseClassFees(user, s.locationId)).map((studio) => (
+            <ContactClassFeesCard key={`fees-${studio.locationId}`} contactId={contact.id} locationId={studio.locationId} studioName={studio.studioName} />
+          ))}
+          {!lensAll && un1tStudios.filter((s) => s.locationId === actingId).map((studio) => (
             <Un1tClassBookingCard
               key={studio.locationId}
               contactId={contact.id}
@@ -650,7 +754,7 @@ function emailStatusPill(e) {
 function buildMessageHistory(emails) {
   const out = []
   for (const e of emails) {
-    out.push({ id: `e-${e.id}`, channel: 'email', label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
+    out.push({ id: `e-${e.id}`, label: e.subject || 'Email', at: e.sent_at || e.created_at, status: emailStatusPill(e) })
   }
   return out
     .filter((m) => m.at)

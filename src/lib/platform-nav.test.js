@@ -15,7 +15,7 @@ import {
 } from './platform-nav'
 
 describe('isPlatformTierPath', () => {
-  it('matches the eight console roots exactly', () => {
+  it('matches the nine console roots exactly', () => {
     expect(isPlatformTierPath('/admin/tenants')).toBe(true)
     expect(isPlatformTierPath('/admin/plans')).toBe(true)
     expect(isPlatformTierPath('/admin/tenant-domains')).toBe(true)
@@ -23,6 +23,7 @@ describe('isPlatformTierPath', () => {
     expect(isPlatformTierPath('/admin/matrix')).toBe(true)
     expect(isPlatformTierPath('/admin/bridges')).toBe(true)
     expect(isPlatformTierPath('/admin/studio-devices')).toBe(true)
+    expect(isPlatformTierPath('/admin/app-usage')).toBe(true)
     expect(isPlatformTierPath('/admin/webhook-dead-letter')).toBe(true)
   })
 
@@ -64,7 +65,7 @@ describe('isPlatformTierPath', () => {
     expect(isPlatformTierPath(undefined)).toBe(false)
   })
 
-  it('claims exactly the eight documented roots, in order', () => {
+  it('claims exactly the nine documented roots, in order', () => {
     expect([...PLATFORM_TIER_PATHS]).toEqual([
       '/admin/tenants',
       '/admin/plans',
@@ -73,13 +74,14 @@ describe('isPlatformTierPath', () => {
       '/admin/matrix',
       '/admin/bridges',
       '/admin/studio-devices',
+      '/admin/app-usage',
       '/admin/webhook-dead-letter',
     ])
   })
 })
 
 describe('resolvePlatformNav', () => {
-  it('exposes the eight console pages in order, Tenants as the home', () => {
+  it('exposes the nine console pages in order, Tenants as the home', () => {
     const { primary } = resolvePlatformNav(null)
     expect(primary.map((p) => p.href)).toEqual([
       '/admin/tenants',
@@ -89,6 +91,7 @@ describe('resolvePlatformNav', () => {
       '/admin/matrix',
       '/admin/bridges',
       '/admin/studio-devices',
+      '/admin/app-usage',
       '/admin/webhook-dead-letter',
     ])
     // Tenants is first (the master landing target / console home).
@@ -103,6 +106,7 @@ describe('resolvePlatformNav', () => {
     expect(byHref['/admin/matrix'].label).toBe('Feature matrix')
     expect(byHref['/admin/bridges'].label).toBe('HR bridges')
     expect(byHref['/admin/studio-devices'].label).toBe('Studio devices')
+    expect(byHref['/admin/app-usage'].label).toBe('App usage')
     expect(byHref['/admin/webhook-dead-letter'].label).toBe('Dead letters')
   })
 

@@ -65,6 +65,51 @@ function routes(handler) {
 beforeEach(() => { vi.clearAllMocks() })
 afterEach(() => { cleanup(); delete global.fetch })
 
+describe('ShellyDeviceCard — a light', () => {
+  const light = (stateOver) => managed({ kind: 'light', last_state: state({ output: true, brightness: 55, ...stateOver }) })
+
+  it('shows On · 55% and renders no slider', () => {
+    render(<ShellyDeviceCard device={light()} connected glofoxConnected />)
+    expect(screen.getByText('On · 55%', { selector: 'span' })).toBeTruthy()
+    expect(screen.queryByRole('slider')).toBeNull()
+  })
+
+  it('shows plain On when brightness is null, and Off when off', () => {
+    const { unmount } = render(<ShellyDeviceCard device={light({ brightness: null })} connected glofoxConnected />)
+    expect(screen.getByText('On', { selector: 'span' })).toBeTruthy()
+    unmount()
+    render(<ShellyDeviceCard device={light({ output: false })} connected glofoxConnected />)
+    expect(screen.getByText('Off', { selector: 'span' })).toBeTruthy()
+  })
+
+  it('a switch with a stray brightness key never prints a percentage', () => {
+    render(<ShellyDeviceCard device={managed({ last_state: state({ brightness: 55 }) })} connected glofoxConnected />)
+    expect(screen.queryByText(/55%/)).toBeNull()
+  })
+})
+
+// SHELLYNOPOWER.1 — the Men's Changing Room RGBW PM reports no power or energy
+// at all. Its card must say so rather than offer an Energy chart of nothing.
+describe('ShellyDeviceCard — a device that reports no power', () => {
+  const renderCard = (device) => render(<ShellyDeviceCard device={device} connected glofoxConnected />)
+  it('an online device with no power and no energy reading says so and offers no Energy chart', () => {
+    renderCard(managed({ kind: 'light', last_state: state({ output: true, apower: null, aenergy_wh: null, brightness: 50 }) }))
+    expect(screen.getByText(/doesn.t report power/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /energy/i })).toBeNull()
+  })
+
+  it('a device that reports energy keeps its Energy chart', () => {
+    renderCard(managed({ last_state: state({ apower: 12, aenergy_wh: 345 }) }))
+    expect(screen.getByRole('button', { name: /energy/i })).toBeTruthy()
+    expect(screen.queryByText(/doesn.t report power/i)).toBeNull()
+  })
+
+  it('an offline device keeps the chart — no reading is not proof it cannot meter', () => {
+    renderCard(managed({ last_state: state({ online: false, apower: null, aenergy_wh: null }) }))
+    expect(screen.getByRole('button', { name: /energy/i })).toBeTruthy()
+  })
+})
+
 describe('ShellyDeviceCard — what it is doing', () => {
   it('renders "Unknown" for output:null, never "Off"', () => {
     render(<ShellyDeviceCard device={managed({ last_state: state({ output: null, apower: null }) })} connected glofoxConnected />)
@@ -402,7 +447,7 @@ describe('ShellyDeviceCard — the schedule switch and run now', () => {
     const toggle = screen.getByLabelText('Schedule on')
     expect(toggle.disabled).toBe(true)
     expect(toggle.closest('label').getAttribute('title')).toBe("Couldn't check Glofox. Reload to try again.")
-    expect(screen.getByLabelText('Class timetable').closest('label').getAttribute('title'))
+    expect(screen.getByLabelText('Follow classes').closest('label').getAttribute('title'))
       .toBe("Couldn't check Glofox. Reload to try again.")
     expect(document.body.innerHTML).not.toMatch(/connect Glofox/i)
   })
@@ -637,5 +682,46 @@ describe('ShellyDeviceCard — energy is lazy', () => {
     fireEvent.click(screen.getByRole('button', { name: /Energy/ }))
     await waitFor(() => expect(global.fetch).toHaveBeenCalled())
     expect(String(global.fetch.mock.calls[0][0])).toContain('/api/shelly/devices/row-1/energy?days=30')
+  })
+})
+
+// SHELLYGROUPS.8 — a device in a group follows the GROUP's schedule; its own
+// schedule fields are refused by the route (409 `grouped`), so the card does
+// not offer them.
+describe('ShellyDeviceCard — a grouped device', () => {
+  const studio = { id: 'g1', name: 'Studio lights', enabled: true, schedule_mode: 'fixed' }
+  // The device's own columns say "unmanaged": they are not what runs it.
+  const grouped = (over = {}) => unmanaged({ group_id: 'g1', ...over })
+
+  it('says which group it follows, with no schedule editor and no "Schedule on"', () => {
+    render(<ShellyDeviceCard device={grouped()} group={studio} connected glofoxConnected />)
+    expect(screen.getByText('Follows Studio lights')).toBeTruthy()
+    expect(screen.queryByText('Schedule on')).toBeNull()
+    expect(screen.queryByLabelText('Fixed hours')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Save schedule/ })).toBeNull()
+  })
+
+  it('keeps its own on/off switch and the energy chart', () => {
+    render(<ShellyDeviceCard device={grouped()} group={studio} connected glofoxConnected />)
+    expect(screen.getByRole('button', { name: 'On' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Off' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Energy/ })).toBeTruthy()
+  })
+
+  it('is managed by its GROUP: the duration presets show and the unmanaged hint does not', () => {
+    render(<ShellyDeviceCard device={grouped()} group={studio} connected glofoxConnected />)
+    expect(screen.getByLabelText('How long')).toBeTruthy()
+    expect(screen.queryByText(/No schedule runs this plug/)).toBeNull()
+  })
+
+  it('a member of a group no schedule runs says the DEVICE stays as set (not "plug")', () => {
+    render(<ShellyDeviceCard device={grouped()} group={{ ...studio, enabled: false, schedule_mode: 'none' }} connected glofoxConnected />)
+    expect(screen.getByText('No schedule runs Studio lights — this device stays as you set it until you change it.')).toBeTruthy()
+  })
+
+  it('a group not loaded yet still hides the editor and says "Follows its group"', () => {
+    render(<ShellyDeviceCard device={grouped()} connected glofoxConnected />)
+    expect(screen.getByText('Follows its group')).toBeTruthy()
+    expect(screen.queryByText('Schedule on')).toBeNull()
   })
 })

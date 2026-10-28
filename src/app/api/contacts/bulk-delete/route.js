@@ -34,6 +34,7 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { redactWhatsAppForContact, redactInBodyForContact } from '@/lib/contact-merge'
 import { redactMailForContact } from '@/lib/contact-mail-erasure'
+import { forgetRevolutCustomerForContact } from '@/lib/revolut-customers'
 import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -101,6 +102,9 @@ export async function POST(request) {
     // FK, so raw body-composition payloads + phone survive orphaned.
     // Hard-delete them before the contact row (must run pre-delete).
     await redactInBodyForContact(db, id)
+    // REVPAY.13: the email → Revolut customer mapping holds the address in
+    // clear and is not keyed to the contact. Best-effort, like the scrubs here.
+    await forgetRevolutCustomerForContact(db, id)
     // MAIL-GDPR.1: mail tickets/messages/attachments, same doctrine as the two
     // above (anonymise in place, best-effort, the delete still runs). Its
     // failures are reported per contact rather than swallowed — see the

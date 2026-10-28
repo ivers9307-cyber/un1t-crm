@@ -15,7 +15,7 @@
 //      happened, and what will happen. The one exception is a rate limit,
 //      which is HTTP 429 so the client can back off rather than re-press;
 //      the body still says `pending:true`, because it is.
-//   3. A FAILED *STAMP* IS NOT A FAILED COMMAND. If setSwitch succeeded the
+//   3. A FAILED *STAMP* IS NOT A FAILED COMMAND. If the command succeeded the
 //      relay has physically moved, so a lost `last_applied` write is logged
 //      and the response still says `applied:true`. Telling the operator the
 //      switch did not happen when it did is the louder failure, and the cost
@@ -48,6 +48,29 @@
 //     Task 6 renders plain On/Off with no expiry time rather than a countdown
 //     that would be a lie.
 //
+// A DEVICE IN A GROUP (SHELLYGROUPS.5). Its device override still wins over the
+// group (effective.js), so on/off is unchanged — but "managed" means the
+// GROUP's schedule, so `holds_until_changed` is judged on effectiveTarget.
+// 'auto' hands the device back to the GROUP's schedule: the group is read
+// FIRST and passed to the engine, and a group that cannot be read refuses
+// with 409 group_unavailable before the override is touched (running the
+// device on its own, cleared schedule would force the relay off).
+//
+// THE SAFETY NET (SHELLYTIMERS.3), only while the studio's switch
+// `locations.settings.shelly.safety_timers` is true (SHELLYTIMERS.5; off by
+// default, and off means every command is exactly what it was before timers).
+// A press ON for a MANAGED device carries a
+// device-side timer — `toggle_after` up to `until` + SAFETY_MARGIN_MS, the
+// planner's rule for an `on` override, so the cron reads the stamp's cap_at as
+// already armed — and the stamp records `cap_at`. The relay then switches
+// itself off even if this CRM never gets to close it. Never on:
+//   • an UNMANAGED device (and a member whose group could not be read, which
+//     we cannot show is managed): the copy promises it "stays as you set it
+//     until you change it", and a timer would break that promise (ruling).
+//   • an OFF press: a timer flips to the opposite of `on`, so it would switch
+//     the room back ON at expiry, fighting the schedule.
+// 'auto' goes through runNowForDevice, which arms by the window rule.
+//
 // TIMEZONE. `until` defaults to the LOCATION's next local midnight, and the
 // engine that later expires it resolves the zone from `conn.locations`, which
 // loadConnectionWithKey does not select — see withLocationTz in
@@ -57,13 +80,16 @@
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { logError, logWarn } from '@/lib/log'
-import { createShellyClient } from '@/lib/shelly/client'
+import { createShellyClient, INTERACTIVE_429_RETRIES } from '@/lib/shelly/client'
 import { loadConnectionWithKey, markKeyRejected } from '@/lib/shelly/connections'
+import { loadSafetyTimers } from '@/lib/shelly/safety-timers'
 import { loadDevice, DEVICE_COLUMNS, requestTz, withLocationTz } from '@/lib/shelly/device-load'
-import { overrideKey } from '@/lib/shelly/plan'
-import { runNowForDevice } from '@/lib/shelly/reconcile'
+import { effectiveTarget } from '@/lib/shelly/effective'
+import { loadDeviceGroup } from '@/lib/shelly/group-load'
+import { overrideKey, safetyCap, isManagedTarget, SAFETY_MARGIN_MS } from '@/lib/shelly/plan'
+import { runNowForDevice, deviceKind, appliedStamp } from '@/lib/shelly/reconcile'
 import { ShellyToggleBody, ShellyOverride, MAX_OVERRIDE_HOURS } from '@/lib/shelly/schemas'
-import { stateFromReading } from '@/lib/shelly/status'
+import { optimisticState } from '@/lib/shelly/optimistic-state'
 import { nextLocalMidnightMs } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
@@ -93,56 +119,17 @@ const PENDING_MESSAGE = {
 }
 const PENDING_FALLBACK = 'Saved. Shelly cloud is not answering — the plug will follow within a minute.'
 
-// The seven fields mig 562's column comment requires of every last_state
-// writer. A partial shape is what makes `output` read as "off" when it is
-// really "unknown", so a row that is missing any of them is rebuilt rather
-// than spread.
-const STATE_KEYS = ['online', 'output', 'apower', 'aenergy_wh', 'temperature_c', 'source', 'at']
-const hasFullState = (s) =>
-  !!s && typeof s === 'object' && !Array.isArray(s) && STATE_KEYS.every((k) => k in s)
+// SHELLYERR.1 — the plug (through Shelly) refused the request itself:
+// DEVICE_INVALID_CHANNEL, DEVICE_NOT_FOUND, BAD_REQUEST… Still `pending`, because
+// the override IS saved and the cron keeps re-planning it, but no wait fixes
+// it, so the one thing this copy must not say is "it will follow".
+const refusedMessage = (code) =>
+  `Saved, but Shelly refused the command (${code}). Check this plug in the Shelly app — it will not follow until that is fixed.`
 
 const bad = (error, status, extra = {}) =>
   NextResponse.json({ success: false, error, ...extra }, { status })
 
 const notFound = () => bad('Not found', 404)
-
-/**
- * The optimistic last_state after a command we KNOW landed.
- *
- * Only the three fields we have evidence for are asserted — output, source and
- * `at` — plus `online`, which rests on exactly the same evidence as the
- * `last_seen_at` written beside it: Shelly Cloud answers a set/switch for an
- * unreachable device with a body-level error, which client.js tags
- * `kind:'device'`, so an ok result means the plug spoke. If that ever proves
- * wrong, this line and the last_seen_at stamp must change together.
- *
- * THE MEASUREMENTS GO TO NULL (SHELLY-UI.9b). A set/switch measures nothing:
- * it returns no watts, no energy counter and no temperature. Carrying the
- * PREVIOUS readings forward under a FRESH `at` is not a neutral act — `at` is
- * what the card reads as "how current is this number", so the old wattage
- * would be re-dated to this instant and rendered as a live measurement of a
- * relay whose state we just changed. Switching a heater ON and then showing
- * the 0 W it drew while off, timestamped "just now", is precisely the silent
- * wrong value this file's write order exists to avoid. Null renders as "—"
- * and the next cron read fills it within the minute. (status.js rule 1:
- * absent is not zero — and it is not a stale number wearing a new date
- * either.)
- */
-function optimisticState(prev, channel, on, nowIso) {
-  const base = hasFullState(prev)
-    ? { ...prev }
-    : stateFromReading(null, { online: true, channels: [] }, channel, nowIso)
-  return {
-    ...base,
-    online: true,
-    output: on,
-    apower: null,
-    aenergy_wh: null,
-    temperature_c: null,
-    source: 'manual',
-    at: nowIso,
-  }
-}
 
 export const POST = withAuth(
   // WIDGET.1 — the Studio Controls widget's plug button lands here.
@@ -166,14 +153,33 @@ export const POST = withAuth(
       logError(MODULE, 'connection read failed', { locationId, reason: conn.reason, error: conn.error })
       return bad('Could not read the Shelly connection', 500)
     }
-    // The engine reads the zone off `locations` — graft the session's.
-    const engineConn = withLocationTz(conn.connection, user)
+    // The engine reads the zone off `locations` — graft the session's — and,
+    // beside it, the studio's safety-timer switch (SHELLYTIMERS.5: off by
+    // default; read server-side as one json path, never shipped anywhere).
+    const safetyTimers = await loadSafetyTimers(db, locationId)
+    const engineConn = withLocationTz(conn.connection, user, { safetyTimers })
 
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
 
+    // The member's group, when it has one. Read before anything is written.
+    const grouped = await loadDeviceGroup(db, device)
+    if (!grouped.ok) {
+      logWarn(MODULE, 'group unavailable for a grouped device', {
+        locationId, deviceId: device.id, groupId: device.group_id, reason: grouped.reason,
+      })
+    }
+    const group = grouped.ok ? grouped.group : null
+    // The schedule the planner judges this device on (the group's, for a member).
+    const target = effectiveTarget(device, group, nowMs)
+
     // ——— back to the schedule ————————————————————————————————————————
     if (input.state === 'auto') {
+      // Refused BEFORE the clear: nothing changes when we cannot say what
+      // "the schedule" is for this device.
+      if (!grouped.ok) {
+        return bad("Could not read this device's group — try again", 409, { code: 'group_unavailable' })
+      }
       const { data: cleared, error: clearError } = await db
         .from('shelly_devices')
         .update({ override: null, updated_at: nowIso })
@@ -193,7 +199,7 @@ export const POST = withAuth(
       // The override is GONE from the row before this runs, so pass the device
       // the same way — planDeviceAction reads `override` off the object it is
       // handed, and the stale one would re-apply the very thing just cleared.
-      const result = await runNowForDevice(db, engineConn, { ...device, override: null }, {})
+      const result = await runNowForDevice(db, engineConn, { ...device, override: null }, { group })
       const cleanDevice = { ...device, override: null }
 
       if (result.ok) {
@@ -209,10 +215,10 @@ export const POST = withAuth(
           // removed it: telling an operator "already on schedule" about a
           // device we in fact declined to touch is the false-reassurance shape
           // this file exists to avoid.
-          if (!device.enabled) {
+          if (!target.enabled) {
             return NextResponse.json({ success: true, device: cleanDevice, applied: null, reason: 'disabled' })
           }
-          if (device.schedule_mode === 'none') {
+          if (target.schedule_mode === 'none') {
             return NextResponse.json({ success: true, device: cleanDevice, applied: null, reason: 'no_schedule' })
           }
           // Unreachable by the argument above, and therefore the one case
@@ -222,7 +228,7 @@ export const POST = withAuth(
           // that behind a green tick forever. The override IS cleared either
           // way (that write already landed), so the copy says so.
           logError(MODULE, 'run-now answered an unexpected no-op for a managed device', {
-            locationId, deviceId: device.id, enabled: device.enabled, scheduleMode: device.schedule_mode,
+            locationId, deviceId: device.id, enabled: target.enabled, scheduleMode: target.schedule_mode,
           })
           return bad(
             'The override was cleared, but the schedule could not be applied — try Run now',
@@ -293,7 +299,16 @@ export const POST = withAuth(
     // See "TWO REGIMES" in the header: on an unmanaged device the engine never
     // closes an expired override (plan.js rule 2 returns before rule 4), so the
     // relay holds until a human changes it and `until` bounds only the banner.
-    const unmanaged = !device.enabled || device.schedule_mode === 'none'
+    // Judged on the effective schedule (the group's, for a member). If the
+    // member's group could not be read we do not know whether a schedule will
+    // close this override, so we claim nothing: holds_until_changed false and
+    // no notice (controller ruling). The device's own fields would say
+    // "unmanaged" — joining cleared them — which is evidence we do not have.
+    // A manual switch is not worth refusing over a banner flag.
+    const unmanaged = grouped.ok && (!target.enabled || target.schedule_mode === 'none')
+    // The other side of that judgement, for the timer: only a target we KNOW
+    // is managed is armed (see THE SAFETY NET in the header).
+    const managed = grouped.ok && isManagedTarget(target)
     const tz = requestTz(user)
     const untilMs = input.until ? Date.parse(input.until) : nextLocalMidnightMs(nowMs, tz)
     if (!Number.isFinite(untilMs)) {
@@ -346,14 +361,24 @@ export const POST = withAuth(
     const withOverride = { ...device, override }
 
     // ——— 2. the command ——————————————————————————————————————————————
-    const res = await createShellyClient(engineConn).setSwitch(device.device_id, device.channel, on)
+    // A light is a `light:N` component, addressed through set/light; set/switch
+    // would name a component the device does not have (SHELLYLIGHT.3).
+    // Three 429 retries (1.1 s, 2.2 s, 3.3 s): a press that lands on the
+    // cron's read rides it out instead of answering "busy". SHELLYBUSY.1.
+    const cap = on && managed && safetyTimers ? safetyCap(untilMs + SAFETY_MARGIN_MS, nowMs) : null
+    const timer = cap ? [{ toggleAfterSec: cap.toggleAfterSec }] : []
+    const shelly = createShellyClient(engineConn, { max429Retries: INTERACTIVE_429_RETRIES })
+    const res = deviceKind(device) === 'light'
+      ? await shelly.setLight(device.device_id, device.channel, on, ...timer)
+      : await shelly.setSwitch(device.device_id, device.channel, on, ...timer)
     if (!res.ok) {
       if (res.kind === 'auth') await markKeyRejected(db, locationId)
       else {
         logWarn(MODULE, 'toggle command did not land', {
-          locationId, deviceId: device.id, kind: res.kind, statusCode: res.statusCode,
+          locationId, deviceId: device.id, kind: res.kind, code: res.code ?? null, statusCode: res.statusCode,
         })
       }
+      const refused = res.kind === 'device' && res.permanent === true
       const body = {
         success: true,
         device: withOverride,
@@ -361,9 +386,10 @@ export const POST = withAuth(
         // The cron applies a live override to every adopted device, enabled or
         // not — this is a delay, not a loss.
         pending: true,
-        code: PENDING_CODE[res.kind] ?? 'pending',
+        code: refused ? 'device_refused' : (PENDING_CODE[res.kind] ?? 'pending'),
         kind: res.kind,
-        message: PENDING_MESSAGE[res.kind] ?? PENDING_FALLBACK,
+        message: refused ? refusedMessage(res.code) : (PENDING_MESSAGE[res.kind] ?? PENDING_FALLBACK),
+        ...(refused ? { shelly_code: res.code } : {}),
         // Carried on the pending body too: what the cron eventually applies is
         // the same override, so the same "it will hold" is true of it.
         holds_until_changed: unmanaged,
@@ -381,8 +407,9 @@ export const POST = withAuth(
       .update({
         // The SAME key the planner would have minted, so the next tick reads
         // this override as already applied and does not re-issue it.
-        last_applied: { key: overrideKey(override), action: input.state, reason: 'override', at: nowIso },
-        last_state: optimisticState(device.last_state, device.channel, on, nowIso),
+        // cap_at only when the command carried a timer (appliedStamp).
+        last_applied: appliedStamp({ key: overrideKey(override), action: input.state, reason: 'override', capAt: cap?.capAt }, nowIso),
+        last_state: optimisticState(device.last_state, device.channel, on, nowIso, deviceKind(device)),
         last_seen_at: nowIso,
         updated_at: nowIso,
       })

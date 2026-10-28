@@ -13,6 +13,7 @@
 // (mig 014), so adding location_id filter is belt-and-braces.
 
 import { supabase } from './supabase'
+import { api } from './api'
 
 // Do NOT embed `assignee:profiles!...` here. The mobile app queries Supabase
 // with the authenticated (anon + JWT) client, and the `authenticated` role has
@@ -95,6 +96,38 @@ export async function createTask({ locationId, subject, assigneeId = null, dueDa
     .single()
   if (error) return { success: false, error: error.message }
   return { success: true, data }
+}
+
+/**
+ * CARDLENS-M.9 — a task about a contact, from the contact screen, at the
+ * screen's acting studio. Goes through POST /api/activities/tasks (the web's
+ * route since C148): it checks the caller may write tasks there AND that the
+ * contact belongs at that studio (its primary, or a contact_studios row since
+ * CARDLENS.6), which a direct insert cannot.
+ *
+ * @param {object} p
+ * @param {string} p.locationId  the studio the task files at
+ * @param {string} p.contactId
+ * @param {string} p.subject
+ * @param {string|null} [p.assigneeId]
+ * @param {string|null} [p.dueDate]   'YYYY-MM-DD'
+ * @param {string|null} [p.priority]
+ */
+export async function createContactTask({ locationId, contactId, subject, assigneeId = null, dueDate = null, priority = null }) {
+  if (!locationId || !contactId) return { success: false, error: 'A contact and a studio are required' }
+  const trimmed = (subject || '').trim()
+  if (!trimmed) return { success: false, error: 'A task needs a subject' }
+  return api('/api/activities/tasks', {
+    method: 'POST',
+    body: {
+      location_id: locationId,
+      contact_id: contactId,
+      subject: trimmed,
+      assignee_id: assigneeId || null,
+      due_date: dueDate || null,
+      priority: priority || null,
+    },
+  })
 }
 
 /**

@@ -38,7 +38,8 @@ import { triggerSequencesForOrderStatus } from './sequences'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { logWarn, logError } from './log'
 import { GAP_PAYMENT_KIND, completeGapPayment } from './race-gap-payment'
-import { sendGapPaidEmail } from './race-confirmations'
+import { runRacePaymentCompletedEffects } from './race-payment-completed'
+import { after } from 'next/server'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -461,6 +462,17 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
  * Pulls the live order state from Revolut so the front-end can show
  * an accurate status without waiting for the webhook to land.
  */
+// The Glofox push can take a while (one call per team member), so on a public
+// request it runs after the response (next/server after()). Outside a request
+// scope (a script, a test) after() throws, and the push runs inline instead.
+async function runAfterResponse(task) {
+  try {
+    after(task)
+  } catch {
+    return task()
+  }
+}
+
 export async function refreshRacePaymentFromProvider(db, input) {
   if (!input?.id || !input?.payment_provider_ref) return input
   const providerName = input.payment_provider
@@ -493,15 +505,20 @@ export async function refreshRacePaymentFromProvider(db, input) {
     revolutState: normalized.state,
     revolutAmount: Number.isFinite(normalized.amountCents) ? normalized.amountCents : null,
   })
-  // EVENT-MOVE.5 — if THIS refresh completed a price-difference payment, the
-  // webhook will see no fresh transition and never send the receipt, so send
-  // it here. Its send-once stamp makes any later attempt harmless. Entry
-  // payments are unchanged.
-  if (payment.kind === GAP_PAYMENT_KIND && result?.applied?.status === 'completed') {
+  // If THIS refresh completed the payment, the webhook that lands later sees
+  // no fresh transition and sends nothing, so the completion effects run here:
+  // the entry confirmations (or, for a price difference, the gap receipt,
+  // EVENT-MOVE.5) and, for an opted-in event, the Glofox push. Before
+  // RACECONFIRM.1 only the gap receipt did, so an entry settled by the status
+  // page (the buyer's return page beat the webhook) never got its confirmation
+  // or its Glofox accounts. The confirmations' send-once stamps and the push's
+  // already-linked check make a later attempt harmless.
+  if (result?.applied?.status === 'completed') {
     try {
-      await sendGapPaidEmail({ db, paymentId: payment.id })
+      const { glofoxPush } = await runRacePaymentCompletedEffects({ db, payment, applied: result.applied })
+      if (glofoxPush) await runAfterResponse(glofoxPush)
     } catch (e) {
-      logError('race-payments', 'gap receipt failed after the refresh completed the payment', { err: e, paymentId: payment.id })
+      logError('race-payments', 'completion effects failed after the refresh completed the payment', { err: e, paymentId: payment.id })
     }
   }
   const { data: refreshed } = await db

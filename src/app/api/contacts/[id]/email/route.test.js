@@ -55,6 +55,9 @@ vi.mock('@/lib/postmark', async (importOriginal) => ({
   sendTransactionalEmail: vi.fn(() => Promise.resolve({ messageId: 'pm-1' })),
 }))
 
+// CARDLENS.5 — a send for another of the person's studios asks contact_studios.
+vi.mock('@/lib/contact-studios', () => ({ hasRelationshipAt: vi.fn(async () => ({ ok: true, at: new Set() })) }))
+
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission, hasMobilePermission } from '@/lib/permissions'
@@ -73,6 +76,11 @@ function mockDb({ contact, contactError = null, locPref = { email_marketing: tru
       const eq1 = vi.fn(() => ({ eq: eq2 }))
       const select = vi.fn(() => ({ eq: eq1 }))
       return { select }
+    }
+    if (table === 'locations') {
+      // CARDLENS.11 — resolveRouteStudio checks the studio is open.
+      const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { active: true, is_host_anchor: false }, error: null }) }
+      return chain
     }
     if (table === 'contacts') {
       const single = vi.fn(() => Promise.resolve(contactError ? { data: null, error: contactError } : { data: contact, error: null }))
@@ -203,5 +211,31 @@ describe('POST /api/contacts/[id]/email', () => {
     createServerClient.mockReturnValue(mockDb({ contact: CONTACT }))
     const res = await POST(req({ subject: '', body: 'x' }), { params: { id: 'c1' } })
     expect(res.status).toBe(400)
+  })
+})
+
+// CARDLENS.5 — the acting studio: consent, brand, send and log at that studio.
+describe('POST /api/contacts/[id]/email — location_id (acting studio)', () => {
+  const HATCH = 'f0000000-0000-4000-8000-00000000000f'
+  it('sends for the chosen studio and logs there', async () => {
+    const { hasRelationshipAt } = await import('@/lib/contact-studios')
+    const { getLocationBranding } = await import('@/lib/location-branding')
+    hasRelationshipAt.mockResolvedValueOnce({ ok: true, at: new Set([HATCH]) })
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: HATCH }] })
+    const db = mockDb({ contact: CONTACT })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ subject: 'Hi', body: 'Hello', location_id: HATCH }), { params: { id: 'c1' } })
+    expect(res.status).toBe(200)
+    expect(getLocationBranding).toHaveBeenCalledWith(db, HATCH)
+    expect(sendTransactionalEmail.mock.calls[0][0].locationId).toBe(HATCH)
+    expect(db.__calls.activityInsert[0].location_id).toBe(HATCH)
+  })
+
+  it('a studio the person has no row at is a 404 and nothing is sent', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: HATCH }] })
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT }))
+    const res = await POST(req({ subject: 'Hi', body: 'Hello', location_id: HATCH }), { params: { id: 'c1' } })
+    expect(res.status).toBe(404)
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
   })
 })

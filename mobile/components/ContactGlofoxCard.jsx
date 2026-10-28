@@ -5,6 +5,9 @@
 // Glofox class bookings (upcoming/recent) from the denormalised
 // contacts.recent_bookings JSONB. Read-only: linking a contact to Glofox
 // stays a web action, so the unlinked state is just a hint here.
+// CARDLENS-M.2 — `view` (glofoxCardView) decides whether the card shows at
+// all, names its studio, and words the unlinked hint; a person with no Glofox
+// account at a un1t.online studio gets no card.
 import { View, Text } from 'react-native'
 import {
   glofoxStatusMeta, glofoxStateMeta, glofoxPauseResumeLabel, formatTenure, relativeTime,
@@ -44,8 +47,8 @@ function GlofoxBookingRow({ b, when }) {
   )
 }
 
-export default function ContactGlofoxCard({ contact }) {
-  const linked = Boolean(contact?.glofox_member_id)
+export default function ContactGlofoxCard({ contact, view }) {
+  const linked = view ? view.linked : Boolean(contact?.glofox_member_id)
   const statusMeta = glofoxStatusMeta(contact?.glofox_membership_status)
   const stateMeta = glofoxStateMeta(contact?.glofox_membership_state)
   // GLOFOX-REACTIVE — append "· resumes {date}" to the paused chip and
@@ -72,11 +75,12 @@ export default function ContactGlofoxCard({ contact }) {
     : false
   const { upcoming, past } = splitGlofoxBookings(contact?.recent_bookings, Math.floor(Date.now() / 1000))
 
+  if (view && !view.show) return null
   return (
     <View className="bg-white border border-un1t-border rounded-2xl p-4 mt-5">
       <View className="flex-row items-center justify-between mb-2">
         <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle" accessibilityRole="header">
-          Glofox membership
+          {view?.title || 'Glofox membership'}
         </Text>
         {linked && (
           <Text className="text-[10px] text-un1t-muted">
@@ -87,7 +91,7 @@ export default function ContactGlofoxCard({ contact }) {
 
       {!linked ? (
         <Text className="text-sm text-un1t-muted py-2 text-center">
-          Not linked to Glofox yet. Link this contact from the web CRM.
+          {view?.unlinkedHint || 'Not linked to Glofox yet. Link this contact from the web CRM.'}
         </Text>
       ) : (
         <View>

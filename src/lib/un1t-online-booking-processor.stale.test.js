@@ -70,6 +70,7 @@ beforeEach(() => {
   deps = {
     writerFactory: vi.fn(async () => writer),
     ensureUn1tAccount: vi.fn(async () => ({ kind: 'created', un1tUserId: 'usr-1', executingContactId: 'c-1' })),
+    readPaidTrialReply: vi.fn(async () => null),
     grantTrial: vi.fn(async () => ({ outcome: 'granted', method: 'charge', ledgerId: 'l-t' })),
     book: vi.fn(async () => ({ verdict: 'done', sent: true, id: 'bk-9', code: null, alreadyBooked: false, retryable: false })),
     runSetPasswordStep: vi.fn(async () => ({ explanation: 'sent', forgotPassword: 'done' })),

@@ -35,6 +35,8 @@ vi.mock('@/lib/permissions', () => {
 })
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/glofox-sync', () => ({ ensureDealForContact: vi.fn(() => Promise.resolve({ action: 'move', to_slug: 'cold_lead' })) }))
+vi.mock('@/lib/un1t-pipeline-cadence', () => ({ reclassifyUn1tBoardNow: vi.fn(async () => ({ ran: false, reason: 'no_un1t_board' })) }))
+vi.mock('@/lib/studio-pipeline-dismissal', () => ({ writeStudioDismissal: vi.fn(async () => ({ error: null })) }))
 vi.mock('@/lib/sequences/triggers', () => ({ triggerSequencesForDealPlacement: vi.fn(async () => {}) }))
 vi.mock('@/lib/activity-events', () => ({ logPipelineDismissal: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(() => Promise.resolve({ logged: true })) }))
@@ -44,6 +46,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { ensureDealForContact } from '@/lib/glofox-sync'
+import { reclassifyUn1tBoardNow } from '@/lib/un1t-pipeline-cadence'
+import { writeStudioDismissal } from '@/lib/studio-pipeline-dismissal'
 import { triggerSequencesForDealPlacement } from '@/lib/sequences/triggers'
 import { logPipelineDismissal } from '@/lib/activity-events'
 import { logAuditEvent } from '@/lib/audit'
@@ -54,9 +58,17 @@ const OTHER_LOC  = 'd0000000-0000-0000-0000-000000000004'
 const CONTACT = { id: CONTACT_ID, location_id: LOC_ID, name: 'Wendy', glofox_membership_status: 'lead' }
 const STAFF = { id: 'u1', role: 'staff', full_name: 'Sarah Coach', email: 'sarah@un1t.ie', locations: [{ id: LOC_ID }] }
 
-function makeDb(updateSpy, contact = CONTACT) {
+function makeDb(updateSpy, contact = CONTACT, { dealsHere = [], dealsError = null, dealsSpy = vi.fn() } = {}) {
   return {
     from: vi.fn((table) => {
+      if (table === 'deals') {
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn((col, val) => { dealsSpy(col, val); return chain }),
+          limit: vi.fn(() => Promise.resolve({ data: dealsError ? null : dealsHere, error: dealsError })),
+        }
+        return chain
+      }
       if (table === 'contacts') {
         return {
           select: vi.fn(() => ({
@@ -105,6 +117,27 @@ describe('POST /api/contacts/[id]/pipeline-status', () => {
     const res = await POST(req({ cold: false }), props)
     expect(res.status).toBe(200)
     expect(updateSpy.mock.calls[0][0].pipeline_dismissed_at).toBeNull()
+  })
+
+  // HATCHCOLD.1 — a un1t.online studio's Acquisition board is re-sorted on the spot.
+  it('runs the un1t board pass for the contact\'s studio, after the dismissal is saved', async () => {
+    const updateSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb(updateSpy))
+    reclassifyUn1tBoardNow.mockResolvedValueOnce({ ran: true, result: { ok: true } })
+    const res = await POST(req({ cold: true }), props)
+    const json = await res.json()
+    expect(reclassifyUn1tBoardNow).toHaveBeenCalledWith(expect.anything(), LOC_ID, { userId: STAFF.id })
+    expect(updateSpy.mock.invocationCallOrder[0]).toBeLessThan(reclassifyUn1tBoardNow.mock.invocationCallOrder[0])
+    expect(json.data.board_pass).toBe('ran')
+  })
+
+  it('a failed un1t board pass still returns success (dismissal already saved)', async () => {
+    createServerClient.mockReturnValue(makeDb(vi.fn()))
+    reclassifyUn1tBoardNow.mockResolvedValueOnce({ ran: false, reason: 'error' })
+    const res = await POST(req({ cold: true }), props)
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.data.board_pass).toBe('error')
   })
 
   it('missing pipeline permission → 403', async () => {
@@ -190,5 +223,81 @@ describe('POST /api/contacts/[id]/pipeline-status', () => {
     expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith(
       CONTACT_ID, placed, { dealLocationId: LOC_ID, pipelineId: 'pl-1' },
     )
+  })
+})
+
+// HATCHCOLD.2 — Cold applies on the board it was pressed from.
+describe('POST /api/contacts/[id]/pipeline-status — a board at another studio', () => {
+  const HATCH_STAFF = { ...STAFF, locations: [{ id: OTHER_LOC }] }
+
+  it('writes that studio\'s row (not the contacts column), and places on that studio\'s board', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    const updateSpy = vi.fn()
+    const dealsSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb(updateSpy, CONTACT, { dealsHere: [{ id: 'd1' }], dealsSpy }))
+    const res = await POST(req({ cold: true, location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(200)
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(writeStudioDismissal).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      contactId: CONTACT_ID, locationId: OTHER_LOC, userId: STAFF.id,
+    }))
+    expect(writeStudioDismissal.mock.calls[0][1].dismissedAt).toBeTruthy()
+    expect(dealsSpy).toHaveBeenCalledWith('location_id', OTHER_LOC)
+    expect(dealsSpy).toHaveBeenCalledWith('status', 'open')
+    expect(ensureDealForContact.mock.calls[0][1]).toBe(OTHER_LOC)
+    expect(ensureDealForContact.mock.calls[0][5]).toEqual({ noCreate: true })
+    expect(reclassifyUn1tBoardNow).toHaveBeenCalledWith(expect.anything(), OTHER_LOC, { userId: STAFF.id })
+    expect(logPipelineDismissal.mock.calls[0][1].locationId).toBe(OTHER_LOC)
+  })
+
+  it('Return to pipeline clears that studio\'s row', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    createServerClient.mockReturnValue(makeDb(vi.fn(), CONTACT, { dealsHere: [{ id: 'd1' }] }))
+    await POST(req({ cold: false, location_id: OTHER_LOC }), props)
+    expect(writeStudioDismissal.mock.calls[0][1].dismissedAt).toBeNull()
+  })
+
+  it('no open deal for the contact at that studio → 404, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    const updateSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb(updateSpy, CONTACT, { dealsHere: [] }))
+    const res = await POST(req({ cold: true, location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(404)
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(writeStudioDismissal).not.toHaveBeenCalled()
+  })
+
+  it('no access at that studio → 404', async () => {
+    createServerClient.mockReturnValue(makeDb(vi.fn(), CONTACT, { dealsHere: [{ id: 'd1' }] }))
+    const res = await POST(req({ cold: true, location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(404)
+    expect(writeStudioDismissal).not.toHaveBeenCalled()
+  })
+
+  it('a failed deal read → 500, nothing written', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    createServerClient.mockReturnValue(makeDb(vi.fn(), CONTACT, { dealsError: { message: 'down' } }))
+    const res = await POST(req({ cold: true, location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(500)
+    expect(writeStudioDismissal).not.toHaveBeenCalled()
+  })
+
+  it('a failed studio write → 500', async () => {
+    getCurrentUser.mockResolvedValue(HATCH_STAFF)
+    writeStudioDismissal.mockResolvedValueOnce({ error: { message: 'boom' } })
+    createServerClient.mockReturnValue(makeDb(vi.fn(), CONTACT, { dealsHere: [{ id: 'd1' }] }))
+    const res = await POST(req({ cold: true, location_id: OTHER_LOC }), props)
+    expect(res.status).toBe(500)
+    expect(ensureDealForContact).not.toHaveBeenCalled()
+  })
+
+  it('location_id naming the home studio takes the contacts-column path', async () => {
+    const updateSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb(updateSpy))
+    const res = await POST(req({ cold: true, location_id: LOC_ID }), props)
+    expect(res.status).toBe(200)
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(writeStudioDismissal).not.toHaveBeenCalled()
+    expect(ensureDealForContact.mock.calls[0][5]).toEqual({ noCreate: false })
   })
 })

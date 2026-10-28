@@ -14,7 +14,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('./PersonActionBar', () => ({
-  default: ({ actions }) => <div data-actions={(actions || []).join(',')} />,
+  // HATCHCOLD.2 — the last props are kept for the board-scoped Cold tests; the
+  // markup stays exactly what the inline snapshots below pin.
+  default: (props) => {
+    globalThis.__dealCardBarProps = props
+    return <div data-actions={(props.actions || []).join(',')} />
+  },
 }))
 
 const { default: DealCard } = await import('./DealCard.jsx')
@@ -120,5 +125,27 @@ describe('DealCard — next-class chip follows the board badge', () => {
     expect(hatch).not.toContain('No class booked')
     const still = render2(boardDealMapper(boardCardOptionsForModule('acquisition'))(row))
     expect(still).toContain('No class booked')
+  })
+})
+
+// HATCHCOLD.2 — Cold follows the board's column and studio, not the contact's
+// home studio (whose slug can say something else for a dual-studio contact).
+describe('DealCard — Cold on the board it is drawn on', () => {
+  const bar = () => globalThis.__dealCardBarProps
+  const coldAtHome = { ...DEAL, contacts: { ...DEAL.contacts, pipeline_stage_slug: 'cold_lead' } }
+
+  it('the column slug decides the Cold label over the home slug', () => {
+    render({ stageSlug: 'cold_lead' })
+    expect(bar().isCold).toBe(true)
+    renderToStaticMarkup(<DealCard deal={coldAtHome} locationId="l-1" stageName="New Enquiry" stageSlug="new_lead" />)
+    expect(bar().isCold).toBe(false)
+  })
+  it('falls back to the home slug when no column slug is given', () => {
+    renderToStaticMarkup(<DealCard deal={coldAtHome} locationId="l-1" stageName="Cold" />)
+    expect(bar().isCold).toBe(true)
+  })
+  it('hands the board\'s studio to the action bar', () => {
+    render({})
+    expect(bar().boardLocationId).toBe('l-1')
   })
 })

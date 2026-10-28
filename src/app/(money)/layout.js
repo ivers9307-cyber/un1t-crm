@@ -64,6 +64,7 @@ const TABS = [
   // has no floor.
   { id: 'orders',   label: 'Orders',        href: '/orders',        perms: ['orders'], roles: MANAGER_ROLES },
   { id: 'offers',   label: 'Offer sales',   href: '/offer-sales',   perms: ['approvals_offer_purchases'] },
+  { id: 'class-fees', label: 'Class fees',  href: '/class-fees',    perms: ['class_fees'] },
   { id: 'contractor-invoices', label: 'Contractor invoices', href: '/schedule/invoices', perms: ['approvals_contractor_invoices'] },
   { id: 'expenses',            label: 'Staff expenses',      href: '/schedule/expenses', perms: ['approvals_fte_expenses'] },
 ]

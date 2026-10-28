@@ -58,6 +58,10 @@ export const ledgerKey = Object.freeze({
   regrant: (loc, un1tUserId) => `trial_regrant:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}`,
   book: (loc, un1tUserId, eventId) => `book:${part('loc', loc)}:${part('un1tUserId', un1tUserId)}:${part('eventId', eventId)}`,
   cancel: (loc, bookingId) => `cancel:${part('loc', loc)}:${part('bookingId', bookingId)}`,
+  // FEES.1: one key per charge ATTEMPT of one class fee (the idempotency-key
+  // header too). A refused attempt took no money, so the next attempt is a new
+  // key; a re-send within one attempt reuses it.
+  fee: (loc, feeId, attempt) => `fee:${part('loc', loc)}:${part('feeId', feeId)}:${attemptNo(attempt)}`,
   // UN1TWRITE.25: one key per reset ATTEMPT (n = 1, 2, 3, ... per person),
   // so the one-open and one-done indexes guard a double-send of the same
   // attempt and never block the next one. Rows written before it carry the
@@ -121,6 +125,8 @@ export async function beginAttempt(
   // A re-grant row names its person (mig 760 regrant_user_check and the
   // one-regrant index key on it).
   if (op === 'trial_regrant' && !un1tUserId) throw new TypeError('beginAttempt: a trial_regrant needs un1tUserId')
+  // A fee charge names its person and its fee (mig 781 fee_target_check).
+  if (op === 'fee_charge' && (!un1tUserId || !target)) throw new TypeError('beginAttempt: a fee_charge needs un1tUserId and target')
   const { data, error } = await db
     .from('un1t_write_events')
     .insert({

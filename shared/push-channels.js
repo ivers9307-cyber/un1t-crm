@@ -110,6 +110,7 @@ const CATEGORY_CHANNELS = Object.freeze({
   issue_resolved: 'updates',
   // Ops-health surveillance.
   checklist_compliance: 'alerts',
+  shelly_alert: 'alerts', // SHELLYALERTS.2 — smart plug key, offline and power-fault alerts
 })
 
 // data.type overrides — where one category spans channels. Types mirror

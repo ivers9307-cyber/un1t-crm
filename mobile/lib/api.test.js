@@ -38,11 +38,14 @@ vi.mock('./impersonate', () => ({
   readImpersonate: async () => null,
 }))
 
-import { api } from './api'
+import {
+  api, listShellyGroups, toggleShellyGroup, countUnadoptedShelly, _resetUnadoptedShellyCache, UNADOPTED_TTL_MS,
+} from './api'
 import { supabase } from './supabase'
 
 beforeEach(() => {
   delete global.fetch
+  _resetUnadoptedShellyCache()
   vi.mocked(supabase.auth.getSession).mockReset()
   vi.mocked(supabase.auth.getSession).mockImplementation(async () => OK_SESSION)
 })
@@ -202,5 +205,114 @@ describe('api() session guard (MOBILE-SESSION.1)', () => {
     // The retry produced a real token, so the request is authenticated — a
     // retry that silently sent an anonymous request would 401 instead.
     expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer jwt-1')
+  })
+})
+
+// SHELLYGROUPS.9 — the three group wrappers ride api(), so they inherit its
+// headers (x-impersonate-target included) and its envelope rules. Pinned: the
+// path, the method, the body, the location override, and that the toggle's
+// 429-with-pending body reaches the caller intact.
+describe('Shelly group wrappers', () => {
+  const okFetch = (body, status = 200) => vi.fn(async () => ({ ok: status < 400, status, json: async () => body }))
+
+  it('listShellyGroups GETs /api/shelly/groups at the given studio', async () => {
+    global.fetch = okFetch({ success: true, groups: [{ id: 'g1' }] })
+    const r = await listShellyGroups('loc-1')
+    expect(r).toEqual({ success: true, groups: [{ id: 'g1' }] })
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://test.local/api/shelly/groups')
+    expect(init.method).toBe('GET')
+    expect(init.headers['x-active-location']).toBe('loc-1')
+  })
+
+  it('toggleShellyGroup POSTs { state, until } and omits an absent until', async () => {
+    global.fetch = okFetch({ success: true, applied: 'all', pending_device_ids: [] })
+    await toggleShellyGroup('g 1', { state: 'on', until: '2026-08-24T23:00:00.000Z' }, 'loc-1')
+    let [url, init] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://test.local/api/shelly/groups/g%201/toggle')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ state: 'on', until: '2026-08-24T23:00:00.000Z' })
+
+    global.fetch = okFetch({ success: true, applied: 'all', pending_device_ids: [] })
+    await toggleShellyGroup('g1', { state: 'auto' }, 'loc-1')
+    ;[url, init] = global.fetch.mock.calls[0]
+    // "Until midnight" omits `until` so the route computes the STUDIO's midnight.
+    expect(JSON.parse(init.body)).toEqual({ state: 'auto' })
+  })
+
+  it('toggleShellyGroup hands back the 429 pending body unchanged', async () => {
+    const body = { success: true, applied: 'none', pending: true, code: 'rate_limited', pending_device_ids: ['d1'], message: 'busy' }
+    global.fetch = okFetch(body, 429)
+    expect(await toggleShellyGroup('g1', { state: 'off' }, 'loc-1')).toEqual(body)
+  })
+
+  it('countUnadoptedShelly counts supported rows nobody holds', async () => {
+    global.fetch = okFetch({
+      success: true,
+      devices: [
+        { device_id: 'a', supported: true, adopted: null },
+        { device_id: 'b', supported: true, adopted: null },
+        { device_id: 'c', supported: true, adopted: 'here' },
+        { device_id: 'd', supported: true, adopted: 'elsewhere' },
+        { device_id: 'e', supported: false, adopted: null },
+        { device_id: 'f', supported: null, adopted: null },
+      ],
+    })
+    expect(await countUnadoptedShelly('loc-1')).toBe(2)
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://test.local/api/shelly/discover')
+    expect(init.headers['x-active-location']).toBe('loc-1')
+  })
+
+  it('countUnadoptedShelly caches a read count per location for five minutes', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(Date.parse('2026-10-26T12:00:00Z'))
+      global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }] })
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      // Another studio is its own entry.
+      expect(await countUnadoptedShelly('loc-2')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      // Just inside the window: still cached. At the window: asked again.
+      vi.setSystemTime(Date.parse('2026-10-26T12:00:00Z') + UNADOPTED_TTL_MS - 1)
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      vi.setSystemTime(Date.parse('2026-10-26T12:00:00Z') + UNADOPTED_TTL_MS)
+      expect(await countUnadoptedShelly('loc-1')).toBe(1)
+      expect(global.fetch).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('countUnadoptedShelly({ fresh: true }) skips the cache and refills it (pull-to-refresh)', async () => {
+    global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }] })
+    expect(await countUnadoptedShelly('loc-1')).toBe(1)
+    global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }, { supported: true, adopted: null }] })
+    expect(await countUnadoptedShelly('loc-1')).toBe(1)
+    expect(global.fetch).toHaveBeenCalledTimes(0)
+    expect(await countUnadoptedShelly('loc-1', { fresh: true })).toBe(2)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    // The fresh answer is what the next ordinary call reads.
+    expect(await countUnadoptedShelly('loc-1')).toBe(2)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('countUnadoptedShelly never caches an unreadable list', async () => {
+    global.fetch = okFetch({ success: false, error: 'x' }, 500)
+    expect(await countUnadoptedShelly('loc-1')).toBeNull()
+    global.fetch = okFetch({ success: true, devices: [{ supported: true, adopted: null }] })
+    expect(await countUnadoptedShelly('loc-1')).toBe(1)
+  })
+
+  it('countUnadoptedShelly answers null — never 0 — when the list could not be read', async () => {
+    global.fetch = okFetch({ success: false, error: 'Connect your Shelly account first' }, 409)
+    expect(await countUnadoptedShelly('loc-1')).toBeNull()
+    global.fetch = vi.fn(async () => { throw new Error('Failed to fetch') })
+    expect(await countUnadoptedShelly('loc-1')).toBeNull()
+    global.fetch = okFetch({ success: true })
+    expect(await countUnadoptedShelly('loc-1')).toBeNull()
   })
 })
