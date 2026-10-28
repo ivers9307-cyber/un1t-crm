@@ -10,6 +10,7 @@
 // boolean true turns anything on. A flag that fails closed is the point.
 
 import { parseHiddenKeywords } from './class-keywords'
+import { appLinksFrom } from './un1t-online-app-links'
 
 export class Un1tSettingsReadError extends Error {
   /** @param {string} message @param {{ code?: string|null }} [opts] */
@@ -28,7 +29,8 @@ const isTrue = (v) => v === true
  *
  * @returns {{ writesEnabled: boolean, funnelEnabled: boolean, trialProductId: string|null,
  *   hiddenClassKeywords: string[], sendsWelcome: boolean, welcomeSetsLogin: boolean,
- *   sendsBookingConfirmation: boolean }}
+ *   sendsBookingConfirmation: boolean,
+ *   appLinks: { iosUrl: string|null, androidUrl: string|null, heading: string, body: string } }}
  */
 export function un1tWriteSettingsFrom(settings) {
   const block =
@@ -45,6 +47,7 @@ export function un1tWriteSettingsFrom(settings) {
     sendsWelcome: isTrue(block.un1t_sends_welcome),
     welcomeSetsLogin: isTrue(block.un1t_welcome_sets_login),
     sendsBookingConfirmation: isTrue(block.un1t_sends_booking_confirmation),
+    appLinks: appLinksFrom(settings),
   }
 }
 

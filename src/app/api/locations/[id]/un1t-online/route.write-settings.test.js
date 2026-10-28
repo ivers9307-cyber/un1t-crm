@@ -238,6 +238,33 @@ describe('UN1TWRITE.24 — funnel settings', () => {
   })
 })
 
+describe('UN1TWELCOME.1 — app links', () => {
+  it('a master PATCH merges app_links key by key and keeps every other key', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    settings = { un1t_online: { hidden_class_keywords: 'elite', app_links: { android_url: 'https://play.google.com/x', heading: 'Old' } } }
+    const res = await patch({ app_links: { ios_url: 'https://apps.apple.com/x', heading: null } })
+    expect(res.status).toBe(200)
+    expect(settings.un1t_online.app_links.ios_url).toBe('https://apps.apple.com/x')
+    expect(settings.un1t_online.app_links.android_url).toBe('https://play.google.com/x')
+    expect(settings.un1t_online.app_links).not.toHaveProperty('heading')
+    expect(settings.un1t_online.hidden_class_keywords).toBe('elite')
+    const j = await (await get()).json()
+    expect(j.data.write.app_links).toMatchObject({ ios_url: 'https://apps.apple.com/x', android_url: 'https://play.google.com/x' })
+  })
+
+  it('refuses a link that is not https', async () => {
+    getCurrentUser.mockResolvedValue(master)
+    expect((await patch({ app_links: { ios_url: 'http://x.test' } })).status).toBe(400)
+    expect(writes).toHaveLength(0)
+  })
+
+  it('a non-master gets 403', async () => {
+    getCurrentUser.mockResolvedValue(owner)
+    expect((await patch({ app_links: { ios_url: 'https://apps.apple.com/x' } })).status).toBe(403)
+    expect(writes).toHaveLength(0)
+  })
+})
+
 describe('UN1TWRITE.24 — writes off switches the funnel off', () => {
   it('a PATCH turning writes off clears funnel_enabled, so writes on again never re-arms it', async () => {
     getCurrentUser.mockResolvedValue(master)

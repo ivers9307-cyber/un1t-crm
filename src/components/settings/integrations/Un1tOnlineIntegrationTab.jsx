@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, AlertCircle, RefreshCw, Unplug, PlugZap } from 'lucide-react'
+import { DEFAULT_APP_SECTION_COPY } from '@/lib/un1t-online-app-links'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const EXPIRY_WARN_DAYS = 30
@@ -284,6 +285,35 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
               className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text"
             />
             <div className="text-un1t-subtle">Words separated by commas. A class whose name contains one is not offered to new people.</div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-un1t-text font-medium">App download links in the emails</div>
+            {[
+              ['ios_url', 'App Store link', 'https://apps.apple.com/...', 'input'],
+              ['android_url', 'Google Play link', 'https://play.google.com/...', 'input'],
+              ['heading', 'App section heading', DEFAULT_APP_SECTION_COPY.heading, 'input'],
+              ['body', 'App section text', DEFAULT_APP_SECTION_COPY.body, 'textarea'],
+            ].map(([key, label, placeholder, kind]) => {
+              const stored = write.app_links?.[key] || ''
+              const props = {
+                id: `un1t-app-${key}`,
+                key: `${key}:${stored}`,
+                defaultValue: stored,
+                placeholder,
+                onBlur: (e) => {
+                  const v = e.target.value.trim()
+                  if (v !== stored) saveWrite({ app_links: { [key]: v === '' ? null : v } })
+                },
+                className: 'w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm text-un1t-text',
+              }
+              return (
+                <div key={key} className="space-y-1">
+                  <label htmlFor={props.id} className="block text-un1t-subtle">{label}</label>
+                  {kind === 'textarea' ? <textarea rows={3} {...props} /> : <input type="url" {...props} />}
+                </div>
+              )
+            })}
+            <div className="text-un1t-subtle">Links must start with https://. With no link, the emails leave the app section out.</div>
           </div>
           {[
             ['un1t_sends_welcome', 'un1t.online sends its own welcome email', 'Then the CRM does not send its account email.'],
