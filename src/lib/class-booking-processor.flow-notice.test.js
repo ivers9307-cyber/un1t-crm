@@ -25,13 +25,15 @@ vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () =
 vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })), CLASS_CONFIRM_TEMPLATE: 'booking_class_confirmed_' }))
 vi.mock('@/lib/agent/approval-notify', () => ({ notifyAgentApprovalRequest: vi.fn(async () => ({})) }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: vi.fn(async () => ({ membershipSource: 'glofox', settings: {} })) }))
-vi.mock('@/lib/whatsapp-flow/booking-notice', () => ({ notifyFlowBookingOutcome: vi.fn(async () => ({ flow: true, sent: true })) }))
+vi.mock('@/lib/whatsapp-flow/booking-notice', () => ({ notifyFlowBookingOutcome: vi.fn(async () => ({ flow: true, sent: true })), readPaidTrialReply: vi.fn(async () => null) }))
 
-import { processClassBookingRequest, routeToReview } from './class-booking-processor'
+import { processClassBookingRequest, routeToReview, closeWithPaidTrialReply } from './class-booking-processor'
 import { createBooking, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
-import { notifyFlowBookingOutcome } from '@/lib/whatsapp-flow/booking-notice'
+import { notifyFlowBookingOutcome, readPaidTrialReply } from '@/lib/whatsapp-flow/booking-notice'
+import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
+import { fetchUserCredits } from '@/lib/glofox'
 
 function makeDb(contact) {
   const api = {
@@ -135,5 +137,66 @@ describe('FLOWACK.1 — a card whose customer was already told by email', () => 
     const r = await routeToReview(makeDb(member), req, 'un1t_trial_used', { provider: 'un1t_online', rowStatus: 'failed', rowLastError: 'trial_used_options_sent' })
     expect(r.outcome).toBe('needs_review')
     expect(notifyFlowBookingOutcome).not.toHaveBeenCalled()
+  })
+})
+
+// PAIDTRIALONLY.1 — where the studio has set its paid trial reply, someone new
+// is never minted an account or a free trial: they are sent the reply.
+describe('PAIDTRIALONLY.1 — paid trial only', () => {
+  const REPLY = 'New here? Start with the 14 Day Reset: https://x.test/trial'
+  const newcomer = { id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: null, last_attended_at: null }
+  const noAccount = async (args) => (args.createIfMissing ? { status: 'created', glofox_member_id: 'gm-new' } : { status: 'skipped' })
+
+  it('brand-new person: no account, no trial, no booking; the Flow customer gets the reply', async () => {
+    readPaidTrialReply.mockResolvedValue(REPLY)
+    findOrCreateGlofoxMember.mockImplementation(noAccount)
+    const r = await processClassBookingRequest(makeDb(newcomer), req)
+    expect(r).toEqual({ outcome: 'failed', detail: 'paid_trial_offered' })
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalledWith(expect.objectContaining({ createIfMissing: true }))
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(notifyFlowBookingOutcome).toHaveBeenCalledWith(expect.anything(), req, { outcome: 'paid_trial', text: REPLY })
+  })
+
+  it('brand-new person, reply not set: minted with the trial and booked, as before', async () => {
+    readPaidTrialReply.mockResolvedValue(null)
+    findOrCreateGlofoxMember.mockImplementation(noAccount)
+    const r = await processClassBookingRequest(makeDb(newcomer), req)
+    expect(r.outcome).toBe('booked')
+    expect(findOrCreateGlofoxMember).toHaveBeenCalledWith(expect.objectContaining({ createIfMissing: true, attachTrial: true }))
+  })
+
+  it('an unreadable reply setting throws (the queue retries) and mints nothing', async () => {
+    readPaidTrialReply.mockRejectedValue(new Error('unreadable'))
+    findOrCreateGlofoxMember.mockImplementation(noAccount)
+    await expect(processClassBookingRequest(makeDb(newcomer), req)).rejects.toThrow('unreadable')
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalledWith(expect.objectContaining({ createIfMissing: true }))
+  })
+
+  it('never-attended account with no credits: the reply, not a credit-grant card', async () => {
+    readPaidTrialReply.mockResolvedValue(REPLY)
+    fetchUserCredits.mockResolvedValueOnce([])
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb(member), req)
+    expect(r).toEqual({ outcome: 'failed', detail: 'paid_trial_offered' })
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+
+  it('a member with credits still books when the reply is set', async () => {
+    readPaidTrialReply.mockResolvedValue(REPLY)
+    const r = await processClassBookingRequest(makeDb(member), req)
+    expect(r.outcome).toBe('booked')
+    expect(readPaidTrialReply).not.toHaveBeenCalled()
+  })
+
+  it('closeWithPaidTrialReply records why: offered, not sent, or not a Flow row', async () => {
+    const stamp = vi.fn(async () => {})
+    const notify = vi.fn()
+    notify.mockResolvedValueOnce({ flow: true, sent: true })
+    expect(await closeWithPaidTrialReply({}, req, REPLY, { stamp, notify })).toEqual({ outcome: 'failed', detail: 'paid_trial_offered' })
+    notify.mockResolvedValueOnce({ flow: true, sent: false, reason: 'window_closed' })
+    expect((await closeWithPaidTrialReply({}, req, REPLY, { stamp, notify })).detail).toBe('paid_trial_reply_not_sent')
+    notify.mockResolvedValueOnce({ flow: false, sent: false })
+    expect((await closeWithPaidTrialReply({}, req, REPLY, { stamp, notify })).detail).toBe('paid_trial_only_not_flow')
+    expect(stamp).toHaveBeenLastCalledWith({}, 'r1', { status: 'failed', last_error: 'paid_trial_only_not_flow' })
   })
 })

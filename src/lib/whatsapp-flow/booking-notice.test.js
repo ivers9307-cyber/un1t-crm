@@ -15,6 +15,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.f
 
 import {
   FLOW_SUBMISSION_BODY, findFlowThread, sendFlowSubmissionReply, notifyFlowBookingOutcome,
+  readPaidTrialReply, PaidTrialReplyReadError,
 } from './booking-notice.js'
 import { DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
 import { sendAgentThreadMessage } from '@/lib/agent/notify'
@@ -233,5 +234,34 @@ describe('notifyFlowBookingOutcome', () => {
     sendAgentThreadMessage.mockRejectedValueOnce(new Error('boom'))
     await expect(notifyFlowBookingOutcome(makeDb({ markers: [marker()] }), REQUEST, { outcome: 'needs_review', approvalId: 'amr1' }))
       .resolves.toMatchObject({ sent: false })
+  })
+})
+
+describe('PAIDTRIALONLY.1 — the paid trial reply', () => {
+  it('readPaidTrialReply: null when the studio has not set it', async () => {
+    expect(await readPaidTrialReply({}, 'loc1')).toBeNull()
+  })
+
+  it('readPaidTrialReply: the trimmed text when set', async () => {
+    resolveAgentSettings.mockResolvedValueOnce({ ok: true, settings: { flow_paid_trial_text: '  Try the Reset: https://x.test/trial  ' }, location: { id: 'loc1' } })
+    expect(await readPaidTrialReply({}, 'loc1')).toBe('Try the Reset: https://x.test/trial')
+  })
+
+  it('readPaidTrialReply: an unreadable setting throws (never falls back to the free trial)', async () => {
+    resolveAgentSettings.mockResolvedValueOnce({ ok: false, reason: 'read_failed' })
+    await expect(readPaidTrialReply({}, 'loc1')).rejects.toBeInstanceOf(PaidTrialReplyReadError)
+  })
+
+  it('paid_trial: sends the given text on the Flow thread, with no card and no error log', async () => {
+    const r = await notifyFlowBookingOutcome(makeDb({ markers: [marker()] }), REQUEST, { outcome: 'paid_trial', text: 'Start the Reset: https://x.test/trial' })
+    expect(r).toMatchObject({ flow: true, sent: true })
+    expect(sendAgentThreadMessage.mock.calls[0][1]).toEqual({ channel: 'whatsapp', conversationId: 'conv1', text: 'Start the Reset: https://x.test/trial' })
+    expect(logError).not.toHaveBeenCalled()
+  })
+
+  it('paid_trial with no text: sends nothing and says so', async () => {
+    const r = await notifyFlowBookingOutcome(makeDb({ markers: [marker()] }), REQUEST, { outcome: 'paid_trial', text: '' })
+    expect(r).toMatchObject({ flow: true, sent: false, reason: 'no_text' })
+    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
   })
 })

@@ -81,7 +81,9 @@ export function templateButtonsError(buttons = [], { ignoreEmptyLabels = false }
 
     if (type === 'FLOW') {
       if (!String(btn?.flow_id || '').trim()) return `${where} needs a Flow ID.`
-      if (!String(btn?.navigate_screen || '').trim()) return `${where} needs an entry screen.`
+      // PAIDTRIALONLY.1 — a data-exchange Flow (the booking Flow, backed by
+      // our endpoint) opens on whatever the endpoint answers: no entry screen.
+      if (!isDataExchangeFlow(btn) && !String(btn?.navigate_screen || '').trim()) return `${where} needs an entry screen.`
     }
 
     if (type === 'COPY_CODE' && !String(btn?.example || '').trim()) {
@@ -94,6 +96,11 @@ export function templateButtonsError(buttons = [], { ignoreEmptyLabels = false }
   if (count('PHONE_NUMBER') > MAX_PHONE_BUTTONS) return `A template can have only one phone-number button (this one has ${count('PHONE_NUMBER')}).`
 
   return null
+}
+
+/** PAIDTRIALONLY.1 — a Flow button that opens through the Flow's endpoint (data exchange). */
+export function isDataExchangeFlow(btn) {
+  return String(btn?.flow_action || '').toLowerCase() === 'data_exchange'
 }
 
 // What Meta accepts on each button type. The editor mutates one button object
@@ -123,6 +130,11 @@ export function normalizeButtonsForMeta(buttons = []) {
     for (const key of allowed) {
       if (key === 'example') continue
       if (btn?.[key] !== undefined) out[key] = btn[key]
+    }
+    // A data-exchange Flow carries no entry screen; Meta wants the action lowercase.
+    if (type === 'FLOW' && isDataExchangeFlow(btn)) {
+      delete out.navigate_screen
+      out.flow_action = 'data_exchange'
     }
     const wantsExample = type === 'COPY_CODE' || (type === 'URL' && VARIABLE.test(String(btn?.url || '')))
     const example = exampleValues(btn)

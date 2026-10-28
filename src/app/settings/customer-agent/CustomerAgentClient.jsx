@@ -814,6 +814,14 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           <p className="text-xs text-un1t-muted mt-1">Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead. Leave blank to use the default shown.</p>
         </div>
 
+        <div>
+          <FieldLabel tag={sourceTag(['flow_paid_trial_text'])}>Booking form paid trial reply (WhatsApp)</FieldLabel>
+          <input className={inputCls} maxLength={500} value={settings.flow_paid_trial_text || ''}
+            onChange={e => setField('flow_paid_trial_text', e.target.value)}
+            placeholder="New to us? Start with our paid trial here: https://…" />
+          <p className="text-xs text-un1t-muted mt-1">When set, someone new to the studio who books through the WhatsApp booking form is not booked and gets no free trial: they are sent this message instead, so put your paid trial link in it. Members, returners and anyone with credits still book as normal. Leave blank to book new people with the free trial as before.</p>
+        </div>
+
         {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
             request, so a decline is never silence. Default mirrors
             DEFAULT_APPROVAL_DECLINE_TEXT in notify.js. */}
