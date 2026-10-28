@@ -1,4 +1,5 @@
-// UN1TWRITE.14 — the staff un1t.online class list, book and cancel routes.
+// UN1TWRITE.14 — the staff un1t.online class list, book and cancel routes
+// (and UN1TMOVE.1's move).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
@@ -6,15 +7,16 @@ vi.mock('@/lib/auth', async () => ({ ...(await vi.importActual('@/lib/auth')), g
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/location-time', async (o) => ({ ...(await o()), getLocationZone: vi.fn(async () => 'Europe/Dublin') }))
 vi.mock('@/lib/un1t-online-settings', async (o) => ({ ...(await o()), readUn1tWriteSettings: vi.fn() }))
-vi.mock('@/lib/un1t-online-write-ops', () => ({ book: vi.fn(), cancel: vi.fn() }))
+vi.mock('@/lib/un1t-online-write-ops', () => ({ book: vi.fn(), cancel: vi.fn(), moveBooking: vi.fn() }))
 
 import { GET } from './route.js'
 import { POST as BOOK, maxDuration as bookMax } from './book/route.js'
 import { POST as CANCEL, maxDuration as cancelMax } from './cancel/route.js'
+import { POST as MOVE, maxDuration as moveMax } from './move/route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
-import { book, cancel } from '@/lib/un1t-online-write-ops'
+import { book, cancel, moveBooking } from '@/lib/un1t-online-write-ops'
 
 const HATCH = 'a0000000-0000-4000-8000-000000000002'
 const C1 = 'c0000000-0000-4000-8000-000000000001'
@@ -128,5 +130,79 @@ describe('POST book / cancel', () => {
     const res = await post(CANCEL, { booking_id: 'bk-1' })
     expect(res.status).toBe(200)
     expect(cancel.mock.calls[0][1]).toMatchObject({ bookingId: 'bk-1', un1tUserId: 'usr-1', origin: 'staff', actor: { id: 'u-s' } })
+  })
+})
+
+describe('UN1TMOVE.2 — the late-window rule on the staff routes', () => {
+  it('a cancel of a booking moved inside the late window is a 409 in staff words; an unreadable check too', async () => {
+    cancel.mockResolvedValueOnce(done({ verdict: 'refused', id: null, code: 'cancel_after_late_move', message: 'raw' }))
+    let res = await post(CANCEL, { booking_id: 'bk-1' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/will not cancel it/)
+    cancel.mockResolvedValueOnce(done({ verdict: 'refused', id: null, code: 'cancel_late_move_unreadable', message: 'raw', retryable: true }))
+    res = await post(CANCEL, { booking_id: 'bk-1' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/could not be checked/)
+  })
+
+  it('a move to another day inside the window is a 409 in staff words', async () => {
+    moveBooking.mockResolvedValueOnce(done({ verdict: 'refused', id: null, code: 'move_late_other_day', message: 'raw' }))
+    const res = await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-2' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/only move to another class on the same day/)
+  })
+})
+
+describe('POST move (UN1TMOVE.1)', () => {
+  it('leaves room for a check read (maxDuration 120)', () => {
+    expect(moveMax).toBe(120)
+  })
+
+  it("moves this contact's booking with origin staff, the actor and the booking's own class as the original", async () => {
+    moveBooking.mockResolvedValue(done({ id: 'bk-1' }))
+    const res = await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-2' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ un1t_booking_id: 'bk-1', ledger_id: 'l-1', chat_template: null })
+    expect(moveBooking.mock.calls[0][1]).toMatchObject({
+      locationId: HATCH, contactId: C1, un1tUserId: 'usr-1', bookingId: 'bk-1', eventId: 'ev-2', fromEventId: 'ev-1',
+      origin: 'staff', actor: { id: 'u-s' },
+    })
+  })
+
+  it("a booking that is not this contact's at this studio → 404, nothing sent", async () => {
+    expect((await post(MOVE, { booking_id: 'bk-other', event_id: 'ev-2' })).status).toBe(404)
+    expect((await post(MOVE, { booking_id: 'bk-none', event_id: 'ev-2' })).status).toBe(404)
+    expect(moveBooking).not.toHaveBeenCalled()
+  })
+
+  it('a target that is not a scheduled future class at this studio → 409, nothing sent', async () => {
+    for (const ev of ['ev-old', 'ev-x', 'ev-nowhere']) {
+      const res = await post(MOVE, { booking_id: 'bk-1', event_id: ev })
+      expect(res.status, ev).toBe(409)
+    }
+    tables.un1t_events.push({ location_id: 'elsewhere', un1t_id: 'ev-away', title: 'AWAY', status: 'scheduled', starts_at: at(24) })
+    expect((await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-away' })).status).toBe(409)
+    expect(moveBooking).not.toHaveBeenCalled()
+  })
+
+  it('a stranger to the studio 403 and writes off 400, before any read of the booking', async () => {
+    getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'other' }], rolesByLocation: { other: 'staff' } })
+    expect((await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-2' })).status).toBe(403)
+    getCurrentUser.mockResolvedValue(staff)
+    readUn1tWriteSettings.mockResolvedValue({ membershipSource: 'un1t_online', studioName: 'Hatch Street', organizationId: 'org-1', settings: { writesEnabled: false } })
+    expect((await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-2' })).status).toBe(400)
+    expect(moveBooking).not.toHaveBeenCalled()
+  })
+
+  it('a refusal is 409 with its words; unknown is 502; odd ids are 400', async () => {
+    moveBooking.mockResolvedValue(done({ verdict: 'refused', id: null, code: 'EVENT_FULL', message: 'This class is full' }))
+    let res = await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-2' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('This class is full')
+    moveBooking.mockResolvedValue(done({ verdict: 'unknown', id: null }))
+    res = await post(MOVE, { booking_id: 'bk-1', event_id: 'ev-2' })
+    expect(res.status).toBe(502)
+    expect((await post(MOVE, { booking_id: 'bk-1', event_id: 'un1t:ev-2' })).status).toBe(400)
+    expect((await post(MOVE, { booking_id: 'un1t:bk-1', event_id: 'ev-2' })).status).toBe(400)
   })
 })

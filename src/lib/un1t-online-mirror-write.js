@@ -42,6 +42,11 @@
 //   contact_id is left out, never NULL over the sync's link. An unknown
 //   event or a status C does not project writes nothing: the next sync
 //   projects the booking. Never an update or a delete.
+// - move (UN1TMOVE.1): the moved booking as a book writes it (the same
+//   un1t_bookings key, so its event_id moves; the same class_bookings key, so
+//   the coach's list shows the new class at once), then the credits. When
+//   un1t.online answered a NEW booking id, the old one is re-read and written
+//   as a cancel's is, so the old class does not keep showing them booked.
 // - checkout: nothing (no money has moved). trial: Task 10.
 
 import { mapBooking, mapClient } from './un1t-online-map.js'
@@ -67,29 +72,39 @@ function meta({ locationId, op, ledgerId }, code) {
  * Bring the un1t_* mirror in step with a done write.
  *
  * @param {object} db service-role client
- * @param {{ op: 'book'|'cancel'|'create_client'|'trial'|'checkout', locationId: string,
+ * @param {{ op: 'book'|'cancel'|'move'|'create_client'|'trial'|'checkout', locationId: string,
  *   contactId?: string|null, un1tUserId?: string|null, studioId?: string|null,
- *   data?: object|null, requestedAt?: string|null, ledgerId?: string|null }} args
+ *   data?: object|null, requestedAt?: string|null, ledgerId?: string|null,
+ *   fromBookingId?: string|null }} args
+ *   fromBookingId: a move's original booking id (re-read when the answer names another).
  *   requestedAt (when the write was sent) is a NEW un1t_clients row's
  *   synced_at; a booking write never sets synced_at (the column default on
  *   insert, untouched on update). ledgerId only feeds log lines.
  * @param {{ read: (path: string) => Promise<object>, now?: () => Date }} deps
  *   read is the writer's budget-counted GET.
  * @returns {Promise<{ ok: boolean, conflict?: 'un1t_link_conflict', row?: object|null }>}
- *   book/cancel also return `row`, the un1t_bookings row built (null when
+ *   book/cancel/move also return `row`, the un1t_bookings row built (null when
  *   there was nothing to write).
  */
 export async function applyUn1tWriteToMirror(db, args, { read, now = () => new Date() } = {}) {
   const op = args?.op
   if (op === 'checkout') return { ok: true }
-  if (op !== 'book' && op !== 'cancel' && op !== 'create_client' && op !== 'trial') {
+  if (op !== 'book' && op !== 'cancel' && op !== 'move' && op !== 'create_client' && op !== 'trial') {
     throw new TypeError(`applyUn1tWriteToMirror: unknown op '${op}'`)
   }
   if (!args.locationId) throw new TypeError('applyUn1tWriteToMirror: locationId is required')
   const stamp = now().toISOString()
   if (op === 'create_client') return mirrorCreate(db, args, stamp)
   if (op === 'trial') return mirrorTrial(db, args, { read, stamp })
-  return mirrorBooking(db, args, { read, stamp })
+  const out = await mirrorBooking(db, args, { read, stamp })
+  if (op !== 'move') return out
+  // A move answered with another booking id: the old booking's own read says
+  // where it now stands (cancelled, most likely). Its credits were refreshed above.
+  const fromId = idText(args.fromBookingId)
+  const newId = idText(args.data?.id)
+  if (!fromId || !newId || sameId(fromId, newId)) return out
+  const old = await mirrorBooking(db, { ...args, op: 'cancel', data: { id: fromId } }, { read, stamp, credits: false })
+  return { ...out, ok: out.ok && old.ok }
 }
 
 /**
@@ -135,7 +150,7 @@ async function mirrorTrial(db, args, { read, stamp }) {
   return { ok: ok && credited }
 }
 
-async function mirrorBooking(db, args, { read, stamp }) {
+async function mirrorBooking(db, args, { read, stamp, credits = true }) {
   const { op, locationId, contactId, un1tUserId, data, requestedAt } = args
   if (typeof read !== 'function') throw new TypeError('applyUn1tWriteToMirror: read is required for a booking')
   let source = isObj(data) ? data : null
@@ -185,7 +200,7 @@ async function mirrorBooking(db, args, { read, stamp }) {
     ok = false
   }
 
-  const credited = await refreshCredits(db, args, { read, stamp })
+  const credited = credits ? await refreshCredits(db, args, { read, stamp }) : true
   // UN1TWRITE.11: only when the booking row above had something to say.
   const projected = row ? await writeClassBooking(db, args, { source, row, stamp }) : true
   return { ok: ok && credited && projected, row }

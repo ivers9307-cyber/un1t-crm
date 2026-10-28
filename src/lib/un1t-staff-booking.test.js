@@ -60,6 +60,17 @@ describe('gateUn1tStaffBooking', () => {
 })
 
 describe('staffWriteAnswer', () => {
+  it('UN1TMOVE.1: a move answers like a cancel (the booking id), with its own refusal and unconfirmed copy', () => {
+    const m = (over) => ({ verdict: 'done', id: 'bk-1', code: null, message: null, alreadyBooked: false, ledgerId: 'l-1', ...over })
+    expect(staffWriteAnswer(m({}), { op: 'move' })).toEqual({ status: 200, body: { success: true, data: { un1t_booking_id: 'bk-1', ledger_id: 'l-1' } } })
+    expect(staffWriteAnswer(m({ verdict: 'refused', code: 'x', message: null }), { op: 'move' }).body.error).toBe('un1t.online refused the move.')
+    expect(staffWriteAnswer(m({ verdict: 'unknown', code: 'move_unverified', message: 'raw' }), { op: 'move' })).toMatchObject({ status: 502, body: { error: UN1T_STAFF_COPY.moveUnverified } })
+    // UN1TMOVE.2 — the late-window rule in staff words.
+    expect(staffWriteAnswer(m({ verdict: 'refused', code: 'move_late_other_day', message: 'raw' }), { op: 'move' })).toMatchObject({ status: 409, body: { code: 'move_late_other_day', error: UN1T_STAFF_COPY.moveLateOtherDay } })
+    expect(staffWriteAnswer(m({ verdict: 'refused', code: 'cancel_after_late_move', message: 'raw' }), { op: 'cancel' })).toMatchObject({ status: 409, body: { error: UN1T_STAFF_COPY.cancelAfterLateMove } })
+    expect(staffWriteAnswer(m({ verdict: 'refused', code: 'cancel_late_move_unreadable', message: 'raw' }), { op: 'cancel' }).body.error).toBe(UN1T_STAFF_COPY.lateCheckUnreadable)
+  })
+
   const r = (over) => ({ verdict: 'done', id: 'bk-1', code: null, message: null, alreadyBooked: false, ledgerId: 'l-1', ...over })
   it('done, already booked, refused, budget, unknown and unconfirmed-already-booked', () => {
     expect(staffWriteAnswer(r({}), { op: 'book' })).toEqual({ status: 200, body: { success: true, data: { un1t_booking_id: 'bk-1', already_booked: false, message: null, ledger_id: 'l-1' } } })

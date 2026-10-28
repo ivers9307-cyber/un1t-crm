@@ -16,7 +16,8 @@ vi.mock('@/lib/agent/notify', () => ({
   sendAgentThreadMessage: vi.fn(async () => ({ sent: true })),
   buildBookingConfirmationText: vi.fn(({ className, classTime }) => `Booked ${className} ${classTime}`),
   buildCancellationConfirmationText: vi.fn(({ className, classTime }) => `Cancelled ${className} ${classTime}`),
-  agentConfirmationTemplates: vi.fn(async () => ({ booking: 'TPL booking', cancellation: 'TPL cancel' })),
+  buildClassMoveConfirmationText: vi.fn(({ from, to, template }) => `${template}: ${from} -> ${to}`),
+  agentConfirmationTemplates: vi.fn(async () => ({ booking: 'TPL booking', cancellation: 'TPL cancel', classMove: 'TPL move' })),
 }))
 
 import { sendAgentThreadMessage, buildBookingConfirmationText, buildCancellationConfirmationText } from '@/lib/agent/notify'
@@ -242,5 +243,22 @@ describe('executeMiaUn1tCard', () => {
     expect(h.execute).toHaveBeenCalledOnce()
     expect(r.executed.record_only).toBe(true)
     expect(db.reads).toEqual([])
+  })
+})
+
+// UN1TMOVE.1 — a move card (class_booking + move_from_booking_id).
+describe('executeMiaUn1tCard: a move card', () => {
+  const MOVE = (over = {}) => BOOK({ reason: 'mia_move', event_id: 'ev-2', class_name: 'BASE', move_from_booking_id: 'bk-1', move_from_class_name: 'RALLY', move_from_class_time: 'Tue 20 Oct, 7:00am', ...over })
+  it("runs D's executor after the account guard and sends the studio's editable MOVED text, from the old class to the new", async () => {
+    const r = await executeMiaUn1tCard(fakeDb(), { row: ROW('class_booking', MOVE()), details: MOVE(), actor: { id: 'staff-1' }, expiredBeforeExecution: false })
+    expect(h.execute).toHaveBeenCalledOnce()
+    expect(h.execute.mock.calls[0][1].row.details).toMatchObject({ move_from_booking_id: 'bk-1' })
+    expect(r.finalStatus).toBe('actioned')
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    // UN1TMOVE.2 — the dedicated moved message, never the booking one.
+    expect(sendAgentThreadMessage.mock.calls[0][1].text).toBe('TPL move: RALLY, Tue 20 Oct, 7:00am -> BASE, Tue 20 Oct, 7:00am')
+    expect(buildBookingConfirmationText).not.toHaveBeenCalled()
+    expect(buildCancellationConfirmationText).not.toHaveBeenCalled()
+    expect(r.details.confirmation).toEqual({ sent: true })
   })
 })

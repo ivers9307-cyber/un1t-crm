@@ -431,6 +431,20 @@ describe("whyFlagged: Mia's un1t.online cards", () => {
     expect(cancel).toMatch(/Mia drafted this cancellation because the studio's booking mode needs approval/)
   })
 
+  // UN1TMOVE.1 — Mia's move cards (class_booking + move_from_booking_id).
+  it('move cards say a move is approved, from which class, and never Glofox', () => {
+    const from = { move_from_booking_id: 'bk-1', move_from_class_name: 'RALLY', move_from_class_time: 'Tue 20 Oct, 7:00am' }
+    const draft = whyFlagged(mia('class_booking', { reason: 'mia_move', ...from }))
+    noGlofoxNoDash(draft)
+    expect(draft).toMatch(/Mia drafted this move from RALLY \(Tue 20 Oct, 7:00am\)/)
+    expect(draft).toMatch(/Approving moves the booking in un1t\.online in one step/)
+    const unknown = whyFlagged(mia('class_booking', { reason: 'move_outcome_unknown', ...from }))
+    noGlofoxNoDash(unknown)
+    expect(unknown).toMatch(/moves it only if it is still in the original class/)
+    expect(whyFlagged(mia('class_booking', { reason: 'move_rejected', result: { message: 'Class is full' }, ...from })))
+      .toMatch(/^un1t\.online refused the move: "Class is full"\./)
+  })
+
   it('outcome unknown and refused cancellations read in un1t.online terms', () => {
     for (const [kind, reason] of [['class_booking', 'un1t_outcome_unknown'], ['class_cancellation', 'cancel_outcome_unknown'], ['class_cancellation', 'cancel_rejected']]) {
       noGlofoxNoDash(whyFlagged(mia(kind, { reason })))

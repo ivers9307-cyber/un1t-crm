@@ -3,7 +3,7 @@
 //   1. the SYNC cannot write: no sync-side module reaches the write transport,
 //      its ops, its ledger or its mirror, however many imports deep;
 //   2. the WRITE side cannot misbehave: every call to the writer's send( names
-//      a policy and one of the seven allowed endpoints, the endpoints and body
+//      a policy and one of the nine allowed endpoints, the endpoints and body
 //      keys the CRM never sends appear nowhere in src/, POST /credits/grant
 //      only inside regrantTrialCredits, called only from grantTrial
 //      (TRIALREGRANT.1, Richard's decision 20 Oct 2026), the write modules
@@ -251,10 +251,12 @@ export function fenceBreaches(entries, io) {
 // ── 2. Calls to the writer's send( ─────────────────────────────────────────
 const HTTP_VERB = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/i
 const POLICIES = ['verify', 'never', 'idempotent']
-// The eight writes the CRM may make, with `${…}` in a path read as :id.
+// The nine writes the CRM may make, with `${…}` in a path read as :id.
 export const ALLOWED_WRITES = Object.freeze([
   'POST /bookings',
   'PATCH /bookings/:id/cancel',
+  // UN1TMOVE.1: moveBooking's one-call reschedule (MoveBookingDto: eventId only).
+  'POST /bookings/:id/move',
   'POST /users/clients',
   'POST /auth/forgot-password',
   'POST /purchases/charge',
@@ -351,7 +353,7 @@ export function sendsWithoutPolicy(label, sf, opPolicy, opts = { writeSide: true
     .map((c) => `${label}:${c.line}`)
 }
 
-/** "line N" of each send( that is not one of the seven writes. */
+/** "line N" of each send( that is not one of the allowed writes (ALLOWED_WRITES). */
 export function sendsOffAllowlist(label, sf, opts = { writeSide: true }) {
   return writerSendCalls(sf, opts).filter((c) => !isAllowedWrite(c)).map((c) => `${label}:${c.line}`)
 }
@@ -550,7 +552,7 @@ describe('the send( scanner (canaries)', () => {
     expect(sendsWithoutPolicy('x.js', sf, OP_POLICY)).toEqual(['x.js:1', 'x.js:2', 'x.js:3', 'x.js:4', 'x.js:5', 'x.js:6', 'x.js:7', 'x.js:8', 'x.js:9', 'x.js:10', 'x.js:11', 'x.js:13'])
   })
 
-  it('flags a send that is not one of the seven writes, a variable verb or path, and a banned verb', () => {
+  it('flags a send that is not one of the allowed writes, a variable verb or path, and a banned verb', () => {
     const sf = parse([
       "writer.send('POST', '/bookings', {})",
       "writer.send('PATCH', `/bookings/${id}/cancel`, {})",
@@ -571,9 +573,14 @@ describe('the send( scanner (canaries)', () => {
       "writer.send('PATCH', '/bookings/1/cancel', {})",
       "writer.send('PUT', '/credits/grant', {})",
       "writer.send('POST', '/credits/grant/x', {})",
+      "writer.send('POST', `/bookings/${id}/move`, {})",
+      "writer.send('PATCH', `/bookings/${id}/move`, {})",
+      "writer.send('POST', '/bookings/1/move', {})",
     ].join('\n'))
-    // Line 10 (POST /credits/grant) is the seventh allowed write (TRIALREGRANT.1); the op and policy are checked elsewhere.
-    expect(sendsOffAllowlist('x.js', sf)).toEqual(['x.js:7', 'x.js:8', 'x.js:9', 'x.js:11', 'x.js:12', 'x.js:13', 'x.js:14', 'x.js:15', 'x.js:16', 'x.js:17', 'x.js:18', 'x.js:19'])
+    // Line 10 (POST /credits/grant) is an allowed write (TRIALREGRANT.1), and line 20 (POST
+    // /bookings/:id/move, UN1TMOVE.1); the op and policy are checked elsewhere. A move by
+    // another verb, or with a literal id the guard cannot read as :id, is off the list.
+    expect(sendsOffAllowlist('x.js', sf)).toEqual(['x.js:7', 'x.js:8', 'x.js:9', 'x.js:11', 'x.js:12', 'x.js:13', 'x.js:14', 'x.js:15', 'x.js:16', 'x.js:17', 'x.js:18', 'x.js:19', 'x.js:21', 'x.js:22'])
   })
 
   it('sees a verb-first send in any file, but another send( only in a write-side file', () => {
@@ -804,10 +811,10 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
   const sendFiles = () => filesMentioning(/\bsend\b/)
   const policyTable = () => frozenTable(parsedFile(allSources().find((e) => e.key === TRANSPORT)), 'UN1T_OP_POLICY')
 
-  it('the policy table is the one the spec fixes: book, cancel, create_client verify; forgot_password, trial, trial_regrant never; checkout, fee_charge idempotent', () => {
+  it('the policy table is the one the spec fixes: book, cancel, move, create_client verify; forgot_password, trial, trial_regrant never; checkout, fee_charge idempotent', () => {
     expect(policyTable()).toEqual({
       book: 'verify', cancel: 'verify', create_client: 'verify', forgot_password: 'never', trial: 'never', checkout: 'idempotent', trial_regrant: 'never',
-      fee_charge: 'idempotent',
+      fee_charge: 'idempotent', move: 'verify',
     })
   })
 
@@ -817,19 +824,22 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(bad).toEqual([])
   })
 
-  it("every send( call's method and path template is one of the eight allowed writes", () => {
+  it("every send( call's method and path template is one of the nine allowed writes", () => {
     const bad = sendFiles().flatMap((e) => sendsOffAllowlist(e.key, e.sf, { writeSide: writeSideFile(e) }))
     expect(bad).toEqual([])
   })
 
-  it('the scan really sees the ops module\'s nine sends (an empty result is not a broken scanner)', () => {
+  it('the scan really sees the ops module\'s ten sends (an empty result is not a broken scanner)', () => {
     const ops = sendFiles().find((e) => e.key === OPS)
     expect(ops).toBeTruthy()
     const calls = writerSendCalls(ops.sf, { writeSide: true })
     expect(calls.map((c) => `${c.verb} ${c.path}`).sort()).toEqual([
-      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /credits/grant', 'POST /purchases/charge',
+      'PATCH /bookings/:id/cancel', 'POST /auth/forgot-password', 'POST /bookings', 'POST /bookings/:id/move', 'POST /credits/grant', 'POST /purchases/charge',
       'POST /purchases/charge-custom', 'POST /purchases/checkout', 'POST /purchases/checkout', 'POST /users/clients',
     ])
+    // UN1TMOVE.1: the move is op move, re-sent only when its check read says absent.
+    const move = calls.filter((c) => c.op === 'move')
+    expect(move.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /bookings/:id/move verify'])
     // FEES.1: the class fee is op fee_charge, re-sent only with its own key.
     const fee = calls.filter((c) => c.op === 'fee_charge')
     expect(fee.map((c) => `${c.verb} ${c.path} ${c.policy}`)).toEqual(['POST /purchases/charge-custom idempotent'])
@@ -843,7 +853,7 @@ describe('UN1TWRITE.7 — the write side cannot misbehave', { timeout: WHOLE_REP
     expect(trial.every((c) => c.policy === 'never')).toBe(true)
   })
 
-  it("the transport's own allowlist is pinned: exactly the eight writes, and the banned body keys it refuses", () => {
+  it("the transport's own allowlist is pinned: exactly the nine writes, and the banned body keys it refuses", () => {
     const sf = parsedFile(allSources().find((e) => e.key === TRANSPORT))
     const entries = []
     const visit = (node) => {

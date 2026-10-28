@@ -45,6 +45,7 @@ beforeEach(() => {
     afterBooking: vi.fn(async () => ({ confirmation: 'sent' })),
     studioContext: vi.fn(async () => ({ blocks: [], studioName: 'Hatch Street', address: null, zone: 'Europe/Dublin' })),
     cancel: vi.fn(async () => ({ verdict: 'done', id: 'bk-1', ledgerId: 'l-c' })),
+    move: vi.fn(async () => ({ verdict: 'done', id: 'bk-7', ledgerId: 'l-m' })),
   }
 })
 const approve = (r) => executeUn1tApproval(makeDb(), { row: r, actor: { id: 'staff-1' } }, deps)
@@ -94,6 +95,13 @@ describe('executeUn1tApproval', () => {
     expect(out.executed).toMatchObject({ ok: false, code: 'UN1T_RATE_BUDGET', retryable: true })
   })
 
+  it('UN1TMOVE.2: a cancellation card for a booking moved inside the late window lands failed, in staff words', async () => {
+    deps.cancel.mockResolvedValueOnce({ verdict: 'refused', code: 'cancel_after_late_move', message: 'x', ledgerId: null })
+    const out = await approve(row('cancel', { kind: 'class_cancellation', details: { provider: 'un1t_online', booking_id: 'bk-7', un1t_user_id: 'usr-1' } }))
+    expect(out).toMatchObject({ finalStatus: 'failed', executed: { ok: false, code: 'cancel_after_late_move' } })
+    expect(out.executed.message).toMatch(/will not cancel it/)
+  })
+
   it('a class_cancellation row (E files these) runs cancel with origin approval; already happened has staff words', async () => {
     const r = row('cancel', { kind: 'class_cancellation', details: { provider: 'un1t_online', booking_id: 'bk-7', un1t_user_id: 'usr-1' } })
     let out = await approve(r)
@@ -103,5 +111,47 @@ describe('executeUn1tApproval', () => {
     out = await approve(r)
     expect(out.finalStatus).toBe('failed')
     expect(out.executed.message).toMatch(/already happened/)
+  })
+})
+
+// UN1TMOVE.1 — a Mia move card is a class_booking row for the target class
+// with move_from_booking_id: approving runs ONE moveBooking, never a book.
+describe('executeUn1tApproval: a move card', () => {
+  const moveRow = (over = {}) => row('mia_move', {
+    details: {
+      provider: 'un1t_online', origin: 'mia', reason: 'mia_move', event_id: 'ev-2', un1t_user_id: 'usr-1', executing_contact_id: 'c-1',
+      starts_at: '2099-01-01T08:00:00Z', class_name: 'BASE', move_from_booking_id: 'bk-7', move_from_event_id: 'ev-1', ...over,
+    },
+  })
+
+  it('moves with origin approval and the approver as actor; never books, never emails', async () => {
+    const out = await approve(moveRow())
+    expect(deps.move).toHaveBeenCalledTimes(1)
+    expect(deps.move.mock.calls[0][1]).toEqual({
+      locationId: 'loc-h', contactId: 'c-1', un1tUserId: 'usr-1', bookingId: 'bk-7', eventId: 'ev-2', fromEventId: 'ev-1',
+      origin: 'approval', originRef: 'amr-1', actor: { id: 'staff-1' },
+    })
+    expect(deps.bookOnce).not.toHaveBeenCalled()
+    expect(deps.afterBooking).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ finalStatus: 'actioned', executed: { ok: true, verdict: 'done', moved: true, un1t_booking_id: 'bk-7', ledger_id: 'l-m' }, customerNotified: null })
+    expect(syncs).toEqual([])
+  })
+
+  it('UN1TMOVE.2: a move refused by the late-window rule lands failed in staff words', async () => {
+    deps.move.mockResolvedValueOnce({ verdict: 'refused', code: 'move_late_other_day', message: 'x', ledgerId: null })
+    const out = await approve(moveRow())
+    expect(out).toMatchObject({ finalStatus: 'failed', executed: { ok: false, code: 'move_late_other_day' } })
+    expect(out.executed.message).toMatch(/only move to another class on the same day/)
+  })
+
+  it('a refusal or an unknown lands failed with staff words; a prefixed id is read bare', async () => {
+    deps.move.mockResolvedValueOnce({ verdict: 'refused', code: 'UN1T_ALREADY_HAPPENED', message: 'x', ledgerId: 'l-m' })
+    let out = await approve(moveRow())
+    expect(out).toMatchObject({ finalStatus: 'failed', executed: { ok: false, code: 'UN1T_ALREADY_HAPPENED' } })
+    expect(out.executed.message).toMatch(/already happened/)
+    deps.move.mockResolvedValueOnce({ verdict: 'unknown', code: null, ledgerId: 'l-m' })
+    out = await approve(moveRow({ event_id: 'un1t:ev-3', move_from_booking_id: 'un1t:bk-8' }))
+    expect(out.finalStatus).toBe('failed')
+    expect(deps.move.mock.calls.at(-1)[1]).toMatchObject({ bookingId: 'bk-8', eventId: 'ev-3' })
   })
 })

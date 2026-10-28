@@ -23,7 +23,7 @@
 //   asked for) or un1t.online's code beside the already-booked hint. Always
 //   branch on `verdict`.
 
-export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge'])
+export const UN1T_WRITE_OPS = Object.freeze(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move'])
 const OPS = new Set(UN1T_WRITE_OPS)
 
 // From the token's `GET /api-token` permissions[]. Fail closed.
@@ -41,6 +41,9 @@ export const REQUIRED_PERMISSIONS = Object.freeze({
   // FEES.1 — POST /purchases/charge-custom (purchases:create, from the 28 Oct
   // dev docs) after the card check, GET /payment-methods/client/{id}.
   fee_charge: Object.freeze(['purchases:create', 'payment_methods:read']),
+  // UN1TMOVE.1 — POST /bookings/{id}/move (x-permission bookings:update in the
+  // OpenAPI snapshot), then its check read GET /bookings/{id} (bookings:read).
+  move: Object.freeze(['bookings:update', 'bookings:read']),
 })
 
 /**
@@ -176,7 +179,7 @@ function opIdIn(op, data) {
   if (!data) return null
   if (op === 'trial' || op === 'fee_charge') return idOf(data.transactionId)
   if (op === 'checkout') return typeof data.checkoutUrl === 'string' && data.checkoutUrl ? data.checkoutUrl : null
-  if (op === 'book' || op === 'create_client' || op === 'cancel') return idOf(data.id)
+  if (op === 'book' || op === 'create_client' || op === 'cancel' || op === 'move') return idOf(data.id)
   return null
 }
 
@@ -196,6 +199,7 @@ const MISMATCH = 'response_mismatch'
  *
  * @param {string} op one of UN1T_WRITE_OPS
  * @param {{ status: number|null, body: any, expect?: { eventId?: string, userId?: string, studioId?: string, bookingId?: string } }} answer
+ *   A move's expect names the TARGET event (eventId), as a book's does.
  * @param {Readonly<Record<string, Un1tRefusalKind>>} [table] test seam; callers omit it
  * @returns {{ verdict: 'done'|'refused'|'unknown', id: string|null, code: string|null, message: string|null, alreadyBooked: boolean }}
  */
@@ -238,6 +242,17 @@ export function judgeUn1tWrite(op, { status, body, expect } = {}, table = UN1T_R
     case 'forgot_password':
       return isObj(body) && body.success === true ? verdict('done') : verdict('unknown')
     case 'book': {
+      const id = idOf(data?.id)
+      if (!id) return verdict('unknown')
+      return bookMatches(data, want) ? verdict('done', { id }) : verdict('unknown', { code: MISMATCH })
+    }
+    case 'move': {
+      // UN1TMOVE.1 — the moved booking, as a book is judged (RF5): our user at
+      // the target event at our studio, booked. The id is the answer's (the
+      // same booking id in the snapshot's BookingResponseDto; a new one is
+      // still the booking we asked for, and the mirror re-reads the old one).
+      // An "already booked" refusal is never a done here: the original
+      // booking still stands, so it stays a refusal.
       const id = idOf(data?.id)
       if (!id) return verdict('unknown')
       return bookMatches(data, want) ? verdict('done', { id }) : verdict('unknown', { code: MISMATCH })

@@ -50,6 +50,8 @@ export const ORG_FIELD_GROUPS = [
         placeholder: "Good news, you're booked in for {class}. See you there.", help: '{class} becomes what was booked and when.' },
       { id: 'cancellation_confirmation_text', paths: ['cancellation_confirmation_text'], kind: 'text', maxLength: 500, label: 'Cancellation confirmation message',
         placeholder: 'All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon.' },
+      { id: 'class_move_confirmation_text', paths: ['class_move_confirmation_text'], kind: 'text', maxLength: 500, label: 'Class move confirmation message',
+        placeholder: 'All sorted, your booking has been moved from {from} to {to}. See you there.', help: '{from} and {to} become each class with its day and time.' },
       { id: 'event_move_confirmation_text', paths: ['event_move_confirmation_text'], kind: 'text', maxLength: 500, label: 'Event move confirmation message',
         placeholder: 'Done, your entry is now on {event}.' },
       { id: 'event_move_failed_text', paths: ['event_move_failed_text'], kind: 'text', maxLength: 500, label: 'Event move not possible message',

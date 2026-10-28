@@ -40,6 +40,27 @@ export function bookChatConfirmationText({ what, template } = {}) {
   return plain(filled).trim()
 }
 
+// UN1TMOVE.2 — "your booking was moved", the staff Move's chat line: the
+// studio's settings.customer_agent.class_move_confirmation_text (the field
+// Mia's approved move cards send too), with the same default as
+// DEFAULT_CLASS_MOVE_CONFIRMATION_TEXT in src/lib/agent/notify.js (pinned by
+// book-chat-copy.move.test.js). {from} / {to}: each class with its day and time.
+export const DEFAULT_MOVE_CHAT_TEXT = 'All sorted, your booking has been moved from {from} to {to}. See you there.'
+
+/**
+ * @param {{ from?: string, to?: string, template?: string|null }} args
+ * @returns {string}
+ */
+export function moveChatConfirmationText({ from, to, template } = {}) {
+  const base = String(template || '').trim() || DEFAULT_MOVE_CHAT_TEXT
+  const f = String(from || '').trim()
+  const t = String(to || '').trim()
+  let out = base
+  out = f ? out.replace(/\{from\}/g, f) : out.replace(/\s*\bfrom\s+\{from\}/gi, '').replace(/\s*\{from\}/g, '')
+  out = t ? out.replace(/\{to\}/g, t) : out.replace(/\s*\bto\s+\{to\}/gi, '').replace(/\s*\{to\}/g, '')
+  return plain(out).trim()
+}
+
 /**
  * The studio's operator-set booking confirmation text, for a booking route to
  * hand the panel. { template: null, error: null } = unset (the default
@@ -50,6 +71,15 @@ export function bookChatConfirmationText({ what, template } = {}) {
  * @returns {Promise<{ template: string|null, error: string|null }>}
  */
 export async function readBookChatTemplate(db, locationId) {
+  return readChatTemplate(db, locationId, 'booking_confirmation_text')
+}
+
+/** UN1TMOVE.2 — as readBookChatTemplate, for the class move confirmation. */
+export async function readMoveChatTemplate(db, locationId) {
+  return readChatTemplate(db, locationId, 'class_move_confirmation_text')
+}
+
+async function readChatTemplate(db, locationId, key) {
   if (!locationId) return { template: null, error: null }
   try {
     // MIAORG.1 — the studio's resolved Mia settings (DEFAULTS <- org <-
@@ -59,7 +89,7 @@ export async function readBookChatTemplate(db, locationId) {
     const { resolveAgentSettings } = await import('./agent/settings-resolve')
     const resolved = await resolveAgentSettings(db, locationId)
     if (!resolved.ok) return { template: null, error: resolved.reason === 'read_failed' ? 'read_failed' : null }
-    const text = String(resolved.settings.booking_confirmation_text || '').trim()
+    const text = String(resolved.settings[key] || '').trim()
     return { template: text || null, error: null }
   } catch (e) {
     return { template: null, error: e?.message || String(e) }

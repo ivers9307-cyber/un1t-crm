@@ -12248,12 +12248,12 @@ registry.registerPath({
   },
 })
 
-// UN1TWRITE.14 — the staff un1t.online class list, book and cancel.
+// UN1TWRITE.14 — the staff un1t.online class list, book and cancel (and UN1TMOVE.1's move).
 const Un1tStaffGate = {
   400: { description: 'Writes off at the studio, or the contact has no un1t.online account there', content: { 'application/json': { schema: ErrorResponse } } },
   401: { description: 'Unauthorised', content: { 'application/json': { schema: ErrorResponse } } },
   403: { description: 'No access to the booking studio', content: { 'application/json': { schema: ErrorResponse } } },
-  404: { description: 'Contact not in the studio\'s organisation (or, on cancel, not their booking)', content: { 'application/json': { schema: ErrorResponse } } },
+  404: { description: 'Contact not in the studio\'s organisation (or, on cancel and move, not their booking)', content: { 'application/json': { schema: ErrorResponse } } },
   503: { description: 'Settings or mirror unreadable; nothing sent', content: { 'application/json': { schema: ErrorResponse } } },
 }
 registry.registerPath({
@@ -12293,6 +12293,23 @@ registry.registerPath({
   responses: {
     200: { description: '{ un1t_booking_id, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
     409: { description: 'un1t.online refused (its words), already happened, or an attempt in flight', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
+    ...Un1tStaffGate,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/un1t-online/classes/move',
+  tags: ['Bookings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff: move a contact\'s un1t.online booking to another class',
+  description: 'One un1t.online call (POST /bookings/{id}/move), never a cancel then a book. The booking must be this contact\'s at this studio in the mirror (404 otherwise) and the target a scheduled future class on this studio\'s timetable (409 otherwise). The moveBooking primitive with origin staff. Same answers as book. maxDuration 120.',
+  request: { body: { content: { 'application/json': { schema: z.object({ contact_id: uuidLike, location_id: uuidLike, booking_id: z.string(), event_id: z.string() }) } } } },
+  responses: {
+    200: { description: '{ un1t_booking_id, ledger_id }', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    409: { description: 'The target class is not on the timetable, un1t.online refused (its words), already happened, the same class, or an attempt in flight', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'un1t.online is busy', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'un1t.online did not answer clearly', content: { 'application/json': { schema: ErrorResponse } } },
     ...Un1tStaffGate,

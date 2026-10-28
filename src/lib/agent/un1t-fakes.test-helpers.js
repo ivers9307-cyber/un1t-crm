@@ -73,6 +73,7 @@ export function fakeUn1tWrite(overrides = {}) {
   const ops = {
     book: fn('book'),
     cancel: fn('cancel'),
+    moveBooking: fn('moveBooking'),
     grantTrial: fn('grantTrial'),
     createCheckoutLink: fn('createCheckoutLink'),
   }

@@ -1,5 +1,5 @@
-// UN1TWRITE.6 — the un1t.online write primitives: book, cancel,
-// createClient, forgotPassword, createCheckoutLink and grantTrial
+// UN1TWRITE.6 — the un1t.online write primitives: book, cancel, moveBooking
+// (UN1TMOVE.1), createClient, forgotPassword, createCheckoutLink and grantTrial
 // (UN1TWRITE.10; with its one-off credit re-grant, regrantTrialCredits,
 // TRIALREGRANT.1). Split out of un1t-online-write.js (the transport), which they
 // call ONLY through createUn1tWriter, plus the ledger and the mirror
@@ -18,6 +18,9 @@ import { scrubMessage, classifyRefusal } from './un1t-online-write-judge.js'
 import { Un1tSettingsReadError, readUn1tWriteSettings } from './un1t-online-settings.js'
 import { finishAttempt, findDone, ledgerKey, listResetAttempts, resetAttemptNo, UN1T_IN_FLIGHT_MS } from './un1t-online-write-ledger.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
+import { lateCancelQuote } from './class-fees-quote.js'
+import { getLocationZone } from './location-time.js'
+import { sameStudioDay, wasMovedInLateWindow, UN1T_LATE_MOVE_CODES } from './un1t-online-late-move.js'
 import { un1tOnlineReads } from './membership/reads/un1t-online.js'
 import { resolveCustomerBaseUrl } from './tenant-host.js'
 import { logError, logInfo, logWarn } from './log'
@@ -61,8 +64,24 @@ const CHECKOUT_TEXT = {
 // stands: nothing is sent (only an `absent` check may re-send).
 const PRIOR_BOOK_UNVERIFIED_TEXT = 'The CRM booked this class before, and un1t.online could not confirm the booking still stands, so nothing was sent. Check the class in un1t.online.'
 const NOT_THIS_CLIENT_TEXT = 'That booking belongs to another un1t.online client, so it was not cancelled.'
+const NOT_THIS_CLIENT_MOVE_TEXT = 'That booking belongs to another un1t.online client, so it was not moved.'
 const NOT_THIS_CLIENT_UNKNOWN_TEXT = "un1t.online's answer named another client's booking. Check the booking in un1t.online."
 const UNKNOWN_CHECKOUT_TEXT = 'un1t.online did not answer clearly, so no checkout link can be given. Try again in a minute.'
+
+/** UN1TMOVE.1 — moveBooking's own codes (the transport's are UN1T_WRITE_CODES). */
+export const UN1T_MOVE_CODES = Object.freeze({
+  // The booking is already for that class: nothing to move, nothing sent.
+  SAME_CLASS: 'move_same_class',
+  // A done move on the ledger the check read could not confirm: nothing sent.
+  PRIOR_MOVE_UNVERIFIED: 'move_unverified',
+})
+const SAME_CLASS_TEXT = 'This booking is already for that class, so nothing was moved.'
+const L = UN1T_LATE_MOVE_CODES
+const LATE_OTHER_DAY_TEXT = "This class starts inside the studio's late-cancel window, so the booking can only move to another class the same day. Nothing was moved."
+const WINDOW_UNREADABLE_TEXT = "Whether this class is inside the studio's late-cancel window could not be checked just now, so nothing was moved. Try again in a minute."
+const CANCEL_AFTER_LATE_MOVE_TEXT = "This booking was moved inside the studio's late-cancel window, so it cannot be cancelled. Nothing was sent."
+const CANCEL_CHECK_UNREADABLE_TEXT = 'Whether this booking was moved late could not be checked just now, so it was not cancelled. Try again in a minute.'
+const PRIOR_MOVE_UNVERIFIED_TEXT = 'The CRM moved this booking to that class before, and un1t.online could not confirm it is still there, so nothing was sent. Check the booking in un1t.online.'
 
 const statusOf = (row) => String(row?.status ?? '').trim().toLowerCase()
 const isCancelledStatus = (s) => s === 'cancelled' || s === 'canceled'
@@ -149,6 +168,36 @@ export async function findCancelState(writer, { bookingId, un1tUserId } = {}) {
   if (s === 'booked') return 'absent'
   if (s === 'attended' || s === 'no_show' || s === 'no-show') return 'already_happened'
   return 'unknown'
+}
+
+/**
+ * UN1TMOVE.1 — where a move stands: `GET /bookings/{id}`. The booking at the
+ * target event and booked → landed; still at the original event (when it is
+ * known) and booked → absent; attended / no_show → already_happened; anything
+ * else (cancelled, a third event, a waitlist, another booking or another
+ * client's, a failed read, no known original event) → unknown. Never throws.
+ * @returns {Promise<{ state: 'landed'|'absent'|'already_happened'|'unknown', id: string|null, row: object|null }>}
+ *   row is the picked booking on landed (no embedded user, no guest details).
+ */
+export async function findMoveState(writer, { bookingId, un1tUserId, eventId, fromEventId = null } = {}) {
+  const unknown = { state: 'unknown', id: null, row: null }
+  let row
+  try {
+    row = await writer.read(`/bookings/${encodeURIComponent(bookingId)}`)
+  } catch (err) {
+    logWarn(LOG_MODULE, 'move check read failed; treated as unknown', fields({ locationId: writer.locationId, op: 'move', code: err?.code ?? 'check_failed' }))
+    return unknown
+  }
+  if (!isObj(row) || (row.id != null && !sameIdText(row.id, bookingId))) return unknown
+  const owner = row.user_id ?? (isObj(row.user) ? row.user.id : undefined)
+  if (un1tUserId && owner != null && !sameIdText(owner, un1tUserId)) return unknown
+  const event = row.event_id ?? (isObj(row.event) ? row.event.id : undefined)
+  const s = statusOf(row)
+  if (s === 'attended' || s === 'no_show' || s === 'no-show') return { state: 'already_happened', id: null, row: null }
+  if (s !== 'booked') return unknown
+  if (sameIdText(event, eventId)) return { state: 'landed', id: bookingId, row: pickBooking({ ...row, id: row.id ?? bookingId }) }
+  if (fromEventId && sameIdText(event, fromEventId)) return { state: 'absent', id: null, row: null }
+  return unknown
 }
 
 /**
@@ -409,6 +458,23 @@ export async function cancel(db, args = {}, deps = {}) {
     return withLedger(refusalResult(C.BOOKING_NOT_THIS_CLIENT, NOT_THIS_CLIENT_TEXT))
   }
 
+  // UN1TMOVE.2 — a booking moved inside the late-cancel window is never
+  // cancelled by the CRM (moving to a later class the same day, then
+  // cancelling, would dodge the fee). A failed read refuses (fail closed): a
+  // cancel not sent is recoverable by staff in the un1t.online console, a
+  // dodged fee is not.
+  let movedLate
+  try {
+    movedLate = await wasMovedInLateWindow(db, { locationId, bookingId })
+  } catch {
+    logWarn(LOG_MODULE, 'late-move read failed; cancel refused, nothing sent', fields({ locationId, op: 'cancel', origin, code: L.CANCEL_CHECK_UNREADABLE }))
+    return withLedger(result('refused', { code: L.CANCEL_CHECK_UNREADABLE, message: CANCEL_CHECK_UNREADABLE_TEXT, retryable: true }))
+  }
+  if (movedLate) {
+    logInfo(LOG_MODULE, 'a booking moved inside the late window was not cancelled; nothing sent', fields({ locationId, op: 'cancel', origin, code: L.CANCEL_AFTER_LATE_MOVE }))
+    return withLedger(refusalResult(L.CANCEL_AFTER_LATE_MOVE, CANCEL_AFTER_LATE_MOVE_TEXT))
+  }
+
   // The check read names the booking, so a resume reports its id too.
   const verify = async () => {
     const state = await findCancelState(writer, { bookingId, un1tUserId })
@@ -440,6 +506,156 @@ export async function cancel(db, args = {}, deps = {}) {
       return { data: m.row ?? null }
     },
   })
+}
+
+// ── moveBooking ────────────────────────────────────────────────────────────
+
+/**
+ * UN1TMOVE.1 — move a un1t.online booking to another class in ONE call
+ * (`POST /bookings/{id}/move` { eventId }), instead of a cancel then a book,
+ * which leaves a window where the credit or the spot is lost. No charge, no
+ * refund flag: un1t.online carries the credit over itself.
+ *
+ * Like cancel, the booking must be this client's (the mirror answers without
+ * a request; the answer and the check read guard one it does not hold yet).
+ * The original event (the caller's, else the mirror's) is what lets the check
+ * read call a move `absent`; without it a 5xx is never re-sent. A done move on
+ * the ledger is confirmed by the check read first (a booking can be moved
+ * back): landed is done with nothing sent, absent sends, anything else is
+ * unknown with nothing sent.
+ * @param {{ locationId: string, contactId?: string|null, un1tUserId: string, bookingId: string,
+ *   eventId: string, fromEventId?: string|null, origin: string, originRef?: string|null,
+ *   actor?: { id: string }|null }} args
+ *   bookingId and eventId (the TARGET class) are bare un1t.online ids.
+ * @returns {Promise<object>} Un1tWriteResult. done: id = the booking id,
+ *   data = the un1t_bookings row (at the new event).
+ */
+export async function moveBooking(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter, now = () => new Date(), lateQuote = lateCancelQuote, zoneOf = getLocationZone } = deps
+  const { locationId, contactId = null, un1tUserId, bookingId, eventId, fromEventId = null, origin, originRef = null, actor = null } = args
+  requireBareId('moveBooking', 'un1tUserId', un1tUserId)
+  requireBareId('moveBooking', 'bookingId', bookingId)
+  requireBareId('moveBooking', 'eventId', eventId)
+  const writer = await writerFactory(db, locationId)
+  const refused = await opRefusal(writer, 'move')
+  if (refused) return refused
+  const path = `/bookings/${bookingId}/move`
+  const body = { eventId }
+  writer.assertAllowed('move', 'POST', path, body)
+
+  // The booking must be this client's, and the mirror knows its class.
+  const { data: mirrored, error: mirrorError } = await db
+    .from('un1t_bookings')
+    .select('un1t_user_id, event_id, credit_charged')
+    .eq('location_id', locationId)
+    .eq('un1t_id', bookingId)
+    .limit(1)
+    .maybeSingle()
+  if (mirrorError) throw new Un1tSettingsReadError(`un1t_bookings read failed (${mirrorError.code ?? 'no code'})`, { code: 'mirror_read_failed' })
+  if (mirrored?.un1t_user_id && !sameIdText(mirrored.un1t_user_id, un1tUserId)) {
+    logWarn(LOG_MODULE, 'a move for another client was refused; nothing sent', fields({ locationId, op: 'move', origin, code: C.BOOKING_NOT_THIS_CLIENT }))
+    return withLedger(refusalResult(C.BOOKING_NOT_THIS_CLIENT, NOT_THIS_CLIENT_MOVE_TEXT))
+  }
+  const from = idText(fromEventId) ?? idText(mirrored?.event_id)
+  if (from && sameIdText(from, eventId)) return withLedger(refusalResult(UN1T_MOVE_CODES.SAME_CLASS, SAME_CLASS_TEXT))
+
+  let landedRow = null
+  const verify = async () => {
+    const chk = await findMoveState(writer, { bookingId, un1tUserId, eventId, fromEventId: from })
+    if (chk.state === 'landed') landedRow = chk.row
+    return chk
+  }
+  let requestedAt = null
+  const mirror = async (r) => {
+    const data = r.data ?? landedRow
+    if (!data) return { data: null }
+    const m = await applyUn1tWriteToMirror(db, {
+      op: 'move', locationId, contactId, un1tUserId, studioId: writer.studioId, data, requestedAt,
+      ledgerId: r.ledgerId, fromBookingId: bookingId,
+    }, mirrorDeps(writer, now))
+    return { data: m.row ?? null }
+  }
+
+  const key = ledgerKey.move(locationId, bookingId, eventId)
+  const prior = await findDone(db, { key })
+  if (prior) {
+    const chk = await verify()
+    if (chk.state === 'landed') {
+      const r = withLedger(result('done', { id: chk.id }), prior.id)
+      return { ...r, ...(await safely(() => mirror(r), { locationId, op: 'move', origin, ledgerId: prior.id })) }
+    }
+    if (chk.state !== 'absent') {
+      logWarn(LOG_MODULE, 'a done move on the ledger could not be confirmed; not sent', fields({ locationId, op: 'move', origin, ledgerId: prior.id, code: UN1T_MOVE_CODES.PRIOR_MOVE_UNVERIFIED }))
+      return withLedger(result('unknown', { code: UN1T_MOVE_CODES.PRIOR_MOVE_UNVERIFIED, message: PRIOR_MOVE_UNVERIFIED_TEXT }), prior.id)
+    }
+  }
+
+  // UN1TMOVE.2 — the late-cancel window (the FEES.2 rule, on the class being
+  // left): inside it, only a class the same studio day; outside, any class.
+  const late = await lateWindowOf(db, writer, {
+    locationId, contactId, un1tUserId, bookingId, fromEventId: from, eventId, creditCharged: mirrored?.credit_charged ?? null,
+    nowMs: now().getTime(), lateQuote, zoneOf,
+  })
+  if (late.refuse) {
+    logWarn(LOG_MODULE, 'a move was refused by the late-window rule; nothing sent', fields({ locationId, op: 'move', origin, code: late.refuse.code }))
+    return withLedger(result('refused', late.refuse))
+  }
+
+  return attemptWrite(db, writer, {
+    attempt: {
+      op: 'move', key, contactId, un1tUserId, target: bookingId, origin, originRef, actorUserId: actorIdOf(actor),
+      lateWindow: late.late,
+    },
+    policy: 'verify',
+    verify,
+    send: (row) => {
+      requestedAt = now().toISOString()
+      return writer.send('POST', `/bookings/${bookingId}/move`, {
+        body, policy: 'verify', verify, op: 'move', origin, ledgerId: row.id,
+        expect: { eventId, userId: un1tUserId, studioId: writer.studioId, bookingId },
+      })
+    },
+    onDone: mirror,
+  })
+}
+
+/**
+ * UN1TMOVE.2 — is leaving the class inside the studio's late-cancel window
+ * (lateCancelQuote says a cancel now would cost a fee or the credit), and if
+ * so, is the target the same studio day? → { late: boolean } | { refuse }.
+ * Never throws: anything that cannot be read refuses the move (retryable,
+ * nothing sent), because a move that might dodge a fee is not sent blind and
+ * the booking simply stays where it is.
+ */
+async function lateWindowOf(db, writer, { locationId, contactId, un1tUserId, bookingId, fromEventId, eventId, creditCharged, nowMs, lateQuote, zoneOf }) {
+  const unreadable = { refuse: { code: L.WINDOW_UNREADABLE, message: WINDOW_UNREADABLE_TEXT, retryable: true } }
+  const startOf = async (id) => {
+    if (!id) return { startsAt: null }
+    const { data, error } = await db.from('un1t_events').select('starts_at').eq('location_id', locationId).eq('un1t_id', id).maybeSingle()
+    return error ? { startsAt: null, error } : { startsAt: data?.starts_at ?? null }
+  }
+  try {
+    const from = await startOf(fromEventId)
+    const quote = await lateQuote(db, {
+      locationId, un1tUserId, contactId, bookingId, eventId: fromEventId, startsAt: from.startsAt, creditCharged, nowMs,
+      readWindowHours: async () => {
+        // A failed read throws (refused below); no window set is no window.
+        const s = await writer.read(`/studios/${encodeURIComponent(writer.studioId)}`)
+        const h = Number(s?.default_cancelation_window_hours)
+        return Number.isFinite(h) && h > 0 ? h : null
+      },
+    })
+    // Fees on, but the class being left has no known start: cannot tell.
+    if (!quote?.applies) return quote?.reason === 'no_start' ? unreadable : { late: false }
+    const target = await startOf(eventId)
+    if (!target.startsAt) return unreadable
+    const zone = await zoneOf(db, locationId)
+    if (sameStudioDay(from.startsAt, target.startsAt, zone)) return { late: true }
+    return { refuse: { code: L.OTHER_DAY, message: LATE_OTHER_DAY_TEXT } }
+  } catch (err) {
+    logWarn(LOG_MODULE, 'late-window check failed; move refused, nothing sent', fields({ locationId: writer.locationId, op: 'move', code: err?.code ?? L.WINDOW_UNREADABLE }))
+    return unreadable
+  }
 }
 
 // ── createClient ───────────────────────────────────────────────────────────

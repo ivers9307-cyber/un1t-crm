@@ -18,6 +18,10 @@
 //     sends anything again), origin 'approval', the approver as actor. A
 //     failed trial is granted at most once more (grantTrial re-checks A's
 //     eligibility itself).
+// UN1TMOVE.1 — a class_booking card carrying details.move_from_booking_id
+// (Mia's move_class_booking files these for the TARGET class) runs ONE
+// moveBooking from the ledger (its check read before any re-send), origin
+// 'approval', the approver as actor: never a book, a trial or an email.
 // A confirmed booking sends the step-7 emails and syncs the queue row. The
 // past-start guard is the route's; no WhatsApp is sent here (E's in-thread
 // confirmation wraps this for Mia's cards).
@@ -27,11 +31,12 @@
 
 import { UN1T_RECORD_ONLY_REASONS } from './un1t-online-approval.js'
 import { createUn1tWriter, UN1T_WRITE_CODES } from './un1t-online-write.js'
-import { cancel as cancelOp } from './un1t-online-write-ops.js'
+import { cancel as cancelOp, moveBooking as moveOp } from './un1t-online-write-ops.js'
 import { readUn1tWriteSettings } from './un1t-online-settings.js'
 import { un1tEventIdOf } from './manual-timetable.js'
 import { un1tBookOnce, un1tAfterBooking, readStudioContextForApproval } from './un1t-online-booking-processor.js'
 import { UN1T_STAFF_COPY } from './un1t-staff-booking-copy.js'
+import { UN1T_LATE_MOVE_CODES as L } from './un1t-online-late-move.js'
 import { logWarn } from './log'
 
 const C = UN1T_WRITE_CODES
@@ -45,9 +50,21 @@ export const UN1T_APPROVAL_COPY = Object.freeze({
   un1t_outcome_unknown: UN1T_STAFF_COPY.unknown,
   un1t_trial_unverified: 'The trial could not be confirmed: no credits show in un1t.online. Check the person in un1t.online; nothing was bought.',
   un1t_trial_used: 'They have had the free trial before, so nothing was booked. Offer them a pack or a membership.',
+  // UN1TMOVE.2 — the late-window move rule (D's cancel and move enforce it).
+  [L.OTHER_DAY]: UN1T_STAFF_COPY.moveLateOtherDay,
+  [L.CANCEL_AFTER_LATE_MOVE]: UN1T_STAFF_COPY.cancelAfterLateMove,
+  [L.WINDOW_UNREADABLE]: UN1T_STAFF_COPY.lateCheckUnreadable,
+  [L.CANCEL_CHECK_UNREADABLE]: UN1T_STAFF_COPY.lateCheckUnreadable,
 })
 
 const reasonOf = (details) => (typeof details?.reason === 'string' ? details.reason : '')
+// A card id, bare: `un1t:<id>` or the id itself; null for anything else.
+function bareUn1tId(v) {
+  const raw = typeof v === 'string' ? v.trim() : ''
+  if (!raw) return null
+  const id = un1tEventIdOf(raw) ?? raw
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id) ? id : null
+}
 
 async function syncQueueRow(db, approvalId, fields) {
   try {
@@ -74,6 +91,7 @@ export async function executeUn1tApproval(db, { row, actor }, deps = {}) {
     afterBooking = un1tAfterBooking,
     studioContext = readStudioContextForApproval,
     cancel = cancelOp,
+    move = moveOp,
   } = deps
   const details = row.details || {}
   const reason = reasonOf(details)
@@ -106,6 +124,23 @@ export async function executeUn1tApproval(db, { row, actor }, deps = {}) {
     return done({
       ok, verdict: r.verdict, code: r.code ?? null, message: UN1T_APPROVAL_COPY[r.code] ?? r.message ?? null,
       un1t_booking_id: ok ? (r.id ?? details.booking_id ?? null) : null, ledger_id: r.ledgerId ?? null,
+    }, ok ? 'actioned' : 'failed')
+  }
+
+  // A move (UN1TMOVE.1): the booking to the card's class, in one call.
+  const moveFrom = bareUn1tId(details.move_from_booking_id)
+  if (row.kind === 'class_booking' && moveFrom) {
+    const un1tUserId = details.un1t_user_id || contact.un1t_user_id
+    const eventId = bareUn1tId(details.event_id)
+    if (!eventId) return done({ ok: false, code: 'class_unavailable', message: 'This card names no un1t.online class.' }, 'failed')
+    const r = await move(db, {
+      locationId: row.location_id, contactId: contact.id, un1tUserId, bookingId: moveFrom, eventId,
+      fromEventId: bareUn1tId(details.move_from_event_id), origin: 'approval', originRef: row.id, actor,
+    }, { writerFactory: async () => writer })
+    const ok = r.verdict === 'done'
+    return done({
+      ok, verdict: r.verdict, moved: ok, code: r.code ?? null, message: UN1T_APPROVAL_COPY[r.code] ?? r.message ?? null,
+      un1t_booking_id: ok ? (r.id ?? moveFrom) : null, ledger_id: r.ledgerId ?? null,
     }, ok ? 'actioned' : 'failed')
   }
 

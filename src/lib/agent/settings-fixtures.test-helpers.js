@@ -49,6 +49,7 @@ export const ORG_LAYER = Object.freeze({
   holding_message: 'Org holding.',
   booking_confirmation_text: 'Org booked {class}.',
   cancellation_confirmation_text: 'Org cancelled {class}.',
+  class_move_confirmation_text: 'Org moved {from} to {to}.',
   approval_decline_text: 'Org decline.',
   event_move_confirmation_text: 'Org moved {event}.',
   event_move_failed_text: 'Org move failed: {reason}.',

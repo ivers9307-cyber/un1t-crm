@@ -55,6 +55,19 @@
 // (only via classifyRefusal) and a class already attended or missed
 // (UN1T_ALREADY_HAPPENED) are relayed, never with a promised refund or credit.
 //
+// move_class_booking (UN1TMOVE.1): a reschedule at the studio in ONE D
+// moveBooking call (POST /bookings/{id}/move), never a cancel then a book,
+// which can lose the credit or the spot in between. The booking must be in
+// the member's LIVE bookings (as for a cancel) and the target class passes
+// book_class's pre-flight (prepareUn1tBooking). Inside the studio's
+// cancellation window (the FEES.2 quote) the booking moves only to a class
+// the same studio day (UN1TMOVE.2), and a booking moved that way can never be
+// cancelled afterwards (un1tCancelBooking and D's cancel both refuse), so a
+// move is never a way round a late-cancel fee. Draft
+// mode files a card; auto writes the row ahead and runs D's moveBooking. Every
+// move card is a class_booking row for the TARGET class carrying
+// move_from_booking_id, so a staff approval runs D's executor's move branch.
+//
 // request_refund (Task 17): one record-only refund_request card through D's
 // fileRefundCard (R2: nothing is refunded, no un1t.online call), answered with
 // the operator's refund_request_text whether or not the card was filed.
@@ -64,7 +77,7 @@
 // D's executeUn1tApproval reads (event_id or booking_id bare, starts_at,
 // class_name, executing_contact_id, un1t_user_id), so a staff approval runs
 // D's executor.
-import { book, cancel } from '@/lib/un1t-online-write-ops'
+import { book, cancel, moveBooking } from '@/lib/un1t-online-write-ops'
 import { UN1T_WRITE_CODES } from '@/lib/un1t-online-write'
 import { fileRefundCard } from '@/lib/un1t-online-approval'
 import { classifyRefusal, scrubMessage } from '@/lib/un1t-online-write-judge'
@@ -79,6 +92,7 @@ import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
 import { openUn1tMemberReader, fetchLiveUn1tBookings, fetchLiveEntitlement } from './un1t-member-read'
 import { UN1T_BOOKED_STATUS, UN1T_EVENT_SCHEDULED_STATUS, zoneFor } from './un1t-tools'
 import { lateCancelQuote, lateCancelWarning } from '@/lib/class-fees-quote'
+import { sameStudioDay, wasMovedInLateWindow, UN1T_LATE_MOVE_CODES } from '@/lib/un1t-online-late-move'
 
 const LOG_MODULE = 'mia-un1t'
 const PROVIDER = 'un1t_online'
@@ -139,9 +153,36 @@ export function un1tCancelOutcome(result) {
   if (common === 'done') return 'cancelled'
   if (common) return common
   if (result.code === C.ALREADY_HAPPENED) return 'already_happened'
+  // UN1TMOVE.2 — moved inside the late-cancel window: never cancelled.
+  if (result.code === UN1T_LATE_MOVE_CODES.CANCEL_AFTER_LATE_MOVE) return 'moved_late'
   if (refusalKind(result) === 'late_cancel') return 'late_cancel'
   return 'card_rejected'
 }
+
+/**
+ * UN1TMOVE.1 — what D's moveBooking result means for Mia. done (recovered
+ * included) is moved; UN1T_ALREADY_HAPPENED, the same class, a full class and
+ * a refusal classifyRefusal calls `late_cancel` (too late to move) are relayed;
+ * the writes switch, a retryable code, an unknown and any other refusal as for
+ * book. Pure.
+ *
+ * @param {object} result Un1tWriteResult
+ * @returns {'moved'|'class_full'|'too_late'|'late_other_day'|'already_happened'|'same_class'|'card_rejected'|'card_unknown'|'writes_off'|'retry'}
+ */
+export function un1tMoveOutcome(result) {
+  const common = writeOutcome(result)
+  if (common === 'done') return 'moved'
+  if (common) return common
+  if (result.code === C.ALREADY_HAPPENED) return 'already_happened'
+  if (result.code === MOVE_SAME_CLASS) return 'same_class'
+  if (result.code === UN1T_LATE_MOVE_CODES.OTHER_DAY) return 'late_other_day'
+  const kind = refusalKind(result)
+  if (kind === 'class_full') return 'class_full'
+  if (kind === 'late_cancel') return 'too_late'
+  return 'card_rejected'
+}
+// D's code for "the booking is already for that class" (UN1T_MOVE_CODES.SAME_CLASS).
+const MOVE_SAME_CLASS = 'move_same_class'
 
 // relayedStartMatches lives in un1t-action-studio.js (purchase-intents.js checks a
 // relayed class time too); re-exported here, where its callers and tests look.
@@ -189,6 +230,10 @@ const HANDOFF_LEAD = Object.freeze({
   // A trial was just given, but book still found no credits: never an upsell.
   un1t_trial_granted_no_credits: 'The free trial is on their account, but its credits did not show for this booking yet, so nothing was booked, and the team has been asked to book it.',
   cancel_rejected: 'un1t.online did not accept this cancellation, and the team has been asked to sort it out.',
+  // UN1TMOVE.1
+  move_rejected: 'un1t.online did not accept this move, so the booking is where it was, and the team has been asked to sort it out.',
+  move_outcome_unknown: 'un1t.online did not confirm whether this booking was moved, and the team has been asked to check.',
+  un1t_move_not_sent: 'The move could not be sent just now, so the booking is where it was.',
   cancel_outcome_unknown: 'un1t.online did not confirm whether this cancellation went through, and the team has been asked to check.',
   un1t_cancel_not_sent: 'The cancellation could not be sent just now, so nothing was cancelled.',
 })
@@ -196,6 +241,7 @@ const HANDOFF_LEAD = Object.freeze({
 const ACTIONS = Object.freeze({
   book: Object.freeze({ flag: 'booked', never: 'Never say the booking is confirmed.' }),
   cancel: Object.freeze({ flag: 'cancelled', never: 'Never say it is cancelled.' }),
+  move: Object.freeze({ flag: 'moved', never: 'Never say it is moved.' }),
 })
 
 const CANCEL_TRY_AGAIN = Object.freeze({
@@ -211,7 +257,12 @@ const CANCEL_PENDING_APPROVAL = Object.freeze({
 const CANCELLATION_UNCERTAIN = Object.freeze({
   not_found: 'That booking is not among this member\'s bookings, so nothing was cancelled. Call list_my_upcoming_bookings again and pass the booking_id exactly as listed; if it is not there, say you cannot find it and offer to hand off to the team.',
   read_failed: 'The member\'s bookings could not be checked just now, so nothing was cancelled. Do not say the booking does not exist: say you cannot check it right now, and ask them to try again in a few minutes or offer to hand off to the team.',
+  // UN1TMOVE.2 — whether it was moved inside the late window could not be read.
+  late_move_unreadable: 'Whether this booking can be cancelled could not be checked just now, so nothing was cancelled. Say you cannot cancel it right now, and ask them to try again in a few minutes or offer to hand off to the team.',
 })
+// UN1TMOVE.2 — the member-facing lines for the late-window move rule.
+const MOVED_LATE_NO_CANCEL = 'This booking was moved to this class inside the studio\'s cancellation window, so it cannot be cancelled now and nothing was cancelled. Tell the customer plainly: they keep this class. If they cannot make it, offer to hand off to the team.'
+const LATE_OTHER_DAY_TEXT = (from) => `${from} starts inside the studio's cancellation window, so it can only be moved to another class on the same day, and nothing was moved. Tell the customer plainly, and offer a class later that day from list_upcoming_classes, or to keep the booking.`
 const NEVER_PROMISE = 'Never promise a refund or a credit back. If they ask for a refund, use request_refund: it only passes the request to the team.'
 
 const classUnavailable = (reason) => ({ booked: false, error: 'class_unavailable', reason, message: CLASS_UNAVAILABLE[reason] })
@@ -290,6 +341,9 @@ async function readEvent(db, studio, eventId, nowMs) {
 const BOOKING_KIND = 'class_booking'
 const CANCEL_KIND = 'class_cancellation'
 const OP_OF_KIND = Object.freeze({ [BOOKING_KIND]: 'book', [CANCEL_KIND]: 'cancel' })
+// UN1TMOVE.1 — a move card is a class_booking row for the target class; this
+// reason (and the late-window one) tells D's executor to move, not book.
+const MOVE_REASON = 'mia_move'
 
 /** One reader serves every live read of a turn's write; a failed open is a reader that says so. */
 async function openReader(db, studio, op) {
@@ -337,16 +391,23 @@ async function alreadyHolds(db, studio, eventId, reader) {
   return live.truncated ? null : false
 }
 
-/** An open (pending) card of this kind for this contact at the studio matching `match` in details, or null. */
+/**
+ * An open (pending) card of this kind for this contact at the studio matching
+ * `match` in details, or null. `contains` matches a superset, so a plain
+ * booking card for class X would also match a MOVE card into X (UN1TMOVE.1),
+ * and approving that reused card would move the member's other booking
+ * instead of adding one: a match without move_from_booking_id skips move cards.
+ */
 async function pendingCardId(db, studio, { kind, contactId, match }) {
-  const { data, error } = await db.from('agent_membership_requests')
+  let query = db.from('agent_membership_requests')
     .select('id')
     .eq('location_id', studio.locationId)
     .eq('contact_id', contactId)
     .eq('kind', kind)
     .eq('status', 'pending')
     .contains('details', { provider: PROVIDER, ...match })
-    .limit(1)
+  if (!('move_from_booking_id' in match)) query = query.is('details->>move_from_booking_id', null)
+  const { data, error } = await query.limit(1)
   if (error) {
     // A duplicate card is better than none: carry on and file one.
     logWarn(LOG_MODULE, 'pending card read failed', { locationId: studio.locationId, op: `${OP_OF_KIND[kind]}_card_dedupe`, code: error.code ?? null })
@@ -908,6 +969,19 @@ export async function un1tCancelBooking(ctx, input, studio) {
 
   const { className, classTime, startsAt } = await classOfBooking(db, ctx, studio, row, input)
 
+  // UN1TMOVE.2 — a booking moved inside the late-cancel window is never
+  // cancelled, by any path (no card either: staff could not approve it). A
+  // failed read refuses (fail closed): a cancel not made can be done by staff
+  // in the un1t.online console, a dodged late-cancel fee cannot be undone.
+  let movedLate
+  try {
+    movedLate = await wasMovedInLateWindow(db, { locationId: studio.locationId, bookingId })
+  } catch (err) {
+    logWarn(LOG_MODULE, 'late-move read failed; nothing cancelled', { locationId: studio.locationId, op: 'cancel', status: null, code: err?.code ?? null })
+    return cancellationUncertain('late_move_unreadable')
+  }
+  if (movedLate) return { cancelled: false, refused: 'moved_late', class_name: className, class_time: classTime, message: MOVED_LATE_NO_CANCEL }
+
   // FEES.2 — inside the studio's window, a fee (or the credit) is lost: the
   // member hears it first, and Mia cancels only on an explicit second call
   // with confirm_late_fee. An unreadable quote never blocks the cancel.
@@ -975,6 +1049,10 @@ export async function un1tCancelBooking(ctx, input, studio) {
     await finishRequest(db, studio, requestId, { status: 'actioned', details: recorded() })
     return { cancelled: true, class_name: className, class_time: classTime }
   }
+  if (outcome === 'moved_late') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'moved_late' }) })
+    return { cancelled: false, refused: 'moved_late', message: MOVED_LATE_NO_CANCEL }
+  }
   if (outcome === 'late_cancel') {
     await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'late_cancel' }) })
     return {
@@ -1010,6 +1088,191 @@ export async function un1tCancelBooking(ctx, input, studio) {
   await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'cancel_outcome_unknown', summary }) })
   await alertStaff(db, ctx, studio, { kind: CANCEL_KIND, requestId, summary: summaryOf(className, classTime, 'cancellation not confirmed by un1t.online') })
   return handoffAnswer('cancel_outcome_unknown', settings, 'cancel')
+}
+
+// ── move_class_booking ──────────────────────────────────────────────
+
+const MOVE_TRY_AGAIN = Object.freeze({
+  moved: false,
+  try_again: true,
+  message: 'The booking could not be moved just now and nothing was changed. Tell the customer and ask them to try again in a few minutes, or offer to hand off to the team. Never say it is moved.',
+})
+const MOVE_PENDING_APPROVAL = Object.freeze({
+  moved: false,
+  pending_approval: true,
+  message: 'Queued for the team to confirm. Tell the customer the team will confirm the change shortly and they are still booked into their original class until then. Never say it is moved yet.',
+})
+const MOVE_UNCERTAIN = Object.freeze({
+  not_found: 'That booking is not among this member\'s bookings, so nothing was moved. Call list_my_upcoming_bookings again and pass the booking_id exactly as listed; if it is not there, say you cannot find it and offer to hand off to the team.',
+  read_failed: 'The member\'s bookings could not be checked just now, so nothing was moved. Say you cannot check it right now, and ask them to try again in a few minutes or offer to hand off to the team.',
+})
+const moveUncertain = (reason) => ({ moved: false, error: 'MOVE_UNCERTAIN', reason, message: MOVE_UNCERTAIN[reason] })
+const moveNotLinked = (studio) => ({
+  moved: false,
+  not_linked: true,
+  message: `No account was found for this person at ${studio.name}, so nothing was moved. Offer to hand off to the team.`,
+})
+// prepareUn1tBooking answers in book_class's words (`booked: false`); a move says `moved`.
+function asMoveAnswer(answer) {
+  const { booked: _booked, ...rest } = answer || {}
+  const message = typeof rest.message === 'string' ? rest.message.replace(/nothing was booked/g, 'nothing was moved') : rest.message
+  return { moved: false, ...rest, ...(message !== undefined ? { message } : {}) }
+}
+
+/**
+ * move_class_booking for a `un1t:` booking id and a `un1t:` event id at one
+ * un1t.online studio: ONE D moveBooking call (never a cancel then a book).
+ *
+ * @param {object} ctx tool context
+ * @param {{ booking_id: string, event_id: string, starts_at: string }} input
+ * @param {import('./member-studios').MemberStudio} studio the answerable un1t.online studio
+ * @param {{ now?: () => number }} [deps]
+ * @returns {Promise<object>} one of: { moved: true, class_name, class_time, from_class_name, from_class_time },
+ *   { moved: false, reason: 'class_full'|'same_class'|'already_booked', message },
+ *   { moved: false, refused: 'too_late'|'already_happened', message },
+ *   { moved: false, error: 'MOVE_UNCERTAIN'|'class_unavailable', reason },
+ *   { moved: false, pending_approval: true }, { moved: false, try_again: true }, { moved: false, not_linked: true },
+ *   { moved: false, handoff: true, reason: 'move_rejected'|'move_outcome_unknown'|'un1t_move_not_sent'|'writes_off' }
+ */
+export async function un1tMoveBooking(ctx, input, studio, deps = {}) {
+  const { now = () => Date.now() } = deps
+  const db = ctx?.db
+  if (!ctx?.verifiedContactId) return { ...NOT_VERIFIED }
+  if (!studio || studio.providerKey !== PROVIDER) return { ...TOOL_NOT_AT_THIS_STUDIO }
+
+  // 1 guards: the account, the booking id, the target class (book_class's pre-flight).
+  const settings = await actionSettings(ctx, studio)
+  if (!studio.un1tUserId) return moveNotLinked(studio)
+  const parsed = parseAgentId(input?.booking_id)
+  if (parsed?.provider !== PROVIDER) return moveUncertain('not_found')
+  const bookingId = parsed.id
+  const prepared = await prepareUn1tBooking(ctx, { event_id: input?.event_id, starts_at: input?.starts_at, class_name: input?.class_name }, studio, settings, now())
+  if (prepared.answer) return asMoveAnswer(prepared.answer)
+  const { eventId, className, classTime, executingContactId, mode, details: targetDetails } = prepared.booking
+
+  // 2 the booking is the member's: the LIVE list only, as for a cancel. A
+  // truncated list without it is no proof of absence: D's ownership checks decide.
+  const reader = await openReader(db, studio, 'move')
+  const live = await liveBookings(db, studio, reader, 'move_bookings')
+  if (!live) return moveUncertain('read_failed')
+  const row = live.rows.find((r) => liveBookingId(r) === bookingId) ?? null
+  if (!row && !live.truncated) {
+    logWarn(LOG_MODULE, 'booking not among the member\'s live bookings; nothing sent', { locationId: studio.locationId, op: 'move', status: null })
+    return moveUncertain('not_found')
+  }
+  const from = await classOfBooking(db, ctx, studio, row, {})
+  const fromEventId = row ? (liveEventId(row) != null ? String(liveEventId(row)) : null) : null
+  if (fromEventId === eventId) {
+    return { moved: false, reason: 'same_class', message: `That booking is already for ${className} at ${classTime}, so nothing was changed. Tell the customer.` }
+  }
+  if (live.rows.some((r) => liveBookingId(r) !== bookingId && bookedOn(r, eventId))) {
+    return { moved: false, reason: 'already_booked', message: `They are already booked into ${className} at ${classTime} in another booking, so nothing was moved. Ask whether they want to cancel the other one instead.` }
+  }
+
+  const details = (extra = {}) => targetDetails({
+    reason: MOVE_REASON,
+    move_from_booking_id: bookingId,
+    move_from_event_id: fromEventId,
+    move_from_class_name: from.className,
+    move_from_class_time: from.classTime,
+    summary: `Move from ${summaryOf(from.className, from.classTime)} to ${summaryOf(className, classTime)}`,
+    ...extra,
+  })
+  const card = { kind: BOOKING_KIND, contactId: executingContactId, match: { event_id: eventId, move_from_booking_id: bookingId } }
+  const cardSummary = summaryOf(className, classTime, `move from ${summaryOf(from.className, from.classTime)}`)
+
+  // 3 UN1TMOVE.2 — inside the studio's cancellation window, only a class the
+  // same studio day. An unreadable quote is no verdict here: D's moveBooking
+  // works the window out again and refuses (nothing sent) when it cannot.
+  const quote = await quoteLateCancel(db, studio, reader, row, bookingId, from.startsAt, executingContactId)
+  if (quote?.applies) {
+    const zone = await zoneFor(ctx, studio)
+    const targetStarts = targetDetails().starts_at
+    if (!sameStudioDay(from.startsAt, targetStarts, zone)) {
+      return { moved: false, refused: 'late_other_day', message: LATE_OTHER_DAY_TEXT(summaryOf(from.className, from.classTime) || 'Their class') }
+    }
+  }
+
+  // 4 draft at the action studio.
+  if (mode === 'draft') {
+    const id = await fileCard(db, ctx, studio, { ...card, details: details(), summary: cardSummary })
+    return id ? { ...MOVE_PENDING_APPROVAL } : { ...MOVE_TRY_AGAIN }
+  }
+
+  // 5 auto: the write-ahead row, then D's move (one call).
+  const requestId = await insertRequest(db, ctx, studio, {
+    kind: BOOKING_KIND, contactId: executingContactId, status: 'pending', details: details({ stage: 'executing' }),
+  })
+  if (!requestId) return { ...MOVE_TRY_AGAIN }
+
+  let result
+  try {
+    result = await moveBooking(db, {
+      locationId: studio.locationId,
+      contactId: executingContactId,
+      un1tUserId: studio.un1tUserId,
+      bookingId,
+      eventId,
+      fromEventId,
+      origin: 'mia',
+      originRef: requestId,
+      actor: null,
+    })
+  } catch (err) {
+    // D rejects only before anything was sent (settings, mirror or ledger read).
+    logError(LOG_MODULE, 'move was not sent', { locationId: studio.locationId, op: 'move', requestId, status: null, code: err?.code ?? null, errClass: err?.name })
+    await finishRequest(db, studio, requestId, { status: 'failed', details: details({ reason: 'un1t_move_not_sent' }) })
+    return handoffAnswer('un1t_move_not_sent', settings, 'move')
+  }
+
+  const recorded = (extra = {}) => details({ un1t_write_id: result?.ledgerId ?? null, result: recordedResult(result), ...extra })
+  const words = recordedResult(result).message
+  const quoted = words ? ` un1t.online said: "${words}".` : ''
+  const stays = `They are still booked into ${from.className}${from.classTime ? ` at ${from.classTime}` : ''}.`
+  const outcome = un1tMoveOutcome(result)
+
+  if (outcome === 'moved') {
+    await finishRequest(db, studio, requestId, { status: 'actioned', details: recorded() })
+    return { moved: true, class_name: className, class_time: classTime, from_class_name: from.className, from_class_time: from.classTime }
+  }
+  if (outcome === 'class_full') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'class_full' }) })
+    return { moved: false, reason: 'class_full', message: `That class is full, so the booking was not moved. ${stays} Say so honestly and offer another class from list_upcoming_classes.` }
+  }
+  if (outcome === 'same_class') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'same_class' }) })
+    return { moved: false, reason: 'same_class', message: `That booking is already for ${className}, so nothing was changed. Tell the customer.` }
+  }
+  if (outcome === 'late_other_day') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'late_other_day' }) })
+    return { moved: false, refused: 'late_other_day', message: LATE_OTHER_DAY_TEXT(summaryOf(from.className, from.classTime) || 'Their class') }
+  }
+  if (outcome === 'too_late' || outcome === 'already_happened') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: outcome }) })
+    const lead = outcome === 'too_late'
+      ? `un1t.online refused this move as too late, so the booking was not moved.${quoted}`
+      : 'That class has already happened (attended or marked a no-show), so the booking was not moved.'
+    return { moved: false, refused: outcome, message: `${lead} ${stays} Tell the customer honestly. ${NEVER_PROMISE}` }
+  }
+  if (outcome === 'retry') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'un1t_retry' }) })
+    return { ...MOVE_TRY_AGAIN }
+  }
+  if (outcome === 'writes_off') {
+    await finishRequest(db, studio, requestId, { status: 'failed', details: recorded({ reason: 'writes_off' }) })
+    return writesOffAnswer(settings, studio, 'move')
+  }
+  if (outcome === 'card_rejected') {
+    const summary = `un1t.online refused this move (${result?.code ?? 'no code'})${words ? `: "${words}"` : ''}. Check the booking in un1t.online, then Approve to try the move again.`
+    await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'move_rejected', summary }) })
+    await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: `${cardSummary}, un1t.online refused the move` })
+    return handoffAnswer('move_rejected', settings, 'move')
+  }
+  // card_unknown: D's check read already ran and could not tell.
+  const summary = 'un1t.online did not confirm whether this booking was moved. Check the booking in un1t.online; Approve moves it only if it is still in the original class.'
+  await finishRequest(db, studio, requestId, { status: 'pending', details: recorded({ reason: 'move_outcome_unknown', summary }) })
+  await alertStaff(db, ctx, studio, { kind: BOOKING_KIND, requestId, summary: `${cardSummary}, move not confirmed by un1t.online` })
+  return handoffAnswer('move_outcome_unknown', settings, 'move')
 }
 
 // ── request_refund ──────────────────────────────────────────────────

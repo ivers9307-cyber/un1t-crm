@@ -124,8 +124,8 @@ function glofoxReminderRules(label, app) {
 // studio) keeps the two booking writes, whose `un1t:` ids answer "not from chat
 // yet". Nothing here says "limited", "spaces" or "capacity", and the tools only
 // say whether a class is full, so the no-count rule is worded around that.
-// MIAHATCH.5: 'full' (block 3b, `writes`) books and cancels at the un1t.online
-// studio from chat, says "booked" / "cancelled" only on the tool's word, never
+// MIAHATCH.5: 'full' (block 3b, `writes`) books, cancels and (UN1TMOVE.1)
+// moves bookings at the un1t.online studio from chat, says "booked" / "cancelled" only on the tool's word, never
 // promises a refund or a credit back, and sends refund requests to the team
 // through request_refund. Every 'read' line is untouched (the read renders are
 // byte-identical to before). MIAHATCH.6 adds the upsell rules to 'full'
@@ -173,7 +173,9 @@ function un1tFullLines({ name, url, multiStudio }) {
   const bookAndCancel = [
     '- BEFORE booking, the customer must have clearly confirmed the exact class and day/time. If YOUR previous message already stated the exact class and time and they explicitly pick it, that IS the clear yes. Only restate-and-ask when their request is ambiguous. Never book from an ambiguous message. Then call book_class with the event_id from the list.',
     '- Say a class is booked only when the book_class result says it is booked, then confirm warmly with the class and time. If the result says the team will confirm, say exactly that and never claim it\'s booked; if it failed (class full, already booked, or anything else), say why and offer an alternative.',
-    '- To cancel, use list_my_upcoming_bookings first so you have the booking_id, confirm exactly which class they mean, then call cancel_class_booking. Say a booking is cancelled only when the cancel_class_booking result says it is cancelled. If the system refuses (for example a late cancellation, or a class that already happened), relay the reason honestly and offer to hand off. Never promise a refund or a credit back for a cancelled or missed class. A class reschedule is a cancel plus a new booking: confirm both halves in one question, cancel first, then book.',
+    '- To cancel, use list_my_upcoming_bookings first so you have the booking_id, confirm exactly which class they mean, then call cancel_class_booking. Say a booking is cancelled only when the cancel_class_booking result says it is cancelled. If the system refuses (for example a late cancellation, or a class that already happened), relay the reason honestly and offer to hand off. Never promise a refund or a credit back for a cancelled or missed class.',
+    // UN1TMOVE.1 — a un1t.online reschedule is ONE move, never a cancel then a book.
+    `- To RESCHEDULE a booking${multiStudio ? ` at ${who}` : ''} (a "un1t:" booking_id) to another class there, confirm the class they are leaving and the new class and time in one question, then call move_class_booking once with the booking_id, the new class's event_id and its starts_at. Never cancel and book to reschedule it. Say it is moved only when the result says moved; if it failed, their original booking still stands, so say that.` + (multiStudio ? ' A reschedule at the other studio is a cancel plus a new booking: confirm both halves in one question, cancel first, then book.' : ''),
     (multiStudio ? `- REFUNDS at ${name || 'the un1t.online studio'}: when` : '- REFUNDS: when') + ' a verified member asks for a refund or their money back (for a late cancellation, a class or a payment), call request_refund with their reason, and the booking_id when it is about one booking. Then tell them you\'ve passed it to the team, who will look at it and get back to them: the team decides. Never say a refund is done, approved or on its way, and never promise one. If request_refund returns an error, apologise briefly and hand off.' + (multiStudio ? ' For a refund at the other studio, hand off.' : ''),
     fallback,
     '- For any other payment or account change, hand off to the team.',

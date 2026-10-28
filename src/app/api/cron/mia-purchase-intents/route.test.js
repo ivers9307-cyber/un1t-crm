@@ -119,6 +119,8 @@ function fakeDb(tables = {}, { fail = {} } = {}) {
       lt: (c, v) => { st.filters.push((r) => r[c] != null && r[c] < v); return b },
       lte: (c, v) => { st.filters.push((r) => r[c] != null && r[c] <= v); return b },
       contains: (c, obj) => { st.filters.push((r) => Object.entries(obj).every(([k, v]) => r[c]?.[k] === v)); return b },
+      // pendingCardId: a plain booking card never reuses a pending move card (UN1TMOVE.1).
+      is: (c, v) => { const [col, key] = c.split('->>'); st.filters.push((r) => (key ? r[col]?.[key] : r[col]) == v); return b },
       order: (c, { ascending = true } = {}) => { st.orders.push([c, ascending]); return b },
       range: (a, z) => { st.limit = z - a + 1; return b },
       limit: (n) => { st.limit = n; return b },

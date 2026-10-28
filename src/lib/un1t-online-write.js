@@ -1,13 +1,14 @@
 // UN1TWRITE.5 — the un1t.online write transport (createUn1tWriter).
-// The primitives (book, cancel, createClient, forgotPassword,
+// The primitives (book, cancel, moveBooking, createClient, forgotPassword,
 // createCheckoutLink; grantTrial in Task 10) live in un1t-online-write-ops.js
 // and call ONLY this transport, the ledger and the mirror.
 //
 // What the transport guarantees (spec 6.1, global constraints):
-// - It sends the seven allowlisted calls and nothing else, with the snapshot
-//   body keys and never bypassCredit / forceRefund / promoCode (the seventh,
-//   POST /credits/grant, is grantTrial's credit re-grant, TRIALREGRANT.1,
-//   Richard's decision 20 Oct 2026). Anything else
+// - It sends the allowlisted calls (ENDPOINTS) and nothing else, with the snapshot
+//   body keys and never bypassCredit / forceRefund / promoCode (POST
+//   /credits/grant is grantTrial's credit re-grant only, TRIALREGRANT.1,
+//   Richard's decision 20 Oct 2026; POST /bookings/{id}/move is moveBooking's,
+//   UN1TMOVE.1). Anything else
 //   is a TypeError before any request: a programming error, nothing sent.
 // - Every write first passes ensureOp: writes switched on, the token's
 //   studio is this location's external_account_id, the op's permissions are
@@ -118,6 +119,10 @@ export const UN1T_OP_POLICY = Object.freeze({
   // (a replay of the same key returned the same transaction, 28 Oct 2026), so
   // an unclear answer is re-sent once with the SAME key.
   fee_charge: 'idempotent',
+  // UN1TMOVE.1 — the check read (GET /bookings/{id}) tells a move that landed
+  // (the target event, booked) from one that did not (still the original
+  // event, booked); only the second is sent again.
+  move: 'verify',
 })
 
 // The policy for `op`; a caller-given one must match. TypeError otherwise.
@@ -157,6 +162,9 @@ export class Un1tWriteUnknown extends Error {
 const ENDPOINTS = Object.freeze([
   { method: 'POST', path: /^\/bookings$/, ops: ['book'], keys: ['eventId', 'userId'] },
   { method: 'PATCH', path: /^\/bookings\/[A-Za-z0-9][A-Za-z0-9_-]*\/cancel$/, ops: ['cancel'], keys: [] },
+  // UN1TMOVE.1: one booking to another class in one call (MoveBookingDto:
+  // eventId only), so no window loses the credit or the spot.
+  { method: 'POST', path: /^\/bookings\/[A-Za-z0-9][A-Za-z0-9_-]*\/move$/, ops: ['move'], keys: ['eventId'] },
   {
     method: 'POST', path: /^\/users\/clients$/, ops: ['create_client'],
     keys: ['email', 'password', 'studioId', 'name', 'first_name', 'last_name', 'phone', 'accepted_terms', 'accepted_liability_waiver'],
@@ -235,7 +243,7 @@ function withoutLedger(r) {
 // checkout: whether it was free, never the URL a second time.
 function dataFor(op, body) {
   const data = isObj(body) && isObj(body.data) ? body.data : null
-  if (op === 'book' || op === 'cancel') return data ? pickBooking(data) : null
+  if (op === 'book' || op === 'cancel' || op === 'move') return data ? pickBooking(data) : null
   if (op === 'checkout' || op === 'trial') return data ? { free: data.free === true } : null
   if (op === 'fee_charge') return null
   return null

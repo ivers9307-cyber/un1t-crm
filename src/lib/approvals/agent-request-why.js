@@ -146,6 +146,12 @@ const MIA_UN1T_REASONS = {
     "Mia drafted this booking because the studio's booking mode needs approval. Approving books it in un1t.online.",
   mia_cancellation:
     "Mia drafted this cancellation because the studio's booking mode needs approval. Approving cancels it in un1t.online.",
+  // UN1TMOVE.1 — move cards (class_booking rows for the target class); the
+  // class they leave is added by moveFromLine.
+  mia_move:
+    "Mia drafted this move because the studio's booking mode needs approval. Approving moves the booking in un1t.online in one step.",
+  move_outcome_unknown:
+    'un1t.online did not answer clearly. Approving checks un1t.online first and moves it only if it is still in the original class.',
   no_credits:
     'Mia escalated: they asked to book, but no credits or membership show in un1t.online. Talk to them in the conversation, add credits there, then approve to book.',
   un1t_outcome_unknown:
@@ -189,8 +195,20 @@ function refusedLine(what, d, next) {
   return `un1t.online refused the ${what}${words ? `: "${words}"` : ''}. ${next}`
 }
 
+// UN1TMOVE.1 — which class a move card leaves, in front of its reason.
+function moveFromLine(d) {
+  const name = typeof d.move_from_class_name === 'string' && d.move_from_class_name.trim() ? d.move_from_class_name.trim() : 'their current class'
+  const time = typeof d.move_from_class_time === 'string' && d.move_from_class_time.trim() ? ` (${d.move_from_class_time.trim()})` : ''
+  return `${name}${time}`
+}
+
 function miaUn1tWhy(d) {
   const reason = typeof d.reason === 'string' ? d.reason : null
+  if (d.move_from_booking_id) {
+    if (reason === 'move_rejected') return refusedLine('move', d, `Check the booking in un1t.online, then approve to try moving it from ${moveFromLine(d)} again.`)
+    if (reason === 'mia_move') return `Mia drafted this move from ${moveFromLine(d)} because the studio's booking mode needs approval. Approving moves the booking in un1t.online in one step.`
+    if (reason && MIA_UN1T_REASONS[reason]) return `Moving from ${moveFromLine(d)}. ${MIA_UN1T_REASONS[reason]}`
+  }
   if (reason === 'booking_rejected') return refusedLine('booking', d, 'Check the member in un1t.online, then approve to try the booking again.')
   if (reason === 'cancel_rejected') return refusedLine('cancellation', d, 'Check the booking in un1t.online, then approve to try the cancellation again.')
   if (reason && TRIAL_REASON.test(reason)) {

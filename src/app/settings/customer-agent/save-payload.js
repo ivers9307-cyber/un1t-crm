@@ -139,6 +139,7 @@ export function buildSavePayload(settings, overridden) {
     holding_message: settings.holding_message || null,
     booking_confirmation_text: settings.booking_confirmation_text || null,
     cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
+    class_move_confirmation_text: settings.class_move_confirmation_text || null,
     event_move_confirmation_text: settings.event_move_confirmation_text || null,
     event_move_failed_text: settings.event_move_failed_text || null,
     booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
