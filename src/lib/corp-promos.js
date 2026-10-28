@@ -40,7 +40,9 @@ export function liveCorpPromos() {
 }
 
 export const CORP_PROMO_COPY_DEFAULT = Object.freeze({
-  eyebrow: 'Corporate offer',
+  // The big line at the top of the /corp card (and the browser tab).
+  title: 'Exclusive Corporate Offer',
+  eyebrow: '{studio_name}',
   heading: '3 free classes at {studio_name}',
   subhead: 'Coach-led strength and conditioning. Your first three classes are on us: claim them in under a minute and book in the app.',
   ticks: Object.freeze(['3 coach-led classes, free', 'Use them within 7 days', 'Book in the un1t.online app']),

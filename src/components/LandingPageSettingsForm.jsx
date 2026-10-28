@@ -1086,6 +1086,7 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
 // are fixed per promo in src/lib/corp-promos.js; tokens {credits},
 // {expires_on}, {first_name} and {studio_name} are filled when shown.
 const CORP_PROMO_TEXTS = [
+  ['title', 'Title (top of the card)', 80, 1],
   ['eyebrow', 'Eyebrow', 60, 1],
   ['heading', 'Heading', 200, 1],
   ['subhead', 'Sub-copy', 400, 2],
@@ -1115,7 +1116,7 @@ export function CorpPromoEdit({ block, onUpdate }) {
       <Field label="Promo" hint="Blank applies these words to every /corp promo at this studio. The credits and their expiry are fixed per promo.">
         <Input value={block.promo_key || ''} onChange={(v) => onUpdate({ promo_key: v.trim() })} maxLength={60} placeholder="hatch-3-free" />
       </Field>
-      {CORP_PROMO_TEXTS.slice(0, 3).map(([key, label, max, rows]) => (
+      {CORP_PROMO_TEXTS.slice(0, 4).map(([key, label, max, rows]) => (
         <Field key={key} label={label}>
           {rows > 1
             ? <Textarea value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} rows={rows} />
@@ -1127,7 +1128,7 @@ export function CorpPromoEdit({ block, onUpdate }) {
           {[0, 1, 2].map((i) => <Input key={i} value={ticks[i] || ''} onChange={(v) => setTick(i, v)} maxLength={120} />)}
         </div>
       </Field>
-      {CORP_PROMO_TEXTS.slice(3).map(([key, label, max, rows]) => (
+      {CORP_PROMO_TEXTS.slice(4).map(([key, label, max, rows]) => (
         <Field key={key} label={label}>
           {rows > 1
             ? <Textarea value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} rows={rows} />
