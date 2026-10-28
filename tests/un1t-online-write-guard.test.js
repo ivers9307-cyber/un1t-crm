@@ -417,8 +417,8 @@ export function creditsGrantOutsideRegrant(key, sf) {
  */
 /**
  * CORPPROMO.1 — "line N" of each mention of grantPromoCredits that is not its
- * declaration in the ops module or an import/call in the one fulfilment
- * module (src/lib/corp-promo-claim.js).
+ * declaration in the ops module or a mention in the one fulfilment module
+ * (src/lib/corp-promo-claim.js, which imports it and passes it as a test seam).
  */
 export const PROMO_GRANT_CALLER = 'src/lib/corp-promo-claim.js'
 export function promoGrantOutsideClaim(key, sf) {
@@ -428,7 +428,6 @@ export function promoGrantOutsideClaim(key, sf) {
       const parent = node.parent
       const isDeclaration = key === OPS && ts.isFunctionDeclaration(parent) && parent.name === node
       const inCaller = key === PROMO_GRANT_CALLER
-        && ((ts.isCallExpression(parent) && parent.expression === node) || ts.isImportSpecifier(parent))
       if (!(isDeclaration || inCaller)) out.push(`${key}:${lineOf(sf, node)}`)
     }
     ts.forEachChild(node, visit)

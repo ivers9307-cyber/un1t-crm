@@ -10,6 +10,7 @@
 // organisation with the same email or the same WhatsApp-normalised mobile,
 // and every un1t.online account those contacts own at the studio.
 //
+//   already_claimed — this promo already granted (or in doubt) for any of them;
 //   free_trial_used — a free trial on our ledger (op trial, trial_regrant or
 //     promo_grant; done, sent or unknown) or a mirrored transaction for the
 //     studio's free trial product, for ANY of them (matched by email or phone);
@@ -65,10 +66,10 @@ async function personContactIds(db, { organizationId, contactId, email, phone })
 /**
  * @param {object} db service-role client
  * @param {{ locationId: string, organizationId: string|null, contactId: string|null,
- *   email: string|null, phone: string|null, trialProductId: string|null }} args
- * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'free_trial_used'|'trained' } | { ok: false }>}
+ *   email: string|null, phone: string|null, trialProductId: string|null, promoKey?: string|null }} args
+ * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'already_claimed'|'free_trial_used'|'trained' } | { ok: false }>}
  */
-export async function corpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, trialProductId = null } = {}) {
+export async function corpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, trialProductId = null, promoKey = null } = {}) {
   if (!locationId) throw new TypeError('corpPromoEligibility: locationId is required')
   try {
     const contactIds = await personContactIds(db, { organizationId, contactId, email, phone })
@@ -84,7 +85,10 @@ export async function corpPromoEligibility(db, { locationId, organizationId = nu
     }
 
     // A. A free trial already used, by email or mobile.
-    const ledger = await byPerson('un1t_write_events', 'id, op, stage')
+    const ledger = await byPerson('un1t_write_events', 'id, op, stage, target')
+    if (promoKey && ledger.some((r) => r.op === 'promo_grant' && r.target === promoKey && OPEN_OR_DONE.includes(r.stage))) {
+      return { ok: true, eligible: false, reason: 'already_claimed' }
+    }
     if (ledger.some((r) => FREE_TRIAL_OPS.includes(r.op) && OPEN_OR_DONE.includes(r.stage))) {
       return { ok: true, eligible: false, reason: 'free_trial_used' }
     }

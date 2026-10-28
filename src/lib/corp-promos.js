@@ -49,6 +49,7 @@ export const CORP_PROMO_COPY_DEFAULT = Object.freeze({
   done_title: "You're in 🎉",
   done_body: 'Your {credits} free classes are on your un1t.online account. Use them by {expires_on}. Check your email for how to log in and book.',
   trained_text: "It looks like you've trained with us at {studio_name} before, so this offer is for people new to the studio. If that's not right, reply to our email or ask at the front desk.",
+  already_claimed_text: "You've already claimed this offer, so your free classes are on your un1t.online account. Book them in the app; if they're not there, reply to our email.",
   trial_used_text: "It looks like this email or mobile has already had a free trial with us, so the offer can't be claimed again. If that's not right, reply to our email or ask at the front desk.",
   active_member_text: "It looks like you're already a member at {studio_name}, so your classes are covered. If that's not right, ask at the front desk.",
   help_text: "Thanks, we've got your details. Something needs a quick check on our side, so the team will be in touch shortly to get your classes on your account.",

@@ -33,6 +33,12 @@ describe('corpPromoEligibility', () => {
     expect(out).toEqual({ ok: true, eligible: false, reason: 'free_trial_used' })
   })
 
+  it('this promo already granted to the person is already_claimed, ahead of free_trial_used', async () => {
+    const ledger = [{ id: 'w1', location_id: LOC, contact_id: TWIN, op: 'promo_grant', stage: 'done', target: 'hatch-3-free' }]
+    expect(await run({ un1t_write_events: ledger }, { promoKey: 'hatch-3-free' })).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })
+    expect((await run({ un1t_write_events: ledger }, { promoKey: 'another' })).reason).toBe('free_trial_used')
+  })
+
   it('a re-grant or an earlier promo grant in doubt counts as a free trial; a refused one does not', async () => {
     expect((await run({ un1t_write_events: [{ id: 'w1', location_id: LOC, contact_id: ME, op: 'trial_regrant', stage: 'sent' }] })).reason).toBe('free_trial_used')
     expect((await run({ un1t_write_events: [{ id: 'w1', location_id: LOC, contact_id: ME, op: 'promo_grant', stage: 'unknown' }] })).reason).toBe('free_trial_used')

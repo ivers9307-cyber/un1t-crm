@@ -1093,6 +1093,7 @@ const CORP_PROMO_TEXTS = [
   ['consent_label', 'Consent checkbox text', 400, 3],
   ['done_title', 'Claimed — title', 120, 1],
   ['done_body', 'Claimed — message ({credits}, {expires_on})', 400, 2],
+  ['already_claimed_text', 'Already claimed — message', 400, 3],
   ['trained_text', 'Trained here before — message', 400, 3],
   ['trial_used_text', 'Free trial already used — message', 400, 3],
   ['active_member_text', 'Already a member — message', 400, 3],
