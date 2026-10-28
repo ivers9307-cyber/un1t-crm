@@ -297,7 +297,6 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
               const stored = write.app_links?.[key] || ''
               const props = {
                 id: `un1t-app-${key}`,
-                key: `${key}:${stored}`,
                 defaultValue: stored,
                 placeholder,
                 onBlur: (e) => {
@@ -309,7 +308,9 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
               return (
                 <div key={key} className="space-y-1">
                   <label htmlFor={props.id} className="block text-un1t-subtle">{label}</label>
-                  {kind === 'textarea' ? <textarea rows={3} {...props} /> : <input type="url" {...props} />}
+                  {kind === 'textarea'
+                    ? <textarea key={`${key}:${stored}`} rows={3} {...props} />
+                    : <input key={`${key}:${stored}`} type="url" {...props} />}
                 </div>
               )
             })}
