@@ -106,6 +106,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms }) {
 
   return (
     <div className={card}>
+      {copy.title && <p className="font-display font-extrabold uppercase text-3xl md:text-4xl leading-tight text-white text-center mb-6">{copy.title}</p>}
       <div className="rounded-2xl bg-white text-black p-6 mb-6">
         {copy.eyebrow && <p className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/45 mb-2">{copy.eyebrow}</p>}
         <h1 className="font-display font-extrabold uppercase text-2xl leading-tight">{copy.heading}</h1>
