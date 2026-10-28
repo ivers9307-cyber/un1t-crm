@@ -26,7 +26,7 @@ describe('CARDLENS.8 — per-studio memberships on the contact page', () => {
   })
 
   it('the strip replaces the studio bar', () => {
-    expect(src).toMatch(/<StudioStrip memberships=\{memberships\} options=\{actingOptions\} actingId=\{actingId\} lensAll=\{lensAll\} \/>/)
+    expect(src).toMatch(/<StudioStrip memberships=\{memberships\} options=\{actingOptions\} actingId=\{actingId\} lensAll=\{lensAll\} query=\{searchParams\} \/>/)
     expect(src).not.toContain('ActingStudioBar')
   })
 

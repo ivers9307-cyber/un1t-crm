@@ -529,7 +529,7 @@ export default async function ContactDetailPage(props) {
 
       {/* CARDLENS.8 — the studios, and which one this page acts at (or All);
           nothing for a one-studio person. */}
-      <StudioStrip memberships={memberships} options={actingOptions} actingId={actingId} lensAll={lensAll} />
+      <StudioStrip memberships={memberships} options={actingOptions} actingId={actingId} lensAll={lensAll} query={searchParams} />
 
       <div className="grid gap-5 items-start xl:grid-cols-[280px_minmax(0,1fr)_300px]">
         {/* Who they are — stacks under the working column on small screens. */}

@@ -65,11 +65,15 @@ describe('pickActingStudio (CARDLENS.4)', () => {
   })
 })
 
-function dbWithRows(rows, error = null) {
+function dbWithRows(rows, error = null, { location = { active: true, is_host_anchor: false }, locationError = null } = {}) {
   const calls = []
   return {
     calls,
     from(table) {
+      if (table === 'locations') {
+        const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => { calls.push({ table }); return { data: locationError ? null : location, error: locationError } } }
+        return chain
+      }
       const chain = { select: () => chain, eq: () => chain, in: async (_c, ids) => { calls.push({ table, ids }); return { data: error ? null : rows.filter((r) => ids.includes(r.location_id)), error } } }
       return chain
     },
@@ -108,6 +112,23 @@ describe('resolveRouteStudio (CARDLENS.4)', () => {
 
   it('503 when the relationship read fails, never an admit', async () => {
     const r = await resolveRouteStudio(dbWithRows([], { message: 'boom' }), userAt(HATCH), CONTACT, HATCH)
+    expect(r.response.status).toBe(503)
+  })
+
+  // CARDLENS.11 — the options never offer a closed studio or a host anchor; a
+  // hand-built body must not file there either.
+  it('404 for a closed studio, even with a row there', async () => {
+    const r = await resolveRouteStudio(dbWithRows([{ location_id: HATCH, status: 'ended' }], null, { location: { active: false, is_host_anchor: false } }), userAt(HATCH), CONTACT, HATCH)
+    expect(r.response.status).toBe(404)
+  })
+
+  it('404 for a host anchor, even with a row there', async () => {
+    const r = await resolveRouteStudio(dbWithRows([{ location_id: HATCH, status: 'active' }], null, { location: { active: true, is_host_anchor: true } }), userAt(HATCH), CONTACT, HATCH)
+    expect(r.response.status).toBe(404)
+  })
+
+  it('503 when the studio cannot be read', async () => {
+    const r = await resolveRouteStudio(dbWithRows([{ location_id: HATCH, status: 'active' }], null, { locationError: { message: 'boom' } }), userAt(HATCH), CONTACT, HATCH)
     expect(r.response.status).toBe(503)
   })
 })

@@ -58,8 +58,9 @@ export function pickActingStudio({ options, requested, activeLocationId, primary
 /**
  * For a contact route that takes an optional `location_id`. Absent, or the
  * primary: the primary, and the route's existing checks judge it as before.
- * Another studio: the caller must belong to it and the person must have a row
- * there; anything else is a 404 (ids are never confirmed), a failed read 503.
+ * Another studio: the caller must belong to it, the person must have a row
+ * there, and it must be an open studio (not a host anchor); anything else is
+ * a 404 (ids are never confirmed), a failed read 503.
  *
  * @returns {Promise<{ locationId: string } | { response: Response }>}
  */
@@ -73,5 +74,12 @@ export async function resolveRouteStudio(db, user, contact, requested) {
     return { response: NextResponse.json({ success: false, error: 'Could not check this contact\'s studios. Try again.' }, { status: 503 }) }
   }
   if (!rel.at.has(requested)) return notFound
+  // CARDLENS.11 — a closed studio or a host anchor never acts (the page's
+  // options leave them out; a hand-built body must not get round that).
+  const { data: loc, error: locErr } = await db.from('locations').select('active, is_host_anchor').eq('id', requested).maybeSingle()
+  if (locErr) {
+    return { response: NextResponse.json({ success: false, error: 'Could not check this contact\'s studios. Try again.' }, { status: 503 }) }
+  }
+  if (!loc || loc.active === false || loc.is_host_anchor === true) return notFound
   return { locationId: requested }
 }
