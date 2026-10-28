@@ -1527,7 +1527,7 @@ export async function chargeClassFee(db, args = {}, deps = {}) {
 // Richard, 28 Oct 2026: staff with the un1t_comp_credits permission may add
 // complimentary class credits, with a use-by date, to a member's un1t.online
 // account from the contact page. The same POST /credits/grant as the trial
-// re-grant, as its own op (comp_credits, mig 787) so the re-grant's once-ever
+// re-grant, as its own op (comp_credits, mig 788) so the re-grant's once-ever
 // rule is untouched. Staff only (origin 'staff', an actor): Mia never reaches
 // it (tests/mia-no-charge-no-refund-guard.test.js).
 
@@ -1539,10 +1539,20 @@ export async function chargeClassFee(db, args = {}, deps = {}) {
  * list with none → absent. No batch list in the answer, a candidate batch
  * whose dates cannot be read, or a failed read → unknown. Never throws.
  *
- * The batch list's key is not in the OpenAPI snapshot (the spec documents
- * the grant's answer, GrantCreditsResponseDto, not the ledger's batches), so
- * `batches` and `credit_batches` are read and anything else is unknown: an
- * unfamiliar answer is never "absent".
+ * The ledger's batches are `credit_batches` (confirmed by a read-only probe of
+ * the live API, 28 Oct 2026: { id, credit_ledger_id, transaction_id,
+ * product_id, source, original_amount, remaining, expires_at, frozen,
+ * created_at, updated_at }); `batches` is read too, and anything else is
+ * unknown: an unfamiliar answer is never "absent".
+ *
+ * What it CANNOT tell apart: a trial re-grant (trial_regrant) and a /corp
+ * promo grant (promo_grant) also make batches with source 'admin', and no
+ * batch field names the CRM op or our ledger key. The only signals are the
+ * amount, the expiry (within a day) and created-since-our-send, so a promo or
+ * re-grant of the same amount and length landing for the same person in the
+ * same minutes would read as this grant having landed. Both are once-only per
+ * person and only onto a zero balance, so the overlap is narrow, but it is
+ * not ruled out.
  * @returns {Promise<{ state: 'landed'|'absent'|'unknown', id: string|null, batch: object|null }>}
  */
 export async function findLandedCompGrant(writer, { un1tUserId, amount, expiresInDays, sentAt } = {}) {
@@ -1658,4 +1668,148 @@ export async function grantCompCredits(db, args = {}, deps = {}) {
       return { data }
     },
   })
+}
+
+// ── grantPromoCredits (CORPPROMO.1) ────────────────────────────────────────
+//
+// Richard, 28 Oct 2026: a /corp promo puts its credits straight onto the
+// person's un1t.online account with POST /credits/grant, the second caller of
+// that call after the trial re-grant. Called ONLY from src/lib/corp-promo-claim.js
+// (tests/un1t-online-write-guard.test.js), which has already judged the
+// person eligible. Amount and expiry come from the promo registry
+// (src/lib/corp-promos.js), never from a request.
+
+/** The origin every promo grant's ledger row carries (mig 787). */
+export const UN1T_PROMO_ORIGIN = 'corp_promo'
+const promoFailed = (code) => `un1t_promo_failed:${code ?? 'unknown'}`
+
+/** The open (sent / unknown) promo grant row for this key, or null. Throws on a database error. */
+async function findOpenPromo(db, key) {
+  const { data, error } = await db
+    .from('un1t_write_events')
+    .select('id, stage, created_at')
+    .eq('idempotency_key', key)
+    .in('stage', ['sent', 'unknown'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw Object.assign(new Error(`un1t_write_events open promo read failed (${error.code ?? 'no code'})`), { code: error.code ?? null })
+  return data ?? null
+}
+
+const positiveInt = (name, v) => {
+  if (!Number.isSafeInteger(v) || v < 1) throw new TypeError(`grantPromoCredits: '${name}' must be a whole number from 1`)
+  return v
+}
+
+/**
+ * POST /credits/grant { userId, amount, expiresInDays } for one person and one
+ * promo, ledgered first (op promo_grant, key promo_grant:<loc>:<user>:<promo>,
+ * also the idempotency-key header), judged on the body, never re-sent.
+ *
+ * Order: the switch and permissions (ensureOp) → a done row for the key
+ * (granted, nothing sent) → the live credits read → an open row (a sent one
+ * under UN1T_IN_FLIGHT_MS is retry; otherwise the credits decide: showing →
+ * granted and the row settled done, none → staff) → credits already showing
+ * (ineligible holds_credits: not new, nothing sent) → the grant. On the answer:
+ * done → granted (expiresAt from the batch when given); unknown, or a
+ * transport refusal after the send → the credits read decides (granted /
+ * needs_staff un1t_promo_unverified / retry credits_unreadable); un1t.online's
+ * refusal → needs_staff un1t_promo_failed:<code>. Rejects only with
+ * Un1tSettingsReadError, a ledger database error before anything was sent, or a
+ * TypeError.
+ *
+ * @param {{ locationId: string, un1tUserId: string, contactId: string|null, promoKey: string,
+ *   amount: number, expiresInDays: number, originRef?: string|null }} args
+ * @returns {Promise<{ outcome: 'granted', ledgerId: string|null, batchId: string|null, expiresAt: string|null }
+ *   | { outcome: 'ineligible', reason: 'holds_credits' }
+ *   | { outcome: 'needs_staff', reason: string, message?: string|null, ledgerId?: string|null }
+ *   | { outcome: 'retry', code: string }>}
+ */
+export async function grantPromoCredits(db, args = {}, deps = {}) {
+  const { writerFactory = createUn1tWriter, now = () => new Date() } = deps
+  const { locationId, un1tUserId, contactId = null, promoKey, originRef = null } = args
+  requireBareId('grantPromoCredits', 'un1tUserId', un1tUserId)
+  requireText('grantPromoCredits', 'promoKey', promoKey)
+  const amount = positiveInt('amount', args.amount)
+  const expiresInDays = positiveInt('expiresInDays', args.expiresInDays)
+  const origin = UN1T_PROMO_ORIGIN
+
+  const writer = await writerFactory(db, locationId)
+  const meta = { locationId, op: 'promo_grant', origin }
+  const fromRefusal = (r) => (r.retryable
+    ? { outcome: 'retry', code: r.code }
+    : { outcome: 'needs_staff', reason: promoFailed(r.code), message: r.message ?? null, ledgerId: r.ledgerId ?? null })
+
+  const refused = await opRefusal(writer, 'promo_grant')
+  if (refused) return fromRefusal(refused)
+  const body = { userId: un1tUserId, amount, expiresInDays }
+  writer.assertAllowed('promo_grant', 'POST', '/credits/grant', body)
+  const key = ledgerKey.promo(locationId, un1tUserId, promoKey)
+
+  const mirror = (credits, ledgerId) => safely(() => applyUn1tWriteToMirror(db, {
+    op: 'trial', locationId, contactId, un1tUserId, studioId: writer.studioId, productId: null, data: { credits }, ledgerId,
+  }, mirrorDeps(writer, now)), { ...meta, ledgerId })
+  const granted = (ledgerId, { batchId = null, expiresAt = null } = {}) => ({ outcome: 'granted', ledgerId: ledgerId ?? null, batchId, expiresAt })
+  // The credits decide an answer in doubt; showing settles the row as done.
+  const byCredits = async (ledgerId) => {
+    const credits = await readTrialCredits(writer, un1tUserId)
+    if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
+    if (!credits.shows) {
+      logWarn(LOG_MODULE, 'a promo grant is in doubt and no credits show', fields({ ...meta, ledgerId: ledgerId ?? undefined, code: 'un1t_promo_unverified' }))
+      return { outcome: 'needs_staff', reason: 'un1t_promo_unverified', ledgerId: ledgerId ?? null }
+    }
+    if (ledgerId) await finishAttempt(db, ledgerId, { stage: 'done', recovered: 'credits_show' })
+    await mirror(credits.ledger, ledgerId)
+    logInfo(LOG_MODULE, 'promo granted on the credits read', fields({ ...meta, ledgerId: ledgerId ?? undefined, recovered: 'credits_show' }))
+    return granted(ledgerId)
+  }
+
+  // 1. Granted before: nothing is sent again.
+  const done = await findDone(db, { key })
+  if (done) return granted(done.id, { batchId: done.un1t_ref ?? null })
+
+  // 2. The live balance.
+  const credits = await readTrialCredits(writer, un1tUserId)
+  if (!credits) return { outcome: 'retry', code: 'credits_unreadable' }
+
+  // 3. An earlier attempt in flight or in doubt.
+  const open = await findOpenPromo(db, key)
+  if (open) {
+    const age = now().getTime() - Date.parse(open.created_at)
+    if (open.stage === 'sent' && (!Number.isFinite(age) || age < UN1T_IN_FLIGHT_MS)) return { outcome: 'retry', code: C.ATTEMPT_IN_FLIGHT }
+    if (credits.shows) {
+      await finishAttempt(db, open.id, { stage: 'done', recovered: 'credits_show' })
+      await mirror(credits.ledger, open.id)
+      return granted(open.id)
+    }
+    logWarn(LOG_MODULE, 'an earlier promo grant is in doubt; nothing sent', fields({ ...meta, ledgerId: open.id, verdict: 'unknown' }))
+    return { outcome: 'needs_staff', reason: 'un1t_promo_unverified', ledgerId: open.id }
+  }
+
+  // 4. Someone already holding credits is not new to the studio.
+  if (credits.shows) return { outcome: 'ineligible', reason: 'holds_credits' }
+
+  // 5. The grant.
+  const r = await attemptWrite(db, writer, {
+    attempt: { op: 'promo_grant', key, contactId, un1tUserId, target: promoKey, origin, originRef, actorUserId: null },
+    policy: 'never',
+    send: (row) => writer.send('POST', '/credits/grant', {
+      body, policy: 'never', idempotencyKey: key, op: 'promo_grant', origin, ledgerId: row.id, expect: {},
+    }),
+  })
+  if (r.verdict === 'done') {
+    const after = await readTrialCredits(writer, un1tUserId)
+    if (after) await mirror(after.ledger, r.ledgerId)
+    logInfo(LOG_MODULE, 'promo credits granted', fields({ ...meta, ledgerId: r.ledgerId, verdict: 'done' }))
+    return granted(r.ledgerId, { batchId: r.id ?? null, expiresAt: r.data?.expiresAt ?? null })
+  }
+  if (r.verdict === 'unknown') {
+    if (r.sent === false && !r.ledgerId) return { outcome: 'retry', code: r.code ?? 'outcome_unknown' }
+    return byCredits(r.ledgerId)
+  }
+  // A refusal from the transport itself (budget, throttle, token) is not
+  // un1t.online's answer about the grant.
+  if (r.retryable || Object.values(C).includes(r.code)) return r.sent ? byCredits(r.ledgerId) : fromRefusal(r)
+  return { outcome: 'needs_staff', reason: promoFailed(r.code), message: r.message ?? null, ledgerId: r.ledgerId ?? null }
 }

@@ -7,8 +7,9 @@
 // - It sends the allowlisted calls (ENDPOINTS) and nothing else, with the snapshot
 //   body keys and never bypassCredit / forceRefund / promoCode (POST
 //   /credits/grant is grantTrial's credit re-grant, TRIALREGRANT.1, Richard's
-//   decision 20 Oct 2026, and staff's complimentary credits, grantCompCredits,
-//   UN1TCOMP.1, Richard's decision 28 Oct 2026; POST /bookings/{id}/move is
+//   decision 20 Oct 2026, the /corp promo grant, grantPromoCredits,
+//   CORPPROMO.1, and staff's complimentary credits, grantCompCredits,
+//   UN1TCOMP.1, both Richard's decisions of 28 Oct 2026; POST /bookings/{id}/move is
 //   moveBooking's, UN1TMOVE.1). Anything else
 //   is a TypeError before any request: a programming error, nothing sent.
 // - Every write first passes ensureOp: writes switched on, the token's
@@ -124,6 +125,9 @@ export const UN1T_OP_POLICY = Object.freeze({
   // (the target event, booked) from one that did not (still the original
   // event, booked); only the second is sent again.
   move: 'verify',
+  // CORPPROMO.1 — POST /credits/grant for a /corp promo: never re-sent; the
+  // credits read decides an unclear answer.
+  promo_grant: 'never',
   // UN1TCOMP.1 — staff's complimentary credits. un1t.online's spec has no
   // idempotency-key on POST /credits/grant, so it is never re-sent: after a
   // 5xx or no reply the credits ledger read can only report a landing.
@@ -181,10 +185,11 @@ const ENDPOINTS = Object.freeze([
     method: 'POST', path: /^\/purchases\/checkout$/, ops: ['checkout', 'trial'],
     keys: ['productId', 'successUrl', 'cancelUrl', 'userId'], needsKey: true,
   },
-  // Inside grantTrial's regrantTrialCredits (TRIALREGRANT.1) and staff's
-  // grantCompCredits (UN1TCOMP.1) only: never re-sent. The key header is sent
-  // (each attempt's ledger key) but un1t.online's spec does not promise it.
-  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant', 'comp_credits'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
+  // Inside grantTrial's regrantTrialCredits (TRIALREGRANT.1), grantPromoCredits
+  // (CORPPROMO.1) and staff's grantCompCredits (UN1TCOMP.1) only: never
+  // re-sent. The key header is sent (each attempt's ledger key) but
+  // un1t.online's spec does not promise it.
+  { method: 'POST', path: /^\/credits\/grant$/, ops: ['trial_regrant', 'promo_grant', 'comp_credits'], keys: ['userId', 'amount', 'expiresInDays'], needsKey: true },
   // Inside chargeClassFee only (FEES.1, Richard's decision 28 Oct 2026): a
   // staff-reviewed late-cancel or no-show fee on the member's default card.
   // Never paymentMethodId: the default card is the only card it charges.
@@ -253,6 +258,13 @@ function dataFor(op, body) {
   if (op === 'book' || op === 'cancel' || op === 'move') return data ? pickBooking(data) : null
   if (op === 'checkout' || op === 'trial') return data ? { free: data.free === true } : null
   if (op === 'fee_charge') return null
+  // CORPPROMO.1 — the granted batch's expiry and balance, nothing else.
+  if (op === 'promo_grant') {
+    return data ? {
+      expiresAt: typeof data.expires_at === 'string' && data.expires_at ? data.expires_at : null,
+      remaining: Number.isSafeInteger(data.remaining) ? data.remaining : null,
+    } : null
+  }
   // UN1TCOMP.1: the batch un1t.online made (its expiry is what staff are shown).
   if (op === 'comp_credits') return data ? pickCompBatch(data) : null
   return null

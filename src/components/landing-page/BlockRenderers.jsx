@@ -83,6 +83,8 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     // landing page it renders only in the editor, as a stub, so its copy and
     // price stay editable there.
     case 'paid_trial':  return localOnEdit ? <PaidTrialBlock block={block} onEdit={localOnEdit} /> : null
+    // CORPPROMO.1 — the /corp promo's words; shown on /corp, a stub in the editor.
+    case 'corp_promo':  return localOnEdit ? <CorpPromoStubBlock block={block} /> : null
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -471,6 +473,19 @@ export function PaidTrialBlock({ block }) {
         <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Paid trial'}</div>
         <p className="text-white/60 text-sm">
           Sold at /trial for {price}. {ready ? 'Glofox product set.' : 'No Glofox product set yet: the page sells nothing until it is.'} Edit the copy, the price and the product in the panel.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+export function CorpPromoStubBlock({ block }) {
+  return (
+    <section className="relative bg-black text-white border-t border-white/10 py-20 px-5 flex items-center justify-center">
+      <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 px-6 py-8 text-center">
+        <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Corporate promo'}</div>
+        <p className="text-white/60 text-sm">
+          Shown at /corp{block.promo_key ? ` for ${block.promo_key}` : ''}. Edit the words in the panel; the credits and their expiry are fixed per promo.
         </p>
       </div>
     </section>

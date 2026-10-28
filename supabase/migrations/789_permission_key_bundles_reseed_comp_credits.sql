@@ -12,7 +12,7 @@
 -- "no key is bundle-gated" (fails OPEN), so TRUNCATE + INSERT must be
 -- atomic. Seed content generated verbatim by: node scripts/generate-bundle-sql.mjs
 --
--- ORDER. Independent of mig 787; apply with it, before the code deploys.
+-- ORDER. Independent of mig 788; apply with it, before the code deploys.
 
 BEGIN;
 

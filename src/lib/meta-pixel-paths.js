@@ -14,7 +14,8 @@ export const SITE_META_PIXEL_ID = '1866914428028977' // UN1T Web dataset
 // '/hatch-street/events'), never by string prefix alone ('/hatch-streetx').
 const STUDIO_META_PIXELS = [
   // UN1T Hatch Street Data Set (business "UN1T HatchStreet").
-  { id: '39174085025538525', prefixes: ['/hatch-street', '/welcome/hatch-street', '/start/hatch-street'] },
+  // CORPPROMO.1: /corp's only promos run at Hatch Street today.
+  { id: '39174085025538525', prefixes: ['/hatch-street', '/welcome/hatch-street', '/start/hatch-street', '/corp'] },
 ]
 
 export function metaPixelIdsForPath(pathname) {

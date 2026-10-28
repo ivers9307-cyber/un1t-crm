@@ -16,7 +16,7 @@ import { todayStrIn, addDaysISO, DAY_MS } from '@shared/zoned-time'
 
 export const COMP_CREDIT_LIMITS = Object.freeze({ minCredits: 1, maxCredits: 10, minDays: 1, maxDays: 365, noteMax: 200 })
 
-/** The reasons staff pick from (required). Keys are stored on the ledger (mig 787 CHECK). */
+/** The reasons staff pick from (required). Keys are stored on the ledger (mig 788 CHECK). */
 export const COMP_CREDIT_REASONS = Object.freeze([
   Object.freeze({ key: 'goodwill', label: 'Goodwill' }),
   Object.freeze({ key: 'injury', label: 'Injury' }),

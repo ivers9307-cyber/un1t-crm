@@ -4,8 +4,9 @@
 // write modules, reached by Mia through grantTrial, and /credits/grant
 // (TRIALREGRANT.1, Richard's decision 20 Oct 2026: the one-off trial credit
 // re-grant) stands only inside regrantTrialCredits in D's ops module (and the
-// transport's ENDPOINTS allowlist), which only grantTrial calls, and inside
-// grantCompCredits (UN1TCOMP.1, Richard's decision 28 Oct 2026: staff's
+// transport's ENDPOINTS allowlist), which only grantTrial calls, inside
+// grantPromoCredits (CORPPROMO.1, the /corp promo grant, used only by
+// src/lib/corp-promo-claim.js), and inside grantCompCredits (UN1TCOMP.1, Richard's decision 28 Oct 2026: staff's
 // complimentary credits), which no agent module may import, name or reach
 // through the 'comp_credits' op.
 // A refund is a record-only refund_request card (fileRefundCard) that staff
@@ -167,14 +168,15 @@ export function bannedKeyViolations(key, sf) {
     .filter((h) => !(key === BANNED_KEYS_DECLARED_IN.file && h.vars.includes(BANNED_KEYS_DECLARED_IN.name)))
     .map((h) => `${key}:${h.line} (${h.name})`)
 }
-// TRIALREGRANT.1 / UN1TCOMP.1 — /credits/grant only inside D's
-// regrantTrialCredits and grantCompCredits, and in the transport's ENDPOINTS
-// allowlist.
-const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: Object.freeze(['regrantTrialCredits', 'grantCompCredits']), [TRANSPORT]: Object.freeze(['ENDPOINTS']) })
+// TRIALREGRANT.1 / CORPPROMO.1 / UN1TCOMP.1 — /credits/grant only inside D's
+// regrantTrialCredits, grantPromoCredits (the /corp promo grant) and
+// grantCompCredits (staff's complimentary credits), and in the transport's
+// ENDPOINTS allowlist.
+const CREDITS_GRANT_ALLOWED = Object.freeze({ [OPS]: Object.freeze(['regrantTrialCredits', 'grantPromoCredits', 'grantCompCredits']), [TRANSPORT]: Object.freeze(['ENDPOINTS']) })
 export function creditsGrantViolations(key, sf) {
   const within = Object.hasOwn(CREDITS_GRANT_ALLOWED, key) ? CREDITS_GRANT_ALLOWED[key] : []
   return literalHits(sf, CREDITS_GRANT)
-    .filter((h) => !within.some((w) => h.names.includes(w)))
+    .filter((h) => !within.some((name) => h.names.includes(name)))
     .map((h) => `${key}:${h.line} (/credits/grant)`)
 }
 /** UN1TCOMP.1 — "line N" of each identifier or literal in an agent module naming staff's complimentary credits. */

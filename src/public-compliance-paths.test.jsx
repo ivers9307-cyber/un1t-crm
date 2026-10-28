@@ -101,6 +101,14 @@ const COMPLIANCE_PATHS = [
     path: '/pay-done/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4',
     why: 'MIAHATCH.6: the return page un1t.online checkout sends a member to after paying; the member has no session and lands on the customer (marketing) host, so a login wall or a rewrite to /welcome strands them',
   },
+  {
+    path: '/corp',
+    why: 'CORPPROMO.1: the corporate promo link partner companies send their staff; a signed-out visitor on the CRM or marketing host claims it there',
+  },
+  {
+    path: '/corp/hatch-3-free',
+    why: 'CORPPROMO.1: one promo by its key, the same page',
+  },
 ]
 
 // The embed's post-submit hop. RaceSignupWidget sends a PAID signup to a
@@ -688,7 +696,7 @@ const TENANT_FLOW_PATHS = [
   '/class-pay/abc', '/h/pride', '/h/pride/join', '/host', '/host/login', '/host-connect/abc',
   '/api/host/x', '/embed/event/x', '/terms',
 ]
-const TENANT_PINNED_OFF = ['/start', '/trial', '/free-class', '/offers', '/technical']
+const TENANT_PINNED_OFF = ['/start', '/trial', '/corp', '/free-class', '/offers', '/technical']
 const PLATFORM_TENANT_HOST = 'gym-a.repset.ie'
 
 // The entries the two rewrite-fallback tiers (un1t-marketing + the tenant

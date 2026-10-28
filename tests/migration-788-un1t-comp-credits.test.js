@@ -1,9 +1,9 @@
-// UN1TCOMP.1 — behavioural test for migration 787 (the 'comp_credits' op on
+// UN1TCOMP.1 — behavioural test for migration 788 (the 'comp_credits' op on
 // the un1t.online write ledger, its six comp_* columns, their CHECK and the
 // "given" index).
 //
 // PGlite (PostgreSQL 17): the tables mig 744 touches, reduced to what it
-// needs, then the real 744, 760 and 787 files. Fictional ids only: the repo
+// needs, then the real 744, 760, 787 (CORPPROMO.1) and 788 files. Fictional ids only: the repo
 // is public.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -14,7 +14,8 @@ import { PGlite } from '@electric-sql/pglite'
 const MIG = (f) => readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations', f), 'utf8')
 const MIG_744 = MIG('744_un1t_write_back.sql')
 const MIG_760 = MIG('760_un1t_trial_regrant.sql')
-const MIG_787 = MIG('787_un1t_comp_credits.sql')
+const MIG_787 = MIG('787_corp_promo.sql')
+const MIG_788 = MIG('788_un1t_comp_credits.sql')
 
 const LOC = 'a0000000-0000-0000-0000-00000000000a'
 const LOC_B = 'a0000000-0000-0000-0000-00000000000b'
@@ -30,6 +31,8 @@ const SETUP_SQL = `
     CREATE TABLE public.locations (id uuid PRIMARY KEY);
     INSERT INTO public.locations VALUES ('${LOC}'), ('${LOC_B}');
     CREATE TABLE public.contacts (id uuid PRIMARY KEY);
+    CREATE TABLE public.profiles (id uuid PRIMARY KEY);
+    CREATE FUNCTION public.update_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END $$;
     INSERT INTO public.contacts VALUES ('${CONTACT}');
 
     CREATE TABLE public.un1t_clients (
@@ -52,12 +55,12 @@ let db
 // PGlite's multi-statement SQL runner (an in-process SQL call, no shell).
 const runSql = (text) => db['exec'](text)
 let seq = 0
-const COLS = ['location_id', 'contact_id', 'un1t_user_id', 'op', 'origin', 'actor_user_id', 'idempotency_key', 'stage',
+const COLS = ['location_id', 'contact_id', 'un1t_user_id', 'op', 'origin', 'actor_user_id', 'idempotency_key', 'target', 'stage',
   'comp_amount', 'comp_expires_in_days', 'comp_use_by', 'comp_reason', 'comp_note', 'comp_expires_at']
 function row(over = {}) {
   const r = {
     location_id: LOC, contact_id: CONTACT, un1t_user_id: 'u-1', op: 'comp_credits', origin: 'staff', actor_user_id: STAFF,
-    idempotency_key: `k:${++seq}`, stage: 'sent', comp_amount: 2, comp_expires_in_days: 8, comp_use_by: '2026-11-05',
+    idempotency_key: `k:${++seq}`, target: null, stage: 'sent', comp_amount: 2, comp_expires_in_days: 8, comp_use_by: '2026-11-05',
     comp_reason: 'goodwill', comp_note: null, comp_expires_at: null, ...over,
   }
   return db.query(
@@ -74,12 +77,13 @@ beforeAll(async () => {
   await runSql(MIG_744)
   await runSql(MIG_760)
   await runSql(MIG_787)
+  await runSql(MIG_788)
 }, 60_000)
 afterAll(() => db?.close())
 
-describe('mig 787 — comp_credits on the un1t.online write ledger', () => {
+describe('mig 788 — comp_credits on the un1t.online write ledger', () => {
   it('builds, passes its own self-check and is idempotent', async () => {
-    await expect(runSql(MIG_787)).resolves.toBeDefined()
+    await expect(runSql(MIG_788)).resolves.toBeDefined()
     const { rows } = await db.query(`SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'un1t_write_events_comp_given'`)
     expect(rows[0].n).toBe(1)
   })
@@ -90,6 +94,7 @@ describe('mig 787 — comp_credits on the un1t.online write ledger', () => {
       await expect(plain(op, { un1t_user_id: `u-${op}` })).resolves.toBeDefined()
     }
     await expect(plain('trial_regrant', { un1t_user_id: 'u-rg' })).resolves.toBeDefined()
+    await expect(plain('promo_grant', { un1t_user_id: 'u-promo', origin: 'corp_promo', target: 'promo-1' })).resolves.toBeDefined()
     await expect(plain('credits_free', { un1t_user_id: 'u-x' })).rejects.toMatchObject({ code: '23514' })
   })
 
@@ -105,6 +110,13 @@ describe('mig 787 — comp_credits on the un1t.online write ledger', () => {
     }
     await expect(row({ comp_amount: 10, comp_expires_in_days: 365, comp_reason: 'referral_reward', comp_note: 'x'.repeat(200) })).resolves.toBeDefined()
     for (const reason of ['injury', 'class_cancelled', 'other']) await expect(row({ comp_reason: reason })).resolves.toBeDefined()
+  })
+
+  it("mig 787's promo_grant rules still hold beside the comp_* rule", async () => {
+    await expect(plain('promo_grant', { un1t_user_id: null, origin: 'corp_promo', target: 'promo-2' })).rejects.toMatchObject({ code: '23514' })
+    await expect(plain('promo_grant', { un1t_user_id: 'u-p2', origin: 'corp_promo', target: 'promo-2', stage: 'done' })).resolves.toBeDefined()
+    await expect(plain('promo_grant', { un1t_user_id: 'u-p2', origin: 'corp_promo', target: 'promo-2', stage: 'done' })).rejects.toMatchObject({ code: '23505' })
+    await expect(plain('promo_grant', { un1t_user_id: 'u-p3', origin: 'corp_promo', target: 'promo-3', comp_amount: 2 })).rejects.toMatchObject({ code: '23514' })
   })
 
   it('no other op carries a comp_* column', async () => {
@@ -132,8 +144,9 @@ describe('mig 787 — comp_credits on the un1t.online write ledger', () => {
     try {
       await probe['exec'](SETUP_SQL)
       await probe['exec'](MIG_744)
-      const broken = MIG_787.replace("CHECK (op IN ('create_client', 'forgot_password', ", "CHECK (op IN (")
-      expect(broken).not.toBe(MIG_787)
+      await probe['exec'](MIG_787)
+      const broken = MIG_788.replace("CHECK (op IN ('create_client', 'forgot_password', ", "CHECK (op IN (")
+      expect(broken).not.toBe(MIG_788)
       await expect(probe['exec'](broken)).rejects.toThrow(/does not admit create_client/)
     } finally {
       await probe.close()

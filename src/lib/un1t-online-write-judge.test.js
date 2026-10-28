@@ -19,8 +19,8 @@ const bookingDto = (over = {}) => ({ id: BOOKING, event_id: EVENT, user_id: USER
 const RESULT_KEYS = ['alreadyBooked', 'code', 'id', 'message', 'verdict']
 
 describe('UN1T_WRITE_OPS', () => {
-  it('lists the ten ops (trial_regrant since TRIALREGRANT.1, fee_charge since FEES.1, move since UN1TMOVE.1, comp_credits since UN1TCOMP.1), frozen', () => {
-    expect(UN1T_WRITE_OPS).toEqual(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'comp_credits'])
+  it('lists the eleven ops (trial_regrant since TRIALREGRANT.1, fee_charge since FEES.1, move since UN1TMOVE.1, promo_grant since CORPPROMO.1, comp_credits since UN1TCOMP.1), frozen', () => {
+    expect(UN1T_WRITE_OPS).toEqual(['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'promo_grant', 'comp_credits'])
     expect(Object.isFrozen(UN1T_WRITE_OPS)).toBe(true)
   })
 })
@@ -293,6 +293,7 @@ describe('permissions', () => {
       trial_regrant: ['credits:create', 'credits:read'],
       fee_charge: ['purchases:create', 'payment_methods:read'],
       move: ['bookings:update', 'bookings:read'],
+      promo_grant: ['credits:create', 'credits:read'],
       comp_credits: ['credits:create', 'credits:read'],
     })
     expect(Object.keys(REQUIRED_PERMISSIONS).sort()).toEqual([...UN1T_WRITE_OPS].sort())

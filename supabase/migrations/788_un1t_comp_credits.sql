@@ -1,4 +1,4 @@
--- 787 — UN1TCOMP.1: complimentary un1t.online credits on the write ledger.
+-- 788 — UN1TCOMP.1: complimentary un1t.online credits on the write ledger.
 --
 -- WHY. Richard, 28 Oct 2026: staff with the new web permission
 -- un1t_comp_credits (owner, manager and reception by default) may add
@@ -12,9 +12,9 @@
 -- read them back.
 --
 -- WHAT.
---   (1) un1t_write_events_op_check admits 'comp_credits' (every op mig 786
+--   (1) un1t_write_events_op_check admits 'comp_credits' (every op mig 787
 --       allowed is kept: create_client, forgot_password, trial, book, cancel,
---       checkout, trial_regrant, fee_charge, move).
+--       checkout, trial_regrant, fee_charge, move, promo_grant).
 --   (2) Six columns, NULL on every other op:
 --         comp_amount          smallint     credits given (1 to 10)
 --         comp_expires_in_days smallint     the expiresInDays sent (1 to 365)
@@ -38,11 +38,12 @@
 --   submission, so a double click is one grant); target is null; once done
 --   its un1t_ref is the credit batch id. The one-open index (one attempt in
 --   flight or in doubt per key) already holds it. No one-done index: staff
---   may give credits more than once. The origin CHECK (mig 781) already
---   admits 'staff'.
+--   may give credits more than once.
 --
 -- GRANTS. No privilege changes: un1t_write_events stays service_role only
 -- (mig 744: RLS on, no policy, nothing for anon/authenticated).
+-- The origin CHECK (mig 787: staff … corp_promo) is unchanged; comp_credits
+-- rows use origin 'staff'.
 --   grant: n/a, no new table, view, sequence or function; the new columns are
 --   on a table no client role holds any privilege on.
 --
@@ -65,7 +66,7 @@ ALTER TABLE public.un1t_write_events
   DROP CONSTRAINT IF EXISTS un1t_write_events_op_check;
 ALTER TABLE public.un1t_write_events
   ADD CONSTRAINT un1t_write_events_op_check
-  CHECK (op IN ('create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'comp_credits'));
+  CHECK (op IN ('create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'promo_grant', 'comp_credits'));
 
 ALTER TABLE public.un1t_write_events
   ADD COLUMN IF NOT EXISTS comp_amount          smallint,
@@ -103,20 +104,20 @@ CREATE INDEX IF NOT EXISTS un1t_write_events_comp_given
   WHERE op = 'comp_credits';
 
 COMMENT ON COLUMN public.un1t_write_events.comp_amount IS
-  'UN1TCOMP.1 (mig 787): complimentary credits a member of staff gave (1 to 10). comp_credits rows only.';
+  'UN1TCOMP.1 (mig 788): complimentary credits a member of staff gave (1 to 10). comp_credits rows only.';
 COMMENT ON COLUMN public.un1t_write_events.comp_expires_in_days IS
-  'UN1TCOMP.1 (mig 787): the expiresInDays sent to POST /credits/grant (whole calendar days from the studio''s today to comp_use_by). comp_credits rows only.';
+  'UN1TCOMP.1 (mig 788): the expiresInDays sent to POST /credits/grant (whole calendar days from the studio''s today to comp_use_by). comp_credits rows only.';
 COMMENT ON COLUMN public.un1t_write_events.comp_use_by IS
-  'UN1TCOMP.1 (mig 787): the use-by day staff chose, a calendar day on the studio''s clock. comp_credits rows only.';
+  'UN1TCOMP.1 (mig 788): the use-by day staff chose, a calendar day on the studio''s clock. comp_credits rows only.';
 COMMENT ON COLUMN public.un1t_write_events.comp_reason IS
-  'UN1TCOMP.1 (mig 787): why the credits were given (goodwill, injury, class_cancelled, referral_reward, other). comp_credits rows only.';
+  'UN1TCOMP.1 (mig 788): why the credits were given (goodwill, injury, class_cancelled, referral_reward, other). comp_credits rows only.';
 COMMENT ON COLUMN public.un1t_write_events.comp_note IS
-  'UN1TCOMP.1 (mig 787): the optional team note (plain text, <= 200 characters; the app refuses an email address or phone number). comp_credits rows only.';
+  'UN1TCOMP.1 (mig 788): the optional team note (plain text, <= 200 characters; the app refuses an email address or phone number). comp_credits rows only.';
 COMMENT ON COLUMN public.un1t_write_events.comp_expires_at IS
-  'UN1TCOMP.1 (mig 787): the expires_at un1t.online answered a done grant with (or the landed batch''s, when a check read found it). comp_credits rows only.';
+  'UN1TCOMP.1 (mig 788): the expires_at un1t.online answered a done grant with (or the landed batch''s, when a check read found it). comp_credits rows only.';
 
 COMMENT ON TABLE public.un1t_write_events IS
-  'UN1TWRITE.1 (mig 744): one row per un1t.online write attempt (book, cancel, create_client, forgot_password, trial, checkout; trial_regrant since mig 760; fee_charge since mig 781; move since mig 786; comp_credits since mig 787). The write-ahead marker, the resume point for retries and approvals, the dedupe of the CRM''s own attempts and the audit trail. Keys: create:<loc>:<contact>, trial:<loc>:<un1tUser>:<product>:<method>, trial_regrant:<loc>:<un1tUser>, book:<loc>:<un1tUser>:<event>, cancel:<loc>:<booking>, move:<loc>:<booking>:<event> (late_window since mig 786), comp:<loc>:<un1tUser>:<request> (the comp_* columns since mig 787), fee:<loc>:<fee>:<n>, pw:<loc>:<un1tUser>:<n>, checkout = the caller''s key (also the idempotency-key header on purchase and credit-grant calls). message is <= 500 chars and never carries a password, token, email or phone. Service role only.';
+  'UN1TWRITE.1 (mig 744): one row per un1t.online write attempt (book, cancel, create_client, forgot_password, trial, checkout; trial_regrant since mig 760; fee_charge since mig 781; move since mig 786; promo_grant since mig 787; comp_credits since mig 788). The write-ahead marker, the resume point for retries and approvals, the dedupe of the CRM''s own attempts and the audit trail. Keys: create:<loc>:<contact>, trial:<loc>:<un1tUser>:<product>:<method>, trial_regrant:<loc>:<un1tUser>, promo_grant:<loc>:<un1tUser>:<promo>, book:<loc>:<un1tUser>:<event>, cancel:<loc>:<booking>, move:<loc>:<booking>:<event> (late_window since mig 786), comp:<loc>:<un1tUser>:<request> (the comp_* columns since mig 788), fee:<loc>:<fee>:<n>, pw:<loc>:<un1tUser>:<n>, checkout = the caller''s key (also the idempotency-key header on purchase and credit-grant calls). message is <= 500 chars and never carries a password, token, email or phone. Service role only.';
 
 -- ---------------------------------------------------------------------------
 -- Self-check: the post-state in the catalog, never this file's text.
@@ -129,37 +130,37 @@ BEGIN
   d := pg_get_constraintdef((SELECT oid FROM pg_constraint
         WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_op_check'));
   IF d IS NULL THEN
-    RAISE EXCEPTION 'mig 787: un1t_write_events_op_check missing';
+    RAISE EXCEPTION 'mig 788: un1t_write_events_op_check missing';
   END IF;
-  FOREACH k IN ARRAY ARRAY['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'comp_credits'] LOOP
+  FOREACH k IN ARRAY ARRAY['create_client', 'forgot_password', 'trial', 'book', 'cancel', 'checkout', 'trial_regrant', 'fee_charge', 'move', 'promo_grant', 'comp_credits'] LOOP
     IF d NOT LIKE '%''' || k || '''%' THEN
-      RAISE EXCEPTION 'mig 787: un1t_write_events_op_check does not admit %: %', k, d;
+      RAISE EXCEPTION 'mig 788: un1t_write_events_op_check does not admit %: %', k, d;
     END IF;
   END LOOP;
   FOREACH k IN ARRAY ARRAY['comp_amount', 'comp_expires_in_days', 'comp_use_by', 'comp_reason', 'comp_note', 'comp_expires_at'] LOOP
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_schema = 'public' AND table_name = 'un1t_write_events'
                      AND column_name = k AND is_nullable = 'YES') THEN
-      RAISE EXCEPTION 'mig 787: un1t_write_events.% missing or NOT NULL', k;
+      RAISE EXCEPTION 'mig 788: un1t_write_events.% missing or NOT NULL', k;
     END IF;
   END LOOP;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
                  WHERE conrelid = 'public.un1t_write_events'::regclass AND conname = 'un1t_write_events_comp_check') THEN
-    RAISE EXCEPTION 'mig 787: un1t_write_events_comp_check missing';
+    RAISE EXCEPTION 'mig 788: un1t_write_events_comp_check missing';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_indexes
                  WHERE schemaname = 'public' AND tablename = 'un1t_write_events' AND indexname = 'un1t_write_events_comp_given') THEN
-    RAISE EXCEPTION 'mig 787: un1t_write_events_comp_given missing';
+    RAISE EXCEPTION 'mig 788: un1t_write_events_comp_given missing';
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.table_privileges
              WHERE table_schema = 'public' AND table_name = 'un1t_write_events'
                AND grantee IN ('anon', 'authenticated', 'PUBLIC')) THEN
-    RAISE EXCEPTION 'mig 787: a client role holds a privilege on un1t_write_events';
+    RAISE EXCEPTION 'mig 788: a client role holds a privilege on un1t_write_events';
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.column_privileges
              WHERE table_schema = 'public' AND table_name = 'un1t_write_events'
                AND grantee IN ('anon', 'authenticated', 'PUBLIC')) THEN
-    RAISE EXCEPTION 'mig 787: a client role holds a column privilege on un1t_write_events';
+    RAISE EXCEPTION 'mig 788: a client role holds a column privilege on un1t_write_events';
   END IF;
 END;
 $$;
