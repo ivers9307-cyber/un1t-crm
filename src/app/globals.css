@@ -256,6 +256,11 @@ body {
   50%      { transform: translateY(8px); opacity: 1; }
 }
 .lp-cue { animation: lp-cue 2.2s ease-in-out infinite; }
+/* TRIALSCROLL.1 — /trial glides to its studio sections (and back up to the
+   card) instead of jumping. Scoped to that page; reduced motion keeps the jump. */
+@media (prefers-reduced-motion: no-preference) {
+  html:has(#trial-learn-more) { scroll-behavior: smooth; }
+}
 
 /* ── Gallery mosaic — first tile spans 2×2 (pure CSS, no data) ───── */
 @media (min-width: 768px) {

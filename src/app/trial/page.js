@@ -42,6 +42,7 @@ const STUDIO_KEYS = ['stillorgan', 'hatch']
 const HERO_IMAGE =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg'
 const CTA_HREF = '#trial'
+const LEARN_MORE_ID = 'trial-learn-more'
 // Only the words the card shows travel to the browser: never the Glofox ids,
 // the un1t.online product id, the location or the tag.
 const CLIENT_BLOCK_FIELDS = [
@@ -138,6 +139,9 @@ export default async function TrialPage(props) {
   const lead = studios.find((s) => s.key === initialStudio && s.sellable) || studios.find((s) => s.sellable) || studios[0]
   const ctaLabel = lead?.block?.cta_label || 'Start my trial'
   const stillorganName = brands[entries.findIndex((s) => s.key === 'stillorgan')]?.companyName || chrome.companyName
+  // TRIALSCROLL.1 — the cue under the card that points down to the studio
+  // sections (the lead studio's block owns its words). No sections, no cue.
+  const scrollCueLabel = blocks.length > 0 ? paidTrialCopyFromBlock(entries.find((s) => s.key === lead?.key)?.block).scrollCueLabel : null
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
@@ -152,7 +156,7 @@ export default async function TrialPage(props) {
         </div>
         <div className="absolute inset-0 pointer-events-none" aria-hidden="true"
           style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.5) 45%, rgba(0,0,0,0.85) 100%)' }} />
-        <div className="relative z-10 flex-1 flex items-center justify-center px-5 pt-28 pb-16">
+        <div className={`relative z-10 flex-1 flex items-center justify-center px-5 pt-28 ${scrollCueLabel ? 'pb-6' : 'pb-16'}`}>
           <PaidTrialFunnel
             studios={studios}
             initialStudio={initialStudio}
@@ -161,11 +165,23 @@ export default async function TrialPage(props) {
             hatchTerms={hatchTerms}
           />
         </div>
+        {scrollCueLabel && (
+          <div className="relative z-10 flex justify-center pb-8">
+            <a href={`#${LEARN_MORE_ID}`} className="group flex flex-col items-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-white/80 transition-colors hover:text-white">
+              {scrollCueLabel}
+              <svg className="lp-cue w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 5v14M19 12l-7 7-7-7" />
+              </svg>
+            </a>
+          </div>
+        )}
       </section>
 
-      {blocks.map((b) => (
-        <BlockRenderer key={b.id} block={b} publicPath="stillorgan" ctaHref={CTA_HREF} ctaLabel={ctaLabel} wordmark={chrome.shortName} locationName={stillorganName} />
-      ))}
+      <div id={LEARN_MORE_ID} className="scroll-mt-20">
+        {blocks.map((b) => (
+          <BlockRenderer key={b.id} block={b} publicPath="stillorgan" ctaHref={CTA_HREF} ctaLabel={ctaLabel} wordmark={chrome.shortName} locationName={stillorganName} />
+        ))}
+      </div>
 
       <SiteFooter ctaHref={CTA_HREF} ctaLabel={ctaLabel} brand={chrome.companyName} studios={chrome.studios} legalName={chrome.legalName} />
     </div>

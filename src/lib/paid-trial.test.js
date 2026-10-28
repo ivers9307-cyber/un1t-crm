@@ -86,13 +86,18 @@ describe('paidTrialConfigFromBlocks, un1t.online shape (TRIALSTUDIO.2)', () => {
       helpCtaLabel: 'I need help',
       helpSentText: 'Thanks. The team will be in touch shortly.',
       pendingBody: "Thanks, your payment is being confirmed. un1t.online will email your receipt and we'll have your trial on your account shortly.",
+      scrollCueLabel: 'Learn more about the studio',
     }
     expect(paidTrialConfigFromBlocks([raw], 'stillorgan')).toMatchObject(expected)
-    const blanked = { ...raw, studio_label: '  ', trial_used_text: '', active_member_text: ' ', help_cta_label: '', help_sent_text: null, pending_body: ' ' }
+    const blanked = { ...raw, studio_label: '  ', trial_used_text: '', active_member_text: ' ', help_cta_label: '', help_sent_text: null, pending_body: ' ', scroll_cue_label: '  ' }
     expect(paidTrialConfigFromBlocks([blanked], 'stillorgan')).toMatchObject(expected)
     // The same words for a block that is not for sale, or no block at all.
     expect(paidTrialCopyFromBlock({ type: 'paid_trial' })).toEqual(expected)
     expect(paidTrialCopyFromBlock(null)).toEqual(expected)
+  })
+  it('scrollCueLabel is the block\'s own when set (TRIALSCROLL.1)', () => {
+    expect(paidTrialCopyFromBlock({ scroll_cue_label: ' See the studio ' }).scrollCueLabel).toBe('See the studio')
+    expect(newBlockOfType('paid_trial').scroll_cue_label).toBe('Learn more about the studio')
   })
   it('pendingBody is the block\'s own when set', () => {
     const config = paidTrialConfigFromBlocks([{ ...sellable(), pending_body: ' Hang tight. ' }], 'stillorgan')
