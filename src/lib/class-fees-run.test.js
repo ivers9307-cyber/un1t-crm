@@ -12,82 +12,13 @@ vi.mock('./location-time.js', async (orig) => ({ ...(await orig()), getLocationZ
 
 import { chargeClassFee } from './un1t-online-write-ops.js'
 import { sendTransactionalEmail } from './postmark.js'
+import { makeDb } from './class-fees.test-helpers.js'
 import { detectClassFees, chargeDueClassFees, waiveClassFee, retryContactFees, sendReviewEmail, readClassFeeContext } from './class-fees-run.js'
 
 const LOC = 'loc-1'
-const SETTINGS = { un1t_online: { writes_enabled: true, fees: { enabled: true, late_cancel_fee_cents: 1000, no_show_fee_cents: 1500, review_emails: ['ops@hatch.test'] } } }
-
-// ── a tiny PostgREST fake ──────────────────────────────────────────────────
-function cmp(op, a, b) {
-  if (op === 'eq') return String(a) === String(b)
-  if (op === 'lte') return a != null && String(a) <= String(b)
-  if (op === 'lt') return a != null && String(a) < String(b)
-  if (op === 'gte') return a != null && String(a) >= String(b)
-  return false
-}
-function parseOr(expr) {
-  // and(a.eq.x,b.lte.y),and(...)
-  return [...expr.matchAll(/and\(([^)]*)\)/g)].map((m) => m[1].split(',').map((part) => {
-    const [col, op, ...rest] = part.split('.')
-    return [op, col, rest.join('.')]
-  }))
-}
-function makeDb(tables) {
-  const store = Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.map((r) => ({ ...r }))]))
-  let seq = 0
-  const db = {
-    store,
-    from(name) {
-      store[name] ??= []
-      const s = { op: 'select', filters: [], ors: null, payload: null, opts: null, head: false, single: false }
-      const rows = () => store[name]
-      const match = (r) => s.filters.every(([op, c, v]) => (op === 'in' ? v.includes(r[c]) : op === 'is' ? r[c] === v : cmp(op, r[c], v)))
-        && (!s.ors || s.ors.some((group) => group.every(([op, c, v]) => cmp(op, r[c], v))))
-      const run = () => {
-        if (s.op === 'upsert' || s.op === 'insert') {
-          const out = []
-          for (const p of [].concat(s.payload)) {
-            const dupe = rows().find((r) => r.location_id === p.location_id && r.un1t_booking_id === p.un1t_booking_id)
-            if (dupe && s.opts?.ignoreDuplicates) continue
-            const row = { id: `id-${++seq}`, attempts: 0, ...p }
-            rows().push(row)
-            out.push({ ...row })
-          }
-          return { data: out, error: null }
-        }
-        if (s.op === 'update') {
-          const hit = rows().filter(match)
-          for (const r of hit) Object.assign(r, s.payload)
-          return { data: hit.map((r) => ({ ...r })), error: null }
-        }
-        const hit = rows().filter(match).map((r) => ({ ...r }))
-        if (s.head) return { data: null, count: hit.length, error: null }
-        if (s.single) return { data: hit[0] ?? null, error: null }
-        return { data: hit, error: null }
-      }
-      const api = {
-        select(_c, o) { if (s.op === 'select' && o?.head) s.head = true; return api },
-        insert(p) { s.op = 'insert'; s.payload = p; return api },
-        upsert(p, o) { s.op = 'upsert'; s.payload = p; s.opts = o; return api },
-        update(p) { s.op = 'update'; s.payload = p; return api },
-        eq(c, v) { s.filters.push(['eq', c, v]); return api },
-        in(c, v) { s.filters.push(['in', c, v]); return api },
-        is(c, v) { s.filters.push(['is', c, v]); return api },
-        gte(c, v) { s.filters.push(['gte', c, v]); return api },
-        lte(c, v) { s.filters.push(['lte', c, v]); return api },
-        lt(c, v) { s.filters.push(['lt', c, v]); return api },
-        or(e) { s.ors = parseOr(e); return api },
-        order() { return api },
-        limit() { return api },
-        range(from) { if (from > 0) { s.filters.push(['in', 'id', []]) } return api },
-        maybeSingle() { s.single = true; return api },
-        then(res, rej) { return Promise.resolve(run()).then(res, rej) },
-      }
-      return api
-    },
-  }
-  return db
-}
+// FEES.1's flow with every forgiveness rule off (FEES.2's rules have their own tests below).
+const NO_FORGIVENESS = { swap: false, spot_refilled: false, new_member: false, first_offence: false, monthly_cap: false }
+const SETTINGS = { un1t_online: { writes_enabled: true, fees: { enabled: true, late_cancel_fee_cents: 1000, no_show_fee_cents: 1500, review_emails: ['ops@hatch.test'], forgiveness: NO_FORGIVENESS } } }
 
 const writerFactory = (windowHours = 2) => vi.fn(async () => ({
   locationId: LOC, studioId: 'studio-1',
@@ -272,5 +203,51 @@ describe('waiveClassFee', () => {
     }
     expect(await waiveClassFee(db, { locationId: LOC, feeId: 'f1', actorId: 'u', reason: 'x' })).toMatchObject({ ok: false, reason: 'not_waivable' })
     expect(db.store.class_fees[0].status).toBe('charging')
+  })
+})
+
+describe('FEES.2 — forgiveness in the nightly run', () => {
+  const withRules = (forgiveness) => baseTables({
+    locations: [{ id: LOC, name: 'Hatch', organization_id: 'org-1', membership_source: 'un1t_online', settings: {
+      un1t_online: { writes_enabled: true, fees: { enabled: true, late_cancel_fee_cents: 1000, no_show_fee_cents: 1500, review_emails: ['ops@hatch.test'], forgiveness } },
+    } }],
+  })
+
+  it('by default a first offence is written as waived with its rule, and never charged', async () => {
+    const db = makeDb(withRules(undefined))
+    const out = await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    expect(out.forgiven).toBe(2)
+    const f = fees(db).find((x) => x.un1t_booking_id === 'b-noshow')
+    expect(f).toMatchObject({ status: 'waived', waive_rule: 'first_offence', waived_by: null, waived_reason: 'First offence, a warning only (automatic)' })
+    expect(f.waived_at).toBeTruthy()
+    const ctx = await readClassFeeContext(db, LOC)
+    const charged = await chargeDueClassFees(db, { locationId: LOC, nowMs: Date.parse('2026-10-29T17:05:00Z'), settings: ctx.settings, zone: ctx.zone })
+    expect(charged.attempted).toBe(0)
+  })
+
+  it('a second offence inside 60 days is charged', async () => {
+    const db = makeDb(withRules({ swap: false, new_member: false, first_offence: true }))
+    db.store.class_fees.push({ id: 'old', location_id: LOC, un1t_user_id: 'u1', un1t_booking_id: 'old-b', starts_at: '2026-10-10T18:30:00.000Z', class_day: '2026-10-10', status: 'charged', penalty: 'fee', waive_rule: null })
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    const f = fees(db).find((x) => x.un1t_booking_id === 'b-noshow')
+    expect(f.status).toBe('pending')
+    expect(f.waive_rule).toBeUndefined()
+  })
+
+  it('a late cancel followed by a booking into another class is a swap', async () => {
+    const t = withRules({ swap: true, new_member: false, first_offence: false })
+    t.un1t_bookings.push({ location_id: LOC, un1t_id: 'b-new', un1t_user_id: 'u2', contact_id: 'c2', event_id: 'e9', status: 'booked', credit_charged: false, remote_created_at: '2026-10-28T17:45:40.000Z' })
+    const db = makeDb(t)
+    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    expect(fees(db).find((x) => x.un1t_booking_id === 'b-late')).toMatchObject({ status: 'waived', waive_rule: 'swap' })
+    expect(fees(db).find((x) => x.un1t_booking_id === 'b-noshow').status).toBe('pending')
+  })
+
+  it('the review email counts what was forgiven', async () => {
+    const db = makeDb(withRules(undefined))
+    const out = await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    const ctx = await readClassFeeContext(db, LOC)
+    await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT, undecidedCount: 0, forgivenCount: out.forgiven })
+    expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toContain('2 fee(s) forgiven automatically')
   })
 })

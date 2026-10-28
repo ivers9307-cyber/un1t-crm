@@ -25,6 +25,7 @@ import {
   classFeeKindLabel,
 } from './class-fees.js'
 import { getLocationZone, dateKeyIn, addDaysIn, dayStartMsIn, formatInZone } from './location-time.js'
+import { loadForgivenessFacts, decideForgiveness, forgivenessReason } from './class-fees-forgiveness.js'
 import { selectAll } from './select-all.js'
 import { sendTransactionalEmail } from './postmark.js'
 import { escapeHtml } from './html-escape.js'
@@ -37,7 +38,7 @@ const ID_CHUNK = 100
 const CHARGE_BATCH = 40
 
 const FEE_COLUMNS =
-  'id, location_id, contact_id, un1t_user_id, un1t_booking_id, un1t_event_id, class_title, starts_at, class_day, kind, cancelled_at, minutes_before_start, penalty, amount_cents, currency, charge_description, status, attempts, charge_due_at, next_attempt_at, charge_started_at, charged_at, un1t_transaction_id, failure_code, failure_message, waived_by, waived_reason, waived_at, created_at, updated_at'
+  'id, location_id, contact_id, un1t_user_id, un1t_booking_id, un1t_event_id, class_title, starts_at, class_day, kind, cancelled_at, minutes_before_start, penalty, amount_cents, currency, charge_description, status, attempts, charge_due_at, next_attempt_at, charge_started_at, charged_at, un1t_transaction_id, failure_code, failure_message, waived_by, waived_reason, waived_at, waive_rule, created_at, updated_at'
 
 const chunk = (arr, n) => {
   const out = []
@@ -167,6 +168,10 @@ export async function detectClassFees(db, { locationId, nowMs = Date.now() }, de
     if (row) rows.push(row)
   }
 
+  // FEES.2 — automatic forgiveness: a forgiven fee is written as waived, with
+  // the rule that forgave it, so staff can see it on the History tab.
+  const forgiven = await forgive(db, { locationId, zone, settings, rows, nowMs })
+
   let inserted = 0
   for (const part of chunk(rows, 200)) {
     const { data, error } = await db
@@ -180,7 +185,29 @@ export async function detectClassFees(db, { locationId, nowMs = Date.now() }, de
   if (windowHours == null) {
     logWarn(LOG_MODULE, 'no un1t.online cancel window; late cancels were not judged this run', { locationId })
   }
-  return { ok: true, inserted, undecided, windowHours, classes: events.length, today, zone, settings, location: ctx.location }
+  return { ok: true, inserted, forgiven, undecided, windowHours, classes: events.length, today, zone, settings, location: ctx.location }
+}
+
+/** Mark the forgiven fee rows (in place) and count them. */
+async function forgive(db, { locationId, zone, settings, rows, nowMs }) {
+  const fees = rows.filter((r) => r.penalty === 'fee')
+  if (!fees.length) return 0
+  const offences = fees.map((r) => ({
+    bookingId: r.un1t_booking_id, un1tUserId: r.un1t_user_id, eventId: r.un1t_event_id,
+    kind: r.kind, startsAt: r.starts_at, cancelledAt: r.cancelled_at,
+  }))
+  const rules = settings.forgiveness
+  const facts = await loadForgivenessFacts(db, { locationId, rules, offences })
+  const decided = decideForgiveness({ offences, facts, rules, zone })
+  const at = new Date(nowMs).toISOString()
+  let n = 0
+  for (const r of fees) {
+    const rule = decided.get(r.un1t_booking_id)
+    if (!rule) continue
+    Object.assign(r, { status: 'waived', waive_rule: rule, waived_reason: forgivenessReason(rule), waived_at: at, waived_by: null })
+    n++
+  }
+  return n
 }
 
 // ── the nightly email ─────────────────────────────────────────────────────
@@ -191,7 +218,7 @@ const euro = (cents) => `€${(Number(cents || 0) / 100).toFixed(2)}`
  * The review email for one studio. Pure: { subject, htmlBody }.
  * Never names a member in the subject; the body names them for staff.
  */
-export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, undecided, outstandingCount, reviewUrl, chargeLabel }) {
+export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, undecided, outstandingCount, reviewUrl, chargeLabel, forgiven = 0 }) {
   const total = dueFees.reduce((s, f) => s + (f.amount_cents || 0), 0)
   const subject = `Class fees for ${dayLabel}: ${dueFees.length} to charge at ${chargeLabel}`
   const rows = dueFees.map((f) => `<tr><td style="padding:4px 8px">${escapeHtml(f.member_name || 'Member')}</td><td style="padding:4px 8px">${escapeHtml(classFeeKindLabel(f.kind))}</td><td style="padding:4px 8px">${escapeHtml(f.charge_description || '')}</td><td style="padding:4px 8px;text-align:right">${escapeHtml(euro(f.amount_cents))}</td></tr>`).join('')
@@ -199,6 +226,7 @@ export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, unde
     `<p>${escapeHtml(studioName)}: ${dueFees.length} fee(s) totalling ${escapeHtml(euro(total))} will be charged at ${escapeHtml(chargeLabel)} unless waived.</p>`,
     dueFees.length ? `<table style="border-collapse:collapse;font-size:14px">${rows}</table>` : '<p>No fees to charge tonight.</p>',
     recorded ? `<p>${recorded} pack credit(s) kept by un1t.online (recorded only, nothing charged).</p>` : '',
+    forgiven ? `<p>${forgiven} fee(s) forgiven automatically by the studio's rules (see History).</p>` : '',
     undecided ? `<p>${undecided} booking(s) are still marked booked after the class. Mark them attended or no-show in un1t.online; they are never charged while undecided.</p>` : '',
     outstandingCount ? `<p>${outstandingCount} fee(s) are outstanding after two refused charges.</p>` : '',
     `<p><a href="${escapeHtml(reviewUrl)}">Review and waive fees</a></p>`,
@@ -207,7 +235,7 @@ export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, unde
 }
 
 /** Send the nightly review email. Never throws; returns { sent, reason? }. */
-export async function sendReviewEmail(db, { locationId, location, settings, zone, nowMs, undecidedCount }) {
+export async function sendReviewEmail(db, { locationId, location, settings, zone, nowMs, undecidedCount, forgivenCount = 0 }) {
   if (!settings.reviewEmails.length) return { sent: false, reason: 'no_recipients' }
   try {
     const { data: due, error } = await db
@@ -237,6 +265,7 @@ export async function sendReviewEmail(db, { locationId, location, settings, zone
       dueFees,
       recorded: recorded || 0,
       undecided: undecidedCount || 0,
+      forgiven: forgivenCount || 0,
       outstandingCount: outstanding || 0,
       reviewUrl: `${getAppUrl()}/class-fees`,
       chargeLabel: `${String(settings.chargeHour).padStart(2, '0')}:00 tomorrow`,
