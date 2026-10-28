@@ -138,3 +138,26 @@ describe('POST /api/sequences/from-template — overdue_payment_dunning refuses 
     expect(db.inserts.sequence_steps).toHaveLength(0)
   })
 })
+
+describe('POST /api/sequences/from-template — overdue_payment_dunning_un1t (UN1TDUN.1)', () => {
+  it('409 naming outstanding_payment_link_un1t until it is APPROVED at the location; nothing written', async () => {
+    // An approved Glofox pay-link template is not enough.
+    const db = mockDb({ waRows: [{ id: 'w-1', name: 'outstanding_payment_link_', status: 'APPROVED' }, { id: 'w-2', name: 'outstanding_payment_link_un1t', status: 'PENDING' }] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ template_id: 'overdue_payment_dunning_un1t', location_id: LOC }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain('outstanding_payment_link_un1t')
+    expect(db.inserts.email_sequences).toHaveLength(0)
+  })
+
+  it('approved: installs two WhatsApp steps on that template, and no email step', async () => {
+    const db = mockDb({ waRows: [{ id: 'w-7', name: 'outstanding_payment_link_un1t', status: 'APPROVED' }] })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(req({ template_id: 'overdue_payment_dunning_un1t', location_id: LOC }))
+    expect(res.status).toBe(200)
+    const wa = db.inserts.sequence_steps.filter((s) => s.step_type === 'whatsapp')
+    expect(wa).toHaveLength(2)
+    for (const row of wa) expect(row.whatsapp_template_id).toBe('w-7')
+    expect(db.inserts.sequence_steps.some((s) => s.step_type === 'email')).toBe(false)
+  })
+})

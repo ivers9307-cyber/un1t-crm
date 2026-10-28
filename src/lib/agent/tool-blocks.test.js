@@ -108,11 +108,11 @@ describe('the un1t read blocks', () => {
       expect(tool.description).toMatch(/overdue/i)
       expect(tool.description).not.toMatch(/glofox|limited|spaces|capacity|[–—]/i)
     }
-    // Single block: never a pay link. Dual block: one section per studio, only the un1t.online one is link free.
-    expect(UN1T_TOOL_DESCRIPTIONS[PAYMENT_REMINDER]).toMatch(/never gives a pay link/i)
+    // UN1TDUN.1 — a pay link only when the studio's own reminder carries one. Dual block: one section per studio.
+    expect(UN1T_TOOL_DESCRIPTIONS[PAYMENT_REMINDER]).toMatch(/pay link only when the studio's own reminder carries one/i)
     const dual = UN1T_DUAL_TOOL_DESCRIPTIONS[PAYMENT_REMINDER]
     expect(dual).toMatch(/one section per studio/i)
-    expect(dual).toMatch(/un1t\.online studio's section[^.]*never has a pay link/i)
+    expect(dual).toMatch(/un1t\.online studio's section[^.]*pay link only when that reminder carries one/i)
     expect(dual).toMatch(/may carry its own pay link/i)
     expect(dual).not.toMatch(/the answer never gives a pay link/i)
     expect(names(CACHED_ACCOUNT_TOOLS)).toContain(PAYMENT_REMINDER)

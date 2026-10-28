@@ -118,7 +118,8 @@ function glofoxReminderRules(label, app) {
 // (Hatch Street), matching the tool block that turn gets (tool-blocks.js):
 // `un1t_read` has no book_class or cancel_class_booking (MIAHATCH.3: both blocks
 // offer get_my_payment_reminder, so the reads carry their own overdue-payment
-// rules below, with no pay link at this studio);
+// rules below; UN1TDUN.1: the only pay link at this studio is the short link
+// of the studio's own reminder run, given by the tool);
 // `un1t_read_dual` (multiStudio: the person is also answerable at a Glofox
 // studio) keeps the two booking writes, whose `un1t:` ids answer "not from chat
 // yet". Nothing here says "limited", "spaces" or "capacity", and the tools only
@@ -235,12 +236,14 @@ function un1tSections({ bookingUrl, multiStudio, studioName, writes = false }) {
     '- Never share account details before verify_identity has succeeded. Never reveal what details would have matched (don\'t say "that\'s not the email we have").',
     '',
     '## Overdue payments',
-    `Overdue payments at ${un1tWho} are chased by the studio itself. There is no pay link for them, and you never send or invent one.`,
+    `Overdue payments at ${un1tWho} are chased by the studio itself, which may send a WhatsApp reminder with a link to pay. You never make up a payment link: the only one you may ever send for ${un1tWho} is the pay_link get_my_payment_reminder gives, exactly as it gives it.`,
     '- When a message is about a payment reminder, a failed or declined membership payment, "am I paid up", "I\'ve paid", or "why did I get this": verify them first (as in the account section), then call get_my_payment_reminder BEFORE answering. Never answer from the thread alone.' + (multiStudio ? ' If the answer lists more than one studio, say which studio each part is for.' : ''),
-    `- For ${un1tWho} the tool tells you only whether a payment is overdue. If still_overdue is false: nothing is showing as overdue on their account. Say so, and if they are unsure, offer to have the team check.`,
+    `- For ${un1tWho} the tool tells you whether a payment is overdue and whether the studio has sent them a reminder. If still_overdue is false: nothing is showing as overdue on their account. Say so, and if they are unsure, offer to have the team check.`,
     '- If still_overdue is true: say a payment is showing as overdue on their account. Use since and amount_label only when the tool gives them, and never state an amount or a date the tool did not give. If they say they have paid: a payment can take a few minutes to show, so do NOT contradict them and do NOT say it is paid. Hand off, putting what the tool gave in the reason so the team checks.',
+    '- If has_reminder is true: the studio sent them a payment reminder on WhatsApp (sent_at says when, when the tool gives it). If has_reminder is false: never say a reminder was sent.',
     '- If still_overdue is \'unknown\': never guess either way. Say you cannot check it right now and hand off.',
-    `- To sort out an overdue payment or update the card on file at ${un1tWho}, they can do it in the un1t.online app, or the team can help. If that does not work for them, hand off.`,
+    '- Link not working, or they want it again: when the tool gives pay_link, send it in plain text (it opens their own invoice to pay). When there is no pay_link, never send any other link.',
+    `- To sort out an overdue payment or update the card on file at ${un1tWho}, they can pay through pay_link when the tool gives one, do it in the un1t.online app, or the team can help. If that does not work for them, hand off.`,
     full ? full.refundPaymentLine : '- Can\'t pay now, wants more time, disputes the amount, asks why the payment failed, wants a refund, or wants to change plan: hand off. Wants to cancel: the cancellation flow below.',
     ...(multiStudio ? [
       'The rules that follow apply only to the section of the answer for the Glofox studio, which can carry its own reminder details and pay link. They never apply to the section for ' + un1tWho + '.',

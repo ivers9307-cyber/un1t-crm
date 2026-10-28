@@ -470,6 +470,36 @@ describe('DUNNING.6 — overdue membership payment → Pay now reminders', () =>
   })
 })
 
+// UN1TDUN.1 — the un1t.online studio's chase. un1t.online already emails the
+// member about the failed payment, so this one is WhatsApp only, starting a
+// day later so that email lands first.
+describe('UN1TDUN.1 — overdue un1t.online membership payment → WhatsApp pay link', () => {
+  const tpl = getTemplate('overdue_payment_dunning_un1t')
+  it('exists in Recovery as a manual-trigger automation with the same cooldown and window as the Glofox one', () => {
+    expect(tpl).not.toBeNull()
+    expect(tpl.category).toBe('Recovery')
+    expect(tpl.trigger_type).toBe('manual')
+    expect(tpl.re_enrolment_cooldown_days).toBe(14)
+    expect(tpl.send_window).toEqual({ start_hour: 9, end_hour: 19, skip_days: [] })
+  })
+  it('is WhatsApp only: wait → WhatsApp a day after → WhatsApp four days later, no email', () => {
+    expect(tpl.steps.map((s) => s.step_type)).toEqual(['wait', 'whatsapp', 'whatsapp'])
+    expect(tpl.steps.map((s) => [s.delay_days ?? 0, s.delay_hours ?? 0])).toEqual([[0, 0], [1, 0], [4, 0]])
+    expect(tpl.steps.some((s) => s.step_type === 'email')).toBe(false)
+  })
+  it('both WhatsApp steps send outstanding_payment_link_un1t with the Glofox variables (first name, amount, our short link suffix)', () => {
+    for (const s of tpl.steps.filter((s) => s.step_type === 'whatsapp')) {
+      expect(s.whatsapp_template_name).toBe('outstanding_payment_link_un1t')
+      expect(s.whatsapp_variables).toEqual({ '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' })
+    }
+  })
+  it('the description names the template that must be approved first and has no em dash', () => {
+    expect(tpl.description).toContain('outstanding_payment_link_un1t')
+    expect(tpl.description).not.toMatch(/\u2014/)
+    expect(tpl.name).not.toMatch(/\u2014/)
+  })
+})
+
 // PAYLINK.8b \u2014 {{payment_cta}} expands to a full clause ("<a>pay it now</a>,
 // it takes a few seconds, or update your card in the Glofox app", or just
 // the card-update clause with no link). Each email body must read cleanly

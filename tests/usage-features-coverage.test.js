@@ -20,7 +20,7 @@ const WEB_NOT_STAFF = new Set([
   'class-pay', 'tv', 'present', 'unsubscribe', 'preferences', 'view-email', 'deposit', 'welcome',
   'free-class', 'start', 'trial', 'offers', 'privacy', 'terms', 'legal', 'technical',
   'account-deletion', 'givers', 'studio-login', 'embed', 'bca', 'host-connect', 'host', 'h',
-  'use-the-app', 'cancel', 'pay-done', 'fee-appeal',
+  'use-the-app', 'cancel', 'pay-done', 'fee-appeal', 'pay-link',
 ])
 
 // Staff routes deliberately filed under `other`, with the reason.

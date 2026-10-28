@@ -17,6 +17,7 @@ vi.mock('@/lib/whatsapp', () => ({ sendTextMessage: vi.fn() }))
 vi.mock('@/lib/radar-outreach', () => ({ sendRadarOutreach: vi.fn() }))
 vi.mock('@/lib/sequences', () => ({ enrolContacts: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/un1t-dunning', () => ({ maybeEnrolUn1tDunning: vi.fn(async () => ({ enrolled: 0, reason: 'not_behind' })) }))
 
 import { radarReadsFor } from '@/lib/membership/reads/index'
 import { glofoxCredentialsForLocation } from '@/lib/glofox'
@@ -24,6 +25,7 @@ import { sendRadarOutreach } from '@/lib/radar-outreach'
 import { logInfo, logWarn } from '@/lib/log'
 import { getLocationZone } from '@/lib/location-time'
 import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
+import { maybeEnrolUn1tDunning } from '@/lib/un1t-dunning'
 import { POST as actionPOST } from './action/route.js'
 import { POST as refreshPOST } from './refresh-member/route.js'
 import { POST as quarantinePOST } from './quarantine/route.js'
@@ -84,12 +86,16 @@ describe('acting routes at a un1t.online studio', () => {
     expect(writes.find((w) => w.update)).toEqual({ table: 'contacts', update: { pipeline_stage_slug: 'dormant' } })
   })
 
-  it('payment_reminder 409 with the exact copy at a un1t studio', async () => {
+  // UN1TDUN.1 — no longer refused outright: the un1t path re-derives the debt
+  // from the mirror (route.un1t-reminder.test.js has the full matrix).
+  it('payment_reminder at a un1t studio goes to the un1t.online reminder path, never Glofox', async () => {
     asSource('un1t_online')
     const res = await actionPOST(req('/api/churn-radar/action', { contact_id: 'c1', action: 'payment_reminder' }))
+    expect(maybeEnrolUn1tDunning).toHaveBeenCalledWith(db, L, 'c1', { manual: true })
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ success: false, error: 'Payment reminders are not available for un1t.online studios yet.' })
+    expect(await res.json()).toEqual({ success: false, error: "This member isn't behind on payment, so no reminder was sent." })
     expect(writes).toEqual([])
+    expect(glofoxCredentialsForLocation).not.toHaveBeenCalled()
   })
 
   it('refresh-member 409 with the last sync time on the studio clock', async () => {

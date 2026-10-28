@@ -722,6 +722,45 @@ export const SEQUENCE_TEMPLATES = [
       },
     ],
   },
+  // UN1TDUN.1 — the same chase for a un1t.online studio (Hatch Street).
+  // un1t.online already emails the member when a membership payment fails, so
+  // this is WhatsApp only, and the first message waits a day so that email
+  // lands first (Richard, 28 Oct 2026). The un1t.online sync starts it (auto-
+  // enrol on) or the radar's "Send payment reminder" does; it stops when the
+  // invoice is no longer open (checked every sync and before each send). The
+  // WhatsApp copy is the approved Meta template outstanding_payment_link_un1t,
+  // whose Pay now URL button is https://<customer host>/pay-link/{{1}}: the
+  // suffix is the run's own short-link token (un1t-dunning.js), which opens
+  // the invoice's hosted payment page. The install route refuses until that
+  // template is APPROVED at the location.
+  {
+    id: 'overdue_payment_dunning_un1t',
+    category: 'Recovery',
+    name: 'Overdue un1t.online membership payment → WhatsApp Pay now reminders',
+    description: 'For a studio on un1t.online. un1t.online already emails the member when a membership payment fails, so this sends WhatsApp only: a reminder with a Pay now link for that exact invoice a day after it fails, and a second one four days later. Stops as soon as the invoice is paid. Install is refused until the WhatsApp template outstanding_payment_link_un1t is approved at this location. Install, publish, then pick it under Churn radar → Payment reminders and turn on automatic starts.',
+    trigger_type: 'manual',
+    trigger_config: {},
+    goal_config: null,
+    re_enrolment_cooldown_days: 14,
+    send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
+    steps: [
+      { step_type: 'wait', delay_days: 0, delay_hours: 0 },
+      {
+        step_type: 'whatsapp',
+        delay_days: 1,
+        delay_hours: 0,
+        whatsapp_template_name: 'outstanding_payment_link_un1t',
+        whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' },
+      },
+      {
+        step_type: 'whatsapp',
+        delay_days: 4,
+        delay_hours: 0,
+        whatsapp_template_name: 'outstanding_payment_link_un1t',
+        whatsapp_variables: { '1': 'first_name', '2': 'pay_amount', url_button: 'pay_link_suffix' },
+      },
+    ],
+  },
   {
     id: 'cart_recovery',
     category: 'Recovery',

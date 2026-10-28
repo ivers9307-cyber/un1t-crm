@@ -255,9 +255,12 @@ export default function ChurnRadar() {
   // RADAR-TREND.1 — week-over-week deltas, null until the first
   // weekly snapshot exists.
   const td = summary.trend?.deltas || null
-  // UN1TRADAR.3 — the payment reminder and the Glofox re-pull read Glofox data:
-  // shown only at a Glofox studio (the routes refuse them elsewhere too)
+  // UN1TRADAR.3 — the Glofox re-pull reads Glofox data: shown only at a Glofox
+  // studio (the route refuses it elsewhere too). UN1TDUN.1 — the payment
+  // reminder works at a un1t.online studio too (the route re-derives the debt
+  // from the un1t.online mirror there).
   const glofoxOnly = radarMeta.source === 'glofox'
+  const canRemind = glofoxOnly || radarMeta.source === 'un1t_online'
   const refreshFn = glofoxOnly ? runRefresh : null
   const freshness = radarMeta.source === 'un1t_online' && radarMeta.zone
     ? syncedAtLine(radarMeta.dataAsOf, radarMeta.zone)
@@ -340,7 +343,7 @@ export default function ChurnRadar() {
 
       {tab === 'radar' && (
         <RadarList radar={radar?.radar || []} busy={busy} onAction={runAction}
-          onRefresh={refreshFn} canRemind={glofoxOnly} snoozed={summary.snoozed} />
+          onRefresh={refreshFn} canRemind={canRemind} snoozed={summary.snoozed} />
       )}
 
       {tab === 'winback' && (
@@ -348,7 +351,7 @@ export default function ChurnRadar() {
       )}
 
       {tab === 'overdue' && (
-        <OverdueList data={overdue} busy={busy} onAction={runAction} onRefresh={refreshFn} canRemind={glofoxOnly} />
+        <OverdueList data={overdue} busy={busy} onAction={runAction} onRefresh={refreshFn} canRemind={canRemind} />
       )}
 
       {tab === 'charges' && (

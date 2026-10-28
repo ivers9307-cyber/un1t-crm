@@ -772,6 +772,82 @@ describe('executeUn1tRead: get_my_payment_reminder', () => {
   })
 })
 
+// ── UN1TDUN.1: a reminder run at the un1t.online studio ─────────────
+describe('executeUn1tRead: get_my_payment_reminder with a un1t reminder run (UN1TDUN.1)', () => {
+  const pastDueFn = vi.fn()
+  const CAPS_ON = { memberships: false, bookings: false, credits: true, invoices: true, schedule: false }
+  const LINK = 'https://hatch.example.test/pay-link/tok_abcdefghijklmnopqrstuv'
+  const row = (over = {}) => ({
+    contactId: 'c-h', un1tUserId: USER, subscriptionId: 'sub-1', productTitle: 'Monthly Foundation',
+    since: '2026-10-10T08:00:00Z', amountCents: 18900, currency: 'EUR', openInvoiceIds: ['inv-1'],
+    cancelAtPeriodEnd: false, pausedUntil: null, ...over,
+  })
+  const enrolment = (over = {}) => ({
+    id: 'e1', contact_id: 'c-h', status: 'active', enrolled_at: '2026-10-11T09:00:00Z', source_type: 'invoice_past_due',
+    metadata: { payment: { invoice_id: 'inv-1', link: LINK, link_suffix: 'tok_abcdefghijklmnopqrstuv', amount: '€189', platform: 'un1t_online' } }, ...over,
+  })
+  const message = (over = {}) => ({
+    location_id: HATCH, contact_id: 'c-h', direction: 'outbound', template_name: 'outstanding_payment_link_un1t', sent_at: '2026-10-12T09:05:00Z', ...over,
+  })
+  const run = (tables, opts) => executeUn1tRead('get_my_payment_reminder', {}, ctxFor(fakeDb(tables, opts)), [hatchStudio])
+
+  beforeEach(() => {
+    pastDueFn.mockReset().mockResolvedValue({ success: true, data: [row()] })
+    membershipReadsFor.mockReset().mockResolvedValue({ source: 'un1t_online', label: 'un1t.online', state: 'configured', error: null, capabilities: CAPS_ON, reads: { pastDue: pastDueFn } })
+  })
+
+  it('a reminder went out on this open invoice: has_reminder true, when it went (studio clock), and our short link', async () => {
+    expect(await run({ sequence_enrollments: [enrolment()], whatsapp_messages: [message()] })).toEqual({
+      has_reminder: true, still_overdue: true, since: 'Sat 10 Oct 2026', amount_label: '€189', sent_at: 'Mon 12 Oct 2026', pay_link: LINK,
+    })
+  })
+
+  it('a run whose first WhatsApp has not gone yet: the link, but no reminder claimed', async () => {
+    const out = await run({ sequence_enrollments: [enrolment()], whatsapp_messages: [message({ sent_at: '2026-10-01T09:00:00Z' })] })
+    expect(out).toEqual({ has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026', amount_label: '€189', pay_link: LINK })
+  })
+
+  it('only the reminder template, outbound, at this studio, to this person counts as sent', async () => {
+    for (const m of [message({ template_name: 'something_else' }), message({ direction: 'inbound' }), message({ location_id: STILL }), message({ contact_id: 'c-other' })]) {
+      expect((await run({ sequence_enrollments: [enrolment()], whatsapp_messages: [m] })).has_reminder).toBe(false)
+    }
+  })
+
+  it('no run for an OPEN invoice of this member: unchanged (no link, no reminder)', async () => {
+    const cases = [
+      [enrolment({ metadata: { payment: { invoice_id: 'inv-paid', link: LINK, platform: 'un1t_online' } } })],
+      [enrolment({ metadata: { payment: { invoice_id: 'inv-1', link: LINK } } })], // a Glofox-shaped run
+      [enrolment({ status: 'exited' })],
+      [enrolment({ contact_id: 'c-other' })],
+      [],
+    ]
+    for (const runs of cases) {
+      expect(await run({ sequence_enrollments: runs, whatsapp_messages: [message()] })).toEqual({ has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026', amount_label: '€189' })
+    }
+  })
+
+  it('never a link that is not https', async () => {
+    const out = await run({ sequence_enrollments: [enrolment({ metadata: { payment: { invoice_id: 'inv-1', link: 'http://x.test/pay-link/t', platform: 'un1t_online' } } })], whatsapp_messages: [message()] })
+    expect(out).not.toHaveProperty('pay_link')
+    expect(out.has_reminder).toBe(true)
+  })
+
+  it('nothing overdue: the run is never read', async () => {
+    pastDueFn.mockResolvedValue({ success: true, data: [] })
+    const db = fakeDb({ sequence_enrollments: [enrolment()] })
+    expect(await executeUn1tRead('get_my_payment_reminder', {}, ctxFor(db), [hatchStudio])).toEqual({ has_reminder: false, still_overdue: false })
+    expect(db.calls.some((c) => c.table === 'sequence_enrollments')).toBe(false)
+  })
+
+  it('an unreadable run or message read leaves the answer as the mirror gave it, logged', async () => {
+    const base = { has_reminder: false, still_overdue: true, since: 'Sat 10 Oct 2026', amount_label: '€189' }
+    expect(await run({ sequence_enrollments: [enrolment()], whatsapp_messages: [message()] }, { errors: { sequence_enrollments: true } })).toEqual(base)
+    expect(await run({ sequence_enrollments: [enrolment()], whatsapp_messages: [message()] }, { errors: { whatsapp_messages: true } })).toEqual({ ...base, pay_link: LINK })
+    expect(logWarn).toHaveBeenCalled()
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain('tok_')
+  })
+})
+
 // ── Task 6: the timetable with event ids and `full` ──────────────────
 describe('shapeUn1tTimetableForAgent', () => {
   const row = (over = {}) => ({ un1t_id: 'e1', title: 'HYROX', starts_at: '2026-10-20T07:00:00Z', capacity: 12, bookings_count: 3, ...over })

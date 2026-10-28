@@ -22,7 +22,9 @@
 // - A failed read is `read_failed`, never "no membership" or "nothing booked".
 // - The payment reminder at a un1t.online studio is read from Spec A's past-due
 //   seam only (never a Glofox call), narrowed to the studio's person group and
-//   its own un1t account, and never carries a pay link. Anything it cannot
+//   its own un1t account. UN1TDUN.1: it carries a pay link only when the
+//   studio's own reminder run is chasing an open invoice (our short link,
+//   never a Stripe URL). Anything it cannot
 //   prove (invoices not provided, seam without pastDue, a failed read) is
 //   still_overdue 'unknown', never false.
 // - Nothing the model sees carries capacity, spaces left or a headcount.
@@ -37,6 +39,7 @@ import { chunkIds } from '@/lib/person-accounts'
 import { fetchLiveUn1tBookings } from './un1t-member-read'
 import { tagUn1tId } from './studio-ids'
 import { TOOL_NOT_AT_THIS_STUDIO } from './tool-capability'
+import { UN1T_DUNNING_WA_TEMPLATE } from '@/lib/un1t-dunning-copy'
 
 const LOG_MODULE = 'mia-un1t'
 
@@ -437,10 +440,13 @@ async function readAttendance(db, studio, zone) {
 }
 
 // ── MIAHATCH.3 — the payment reminder ───────────────────────────────
-// { has_reminder: false, still_overdue: true | false | 'unknown', since?, amount_label? }.
-// has_reminder is always false here: un1t.online sends its own reminders and the
-// CRM runs no dunning for it, so there is no run to describe. There is never a
-// pay link. The question answered is only "is a payment overdue at this studio".
+// { has_reminder, still_overdue: true | false | 'unknown', since?, amount_label?, sent_at?, pay_link? }.
+// The overdue answer comes from the mirror (the seam's pastDue). UN1TDUN.1 —
+// the studio may now run its own WhatsApp reminder (un1t-dunning.js): when an
+// ACTIVE un1t run is chasing one of this member's OPEN invoices, pay_link is
+// that run's short link (ours, never a Stripe URL), and has_reminder is true
+// only once the reminder template has actually gone to them on that run
+// (sent_at, the studio's date). Anything unreadable leaves has_reminder false.
 const REMINDER_UNKNOWN = Object.freeze({ has_reminder: false, still_overdue: 'unknown' })
 
 function logReminderFailure(studio, status, err) {
@@ -506,7 +512,72 @@ async function readPaymentReminder(db, studio, zone) {
     logReminderFailure(studio, 'read_failed', null)
     return { ...REMINDER_UNKNOWN }
   }
-  return shapeUn1tPaymentReminder(res.data, studio.un1tUserId, zone)
+  const out = shapeUn1tPaymentReminder(res.data, studio.un1tUserId, zone)
+  if (out.still_overdue !== true) return out
+  return withUn1tReminderRun(db, studio, contactIds, res.data, out, zone)
+}
+
+// How many of the group's newest active runs are looked at for a un1t run.
+const REMINDER_RUN_SCAN = 20
+
+/**
+ * UN1TDUN.1 — add the studio's own reminder run to an overdue answer: the
+ * newest ACTIVE run carrying a un1t payment for one of the member's open
+ * invoices gives pay_link; has_reminder / sent_at need the reminder template
+ * sent outbound, at this studio, to the group, since the run began. The
+ * invoice match is what scopes the run to this studio (sequence_enrollments
+ * carries no location; un1t invoice ids are this studio's). Never throws: a
+ * failed read is logged and leaves the answer as it was.
+ */
+async function withUn1tReminderRun(db, studio, contactIds, rows, out, zone) {
+  try {
+    const open = new Set(rows
+      .filter((r) => r?.un1tUserId === studio.un1tUserId)
+      .flatMap((r) => (Array.isArray(r.openInvoiceIds) ? r.openInvoiceIds : []))
+      .map(String))
+    if (!open.size) return out
+    const { data: runs, error } = await db.from('sequence_enrollments')
+      .select('id, contact_id, status, enrolled_at, metadata')
+      .in('contact_id', contactIds)
+      .eq('status', 'active')
+      .order('enrolled_at', { ascending: false })
+      .limit(REMINDER_RUN_SCAN)
+    if (error) {
+      logReminderFailure(studio, 'read_failed', null)
+      return out
+    }
+    const run = (runs || [])
+      .filter((r) => r?.status === 'active')
+      .sort((a, b) => (toMs(b.enrolled_at) ?? -Infinity) - (toMs(a.enrolled_at) ?? -Infinity))
+      .find((r) => {
+        const p = r?.metadata?.payment
+        return p?.platform === 'un1t_online' && typeof p.invoice_id === 'string' && open.has(p.invoice_id)
+      })
+    if (!run) return out
+    const link = run.metadata.payment.link
+    const withLink = typeof link === 'string' && link.startsWith('https://') ? { ...out, pay_link: link } : { ...out }
+    if (!run.enrolled_at) return withLink
+    const { data: sent, error: sentErr } = await db.from('whatsapp_messages')
+      .select('sent_at')
+      .eq('location_id', studio.locationId)
+      .in('contact_id', contactIds)
+      .eq('direction', 'outbound')
+      .eq('template_name', UN1T_DUNNING_WA_TEMPLATE)
+      .gte('sent_at', run.enrolled_at)
+      .order('sent_at', { ascending: true })
+      .limit(1)
+    if (sentErr) {
+      logReminderFailure(studio, 'read_failed', null)
+      return withLink
+    }
+    const first = (sent || [])[0]
+    if (!first?.sent_at) return withLink
+    const sentAt = dateLabel(first.sent_at, zone)
+    return { ...withLink, has_reminder: true, ...(sentAt ? { sent_at: sentAt } : {}) }
+  } catch (err) {
+    logReminderFailure(studio, null, err)
+    return out
+  }
 }
 
 async function readBookingsTool(toolName, db, studio, zone) {
