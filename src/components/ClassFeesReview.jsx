@@ -204,7 +204,19 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
     late: (settings.lateCancelFeeCents / 100).toFixed(2),
     noShow: (settings.noShowFeeCents / 100).toFixed(2),
     emails: settings.reviewEmails.join(', '),
+    fg: {
+      swap: settings.forgiveness.swap.on,
+      swap_minutes: settings.forgiveness.swap.minutes,
+      spot_refilled: settings.forgiveness.spotRefilled.on,
+      new_member: settings.forgiveness.newMember.on,
+      new_member_days: settings.forgiveness.newMember.days,
+      first_offence: settings.forgiveness.firstOffence.on,
+      first_offence_days: settings.forgiveness.firstOffence.days,
+      monthly_cap: settings.forgiveness.monthlyCap.on,
+      monthly_cap_count: settings.forgiveness.monthlyCap.cap,
+    },
   }))
+  const setFg = (k, v) => setForm((f) => ({ ...f, fg: { ...f.fg, [k]: v } }))
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
   const toCents = (v) => Math.round(Number(String(v).replace(',', '.')) * 100)
@@ -227,6 +239,13 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
           late_cancel_fee_cents: late,
           no_show_fee_cents: noShow,
           review_emails: form.emails.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
+          forgiveness: {
+            ...form.fg,
+            swap_minutes: Number(form.fg.swap_minutes),
+            new_member_days: Number(form.fg.new_member_days),
+            first_offence_days: Number(form.fg.first_offence_days),
+            monthly_cap_count: Number(form.fg.monthly_cap_count),
+          },
         }),
       })
       const json = await res.json()
@@ -261,6 +280,20 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
         <Field id="fee-emails" label="Review email recipients" hint="Comma-separated. They get the list at 23:00." className="sm:col-span-2">
           {(p) => <input {...p} disabled={!canEdit} value={form.emails} onChange={(e) => setForm({ ...form, emails: e.target.value })} className={input} />}
         </Field>
+        <fieldset className="sm:col-span-2 space-y-2">
+          <legend className="text-sm font-medium text-un1t-text mb-1">Forgive automatically</legend>
+          <ForgiveRow disabled={!canEdit} checked={form.fg.swap} onCheck={(v) => setFg('swap', v)}
+            label="Moved to another class" num={form.fg.swap_minutes} onNum={(v) => setFg('swap_minutes', v)} unit="minutes to rebook" />
+          <ForgiveRow disabled={!canEdit} checked={form.fg.new_member} onCheck={(v) => setFg('new_member', v)}
+            label="New members and trials" num={form.fg.new_member_days} onNum={(v) => setFg('new_member_days', v)} unit="days from joining" />
+          <ForgiveRow disabled={!canEdit} checked={form.fg.first_offence} onCheck={(v) => setFg('first_offence', v)}
+            label="First offence is a warning" num={form.fg.first_offence_days} onNum={(v) => setFg('first_offence_days', v)} unit="day window" />
+          <ForgiveRow disabled={!canEdit} checked={form.fg.spot_refilled} onCheck={(v) => setFg('spot_refilled', v)}
+            label="Spot taken by someone else (late cancels)" />
+          <ForgiveRow disabled={!canEdit} checked={form.fg.monthly_cap} onCheck={(v) => setFg('monthly_cap', v)}
+            label="Monthly limit per member" num={form.fg.monthly_cap_count} onNum={(v) => setFg('monthly_cap_count', v)} unit="fees a month at most" />
+          <p className="text-xs text-un1t-subtle">A forgiven fee shows on History as waived, with the rule that forgave it.</p>
+        </fieldset>
         <p className="text-xs text-un1t-subtle sm:col-span-2">
           A cancellation is late inside un1t.online&apos;s own cancellation window. The list is made at {String(settings.detectHour).padStart(2, '0')}:00 and fees are charged at {String(settings.chargeHour).padStart(2, '0')}:00 the next day; a refused charge is tried once more 7 days later. Pack members who lose a credit are recorded, never charged.
         </p>
@@ -274,5 +307,30 @@ function SettingsCard({ locationId, settings, canEdit, onSaved }) {
         )}
       </form>
     </Card>
+  )
+}
+
+function ForgiveRow({ disabled, checked, onCheck, label, num, onNum, unit }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <label className="flex items-center gap-2">
+        <input type="checkbox" disabled={disabled} checked={checked} onChange={(e) => onCheck(e.target.checked)} />
+        {label}
+      </label>
+      {onNum && (
+        <span className="flex items-center gap-1 text-un1t-subtle">
+          <input
+            type="number"
+            min={1}
+            disabled={disabled || !checked}
+            value={num}
+            onChange={(e) => onNum(e.target.value)}
+            className="w-16 rounded-lg border border-un1t-border bg-un1t-surface px-2 py-1 text-sm disabled:opacity-60"
+            aria-label={`${label}: ${unit}`}
+          />
+          {unit}
+        </span>
+      )}
+    </div>
   )
 }

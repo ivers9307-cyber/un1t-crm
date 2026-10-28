@@ -23,6 +23,19 @@ export const ClassFeeSettingsSchema = z.object({
   late_cancel_fee_cents: cents,
   no_show_fee_cents: cents,
   review_emails: z.array(z.string().trim().email().max(254)).max(10),
+  // FEES.2 — the automatic forgiveness rules. Optional: a client that never
+  // sends them leaves the stored rules as they are.
+  forgiveness: z.object({
+    swap: z.boolean(),
+    swap_minutes: z.number().int().min(5).max(240),
+    spot_refilled: z.boolean(),
+    new_member: z.boolean(),
+    new_member_days: z.number().int().min(1).max(90),
+    first_offence: z.boolean(),
+    first_offence_days: z.number().int().min(7).max(365),
+    monthly_cap: z.boolean(),
+    monthly_cap_count: z.number().int().min(1).max(31),
+  }).optional(),
 })
 
 export async function PUT(request) {
@@ -30,7 +43,7 @@ export async function PUT(request) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const validation = await validateBody(request, ClassFeeSettingsSchema)
   if (!validation.ok) return validation.response
-  const { location_id: locationId, ...fees } = validation.data
+  const { location_id: locationId, forgiveness, ...fees } = validation.data
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
   const roleGuard = guardMasterOrOwner(user, locationId)
@@ -50,6 +63,7 @@ export async function PUT(request) {
           late_cancel_fee_cents: fees.late_cancel_fee_cents,
           no_show_fee_cents: fees.no_show_fee_cents,
           review_emails: fees.review_emails.map((e) => e.toLowerCase()),
+          ...(forgiveness ? { forgiveness } : {}),
         },
       },
     }

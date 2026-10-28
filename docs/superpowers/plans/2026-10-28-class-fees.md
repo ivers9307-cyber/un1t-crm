@@ -264,3 +264,22 @@ Ordered by impact on how fair the policy feels to members:
 - **The rule change:** lifting the "no paid charges on un1t.online" rule for `chargeClassFee` only.
 - **Policy numbers:** late-cancel window hours and fee amounts, set in un1t.online as product prices.
 - **Grace before 17:00:** whether a member messaging before 17:00 should hold their fee automatically (Phase 2 item 2 makes this possible).
+
+---
+
+## FEES.2 batch 1 (28 Oct 2026, Richard's picks)
+
+- **Forgiveness rules** (`src/lib/class-fees-forgiveness.js`, mig 783 `class_fees.waive_rule`):
+  - **On by default:**
+    - swap: rebooked into another class within 30 minutes of the cancel;
+    - new member or trial: the first 14 days, or a €0 pack;
+    - first offence: none in the previous 60 days.
+  - **Off by default:** spot refilled, and a monthly cap.
+  - A forgiven fee is written as waived, with its rule, and shows on History and in the nightly email count.
+- **Mia's warning:** a late cancel inside the window returns `needs_confirmation`, stating the fee or the lost credit and offering a move. Mia cancels only on a second call with `confirm_late_fee: true`. A quote that cannot be read never blocks a cancel.
+- **Still to come:**
+  - the member notice (email only, Richard's choice);
+  - self-serve appeal;
+  - member visibility;
+  - reporting;
+  - the phone screen.

@@ -36,7 +36,7 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Could not list locations' }, { status: 500 })
   }
 
-  const outcome = { studios: 0, fees_off: 0, detected_runs: 0, inserted: 0, emails: 0, charge_runs: 0, charged: 0, retry_scheduled: 0, outstanding: 0, in_doubt: 0, failed: 0, deferred_budget: 0 }
+  const outcome = { studios: 0, fees_off: 0, detected_runs: 0, inserted: 0, forgiven: 0, emails: 0, charge_runs: 0, charged: 0, retry_scheduled: 0, outstanding: 0, in_doubt: 0, failed: 0, deferred_budget: 0 }
   for (const [i, loc] of (eligible || []).entries()) {
     if (Date.now() - started > BUDGET_MS) { outcome.deferred_budget = eligible.length - i; break }
     outcome.studios++
@@ -48,9 +48,11 @@ export async function GET(request) {
         const found = await detectClassFees(db, { locationId: loc.id, nowMs })
         outcome.detected_runs++
         outcome.inserted += found.inserted
+        outcome.forgiven += found.forgiven
         const mail = await sendReviewEmail(db, {
           locationId: loc.id, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs,
           undecidedCount: found.undecided.length,
+          forgivenCount: found.forgiven,
         })
         if (mail.sent) outcome.emails++
       }
