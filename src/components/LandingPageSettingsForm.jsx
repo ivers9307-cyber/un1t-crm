@@ -1248,6 +1248,9 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
       <Field label="Help sent — message" hint="Shown after the buyer taps the help button.">
         <Textarea value={block.help_sent_text || ''} onChange={(v) => onUpdate({ help_sent_text: v })} maxLength={400} rows={2} />
       </Field>
+      <Field label="Scroll cue label" hint="Shown with an arrow at the bottom of the /trial hero, pointing down to the studio sections.">
+        <Input value={block.scroll_cue_label || ''} onChange={(v) => onUpdate({ scroll_cue_label: v })} maxLength={40} placeholder="Learn more about the studio" />
+      </Field>
       {isUn1tOnline && (
         <>
           <Field

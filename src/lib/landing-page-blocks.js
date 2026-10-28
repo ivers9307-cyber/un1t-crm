@@ -258,6 +258,9 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   active_member_text: paidTrialActiveMemberDefault(brand),
   help_cta_label: 'I need help',
   help_sent_text: 'Thanks. The team will be in touch shortly.',
+  // TRIALSCROLL.1 — the cue under the /trial hero that points down to the
+  // studio sections. Blank ⇒ the default.
+  scroll_cue_label: 'Learn more about the studio',
   // Final-review F2 — a un1t.online studio only: the email a buyer whose
   // un1t.online account the CRM created gets once the purchase settles.
   account_email_subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject,
