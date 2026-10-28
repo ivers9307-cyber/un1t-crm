@@ -11,9 +11,12 @@
 //       funnel contact (the create mirror's semantics: never over another
 //       link); several, or a walk cut short by the page cap → ambiguous; a
 //       failed walk throws (the queue retries; nothing is written yet).
+//       UN1TINCR.1: only clients created since the last client sync (less
+//       30 minutes), because (a) and (b) answer every older one; a client
+//       whose contact link failed is caught by the full walk below.
 // Create only with a recorded acceptance of un1t.online's terms and waiver on
 // the request (no tick, no create: terms_not_accepted). An "email in use"
-// refusal walks again: one → link it as existing; none (in use elsewhere in
+// refusal walks again, over EVERY client: one → link it as existing; none (in use elsewhere in
 // the franchise) → un1t_email_in_use_elsewhere.
 //
 // The set-password step runs only when the CRM created THIS person's account
@@ -76,10 +79,35 @@ async function clientAt(db, locationId, un1tUserIds) {
   return [...new Set((data || []).map((r) => idText(r.un1t_user_id)).filter(Boolean))]
 }
 
+// UN1TINCR.1 — how far back (c) must look. Each sync links every client it
+// pulls to the organisation's contact for that email (one contact per email
+// per organisation), so (a) and (b) already answer every client older than
+// the last client sync; the walk only needs the ones created since, with a
+// margin. null (never synced, or unreadable) is a walk over every client.
+const SYNC_MARGIN_MS = 30 * 60_000
+async function walkSince(db, locationId) {
+  const { data, error } = await db
+    .from('un1t_clients')
+    .select('synced_at')
+    .eq('location_id', locationId)
+    .order('synced_at', { ascending: false })
+    .limit(1)
+  if (error) {
+    logWarn(LOG, 'could not read the last client sync; walking every client', { locationId, code: error.code ?? null })
+    return null
+  }
+  let newest = null
+  for (const r of data || []) {
+    const t = Date.parse(r?.synced_at)
+    if (Number.isFinite(t) && (newest === null || t > newest)) newest = t
+  }
+  return newest === null ? null : new Date(newest - SYNC_MARGIN_MS).toISOString()
+}
+
 // (c) the API walk: { matches } or 'truncated' (cut short by the page cap).
-async function walk(d, writer, email) {
+async function walk(d, writer, email, createdSince) {
   try {
-    return await d.findClientByEmail(writer, email)
+    return createdSince ? await d.findClientByEmail(writer, email, { createdSince }) : await d.findClientByEmail(writer, email)
   } catch (err) {
     if (err?.code === 'truncated') return 'truncated'
     throw err
@@ -90,7 +118,7 @@ async function walk(d, writer, email) {
  * @returns {Promise<{ kind: 'linked', un1tUserId: string, executingContactId: string } | { kind: 'none' }
  *   | { kind: 'ambiguous' } | { kind: 'conflict' }>} throws when a read or the API walk failed.
  */
-export async function findUn1tAccount(db, { locationId, organizationId, contact, writer = null }, deps = {}) {
+export async function findUn1tAccount(db, { locationId, organizationId, contact, writer = null, fullWalk = false }, deps = {}) {
   const d = depsOf(deps)
   // (a) the contact's own link, with an account at this studio.
   const own = idText(contact?.un1t_user_id)
@@ -122,9 +150,9 @@ export async function findUn1tAccount(db, { locationId, organizationId, contact,
     }
   }
 
-  // (c) the API email walk.
+  // (c) the API email walk: since the last client sync, or every client.
   const w = writer ?? (await d.writerFactory(db, locationId))
-  const found = await walk(d, w, email)
+  const found = await walk(d, w, email, fullWalk ? null : await walkSince(db, locationId))
   if (found === 'truncated') return { kind: 'ambiguous' }
   if (found.matches.length > 1) return { kind: 'ambiguous' }
   if (found.matches.length === 0) return { kind: 'none' }
@@ -179,10 +207,11 @@ export async function ensureUn1tAccount(db, { locationId, organizationId, contac
   if (r.code === 'terms_not_accepted') return card('terms_not_accepted')
   if (classifyRefusal({ code: r.code, message: r.message }) === 'email_in_use') {
     // Find again, mirror first: a sibling contact racing this one may have
-    // just created and linked the account.
+    // just created and linked the account. Every client this time: the
+    // account may be an older one whose contact link failed (UN1TINCR.1).
     let again
     try {
-      again = await findUn1tAccount(db, { locationId, organizationId, contact, writer }, deps)
+      again = await findUn1tAccount(db, { locationId, organizationId, contact, writer, fullWalk: true }, deps)
     } catch (err) {
       const retry = retryOf(err)
       if (retry) return retry

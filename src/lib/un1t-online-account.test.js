@@ -97,6 +97,25 @@ describe('findUn1tAccount', () => {
     await expect(findUn1tAccount(makeDb(), { locationId: LOC, organizationId: ORG, contact: contact() }, deps)).rejects.toThrow('down')
   })
 
+  it('UN1TINCR.1: after a client sync the API walk only reaches back to 30 minutes before it', async () => {
+    tables.un1t_clients = [
+      { location_id: LOC, un1t_user_id: 'u-a', synced_at: '2026-10-28T11:45:00.000Z' },
+      { location_id: LOC, un1t_user_id: 'u-b', synced_at: '2026-10-28T12:00:00.000Z' },
+      { location_id: 'loc-other', un1t_user_id: 'u-c', synced_at: '2026-10-28T13:00:00.000Z' },
+    ]
+    await findUn1tAccount(makeDb(), { locationId: LOC, organizationId: ORG, contact: contact() }, deps)
+    expect(deps.findClientByEmail).toHaveBeenCalledWith(expect.anything(), 'jane@x.ie', { createdSince: '2026-10-28T11:30:00.000Z' })
+  })
+
+  it('UN1TINCR.1: fullWalk (and a studio never synced) reads every client', async () => {
+    tables.un1t_clients = [{ location_id: LOC, un1t_user_id: 'u-a', synced_at: '2026-10-28T12:00:00.000Z' }]
+    await findUn1tAccount(makeDb(), { locationId: LOC, organizationId: ORG, contact: contact(), fullWalk: true }, deps)
+    expect(deps.findClientByEmail).toHaveBeenLastCalledWith(expect.anything(), 'jane@x.ie')
+    tables.un1t_clients = []
+    await findUn1tAccount(makeDb(), { locationId: LOC, organizationId: ORG, contact: contact() }, deps)
+    expect(deps.findClientByEmail).toHaveBeenLastCalledWith(expect.anything(), 'jane@x.ie')
+  })
+
   it('a walk cut short by the page cap is ambiguous (staff sort it), never "none"', async () => {
     deps.findClientByEmail.mockRejectedValueOnce(Object.assign(new Error('cut short'), { code: 'truncated' }))
     expect(await findUn1tAccount(makeDb(), { locationId: LOC, organizationId: ORG, contact: contact() }, deps)).toEqual({ kind: 'ambiguous' })
@@ -122,6 +141,15 @@ describe('ensureUn1tAccount', () => {
     expect(await run()).toEqual({ kind: 'existing', un1tUserId: 'usr-x', executingContactId: 'c-funnel' })
     deps.findClientByEmail.mockResolvedValue({ matches: [] })
     expect(await run()).toEqual({ kind: 'card', reason: 'un1t_email_in_use_elsewhere' })
+  })
+
+  it('UN1TINCR.1: email in use walks again over EVERY client, even after a recent sync', async () => {
+    tables.un1t_clients = [{ location_id: LOC, un1t_user_id: 'u-a', synced_at: '2026-10-28T12:00:00.000Z' }]
+    deps.createClient.mockResolvedValue({ ...done({ verdict: 'refused', code: 'EMAIL_IN_USE', message: 'Email already in use' }), conflict: null })
+    deps.findClientByEmail.mockResolvedValueOnce({ matches: [] }).mockResolvedValueOnce({ matches: ['usr-old'] })
+    expect(await run()).toEqual({ kind: 'existing', un1tUserId: 'usr-old', executingContactId: 'c-funnel' })
+    expect(deps.findClientByEmail.mock.calls[0]).toEqual([expect.anything(), 'jane@x.ie', { createdSince: '2026-10-28T11:30:00.000Z' }])
+    expect(deps.findClientByEmail.mock.calls[1]).toEqual([expect.anything(), 'jane@x.ie'])
   })
 
   it('other refusals, unknown, a link conflict and retryable codes', async () => {
