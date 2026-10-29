@@ -1,3 +1,5 @@
+import { UN1T_ACCOUNT_WELCOME_HTML } from '@/lib/sequences/templates/un1t-account-welcome.js'
+
 // sequence-templates — pre-built recipes operators can clone +
 // customise instead of building from scratch (Tier 3B).
 //
@@ -943,9 +945,31 @@ export const SEQUENCE_TEMPLATES = [
       },
     ],
   },
+  // ─── Onboarding ──────────────────────────────────────────────
+  // UN1TWELCOME — the welcome email for every new un1t.online account.
+  {
+    id: 'un1t_account_welcome',
+    category: 'Onboarding',
+    name: 'Welcome: new un1t.online account',
+    description: 'Sends one welcome email to every new un1t.online account, pointing them at the app and its first booking. Accounts made by the CRM whose account email has already gone out skip step 1. It sends as an account email, so it has no unsubscribe link. If "New Lead - First Class Booking Nudge" is switched on at the same studio, raise its first wait to about a day so the welcome lands first.',
+    trigger_type: 'un1t_account_created',
+    trigger_config: {},
+    goal_config: null,
+    send_window: { start_hour: 8, end_hour: 21, skip_days: [] },
+    steps: [
+      {
+        step_type: 'email',
+        delay_days: 0,
+        delay_hours: 0,
+        delay_minutes: 0,
+        subject: 'Welcome to {{location_name}}, {{first_name}}',
+        html_content: UN1T_ACCOUNT_WELCOME_HTML,
+      },
+    ],
+  },
 ]
 
-export const TEMPLATE_CATEGORIES = ['Lead conversion', 'Welcome', 'Recovery', 'Anniversary', 'Races', 'Internal']
+export const TEMPLATE_CATEGORIES = ['Lead conversion', 'Onboarding', 'Welcome', 'Recovery', 'Anniversary', 'Races', 'Internal']
 
 export function getTemplate(id) {
   return SEQUENCE_TEMPLATES.find((t) => t.id === id) || null

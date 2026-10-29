@@ -676,7 +676,9 @@ describe('W1.S1a — templates speak the sending location brand', () => {
 
   it('no email step names a fixed gym', () => {
     for (const { id, s } of emailSteps) {
-      expect(`${s.subject || ''} ${s.html_content || ''}`, id).not.toMatch(/UN1T|un1tdublin/i)
+      // un1t.online is the product (the app every account is for), not a gym.
+      const text = `${s.subject || ''} ${s.html_content || ''}`.replace(/un1t\.online/gi, '')
+      expect(text, id).not.toMatch(/UN1T|un1tdublin/i)
     }
   })
 
@@ -699,5 +701,31 @@ describe('W1.S1a — templates speak the sending location brand', () => {
     const out = applyMergeTags(signed[0].s.html_content, contact, { location_name: 'UN1T Stillorgan', company_name: 'UN1T Stillorgan' })
     expect(out).toContain('<p>UN1T Stillorgan</p>')
     expect(out).not.toContain('UN1T UN1T')
+  })
+})
+
+describe('un1t_account_welcome template', () => {
+  const t = getTemplate('un1t_account_welcome')
+
+  it('is an Onboarding recipe on the account-created trigger with one immediate email step', () => {
+    expect(t).toBeTruthy()
+    expect(t.category).toBe('Onboarding')
+    expect(TEMPLATE_CATEGORIES).toContain('Onboarding')
+    expect(t.trigger_type).toBe('un1t_account_created')
+    expect(t.steps).toHaveLength(1)
+    expect(t.steps[0].step_type).toBe('email')
+    expect(t.steps[0].delay_minutes).toBe(0)
+    expect(t.steps[0].subject).toContain('{{first_name}}')
+  })
+
+  it('carries the merge tags and none of the banned content', () => {
+    const html = t.steps[0].html_content
+    expect(html).toContain('{{studio_logo}}')
+    expect(html).toContain('{{app_download_links}}')
+    expect(html).toContain('{{location_name}}')
+    expect(html).not.toMatch(/[—–]/)
+    expect(html).not.toContain('Sarah')
+    expect(html.toLowerCase()).not.toContain('unsubscribe')
+    expect(t.description).not.toMatch(/[—–]/)
   })
 })
