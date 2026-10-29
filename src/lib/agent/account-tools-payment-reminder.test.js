@@ -147,6 +147,29 @@ describe('get_my_payment_reminder · executor', () => {
     expect(res.has_reminder).toBe(false)
   })
 
+  it('UN1TWELCOME.3 — a welcome enrolment is not a payment reminder', async () => {
+    const db = stubDb({
+      contacts: [{ id: 'c1', glofox_member_id: MEMBER, location_id: 'loc1' }],
+      enrollments: [enrol({ source_type: 'un1t_account_created', metadata: {} })],
+    })
+    const res = await run(db)
+    expect(res.has_reminder).toBe(false)
+  })
+
+  it('UN1TWELCOME.3 — a newer welcome enrolment does not hide an older dunning run', async () => {
+    const db = stubDb({
+      contacts: [{ id: 'c1', glofox_member_id: MEMBER, location_id: 'loc1' }],
+      enrollments: [
+        enrol({ id: 'e-old', enrolled_at: '2026-09-12T10:00:00.000Z' }),
+        enrol({ id: 'e-new', source_type: 'un1t_account_created', metadata: {}, enrolled_at: '2026-10-28T10:00:00.000Z' }),
+      ],
+    })
+    const res = await run(db)
+    expect(res.has_reminder).toBe(true)
+    expect(res.amount).toBe('€209')
+    expect(res.first_sent_at).toBe('2026-09-12T10:00:00.000Z')
+  })
+
   it('active run + invoice still in the overdue list → still_overdue true with amount and link', async () => {
     const db = stubDb({
       contacts: [{ id: 'c1', glofox_member_id: MEMBER, location_id: 'loc1' }],

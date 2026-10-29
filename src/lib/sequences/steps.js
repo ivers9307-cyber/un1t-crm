@@ -64,6 +64,10 @@ import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-te
 // rides the lane (a MARKETING template keeps the marketing gate).
 export const TRANSACTIONAL_SOURCE_TYPES = Object.freeze(['invoice_past_due', 'churn_radar', 'un1t_account_created'])
 
+// Answers "is this a payment reminder" (Mia's reminder lookup); the list above
+// answers "which consent lane".
+export const DUNNING_SOURCE_TYPES = Object.freeze(['invoice_past_due', 'churn_radar'])
+
 /** @param {{ source_type?: string|null }|null|undefined} enrollment */
 export function isTransactionalEnrolment(enrollment) {
   return TRANSACTIONAL_SOURCE_TYPES.includes(String(enrollment?.source_type || ''))
