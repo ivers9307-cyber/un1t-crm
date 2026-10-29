@@ -274,8 +274,25 @@ function writeFields(settings) {
     un1t_sends_welcome: s.sendsWelcome,
     un1t_welcome_sets_login: s.welcomeSetsLogin,
     un1t_sends_booking_confirmation: s.sendsBookingConfirmation,
+    // UN1TWELCOME.1 — as stored, so the form shows what a master typed.
+    app_links: appLinksStored(settings),
   }
 }
+
+function appLinksStored(settings) {
+  const raw = settings?.un1t_online?.app_links
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+}
+
+// UN1TWELCOME.1 — the app store links and the copy above them in the account
+// and sequence emails. null clears a key, an absent key is kept.
+const httpsLink = z.string().trim().url().startsWith('https://').max(500).nullable().optional()
+const AppLinksSchema = z.object({
+  ios_url: httpsLink,
+  android_url: httpsLink,
+  heading: z.string().trim().max(120).nullable().optional(),
+  body: z.string().trim().max(600).nullable().optional(),
+}).strict()
 
 const WriteSettingsSchema = z.object({
   writes_enabled: z.boolean().optional(),
@@ -287,6 +304,7 @@ const WriteSettingsSchema = z.object({
   un1t_sends_welcome: z.boolean().optional(),
   un1t_welcome_sets_login: z.boolean().optional(),
   un1t_sends_booking_confirmation: z.boolean().optional(),
+  app_links: AppLinksSchema.optional(),
 }).strict().refine((b) => Object.keys(b).length > 0, { message: 'Nothing to change.' })
 
 export async function PATCH(request, props) {
@@ -318,6 +336,15 @@ export async function PATCH(request, props) {
   const merged = await mergeLocationSettings(db, g.locationId, (current) => {
     const block = current.un1t_online && typeof current.un1t_online === 'object' ? current.un1t_online : {}
     const next = { ...block, ...patch }
+    if (body.app_links !== undefined) {
+      const links = { ...appLinksStored(current) }
+      for (const [k, v] of Object.entries(body.app_links)) {
+        if (v === undefined) continue
+        if (v === null || v === '') delete links[k]
+        else links[k] = v
+      }
+      next.app_links = links
+    }
     // Writes off switches the funnel off too, so writes coming back on never
     // brings the public path back live without anyone asking for it.
     if (patch.writes_enabled === false) next.funnel_enabled = false

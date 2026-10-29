@@ -22,6 +22,20 @@ describe('sendCorpPromoEmail', () => {
     expect(msg.tag).toBe('corp-promo-granted')
   })
 
+  it('appends the app section when the studio has links, nothing when it has none', async () => {
+    const appLinks = { iosUrl: 'https://apps.apple.com/x', androidUrl: null, heading: 'Get the app', body: 'Log in.' }
+    await sendCorpPromoEmail(db({ id: 'c-1' }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin', appLinks })
+    expect(sent.mock.calls[0][0].htmlBody).toContain('Get the app')
+    expect(sent.mock.calls[0][0].htmlBody).toContain('Download on the App Store')
+    sent.mockClear()
+    await sendCorpPromoEmail(db({ id: 'c-1' }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin', appLinks: { iosUrl: null, androidUrl: null } })
+    expect(sent.mock.calls[0][0].htmlBody).not.toContain('Download on the App Store')
+    expect(sent.mock.calls[0][0].htmlBody).not.toContain('Get the app')
+    sent.mockClear()
+    await sendCorpPromoEmail(db({ id: 'c-1' }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin' })
+    expect(sent.mock.calls[0][0].htmlBody).not.toContain('App Store')
+  })
+
   it('honours the administrative opt-out and a bounced address', async () => {
     expect(await sendCorpPromoEmail(db({ id: 'c-1', contact_preferences: { email_administrative: false } }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin' })).toEqual({ sent: false, reason: 'opted_out_administrative_email' })
     expect(await sendCorpPromoEmail(db({ id: 'c-1', email_status: 'bounced' }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin' })).toMatchObject({ sent: false })

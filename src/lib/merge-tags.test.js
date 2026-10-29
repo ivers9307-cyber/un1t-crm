@@ -61,6 +61,9 @@ describe('the registry and applyMergeTags() agree', () => {
       // PAYLINK.7 — only non-empty on an overdue-payment reminder run.
       pay_amount_phrase: ' of €209',
       payment_cta: '<a href="https://pay.test/x">pay it now here</a>',
+      // UN1TWELCOME.3 — only non-empty in a sequence email step.
+      app_download_links: '<table><tr><td>Download</td></tr></table>',
+      studio_logo: '<img src="https://cdn.test/logo.png" alt="">',
     }
     for (const { tag, retired } of MERGE_TAGS) {
       const out = applyMergeTags(`<p>${tag}</p>`, contact, extras)
@@ -92,11 +95,23 @@ describe('the registry is well formed', () => {
     }
   })
 
-  it('withholds exactly the deprecated alias, the welcome-sequence tag, and the payment-reminder tags', () => {
+  it('withholds exactly the deprecated alias, the retired passcode tag, the payment-reminder tags, and the studio logo tag', () => {
     // Pinned so widening the withheld set is a deliberate edit to this test,
     // not a quiet way to stop advertising something that works.
     expect(MERGE_TAGS.filter((t) => !t.offered).map((t) => t.tag).sort())
-      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}'])
+      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}', '{{studio_logo}}'])
+  })
+
+  it('UN1TWELCOME.3/.7 — the app tag is offered, the logo tag withheld, and both render empty with no extras', () => {
+    const app = MERGE_TAGS.find((t) => t.tag === '{{app_download_links}}')
+    expect(app?.offered).toBe(true)
+    expect(app?.description).toMatch(/App Store and Google Play/)
+    expect(app?.description).toMatch(/outside sequence emails/)
+    const logo = MERGE_TAGS.find((t) => t.tag === '{{studio_logo}}')
+    expect(logo?.offered).toBe(false)
+    expect(logo?.why).toBe('only resolved by sequence email steps; empty in a broadcast')
+    expect(applyMergeTags('{{app_download_links}}', {}, {})).toBe('')
+    expect(applyMergeTags('{{studio_logo}}', {}, {})).toBe('')
   })
 
   it('derives the editor shapes from the offered set', () => {

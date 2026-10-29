@@ -7,6 +7,7 @@ import { sendTransactionalEmail } from '@/lib/postmark'
 import { escapeHtml } from '@/lib/html-escape'
 import { fillCorpPromoTokens } from '@/lib/corp-promos'
 import { formatInZone } from '@/lib/location-time'
+import { renderAppSection } from '@/lib/un1t-online-app-links'
 
 /** "Tuesday 4 November" in the studio's zone; null for an unreadable instant. */
 export function expiresOnLabel(expiresAt, zone) {
@@ -29,11 +30,12 @@ const paragraphs = (text) => text.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n
 
 /**
  * @param {object} db service-role client
- * @param {{ claim: object, copy: object, studioName: string, zone: string }} args
+ * @param {{ claim: object, copy: object, studioName: string, zone: string, appLinks?: object|null }} args
+ *   appLinks: the studio's app download links (UN1TWELCOME); the section follows the body, left out when there are none
  *   claim: a corp_promo_claims row with credits and expires_at stamped
  * @returns {Promise<{ sent: boolean, reason?: string }>}
  */
-export async function sendCorpPromoEmail(db, { claim, copy, studioName, zone }) {
+export async function sendCorpPromoEmail(db, { claim, copy, studioName, zone, appLinks = null }) {
   const to = claim?.customer_email
   if (!to) return { sent: false, reason: 'no_email_address' }
   if (claim.contact_id) {
@@ -48,11 +50,12 @@ export async function sendCorpPromoEmail(db, { claim, copy, studioName, zone }) 
   }
   const tokens = corpPromoTokens({ firstName: claim.first_name, credits: claim.credits, expiresAt: claim.expires_at, zone, studioName })
   const safe = Object.fromEntries(Object.entries(tokens).map(([k, v]) => [k, escapeHtml(v)]))
+  const appSection = renderAppSection(appLinks)
   await sendTransactionalEmail({
     to,
     subject: fillCorpPromoTokens(copy.email_subject, tokens),
     // The block is plain text: escaped whole, then filled with escaped tokens.
-    htmlBody: paragraphs(fillCorpPromoTokens(escapeHtml(copy.email_body), safe)),
+    htmlBody: paragraphs(fillCorpPromoTokens(escapeHtml(copy.email_body), safe)) + (appSection ? `\n<div style="font-family:Arial,Helvetica,sans-serif;margin-top:16px">${appSection}</div>` : ''),
     contactId: claim.contact_id || null,
     locationId: claim.location_id,
     tag: 'corp-promo-granted',

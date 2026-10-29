@@ -193,6 +193,9 @@ const config = [
       // CORPPROMO.1 — the /corp claim path: every write checked from day one.
       'src/lib/corp-promo-*.js', 'src/app/api/public/corp-claims/**', 'src/app/api/corp-promo-claims/**',
       'src/lib/campaign-sender.js',
+      'src/lib/un1t-online-account.js',
+      // UN1TWELCOME.5 — the welcome sweep: born clean; every stamp reads its error.
+      'src/lib/un1t-online-welcome.js',
       'src/app/api/cron/run-campaigns/route.js',
       'src/lib/race-confirmations.js',
       'src/lib/event-comms-location.js',

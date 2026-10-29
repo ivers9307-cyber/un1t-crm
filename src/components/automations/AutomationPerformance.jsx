@@ -18,6 +18,7 @@ import { describeNextStep } from '@/lib/sequences/run-history'
 // Friendly labels for sequence_enrollments.source_type (how they got in).
 const SOURCE_LABELS = {
   contact_created: 'New lead',
+  un1t_account_created: 'New un1t.online account',
   manual: 'Manual enrolment',
   booking_created: 'Booking',
   first_booking: 'First booking',

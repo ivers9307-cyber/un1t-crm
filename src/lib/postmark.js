@@ -548,6 +548,10 @@ export function applyMergeTags(html, contact, extras = {}) {
     // empty for any other email, so a body that uses them still renders.
     '{{pay_amount_phrase}}': extras.pay_amount_phrase || '',
     '{{payment_cta}}': extras.payment_cta || '',
+    // UN1TWELCOME.3 — rendered HTML from the sequence email step (store
+    // buttons from the studio's app links, the studio logo). Empty elsewhere.
+    '{{app_download_links}}': extras.app_download_links || '',
+    '{{studio_logo}}': extras.studio_logo || '',
   }
 
   let result = html

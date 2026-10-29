@@ -42,7 +42,7 @@ import {
   UN1T_RESET_ALREADY_REQUESTED_CODE,
 } from './un1t-online-write-ops.js'
 import { applyUn1tWriteToMirror } from './un1t-online-mirror-write.js'
-import { logWarn } from './log'
+import { logWarn, logError } from './log'
 
 const LOG = 'un1t-online-write'
 
@@ -232,6 +232,21 @@ export async function ensureUn1tAccount(db, { locationId, organizationId, contac
   return card(`un1t_create_failed:${r.code ?? 'unknown'}`)
 }
 
+// UN1TWELCOME.4: the welcome sweep reads account_email_sent_at to know a
+// CRM-made account already got its welcome through the account email. A lost
+// stamp is logged and never changes the step (the email has gone out).
+async function stampAccountEmailSent(db, { locationId, un1tUserId }) {
+  try {
+    const { data, error } = await db.from('un1t_clients')
+      .update({ account_email_sent_at: new Date().toISOString() })
+      .eq('location_id', locationId).eq('un1t_user_id', un1tUserId).select('id')
+    if (error) logError('un1t-account', 'account email sent but the sent stamp failed', { locationId, code: error.code ?? null })
+    else if (!data || data.length === 0) logWarn('un1t-account', 'account email sent but no un1t_clients row to stamp', { locationId })
+  } catch (err) {
+    logError('un1t-account', 'account email sent but the sent stamp threw', { locationId, err })
+  }
+}
+
 /**
  * The set-password step (spec 6.5 step 7). Never throws on the email; throws
  * only on a ledger read failure (the queue retries; nothing was sent).
@@ -280,9 +295,10 @@ export async function runSetPasswordStep(db, { locationId, contact, un1tUserId, 
   const sendExplanation = async () => {
     try {
       const sent = await d.sendUn1tAccountEmail(db, {
-        locationId, contact, className: request?.class_name ?? null, startsAt: request?.starts_at ?? null, ...emailArgs,
+        locationId, contact, className: request?.class_name ?? null, startsAt: request?.starts_at ?? null, appLinks: settings?.appLinks, ...emailArgs,
       })
       explanation = sent?.sent ? 'sent' : (sent?.reason || 'not_sent')
+      if (sent?.sent) await stampAccountEmailSent(db, { locationId, un1tUserId })
     } catch {
       logWarn(LOG, 'the account explanation email threw; the reset still goes', { locationId, op: 'forgot_password', code: 'send_error' })
       explanation = 'send_error'

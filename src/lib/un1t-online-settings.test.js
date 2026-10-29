@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { appLinksFrom } from './un1t-online-app-links.js'
 import { un1tWriteSettingsFrom, readUn1tWriteSettings, Un1tSettingsReadError } from './un1t-online-settings.js'
 
 const OFF = {
@@ -9,6 +10,7 @@ const OFF = {
   sendsWelcome: false,
   welcomeSetsLogin: false,
   sendsBookingConfirmation: false,
+  appLinks: appLinksFrom(null),
 }
 
 describe('un1tWriteSettingsFrom', () => {
@@ -70,6 +72,12 @@ describe('un1tWriteSettingsFrom', () => {
     expect(f(['  Elites ', '', 'HYROX'])).toEqual(['elites', 'hyrox'])
     expect(f(undefined)).toEqual([])
     expect(f(7)).toEqual([])
+  })
+
+  it('carries the app links through appLinksFrom', () => {
+    const settings = { un1t_online: { app_links: { ios_url: 'https://apps.apple.com/x' } } }
+    expect(un1tWriteSettingsFrom(settings).appLinks).toEqual(appLinksFrom(settings))
+    expect(un1tWriteSettingsFrom(settings).appLinks.iosUrl).toBe('https://apps.apple.com/x')
   })
 
   it('ignores the glofox block and every other settings key', () => {

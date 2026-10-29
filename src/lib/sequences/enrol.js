@@ -26,6 +26,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { selectAllByKeys } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
+import { getLocationZone } from '@/lib/location-time'
+import { clampToSendWindow, hasSendWindow, nextStepDelayMs } from './scheduler.js'
 import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 
 // Operator-initiated sourceTypes that bypass the automations_exempt gate.
@@ -44,6 +46,9 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  *   ('manual', 'trigger:status_change', 'trigger:race_finished', etc.)
  * @param {string} [args.sourceRef]            Free-form ref to whatever
  *   caused the enrolment (booking id, race-registration id, etc.)
+ * @param {number} [args.startStepOrder=0]  UN1TWELCOME.2 — the `current_step_order`
+ *   a FRESH insert starts at (a non-negative integer, else it throws), so a
+ *   caller can skip step 1. The DUNNING re-activation path always restarts at 0.
  * @param {boolean} [args.allowReenrol=false]  DUNNING.2 — re-activate a
  *   contact's TERMINAL enrolment row (completed / exited) in place when the
  *   sequence's cooldown has passed and the sourceRef differs from the last
@@ -70,8 +75,11 @@ const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
  */
 export async function enrolContacts({
   sequenceId, contactIds, sourceType = 'manual', sourceRef = null, allowReenrol = false,
-  metadata = null,
+  metadata = null, startStepOrder = 0,
 }) {
+  if (!Number.isInteger(startStepOrder) || startStepOrder < 0) {
+    throw new Error(`enrolContacts: startStepOrder must be a non-negative integer, got ${startStepOrder}`)
+  }
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     return { enrolled: 0, skipped: 0, reactivated: 0 }
   }
@@ -145,7 +153,7 @@ export async function enrolContacts({
   // and it does not belong in a PR about chunking and conflict handling.
   const { data: seqRow } = await db
     .from('email_sequences')
-    .select('re_enrolment_cooldown_days')
+    .select('re_enrolment_cooldown_days, send_window, location_id')
     .eq('id', sequenceId)
     .single()
   const cooldownDays = seqRow?.re_enrolment_cooldown_days
@@ -216,13 +224,49 @@ export async function enrolContacts({
     }
   }
 
+  // UN1TWELCOME.7 — a fresh enrolment fires "on the next tick" (now) for every
+  // other sequence in the estate, and they depend on that. The welcome
+  // sequence alone also honours its send window and the start step's delay,
+  // exactly as the scheduler does for the steps that follow: the delay of the
+  // step the cursor lands on, then clamped to the window in the sequence
+  // location's zone. Scoped to this source type on purpose: applying the
+  // window to every windowed sequence's first step would change live behaviour
+  // for triggers, dunning and campaigns that this feature does not own.
+  let firstFireAt = new Date()
+  if (sourceType === 'un1t_account_created' && candidateIds.length > 0 && (startStepOrder > 0 || hasSendWindow(seqRow?.send_window))) {
+    // Best-effort: a failed read must not lose the enrolment, so it falls back
+    // to firing now (every other sequence's behaviour). Codes and names only.
+    try {
+      const { data: firstStep, error: stepErr } = await db
+        .from('sequence_steps')
+        .select('delay_days, delay_hours, delay_minutes')
+        .eq('sequence_id', sequenceId)
+        .eq('step_order', startStepOrder + 1)
+        .maybeSingle()
+      if (stepErr) {
+        logWarn('enrol', 'first step unreadable; the enrolment fires now', { sequenceId, code: stepErr.code ?? null })
+      } else if (firstStep) {
+        const raw = new Date(firstFireAt.getTime() + nextStepDelayMs(firstStep))
+        if (hasSendWindow(seqRow?.send_window)) {
+          const zone = await getLocationZone(db, seqRow.location_id)
+          firstFireAt = clampToSendWindow(raw, seqRow.send_window, zone)
+        } else {
+          firstFireAt = raw
+        }
+      }
+    } catch (e) {
+      firstFireAt = new Date()
+      logWarn('enrol', 'first send time unreadable; the enrolment fires now', { sequenceId, errName: e?.name ?? null })
+    }
+  }
+
   const toInsert = candidateIds
     .map(contactId => ({
       sequence_id: sequenceId,
       contact_id: contactId,
-      current_step_order: 0,
+      current_step_order: startStepOrder,
       status: 'active',
-      next_step_at: new Date().toISOString(), // fire on next cron tick
+      next_step_at: firstFireAt.toISOString(), // fire on next cron tick (welcome: window + start-step delay, above)
       source_type: sourceType,
       source_ref: sourceRef,
       ...(runMeta ? { metadata: runMeta } : {}),

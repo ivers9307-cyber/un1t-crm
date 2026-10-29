@@ -44,6 +44,13 @@
 //                       the trial-finisher opener and follow-up arm. Seeded by
 //                       mig 757, applied RIGHT AFTER the deploy.
 //
+// UN1TWELCOME.5 adds a seventh, on the */15 un1t-online-sync cron:
+//
+//   'un1t-welcome-sweep' — sweepUn1tWelcomes (src/lib/un1t-online-welcome.js),
+//                       the welcome-email enrolment arm. Stamped by the route
+//                       only when every studio's sweep finished clean. Seeded
+//                       by mig 791, applied RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
