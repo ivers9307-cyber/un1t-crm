@@ -100,6 +100,22 @@ export const MERGE_TAGS = Object.freeze([
     // PAYLINK.7 — same run-scoped source as {{pay_amount_phrase}} above.
     why: 'only populated on an overdue-payment reminder run — empty in a broadcast',
   },
+  {
+    tag: '{{app_download_links}}',
+    name: 'App download links',
+    description: 'The App Store and Google Play buttons from the studio app links, or empty',
+    offered: false,
+    // UN1TWELCOME.3 — rendered HTML, resolved from the location's settings.
+    why: 'only resolved by sequence email steps; empty in a broadcast',
+  },
+  {
+    tag: '{{studio_logo}}',
+    name: 'Studio logo',
+    description: "The sending studio's logo image",
+    offered: false,
+    // UN1TWELCOME.3 — rendered HTML from the location's branding.
+    why: 'only resolved by sequence email steps; empty in a broadcast',
+  },
 ])
 
 /** The tags an operator is offered, in display order. */

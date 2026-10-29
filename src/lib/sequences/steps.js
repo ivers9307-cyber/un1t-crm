@@ -25,6 +25,8 @@
 
 import {
   sendMarketingEmail,
+  sendTransactionalEmail,
+  getLocationInboxReplyTo,
   applyMergeTags,
   buildUnsubscribeUrl,
   appendUnsubscribeFooter,
@@ -40,6 +42,7 @@ import { logWarn } from '@/lib/log'
 import { isWhatsAppNumberMissing } from '@/lib/whatsapp-number-missing'
 import { signStartPrefillToken } from '@/lib/start-prefill-token'
 import { getLocationBranding } from '@/lib/location-branding'
+import { appLinksFrom, renderAppDownloadLinks, renderStudioLogo } from '@/lib/un1t-online-app-links'
 import { getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
@@ -59,11 +62,26 @@ import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-te
 // send), bounced / complained / suppressed email, wa opted_out / blocked /
 // undeliverable, and — for WhatsApp — only a UTILITY-category template
 // rides the lane (a MARKETING template keeps the marketing gate).
-export const TRANSACTIONAL_SOURCE_TYPES = Object.freeze(['invoice_past_due', 'churn_radar'])
+export const TRANSACTIONAL_SOURCE_TYPES = Object.freeze(['invoice_past_due', 'churn_radar', 'un1t_account_created'])
 
 /** @param {{ source_type?: string|null }|null|undefined} enrollment */
 export function isTransactionalEnrolment(enrollment) {
   return TRANSACTIONAL_SOURCE_TYPES.includes(String(enrollment?.source_type || ''))
+}
+
+// ── UN1TWELCOME.3 — account stream ───────────────────────────────
+// The welcome email for a new un1t.online account is a service message about
+// the account the person just made, not marketing. Like the transactional lane
+// it is a property of HOW the contact was enrolled. On top of that lane's
+// gates it sends on the transactional stream: no unsubscribe footer or
+// List-Unsubscribe header, no unsubscribe-token requirement, and no
+// marketing-touch stamp (it must not count against the frequency cap of the
+// marketing mail that follows).
+export const ACCOUNT_STREAM_SOURCE_TYPES = Object.freeze(['un1t_account_created'])
+
+/** @param {{ source_type?: string|null }|null|undefined} enrollment */
+export function isAccountStreamEnrolment(enrollment) {
+  return ACCOUNT_STREAM_SOURCE_TYPES.includes(String(enrollment?.source_type || ''))
 }
 
 // ── FREQ-CAP.1 — cross-channel marketing frequency cap ──────────
@@ -188,7 +206,7 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // no extra round trip versus before this change.
   const { data: seqLocation } = await db
     .from('locations')
-    .select('id, name, features')
+    .select('id, name, features, settings')
     .eq('id', sequence.location_id)
     .single()
   if (!(await channelEnabledOrSkip(db, {
@@ -212,6 +230,7 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // DUNNING.3 — a transactional enrolment (a dunning run) skips only the
   // MARKETING half of this gate; "not on this location's list" still skips.
   const transactional = isTransactionalEnrolment(enrollment)
+  const accountStream = isAccountStreamEnrolment(enrollment)
   const emailConsent = locationConsent(contact, sequence)
   if (!emailConsent) {
     await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'not on this location\u2019s list' })
@@ -305,7 +324,8 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // MAX_ERRORS pauses the enrolment for everybody on it. The activity row names
   // the reason on the contact's timeline; mig 532 means nobody is in this state
   // today, so one appearing is a real signal worth reading.
-  if (!unsubscribeUrl) {
+  // UN1TWELCOME.3 — the account stream carries no unsubscribe link at all.
+  if (!unsubscribeUrl && !accountStream) {
     await recordStepSkip(db, {
       contact, sequence, step, channel: 'email',
       reason: 'no unsubscribe token — a marketing email needs a working opt-out link',
@@ -330,7 +350,15 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
   // on which run's amount they're quoting.
   const payment = paymentFromEnrollment(enrollment)
   const payPhrase = payAmountPhrase(payment)
-  const { companyName } = await getLocationBranding(db, sequence?.location_id)
+  const { companyName, logoUrl } = await getLocationBranding(db, sequence?.location_id)
+  // UN1TWELCOME.3 — the app store buttons and the studio logo, for any
+  // sequence email (empty strings when a body does not use the tags). Only
+  // appLinksFrom reads the location settings, and nothing else leaves it.
+  const appDownloadLinks = renderAppDownloadLinks(appLinksFrom(seqLocation?.settings))
+  const studioLogo = renderStudioLogo({ logoUrl, name: companyName || locationName })
+  if (html.includes('{{app_download_links}}') && !appDownloadLinks) {
+    logWarn('sequences', 'app_download_links empty: no app links set', { locationId: sequence?.location_id })
+  }
   // TZ.17 — {{current_year}} on the sequence studio's calendar. Text only, so
   // an unreadable zone falls back to Europe/Dublin rather than hold the email.
   const mergeZone = await getLocationZone(db, sequence?.location_id).catch(() => DEFAULT_TZ)
@@ -340,13 +368,35 @@ export async function sendEmailStep(db, { enrollment, step, sequence, contact, f
     location_name: locationName,
     company_name: companyName || '',
     booking_token: bookingToken,
-    unsubscribe_url: unsubscribeUrl,
+    unsubscribe_url: accountStream ? '' : unsubscribeUrl,
     // Derived from the unsubscribe URL because both endpoints resolve the same
-    // token column. Safe to split now that the null case returned above.
-    preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
+    // token column. Safe to split now that the null case returned above (the
+    // account stream has no link, so its tag is empty).
+    preference_url: accountStream ? '' : `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
     pay_amount_phrase: payPhrase,
     payment_cta: paymentCtaHtml(payment),
+    app_download_links: appDownloadLinks,
+    studio_logo: studioLogo,
   })
+
+  // UN1TWELCOME.3 — the account stream sends the body as written: no footer,
+  // no broadcast-stream headers, no marketing-touch stamp. Reply-To falls back
+  // to the studio's inbox like a marketing step's default.
+  if (accountStream) {
+    const accountResult = await sendTransactionalEmail({
+      to: contact.email,
+      subject: mergedSubject,
+      htmlBody: merged,
+      contactId: contact.id,
+      locationId: sequence.location_id,
+      tag: `seq-${sequence.id}`,
+      replyTo: sequence.reply_to || await getLocationInboxReplyTo(sequence.location_id) || undefined,
+      sourceType: 'sequence',
+      sequenceId: sequence.id,
+      sequenceStepId: step.id,
+    })
+    return accountResult?.messageId || null
+  }
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
   // Attribution (source_type='sequence', sequence_id, sequence_step_id) is
