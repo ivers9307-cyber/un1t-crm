@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 vi.mock('./postmark.js', () => ({ sendTransactionalEmail: vi.fn(async () => ({ messageId: 'm1' })) }))
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.example.test' }))
+vi.mock('./location-branding.js', () => ({ getLocationBranding: vi.fn(async () => ({ companyName: 'Hatch', logoUrl: 'https://cdn.example.test/logo.png' })) }))
 vi.mock('./un1t-online-write-ops.js', () => ({ chargeClassFee: vi.fn() }))
 vi.mock('./location-time.js', async (orig) => ({ ...(await orig()), getLocationZone: vi.fn(async () => 'Europe/Dublin') }))
 
@@ -89,18 +90,22 @@ describe('detectClassFees', () => {
 describe('the review email', () => {
   it('goes to each recipient with the due fees, the counts and the review link', async () => {
     const db = makeDb(baseTables())
-    await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
+    const out0 = await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
     const ctx = await readClassFeeContext(db, LOC)
-    const out = await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT, undecidedCount: 1 })
+    const out = await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT, undecided: out0.undecided })
     expect(out.sent).toBe(true)
     const mail = sendTransactionalEmail.mock.calls[0][0]
     expect(mail).toMatchObject({ to: 'ops@hatch.test', locationId: LOC, tag: 'class-fees-review' })
     expect(mail.contactId).toBeUndefined()
-    expect(mail.subject).toBe('Class fees for Wed 28 Oct: 2 to charge at 17:00 tomorrow')
-    expect(mail.htmlBody).toContain('https://crm.example.test/class-fees')
+    expect(mail.subject).toBe('Hatch class fees, Wednesday 28 October: 2 to charge at 17:00 tomorrow')
+    // FEES.5: the button opens THIS studio's page, never the viewer's active one.
+    expect(mail.htmlBody).toContain(`href="https://crm.example.test/class-fees?location=${LOC}"`)
+    expect(mail.htmlBody).toContain(`href="https://crm.example.test/contacts/c1?studio=${LOC}"`)
     expect(mail.htmlBody).toContain('Ann A')
-    expect(mail.htmlBody).toContain('€25.00')
-    expect(mail.htmlBody).toContain('1 booking(s) are still marked booked')
+    expect(mail.htmlBody).toContain('€25')
+    expect(mail.htmlBody).toContain('https://cdn.example.test/logo.png')
+    expect(mail.htmlBody).toContain('Not marked in un1t.online')
+    expect(mail.htmlBody).toContain('Strength')
   })
 })
 
@@ -247,8 +252,11 @@ describe('FEES.2 — forgiveness in the nightly run', () => {
     const db = makeDb(withRules(undefined))
     const out = await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
     const ctx = await readClassFeeContext(db, LOC)
-    await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT, undecidedCount: 0, forgivenCount: out.forgiven })
-    expect(sendTransactionalEmail.mock.calls[0][0].htmlBody).toContain('2 fee(s) forgiven automatically')
+    await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT })
+    const html = sendTransactionalEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('Forgiven automatically')
+    expect(html).toContain('First offence, a warning only')
+    expect(html).not.toContain('(automatic)')
   })
 })
 
@@ -284,10 +292,12 @@ describe('FEES.3 — the dry run never charges', () => {
     const db = makeDb(paused(true))
     await detectClassFees(db, { locationId: LOC, nowMs: NIGHT }, { writerFactory: writerFactory(2) })
     const ctx = await readClassFeeContext(db, LOC)
-    await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT, undecidedCount: 0 })
+    await sendReviewEmail(db, { locationId: LOC, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs: NIGHT })
     const mail = sendTransactionalEmail.mock.calls[0][0]
-    expect(mail.subject).toBe('Class fees for Wed 28 Oct (dry run): 2 would be charged')
-    expect(mail.htmlBody).toContain('no member is emailed while charging is paused')
+    expect(mail.subject).toBe('Hatch class fees, Wednesday 28 October (dry run): 2 would be charged')
+    expect(mail.htmlBody).toContain('DRY RUN')
+    expect(mail.htmlBody).toContain('no member is emailed')
+    expect(mail.htmlBody).toContain('Would be charged')
   })
 
   it('an appealed fee is never picked up by the charge run', async () => {
