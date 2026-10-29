@@ -68,7 +68,7 @@ export default async function LandingPreviewPage(props) {
   const searchParams = await props.searchParams
   const key = searchParams?.p === 'hatch-street' ? 'hatch-street' : 'stillorgan'
   const blocks = FIXTURES[key]
-  const { primary: cta, secondary: cta2 } = pageCtas(blocks)
+  const { primary: cta, secondary: cta2 } = pageCtas(blocks, { trialShown: false })
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">

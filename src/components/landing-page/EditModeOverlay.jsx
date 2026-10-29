@@ -51,6 +51,12 @@ export default function EditModeOverlay({
   wordmark = '',
   locationName = '',
   footer = {},
+  // TRIALFIRST.1 — the studio's paid trial card as a disabled preview
+  // (`{ studio, returnPath, …, preview: true }`, built by the page from the
+  // saved row, sellable or not), or null when the studio sells no trial. It
+  // goes to the first hero, as on the public page, and its presence shrinks
+  // the lead form to the compact strip.
+  trialPreview = null,
 }) {
   const [blocks, setBlocks] = useState(initialBlocks)
   const [logoUrl, setLogoUrl] = useState(initialLogoUrl)
@@ -185,6 +191,7 @@ export default function EditModeOverlay({
         const isFirst = i === 0
         const isLast = i === blocks.length - 1
         const blockLabel = BLOCK_TYPES.find((t) => t.type === block.type)?.label || block.type
+        const trialHere = trialPreview && block === blocks.find((b) => b.type === 'hero') ? trialPreview : null
         return (
           <div key={block.id}>
             <div
@@ -205,7 +212,7 @@ export default function EditModeOverlay({
                   : 'hover:outline hover:outline-2 hover:outline-blue-300/60 hover:outline-offset-[-2px]'
               }`}
             >
-              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} wordmark={wordmark} locationName={locationName} />
+              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} wordmark={wordmark} locationName={locationName} trial={trialHere} trialShown={Boolean(trialPreview)} />
               {/* Type badge — top-left, hover-revealed. */}
               <div
                 className={`absolute top-2 left-2 z-30 px-2 py-1 rounded text-[10px] uppercase tracking-wider font-semibold pointer-events-none transition-opacity ${
