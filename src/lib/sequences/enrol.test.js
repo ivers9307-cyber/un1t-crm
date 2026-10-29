@@ -43,6 +43,7 @@ function mockDb({
   activeReadError = null,
   sendWindow = null,
   firstStep = null,
+  stepError = null,
 } = {}) {
   const inserts = []
   const upsertOpts = []
@@ -124,7 +125,7 @@ function mockDb({
         }
       }
       if (table === 'sequence_steps') {
-        const b = { select: vi.fn(() => b), eq: vi.fn(() => b), maybeSingle: vi.fn(async () => ({ data: firstStep, error: null })) }
+        const b = { select: vi.fn(() => b), eq: vi.fn(() => b), maybeSingle: vi.fn(async () => ({ data: firstStep, error: stepError })) }
         return b
       }
       if (table === 'email_sequences') {
@@ -712,6 +713,26 @@ describe('ENROLFIX.1 — the history read names only columns the table has', () 
       createServerClient.mockReturnValue(m.db)
       await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created' })
       expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T02:00:00.000Z')
+    })
+
+    it('a failed zone read still enrols, firing now, with a code-only warning', async () => {
+      at('2026-01-15T02:00:00Z')
+      const { getLocationZone } = await import('@/lib/location-time')
+      getLocationZone.mockRejectedValueOnce(Object.assign(new Error('secret db text'), { name: 'LocationZoneReadError' }))
+      const m = mockDb({ sendWindow: WINDOW, firstStep: { delay_days: 0, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created' })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T02:00:00.000Z')
+      expect(logWarn).toHaveBeenCalledWith('enrol', expect.any(String), { sequenceId: 's1', errName: 'LocationZoneReadError' })
+    })
+
+    it('a failed step read still enrols, firing now, with a code-only warning', async () => {
+      at('2026-01-15T02:00:00Z')
+      const m = mockDb({ sendWindow: WINDOW, stepError: { code: '57014', message: 'secret' } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created', startStepOrder: 1 })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T02:00:00.000Z')
+      expect(logWarn).toHaveBeenCalledWith('enrol', expect.any(String), { sequenceId: 's1', code: '57014' })
     })
 
     it('any other source type keeps firing now, window or not', async () => {

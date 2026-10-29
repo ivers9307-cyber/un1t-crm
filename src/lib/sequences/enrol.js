@@ -234,22 +234,29 @@ export async function enrolContacts({
   // for triggers, dunning and campaigns that this feature does not own.
   let firstFireAt = new Date()
   if (sourceType === 'un1t_account_created' && candidateIds.length > 0 && (startStepOrder > 0 || hasSendWindow(seqRow?.send_window))) {
-    const { data: firstStep, error: stepErr } = await db
-      .from('sequence_steps')
-      .select('delay_days, delay_hours, delay_minutes')
-      .eq('sequence_id', sequenceId)
-      .eq('step_order', startStepOrder + 1)
-      .maybeSingle()
-    if (stepErr) throw new Error(`enrol: first step read failed: ${stepErr.code ?? 'unknown'}`)
-    if (firstStep) {
-      const raw = new Date(firstFireAt.getTime() + nextStepDelayMs(firstStep))
-      if (hasSendWindow(seqRow?.send_window)) {
-        // A zone read failure throws (LocationZoneReadError): never guess Dublin.
-        const zone = await getLocationZone(db, seqRow.location_id)
-        firstFireAt = clampToSendWindow(raw, seqRow.send_window, zone)
-      } else {
-        firstFireAt = raw
+    // Best-effort: a failed read must not lose the enrolment, so it falls back
+    // to firing now (every other sequence's behaviour). Codes and names only.
+    try {
+      const { data: firstStep, error: stepErr } = await db
+        .from('sequence_steps')
+        .select('delay_days, delay_hours, delay_minutes')
+        .eq('sequence_id', sequenceId)
+        .eq('step_order', startStepOrder + 1)
+        .maybeSingle()
+      if (stepErr) {
+        logWarn('enrol', 'first step unreadable; the enrolment fires now', { sequenceId, code: stepErr.code ?? null })
+      } else if (firstStep) {
+        const raw = new Date(firstFireAt.getTime() + nextStepDelayMs(firstStep))
+        if (hasSendWindow(seqRow?.send_window)) {
+          const zone = await getLocationZone(db, seqRow.location_id)
+          firstFireAt = clampToSendWindow(raw, seqRow.send_window, zone)
+        } else {
+          firstFireAt = raw
+        }
       }
+    } catch (e) {
+      firstFireAt = new Date()
+      logWarn('enrol', 'first send time unreadable; the enrolment fires now', { sequenceId, errName: e?.name ?? null })
     }
   }
 

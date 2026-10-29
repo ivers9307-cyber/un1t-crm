@@ -72,7 +72,7 @@ describe('fulfilCorpPromoClaim', () => {
     const appLinks = { iosUrl: 'https://apps.apple.com/x', androidUrl: null }
     const d = deps({
       ensureUn1tAccount: vi.fn(async () => ({ kind: 'created', un1tUserId: 'u-1', executingContactId: 'c-1' })),
-      runSetPasswordStep: vi.fn(async (_db, _a, { sendUn1tAccountEmail }) => { await sendUn1tAccountEmail({ appLinks }); return { explanation: 'sent' } }),
+      runSetPasswordStep: vi.fn(async (_db, _a, { sendUn1tAccountEmail }) => { await sendUn1tAccountEmail({}, { appLinks }); return { explanation: 'sent' } }),
     })
     await run(d)
     expect(d.sendCorpPromoEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ appLinks }))

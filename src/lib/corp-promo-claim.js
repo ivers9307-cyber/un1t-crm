@@ -135,7 +135,7 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
 
   // ── 4. Tell them (best-effort: the credits are already on the account) ──
   // appLinks arrive from the set-password step (emailArgs), or from the caller on the direct send.
-  const sendEmail = (args) => d.sendCorpPromoEmail(db, { claim: grantedRow, copy, studioName: location.name || '', zone, appLinks: args?.appLinks ?? null })
+  const sendEmail = (_db, args) => d.sendCorpPromoEmail(db, { claim: grantedRow, copy, studioName: location.name || '', zone, appLinks: args?.appLinks ?? null })
   try {
     if (account.kind === 'created') {
       const { settings } = await readUn1tWriteSettings(db, locationId)
@@ -143,7 +143,7 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
         locationId, contact, un1tUserId, request: claim, settings, origin: UN1T_PROMO_ORIGIN, writer: null,
       }, { sendUn1tAccountEmail: sendEmail })
       // The step skipped our email (un1t.online's own welcome sets the login): send it ourselves.
-      if (res?.explanation !== 'sent') await sendEmail({ appLinks: settings?.appLinks })
+      if (res?.explanation !== 'sent') await sendEmail(db, { appLinks: settings?.appLinks })
     } else {
       await sendEmail()
     }
