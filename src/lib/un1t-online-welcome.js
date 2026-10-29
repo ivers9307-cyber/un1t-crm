@@ -114,7 +114,11 @@ export async function sweepUn1tWelcomes(db, locationId, { now = () => new Date()
           if (crmMade) out.crm_made++
         } else {
           out.failed++
-          logError(MODULE, 'enrol refused', { locationId, reason: res?.reason ?? null })
+          // The reason can carry DB error text: log a short code only.
+          logError(MODULE, 'enrol refused', { locationId, code: 'trigger_failed' })
+          // A young client is retried next tick; an old one is given up on so a
+          // permanently refused client cannot hold the queue.
+          if (age < NO_CONTACT_WAIT_MS) stampIt = false
         }
       }
 

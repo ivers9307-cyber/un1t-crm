@@ -127,11 +127,26 @@ describe('sweepUn1tWelcomes', () => {
     expect(trigger.mock.calls[0][1]).toMatchObject({ un1tUserId: 'u-stale', crmMade: false })
   })
 
-  it('a refused enrolment still stamps, counts failed, and the sweep stays ok', async () => {
-    const db = makeDb({ clients: [client('a')], contacts: { 'c-a': 'a@x.ie' } })
-    const { r } = await run(db, vi.fn(async () => ({ ok: false, reason: 'nope' })))
+  it('a refused enrolment on a young row is not stamped, so it is retried; failed counts it', async () => {
+    const db = makeDb({ clients: [client('a', { first_seen_at: ago(2 * H) })], contacts: { 'c-a': 'a@x.ie' } })
+    const { r } = await run(db, vi.fn(async () => ({ ok: false, reason: 'db text' })))
     expect(r).toMatchObject({ ok: true, failed: 1, enrolled: 0 })
+    expect(db.log.updates).toEqual([])
+  })
+
+  it('a refused enrolment on a 48 h old row is stamped and given up on', async () => {
+    const db = makeDb({ clients: [client('a', { first_seen_at: ago(49 * H) })], contacts: { 'c-a': 'a@x.ie' } })
+    const { r } = await run(db, vi.fn(async () => ({ ok: false, reason: 'db text' })))
+    expect(r).toMatchObject({ ok: true, failed: 1 })
     expect(db.log.updates).toEqual(['a'])
+  })
+
+  it('logs a short code, never the trigger reason', async () => {
+    const { logError } = await import('@/lib/log')
+    const db = makeDb({ clients: [client('a')], contacts: { 'c-a': 'a@x.ie' } })
+    await run(db, vi.fn(async () => ({ ok: false, reason: 'secret db text' })))
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('secret db text')
+    expect(logError).toHaveBeenCalledWith('un1t-welcome', 'enrol refused', { locationId: 'loc', code: 'trigger_failed' })
   })
 
   it('a stamp error is ok:false and the next row is still processed', async () => {
@@ -146,16 +161,36 @@ describe('sweepUn1tWelcomes', () => {
     expect(db.log.updates).toEqual(['b'])
   })
 
-  it('3 waiting rows plus 500 due rows: every due row is processed exactly once', async () => {
-    const waiting = [0, 1, 2].map((i) => client(`w${i}`, { contact_id: null, first_seen_at: ago(H + i) }))
-    // Waiting rows sort LAST (newest), so they stay in the unstamped tail.
-    const due = Array.from({ length: 500 }, (_, i) => client(`d${String(i).padStart(3, '0')}`, { first_seen_at: ago(40 * H - i) }))
-    const contacts = Object.fromEntries(due.map((d) => [d.contact_id, `${d.id}@x.ie`]))
-    const db = makeDb({ clients: [...waiting, ...due], contacts })
+  const dueRows = (n, o = {}) => Array.from({ length: n }, (_, i) => client(`d${String(i).padStart(3, '0')}`, { first_seen_at: ago(20 * H - i * 1000), ...o }))
+  const contactsFor = (rows) => Object.fromEntries(rows.filter((d) => d.contact_id).map((d) => [d.contact_id, `${d.id}@x.ie`]))
+  const waitingRows = (n) => Array.from({ length: n }, (_, i) => client(`w${String(i).padStart(3, '0')}`, { contact_id: null, first_seen_at: ago(47 * H - i * 1000) }))
+  const calledIds = (trigger) => trigger.mock.calls.map((c) => c[1].un1tUserId)
+
+  it('3 waiting rows AHEAD of 500 due rows: every due row is enrolled exactly once', async () => {
+    const due = dueRows(500)
+    const db = makeDb({ clients: [...waitingRows(3), ...due], contacts: contactsFor(due) })
     const { r, trigger } = await run(db)
-    const ids = trigger.mock.calls.map((c) => c[1].un1tUserId)
-    expect(new Set(ids).size).toBe(500)
+    const ids = calledIds(trigger)
     expect(ids).toHaveLength(500)
+    expect(new Set(ids).size).toBe(500)
     expect(r).toMatchObject({ enrolled: 500, waiting: 3 })
+  })
+
+  it('one failed stamp in page 0 of 501 rows: no row skipped, none processed twice', async () => {
+    const due = dueRows(501)
+    const db = makeDb({ clients: due, contacts: contactsFor(due), stampErrorFor: new Set(['d000']) })
+    const { r, trigger } = await run(db)
+    const ids = calledIds(trigger)
+    expect(ids).toHaveLength(501)
+    expect(new Set(ids).size).toBe(501)
+    expect(r.ok).toBe(false)
+  })
+
+  it('501 waiting rows ahead of 10 due rows: the due rows are still enrolled inside the page cap', async () => {
+    const due = dueRows(10)
+    const db = makeDb({ clients: [...waitingRows(501), ...due], contacts: contactsFor(due) })
+    const { r, trigger } = await run(db)
+    expect(calledIds(trigger)).toHaveLength(10)
+    expect(r).toMatchObject({ enrolled: 10, waiting: 501 })
   })
 })
