@@ -26,6 +26,8 @@
 import { createServerClient } from '@/lib/supabase'
 import { selectAllByKeys } from '@/lib/select-all'
 import { logWarn } from '@/lib/log'
+import { getLocationZone } from '@/lib/location-time'
+import { clampToSendWindow, hasSendWindow, nextStepDelayMs } from './scheduler.js'
 import { findBlockedByCooldown, planReenrolments } from './cooldown.js'
 
 // Operator-initiated sourceTypes that bypass the automations_exempt gate.
@@ -151,7 +153,7 @@ export async function enrolContacts({
   // and it does not belong in a PR about chunking and conflict handling.
   const { data: seqRow } = await db
     .from('email_sequences')
-    .select('re_enrolment_cooldown_days')
+    .select('re_enrolment_cooldown_days, send_window, location_id')
     .eq('id', sequenceId)
     .single()
   const cooldownDays = seqRow?.re_enrolment_cooldown_days
@@ -222,13 +224,42 @@ export async function enrolContacts({
     }
   }
 
+  // UN1TWELCOME.7 — a fresh enrolment fires "on the next tick" (now) for every
+  // other sequence in the estate, and they depend on that. The welcome
+  // sequence alone also honours its send window and the start step's delay,
+  // exactly as the scheduler does for the steps that follow: the delay of the
+  // step the cursor lands on, then clamped to the window in the sequence
+  // location's zone. Scoped to this source type on purpose: applying the
+  // window to every windowed sequence's first step would change live behaviour
+  // for triggers, dunning and campaigns that this feature does not own.
+  let firstFireAt = new Date()
+  if (sourceType === 'un1t_account_created' && candidateIds.length > 0 && (startStepOrder > 0 || hasSendWindow(seqRow?.send_window))) {
+    const { data: firstStep, error: stepErr } = await db
+      .from('sequence_steps')
+      .select('delay_days, delay_hours, delay_minutes')
+      .eq('sequence_id', sequenceId)
+      .eq('step_order', startStepOrder + 1)
+      .maybeSingle()
+    if (stepErr) throw new Error(`enrol: first step read failed: ${stepErr.code ?? 'unknown'}`)
+    if (firstStep) {
+      const raw = new Date(firstFireAt.getTime() + nextStepDelayMs(firstStep))
+      if (hasSendWindow(seqRow?.send_window)) {
+        // A zone read failure throws (LocationZoneReadError): never guess Dublin.
+        const zone = await getLocationZone(db, seqRow.location_id)
+        firstFireAt = clampToSendWindow(raw, seqRow.send_window, zone)
+      } else {
+        firstFireAt = raw
+      }
+    }
+  }
+
   const toInsert = candidateIds
     .map(contactId => ({
       sequence_id: sequenceId,
       contact_id: contactId,
       current_step_order: startStepOrder,
       status: 'active',
-      next_step_at: new Date().toISOString(), // fire on next cron tick
+      next_step_at: firstFireAt.toISOString(), // fire on next cron tick (welcome: window + start-step delay, above)
       source_type: sourceType,
       source_ref: sourceRef,
       ...(runMeta ? { metadata: runMeta } : {}),

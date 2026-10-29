@@ -998,15 +998,17 @@ describe('triggerSequencesForUn1tAccountCreated', () => {
     } }
     const res = await triggers.triggerSequencesForUn1tAccountCreated(db, args)
     expect(res.ok).toBe(false)
-    expect(res.reason).toMatch(/boom/)
-    expect(logError).toHaveBeenCalled()
+    expect(res.reason).toBe('sequences_unreadable')
+    expect(JSON.stringify(logError.mock.calls)).not.toMatch(/boom/)
+    expect(logError).toHaveBeenCalledWith('sequences', expect.any(String), { locationId: args.locationId, code: null })
   })
 
   it('returns ok:false when enrolment throws', async () => {
     enrolContacts.mockRejectedValue(new Error('insert failed'))
     const db = mockDb({ email_sequences: { list: [{ id: 'seq-1', audience_filter: null }] } })
     const res = await triggers.triggerSequencesForUn1tAccountCreated(db, args)
-    expect(res).toEqual({ ok: false, reason: 'insert failed' })
-    expect(logError).toHaveBeenCalled()
+    expect(res).toEqual({ ok: false, reason: 'trigger_error' })
+    expect(JSON.stringify(logError.mock.calls)).not.toMatch(/insert failed/)
+    expect(logError).toHaveBeenCalledWith('sequences', expect.any(String), { contactId: args.contactId, locationId: args.locationId, errName: 'Error' })
   })
 })

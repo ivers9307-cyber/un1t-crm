@@ -95,19 +95,21 @@ describe('the registry is well formed', () => {
     }
   })
 
-  it('withholds exactly the deprecated alias, the retired passcode tag, the payment-reminder tags, and the welcome-email tags', () => {
+  it('withholds exactly the deprecated alias, the retired passcode tag, the payment-reminder tags, and the studio logo tag', () => {
     // Pinned so widening the withheld set is a deliberate edit to this test,
     // not a quiet way to stop advertising something that works.
     expect(MERGE_TAGS.filter((t) => !t.offered).map((t) => t.tag).sort())
-      .toEqual(['{{app_download_links}}', '{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}', '{{studio_logo}}'])
+      .toEqual(['{{glofox_passcode}}', '{{lead_status}}', '{{pay_amount_phrase}}', '{{payment_cta}}', '{{studio_logo}}'])
   })
 
-  it('UN1TWELCOME.3 — the app and logo tags are registered withheld and render empty with no extras', () => {
-    for (const tag of ['{{app_download_links}}', '{{studio_logo}}']) {
-      const entry = MERGE_TAGS.find((t) => t.tag === tag)
-      expect(entry?.offered).toBe(false)
-      expect(entry?.why).toBe('only resolved by sequence email steps; empty in a broadcast')
-    }
+  it('UN1TWELCOME.3/.7 — the app tag is offered, the logo tag withheld, and both render empty with no extras', () => {
+    const app = MERGE_TAGS.find((t) => t.tag === '{{app_download_links}}')
+    expect(app?.offered).toBe(true)
+    expect(app?.description).toMatch(/App Store and Google Play/)
+    expect(app?.description).toMatch(/outside sequence emails/)
+    const logo = MERGE_TAGS.find((t) => t.tag === '{{studio_logo}}')
+    expect(logo?.offered).toBe(false)
+    expect(logo?.why).toBe('only resolved by sequence email steps; empty in a broadcast')
     expect(applyMergeTags('{{app_download_links}}', {}, {})).toBe('')
     expect(applyMergeTags('{{studio_logo}}', {}, {})).toBe('')
   })

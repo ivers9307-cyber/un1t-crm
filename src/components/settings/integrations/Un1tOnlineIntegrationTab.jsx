@@ -310,7 +310,7 @@ export default function Un1tOnlineIntegrationTab({ location, canEdit }) {
                   <label htmlFor={props.id} className="block text-un1t-subtle">{label}</label>
                   {kind === 'textarea'
                     ? <textarea key={`${key}:${stored}`} rows={3} {...props} />
-                    : <input key={`${key}:${stored}`} type="url" {...props} />}
+                    : <input key={`${key}:${stored}`} type={key === 'heading' ? 'text' : 'url'} {...props} />}
                 </div>
               )
             })}

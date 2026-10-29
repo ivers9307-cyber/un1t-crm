@@ -103,10 +103,9 @@ export const MERGE_TAGS = Object.freeze([
   {
     tag: '{{app_download_links}}',
     name: 'App download links',
-    description: 'The App Store and Google Play buttons from the studio app links, or empty',
-    offered: false,
+    description: "The studio's App Store and Google Play buttons. Empty outside sequence emails",
+    offered: true,
     // UN1TWELCOME.3 — rendered HTML, resolved from the location's settings.
-    why: 'only resolved by sequence email steps; empty in a broadcast',
   },
   {
     tag: '{{studio_logo}}',

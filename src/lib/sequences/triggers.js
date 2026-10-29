@@ -823,8 +823,8 @@ export async function triggerSequencesForUn1tAccountCreated(db, { contactId, loc
       .eq('trigger_type', 'un1t_account_created')
       .eq('status', 'active')
     if (error) {
-      logError('sequences', 'un1t_account_created sequences unreadable', { locationId, err: error.message })
-      return { ok: false, reason: `sequences_unreadable: ${error.message}` }
+      logError('sequences', 'un1t_account_created sequences unreadable', { locationId, code: error?.code ?? null })
+      return { ok: false, reason: 'sequences_unreadable' }
     }
 
     let enrolled = 0
@@ -842,8 +842,8 @@ export async function triggerSequencesForUn1tAccountCreated(db, { contactId, loc
     }
     return { ok: true, enrolled }
   } catch (e) {
-    logError('sequences', 'un1t_account_created trigger failed', { contactId, locationId, err: e })
-    return { ok: false, reason: e?.message || String(e) }
+    logError('sequences', 'un1t_account_created trigger failed', { contactId, locationId, errName: e?.name ?? null })
+    return { ok: false, reason: 'trigger_error' }
   }
 }
 

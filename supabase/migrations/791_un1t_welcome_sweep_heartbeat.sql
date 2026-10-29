@@ -19,7 +19,7 @@ VALUES (
   now(),
   900,
   1800,
-  'UN1TWELCOME.5 — the welcome-email enrolment arm (src/lib/un1t-online-welcome.js sweepUn1tWelcomes) of the */15 Vercel cron /api/cron/un1t-online-sync. No route or vercel.json entry of its own. Stamped ONLY when every studio''s sweep returned ok (no failed read or stamp, no throw, no timeout); zero eligible studios, or a studio with no active un1t_account_created sequence, is clean and stamps. A refused enrolment (counted as failed) still stamps: the client is marked checked and not retried. Independent of the parent: a failing sweep still stamps un1t-online-sync. STALE = no clean sweep for 45 minutes: read the un1t-welcome / un1t-online-sync logError lines. last_outcome carries { locations, checked, enrolled, crm_made, waiting, no_contact, no_email, failed }.'
+  'UN1TWELCOME.5 — the welcome-email enrolment arm (src/lib/un1t-online-welcome.js sweepUn1tWelcomes) of the */15 Vercel cron /api/cron/un1t-online-sync. No route or vercel.json entry of its own. Stamped ONLY when every studio''s sweep returned ok (no failed read or stamp, no throw, no timeout); zero eligible studios, or a studio with no active un1t_account_created sequence, is clean and stamps. A refused enrolment is counted as failed: under 48 h old the client is left unstamped and retried next tick, at 48 h or older it is stamped and not retried. Independent of the parent: a failing sweep still stamps un1t-online-sync. STALE = no clean sweep for 45 minutes: read the un1t-welcome / un1t-online-sync logError lines. last_outcome carries { locations, checked, enrolled, crm_made, waiting, no_contact, no_email, failed }.'
 )
 ON CONFLICT (name) DO UPDATE
   SET last_ok_at = now(),

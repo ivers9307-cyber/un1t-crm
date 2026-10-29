@@ -12,8 +12,9 @@
 //     is under 30 min old                        -> waiting (the mirror write
 //     inserts the row seconds BEFORE the account email is stamped)
 //   - otherwise enrol (crmMade = the account email already went out), then
-//     stamp whatever the trigger answered: a refusal is counted as failed but
-//     never retried, so one bad client cannot hold the queue.
+//     stamp whatever the trigger answered. A refusal is counted as failed; under
+//     48 h old it is left unstamped and retried next tick, at 48 h or older it
+//     is stamped, so one bad client cannot hold the queue.
 //
 // A studio with no active sequence is skipped before anything is read or
 // stamped, so switching a sequence on later still welcomes everyone who

@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/location-time', async (orig) => ({ ...(await orig()), getLocationZone: vi.fn(async () => 'Europe/Dublin') }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { logWarn } = await import('@/lib/log')
@@ -40,6 +41,8 @@ function mockDb({
   contactsError = null,
   conflictedContactIds = [],
   activeReadError = null,
+  sendWindow = null,
+  firstStep = null,
 } = {}) {
   const inserts = []
   const upsertOpts = []
@@ -67,7 +70,7 @@ function mockDb({
       // `this` keeps the whole chain awaitable exactly as before.
       order: vi.fn().mockReturnThis(),
       range: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({ data: { re_enrolment_cooldown_days: cooldownDays }, error: null }),
+      single: vi.fn().mockResolvedValue({ data: { re_enrolment_cooldown_days: cooldownDays, send_window: sendWindow, location_id: 'loc-1' }, error: null }),
       // The .in(...).in(...) chain on history reads + active reads
       // ends with a `then` (await on the chain). vitest's
       // `.mockResolvedValue` doesn't apply to chains, so we attach a
@@ -119,6 +122,10 @@ function mockDb({
             return b
           }),
         }
+      }
+      if (table === 'sequence_steps') {
+        const b = { select: vi.fn(() => b), eq: vi.fn(() => b), maybeSingle: vi.fn(async () => ({ data: firstStep, error: null })) }
+        return b
       }
       if (table === 'email_sequences') {
         return { select: vi.fn(() => chain([{ re_enrolment_cooldown_days: cooldownDays }])) }
@@ -658,5 +665,61 @@ describe('ENROLFIX.1 — the history read names only columns the table has', () 
     expect(m.historySelects).toHaveLength(1)
     expect(m.historySelects[0]).toMatch(/\benrolled_at\b/)
     expect(m.historySelects[0]).not.toMatch(/\bcreated_at\b/)
+  })
+
+  // UN1TWELCOME.7 — the welcome sequence honours its window and the start step's delay.
+  describe('un1t_account_created first send', () => {
+    const WINDOW = { start_hour: 8, end_hour: 21, skip_days: [] }
+    afterEach(() => vi.useRealTimers())
+    // Only Date is faked: nothing here waits on a timer.
+    const at = (iso) => vi.useFakeTimers({ toFake: ['Date'], now: new Date(iso) })
+
+    it('a 02:00 local signup waits for the 08:00 window opening', async () => {
+      at('2026-01-15T02:00:00Z')
+      const m = mockDb({ sendWindow: WINDOW, firstStep: { delay_days: 0, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created' })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T08:00:00.000Z')
+    })
+
+    it('inside the window it fires now', async () => {
+      at('2026-01-15T10:00:00Z')
+      const m = mockDb({ sendWindow: WINDOW, firstStep: { delay_days: 0, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created' })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T10:00:00.000Z')
+    })
+
+    it('startStepOrder 1 takes step 2 delay (3 days), then clamps to the window', async () => {
+      at('2026-01-15T02:00:00Z')
+      const m = mockDb({ sendWindow: WINDOW, firstStep: { delay_days: 3, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created', startStepOrder: 1 })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-18T08:00:00.000Z')
+    })
+
+    it('startStepOrder 1 with no window: just the delay', async () => {
+      at('2026-01-15T02:00:00Z')
+      const m = mockDb({ firstStep: { delay_days: 3, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created', startStepOrder: 1 })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-18T02:00:00.000Z')
+    })
+
+    it('startStepOrder 0 and no window: now, unchanged', async () => {
+      at('2026-01-15T02:00:00Z')
+      const m = mockDb({ firstStep: { delay_days: 3, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'un1t_account_created' })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T02:00:00.000Z')
+    })
+
+    it('any other source type keeps firing now, window or not', async () => {
+      at('2026-01-15T02:00:00Z')
+      const m = mockDb({ sendWindow: WINDOW, firstStep: { delay_days: 0, delay_hours: 0, delay_minutes: 0 } })
+      createServerClient.mockReturnValue(m.db)
+      await enrolContacts({ sequenceId: 's1', contactIds: ['a'], sourceType: 'trigger:status_change' })
+      expect(m.inserts[0][0].next_step_at).toBe('2026-01-15T02:00:00.000Z')
+    })
   })
 })

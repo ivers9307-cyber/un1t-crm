@@ -951,7 +951,7 @@ export const SEQUENCE_TEMPLATES = [
     id: 'un1t_account_welcome',
     category: 'Onboarding',
     name: 'Welcome: new un1t.online account',
-    description: 'Sends one welcome email to every new un1t.online account, pointing them at the app and its first booking. Accounts made by the CRM whose account email has already gone out skip step 1. It sends as an account email, so it has no unsubscribe link. If "New Lead - First Class Booking Nudge" is switched on at the same studio, raise its first wait to about a day so the welcome lands first.',
+    description: 'Sends one welcome email to every new un1t.online account, pointing them at the app and its first booking. Accounts made by the CRM whose account email has already gone out skip step 1. It sends as an account email, so it has no unsubscribe link, and so does any step you add to this sequence: every step goes out as an account email, so add only account-type messages here and put promotions in a marketing sequence. If "New Lead - First Class Booking Nudge" is switched on at the same studio, raise its first wait to about a day so the welcome lands first.',
     trigger_type: 'un1t_account_created',
     trigger_config: {},
     goal_config: null,
