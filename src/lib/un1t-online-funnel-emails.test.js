@@ -13,6 +13,7 @@ vi.mock('@/lib/location-branding', () => ({ getLocationBranding: vi.fn(async () 
 vi.mock('./un1t-online-trial-used', async (o) => ({ ...(await o()), trialUsedOptionsText: vi.fn(async () => null) }))
 
 import { sendUn1tAccountEmail, sendUn1tTrialUsedEmail } from './un1t-online-funnel-emails'
+import { DEFAULT_APP_SECTION_COPY } from './un1t-online-app-links'
 import { DEFAULT_FUNNEL_EMAIL_COPY } from './un1t-online-funnel-copy'
 import { trialUsedHandoff } from './un1t-online-trial-used'
 import { trialUsedOptionsText } from './un1t-online-trial-used'
@@ -32,6 +33,31 @@ describe('defaults', () => {
       expect(v, k).not.toMatch(/[—–]/)
       expect(v, k).not.toMatch(CAPACITY)
     }
+  })
+})
+
+describe('UN1TWELCOME.4: the app section', () => {
+  const appLinks = { iosUrl: 'https://apps.apple.com/ie/app/x/id1', androidUrl: null, heading: null, body: null }
+  it('account email with a link carries the default heading and the App Store button', async () => {
+    await sendUn1tAccountEmail({}, { ...base, blocks: [], appLinks })
+    expect(sent().htmlBody).toContain('Download on the App Store')
+    expect(sent().htmlBody).toContain('apps.apple.com')
+    expect(sent().htmlBody).toContain(DEFAULT_APP_SECTION_COPY.heading)
+  })
+  it('trial purchase email carries it too', async () => {
+    await sendUn1tAccountEmail({}, { ...base, kind: 'trial_purchase', copy: { subject: 'S', body: 'B' }, appLinks })
+    expect(sent().htmlBody).toContain('Download on the App Store')
+  })
+  it('no links, no section', async () => {
+    await sendUn1tAccountEmail({}, { ...base, blocks: [], appLinks: { iosUrl: null, androidUrl: null } })
+    expect(sent().htmlBody).not.toContain(DEFAULT_APP_SECTION_COPY.heading)
+    await sendUn1tAccountEmail({}, { ...base, blocks: [] })
+    expect(sent().htmlBody).not.toContain(DEFAULT_APP_SECTION_COPY.heading)
+  })
+  it('trial_used never carries it', async () => {
+    await sendUn1tTrialUsedEmail({}, { ...base, blocks: [], appLinks })
+    expect(sent().htmlBody).not.toContain(DEFAULT_APP_SECTION_COPY.heading)
+    expect(sent().htmlBody).not.toContain('Download on the App Store')
   })
 })
 

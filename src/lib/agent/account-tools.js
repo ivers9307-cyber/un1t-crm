@@ -553,7 +553,7 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
     // Lazy imports, like glofox-catalog above: dunning-payment pulls the
     // enrolment-status helper (a service client) and glofox pulls the
     // connection registry. Keeps this module test-loadable.
-    const [{ paymentFromEnrollment }, { TRANSACTIONAL_SOURCE_TYPES }, glofox] = await Promise.all([
+    const [{ paymentFromEnrollment }, { DUNNING_SOURCE_TYPES }, glofox] = await Promise.all([
       import('@/lib/dunning-payment'),
       import('@/lib/sequences/steps'),
       import('@/lib/glofox'),
@@ -570,7 +570,7 @@ async function getMyPaymentReminder(db, { verifiedId, locationId }) {
     const { data: row, error } = await db.from('sequence_enrollments')
       .select(REMINDER_ENROLMENT_COLUMNS)
       .in('contact_id', ids)
-      .in('source_type', [...TRANSACTIONAL_SOURCE_TYPES])
+      .in('source_type', [...DUNNING_SOURCE_TYPES])
       .order('enrolled_at', { ascending: false })
       .limit(1)
       .maybeSingle()

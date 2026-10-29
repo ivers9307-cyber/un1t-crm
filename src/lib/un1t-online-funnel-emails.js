@@ -25,6 +25,7 @@ import { un1tFunnelEmailCopyFromBlocks, DEFAULT_FUNNEL_EMAIL_COPY, DEFAULT_TRIAL
 import { trialUsedOptionsText } from './un1t-online-trial-used.js'
 import { getLocationBranding } from '@/lib/location-branding'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
+import { renderAppSection } from './un1t-online-app-links.js'
 
 // An address sits mid-sentence in the default body: it ends with a full stop.
 const sentence = (v) => {
@@ -33,7 +34,7 @@ const sentence = (v) => {
   return /[.!?]$/.test(t) ? t : `${t}.`
 }
 
-async function send(db, { kind, locationId, contact, className, startsAt, blocks, studioName, address = null, zone = null, options = null, copy: callerCopy = null, productName = null }) {
+async function send(db, { kind, locationId, contact, className, startsAt, blocks, studioName, address = null, zone = null, options = null, copy: callerCopy = null, productName = null, appLinks = null }) {
   const email = typeof contact?.email === 'string' ? contact.email.trim() : ''
   if (!email) return { sent: false, channel: 'email', reason: 'no_email' }
   const { contact: consent, unreadable } = await loadTransactionalConsent(db, contact.id)
@@ -82,12 +83,16 @@ async function send(db, { kind, locationId, contact, className, startsAt, blocks
   const bodyKey = `${kind}_email_body`
   const subject = renderCopy(copy[subjectKey], vars) || renderCopy(defaults[subjectKey], vars)
   const body = (renderCopy(copy[bodyKey], vars) || renderCopy(defaults[bodyKey], vars)).replace(/[ \t]{2,}/g, ' ')
+  // UN1TWELCOME.4: the app download section follows the account emails only
+  // (never trial_used). confirmEmailHtml's wrapper is a single div, so the
+  // section sits right after it rather than changing that shared function.
+  const appSection = kind === 'trial_used' ? '' : renderAppSection(appLinks)
   try {
     const replyTo = await getLocationInboxReplyTo(locationId)
     await sendTransactionalEmail({
       to: email,
       subject,
-      htmlBody: confirmEmailHtml(body),
+      htmlBody: appSection ? `${confirmEmailHtml(body)}\n<div style="font-family:Arial,Helvetica,sans-serif;margin-top:16px">${appSection}</div>` : confirmEmailHtml(body),
       contactId: contact.id,
       locationId,
       tag: kind === 'account' ? 'class_booking_confirmation' : trialPurchase ? 'trial_purchase_account' : 'class_trial_used',

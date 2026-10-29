@@ -233,6 +233,6 @@ describe('DUNNING.3 — transactional enrolments skip the marketing gate, keep t
     expect(isTransactionalEnrolment({ source_type: 'invoice_past_due' })).toBe(true)
     expect(isTransactionalEnrolment({ source_type: 'manual' })).toBe(false)
     expect(isTransactionalEnrolment(null)).toBe(false)
-    expect(TRANSACTIONAL_SOURCE_TYPES).toEqual(['invoice_past_due', 'churn_radar'])
+    expect(TRANSACTIONAL_SOURCE_TYPES).toEqual(['invoice_past_due', 'churn_radar', 'un1t_account_created'])
   })
 })

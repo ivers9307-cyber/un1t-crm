@@ -25,6 +25,7 @@ vi.mock('@/lib/postmark', () => ({
   applyMergeTags: vi.fn((s) => s),
   buildUnsubscribeUrl: vi.fn((contact, baseUrl) => `${baseUrl}/unsubscribe/${contact.id}`),
   appendUnsubscribeFooter: vi.fn((html) => html),
+  getLocationInboxReplyTo: vi.fn(async () => 'inbox@loc.test'),
 }))
 vi.mock('@/lib/app-url', () => ({ getAppUrl: vi.fn(() => 'https://crm.test') }))
 // W1.L3a — the sequence's location decides the host its email links land on.
@@ -1163,13 +1164,16 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true }],
   }
 
-  function emailDb({ failActivityInsert = false } = {}) {
+  function emailDb({ failActivityInsert = false, settings } = {}) {
     const activityInserts = []
     const rpcCalls = []
+    const tablesRead = []
     return {
       activityInserts,
       rpcCalls,
+      tablesRead,
       from(table) {
+        tablesRead.push(table)
         if (table === 'activities') {
           return {
             insert: (row) => {
@@ -1181,7 +1185,7 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
         }
         // COMMSFIX.E.4 — sendEmailStep resolves the location name for the
         // {{location_name}} merge tag (parity with the SMS step).
-        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan' } }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan', ...(settings ? { settings } : {}) } }) }) }) }
         throw new Error(`unexpected table ${table}`)
       },
       rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
@@ -1499,6 +1503,122 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     const sent = pm.sendMarketingEmail.mock.calls[0][0]
     expect(sent.subject).not.toContain('<a')
     expect(sent.subject).toBe('Payment failed of €209 — ')
+  })
+
+  // ── UN1TWELCOME.3 — account-stream lane + app/logo merge tags ────
+  describe('UN1TWELCOME.3 — account stream', () => {
+    const welcomeEnrol = { id: 'e-w', source_type: 'un1t_account_created' }
+    const noTokenNoConsent = {
+      ...consentedContact,
+      email_marketing: false,
+      contact_location_preferences: [{ location_id: 'loc-1', email_marketing: false, sms_marketing: false, whatsapp_marketing: false }],
+    }
+
+    beforeEach(async () => {
+      const { buildUnsubscribeUrl } = await import('@/lib/postmark')
+      buildUnsubscribeUrl.mockClear()
+      pm.sendTransactionalEmail.mockResolvedValue({ messageId: 'cccccccc-0000-0000-0000-000000000004' })
+    })
+
+    it('sends on the transactional stream: no footer, no marketing stamp, no unsubscribe token, consent false still sends', async () => {
+      const { buildUnsubscribeUrl, appendUnsubscribeFooter } = await import('@/lib/postmark')
+      buildUnsubscribeUrl.mockReturnValueOnce(null)
+      appendUnsubscribeFooter.mockClear()
+      const db = emailDb()
+      const out = await steps.sendEmailStep(db, { enrollment: welcomeEnrol, step, sequence, contact: noTokenNoConsent })
+      expect(out).toBe('cccccccc-0000-0000-0000-000000000004')
+      expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+      expect(pm.sendTransactionalEmail).toHaveBeenCalledTimes(1)
+      expect(appendUnsubscribeFooter).not.toHaveBeenCalled()
+      // stampMarketingTouch writes contacts; the account stream never touches it.
+      expect(db.tablesRead).not.toContain('contacts')
+      expect(db.activityInserts).toHaveLength(0)
+      const arg = pm.sendTransactionalEmail.mock.calls[0][0]
+      expect(arg).toMatchObject({
+        to: 'a@b.ie', contactId: 'c9', locationId: 'loc-1', tag: 'seq-seq-9',
+        replyTo: 'inbox@loc.test', sourceType: 'sequence', sequenceId: 'seq-9', sequenceStepId: 'st-9',
+      })
+    })
+
+    it('gives the unsubscribe and preference tags empty extras', async () => {
+      const db = emailDb()
+      await steps.sendEmailStep(db, { enrollment: welcomeEnrol, step, sequence, contact: consentedContact })
+      expect(pm.applyMergeTags).toHaveBeenCalledWith(
+        step.html_content, consentedContact,
+        expect.objectContaining({ unsubscribe_url: '', preference_url: '' }),
+      )
+    })
+
+    it('a sequence reply_to wins over the location inbox', async () => {
+      const db = emailDb()
+      await steps.sendEmailStep(db, { enrollment: welcomeEnrol, step, sequence: { ...sequence, reply_to: 'hello@un1t.test' }, contact: consentedContact })
+      expect(pm.sendTransactionalEmail.mock.calls[0][0].replyTo).toBe('hello@un1t.test')
+    })
+
+    it('the same sequence enrolled manually stays marketing: marketing stream, consent gate, footer', async () => {
+      const { appendUnsubscribeFooter } = await import('@/lib/postmark')
+      appendUnsubscribeFooter.mockClear()
+      const db = emailDb()
+      await steps.sendEmailStep(db, { enrollment: { id: 'e-m', source_type: 'manual' }, step, sequence, contact: consentedContact })
+      expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+      expect(pm.sendTransactionalEmail).not.toHaveBeenCalled()
+      expect(appendUnsubscribeFooter).toHaveBeenCalledTimes(1)
+      const out = await steps.sendEmailStep(emailDb(), { enrollment: { id: 'e-m', source_type: 'manual' }, step, sequence, contact: noTokenNoConsent })
+      expect(out).toBeNull()
+    })
+
+    it('still skips a contact who is not on the location list', async () => {
+      const off = { ...consentedContact, contact_location_preferences: [] }
+      const out = await steps.sendEmailStep(emailDb(), { enrollment: welcomeEnrol, step, sequence, contact: off })
+      expect(out).toBeNull()
+      expect(pm.sendTransactionalEmail).not.toHaveBeenCalled()
+    })
+
+    it('isAccountStreamEnrolment only matches the account-created source', () => {
+      expect(steps.ACCOUNT_STREAM_SOURCE_TYPES).toEqual(['un1t_account_created'])
+      expect(steps.isAccountStreamEnrolment({ source_type: 'un1t_account_created' })).toBe(true)
+      expect(steps.isAccountStreamEnrolment({ source_type: 'invoice_past_due' })).toBe(false)
+      expect(steps.isAccountStreamEnrolment(null)).toBe(false)
+      expect(steps.TRANSACTIONAL_SOURCE_TYPES).toContain('un1t_account_created')
+    })
+  })
+
+  describe('UN1TWELCOME.3 — {{app_download_links}} and {{studio_logo}}', () => {
+    beforeEach(async () => {
+      const { applyMergeTags: real } = await vi.importActual('@/lib/postmark')
+      pm.applyMergeTags.mockImplementation(real)
+      logWarn.mockClear()
+    })
+
+    it('renders the store buttons from the location settings', async () => {
+      const settings = { un1t_online: { app_links: { ios_url: 'https://apps.apple.com/ie/app/un1t/id1' } } }
+      const links = { ...step, html_content: '<p>{{app_download_links}}</p>' }
+      await steps.sendEmailStep(emailDb({ settings }), { enrollment: { id: 'e1' }, step: links, sequence, contact: consentedContact })
+      const html = pm.sendMarketingEmail.mock.calls[0][0].htmlBody
+      expect(html).toContain('Download on the App Store')
+      expect(html).not.toContain('{{app_download_links}}')
+      expect(JSON.stringify(pm.sendMarketingEmail.mock.calls[0][0])).not.toContain('un1t_online')
+    })
+
+    it('with no links the tag renders empty and a warning is logged', async () => {
+      const links = { ...step, html_content: '<p>A{{app_download_links}}B</p>' }
+      await steps.sendEmailStep(emailDb(), { enrollment: { id: 'e1' }, step: links, sequence, contact: consentedContact })
+      expect(pm.sendMarketingEmail.mock.calls[0][0].htmlBody).toBe('<p>AB</p>')
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'app_download_links empty: no app links set', { locationId: 'loc-1' })
+    })
+
+    it('no warning when the body does not use the tag', async () => {
+      await steps.sendEmailStep(emailDb(), { enrollment: { id: 'e1' }, step, sequence, contact: consentedContact })
+      expect(logWarn).not.toHaveBeenCalledWith('sequences', expect.stringContaining('app_download_links'), expect.anything())
+    })
+
+    it('{{studio_logo}} renders the branding logo as an image', async () => {
+      const { getLocationBranding } = await import('@/lib/location-branding')
+      getLocationBranding.mockResolvedValueOnce({ companyName: 'UN1T Hatch', logoUrl: 'https://cdn.test/logo.png' })
+      const logo = { ...step, html_content: '<div>{{studio_logo}}</div>' }
+      await steps.sendEmailStep(emailDb(), { enrollment: { id: 'e1' }, step: logo, sequence, contact: consentedContact })
+      expect(pm.sendMarketingEmail.mock.calls[0][0].htmlBody).toContain('<img')
+    })
   })
 
   // PAYLINK.7c — the two tests above swap in the REAL applyMergeTags for

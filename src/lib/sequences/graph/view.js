@@ -92,6 +92,7 @@ export function describeNode(node) {
 const TRIGGER_LABELS = {
   manual: () => 'Manually enrolled',
   contact_created: () => 'When a new lead is created',
+  un1t_account_created: () => 'When a new un1t.online account is created',
   booking_created: () => 'When a booking is created',
   pipeline_stage_change: (c) => c?.to_stage ? `When pipeline stage becomes ${c.to_stage}` : 'When pipeline stage changes',
   tag_added: (c) => c?.tag ? `When the tag “${c.tag}” is added` : 'When a tag is added',

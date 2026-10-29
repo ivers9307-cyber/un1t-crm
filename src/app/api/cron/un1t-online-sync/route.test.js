@@ -23,6 +23,7 @@ vi.mock('@/lib/membership/locations-for-source', async (importOriginal) => ({
   locationsWithSource: vi.fn(async () => h.discovery),
 }))
 vi.mock('@/lib/un1t-online-sync', () => ({ runUn1tSync: vi.fn() }))
+vi.mock('@/lib/un1t-online-welcome', () => ({ sweepUn1tWelcomes: vi.fn() }))
 vi.mock('@/lib/un1t-pipeline-cadence', () => ({ maybeReclassifyAfterSync: vi.fn(async () => ({ ran: false, reason: 'recent_run' })) }))
 
 import { GET, BUDGET_MS } from './route.js'
@@ -31,6 +32,7 @@ import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
+import { sweepUn1tWelcomes } from '@/lib/un1t-online-welcome'
 import { logError, logWarn } from '@/lib/log'
 
 const req = (token = 'test-secret') => ({
@@ -45,6 +47,7 @@ beforeEach(() => {
   stampHeartbeat.mockReset().mockResolvedValue(undefined)
   stampTenantHeartbeat.mockReset().mockResolvedValue(undefined)
   maybeReclassifyAfterSync.mockReset().mockResolvedValue({ ran: false, reason: 'recent_run' })
+  sweepUn1tWelcomes.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, crm_made: 0, waiting: 0, no_contact: 0, no_email: 0, failed: 0 })
   h.discovery = found([])
 })
 
@@ -98,7 +101,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
       ['un1t-online-sync', 'hatch'],
       ['un1t-online-sync', 'other'],
     ])
-    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')).toHaveLength(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', {
       locations_processed: 2, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 0,
     })
@@ -227,7 +230,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
     expect(runUn1tSync.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
     expect(stampTenantHeartbeat.mock.calls).toEqual([['un1t-online-sync', 'hatch'], ['un1t-online-sync', 'other']])
     const expected = { locations_processed: 2, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 0 }
-    expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+    expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')).toHaveLength(1)
     expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', expected)
     expect(body).toEqual({ success: true, ...expected })
     // Logged by name only, never the message.
@@ -239,7 +242,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
     h.discovery = found([loc('hatch')])
     runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
     const order = []
-    stampHeartbeat.mockImplementation(async () => { order.push('stamp') })
+    stampHeartbeat.mockImplementation(async (name) => { if (name === 'un1t-online-sync') order.push('stamp') })
     maybeReclassifyAfterSync.mockImplementation(async () => { order.push('re'); return { ran: false, reason: 'recent_run' } })
     await GET(req())
     expect(order).toEqual(['stamp', 're'])
@@ -255,7 +258,7 @@ describe('GET /api/cron/un1t-online-sync', () => {
       await vi.advanceTimersByTimeAsync(60_000)
       const res = await pending
       const expected = { locations_processed: 1, failed_locations: 0, failed_by_reason: {}, skipped: 0, skipped_in_progress: 0, deferred_budget: 0 }
-      expect(stampHeartbeat).toHaveBeenCalledTimes(1)
+      expect(stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')).toHaveLength(1)
       expect(stampHeartbeat).toHaveBeenCalledWith('un1t-online-sync', expected)
       expect(res.status).toBe(200)
       expect(await res.json()).toEqual({ success: true, ...expected })
@@ -263,5 +266,54 @@ describe('GET /api/cron/un1t-online-sync', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  describe('welcome sweep arm (UN1TWELCOME.5)', () => {
+    const syncStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')
+    const welcomeStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-welcome-sweep')
+
+    it('stamps its own row with summed counts when every sweep is ok', async () => {
+      h.discovery = found([loc('hatch'), loc('other')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      sweepUn1tWelcomes.mockResolvedValue({ ok: true, checked: 2, enrolled: 1, crm_made: 0, waiting: 1, no_contact: 0, no_email: 0, failed: 0 })
+      await GET(req())
+      expect(sweepUn1tWelcomes.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
+      expect(syncStamps()).toHaveLength(1)
+      expect(welcomeStamps()).toEqual([['un1t-welcome-sweep', expect.objectContaining({ locations: 2, checked: 4, enrolled: 2, waiting: 2 })]])
+    })
+
+    it('zero eligible locations still stamps the welcome row', async () => {
+      await GET(req())
+      expect(welcomeStamps()).toHaveLength(1)
+    })
+
+    it('a sweep returning ok:false skips the welcome stamp but not the sync stamp', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      sweepUn1tWelcomes.mockResolvedValue({ ok: false, checked: 0 })
+      const res = await GET(req())
+      expect(res.status).toBe(200)
+      expect(syncStamps()).toHaveLength(1)
+      expect(welcomeStamps()).toHaveLength(0)
+    })
+
+    it('a sweep that throws changes neither the response nor the sync stamp, and skips the welcome stamp', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      sweepUn1tWelcomes.mockRejectedValue(new Error('boom'))
+      const res = await GET(req())
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({ success: true, locations_processed: 1 })
+      expect(syncStamps()).toHaveLength(1)
+      expect(welcomeStamps()).toHaveLength(0)
+      expect(logError).toHaveBeenCalled()
+    })
+
+    it('does not sweep a location whose sync failed', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: false, reason: 'auth', counts: {}, runId: 'r' })
+      await GET(req())
+      expect(sweepUn1tWelcomes).not.toHaveBeenCalled()
+    })
   })
 })
