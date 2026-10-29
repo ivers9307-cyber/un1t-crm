@@ -472,7 +472,7 @@ export function PaidTrialBlock({ block }) {
       <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 px-6 py-8 text-center">
         <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Paid trial'}</div>
         <p className="text-white/60 text-sm">
-          Sold at /trial for {price}. {ready ? 'Glofox product set.' : 'No Glofox product set yet: the page sells nothing until it is.'} Edit the copy, the price and the product in the panel.
+          Shown in this page&apos;s hero and at /trial for {price}. {ready ? 'Glofox product set.' : 'No Glofox product set yet: the page sells nothing until it is.'} Edit the copy, the price and the product in the panel.
         </p>
       </div>
     </section>
