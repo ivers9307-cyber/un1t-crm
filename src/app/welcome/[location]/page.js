@@ -263,7 +263,7 @@ export default async function StudioLandingPage(props) {
           trialShown={trialShown}
         />
       ))}
-      <SiteFooter ctaHref={cta?.href || '#trial'} ctaLabel={cta?.label || 'Book a free consult'} {...footer} />
+      <SiteFooter ctaHref={cta?.href || (trialShown ? '#trial' : '#book')} ctaLabel={cta?.label || 'Book a free consult'} {...footer} />
     </div>
   )
 }

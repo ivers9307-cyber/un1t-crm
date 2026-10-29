@@ -36,7 +36,7 @@ describe('HeroBlock trial-first (TRIALFIRST.1)', () => {
   it('keeps every copy field, with the subhead as a grey block span', () => {
     const html = renderToStaticMarkup(<HeroBlock block={hero} trial={trial} />)
     expect(html).toContain('Stillorgan, Dublin')
-    expect(html).toContain('<span class="block text-white/50">Every class.</span>')
+    expect(html).toContain('<span class="block text-white/50 text-[clamp(1.35rem,3vw,2.4rem)] leading-[1.1] mt-2">Every class.</span>')
     expect(html).toContain('Pay once.')
     expect(html).toContain('md:grid-cols-[1.05fr_1fr]')
     expect(html).toContain('lp-kenburns')

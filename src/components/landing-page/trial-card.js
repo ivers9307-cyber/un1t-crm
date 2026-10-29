@@ -9,6 +9,6 @@ export const TRIAL_CARD = 'w-full max-w-lg rounded border border-black/10 bg-whi
 export const TRIAL_INPUT = 'w-full bg-white border-0 border-b border-black/25 rounded-none px-0 py-3 text-base text-black placeholder-black/40 focus:outline-none focus:border-black'
 export const TRIAL_BTN = 'lp-btn lp-btn-invert w-full disabled:opacity-50'
 export const TRIAL_MUTED = 'text-black/60'
-export const TRIAL_FINE = 'text-center text-[11px] text-black/50'
+export const TRIAL_FINE = 'text-center text-[11px] text-black/60'
 export const TRIAL_ERROR = 'text-sm text-red-700'
 export const TRIAL_LINK = 'underline hover:text-black'

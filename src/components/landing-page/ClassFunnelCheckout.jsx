@@ -3,8 +3,8 @@
 // ClassFunnelCheckout — inline embedded Revolut checkout for a PAID class-funnel
 // booking. The class_booking_requests row + Revolut order were created by
 // /api/public/class-booking (Phase 1); this only mounts the SDK against the
-// existing order token and watches for completion. Styled to sit inside the
-// funnel's frosted card.
+// existing order token and watches for completion. It takes a `tone`: dark
+// inside the class funnel's frosted card, light inside the white trial card.
 import { useEffect, useRef, useState } from 'react'
 import { loadStripe } from '@stripe/stripe-js'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'

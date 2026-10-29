@@ -46,7 +46,7 @@ function Eyebrow({ children, dark = true }) {
   return (
     <div className="lp-reveal flex items-center gap-4 mb-10 md:mb-14">
       <span className={`h-px w-10 ${dark ? 'bg-white/30' : 'bg-black/25'}`} aria-hidden="true" />
-      <span className={`text-[11px] uppercase tracking-[0.35em] font-semibold ${dark ? 'text-white/55' : 'text-black/45'}`}>
+      <span className={`text-[11px] uppercase tracking-[0.35em] font-semibold ${dark ? 'text-white/55' : 'text-black/60'}`}>
         {children}
       </span>
     </div>
@@ -246,7 +246,7 @@ function HeroTrialFirst({ block, onEdit, locationId, wordmark, trial }) {
               <h1 className="font-display font-extrabold text-[clamp(2.4rem,6vw,5rem)] leading-[0.98] tracking-tight">
                 <E value={block.headline} onEdit={onEdit} path={['headline']} />
                 {(block.subhead || onEdit) && (
-                  <span className="block text-white/50">
+                  <span className="block text-white/50 text-[clamp(1.35rem,3vw,2.4rem)] leading-[1.1] mt-2">
                     <E value={block.subhead} onEdit={onEdit} path={['subhead']} />
                   </span>
                 )}
@@ -937,7 +937,7 @@ function ReviewCard({ review }) {
           <img src={review.author_photo_url} alt="" className="w-7 h-7 rounded-full object-cover" loading="lazy" />
         ) : null}
         <span className="text-black font-medium">{review.author_name || 'Google user'}</span>
-        <span className="ml-auto inline-flex items-center gap-1 text-black/45">
+        <span className="ml-auto inline-flex items-center gap-1 text-black/60">
           <span className="text-[#4285F4] font-bold">G</span> Google
         </span>
       </figcaption>

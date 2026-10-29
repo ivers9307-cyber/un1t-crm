@@ -76,6 +76,8 @@ describe('/welcome/[location] trial-first (TRIALFIRST.1)', () => {
     const out = await html()
     expect(out).not.toContain('id="trial"')
     expect(out).toContain('lp-marquee-track')
+    expect(out).toContain('href="#book"')
+    expect(out).not.toContain('href="#trial"')
   })
 
   it('an unreadable trial config degrades to the classic hero and logs ids only', async () => {

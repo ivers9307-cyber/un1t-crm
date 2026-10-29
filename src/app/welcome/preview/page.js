@@ -34,7 +34,7 @@ const PILLARS_STILLORGAN = [
 
 // TRIALFIRST.1 — fixtures for the trial-first look (`?trial=1`).
 const TRIAL_CTA_LABEL = 'Start my 14 Day Reset'
-const PAID_TRIAL_BLOCK = { id: 'fx-paid-trial', type: 'paid_trial', cta_label: TRIAL_CTA_LABEL, cta_label_short: '€39 →' }
+const PAID_TRIAL_BLOCK = { id: 'fx-paid-trial', type: 'paid_trial', cta_label: TRIAL_CTA_LABEL, cta_label_short: '€39' }
 const REVIEWS_BLOCK = { id: 'fx-reviews', type: 'reviews', title: 'What our members say', min_rating: 4, speed: 'normal' }
 const SOFT_LEAD_BLOCK = {
   id: 'fx-lead-soft',

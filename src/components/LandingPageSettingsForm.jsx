@@ -1198,7 +1198,7 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
       <Field label="Heading">
         <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="The 14 Day Reset" />
       </Field>
-      <Field label="Short button label (phone header)" hint="Fits beside the logo on a phone, e.g. “€39 →”. Blank uses the full button label.">
+      <Field label="Short button label (sticky header)" hint="Used by the sticky header only, which adds its own arrow. e.g. “€39”. Blank uses the full button label.">
         <Input value={block.cta_label_short || ''} onChange={(v) => onUpdate({ cta_label_short: v })} maxLength={24} />
       </Field>
       <Field label="Sub-copy">

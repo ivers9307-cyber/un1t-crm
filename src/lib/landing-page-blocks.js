@@ -407,8 +407,8 @@ export function paidTrialBlockOf(blocks) {
 // capture > booking > event signup.
 //
 // `primary` is what the sticky header, hero and footer point at.
-// `secondary` exists only when a live offer has pushed the lead form
-// out of the primary slot, and only the hero renders it — the header
+// `secondary` exists only when a live offer or a shown paid trial has
+// pushed the lead form out of the primary slot, and only the hero renders it — the header
 // and footer are space-constrained and the second path is one scroll
 // away on the same page.
 //
