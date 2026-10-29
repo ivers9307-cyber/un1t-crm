@@ -233,3 +233,24 @@ describe('landing chrome carries the tenant brand (W1.S1b)', () => {
     expect(html).not.toMatch(/UN1T|Hatch Street/)
   })
 })
+
+describe('LeadFormBlock compact soft path (TRIALFIRST.1)', () => {
+  it('ignores a live offer and a funnel second path; renders the pale capture strip', () => {
+    const html = renderToStaticMarkup(<LeadFormBlock block={{ ...base, offer, second_path: 'class_funnel' }} publicPath="hatch-street" compact ctaSecondaryHref="#start" ctaSecondaryLabel="Book" />)
+    expect(html).toContain('id="waitlist"')
+    expect(html).toContain('bg-lp-pale')
+    expect(html).not.toContain('€189')
+    expect(html).not.toContain('lp-was-strike')
+    expect(html).not.toContain('href="#start"')
+    expect(html).toContain('placeholder="Email"')
+    expect(html).not.toContain('lp-outline')
+  })
+  it('keeps the heading and subtext, mixed case, with the form in the light tone', () => {
+    const html = renderToStaticMarkup(<LeadFormBlock block={base} publicPath="hatch-street" compact wordmark="UN1T" />)
+    expect(html).toContain('Not ready to join yet?')
+    expect(html).toContain('md:grid-cols-[1fr_1.2fr]')
+    expect(html).toContain('border-b border-black/25')
+    expect(html).not.toContain('bg-white/[0.06]')
+    expect(html).not.toMatch(/<h2[^>]*uppercase/)
+  })
+})

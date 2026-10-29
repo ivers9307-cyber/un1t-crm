@@ -4,7 +4,7 @@
 // they can be rendered from either a server component (the live
 // public page) or a client component (the in-iframe edit overlay).
 // Interactivity ships as imported client islands (BookingWidget,
-// WaitlistWidget, VideoTestimonials, CountUp).
+// WaitlistWidget, VideoTestimonials, CountUp, PaidTrialFunnel).
 //
 // SOURCE OF TRUTH for "what does each block type look like".
 // Adding a new block type means: register it in
@@ -36,6 +36,7 @@ import EditableImage from './EditableImage'
 import HeroMediaTools from './HeroMediaTools'
 import LogoSwapper from './LogoSwapper'
 import OfferPanel from './OfferPanel'
+import PaidTrialFunnel from './PaidTrialFunnel'
 import { offerOf } from '@/lib/landing-page-blocks'
 
 // Shared section header: hairline + uppercase tracked label. The label
@@ -56,7 +57,12 @@ function Eyebrow({ children, dark = true }) {
 // outlined watermarks and "Why …") and `locationName` (the page's studio:
 // consent and sign-off defaults) come from the page's own location load.
 // Blank → the block words around it; never a literal gym.
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '' }) {
+//
+// TRIALFIRST.1 — `trial` (the page's one sellable paid trial, or null) goes
+// to the hero only, which then carries the buy card; `trialShown` tells the
+// lead form that card is on the page, so it shrinks to the quiet
+// "not ready yet" strip (`compact`).
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -68,12 +74,12 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
   // the upload to the right tenant.
   const editProps = { onEdit: localOnEdit, locationId }
   switch (block.type) {
-    case 'hero':        return <HeroBlock        block={block} {...editProps} wordmark={wordmark} ctaHref={ctaHref} ctaLabel={ctaLabel} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} />
+    case 'hero':        return <HeroBlock        block={block} {...editProps} wordmark={wordmark} ctaHref={ctaHref} ctaLabel={ctaLabel} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} trial={trial} />
     case 'booking':     return <BookingBlock     block={block} />
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} wordmark={wordmark} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
-    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} wordmark={wordmark} locationName={locationName} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} wordmark={wordmark} locationName={locationName} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} compact={trialShown} />
     // MANUALFUNNEL.1 — a funnel switched off the main page still renders in
     // the editor (so its copy and timetable stay editable) and at /start/{path}.
     case 'class_funnel': return (localOnEdit || classFunnelShownOnLanding(block))
@@ -125,13 +131,160 @@ function HeroMarquee() {
   )
 }
 
-// Hero — full-viewport opener. Backdrop precedence: video > image >
-// outlined-watermark fallback. Media gets a slow Ken Burns push-in
-// (image only), film grain, and a bottom-weighted scrim so the type
-// always carries. Content staggers in on load (CSS only). The primary
-// CTA is passed down from the page (computed from the page's own
-// funnel blocks) — the hero never invents a target.
-export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '' }) {
+// The hero's scrims. Classic: bottom-weighted so centred type carries.
+// Trial-first (TRIALFIRST.1): left-weighted so the copy column carries,
+// plus a bottom fade into the page.
+const HERO_SCRIM = [
+  'linear-gradient(180deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.88) 100%)',
+]
+const HERO_TRIAL_SCRIM = [
+  'linear-gradient(90deg, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.55) 55%, rgba(0,0,0,0.35) 100%)',
+  'linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.9) 100%)',
+]
+
+// The hero's backdrop, written once for both layouts. Precedence:
+// video > image > outlined-watermark fallback. Media gets a slow Ken
+// Burns push-in (image only) and the `scrim` gradients laid over it;
+// the wordmark fallback carries its own glow and takes no scrim.
+function HeroBackdrop({ block, wordmark = '', scrim = HERO_SCRIM }) {
+  const scrims = scrim.map((background, i) => (
+    <div
+      key={i}
+      className="absolute inset-0 pointer-events-none"
+      style={{ background }}
+      aria-hidden="true"
+    />
+  ))
+  if (block.video_url) {
+    return (
+      <>
+        <video
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+          src={block.video_url}
+          poster={block.image_url || undefined}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          aria-hidden="true"
+        />
+        {scrims}
+      </>
+    )
+  }
+  if (block.image_url) {
+    return (
+      <>
+        <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+          <div
+            className="absolute inset-0 bg-cover bg-center lp-kenburns"
+            style={{ backgroundImage: `url(${block.image_url})` }}
+          />
+        </div>
+        {scrims}
+      </>
+    )
+  }
+  // No media: oversized outlined wordmark + soft radial glow.
+  // Strong, brand-true, zero assets — never a dead black screen.
+  return (
+    <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+      <div
+        className="absolute inset-0 opacity-80"
+        style={{
+          background:
+            'radial-gradient(ellipse 75% 55% at 50% 38%, rgba(255,255,255,0.10) 0%, rgba(0,0,0,0) 65%)',
+        }}
+      />
+      <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
+        <span className="lp-outline font-display font-extrabold leading-none select-none text-[34vw] md:text-[26vw]">
+          {wordmark}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// Hero media tools — only when in edit mode. Sit top-right inside the
+// hero so they're visible without overlapping the headline. Uses the
+// same /media upload route as everything else.
+function HeroEditTools({ block, onEdit, locationId }) {
+  if (!onEdit) return null
+  return (
+    <HeroMediaTools
+      imageUrl={block.image_url}
+      videoUrl={block.video_url}
+      locationId={locationId}
+      onChangeImage={(url) => onEdit(['image_url'], url)}
+      onChangeVideo={(url) => onEdit(['video_url'], url)}
+    />
+  )
+}
+
+// TRIALFIRST.1 — trial-first hero: the page's one sellable paid trial is
+// its offer, so the buy card sits in the hero beside the copy, anchored
+// at #trial (the target of every trial CTA on the page). No hero button,
+// scroll cue or marquee: the card is the call to action. The headline is
+// mixed case so it reads as a sentence beside the card; the subtext steps
+// aside on phones so the card comes up sooner.
+function HeroTrialFirst({ block, onEdit, locationId, wordmark, trial }) {
+  return (
+    <section id="trial" className="scroll-mt-20 relative min-h-[92svh] flex flex-col overflow-hidden bg-black text-white lp-grain">
+      <HeroBackdrop block={block} wordmark={wordmark} scrim={HERO_TRIAL_SCRIM} />
+      <HeroEditTools block={block} onEdit={onEdit} locationId={locationId} />
+
+      <div className="relative z-10 flex-1 flex items-center px-6 pt-28 pb-16 md:pt-32">
+        <div className="w-full max-w-6xl mx-auto grid md:grid-cols-[1.05fr_1fr] gap-10 items-center">
+          <div className="lp-hero-stagger">
+            {(block.eyebrow || onEdit) && (
+              <p className="text-[11px] md:text-xs uppercase tracking-[0.45em] text-white/60 mb-6 font-semibold">
+                <E value={block.eyebrow} onEdit={onEdit} path={['eyebrow']} />
+              </p>
+            )}
+            {(block.headline || block.subhead || onEdit) && (
+              <h1 className="font-display font-extrabold text-[clamp(2.4rem,6vw,5rem)] leading-[0.98] tracking-tight">
+                <E value={block.headline} onEdit={onEdit} path={['headline']} />
+                {(block.subhead || onEdit) && (
+                  <span className="block text-white/50">
+                    <E value={block.subhead} onEdit={onEdit} path={['subhead']} />
+                  </span>
+                )}
+              </h1>
+            )}
+            {(block.subtext || onEdit) && (
+              <p className="hidden md:block mt-7 text-lg text-white/75 max-w-xl leading-relaxed">
+                <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+              </p>
+            )}
+          </div>
+          <div className="flex justify-center md:justify-end">
+            <PaidTrialFunnel
+              studios={[trial.studio]}
+              initialStudio={trial.studio.key}
+              returnPath={trial.returnPath}
+              resumePurchaseId={trial.resumePurchaseId}
+              cancelled={trial.cancelled}
+              hatchTerms={trial.hatchTerms}
+              preview={trial.preview}
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// Hero — full-viewport opener. Backdrop (HeroBackdrop) with film grain
+// and a bottom-weighted scrim so the type always carries. Content
+// staggers in on load (CSS only). The primary CTA is passed down from
+// the page (computed from the page's own funnel blocks) — the hero
+// never invents a target. With a `trial` (TRIALFIRST.1) it renders
+// HeroTrialFirst instead; without one this markup is unchanged.
+export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', trial = null }) {
+  if (trial) {
+    return <HeroTrialFirst block={block} onEdit={onEdit} locationId={locationId} wordmark={wordmark} trial={trial} />
+  }
   const href = ctaHref || (onEdit ? '#book' : null)
   const label = ctaLabel || 'Book a free consult'
   // An off-site primary (the foundation checkout) gets rel=noopener.
@@ -140,77 +293,9 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSec
   const external = /^https?:\/\//i.test(href || '')
   return (
     <section className="relative min-h-[92svh] flex flex-col overflow-hidden bg-black lp-grain">
-      {block.video_url ? (
-        <>
-          <video
-            className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-            src={block.video_url}
-            poster={block.image_url || undefined}
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            aria-hidden="true"
-          />
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              background:
-                'linear-gradient(180deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.88) 100%)',
-            }}
-            aria-hidden="true"
-          />
-        </>
-      ) : block.image_url ? (
-        <>
-          <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
-            <div
-              className="absolute inset-0 bg-cover bg-center lp-kenburns"
-              style={{ backgroundImage: `url(${block.image_url})` }}
-            />
-          </div>
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              background:
-                'linear-gradient(180deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.88) 100%)',
-            }}
-            aria-hidden="true"
-          />
-        </>
-      ) : (
-        // No media: oversized outlined wordmark + soft radial glow.
-        // Strong, brand-true, zero assets — never a dead black screen.
-        <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
-          <div
-            className="absolute inset-0 opacity-80"
-            style={{
-              background:
-                'radial-gradient(ellipse 75% 55% at 50% 38%, rgba(255,255,255,0.10) 0%, rgba(0,0,0,0) 65%)',
-            }}
-          />
-          <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
-            <span className="lp-outline font-display font-extrabold leading-none select-none text-[34vw] md:text-[26vw]">
-              {wordmark}
-            </span>
-          </div>
-        </div>
-      )}
+      <HeroBackdrop block={block} wordmark={wordmark} scrim={HERO_SCRIM} />
 
-      {/* Hero media tools — only when in edit mode. Sit top-right
-          inside the hero so they're visible without overlapping the
-          headline. Uses the same /media upload route as everything
-          else. */}
-      {onEdit && (
-        <HeroMediaTools
-          imageUrl={block.image_url}
-          videoUrl={block.video_url}
-          locationId={locationId}
-          onChangeImage={(url) => onEdit(['image_url'], url)}
-          onChangeVideo={(url) => onEdit(['video_url'], url)}
-        />
-      )}
+      <HeroEditTools block={block} onEdit={onEdit} locationId={locationId} />
 
       <div className="relative z-10 flex-1 flex items-center justify-center px-6 pt-28 pb-16 md:pt-32">
         <div className="lp-hero-stagger max-w-6xl mx-auto text-center">
@@ -329,7 +414,48 @@ export function EventBlock({ block }) {
   )
 }
 
-export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '' }) {
+// TRIALFIRST.1 — the soft path. With the paid trial's card in the hero,
+// this section is no longer a second offer: it is the quiet "not ready
+// yet" strip near the footer. Pale, no watermark, no offer panel and no
+// funnel button whatever the block's offer/second_path say; just the
+// heading, subtext and the capture form in its light tone. Still
+// anchored at #waitlist so every secondary CTA resolves.
+function LeadFormCompact({ block, onEdit, publicPath, campaign, locationName }) {
+  return (
+    <section id="waitlist" className="scroll-mt-20 bg-lp-pale text-black py-16 md:py-20 border-t border-black/10">
+      <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-[1fr_1.2fr] gap-10 items-center">
+        <div>
+          {(block.heading || onEdit) && (
+            <h2 className="lp-reveal font-display font-extrabold text-2xl md:text-3xl tracking-tight mb-3">
+              <E value={block.heading} onEdit={onEdit} path={['heading']} />
+            </h2>
+          )}
+          {(block.subtext || onEdit) && (
+            <p className="lp-reveal lp-d1 text-black/65 leading-relaxed max-w-md">
+              <E value={block.subtext} onEdit={onEdit} path={['subtext']} multiline />
+            </p>
+          )}
+        </div>
+        <div className="lp-reveal lp-d2">
+          <WaitlistWidget
+            publicPath={publicPath}
+            campaign={campaign}
+            buttonLabel={block.button_label}
+            successMessage={block.success_message}
+            consentLabel={block.consent_label}
+            brandName={locationName}
+            tone="light"
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', compact = false }) {
+  if (compact) {
+    return <LeadFormCompact block={block} onEdit={onEdit} publicPath={publicPath} campaign={campaign} locationName={locationName} />
+  }
   // offerOf() is the one place that decides whether there is an offer
   // to show; a malformed group returns null and we render exactly
   // what this section rendered before the group existed.
