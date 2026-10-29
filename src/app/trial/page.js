@@ -22,6 +22,8 @@ import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import { loadTrialStudios } from '@/lib/trial-studios'
 import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
+import { trialStudioView } from '@/lib/trial-studio-view'
+import { parseTrialReturn } from '@/lib/trial-return-path'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
@@ -38,17 +40,10 @@ export const dynamic = 'force-dynamic'
 const STILLORGAN_LOCATION_ID = 'a0000000-0000-0000-0000-000000000001'
 const CONTENT_PATHS = ['stillorgan', 'hatch-street']
 const NOT_CONTENT = ['hero', 'lead_form', 'class_funnel', 'paid_trial']
-const STUDIO_KEYS = ['stillorgan', 'hatch']
 const HERO_IMAGE =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg'
 const CTA_HREF = '#trial'
 const LEARN_MORE_ID = 'trial-learn-more'
-// Only the words the card shows travel to the browser: never the Glofox ids,
-// the un1t.online product id, the location or the tag.
-const CLIENT_BLOCK_FIELDS = [
-  'eyebrow', 'heading', 'subhead', 'product_name', 'ticks', 'cta_label', 'consent_label',
-  'done_title', 'done_body',
-]
 
 export async function generateMetadata() {
   const chrome = await resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID })
@@ -78,27 +73,9 @@ async function loadContent(db) {
   }
 }
 
-// The refusal, help and being-confirmed words are the resolved ones (each
-// missing or blank field on its default, as the POST and the help route
-// serve them), so a stored block that predates them never renders an empty
-// message; resolved even for a studio not for sale, since a return reads them.
-function clientBlock(block) {
-  const out = {}
-  for (const k of CLIENT_BLOCK_FIELDS) if (block && block[k] !== undefined) out[k] = block[k]
-  const copy = paidTrialCopyFromBlock(block)
-  out.trial_used_text = copy.trialUsedText
-  out.active_member_text = copy.activeMemberText
-  out.help_cta_label = copy.helpCtaLabel
-  out.help_sent_text = copy.helpSentText
-  out.pending_body = copy.pendingBody
-  return out
-}
-
 export default async function TrialPage(props) {
   const sp = await props.searchParams
-  const resumePurchaseId = typeof sp?.purchase === 'string' && /^[0-9a-f-]{36}$/i.test(sp.purchase) ? sp.purchase : null
-  const initialStudio = STUDIO_KEYS.includes(sp?.studio) ? sp.studio : null
-  const cancelled = sp?.cancelled === '1'
+  const { resumePurchaseId, initialStudio, cancelled } = parseTrialReturn(sp)
   const db = createServerClient()
   const [{ blocks, hatchBlocks }, entries, logoUrl, chrome] = await Promise.all([
     loadContent(db),
@@ -111,23 +88,8 @@ export default async function TrialPage(props) {
     return locationId ? resolveLocationBrand({ locationId }) : null
   }))
 
-  // The card's client-safe view of each studio. The price is the config's
-  // (Hatch: the mirrored un1t.online product's), so an unsellable studio has none.
-  const studios = entries.map((s, i) => {
-    const block = s.block || {}
-    const name = brands[i]?.companyName || brands[i]?.locationName || (s.key === 'hatch' ? 'Hatch Street' : 'Stillorgan')
-    return {
-      key: s.key,
-      label: (typeof block.studio_label === 'string' && block.studio_label.trim()) || name,
-      // The POST sells each studio through its own provider only; agree with it.
-      sellable: Boolean(s.sellable && s.locationId && s.config?.provider === (s.key === 'hatch' ? 'un1t_online' : 'glofox')),
-      block: clientBlock(s.block),
-      priceCents: s.config?.priceCents ?? null,
-      currency: s.config?.currency || 'EUR',
-      durationDays: s.config?.durationDays || 14,
-      productName: s.config?.productName || block.product_name || '',
-    }
-  })
+  // The card's client-safe view of each studio (src/lib/trial-studio-view.js).
+  const studios = entries.map((s, i) => trialStudioView(s, brands[i]))
   const hatchIndex = entries.findIndex((s) => s.key === 'hatch')
   const hatch = studios[hatchIndex]
   // un1t.online's terms and waiver tick, as the server's terms_required answer
