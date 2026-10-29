@@ -1,4 +1,4 @@
-import { UN1T_ACCOUNT_WELCOME_HTML } from '@/lib/sequences/templates/un1t-account-welcome.js'
+import { ACCOUNT_WELCOME_HTML } from '@/lib/sequences/templates/un1t-account-welcome.js'
 
 // sequence-templates — pre-built recipes operators can clone +
 // customise instead of building from scratch (Tier 3B).
@@ -963,7 +963,7 @@ export const SEQUENCE_TEMPLATES = [
         delay_hours: 0,
         delay_minutes: 0,
         subject: 'Welcome to {{location_name}}, {{first_name}}',
-        html_content: UN1T_ACCOUNT_WELCOME_HTML,
+        html_content: ACCOUNT_WELCOME_HTML,
       },
     ],
   },
