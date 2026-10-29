@@ -20,6 +20,9 @@ module.exports = {
         body: ['var(--font-body)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       colors: {
+        // Editorial funnel pages (TRIALFIRST.1): the pale band between
+        // the black sections. One token so the four pages cannot drift.
+        lp: { pale: '#F5F5F3' },
         un1t: {
           // Intent-based tokens (UI-FOUND.1). Names previously meant
           // their opposite (e.g. `black` held #FFFFFF) after a

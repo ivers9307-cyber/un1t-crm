@@ -496,10 +496,10 @@ export function PillarsBlock({ block, onEdit, locationId, wordmark = '' }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
-    <section className="bg-white text-black py-24 md:py-32">
+    <section className="bg-lp-pale text-black py-20 md:py-28">
       <div className="max-w-6xl mx-auto px-6">
         <Eyebrow dark={false}>{wordmark ? `Why ${wordmark}` : 'Why us'}</Eyebrow>
-        <div className="grid md:grid-cols-3 gap-10 md:gap-8">
+        <div className="grid md:grid-cols-3 gap-6 md:gap-6">
           {items.map((p, i) => (
             <Pillar
               key={i}
@@ -658,9 +658,9 @@ export function StatsBlock({ block, onEdit }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
-    <section className="bg-black text-white py-24 md:py-32 border-t border-white/10">
+    <section className="bg-lp-pale text-black py-20 md:py-28">
       <div className="max-w-6xl mx-auto px-6">
-        <div className="grid md:grid-cols-3 text-center md:divide-x md:divide-white/10">
+        <div className="grid md:grid-cols-3 text-center md:divide-x md:divide-black/10">
           {items.map((s, i) => (
             <Stat
               key={i}
@@ -687,15 +687,9 @@ export function TestimonialBlock({ block, onEdit }) {
     : 'text-2xl md:text-[2rem] leading-snug font-medium text-white/90'
   return (
     <section className="relative bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
-      <div
-        className="absolute top-10 left-1/2 -translate-x-1/2 font-display font-extrabold text-[12rem] leading-none text-white/[0.06] select-none pointer-events-none"
-        aria-hidden="true"
-      >
-        &ldquo;
-      </div>
       <div className="relative max-w-6xl mx-auto px-6">
         <blockquote className="lp-reveal max-w-3xl mx-auto text-center">
-          <div className="text-amber-400 tracking-[0.3em] text-sm mb-8" aria-label="5 out of 5 stars">
+          <div className="text-white tracking-[0.3em] text-sm mb-8" aria-label="5 out of 5 stars">
             ★★★★★
           </div>
           {(block.quote || onEdit) && (
@@ -735,8 +729,8 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
   if (visible.length === 0) {
     if (!onEdit) return null
     return (
-      <section className="bg-black text-white py-24 md:py-32 border-t border-white/10">
-        <div className="max-w-6xl mx-auto px-6 text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
+      <section className="bg-lp-pale text-black py-20 md:py-28">
+        <div className="max-w-6xl mx-auto px-6 text-center text-black/45 text-sm border border-dashed border-black/20 rounded py-10">
           Google reviews appear here on the live page once reviews have been
           added for this location.
         </div>
@@ -748,7 +742,7 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
   const track = [...visible, ...visible]
 
   return (
-    <section className="bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
+    <section className="bg-lp-pale text-black py-20 md:py-28 overflow-hidden">
       <div className="max-w-6xl mx-auto px-6">
         {block.title && (
           <div className="lp-reveal text-center mb-12">
@@ -765,8 +759,8 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
             <ReviewCard key={`${r.id || r.google_review_id || i}-${i}`} review={r} />
           ))}
         </div>
-        <div className="pointer-events-none absolute inset-y-0 left-0 w-20 bg-gradient-to-r from-black to-transparent" aria-hidden="true" />
-        <div className="pointer-events-none absolute inset-y-0 right-0 w-20 bg-gradient-to-l from-black to-transparent" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-20 bg-gradient-to-r from-lp-pale to-transparent" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-20 bg-gradient-to-l from-lp-pale to-transparent" aria-hidden="true" />
       </div>
     </section>
   )
@@ -806,18 +800,18 @@ export function VideoTestimonialsBlock({ block, onEdit }) {
 function ReviewCard({ review }) {
   const stars = '★★★★★'.slice(0, Math.max(0, Math.min(5, review.rating || 0)))
   return (
-    <figure className="w-80 shrink-0 bg-white/[0.05] border border-white/10 rounded-2xl p-6 transition-colors hover:bg-white/[0.08]">
+    <figure className="w-80 shrink-0 bg-white border border-black/10 rounded p-6">
       <div className="text-amber-400 text-sm tracking-[0.18em]" aria-label={`${review.rating} out of 5`}>{stars}</div>
-      <blockquote className="mt-4 text-sm leading-relaxed text-white/85 line-clamp-5">
+      <blockquote className="mt-4 text-sm leading-relaxed text-black/80 line-clamp-5">
         {review.comment}
       </blockquote>
-      <figcaption className="mt-5 flex items-center gap-2.5 text-xs text-white/55">
+      <figcaption className="mt-5 flex items-center gap-2.5 text-xs text-black/55">
         {review.author_photo_url ? (
 
           <img src={review.author_photo_url} alt="" className="w-7 h-7 rounded-full object-cover" loading="lazy" />
         ) : null}
-        <span className="text-white/80 font-medium">{review.author_name || 'Google user'}</span>
-        <span className="ml-auto inline-flex items-center gap-1 text-white/40">
+        <span className="text-black font-medium">{review.author_name || 'Google user'}</span>
+        <span className="ml-auto inline-flex items-center gap-1 text-black/45">
           <span className="text-[#4285F4] font-bold">G</span> Google
         </span>
       </figcaption>
@@ -830,7 +824,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, 
   // (so the operator has somewhere to drop one).
   const showPhotoRegion = !!photoUrl || !!onEdit
   return (
-    <div className={`lp-reveal ${delayClass} group`}>
+    <div className={`lp-reveal ${delayClass} group bg-white border border-black/10 rounded p-7`}>
       {showPhotoRegion && (
         <div className="aspect-[3/4] overflow-hidden bg-black/5 relative rounded-xl">
           {onEdit ? (
@@ -854,7 +848,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, 
         </div>
       )}
       <div className="mt-6 flex items-baseline gap-4">
-        <span className="font-display font-bold text-xl text-black/25 tracking-wide">
+        <span className="font-display font-extrabold text-3xl text-black/20 tracking-wide">
           <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
         </span>
         <span className="h-px flex-1 bg-black/10" aria-hidden="true" />
@@ -872,14 +866,14 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, 
 function Stat({ number, label, onEdit, itemIndex, delayClass = '' }) {
   return (
     <div className={`lp-reveal ${delayClass} px-6 py-8 md:py-4`}>
-      <div className="font-display font-extrabold text-[clamp(2.75rem,5.5vw,4.5rem)] leading-none tracking-tight">
+      <div className="font-display font-extrabold text-[clamp(3rem,6.5vw,5rem)] leading-none tracking-tight">
         {onEdit ? (
           <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
         ) : (
           <CountUp value={number} />
         )}
       </div>
-      <div className="mt-3 text-xs uppercase tracking-[0.3em] text-white/55 font-semibold">
+      <div className="mt-3 text-xs uppercase tracking-[0.3em] text-black/55 font-semibold">
         <E value={label} onEdit={onEdit} path={['items', itemIndex, 'label']} />
       </div>
     </div>
