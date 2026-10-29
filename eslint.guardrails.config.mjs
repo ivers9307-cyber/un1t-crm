@@ -193,6 +193,7 @@ const config = [
       // CORPPROMO.1 — the /corp claim path: every write checked from day one.
       'src/lib/corp-promo-*.js', 'src/app/api/public/corp-claims/**', 'src/app/api/corp-promo-claims/**',
       'src/lib/campaign-sender.js',
+      'src/lib/un1t-online-account.js',
       'src/app/api/cron/run-campaigns/route.js',
       'src/lib/race-confirmations.js',
       'src/lib/event-comms-location.js',

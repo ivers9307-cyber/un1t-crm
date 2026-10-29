@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('./log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { findUn1tAccount, ensureUn1tAccount, runSetPasswordStep } from './un1t-online-account'
+import { logError, logWarn } from './log'
 import { ilikeMatches } from './like-escape.test-helpers'
 
 const LOC = 'loc-1'
@@ -15,6 +16,7 @@ const accepted = { terms_accepted_at: '2026-10-18T09:00:00.000Z', terms_source: 
 
 let tables
 let writes
+let stampResult
 function makeDb() {
   return {
     from(table) {
@@ -29,13 +31,20 @@ function makeDb() {
       }))
       const b = {
         select: () => b, order: () => b, limit: () => b,
+        update: (payload) => { q.op = 'update'; q.payload = payload; return b },
         eq: (c, v) => { q.f.push(['eq', c, v]); return b },
         neq: (c, v) => { q.f.push(['neq', c, v]); return b },
         in: (c, v) => { q.f.push(['in', c, v]); return b },
         ilike: (c, v) => { q.f.push(['ilike', c, v]); return b },
         not: (c) => { q.f.push(['notnull', c]); return b },
         maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
-        then: (ok, no) => Promise.resolve({ data: rows(), error: null }).then(ok, no),
+        then: (ok, no) => {
+          if (q.op === 'update') {
+            writes.push(['update', table, q.payload, q.f.map(([, c, v]) => [c, v])])
+            return Promise.resolve(stampResult).then(ok, no)
+          }
+          return Promise.resolve({ data: rows(), error: null }).then(ok, no)
+        },
       }
       return b
     },
@@ -48,6 +57,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('test: real network call') }))
   writes = []
+  stampResult = { data: [{ id: 'cl-1' }], error: null }
   tables = { contacts: [], un1t_clients: [], un1t_write_events: [] }
   deps = {
     writerFactory: vi.fn(async () => ({ locationId: LOC })),
@@ -252,6 +262,37 @@ describe('runSetPasswordStep', () => {
     tables.un1t_write_events = [createdRow, { id: 'w-5', location_id: LOC, un1t_user_id: 'usr-other', op: 'forgot_password', stage: 'done', idempotency_key: `pw:${LOC}:usr-other:1`, created_at: '2026-10-18T09:01:00Z' }]
     expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
     expect(deps.forgotPassword).toHaveBeenCalledTimes(1)
+  })
+
+  describe('UN1TWELCOME.4: the account email stamps un1t_clients.account_email_sent_at', () => {
+    const stamps = () => writes.filter((w) => w[0] === 'update' && w[1] === 'un1t_clients')
+    it('a sent explanation stamps the client row for (location, user) and passes appLinks to the email', async () => {
+      tables.un1t_write_events = [createdRow]
+      const appLinks = { iosUrl: 'https://apps.apple.com/x', androidUrl: null, heading: null, body: null }
+      expect(await step({ settings: settings({ appLinks }) })).toEqual({ explanation: 'sent', forgotPassword: 'done' })
+      expect(stamps()).toHaveLength(1)
+      expect(stamps()[0][2].account_email_sent_at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+      expect(stamps()[0][3]).toEqual([['location_id', LOC], ['un1t_user_id', 'usr-new']])
+      expect(deps.sendUn1tAccountEmail.mock.calls[0][1].appLinks).toEqual(appLinks)
+    })
+    it('a not-sent explanation does not stamp', async () => {
+      tables.un1t_write_events = [createdRow]
+      deps.sendUn1tAccountEmail.mockResolvedValue({ sent: false, channel: 'email', reason: 'email_blocked' })
+      expect(await step()).toEqual({ explanation: 'email_blocked', forgotPassword: 'done' })
+      expect(stamps()).toHaveLength(0)
+    })
+    it('no row to stamp: a warning, and the result is unchanged', async () => {
+      tables.un1t_write_events = [createdRow]
+      stampResult = { data: [], error: null }
+      expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
+      expect(logWarn).toHaveBeenCalledWith('un1t-account', 'account email sent but no un1t_clients row to stamp', { locationId: LOC })
+    })
+    it('a stamp error: logError, and the result is unchanged', async () => {
+      tables.un1t_write_events = [createdRow]
+      stampResult = { data: null, error: { code: '42703', message: 'boom' } }
+      expect(await step()).toEqual({ explanation: 'sent', forgotPassword: 'done' })
+      expect(logError).toHaveBeenCalled()
+    })
   })
 
   describe('review fix: two runs for one new account (two bookings, an overlapping retry, approval + processor)', () => {
