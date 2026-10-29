@@ -30,6 +30,7 @@ import { studioByKey, loadTrialStudios } from '@/lib/trial-studios'
 import { stillorganTrialHistory, hatchActiveMembership } from '@/lib/trial-eligibility'
 import { createTrialPurchasePayment } from '@/lib/trial-purchase-payments'
 import { startUn1tTrialCheckout } from '@/lib/trial-purchase-un1t-checkout'
+import { normalizeTrialReturnPath } from '@/lib/trial-return-path'
 import { locationCanTakePayments } from '@/lib/location-payments'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
@@ -42,6 +43,9 @@ const Schema = z.object({
   // A page loaded before the studio choice shipped posts no studio: it was
   // the Stillorgan page, so that is the default (never a 400 for paid traffic).
   studio: z.enum(['stillorgan', 'hatch']).default('stillorgan'),
+  // TRIALFIRST.1: the page the buyer started on, so a redirect-based payment
+  // returns there. Allowlisted by normalizeTrialReturnPath; unknown → /trial.
+  return_path: z.string().max(64).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -78,6 +82,7 @@ export async function POST(request) {
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const b = validation.data
+  const returnPath = normalizeTrialReturnPath(b.return_path)
 
   const studio = studioByKey(b.studio)
   if (!studio) return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })
@@ -284,7 +289,7 @@ export async function POST(request) {
   let payment = null
   let redirectUrl = null
   if (isHatch) {
-    const outcome = await startUn1tTrialCheckout(db, { row, location, contact: un1tContact })
+    const outcome = await startUn1tTrialCheckout(db, { row, location, contact: un1tContact, returnPath })
     if (outcome.kind === 'unavailable') return unavailable()
     if (outcome.kind === 'help_filed') {
       await sendConversions({ initiateCheckout: false })
@@ -293,7 +298,7 @@ export async function POST(request) {
     redirectUrl = outcome.checkoutUrl
   } else {
     try {
-      payment = await createTrialPurchasePayment({ db, purchase: row, location, amountCents: product.priceCents, currency: product.currency })
+      payment = await createTrialPurchasePayment({ db, purchase: row, location, amountCents: product.priceCents, currency: product.currency, returnPath })
     } catch (e) {
       logError('trialbuy', 'payment create failed', { err: e, purchaseId: row.id })
       return NextResponse.json({ success: false, code: 'checkout_failed', error: 'Could not start checkout. Please try again.' }, { status: 502 })

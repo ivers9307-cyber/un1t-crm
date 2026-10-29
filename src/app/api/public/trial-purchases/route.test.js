@@ -263,6 +263,30 @@ describe('POST /api/public/trial-purchases', () => {
     expect(mocks.legal).not.toHaveBeenCalled()
   })
 
+  it('a Stillorgan buyer from /stillorgan has the Revolut order return there', async () => {
+    const r = await POST(req({ ...BODY, return_path: '/stillorgan' }))
+    expect(r.status).toBe(200)
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/stillorgan' }))
+  })
+  it('an unknown return_path falls back to /trial', async () => {
+    const r = await POST(req({ ...BODY, return_path: '/evil' }))
+    expect(r.status).toBe(200)
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+  })
+  it('a body with no return_path keeps the Revolut order on /trial', async () => {
+    await POST(req(BODY))
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+  })
+  it('a Hatch buyer from /hatch-street is sent back there by un1t.online', async () => {
+    mocks.inserted.mockImplementation(async (row) => ({ data: { id: 'tp9', ...row }, error: null }))
+    const r = await POST(req({ ...HATCH_BODY, return_path: '/hatch-street' }))
+    expect(r.status).toBe(200)
+    expect(mocks.checkout).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      successUrl: 'https://www.un1tdublin.com/hatch-street?purchase=tp9&studio=hatch',
+      cancelUrl: 'https://www.un1tdublin.com/hatch-street?purchase=tp9&studio=hatch&cancelled=1',
+    }))
+  })
+
   // ── Hatch Street: un1t.online's hosted checkout, never a CRM charge ──
   it('Hatch: terms_required without the tick, and the payload names the Hatch legal paths', async () => {
     const r = await POST(req({ ...HATCH_BODY, terms_accepted: undefined }))
