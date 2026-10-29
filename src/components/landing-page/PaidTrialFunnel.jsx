@@ -1,7 +1,8 @@
 'use client'
 
 // PaidTrialFunnel — PAIDTRIAL.1 / TRIALSTUDIO.10: the buyer's side of the paid
-// trial (/trial), in one frosted card. The buyer chooses a studio first
+// trial (/trial), in one white card (TRIALFIRST.1: `./trial-card`, the look the
+// studio pages' heroes share). The buyer chooses a studio first
 // (TrialStudioPicker; `?studio=` preselects a sellable one), then the price
 // panel with the form (details → POST /api/public/trial-purchases with the
 // studio). Then, by studio:
@@ -20,6 +21,13 @@
 //   (the server already filed one) goes straight to the thanks.
 // Every studio-specific word is the studio's paid_trial block or the server's
 // answer.
+//
+// TRIALFIRST.1, for a studio page's hero: given ONE studio there is no
+// "Change studio" (and an unsellable one shows the picker's disabled tile
+// with the not-available line); `returnPath` goes to the POST as
+// `return_path`, so a checkout comes back to the page it started on (the
+// server allows /trial, /stillorgan, /hatch-street); `preview` is the
+// operator's editor: the form renders disabled, posts nothing, tracks nothing.
 //
 // What it tells Meta (no-ops without consent / fbq): the browser Lead at the
 // POST, sharing the server's event id so Meta counts one, and (TRIALCHECKOUT.1)
@@ -41,11 +49,11 @@ import { formatTrialPrice, trialTicks, PAID_TRIAL_PENDING_BODY } from '@/lib/pai
 import ClassFunnelCheckout from './ClassFunnelCheckout'
 import TrialStudioPicker from './TrialStudioPicker'
 import TrialTermsTick from './TrialTermsTick'
+import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK } from './trial-card'
 
 const STATUS_PATH = '/api/public/trial-purchases'
 const HELP_PATH = '/api/public/trial-purchases/help'
 const REFUSALS = new Set(['trial_used', 'active_member'])
-const inputCls = 'w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
 
 function readFbpCookie() {
   try {
@@ -65,9 +73,10 @@ function fireBrowserPurchase({ purchaseId, amountCents, currency, contentName })
 /**
  * @param {{ studios: Array<{ key: 'stillorgan'|'hatch', label: string, sellable: boolean, block: object,
  *   priceCents: number|null, currency: string, durationDays: number, productName: string }>,
- *   initialStudio?: string|null, resumePurchaseId?: string|null, cancelled?: boolean, hatchTerms?: object|null }} props
+ *   initialStudio?: string|null, resumePurchaseId?: string|null, cancelled?: boolean, hatchTerms?: object|null,
+ *   returnPath?: string, preview?: boolean }} props
  */
-export default function PaidTrialFunnel({ studios = [], initialStudio = null, resumePurchaseId = null, cancelled = false, hatchTerms = null }) {
+export default function PaidTrialFunnel({ studios = [], initialStudio = null, resumePurchaseId = null, cancelled = false, hatchTerms = null, returnPath = '/trial', preview = false }) {
   const list = Array.isArray(studios) ? studios : []
   const byKey = (k) => list.find((s) => s.key === k) || null
   const resuming = Boolean(resumePurchaseId) && !cancelled
@@ -108,8 +117,8 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         fbclid: p.get('fbclid') || undefined,
       }
     } catch { /* never block the page */ }
-    trackFunnelStep('trial_view')
-  }, [])
+    if (!preview) trackFunnelStep('trial_view') // the editor's preview tracks nothing
+  }, [preview])
 
   // Back from un1t.online's checkout restores this page from the back-forward
   // cache with the button still on "One moment…": give it back.
@@ -135,7 +144,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
     if (key !== studioKey) { setTermsOverride(null); setTermsAccepted(false) }
     setStudioKey(key)
     setError(null)
-    trackFunnelStep('trial_studio_chosen', { studio: key })
+    if (!preview) trackFunnelStep('trial_studio_chosen', { studio: key })
     setStep('form')
   }
 
@@ -148,6 +157,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
 
   async function submit(e) {
     e.preventDefault()
+    if (preview) return
     setError(null)
     if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim() || !form.consent) {
       setError('Please complete every field and tick consent.'); return
@@ -174,6 +184,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
           attribution: buildAttribution(),
           visit: readVisitOrigin() || undefined,
           lead_event_id: leadEventId,
+          return_path: returnPath,
         }),
       })
       const j = await r.json().catch(() => ({}))
@@ -300,15 +311,13 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the studio and its block are fixed while polling; re-arming on them would double the polls
   }, [step])
 
-  const card = 'w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 backdrop-blur-xl px-6 py-8 md:px-8'
-
   if (step === 'choose') {
     return (
-      <div className={card}>
+      <div className={TRIAL_CARD}>
         <TrialStudioPicker studios={list} onChoose={choose} />
-        {error && <p className="mt-4 text-sm text-red-300" role="alert">{error}</p>}
+        {error && <p className={`mt-4 ${TRIAL_ERROR}`} role="alert">{error}</p>}
         {!list.some((s) => s.sellable) && (
-          <p className="mt-4 text-white/70">The trial is not available online right now. Message us on WhatsApp or drop into the studio and we will sort you out.</p>
+          <p className={`mt-4 ${TRIAL_MUTED}`}>The trial is not available online right now. Message us on WhatsApp or drop into the studio and we will sort you out.</p>
         )}
       </div>
     )
@@ -316,9 +325,9 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
 
   if (step === 'confirming') {
     return (
-      <div className={`${card} text-center`}>
-        <p className="font-display font-extrabold uppercase text-2xl text-white mb-2">Confirming your payment</p>
-        <p className="text-white/70">{isHatch ? (block.pending_body || PAID_TRIAL_PENDING_BODY) : 'One moment while we check with the bank.'}</p>
+      <div className={`${TRIAL_CARD} text-center`}>
+        <p className="font-display font-extrabold text-2xl text-black mb-2">Confirming your payment</p>
+        <p className={TRIAL_MUTED}>{isHatch ? (block.pending_body || PAID_TRIAL_PENDING_BODY) : 'One moment while we check with the bank.'}</p>
       </div>
     )
   }
@@ -332,27 +341,27 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         ? (block.pending_body || PAID_TRIAL_PENDING_BODY)
         : 'Thanks, your payment is in. We are setting the trial up on your account now; this usually takes under a minute. Your confirmation email has the details.'
     return (
-      <div className={`${card} text-center`}>
-        <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">{title}</p>
-        <p className="text-white/70">{body}</p>
+      <div className={`${TRIAL_CARD} text-center`}>
+        <p className="font-display font-extrabold text-3xl text-black mb-3">{title}</p>
+        <p className={TRIAL_MUTED}>{body}</p>
       </div>
     )
   }
 
   if (step === 'help_sent') {
     return (
-      <div className={`${card} text-center`}>
-        <p className="text-white/80" role="status">{helpMessage}</p>
+      <div className={`${TRIAL_CARD} text-center`}>
+        <p className="text-black/80" role="status">{helpMessage}</p>
       </div>
     )
   }
 
   if (step === 'refused' && refusal) {
     return (
-      <div className={card}>
-        <p className="text-white/80 mb-5">{refusal.message}</p>
-        {error && <p className="text-sm text-red-300 mb-3" role="alert">{error}</p>}
-        <button type="button" onClick={askForHelp} disabled={submitting} className="lp-btn w-full disabled:opacity-50">
+      <div className={TRIAL_CARD}>
+        <p className="text-black/80 mb-5">{refusal.message}</p>
+        {error && <p className={`${TRIAL_ERROR} mb-3`} role="alert">{error}</p>}
+        <button type="button" onClick={askForHelp} disabled={submitting} className={TRIAL_BTN}>
           {submitting ? 'One moment…' : refusal.ctaLabel}
         </button>
       </div>
@@ -361,8 +370,9 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
 
   if (step === 'payment' && payment) {
     return (
-      <div className={card}>
+      <div className={TRIAL_CARD}>
         <ClassFunnelCheckout
+          tone="light"
           paymentId={payment.purchaseId}
           checkout={payment.checkout}
           priceLabel={`${payment.product_name || studio?.productName} · ${formatTrialPrice(payment.amount_cents, payment.currency)}`}
@@ -375,20 +385,23 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
   }
 
   return (
-    <div className={card}>
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <p className="text-xs uppercase tracking-[0.25em] font-semibold text-white/60">{studio?.label}</p>
-        <button type="button" onClick={() => { setError(null); setStep('choose') }} className="text-xs text-white/70 underline hover:text-white">
-          Change studio
-        </button>
+    <div className={TRIAL_CARD}>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <p className={`text-xs uppercase tracking-[0.25em] font-semibold ${TRIAL_MUTED}`}>{studio?.label}</p>
+        {/* One studio (a studio page's hero) has nothing to change to. */}
+        {list.length > 1 && (
+          <button type="button" disabled={preview} onClick={() => { setError(null); setStep('choose') }} className={`text-xs ${TRIAL_MUTED} ${TRIAL_LINK}`}>
+            Change studio
+          </button>
+        )}
       </div>
-      {/* The price panel: inverted white on the dark card so the price is the
-          first thing the eye lands on (the Hatch foundation-offer lesson). */}
-      <div className="rounded-2xl bg-white text-black p-6 mb-6">
+      {/* The price region: the heading and the price first, where the eye
+          lands (the Hatch foundation-offer lesson). */}
+      <div className="mb-6">
         <div className="flex items-start justify-between gap-3">
           <div>
-            {block.eyebrow && <p className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/45 mb-2">{block.eyebrow}</p>}
-            <h1 className="font-display font-extrabold uppercase text-2xl leading-tight">{block.heading}</h1>
+            {block.eyebrow && <p className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/50 mb-2">{block.eyebrow}</p>}
+            <h1 className="font-display font-extrabold text-2xl leading-tight">{block.heading}</h1>
           </div>
           <div className="text-right shrink-0">
             <div className="font-display font-extrabold text-4xl leading-none">{price}</div>
@@ -409,22 +422,22 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
       </div>
 
       <form onSubmit={submit} className="space-y-3" aria-label="Your details">
-        <div className="grid grid-cols-2 gap-3">
-          <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" aria-label="First name" />
-          <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" aria-label="Last name" />
+        <div className="grid grid-cols-2 gap-4">
+          <input className={TRIAL_INPUT} disabled={preview} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" aria-label="First name" />
+          <input className={TRIAL_INPUT} disabled={preview} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" aria-label="Last name" />
         </div>
-        <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" aria-label="Email" />
-        <input className={inputCls} type="tel" placeholder="Phone" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" aria-label="Phone" />
-        <label className="flex items-start gap-2.5 text-xs text-white/65 pt-1">
-          <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-white" />
-          <span>{block.consent_label} <a href="/privacy" target="_blank" rel="noreferrer" className="underline">Privacy</a></span>
+        <input className={TRIAL_INPUT} disabled={preview} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" aria-label="Email" />
+        <input className={TRIAL_INPUT} disabled={preview} type="tel" placeholder="Phone" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" aria-label="Phone" />
+        <label className={`flex items-start gap-2.5 text-xs pt-1 ${TRIAL_MUTED}`}>
+          <input type="checkbox" disabled={preview} checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-black" />
+          <span>{block.consent_label} <a href="/privacy" target="_blank" rel="noreferrer" className={TRIAL_LINK}>Privacy</a></span>
         </label>
-        {terms && <TrialTermsTick terms={terms} checked={termsAccepted} onChange={setTermsAccepted} />}
-        {error && <p className="text-sm text-red-300" role="alert">{error}</p>}
-        <button type="submit" disabled={submitting} className="lp-btn w-full disabled:opacity-50">
+        {terms && <TrialTermsTick terms={terms} checked={termsAccepted} onChange={setTermsAccepted} disabled={preview} />}
+        {error && <p className={TRIAL_ERROR} role="alert">{error}</p>}
+        <button type="submit" disabled={preview || submitting} className={TRIAL_BTN}>
           {submitting ? 'One moment…' : `${block.cta_label || 'Start my trial'} · ${price}`}
         </button>
-        <p className="text-center text-[11px] text-white/45">Secure payment. You are charged {price} once; nothing renews.</p>
+        <p className={TRIAL_FINE}>Secure payment. You are charged {price} once; nothing renews.</p>
       </form>
     </div>
   )

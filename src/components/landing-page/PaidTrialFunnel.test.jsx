@@ -22,6 +22,7 @@ vi.mock('@/components/landing-page/ClassFunnelCheckout', () => ({ default: () =>
 
 import PaidTrialFunnel from './PaidTrialFunnel'
 import { fireBrowserLead, fireBrowserInitiateCheckout } from '@/lib/meta-pixel-lead'
+import { trackFunnelStep } from '@/lib/funnel-track'
 
 const STILLORGAN = {
   key: 'stillorgan', label: 'Stillorgan Village', sellable: true,
@@ -303,5 +304,44 @@ describe('TRIALSTUDIO.10 — PaidTrialFunnel', () => {
     Object.defineProperty(ev, 'persisted', { value: true })
     act(() => { window.dispatchEvent(ev) })
     expect(screen.getByRole('button', { name: 'Start my trial · €39' }).disabled).toBe(false)
+  })
+})
+
+describe('single studio (TRIALFIRST.1)', () => {
+  it('opens on the form with no studio picker and no Change studio', () => {
+    render(<PaidTrialFunnel studios={[STILLORGAN]} initialStudio="stillorgan" />)
+    expect(screen.queryByText('Choose your studio')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Change studio' })).toBeNull()
+    expect(screen.getByPlaceholderText('First name')).toBeTruthy()
+  })
+  it('one studio that is not sellable shows the not-available line and no form', () => {
+    render(<PaidTrialFunnel studios={[{ ...STILLORGAN, sellable: false }]} initialStudio="stillorgan" />)
+    expect(screen.getByText(/not available online right now/)).toBeTruthy()
+    expect(screen.queryByPlaceholderText('First name')).toBeNull()
+  })
+  it('posts return_path with the details', async () => {
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: true, data: { purchaseId: PURCHASE_ID, checkout: {}, amount_cents: 3900, currency: 'EUR', product_name: 'The 14 Day Reset' } } }
+    render(<PaidTrialFunnel studios={[STILLORGAN]} initialStudio="stillorgan" returnPath="/stillorgan" />)
+    fillDetails()
+    fireEvent.click(submitButton())
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body.return_path).toBe('/stillorgan')
+  })
+  it('sends return_path /trial by default', async () => {
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: true, data: { purchaseId: PURCHASE_ID, checkout: {}, amount_cents: 3900, currency: 'EUR', product_name: 'The 14 Day Reset' } } }
+    render(<PaidTrialFunnel studios={[STILLORGAN]} initialStudio="stillorgan" />)
+    fillDetails()
+    fireEvent.click(submitButton())
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body.return_path).toBe('/trial')
+  })
+  it('preview renders a disabled form and never posts', () => {
+    vi.mocked(trackFunnelStep).mockClear()
+    render(<PaidTrialFunnel studios={[STILLORGAN]} initialStudio="stillorgan" preview />)
+    expect(screen.getByPlaceholderText('First name').disabled).toBe(true)
+    expect(submitButton().disabled).toBe(true)
+    fireEvent.click(submitButton())
+    expect(posts).toHaveLength(0)
+    expect(trackFunnelStep).not.toHaveBeenCalled()
   })
 })

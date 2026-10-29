@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { loadStripe } from '@stripe/stripe-js'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
+import { TRIAL_MUTED } from './trial-card'
 
 const stripePromises = new Map()
 function getStripe(pubKey, connectedAccountId) {
@@ -21,7 +22,16 @@ const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
 
 // PAIDTRIAL.1 — `statusPath` lets another paid flow (the /trial purchase)
 // reuse this widget with its own status route; the default is unchanged.
-export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel, statusPath = '/api/public/class-booking-payments' }) {
+// TRIALFIRST.1 — `tone="light"` puts the heading, price, error and Back in
+// black for the white trial card; the default 'dark' is the class funnel's
+// and the donate card's frosted dark card, unchanged.
+const TONES = {
+  dark: { heading: 'uppercase', price: 'text-white/60', error: 'text-red-300', back: 'text-white/50 hover:text-white/80', mount: 'rounded-xl bg-white p-3' },
+  light: { heading: 'text-black', price: TRIAL_MUTED, error: 'text-red-700', back: 'text-black/50 hover:text-black', mount: 'rounded border border-black/10 bg-white p-3' },
+}
+
+export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel, statusPath = '/api/public/class-booking-payments', tone = 'dark' }) {
+  const cls = TONES[tone] || TONES.dark
   const targetRef = useRef(null)
   const instanceRef = useRef(null)
   const paidRef = useRef(false)
@@ -101,21 +111,21 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
   return (
     <div>
       <div className="mb-4 text-center">
-        <h1 className="font-display font-extrabold uppercase text-2xl mb-1">Secure checkout</h1>
-        {priceLabel && <p className="text-white/60 text-sm">{priceLabel}</p>}
+        <h1 className={`font-display font-extrabold text-2xl mb-1 ${cls.heading}`}>Secure checkout</h1>
+        {priceLabel && <p className={`${cls.price} text-sm`}>{priceLabel}</p>}
       </div>
       {error ? (
-        <p className="text-sm text-red-300 text-center">{error}</p>
+        <p className={`text-sm ${cls.error} text-center`}>{error}</p>
       ) : (
         /* WHITE panel behind the widget: it ships a light theme (dark labels)
            with no dark mode, so mounted bare on the dark funnel card its text
            was unreadable — same defect fixed on /offers in OFFERS.8d (#1293). */
-        <div className="rounded-xl bg-white p-3">
+        <div className={cls.mount}>
           <div ref={targetRef} className="min-h-[320px]" />
         </div>
       )}
       {onCancel && !error && (
-        <button type="button" onClick={onCancel} className="mt-4 w-full text-white/50 text-sm hover:text-white/80">← Back</button>
+        <button type="button" onClick={onCancel} className={`mt-4 w-full text-sm ${cls.back}`}>← Back</button>
       )}
     </div>
   )
