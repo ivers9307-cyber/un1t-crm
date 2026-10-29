@@ -22,14 +22,14 @@ import {
   WAIVABLE_STATUSES,
   RETRYABLE_STATUSES,
   OPEN_FEE_STATUSES,
-  classFeeKindLabel,
 } from './class-fees.js'
 import { getLocationZone, dateKeyIn, addDaysIn, dayStartMsIn, formatInZone } from './location-time.js'
 import { loadForgivenessFacts, decideForgiveness, forgivenessReason } from './class-fees-forgiveness.js'
 import { exemptContactIds, waiveFeesOfExempt, EXEMPT_REASON } from './class-fees-exemptions.js'
 import { selectAll } from './select-all.js'
 import { sendTransactionalEmail } from './postmark.js'
-import { escapeHtml } from './html-escape.js'
+import { buildReviewEmail } from './class-fees-email.js'
+import { getLocationBranding } from './location-branding.js'
 import { getAppUrl } from './app-url.js'
 import { logError, logInfo, logWarn } from './log'
 
@@ -248,75 +248,73 @@ async function dropExempt(db, locationId, fees, nowMs) {
 
 // ── the nightly email ─────────────────────────────────────────────────────
 
-const euro = (cents) => `€${(Number(cents || 0) / 100).toFixed(2)}`
 
 /**
  * The review email for one studio. Pure: { subject, htmlBody }.
  * Never names a member in the subject; the body names them for staff.
  */
-export function buildReviewEmail({ studioName, dayLabel, dueFees, recorded, undecided, outstandingCount, reviewUrl, chargeLabel, forgiven = 0, dryRun = false, noticesSent = 0 }) {
-  const total = dueFees.reduce((s, f) => s + (f.amount_cents || 0), 0)
-  const subject = dryRun
-    ? `Class fees for ${dayLabel} (dry run): ${dueFees.length} would be charged`
-    : `Class fees for ${dayLabel}: ${dueFees.length} to charge at ${chargeLabel}`
-  const rows = dueFees.map((f) => `<tr><td style="padding:4px 8px">${escapeHtml(f.member_name || 'Member')}</td><td style="padding:4px 8px">${escapeHtml(classFeeKindLabel(f.kind))}</td><td style="padding:4px 8px">${escapeHtml(f.charge_description || '')}</td><td style="padding:4px 8px;text-align:right">${escapeHtml(euro(f.amount_cents))}</td></tr>`).join('')
-  const htmlBody = [
-    dryRun
-      ? `<p>${escapeHtml(studioName)} (dry run, charging paused): ${dueFees.length} fee(s) totalling ${escapeHtml(euro(total))} would be charged. Nothing is charged and no member is emailed while charging is paused.</p>`
-      : `<p>${escapeHtml(studioName)}: ${dueFees.length} fee(s) totalling ${escapeHtml(euro(total))} will be charged at ${escapeHtml(chargeLabel)} unless waived.</p>`,
-    noticesSent ? `<p>${noticesSent} member(s) were emailed about their fee.</p>` : '',
-    dueFees.length ? `<table style="border-collapse:collapse;font-size:14px">${rows}</table>` : '<p>No fees to charge tonight.</p>',
-    recorded ? `<p>${recorded} pack credit(s) kept by un1t.online (recorded only, nothing charged).</p>` : '',
-    forgiven ? `<p>${forgiven} fee(s) forgiven automatically by the studio's rules (see History).</p>` : '',
-    undecided ? `<p>${undecided} booking(s) are still marked booked after the class. Mark them attended or no-show in un1t.online; they are never charged while undecided.</p>` : '',
-    outstandingCount ? `<p>${outstandingCount} fee(s) are outstanding after two refused charges.</p>` : '',
-    `<p><a href="${escapeHtml(reviewUrl)}">Review and waive fees</a></p>`,
-  ].join('\n')
-  return { subject, htmlBody }
-}
-
-/** Send the nightly review email. Never throws; returns { sent, reason? }. */
-export async function sendReviewEmail(db, { locationId, location, settings, zone, nowMs, undecidedCount, forgivenCount = 0, noticesSent = 0 }) {
+/**
+ * FEES.5 — the nightly review email (layout in class-fees-email.js). Lists
+ * the fees due (or, on a paused night, the previews), the fees forgiven and
+ * why, and the bookings still not marked, for yesterday and today. The button
+ * opens THIS studio's /class-fees page. Never throws; returns { sent, reason? }.
+ *
+ * `undecided` is detectClassFees' list ({ contactId, classTitle, startsAt }).
+ */
+export async function sendReviewEmail(db, { locationId, location, settings, zone, nowMs, undecided = [], noticesSent = 0 }) {
   if (!settings.reviewEmails.length) return { sent: false, reason: 'no_recipients' }
   try {
+    const dryRun = settings.chargingPaused
+    const since = addDaysIn(dateKeyIn(nowMs, zone), -1, zone)
     // A paused night lists its previews (yesterday and today only: a preview
     // is never charged, so older ones would repeat every night).
-    const dryRun = settings.chargingPaused
     let dueQ = db
       .from('class_fees')
-      .select('id, contact_id, kind, amount_cents, charge_description')
+      .select('id, contact_id, kind, class_title, starts_at, amount_cents')
       .eq('location_id', locationId)
       .eq('status', dryRun ? 'preview' : 'pending')
-    if (dryRun) dueQ = dueQ.gte('class_day', addDaysIn(dateKeyIn(nowMs, zone), -1, zone))
-    const { data: due, error } = await dueQ
+    if (dryRun) dueQ = dueQ.gte('class_day', since)
+    const { data: due, error } = await dueQ.order('starts_at').limit(500)
+    if (error) throw error
+    const { data: forgiven, error: fErr } = await db
+      .from('class_fees')
+      .select('id, contact_id, kind, class_title, starts_at, waived_reason, waive_rule')
+      .eq('location_id', locationId)
+      .eq('status', 'waived')
+      .not('waive_rule', 'is', null)
+      .gte('class_day', since)
       .order('starts_at')
       .limit(500)
-    if (error) throw error
+    if (fErr) throw fErr
     const { count: recorded } = await db
       .from('class_fees')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
       .eq('status', 'recorded')
-      .eq('class_day', dateKeyIn(nowMs, zone))
+      .gte('class_day', since)
     const { count: outstanding } = await db
       .from('class_fees')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
       .eq('status', 'outstanding')
-    const names = await contactNames(db, locationId, (due || []).map((f) => f.contact_id))
-    const dueFees = (due || []).map((f) => ({ ...f, member_name: names.get(f.contact_id) ?? null }))
+    const names = await contactNames(db, locationId, [...(due || []), ...(forgiven || []), ...undecided.map((u) => ({ contact_id: u.contactId }))].map((r) => r.contact_id))
+    const when = (iso) => (iso ? formatInZone(iso, zone, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).replace(/,/g, '') : '')
+    const appUrl = getAppUrl()
+    const branding = await getLocationBranding(db, locationId)
     const { subject, htmlBody } = buildReviewEmail({
       studioName: location.name || 'Studio',
-      dayLabel: formatInZone(nowMs, zone, { weekday: 'short', day: 'numeric', month: 'short' }).replace(/,/g, ''),
-      dueFees,
-      recorded: recorded || 0,
-      undecided: undecidedCount || 0,
-      forgiven: forgivenCount || 0,
+      logoUrl: branding?.logoUrl || null,
+      dayLabel: formatInZone(nowMs, zone, { weekday: 'long', day: 'numeric', month: 'long' }).replace(/,/g, ''),
       dryRun,
-      noticesSent,
-      outstandingCount: outstanding || 0,
-      reviewUrl: `${getAppUrl()}/class-fees`,
       chargeLabel: `${String(settings.chargeHour).padStart(2, '0')}:00 tomorrow`,
+      due: (due || []).map((f) => ({ member: names.get(f.contact_id) ?? null, contactId: f.contact_id, classTitle: f.class_title, classTime: when(f.starts_at), kind: f.kind, amountCents: f.amount_cents })),
+      forgiven: (forgiven || []).map((f) => ({ member: names.get(f.contact_id) ?? null, contactId: f.contact_id, classTitle: f.class_title, classTime: when(f.starts_at), kind: f.kind, reason: f.waived_reason })),
+      recordedCount: recorded || 0,
+      undecided: undecided.map((u) => ({ member: names.get(u.contactId) ?? null, contactId: u.contactId, classTitle: u.classTitle, classTime: when(u.startsAt) })),
+      outstandingCount: outstanding || 0,
+      noticesSent,
+      reviewUrl: `${appUrl}/class-fees?location=${encodeURIComponent(locationId)}`,
+      contactUrl: (id) => `${appUrl}/contacts/${encodeURIComponent(id)}?studio=${encodeURIComponent(locationId)}`,
     })
     let sent = 0
     for (const to of settings.reviewEmails) {

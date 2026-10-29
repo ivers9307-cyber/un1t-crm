@@ -61,8 +61,7 @@ export async function GET(request) {
         outcome.notices += notices.sent
         const mail = await sendReviewEmail(db, {
           locationId: loc.id, location: ctx.location, settings: ctx.settings, zone: ctx.zone, nowMs,
-          undecidedCount: found.undecided.length,
-          forgivenCount: found.forgiven,
+          undecided: found.undecided,
           noticesSent: notices.sent,
         })
         if (mail.sent) outcome.emails++

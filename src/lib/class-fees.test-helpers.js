@@ -25,7 +25,7 @@ export function makeDb(tables) {
       store[name] ??= []
       const s = { op: 'select', filters: [], ors: null, payload: null, opts: null, head: false, single: false }
       const rows = () => store[name]
-      const match = (r) => s.filters.every(([op, c, v]) => (op === 'in' ? v.includes(r[c]) : op === 'is' ? r[c] === v : cmp(op, r[c], v)))
+      const match = (r) => s.filters.every(([op, c, v]) => (op === 'in' ? v.includes(r[c]) : op === 'is' ? r[c] === v : op === 'notnull' ? r[c] != null : cmp(op, r[c], v)))
         && (!s.ors || s.ors.some((group) => group.every(([op, c, v]) => cmp(op, r[c], v))))
       const run = () => {
         if (s.op === 'upsert' || s.op === 'insert') {
@@ -68,6 +68,7 @@ export function makeDb(tables) {
         lte(c, v) { s.filters.push(['lte', c, v]); return api },
         lt(c, v) { s.filters.push(['lt', c, v]); return api },
         gt(c, v) { s.filters.push(['gt', c, v]); return api },
+        not(c, op, v) { if (op === 'is' && v === null) s.filters.push(['notnull', c]); return api },
         or(e) { s.ors = parseOr(e); return api },
         order() { return api },
         limit() { return api },
