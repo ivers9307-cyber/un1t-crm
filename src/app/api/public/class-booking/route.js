@@ -19,6 +19,7 @@ import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUnavailableMessage } from '@/lib/public-landing'
+import { resolveCampaignKey, campaignFunnelBlock, campaignFunnelConfig, campaignFunnelCopy } from '@/lib/campaign-funnel'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
 import { locationCanTakePayments } from '@/lib/location-payments'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
@@ -30,6 +31,10 @@ export const runtime = 'nodejs'
 const Schema = z.object({
   event_id: z.string().trim().min(1).max(64),
   path: z.string().trim().max(64).optional(),
+  // FIFTYPLUS.1 — a campaign page (/50plus): the row's campaign_funnel block
+  // for this key decides the tag, lead source, trial pair and the allow-listed
+  // validation read. Judged below, after the row is read.
+  campaign: z.string().trim().max(64).optional(),
   class_name: z.string().trim().max(200).optional(),
   starts_at: z.string().trim().max(40).optional(),
   first_name: z.string().trim().min(1).max(120),
@@ -67,6 +72,31 @@ const Schema = z.object({
   terms_accepted: z.boolean().optional(),
 })
 
+// One source for everything the handler reads off the row: the class_funnel
+// block (no campaign) or the campaign_funnel block for the key.
+function resolveFunnel(blocks, landingPath, campaignKey) {
+  if (!campaignKey) {
+    return {
+      ...classFunnelConfigFromBlocks(blocks, landingPath),
+      allowKeywords: null,
+      timetableUnavailableText: classFunnelTimetableUnavailableMessage(blocks),
+      notConfigured: false,
+    }
+  }
+  const block = campaignFunnelBlock(blocks, campaignKey)
+  const cfg = campaignFunnelConfig(block, { landingPath })
+  const copy = campaignFunnelCopy(block || {})
+  return {
+    tag: cfg.tag, leadSource: cfg.leadSource, eventSourceUrl: cfg.eventSourceUrl,
+    trialMembershipId: cfg.trialMembershipId, trialPlanCode: cfg.trialPlanCode,
+    priceCents: 0, currency: 'EUR',
+    allowKeywords: cfg.allowKeywords,
+    timetableUnavailableText: copy.timetable_unavailable_text,
+    notConfigured: !block || !cfg.configured,
+    notConfiguredText: copy.not_configured_text,
+  }
+}
+
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
@@ -94,7 +124,18 @@ export async function POST(request) {
   // location's class_funnel block (defaults reproduce today's Stillorgan
   // values) — never Stillorgan literals, so a second gym on this block isn't
   // mistagged 'stillorgan-start' or misreported to Meta as /start.
-  const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode, priceCents, currency } = classFunnelConfigFromBlocks(page.blocks, landingPath)
+  //
+  // FIFTYPLUS.1 — with `campaign`, they come from the row's campaign_funnel
+  // block for that key instead, and the trial pair is REQUIRED: a block with
+  // no plan picked, or no such block, is refused here, before any read or
+  // capture, never a fallback to the class_funnel trial (the generic one).
+  // A campaign booking is always free and validates against the block's
+  // allow-list, so a real class outside it is class_unavailable.
+  const funnel = resolveFunnel(page.blocks, landingPath, resolveCampaignKey(b.campaign))
+  if (funnel.notConfigured) {
+    return NextResponse.json({ success: false, code: 'not_configured', error: funnel.notConfiguredText }, { status: 409 })
+  }
+  const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode, priceCents, currency } = funnel
 
   // UN1TWRITE.18 — at a un1t.online studio with the funnel on, the person
   // must accept the studio's terms and liability waiver; the acceptance is
@@ -150,7 +191,9 @@ export async function POST(request) {
   let chosen = null
   let timetableErr = null
   try {
-    const r = await readPublicClasses(db, locationId, 14)
+    const r = funnel.allowKeywords
+      ? await readPublicClasses(db, locationId, 14, { allowKeywords: funnel.allowKeywords })
+      : await readPublicClasses(db, locationId, 14)
     timetableErr = r.error
     chosen = r.classes.find((c) => c.event_id === b.event_id) || null
   } catch (e) {
@@ -167,7 +210,7 @@ export async function POST(request) {
     return NextResponse.json({
       success: false,
       code: 'timetable_unavailable',
-      error: classFunnelTimetableUnavailableMessage(page.blocks),
+      error: funnel.timetableUnavailableText,
     }, { status: 503 })
   }
   if (!chosen) {
