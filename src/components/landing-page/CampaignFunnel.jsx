@@ -23,6 +23,14 @@ import { readAttributionFromUrl, buildAttribution, readFbpCookie, funnelSessionI
 
 const VISIBLE_TILES = 3
 const FUNNEL = '50plus'
+// The CRM's funnel_events accepts only VALID_STEPS (src/lib/funnel-events.js),
+// so the card's steps map onto the /start vocabulary the Ads report counts;
+// steps with no CRM twin (empty, not_configured, unavailable) go to the
+// Pixel and Vercel only.
+const CRM_STEP = { view: 'view', pick: 'path_class', details: 'details', booked: 'booked_class' }
+// en-IE day labels read "Mon, 2 Nov": the weekday is the first token before
+// the comma or space.
+const labelParts = (label) => String(label || '').split(/[,\s]+/).filter(Boolean)
 const inputCls = 'w-full bg-white border border-black/15 rounded-xl px-4 py-3.5 text-base text-black placeholder-black/40 focus:outline-none focus:border-black/60'
 const ctaCls = 'w-full rounded-full bg-black text-white py-4 px-6 font-bold text-base disabled:opacity-50'
 
@@ -40,20 +48,22 @@ export function cadenceGroups(classes) {
 /** The CTA label: `{day}` is the weekday off day_label, `{time}` the slot's time. */
 export function ctaLabelFor(template, cls) {
   const t = typeof template === 'string' && template.trim() ? template : 'Book {day} {time}'
-  const weekday = String(cls?.day_label || '').split(' ')[0] || ''
+  const weekday = labelParts(cls?.day_label)[0] || ''
   return t.replace('{day}', weekday).replace('{time}', cls?.time || '').replace(/\s+/g, ' ').trim()
 }
 
-function Tile({ cls, selected, onPick }) {
-  const [weekday, ...rest] = String(cls.day_label || '').split(' ')
-  const dateNumber = rest[0] || ''
-  const month = rest.slice(1).join(' ')
+function Tile({ cls, selected, onPick, beyondFirstRow }) {
+  const [weekday, dateNumber = '', ...rest] = labelParts(cls.day_label)
+  const month = rest.join(' ')
+  // The second week is a tap away on a phone and in view on a wide screen.
+  const reveal = beyondFirstRow ? 'hidden lg:block' : ''
   return (
     <button
       type="button"
+      data-tile={cls.event_id}
       onClick={() => onPick(cls)}
       aria-pressed={selected}
-      className={`rounded-2xl px-2 py-3 text-center transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
+      className={`${reveal} rounded-2xl px-2 py-3 text-center transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
     >
       <span className={`block text-xs ${selected ? 'text-white/70' : 'text-black/60'}`}>{weekday}</span>
       <span className="block font-display font-extrabold text-2xl leading-tight">{dateNumber}</span>
@@ -69,6 +79,7 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
   const [classes, setClasses] = useState([])
   const [loading, setLoading] = useState(true)
   const [configured, setConfigured] = useState(true)
+  const [unavailable, setUnavailable] = useState(false)
   const [chosen, setChosen] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
@@ -81,6 +92,8 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
 
   function fireStep(name, params = {}) {
     trackFunnelStep(`${FUNNEL}_${name}`, params)
+    const crmStep = CRM_STEP[name]
+    if (!crmStep) return
     try {
       const a = attributionRef.current || {}
       fetch('/api/public/funnel-event', {
@@ -88,7 +101,7 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
         headers: { 'Content-Type': 'application/json' },
         keepalive: true,
         body: JSON.stringify({
-          location_path: publicPath, funnel: FUNNEL, step: name,
+          location_path: publicPath, funnel: FUNNEL, step: crmStep,
           session_id: sessionRef.current,
           ad_provider: a.meta_ad_id ? 'meta' : undefined,
           ad_external_id: a.meta_ad_id,
@@ -99,34 +112,44 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
     } catch { /* never block the funnel */ }
   }
 
+  // The campaign's slots. `preselect` picks the first on the first load; a
+  // reload after class_unavailable leaves nothing chosen until they pick.
+  const aliveRef = useRef(true)
+  function loadClasses({ preselect }) {
+    setLoading(true)
+    return fetch(`/api/public/classes?path=${encodeURIComponent(publicPath)}&campaign=${encodeURIComponent(campaign)}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (!aliveRef.current) return
+        const list = (j?.success && Array.isArray(j.data?.classes)) ? j.data.classes : []
+        const ok = j?.data?.campaign?.configured !== false
+        const blip = j?.data?.campaign?.timetable_unavailable === true
+        setClasses(list)
+        setConfigured(ok)
+        setUnavailable(blip)
+        if (preselect && list.length) setChosen(list[0])
+        if (!ok) fireStep('not_configured')
+        else if (blip) fireStep('unavailable')
+        else if (!list.length) fireStep('empty')
+      })
+      .catch(() => { if (aliveRef.current) { setClasses([]); setUnavailable(true); fireStep('unavailable') } })
+      .finally(() => { if (aliveRef.current) setLoading(false) })
+  }
+
   useEffect(() => {
+    aliveRef.current = true
     attributionRef.current = readAttributionFromUrl(window.location.search)
     let storage = null
     try { storage = window.sessionStorage } catch { /* private mode */ }
     sessionRef.current = funnelSessionId(storage)
     fireStep('view')
-    let alive = true
-    fetch(`/api/public/classes?path=${encodeURIComponent(publicPath)}&campaign=${encodeURIComponent(campaign)}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (!alive) return
-        const list = (j?.success && Array.isArray(j.data?.classes)) ? j.data.classes : []
-        const ok = j?.data?.campaign?.configured !== false
-        setClasses(list)
-        setConfigured(ok)
-        if (list.length) setChosen(list[0])
-        if (!ok) fireStep('not_configured')
-        else if (!list.length) fireStep('empty')
-      })
-      .catch(() => { if (alive) setClasses([]) })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
+    loadClasses({ preselect: true })
+    return () => { aliveRef.current = false }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const groups = cadenceGroups(classes)
   const flat = groups.flatMap((g) => g.classes)
-  const visible = showAll ? flat : flat.slice(0, VISIBLE_TILES)
-  const hiddenCount = flat.length - visible.length
+  const hiddenCount = showAll ? 0 : Math.max(0, flat.length - VISIBLE_TILES)
 
   function pick(cls) {
     setChosen(cls)
@@ -166,8 +189,12 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
         if (j.code === 'class_unavailable') {
+          // The slot they chose is gone: clear it and reload the list so the
+          // same tile cannot be pressed into the same refusal.
+          setChosen(null)
           setStep('pick')
           setError('That class filled up while you were typing. Pick another one, your details are saved.')
+          loadClasses({ preselect: false })
           return
         }
         setError(stripDashes(j.error || 'Something went wrong. Please try again.'))
@@ -240,17 +267,19 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
         <p className="text-black/50 text-base py-6 text-center">Checking the timetable…</p>
       ) : !configured ? (
         <p className="text-black/70 text-lg py-4" role="status">{c.not_configured_text}</p>
+      ) : unavailable ? (
+        <p className="text-black/70 text-lg py-4" role="status">{c.timetable_unavailable_text}</p>
       ) : flat.length === 0 ? (
         <p className="text-black/70 text-lg py-4" role="status">{c.no_classes_text}</p>
       ) : (
         <>
           <div className="grid grid-cols-3 gap-2.5">
-            {visible.map((cls) => (
-              <Tile key={cls.event_id} cls={cls} selected={chosen?.event_id === cls.event_id} onPick={pick} />
+            {flat.map((cls, i) => (
+              <Tile key={cls.event_id} cls={cls} selected={chosen?.event_id === cls.event_id} onPick={pick} beyondFirstRow={!showAll && i >= VISIBLE_TILES} />
             ))}
           </div>
           {hiddenCount > 0 && (
-            <button type="button" onClick={() => setShowAll(true)} className="block mx-auto mt-3 text-sm underline text-black/60 hover:text-black">
+            <button type="button" onClick={() => setShowAll(true)} className="lg:hidden block mx-auto mt-3 text-sm underline text-black/60 hover:text-black">
               More dates ({hiddenCount})
             </button>
           )}

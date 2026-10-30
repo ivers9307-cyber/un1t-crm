@@ -45,6 +45,7 @@ const get = (qs) => GET(new Request(`https://crm.example/api/public/classes?${qs
 
 beforeEach(() => {
   vi.clearAllMocks()
+  fetchUpcomingEvents.mockReset() // a queued once-value from a test that never fetched must not leak
   blocks = []
   createServerClient.mockReturnValue(makeDb())
 })
@@ -57,7 +58,7 @@ describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.classes.map((c) => c.event_id)).toEqual(['a'])
-    expect(body.data.campaign).toEqual({ configured: true })
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: false })
     const opts = fetchUpcomingEvents.mock.calls[0][1]
     expect(opts.end - opts.start).toBe(14 * 86400)
   })
@@ -67,7 +68,7 @@ describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
     fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
     const body = await (await get('path=stillorgan&campaign=50plus')).json()
     expect(body.data.classes).toEqual([])
-    expect(body.data.campaign).toEqual({ configured: false })
+    expect(body.data.campaign).toEqual({ configured: false, timetable_unavailable: false })
     expect(fetchUpcomingEvents).not.toHaveBeenCalled()
   })
 
@@ -76,14 +77,29 @@ describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
     fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
     const body = await (await get('path=stillorgan&campaign=50plus')).json()
     expect(body.data.classes.map((c) => c.event_id)).toEqual(['a'])
-    expect(body.data.campaign).toEqual({ configured: false })
+    expect(body.data.campaign).toEqual({ configured: false, timetable_unavailable: false })
+  })
+
+  it('a failed timetable read is flagged, not "no classes"', async () => {
+    blocks = [{ type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+', trial_membership_id: 'm', trial_plan_code: 'p' }]
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: false })
+    const body = await (await get('path=stillorgan&campaign=50plus')).json()
+    expect(body.data.classes).toEqual([])
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: true })
+  })
+
+  it('a good read carries timetable_unavailable false', async () => {
+    blocks = [{ type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+', trial_membership_id: 'm', trial_plan_code: 'p' }]
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
+    const body = await (await get('path=stillorgan&campaign=50plus')).json()
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: false })
   })
 
   it('a missing landing row under a campaign is not configured, not "no classes"', async () => {
     createServerClient.mockReturnValue({ from: () => ({ select() { return this }, eq() { return this }, maybeSingle: async () => ({ data: null, error: null }) }) })
     const body = await (await get('path=stillorgan&campaign=50plus')).json()
     expect(body.data.classes).toEqual([])
-    expect(body.data.campaign).toEqual({ configured: false })
+    expect(body.data.campaign).toEqual({ configured: false, timetable_unavailable: false })
   })
 
   it('no campaign param keeps the full list and no campaign key', async () => {

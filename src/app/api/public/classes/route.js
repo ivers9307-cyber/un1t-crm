@@ -40,14 +40,16 @@ export const dynamic = 'force-dynamic'
 
 const CAMPAIGN_DAYS = 14
 
-// The campaign list: the block's allow-list over the full window, with the
-// old contract ([] on any failure) the public list has always had.
+// The campaign list: the block's allow-list over the full window. A timetable
+// the studio could not READ (a Glofox or settings blip) is flagged, so the
+// card says "try again in a minute" rather than "no classes": a paid click
+// told there is nothing to book leaves.
 async function listCampaignClasses(db, page, path, key) {
   const block = campaignFunnelBlock(page.blocks, key)
-  if (!block) return { classes: [], campaign: { configured: false } }
+  if (!block) return { classes: [], campaign: { configured: false, timetable_unavailable: false } }
   const cfg = campaignFunnelConfig(block, { landingPath: path })
-  const { classes } = await readPublicClasses(db, page.location_id, CAMPAIGN_DAYS, { allowKeywords: cfg.allowKeywords })
-  return { classes, campaign: { configured: cfg.configured } }
+  const { classes, error } = await readPublicClasses(db, page.location_id, CAMPAIGN_DAYS, { allowKeywords: cfg.allowKeywords })
+  return { classes, campaign: { configured: cfg.configured, timetable_unavailable: Boolean(error) } }
 }
 
 export async function GET(request) {
@@ -66,7 +68,7 @@ export async function GET(request) {
     const { data: page } = await db.from('landing_page_settings')
       .select('location_id, public_path, blocks').eq('public_path', path).maybeSingle()
     // A campaign page with no row to read is "not open", not "no classes".
-    if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false } } : {}) } })
+    if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false, timetable_unavailable: false } } : {}) } })
     if (campaignKey) {
       const [listed, terms] = await Promise.all([listCampaignClasses(db, page, path, campaignKey), termsFor(db, page)])
       return NextResponse.json({ success: true, data: { classes: listed.classes, terms, campaign: listed.campaign } })
@@ -75,6 +77,7 @@ export async function GET(request) {
     return NextResponse.json({ success: true, data: { classes, terms } })
   } catch (e) {
     logWarn('public-classes', 'list failed', { err: e })
-    return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false } } : {}) } })
+    // A list that threw: the page cannot tell, so say the timetable could not be read.
+    return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: true, timetable_unavailable: true } } : {}) } })
   }
 }

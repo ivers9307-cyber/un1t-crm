@@ -81,7 +81,10 @@ describe('/50plus page', () => {
     expect(html).toMatch(/<section class="bg-lp-pale text-black[^"]*"><div class="max-w-6xl mx-auto px-6">/)
   })
 
-  it('metadata is noindex', async () => {
-    expect((await generateMetadata()).robots).toEqual({ index: false, follow: false })
+  it('metadata is noindex and the title carries no em-dash (customer-visible copy)', async () => {
+    const meta = await generateMetadata()
+    expect(meta.robots).toEqual({ index: false, follow: false })
+    expect(meta.title).toBe('The 50+ Club Trial at UN1T')
+    expect(meta.title).not.toContain('—')
   })
 })

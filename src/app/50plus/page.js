@@ -48,7 +48,8 @@ export async function generateMetadata() {
   const chrome = await resolveOrgChrome({ orgId: UN1T_GROUP_ORG_ID })
   const name = chrome.companyName
   return {
-    title: name ? `The 50+ Club Trial — ${name}` : 'The 50+ Club Trial',
+    // Customer-visible (the tab, a share): no em-dash (CLAUDE.md).
+    title: name ? `The 50+ Club Trial at ${name}` : 'The 50+ Club Trial',
     description: 'A free trial of The 50+ Club at UN1T Stillorgan. Coach-led strength for the over-50s, three mornings a week. Pick your first class.',
     robots: { index: false, follow: false },
   }
