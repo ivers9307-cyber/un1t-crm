@@ -21,6 +21,7 @@ const WEB_NOT_STAFF = new Set([
   'free-class', 'start', 'trial', 'corp', 'offers', 'privacy', 'terms', 'legal', 'technical',
   'account-deletion', 'givers', 'studio-login', 'embed', 'bca', 'host-connect', 'host', 'h',
   'use-the-app', 'cancel', 'pay-done', 'fee-appeal', 'pay-link',
+  '50plus', // FIFTYPLUS.1 — the 50+ Club trial page, public like /trial
 ])
 
 // Staff routes deliberately filed under `other`, with the reason.
