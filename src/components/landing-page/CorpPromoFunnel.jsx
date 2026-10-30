@@ -1,7 +1,8 @@
 'use client'
 
 // CorpPromoFunnel — CORPPROMO.1: the visitor's side of a /corp promo, in the
-// /trial card's look. The form (details, consent, un1t.online's terms tick) →
+// /trial card's look (TRIALFIRST.1: the one white card, `./trial-card`).
+// The form (details, consent, un1t.online's terms tick) →
 // POST /api/public/corp-claims → one of:
 //   granted: the server's done title and message (the credits and the day
 //     they expire, in the studio's zone);
@@ -17,10 +18,9 @@ import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import TrialTermsTick from './TrialTermsTick'
+import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK } from './trial-card'
 
 const CLAIM_PATH = '/api/public/corp-claims'
-const inputCls = 'w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
-const card = 'w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 backdrop-blur-xl px-6 py-8 md:px-8'
 
 function utmFromUrl() {
   try {
@@ -49,7 +49,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms }) {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
 
   if (!promoKey) {
-    return <div className={`${card} text-center`}><p className="text-white/80">{copy.unavailable_text}</p></div>
+    return <div className={`${TRIAL_CARD} text-center`}><p className="text-black/80">{copy.unavailable_text}</p></div>
   }
 
   async function submit(e) {
@@ -97,19 +97,19 @@ export default function CorpPromoFunnel({ promoKey, copy, terms }) {
 
   if (result) {
     return (
-      <div className={`${card} text-center`} role="status">
-        {result.kind === 'granted' && <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">{result.title}</p>}
-        <p className="text-white/80">{result.message}</p>
+      <div className={`${TRIAL_CARD} text-center`} role="status">
+        {result.kind === 'granted' && <p className="font-display font-extrabold text-3xl text-black mb-3">{result.title}</p>}
+        <p className="text-black/80">{result.message}</p>
       </div>
     )
   }
 
   return (
-    <div className={card}>
-      {copy.title && <p className="font-display font-extrabold uppercase text-3xl md:text-4xl leading-tight text-white text-center mb-6">{copy.title}</p>}
-      <div className="rounded-2xl bg-white text-black p-6 mb-6">
-        {copy.eyebrow && <p className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/45 mb-2">{copy.eyebrow}</p>}
-        <h1 className="font-display font-extrabold uppercase text-2xl leading-tight">{copy.heading}</h1>
+    <div className={TRIAL_CARD}>
+      {copy.title && <p className="font-display font-extrabold text-3xl md:text-4xl leading-tight text-black text-center mb-6">{copy.title}</p>}
+      <div className="mb-6">
+        {copy.eyebrow && <p className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/50 mb-2">{copy.eyebrow}</p>}
+        <h1 className="font-display font-extrabold text-2xl leading-tight">{copy.heading}</h1>
         {copy.subhead && <p className="mt-3 text-sm text-black/70">{copy.subhead}</p>}
         {copy.ticks.length > 0 && (
           <ul className="mt-4 space-y-1.5">
@@ -124,22 +124,22 @@ export default function CorpPromoFunnel({ promoKey, copy, terms }) {
       </div>
 
       <form onSubmit={submit} className="space-y-3" aria-label="Your details">
-        <div className="grid grid-cols-2 gap-3">
-          <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" aria-label="First name" />
-          <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" aria-label="Last name" />
+        <div className="grid grid-cols-2 gap-4">
+          <input className={TRIAL_INPUT} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" aria-label="First name" />
+          <input className={TRIAL_INPUT} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" aria-label="Last name" />
         </div>
-        <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" aria-label="Email" />
-        <input className={inputCls} type="tel" placeholder="Mobile" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" aria-label="Mobile" />
-        <label className="flex items-start gap-2.5 text-xs text-white/65 pt-1">
-          <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-white" />
-          <span>{copy.consent_label} <a href="/privacy" target="_blank" rel="noreferrer" className="underline">Privacy</a></span>
+        <input className={TRIAL_INPUT} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" aria-label="Email" />
+        <input className={TRIAL_INPUT} type="tel" placeholder="Mobile" value={form.phone} onChange={set('phone')} maxLength={50} autoComplete="tel" aria-label="Mobile" />
+        <label className={`flex items-start gap-2.5 text-xs pt-1 ${TRIAL_MUTED}`}>
+          <input type="checkbox" checked={form.consent} onChange={set('consent')} className="mt-0.5 w-4 h-4 accent-black" />
+          <span>{copy.consent_label} <a href="/privacy" target="_blank" rel="noreferrer" className={TRIAL_LINK}>Privacy</a></span>
         </label>
         {terms && <TrialTermsTick terms={terms} checked={termsAccepted} onChange={setTermsAccepted} />}
-        {error && <p className="text-sm text-red-300" role="alert">{error}</p>}
-        <button type="submit" disabled={submitting} className="lp-btn w-full disabled:opacity-50">
+        {error && <p className={TRIAL_ERROR} role="alert">{error}</p>}
+        <button type="submit" disabled={submitting} className={TRIAL_BTN}>
           {submitting ? 'One moment…' : copy.cta_label}
         </button>
-        <p className="text-center text-[11px] text-white/45">Free. No card, nothing to pay.</p>
+        <p className={TRIAL_FINE}>Free. No card, nothing to pay.</p>
       </form>
     </div>
   )

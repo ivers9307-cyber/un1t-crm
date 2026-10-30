@@ -14,8 +14,41 @@
 import { useState } from 'react'
 import { readVisitOrigin } from '@/lib/visit-origin'
 import { leadFormConsentDefault } from '@/lib/landing-page-blocks'
+import { TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_LINK } from '@/components/landing-page/trial-card'
 
-export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel, brandName = '' }) {
+// TRIALFIRST.1 — `tone`: 'dark' (the default, the form on the black lead
+// section, unchanged) or 'light' (the compact "not ready yet" strip on the
+// pale band: the trial card's underline inputs, black pill and black-alpha
+// text from trial-card.js). Same fields, words and behaviour in both.
+const TONES = {
+  dark: {
+    doneBadge: 'mx-auto mb-5 flex w-16 h-16 items-center justify-center rounded-full bg-white text-black',
+    doneTitle: 'font-display font-extrabold uppercase tracking-wide text-2xl text-white mb-2',
+    doneBody: 'text-white/70 text-sm leading-relaxed max-w-xs mx-auto',
+    input: 'w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 transition-colors focus:outline-none focus:border-white/50 focus:bg-white/[0.09]',
+    label: 'flex items-start gap-2.5 text-xs text-white/65 leading-relaxed pt-1 cursor-pointer',
+    checkbox: 'mt-0.5 shrink-0 w-4 h-4 rounded accent-white cursor-pointer',
+    link: 'underline hover:text-white',
+    button: 'lp-btn w-full disabled:opacity-60 disabled:hover:transform-none',
+    spinner: 'inline-block w-4 h-4 rounded-full border-2 border-black/25 border-t-black animate-spin',
+    fine: 'text-center text-[11px] text-white/40 pt-1',
+  },
+  light: {
+    doneBadge: 'mx-auto mb-5 flex w-16 h-16 items-center justify-center rounded-full bg-black text-white',
+    doneTitle: 'font-display font-extrabold uppercase tracking-wide text-2xl text-black mb-2',
+    doneBody: `${TRIAL_MUTED} text-sm leading-relaxed max-w-xs mx-auto`,
+    input: TRIAL_INPUT,
+    label: `flex items-start gap-2.5 text-xs ${TRIAL_MUTED} leading-relaxed pt-1 cursor-pointer`,
+    checkbox: 'mt-0.5 shrink-0 w-4 h-4 rounded accent-black cursor-pointer',
+    link: TRIAL_LINK,
+    button: `${TRIAL_BTN} disabled:hover:transform-none`,
+    spinner: 'inline-block w-4 h-4 rounded-full border-2 border-white/25 border-t-white animate-spin',
+    fine: `${TRIAL_FINE} pt-1`,
+  },
+}
+
+export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel, brandName = '', tone = 'dark' }) {
+  const t = TONES[tone] || TONES.dark
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
   const [error, setError] = useState(null)
@@ -57,21 +90,20 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
   if (status === 'done') {
     return (
       <div className="px-6 py-10 text-center" role="status">
-        <span className="mx-auto mb-5 flex w-16 h-16 items-center justify-center rounded-full bg-white text-black">
+        <span className={t.doneBadge}>
           <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path className="lp-check-path" d="M20 6L9 17l-5-5" />
           </svg>
         </span>
-        <p className="font-display font-extrabold uppercase tracking-wide text-2xl text-white mb-2">You&apos;re in</p>
-        <p className="text-white/70 text-sm leading-relaxed max-w-xs mx-auto">
+        <p className={t.doneTitle}>You&apos;re in</p>
+        <p className={t.doneBody}>
           {successMessage || "You're on the list — we'll be in touch soon."}
         </p>
       </div>
     )
   }
 
-  const inputCls =
-    'w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 transition-colors focus:outline-none focus:border-white/50 focus:bg-white/[0.09]'
+  const inputCls = t.input
 
   return (
     <form onSubmit={onSubmit} className="space-y-3.5 text-left">
@@ -79,17 +111,17 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
       <input className={inputCls} type="email" required placeholder="Email"     value={form.email}      onChange={set('email')}      maxLength={320} autoComplete="email" aria-label="Email" />
       <input className={inputCls} type="tel"   required placeholder="Phone"     value={form.phone}      onChange={set('phone')}      maxLength={50}  autoComplete="tel" aria-label="Phone" />
 
-      <label className="flex items-start gap-2.5 text-xs text-white/65 leading-relaxed pt-1 cursor-pointer">
+      <label className={t.label}>
         <input
           type="checkbox"
           required
           checked={form.consent}
           onChange={set('consent')}
-          className="mt-0.5 shrink-0 w-4 h-4 rounded accent-white cursor-pointer"
+          className={t.checkbox}
         />
         <span>
           {consentLabel || leadFormConsentDefault(brandName)}{' '}
-          <a href="/privacy" target="_blank" rel="noreferrer" className="underline hover:text-white">Privacy</a>
+          <a href="/privacy" target="_blank" rel="noreferrer" className={t.link}>Privacy</a>
         </span>
       </label>
 
@@ -102,12 +134,12 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
       <button
         type="submit"
         disabled={status === 'submitting'}
-        className="lp-btn w-full disabled:opacity-60 disabled:hover:transform-none"
+        className={t.button}
       >
         {status === 'submitting' ? (
           <>
             <span
-              className="inline-block w-4 h-4 rounded-full border-2 border-black/25 border-t-black animate-spin"
+              className={t.spinner}
               aria-hidden="true"
             />
             Submitting…
@@ -119,7 +151,7 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
           </>
         )}
       </button>
-      <p className="text-center text-[11px] text-white/40 pt-1">Takes 20 seconds. No spam — ever.</p>
+      <p className={t.fine}>Takes 20 seconds. No spam — ever.</p>
     </form>
   )
 }

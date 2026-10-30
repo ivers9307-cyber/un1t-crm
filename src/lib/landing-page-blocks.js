@@ -245,6 +245,9 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   duration_days:  14,
   ticks:          ['Unlimited classes for 14 days', 'Every session coach-led', 'Book straight after you pay'],
   cta_label:      'Start my 14 Day Reset',
+  // TRIALFIRST.1 — header-only short form of cta_label (a phone header has no
+  // room for the full label). Blank ⇒ the header uses cta_label.
+  cta_label_short: '',
   consent_label:  classFunnelConsentDefault(brand),
   done_title:     "You're in 🎉",
   done_body:      'Your 14 Day Reset is on your account. Check your email for how to book your first class.',
@@ -393,21 +396,43 @@ const BlockBaseSchema = z.object({
 
 export const BlocksArraySchema = z.array(BlockBaseSchema).max(40)
 
+// The first paid_trial block of a page, else null.
+export function paidTrialBlockOf(blocks) {
+  return (Array.isArray(blocks) ? blocks : []).find((b) => b && b.type === 'paid_trial') || null
+}
+
 // Conversion targets — derived from a page's own blocks.
-// Priority: a live foundation offer > explicit lead capture >
-// booking > event signup.
+// Priority: a shown paid trial (caller passes { trialShown: true } and the
+// page has a paid_trial block) > a live foundation offer > explicit lead
+// capture > booking > event signup.
 //
 // `primary` is what the sticky header, hero and footer point at.
-// `secondary` exists only when a live offer has pushed the lead form
-// out of the primary slot, and only the hero renders it — the header
+// `secondary` exists only when a live offer or a shown paid trial has
+// pushed the lead form out of the primary slot, and only the hero renders it — the header
 // and footer are space-constrained and the second path is one scroll
 // away on the same page.
 //
 // Either may be null: a page with no funnel block renders no CTA
 // rather than a dead anchor.
-export function pageCtas(blocks) {
+export function pageCtas(blocks, { trialShown = false } = {}) {
   const list = Array.isArray(blocks) ? blocks : []
   const leadForm = list.find((b) => b && b.type === 'lead_form')
+
+  // TRIALFIRST.1 — a paid trial shown in the hero (#trial) owns the primary
+  // slot; the lead form drops to secondary and any live offer is ignored.
+  const trialBlock = trialShown ? paidTrialBlockOf(list) : null
+  if (trialBlock) {
+    return {
+      primary: {
+        href: '#trial',
+        label: (typeof trialBlock.cta_label === 'string' && trialBlock.cta_label.trim()) || 'Start my trial',
+        labelShort: (typeof trialBlock.cta_label_short === 'string' && trialBlock.cta_label_short.trim()) || '',
+      },
+      secondary: leadForm
+        ? { href: '#waitlist', label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist' }
+        : null,
+    }
+  }
   const offer = leadForm ? offerOf(leadForm) : null
   const waitlist = leadForm
     ? {

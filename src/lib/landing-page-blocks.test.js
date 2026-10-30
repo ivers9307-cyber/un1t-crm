@@ -586,3 +586,25 @@ describe('block defaults name the studio\'s brand (W1.S1b)', () => {
   })
 })
 
+describe('pageCtas with a shown paid trial (TRIALFIRST.1)', () => {
+  const trial = { id: 't', type: 'paid_trial', cta_label: 'Start my 14 Day Reset', cta_label_short: '€39' }
+  const lead = { id: 'l', type: 'lead_form', button_label: 'Keep me posted', offer: { enabled: true, cta_url: 'https://x', cta_label: 'Claim' } }
+  it('the trial owns the primary and the lead form is secondary; the offer is ignored', () => {
+    expect(pageCtas([{ id: 'h', type: 'hero' }, lead, trial], { trialShown: true })).toEqual({
+      primary: { href: '#trial', label: 'Start my 14 Day Reset', labelShort: '€39' },
+      secondary: { href: '#waitlist', label: 'Keep me posted' },
+    })
+  })
+  it('no lead form → no secondary; blank short label → empty string', () => {
+    expect(pageCtas([{ ...trial, cta_label_short: '  ' }], { trialShown: true }))
+      .toEqual({ primary: { href: '#trial', label: 'Start my 14 Day Reset', labelShort: '' }, secondary: null })
+  })
+  it('trialShown without a paid_trial block, or a trial block without trialShown, changes nothing', () => {
+    expect(pageCtas([lead], { trialShown: true })).toEqual(pageCtas([lead]))
+    expect(pageCtas([lead, trial])).toEqual(pageCtas([lead]))
+  })
+  it('the factory default carries cta_label_short', () => {
+    expect(newBlockOfType('paid_trial').cta_label_short).toBe('')
+  })
+})
+

@@ -39,10 +39,12 @@ export const UN1T_TRIAL_ORIGIN = 'web_trial'
  * @param {object} db service-role client
  * @param {{ row: object, location: { id: string, organization_id: string|null },
  *   contact: { id: string, email: string, first_name?: string|null, last_name?: string|null,
- *   name?: string|null, phone?: string|null, un1t_user_id?: string|null } }} args
+ *   name?: string|null, phone?: string|null, un1t_user_id?: string|null },
+ *   returnPath?: string }} args returnPath: the page the buyer started on
+ *   (already allowlisted by the caller, see trial-return-path.js); default /trial
  * @returns {Promise<{ kind: 'redirect', checkoutUrl: string } | { kind: 'help_filed' } | { kind: 'unavailable' }>}
  */
-export async function startUn1tTrialCheckout(db, { row, location, contact }) {
+export async function startUn1tTrialCheckout(db, { row, location, contact, returnPath = '/trial' }) {
   const locationId = row.location_id
   const purchaseId = row.id
 
@@ -107,9 +109,9 @@ export async function startUn1tTrialCheckout(db, { row, location, contact }) {
     return failed('un1t_user_unstamped')
   }
 
-  // ── 2. un1t.online's hosted checkout, back to /trial on the customer host ──
+  // ── 2. un1t.online's hosted checkout, back to the page the buyer started on, on the customer host ──
   const base = await resolveCustomerBaseUrl(db, locationId)
-  const successUrl = `${base}/trial?purchase=${encodeURIComponent(purchaseId)}&studio=hatch`
+  const successUrl = `${base}${returnPath}?purchase=${encodeURIComponent(purchaseId)}&studio=hatch`
   const cancelUrl = `${successUrl}&cancelled=1`
   let checkout
   try {

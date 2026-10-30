@@ -91,6 +91,21 @@ describe('startUn1tTrialCheckout', () => {
     expect(mocks.alert).not.toHaveBeenCalled()
   })
 
+  it("builds the success and cancel URLs on the caller's returnPath", async () => {
+    expect(await startUn1tTrialCheckout(db, { ...ARGS, returnPath: '/hatch-street' })).toEqual({ kind: 'redirect', checkoutUrl: 'https://pay.un1t.online/s/x' })
+    expect(mocks.checkout).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      successUrl: `https://www.un1tdublin.com/hatch-street?purchase=${encodeURIComponent(ROW.id)}&studio=hatch`,
+      cancelUrl: `https://www.un1tdublin.com/hatch-street?purchase=${encodeURIComponent(ROW.id)}&studio=hatch&cancelled=1`,
+    }))
+  })
+  it('defaults to /trial when no returnPath is given', async () => {
+    await startUn1tTrialCheckout(db, ARGS)
+    expect(mocks.checkout).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      successUrl: `https://www.un1tdublin.com/trial?purchase=${encodeURIComponent(ROW.id)}&studio=hatch`,
+      cancelUrl: `https://www.un1tdublin.com/trial?purchase=${encodeURIComponent(ROW.id)}&studio=hatch&cancelled=1`,
+    }))
+  })
+
   // Final review — uniq_trial_purchases_open_help (mig 764) also guards this
   // stamp: a buyer who already has an open help card at Hatch.
   it('a help stamp refused 23505 (a card already open) closes the row failed, sends no second alert, still help_filed', async () => {

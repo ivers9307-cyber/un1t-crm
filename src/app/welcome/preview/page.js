@@ -9,6 +9,10 @@
 // so the preview shows the operator's actual media.
 //
 // `?p=stillorgan` (default) | `?p=hatch-street` picks the studio.
+// `&trial=1` renders what the public page renders for a studio with a
+// sellable paid trial (TRIALFIRST.1): the buy card in the hero, the
+// trial owning the header/hero/footer CTA, and the lead form shrunk to
+// the quiet "not ready yet" strip. Without it the page renders as before.
 // Hard 404 outside development — this never ships content to prod.
 
 import { notFound } from 'next/navigation'
@@ -28,6 +32,61 @@ const PILLARS_STILLORGAN = [
   { number: '03', title: 'A room that shows up', body: 'Members across every level — first-time movers to elite competitors. Intense, friendly, zero judgment.', photo_url: `${STORAGE}/a0000000-0000-0000-0000-000000000001/2328da3c-ffef-4b2a-9967-f614cf1b60ba.webp` },
 ]
 
+// TRIALFIRST.1 — fixtures for the trial-first look (`?trial=1`).
+const TRIAL_CTA_LABEL = 'Start my 14 Day Reset'
+const PAID_TRIAL_BLOCK = { id: 'fx-paid-trial', type: 'paid_trial', cta_label: TRIAL_CTA_LABEL, cta_label_short: '€39' }
+const REVIEWS_BLOCK = { id: 'fx-reviews', type: 'reviews', title: 'What our members say', min_rating: 4, speed: 'normal' }
+const SOFT_LEAD_BLOCK = {
+  id: 'fx-lead-soft',
+  type: 'lead_form',
+  heading: 'Not ready yet?',
+  subtext: 'Leave your details and we’ll keep you posted on classes and offers.',
+  button_label: 'Keep me posted',
+  success_message: "You're on the list — we'll be in touch soon.",
+  consent_label: 'I’d like to hear from UN1T about classes and offers by email, SMS and WhatsApp. I can opt out anytime.',
+  tag: 'preview-soft-path',
+  lead_source: 'preview',
+}
+const FAKE_REVIEWS = {
+  reviews: [
+    { id: 'rv1', google_review_id: 'rv1', rating: 5, author_name: 'Aoife K.', author_photo_url: null, review_time: '2026-09-02T10:00:00Z', hidden: false, comment: 'Best coaching I’ve had in a gym. Every class is planned, cued and pushed just right, and the room is so welcoming.' },
+    { id: 'rv2', google_review_id: 'rv2', rating: 5, author_name: 'Conor D.', author_photo_url: null, review_time: '2026-08-21T10:00:00Z', hidden: false, comment: 'Joined for the Hyrox training and stayed for the people. Six months in and I’m stronger and fitter than I’ve ever been.' },
+    { id: 'rv3', google_review_id: 'rv3', rating: 5, author_name: 'Sinead M.', author_photo_url: null, review_time: '2026-08-05T10:00:00Z', hidden: false, comment: 'Nervous about starting, but the coaches made it easy from the first session. Brilliant studio, brilliant team.' },
+    { id: 'rv4', google_review_id: 'rv4', rating: 5, author_name: 'Paul R.', author_photo_url: null, review_time: '2026-07-18T10:00:00Z', hidden: false, comment: 'Intense, friendly, and zero ego. Every session feels like a proper workout with real coaching behind it.' },
+  ],
+}
+const TRIAL_STUDIO_META = {
+  stillorgan: { key: 'stillorgan', label: 'UN1T Stillorgan', returnPath: '/stillorgan' },
+  'hatch-street': { key: 'hatch', label: 'UN1T Hatch Street', returnPath: '/hatch-street' },
+}
+function fixtureTrial(key) {
+  const meta = TRIAL_STUDIO_META[key]
+  return {
+    studio: {
+      key: meta.key,
+      label: meta.label,
+      sellable: true,
+      block: {
+        eyebrow: '14 day reset',
+        heading: 'The 14 Day Reset',
+        subhead: 'Coach-led 45-minute sessions, as many as you want, for 14 days. Pay once, start this week.',
+        ticks: ['Unlimited classes for 14 days', 'Every session coach-led', 'Book straight after you pay'],
+        cta_label: TRIAL_CTA_LABEL,
+        consent_label: 'I’d like to hear from UN1T about classes and offers by email, SMS and WhatsApp. I can opt out anytime.',
+      },
+      priceCents: 3900,
+      currency: 'EUR',
+      durationDays: 14,
+      productName: 'The 14 Day Reset',
+    },
+    returnPath: meta.returnPath,
+    resumePurchaseId: null,
+    cancelled: false,
+    hatchTerms: null,
+    preview: false,
+  }
+}
+
 const FIXTURES = {
   stillorgan: [
     { id: 'fx-hero', type: 'hero', eyebrow: 'Stillorgan, Dublin', headline: 'ACCOUNTABILITY, PERFORMANCE, RESULTS', subhead: '', subtext: 'Coach-led strength & conditioning, built for everybody. \nBook a free 30-minute consultation below.', image_url: null, video_url: null },
@@ -39,6 +98,8 @@ const FIXTURES = {
       { number: '4.9', label: 'Average member rating' },
     ] },
     { id: 'fx-testimonial', type: 'testimonial', author: 'Simon Goldsmith - Joined 2022', quote: 'I’ve been a member of UN1T Dublin since the day it opened and I’ve loved every single session since! It’s great to see a new gym opening in such a great location with loads of parking - not to mention how slick the studio is. The team in UN1T Dublin are a really good bunch too- always greeting members with a smile and the coaches are great fun but also really committed to ensuring all members are looked after from getting the right weights to having their form on point! It’s been great to see so many new members joining week after week - it brings and extra level of community to the training - we all love a little healthy competition. Only open a couple of months and seeing great things, I’m excited to see what is to come!! Well done UN1T Dublin' },
+    REVIEWS_BLOCK,
+    PAID_TRIAL_BLOCK,
   ],
   'hatch-street': [
     { id: 'fx-hero', type: 'hero', eyebrow: 'Hatch Street, Dublin', headline: 'UN1T OPENS 2nd STUDIO', subhead: 'STRENGTH AND CONDITIONING TRAINING IN HATCH STREET', subtext: 'Boutique gym in the heart of Dublin city, a stone’s throw from the Harcourt Street Luas stop.', image_url: `${STORAGE}/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg`, video_url: null },
@@ -59,6 +120,8 @@ const FIXTURES = {
       { number: '4.9 ⭐', label: 'Average member rating' },
     ] },
     { id: 'fx-testimonial', type: 'testimonial', author: 'Nikki M', quote: 'I’ve been going to UN1T since the day it opened and I haven’t looked back. It’s an amazing gym with incredible coaches who know when to push you, and know when you’re just there to clear the head after a busy day. It’s a brilliant mix of strength and conditioning and I’ve definitely seen a massive improvement in my strength and fitness. The community they have built there is really special with a really great group of people and I’m always leaving with a smile. ❤️' },
+    REVIEWS_BLOCK,
+    PAID_TRIAL_BLOCK,
   ],
 }
 
@@ -67,8 +130,16 @@ export default async function LandingPreviewPage(props) {
 
   const searchParams = await props.searchParams
   const key = searchParams?.p === 'hatch-street' ? 'hatch-street' : 'stillorgan'
-  const blocks = FIXTURES[key]
-  const { primary: cta, secondary: cta2 } = pageCtas(blocks)
+  const trialShown = searchParams?.trial === '1'
+  // Trial-first: the offer-bearing lead form gives way to the quiet soft one
+  // at the foot of the page, as it does on the public page.
+  const blocks = trialShown
+    ? [...FIXTURES[key].filter((b) => b.type !== 'lead_form'), SOFT_LEAD_BLOCK]
+    : FIXTURES[key]
+  const trial = trialShown ? fixtureTrial(key) : null
+  const trialHero = trialShown ? blocks.find((b) => b.type === 'hero') : null
+  const reviewsData = trialShown ? FAKE_REVIEWS : null
+  const { primary: cta, secondary: cta2 } = pageCtas(blocks, { trialShown })
 
   return (
     <div className="min-h-screen bg-black text-white antialiased">
@@ -88,14 +159,16 @@ export default async function LandingPreviewPage(props) {
           key={block.id}
           block={block}
           publicPath={key}
-          reviewsData={null}
+          reviewsData={reviewsData}
           ctaHref={cta?.href || null}
           ctaLabel={cta?.label}
           ctaSecondaryHref={cta2?.href || null}
           ctaSecondaryLabel={cta2?.label}
+          trial={block === trialHero ? trial : null}
+          trialShown={trialShown}
         />
       ))}
-      <SiteFooter ctaHref={cta?.href || '#book'} ctaLabel={cta?.label || 'Book a free consult'} />
+      <SiteFooter ctaHref={cta?.href || (trialShown ? '#trial' : '#book')} ctaLabel={cta?.label || 'Book a free consult'} />
     </div>
   )
 }

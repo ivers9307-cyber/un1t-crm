@@ -82,4 +82,11 @@ describe('createTrialPurchasePayment (REVPAY.7)', () => {
     }))
     expect('expirePendingAfter' in args).toBe(false)
   })
+  it('a returnPath sends the buyer back to the page they started on', async () => {
+    createPayment.mockClear()
+    const client = { from: () => ({ update: () => ({ eq: async () => ({ error: null }) }) }) }
+    const purchase = { id: 'tp2', location_id: 'loc1', product_name: '2 Week Trial', customer_email: 'a@b.com', customer_name: 'A B' }
+    await createTrialPurchasePayment({ db: client, purchase, location: { id: 'loc1', settings: {} }, amountCents: 3900, currency: 'EUR', returnPath: '/stillorgan' })
+    expect(createPayment.mock.calls[0][0].returnUrl).toBe(`https://crm.test/stillorgan?purchase=${purchase.id}`)
+  })
 })
