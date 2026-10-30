@@ -757,3 +757,31 @@ describe('W1.L2 — the customer flow is complete on a tenant domain', () => {
     }
   })
 })
+
+// ── FIFTYPLUS.1 — /50plus, the 50+ Club trial page ─────────────────────
+//
+// A UN1T-only Meta-ad page like /start and /trial: public on the CRM and
+// marketing hosts, rendered bare by AppShell, and deliberately NOT in the
+// tenant defaults (TENANT_PINNED_OFF above pins that side).
+describe('FIFTYPLUS.1 — /50plus is public on UN1T hosts', () => {
+  it('CRM host admits /50plus anonymously', async () => {
+    const res = await proxy(makeReq({ host: CRM_HOST, path: '/50plus' }))
+    expect(admitted(res), '/50plus is missing from proxy.js publicPaths').toBe(true)
+  })
+
+  it('marketing host does not rewrite /50plus to /welcome', async () => {
+    const res = await proxy(makeReq({ host: MARKETING_HOST, path: '/50plus' }))
+    expect(rewrittenTo(res), '/50plus is missing from the un1t-marketing allowlist').toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('AppShell renders /50plus with no session', () => {
+    pathnameImpl = '/50plus'
+    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
+    expect(html, '/50plus is missing from AppShell PUBLIC_PATHS').toContain('page-body')
+  })
+
+  it('the marketing allowlist names it explicitly', () => {
+    expect(marketingBrand().allowedPaths).toContain('/50plus')
+  })
+})

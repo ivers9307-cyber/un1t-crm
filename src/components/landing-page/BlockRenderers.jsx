@@ -62,7 +62,10 @@ function Eyebrow({ children, dark = true }) {
 // to the hero only, which then carries the buy card; `trialShown` tells the
 // lead form that card is on the page, so it shrinks to the quiet
 // "not ready yet" strip (`compact`).
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false }) {
+// FIFTYPLUS.1 — `tone` ('dark' | 'light'): a light page (/50plus) passes
+// 'light' so the one still-dark section it reuses (video testimonials)
+// renders on the pale surface. Never read from block data.
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false, tone = 'dark' }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -95,7 +98,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
     case 'reviews':     return <ReviewsBlock     block={block} onEdit={localOnEdit} reviewsData={reviewsData} />
-    case 'video_testimonials': return <VideoTestimonialsBlock block={block} onEdit={localOnEdit} />
+    case 'video_testimonials': return <VideoTestimonialsBlock block={block} onEdit={localOnEdit} tone={tone} />
     default:            return null
   }
 }
@@ -898,11 +901,12 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
 // ships zero video bytes. Hidden on the public page when no clip has a
 // video_url; in edit mode it stays visible with a hint so the operator
 // can find the section + edit the heading.
-export function VideoTestimonialsBlock({ block, onEdit }) {
+export function VideoTestimonialsBlock({ block, onEdit, tone = 'dark' }) {
   const clips = (Array.isArray(block.items) ? block.items : []).filter((it) => it && it.video_url).slice(0, 3)
   if (clips.length === 0 && !onEdit) return null
+  const light = tone === 'light'
   return (
-    <section className="bg-black text-white py-24 md:py-32 border-t border-white/10">
+    <section className={light ? 'bg-lp-pale text-black py-20 md:py-28' : 'bg-black text-white py-24 md:py-32 border-t border-white/10'}>
       <div className="max-w-6xl mx-auto px-6">
         {(block.title || onEdit) && (
           <h2 className="lp-reveal font-display font-extrabold uppercase text-3xl md:text-4xl tracking-tight text-center mb-12">
@@ -914,7 +918,7 @@ export function VideoTestimonialsBlock({ block, onEdit }) {
             <VideoTestimonials items={clips} />
           </div>
         ) : onEdit ? (
-          <div className="max-w-md mx-auto text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
+          <div className={`max-w-md mx-auto text-center text-sm border border-dashed rounded py-10 ${light ? 'text-black/45 border-black/20' : 'text-white/40 border-white/20'}`}>
             Add up to 3 portrait videos in the &ldquo;Video testimonials&rdquo; panel on the left.
           </div>
         ) : null}

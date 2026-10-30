@@ -20,6 +20,7 @@
 import { z } from 'zod'
 import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-landing'
 import { PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
+import { CAMPAIGN_FUNNEL_COPY_DEFAULTS, CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT, CAMPAIGN_FUNNEL_SECTIONS } from '@/lib/campaign-funnel'
 import { CORP_PROMO_COPY_DEFAULT } from '@/lib/corp-promos'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
@@ -315,6 +316,28 @@ const REVIEWS_DEFAULT = () => ({
   // still carry the key harmlessly (BlockBaseSchema is passthrough).
 })
 
+// FIFTYPLUS.1 — a booking page for ONE class and ONE trial plan at
+// /<campaign> (src/lib/campaign-funnel.js). Edited on the studio's landing
+// row, never rendered on it. The trial pair is REQUIRED for the page to take a
+// booking: '' here means the page says booking is not open online.
+const CAMPAIGN_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
+  id:                  newBlockId(),
+  type:                'campaign_funnel',
+  campaign:            '50plus',
+  class_keywords:      '50+',
+  trial_membership_id: '',
+  trial_plan_code:     '',
+  tag:                 '',
+  lead_source:         '',
+  event_source_url:    '',
+  video_url:           null,
+  poster_url:          null,
+  ...CAMPAIGN_FUNNEL_COPY_DEFAULTS,
+  consent_label:       classFunnelConsentDefault(brand),
+  expect_cards:        CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT.map((c) => ({ ...c })),
+  show_sections:       [...CAMPAIGN_FUNNEL_SECTIONS],
+})
+
 const VIDEO_TESTIMONIALS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'video_testimonials',
@@ -335,6 +358,7 @@ export const BLOCK_TYPES = [
   { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Pick a class, enter details, book. Live Glofox classes, or a timetable you type in for a studio without Glofox (staff then book by hand). Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
   { type: 'paid_trial',  label: 'Paid trial product', description: 'A paid trial (e.g. 2 weeks for €39) sold from its own page: price panel, buyer form, embedded checkout, then the Glofox plan, or the un1t.online product, is put on their account.', factory: PAID_TRIAL_DEFAULT },
   { type: 'corp_promo',  label: 'Corporate promo (/corp)', description: 'The words of a free corporate offer at /corp (e.g. 3 free classes). The credits and their expiry are fixed per promo; this edits what visitors read.', factory: CORP_PROMO_DEFAULT },
+  { type: 'campaign_funnel', label: 'Campaign funnel (own page)', description: 'A booking page for one class and one trial plan at /<campaign>: coach video, date tiles, details, booked. Edited here, never shown on this landing page.', factory: CAMPAIGN_FUNNEL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
