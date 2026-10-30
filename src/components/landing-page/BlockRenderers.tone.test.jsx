@@ -13,25 +13,28 @@ const reviews = { id: 'r', type: 'reviews', title: 'Reviews', min_rating: 4 }
 const reviewsData = { reviews: [{ id: 1, rating: 5, comment: 'Great', author_name: 'A', review_time: '2026-01-01' }] }
 
 const LIGHT_SURFACE = /bg-lp-pale|bg-white/
-const DARK_TEXT = /text-white(?![-\w])/
+// The section wrapper's class list: the play-button overlay inside a video
+// thumbnail is dark on purpose in every tone, so the surface is judged on the
+// section, not on the whole markup.
+const sectionClass = (html) => (html.match(/<section class="([^"]*)"/) || [])[1] || ''
 
 describe('BlockRenderer tone', () => {
   it('video testimonials render light on tone="light"', () => {
-    const html = renderToStaticMarkup(<BlockRenderer block={videos} tone="light" />)
-    expect(html).toMatch(LIGHT_SURFACE)
-    expect(html).not.toContain('bg-black')
-    expect(html).not.toMatch(DARK_TEXT)
+    const cls = sectionClass(renderToStaticMarkup(<BlockRenderer block={videos} tone="light" />))
+    expect(cls).toMatch(LIGHT_SURFACE)
+    expect(cls).toContain('text-black')
+    expect(cls).not.toContain('bg-black')
   })
 
   it('video testimonials stay dark by default', () => {
-    expect(renderToStaticMarkup(<BlockRenderer block={videos} />)).toContain('bg-black')
+    expect(sectionClass(renderToStaticMarkup(<BlockRenderer block={videos} />))).toContain('bg-black')
   })
 
   it.each([['stats', stats], ['reviews', reviews]])('%s is already light, with or without the prop', (_, block) => {
     for (const tone of [undefined, 'light']) {
-      const html = renderToStaticMarkup(<BlockRenderer block={block} tone={tone} reviewsData={reviewsData} />)
-      expect(html).toMatch(LIGHT_SURFACE)
-      expect(html).not.toContain('bg-black')
+      const cls = sectionClass(renderToStaticMarkup(<BlockRenderer block={block} tone={tone} reviewsData={reviewsData} />))
+      expect(cls).toMatch(LIGHT_SURFACE)
+      expect(cls).not.toContain('bg-black')
     }
   })
 
