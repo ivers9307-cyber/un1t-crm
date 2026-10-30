@@ -79,6 +79,13 @@ describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
     expect(body.data.campaign).toEqual({ configured: false })
   })
 
+  it('a missing landing row under a campaign is not configured, not "no classes"', async () => {
+    createServerClient.mockReturnValue({ from: () => ({ select() { return this }, eq() { return this }, maybeSingle: async () => ({ data: null, error: null }) }) })
+    const body = await (await get('path=stillorgan&campaign=50plus')).json()
+    expect(body.data.classes).toEqual([])
+    expect(body.data.campaign).toEqual({ configured: false })
+  })
+
   it('no campaign param keeps the full list and no campaign key', async () => {
     blocks = [{ type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+' }]
     fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })

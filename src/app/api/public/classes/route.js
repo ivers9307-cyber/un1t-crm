@@ -65,7 +65,8 @@ export async function GET(request) {
   try {
     const { data: page } = await db.from('landing_page_settings')
       .select('location_id, public_path, blocks').eq('public_path', path).maybeSingle()
-    if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [] } })
+    // A campaign page with no row to read is "not open", not "no classes".
+    if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false } } : {}) } })
     if (campaignKey) {
       const [listed, terms] = await Promise.all([listCampaignClasses(db, page, path, campaignKey), termsFor(db, page)])
       return NextResponse.json({ success: true, data: { classes: listed.classes, terms, campaign: listed.campaign } })
@@ -74,6 +75,6 @@ export async function GET(request) {
     return NextResponse.json({ success: true, data: { classes, terms } })
   } catch (e) {
     logWarn('public-classes', 'list failed', { err: e })
-    return NextResponse.json({ success: true, data: { classes: [] } })
+    return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false } } : {}) } })
   }
 }
