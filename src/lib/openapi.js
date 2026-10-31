@@ -12674,6 +12674,22 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/landing-pages/media',
+  tags: ['Landing pages'],
+  summary: 'The media library: every video or image already uploaded for the pages the caller may view',
+  description: 'Session cookie. MEDIALIB.1, the editor\'s "Choose existing". Lists the `branding` bucket folders of every page canViewPage admits (`pages/<page id>/`) and the legacy folder of each such page\'s studio (`landing-page/<location id>/`), newest first, one entry per URL: `{ url, path, name, kind, size, created_at, page_id, page_title, location_id, poster_url }` (poster_url: the poster the page\'s blocks store next to a video, else null). `kind` keeps the list to videos or images. A caller who may view no page gets an empty list. A read of the bucket, never a write.',
+  security: [{ CookieAuth: [] }],
+  request: { query: z.object({ kind: z.enum(['video', 'image']).optional() }) },
+  responses: {
+    200: { description: '{ success, data: { items } }' },
+    400: { description: 'kind must be video or image', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    503: LANDING_PAGE_503,
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/landing-pages/slug-check',
   tags: ['Landing pages'],
   summary: 'Is a slug free for a new page in the caller\'s active organisation?',
