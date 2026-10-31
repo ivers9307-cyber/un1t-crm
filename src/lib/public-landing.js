@@ -1,9 +1,9 @@
 // Public landing pages are addressed by a URL-safe `public_path` slug
-// (e.g. 'stillorgan', 'hatch-street') that maps 1:1 to a
-// landing_page_settings row → location_id. Public funnel endpoints take
-// this slug from the client; this helper sanitises it and defaults to
-// Stillorgan (the original hard-coded target) so pre-existing callers
-// that send no path keep working.
+// (e.g. 'stillorgan', 'hatch-street') that is the slug of a studio's
+// kind='studio' landing_pages row → its primary location. Public funnel
+// endpoints take this slug from the client (the legacy `path` param);
+// this helper sanitises it and defaults to Stillorgan (the original
+// hard-coded target) so pre-existing callers that send no path keep working.
 const DEFAULT_LANDING_PATH = 'stillorgan'
 
 export function resolveLandingPath(raw) {
@@ -18,7 +18,7 @@ export function resolveLandingPath(raw) {
 
 // The class_funnel block's nurture attribution: the tag stamped on the captured
 // lead, its lead_source, and the Meta CAPI eventSourceUrl. Derived from the
-// resolved location's landing_page_settings.blocks (mirrors leadConfigFromBlocks
+// resolved studio page's merged blocks (mirrors leadConfigFromBlocks
 // in leads.js) so a second gym adopting the block gets its OWN attribution
 // instead of Stillorgan's literals. The client never sends these, so they can't
 // be injected.

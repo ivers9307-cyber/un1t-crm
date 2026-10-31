@@ -5,21 +5,29 @@
 // the funnel shows the error with their details intact.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// The landing row's blocks: a test sets these to model an operator's edit.
+// The studio page's blocks the resolver answers with: a test sets these to model an operator's edit.
 let pageBlocks = []
+let pageTerms = {}
 const db = {
-  from(table) {
+  from() {
     const b = {
       select: () => b, eq: () => b, is: () => b, update: () => b,
-      maybeSingle: async () => (table === 'landing_page_settings'
-        ? { data: { location_id: 'L1', blocks: pageBlocks }, error: null }
-        : { data: null, error: null }),
+      maybeSingle: async () => ({ data: null, error: null }),
       then: (resolve, reject) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
     }
     return b
   },
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
+vi.mock('@/lib/landing-pages', async (importOriginal) => ({
+  ...(await importOriginal()),
+  // The studio page the `path` names, as the resolver answers it (its own tests live beside it).
+  resolvePublicPageRequest: vi.fn(async () => ({
+    ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'stillorgan', kind: 'studio', offer_type: 'class_funnel' }, studioRow: {},
+    locationId: 'L1', publicPath: 'stillorgan', blocks: pageBlocks,
+    attribution: { tag: 'stillorgan-stillorgan', lead_source: 'meta_stillorgan' }, terms: pageTerms,
+  })),
+}))
 vi.mock('@/lib/rate-limit', () => ({
   getClientIp: () => '1.2.3.4',
   checkRateLimit: vi.fn(async () => ({ allowed: true })),

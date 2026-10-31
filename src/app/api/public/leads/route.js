@@ -11,16 +11,18 @@
 // studio is the live page's resolved studio row, and the tag and lead source
 // are the page's lead_form block's own when it sets them (a lead form is a
 // content block), else the row's attribution; the CAPI eventSourceUrl is the
-// row's, else the page's URL. `public_path` and `campaign` are ignored and the
-// body can never set a tag or source. LEAD_CAMPAIGNS (and its WhatsApp
-// welcome) stays on the legacy public_path path (PR1; PR3 deletes it).
+// row's, else the page's URL. `public_path` is ignored and the body can never
+// set a tag or source. Without `page`, `public_path` names a STUDIO PAGE by its
+// slug (/stillorgan's own lead form): the studio page's lead_form block carries
+// the tag and lead source (leadConfigFromBlocks). The paid-traffic campaign key
+// and its WhatsApp welcome are gone: a campaign is a page of its own now.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
-import { LeadSchema, normaliseLead, leadConfigFromBlocks, resolveCampaign } from '@/lib/leads'
+import { LeadSchema, normaliseLead, leadConfigFromBlocks } from '@/lib/leads'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { stampLeadSource } from '@/lib/lead-source-stamp'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
@@ -63,7 +65,6 @@ export async function POST(request) {
 
   const normalised = normaliseLead({ ...body, public_path: body.public_path ?? '' })
   const { firstName, email, phone, visit } = normalised
-  let campaign = normalised.campaign
   let locationId
   let tag
   let leadSource
@@ -81,7 +82,6 @@ export async function POST(request) {
       return NextResponse.json(refusal.body, { status: refusal.status })
     }
     ;({ locationId, tag, leadSource, eventSourceUrl } = pageLeadConfig(r))
-    campaign = null // LEAD_CAMPAIGNS is the legacy path only
   } else {
     const { publicPath } = normalised
 
@@ -95,33 +95,21 @@ export async function POST(request) {
       return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
     }
 
-    // PR1 legacy (PR3 deletes it). Resolve the studio + its lead-form config
-    // from public_path. The client never sends a location_id or the
+    // Resolve the studio + its lead-form config from the studio page the
+    // public_path names. The client never sends a location_id or the
     // tag/source, so a caller can't target an arbitrary location or inject
-    // arbitrary tags.
-    const { data: page } = await db
-      .from('landing_page_settings')
-      .select('location_id, blocks')
-      .eq('public_path', publicPath)
-      .maybeSingle()
-    if (!page || !page.location_id) {
+    // arbitrary tags. A failed read is 503, never "not accepting sign-ups".
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: publicPath })
+    if (!r.ok && r.reason === 'unreadable') {
+      const refusal = pageRequestRefusal('unreadable')
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    if (!r.ok) {
       return NextResponse.json({ success: false, error: 'This studio is not accepting sign-ups right now.' }, { status: 400 })
     }
-    locationId = page.location_id
-    ;({ tag, leadSource } = leadConfigFromBlocks(page.blocks))
-
-    // Paid-traffic campaign override. Only applies when the slug is in
-    // the server-side allowlist AND its studio matches the resolved
-    // public_path — so a campaign can't be replayed against another
-    // studio or used to inject an arbitrary tag/source.
-    const camp = resolveCampaign(campaign)
-    if (camp && camp.locationPublicPath === publicPath) {
-      tag = camp.tag
-      leadSource = camp.leadSource
-    }
-    eventSourceUrl = camp && camp.locationPublicPath === publicPath
-      ? 'https://www.un1tdublin.com/free-class'
-      : `https://www.un1tdublin.com/${publicPath}`
+    locationId = r.locationId
+    ;({ tag, leadSource } = leadConfigFromBlocks(r.blocks))
+    eventSourceUrl = `https://www.un1tdublin.com/${publicPath}`
   }
 
   // Find-or-create the contact at this studio (shared public-form helper).
@@ -211,24 +199,6 @@ export async function POST(request) {
       await triggerSequencesForContactCreated(contactRow.id, { locationId })
     }
   } catch (e) { logWarn('leads', 'glofox provisioning hook failed', { err: e }) }
-
-  // Campaign first-touch WhatsApp (e.g. Meta free-class lead → welcome
-  // template w/ quick-reply buttons → Mia handoff). Only fires for
-  // campaigns that configure a template; best-effort, never blocks.
-  try {
-    const camp = resolveCampaign(campaign)
-    if (camp?.whatsappTemplate) {
-      const { data: c } = await db
-        .from('contacts')
-        .select('id, name, first_name, phone, wa_phone')
-        .eq('id', contactId)
-        .maybeSingle()
-      if (c) {
-        const { maybeSendCampaignWhatsappWelcome } = await import('@/lib/automations/meta-ad-whatsapp-welcome')
-        await maybeSendCampaignWhatsappWelcome({ db, locationId, contact: c, templateName: camp.whatsappTemplate, purpose: 'meta_ad_welcome' })
-      }
-    }
-  } catch (e) { logWarn('leads', 'campaign WA welcome failed', { err: e }) }
 
   return NextResponse.json({ success: true, data: { already_on_list: alreadyOnList } })
 }

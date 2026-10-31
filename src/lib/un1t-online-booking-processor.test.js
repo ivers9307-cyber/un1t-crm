@@ -55,7 +55,7 @@ beforeEach(() => {
     un1t_events: [{ location_id: LOC, un1t_id: EVENT, title: 'RALLY', status: 'scheduled', starts_at: new Date(Date.now() + 24 * HOUR).toISOString() }],
     contacts: [{ id: 'c-1', organization_id: 'org-1', first_name: 'Jane', last_name: 'Doe', name: 'Jane Doe', email: 'jane@example.test', phone: null, un1t_user_id: null, ctwa_clid: null }],
     un1t_subscriptions: [],
-    landing_page_settings: [{ location_id: LOC, public_path: 'hatch-street', blocks: [] }],
+    landing_pages: [{ id: 'sp', organization_id: 'org-1', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: LOC, offer_type: 'class_funnel', publish_state: 'live', chrome: {}, blocks: [] }],
     locations: [{ id: LOC, name: 'Hatch Street', address: '1 Hatch St', timezone: 'Europe/Dublin' }],
   }
   writer = { locationId: LOC, studioId: 'studio-1', read: vi.fn(async () => ({ balance: 0, is_unlimited: false })) }
@@ -94,14 +94,13 @@ describe('processUn1tClassBookingRequest', () => {
   it('PAGES.1: a request carrying a page_id reads its confirmation copy from that page merged with its studio row; without one it reads the studio page', async () => {
     tables.landing_pages = [
       { id: 'p-1', organization_id: 'org-1', slug: 'hatch-camp', kind: 'campaign', scope: 'one', primary_location_id: LOC, offer_type: null, publish_state: 'live', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/hatch-camp' }] },
-      { id: 'sp', organization_id: 'org-1', slug: 'hatch-street', kind: 'studio', primary_location_id: LOC, blocks: [] },
+      { id: 'sp', organization_id: 'org-1', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: LOC, offer_type: 'class_funnel', publish_state: 'live', chrome: {}, blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/studio-page' }] },
     ]
     tables.landing_page_studios = [{ page_id: 'p-1', location_id: LOC, enabled: true, sort_order: 0, offer: {}, attribution: {} }]
-    tables.landing_page_settings = [{ location_id: LOC, public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/legacy' }] }]
     await run(request({ page_id: 'p-1' }))
     expect(deps.sendWebsiteConversion).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/hatch-camp' }))
     await run(request({ page_id: null }))
-    expect(deps.sendWebsiteConversion).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/legacy' }))
+    expect(deps.sendWebsiteConversion).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/studio-page' }))
   })
 
   it('TRIALREGRANT.1: a credit re-grant (claimed the trial, never used, run out) books exactly as after a trial grant', async () => {

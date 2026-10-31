@@ -21,13 +21,23 @@ import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 const un1t = (funnel) => ({ membershipSource: 'un1t_online', studioName: 'Hatch Street', settings: { writesEnabled: funnel, funnelEnabled: funnel } })
 const glofox = { membershipSource: 'glofox', studioName: 'Stillorgan', settings: { writesEnabled: false, funnelEnabled: false } }
 
-let blocks
+// The studio's own page (kind='studio', primary L1): its slug is the terms
+// page's path and its chrome.un1t_terms the operator's wording.
+let terms
+let studioPageError
 const inserts = []
 const db = {
   from(table) {
     const b = {
-      select: () => b, eq: () => b,
-      maybeSingle: async () => (table === 'landing_page_settings' ? { data: { public_path: 'hatch-street', blocks }, error: null } : { data: { id: 'Q1' }, error: null }),
+      select: () => b, eq: () => b, order: () => b,
+      maybeSingle: async () => {
+        if (table === 'landing_pages') {
+          if (studioPageError) return { data: null, error: studioPageError }
+          return { data: { id: 'p-h', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: 'L1', offer_type: 'class_funnel', publish_state: 'live', blocks: [{ type: 'class_funnel' }], chrome: { un1t_terms: terms } }, error: null }
+        }
+        return { data: { id: 'Q1' }, error: null }
+      },
+      then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej),
       insert: (row) => { inserts.push({ table, row }); return b },
     }
     return b
@@ -37,7 +47,7 @@ const contact = { id: 'ct1', name: 'Ann', email: 'ann@x.ie', phone: '+3538712345
 const exchange = (screen, data) => handleDataExchange(db, { decryptedBody: { action: 'data_exchange', screen, data }, contact, locationId: 'L1', config: {} })
 const completion = (payload) => ({ type: 'nfm_reply', nfm_reply: { response_json: JSON.stringify(payload) } })
 
-beforeEach(() => { vi.clearAllMocks(); inserts.length = 0; blocks = [{ type: 'class_funnel' }]; settings = un1t(true) })
+beforeEach(() => { vi.clearAllMocks(); inserts.length = 0; terms = {}; studioPageError = null; settings = un1t(true) })
 
 describe('FLOW_JSON', () => {
   const byId = Object.fromEntries(FLOW_JSON.screens.map((s) => [s.id, s]))
@@ -88,6 +98,20 @@ describe('handler', () => {
     })
   })
 
+  it("the studio page's own terms wording is the label and the studio page's slug is the link", async () => {
+    terms = { terms_label: 'I agree to the {terms} and {waiver} of {studio_name}', terms_link_label: 'T and Cs', waiver_link_label: 'waiver', terms_required_message: 'Tick it please.' }
+    const res = await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })
+    expect(res.data).toMatchObject({ terms_required: true, terms_label: 'I agree to the T and Cs and waiver of Hatch Street', terms_url: 'https://crm.example.com/legal/un1t/hatch-street/terms' })
+    const again = await exchange(SCREEN.DETAILS, { path: 'class', slot: 's', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true, terms_accepted: false })
+    expect(again.data.terms_error).toBe('Tick it please.')
+  })
+
+  it('an unreadable studio page never asks (no link, no tick), never throws', async () => {
+    studioPageError = { code: 'XX' }
+    const res = await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })
+    expect(res.data).not.toHaveProperty('terms_required')
+  })
+
   it('returns DETAILS with the error until ticked, then CONFIRM carrying the tick', async () => {
     const data = { path: 'class', slot: 's', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true, terms_accepted: false }
     const again = await exchange(SCREEN.DETAILS, data)
@@ -125,7 +149,7 @@ describe('handler', () => {
   })
 
   it('never asks when the terms link cannot be built, and cuts a long label', async () => {
-    blocks = [{ type: 'class_funnel', terms_label: 'x'.repeat(300) }]
+    terms = { terms_label: 'x'.repeat(300) }
     const long = await exchange(SCREEN.SLOT, { path: 'class', slot: 's' })
     expect(long.data.terms_label.length).toBe(120)
     const saved = db.from

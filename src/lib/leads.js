@@ -6,7 +6,8 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 
 // Defaults when a lead_form block hasn't overridden them. Hatch's
 // founding-member launch is the first use; both are operator-overridable
-// per-block via landing-page-blocks.js.
+// per-block via landing-page-blocks.js. (Paid-traffic campaigns are pages of
+// their own now: their tag and lead source are the studio row's attribution.)
 export const DEFAULT_LEAD_TAG = 'hatch-founding-member'
 export const DEFAULT_LEAD_SOURCE = 'hatch_launch'
 
@@ -21,10 +22,6 @@ export const LeadSchema = z.object({
     .refine(isValidMobileNumber, 'Enter a valid mobile number'),
   consent: z.boolean().refine((v) => v === true, { message: 'Please tick the consent box to continue' }),
   public_path: z.string().trim().min(1).max(120),
-  // Optional campaign key (paid-traffic landing pages). Validated
-  // against the LEAD_CAMPAIGNS allowlist server-side — an unknown or
-  // studio-mismatched value is ignored, never trusted to set a tag.
-  campaign: z.string().trim().min(1).max(80).optional(),
   // VISIT-ORIGIN.1 — first page of the visit + its referrer. Low-trust;
   // sanitiseVisitOrigin reduces it before anything is stored.
   visit: z.object({
@@ -40,7 +37,6 @@ export function normaliseLead(data) {
     email: data.email.toLowerCase().trim(),
     phone: data.phone.trim(),
     publicPath: data.public_path.trim(),
-    campaign: data.campaign ? data.campaign.trim() : null,
     visit: data.visit || null,
   }
 }
@@ -55,39 +51,4 @@ export function leadConfigFromBlocks(blocks) {
   const tag = (lf && typeof lf.tag === 'string' && lf.tag.trim()) || DEFAULT_LEAD_TAG
   const leadSource = (lf && typeof lf.lead_source === 'string' && lf.lead_source.trim()) || DEFAULT_LEAD_SOURCE
   return { tag, leadSource }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Campaign registry — paid-traffic landing pages (e.g. the Meta
-// "3 free classes" page) capture leads with their own attribution
-// without an editable landing_page_settings row (that table is
-// one-row-per-location). Keyed by an opaque slug the page sends; the
-// client can ONLY pick from this allowlist, so it can't inject an
-// arbitrary tag/source or target another studio.
-//
-//   locationPublicPath — the studio the lead belongs to. The route
-//     requires the submitted public_path to MATCH this before applying
-//     the override, so a campaign can't be replayed at the wrong studio.
-//   tag / leadSource — override the block-derived nurture tag +
-//     attribution for leads captured on that page.
-// ─────────────────────────────────────────────────────────────
-export const LEAD_CAMPAIGNS = {
-  'stillorgan-free-class': {
-    locationPublicPath: 'stillorgan',
-    tag: 'stillorgan-free-trial',
-    leadSource: 'meta_free_trial',
-    // First-touch WhatsApp: the instant the lead signs up, send this
-    // APPROVED template (asks consultation vs first class via quick-reply
-    // buttons); the reply hands off to the Mia agent who books it. This is
-    // the DEFAULT name: a studio's own pick for the 'meta_ad_welcome' purpose
-    // (WAORGNUMBER.2 R5) wins; without one, it must match a
-    // whatsapp_templates row at the campaign's location.
-    whatsappTemplate: 'meta_ad_whatsapp_lead',
-  },
-}
-
-// Resolve a campaign slug to its config, or null when unknown.
-export function resolveCampaign(key) {
-  if (typeof key !== 'string') return null
-  return Object.prototype.hasOwnProperty.call(LEAD_CAMPAIGNS, key) ? LEAD_CAMPAIGNS[key] : null
 }

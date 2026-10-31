@@ -135,29 +135,23 @@ describe('landing-pages', () => {
     expect(studioParamToPublicPath(null)).toBeNull()
   })
 
-  it('locationIdForPublicPath: the studio page row wins, then landing_page_settings', async () => {
+  it('locationIdForPublicPath: the studio page row at that slug, null when there is none (no fallback table)', async () => {
     const withPage = makeDb({ landing_pages: { single: { data: { primary_location_id: 'loc-s' }, error: null } } })
     expect(await locationIdForPublicPath(withPage, 'org-un1t', 'stillorgan')).toBe('loc-s')
     expect(withPage.calls[0].eq).toEqual([['organization_id', 'org-un1t'], ['kind', 'studio'], ['slug', 'stillorgan']])
-    const legacy = makeDb({
-      landing_pages: { single: { data: null, error: null } },
-      landing_page_settings: { single: { data: { location_id: 'loc-legacy' }, error: null } },
-    })
-    expect(await locationIdForPublicPath(legacy, 'org-un1t', 'stillorgan')).toBe('loc-legacy')
-    expect(legacy.calls[1].eq).toEqual([['public_path', 'stillorgan']])
     const none = makeDb({})
     expect(await locationIdForPublicPath(none, 'org-un1t', 'nowhere')).toBeNull()
+    expect(none.calls.map((c) => c.table)).toEqual(['landing_pages'])
+    const failed = makeDb({ landing_pages: { single: { data: null, error: { code: 'XX' } } } })
+    await expect(locationIdForPublicPath(failed, 'org-un1t', 'stillorgan')).rejects.toThrow()
   })
 
-  it('studioPublicPath: the studio page slug, then landing_page_settings', async () => {
+  it('studioPublicPath: the studio page slug, null when the studio has no page (no fallback table)', async () => {
     const withPage = makeDb({ landing_pages: { single: { data: { slug: 'stillorgan' }, error: null } } })
     expect(await studioPublicPath(withPage, 'loc-s')).toBe('stillorgan')
-    const legacy = makeDb({
-      landing_pages: { single: { data: null, error: null } },
-      landing_page_settings: { single: { data: { public_path: 'hatch-street' }, error: null } },
-    })
-    expect(await studioPublicPath(legacy, 'loc-h')).toBe('hatch-street')
-    expect(await studioPublicPath(makeDb({}), 'loc-x')).toBeNull()
+    const none = makeDb({})
+    expect(await studioPublicPath(none, 'loc-x')).toBeNull()
+    expect(none.calls.map((c) => c.table)).toEqual(['landing_pages'])
   })
 
   it('mergedBlocksFor merges the studio half onto the offer block only', () => {
@@ -250,7 +244,7 @@ describe('landing-pages', () => {
     expect(await publicOrgIdForHost('')).toBe('org-un1t')
   })
 
-  it('studioTermsCopy reads the studio page\'s chrome.un1t_terms by location (never landing_page_settings); defaults on a miss, an error or a throw', async () => {
+  it('studioTermsCopy reads the studio page\'s chrome.un1t_terms by location (and nothing else); defaults on a miss, an error or a throw', async () => {
     const db = makeDb({ landing_pages: { single: { data: { chrome: { logo_url: 'x', un1t_terms: { terms_label: 'CUSTOM {studio_name}', waiver_link_label: '  ' } } }, error: null } } })
     const got = await studioTermsCopy(db, 'loc-h')
     expect(got).toEqual({ ...DEFAULT_FUNNEL_TERMS_COPY, terms_label: 'CUSTOM {studio_name}' })

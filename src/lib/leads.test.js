@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   LeadSchema, normaliseLead, leadConfigFromBlocks,
   DEFAULT_LEAD_TAG, DEFAULT_LEAD_SOURCE,
-  LEAD_CAMPAIGNS, resolveCampaign,
 } from './leads'
 
 const valid = {
@@ -63,38 +62,16 @@ describe('LeadSchema visit (VISIT-ORIGIN.1)', () => {
 })
 
 describe('normaliseLead', () => {
-  it('trims name/phone and lowercases email, campaign null when absent', () => {
+  it('trims name/phone and lowercases email', () => {
     expect(normaliseLead(valid)).toEqual({
-      firstName: 'Sarah', email: 'sarah@example.com', phone: '087 123 4567', publicPath: 'hatch-street', campaign: null,
+      firstName: 'Sarah', email: 'sarah@example.com', phone: '087 123 4567', publicPath: 'hatch-street',
       visit: null,
     })
   })
-  it('trims and passes through a campaign key', () => {
-    expect(normaliseLead({ ...valid, campaign: '  stillorgan-free-class ' }).campaign).toBe('stillorgan-free-class')
-  })
-})
-
-describe('resolveCampaign', () => {
-  it('returns the config for a known campaign', () => {
-    expect(resolveCampaign('stillorgan-free-class')).toEqual({
-      locationPublicPath: 'stillorgan', tag: 'stillorgan-free-trial', leadSource: 'meta_free_trial',
-      whatsappTemplate: 'meta_ad_whatsapp_lead',
-    })
-  })
-  it('returns null for an unknown or non-string key', () => {
-    expect(resolveCampaign('made-up')).toBeNull()
-    expect(resolveCampaign(null)).toBeNull()
-    expect(resolveCampaign(undefined)).toBeNull()
-    // not fooled by inherited Object.prototype props
-    expect(resolveCampaign('toString')).toBeNull()
-    expect(resolveCampaign('constructor')).toBeNull()
-  })
-  it('every registered campaign carries the three required fields', () => {
-    for (const cfg of Object.values(LEAD_CAMPAIGNS)) {
-      expect(typeof cfg.locationPublicPath).toBe('string')
-      expect(typeof cfg.tag).toBe('string')
-      expect(typeof cfg.leadSource).toBe('string')
-    }
+  it('a campaign key is no part of a lead any more (a campaign is a page of its own)', () => {
+    const parsed = LeadSchema.parse({ ...valid, campaign: 'stillorgan-free-class' })
+    expect(parsed).not.toHaveProperty('campaign')
+    expect(normaliseLead(parsed)).not.toHaveProperty('campaign')
   })
 })
 

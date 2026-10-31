@@ -63,7 +63,7 @@ beforeEach(() => {
     un1t_events: [ev(), ev({ un1t_id: 'ev-other', synced_at: LATEST })],
     contacts: [{ id: 'c-1', organization_id: 'org-1', first_name: 'Jane', last_name: 'Doe', name: 'Jane Doe', email: 'jane@example.test', phone: null, un1t_user_id: null, ctwa_clid: null }],
     un1t_subscriptions: [],
-    landing_page_settings: [{ location_id: LOC, public_path: 'hatch-street', blocks: [] }],
+    landing_pages: [{ id: 'sp', organization_id: 'org-1', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: LOC, offer_type: 'class_funnel', publish_state: 'live', chrome: {}, blocks: [] }],
     locations: [{ id: LOC, name: 'Hatch Street', address: '1 Hatch St', timezone: 'Europe/Dublin' }],
   }
   const writer = { locationId: LOC, studioId: 'studio-1', read: vi.fn(async () => ({ balance: 0, is_unlimited: false })) }

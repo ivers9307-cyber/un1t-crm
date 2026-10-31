@@ -1,13 +1,13 @@
 // PAGES.1 — POST /api/public/leads with `page` + `studio`: the studio, the
 // tag and the lead source come from the page's studio row (its lead_form
 // block's own tag / lead_source when it sets them, else the row's
-// attribution), never the body. Without `page` the legacy public_path +
-// LEAD_CAMPAIGNS path is unchanged.
+// attribution), never the body. Without `page`, public_path names a studio
+// page by slug (the resolver's legacy branch) and its lead_form block decides.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const m = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), stamp: vi.fn(), tag: vi.fn(), deal: vi.fn(), capi: vi.fn(), consent: vi.fn(),
-  welcome: vi.fn(), resolve: vi.fn(), legacyRow: null,
+  resolve: vi.fn(),
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: m.contact }))
@@ -16,20 +16,19 @@ vi.mock('@/lib/contact-tags', () => ({ writeContactTag: m.tag }))
 vi.mock('@/lib/waitlist-entry', () => ({ placeWaitlistEntry: m.deal }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: m.capi }))
 vi.mock('@/lib/marketing-consent', () => ({ applyFormMarketingConsent: m.consent }))
-vi.mock('@/lib/automations/meta-ad-whatsapp-welcome', () => ({ maybeSendCampaignWhatsappWelcome: m.welcome }))
 vi.mock('@/lib/automations/glofox-lead-provisioning', () => ({ maybeProvisionLeadInGlofox: vi.fn() }))
 vi.mock('@/lib/sequences/triggers', () => ({ triggerSequencesForContactCreated: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('@/lib/landing-pages', async (orig) => {
   const actual = await orig()
-  return { ...actual, resolvePublicPageRequest: vi.fn((db, args) => (args.page ? m.resolve(db, args) : actual.resolvePublicPageRequest(db, args))) }
+  return { ...actual, resolvePublicPageRequest: vi.fn((db, args) => m.resolve(db, args)) }
 })
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
-    from: (table) => {
+    from: () => {
       const q = {
         select: () => q, eq: () => q, is: () => q, update: () => q,
-        maybeSingle: async () => (table === 'landing_page_settings' ? { data: m.legacyRow, error: null } : { data: null, error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
         then: (ok, no) => Promise.resolve({ data: null, error: null }).then(ok, no),
       }
       return q
@@ -50,7 +49,6 @@ const pageOk = (blocks = [], extra = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
-  m.legacyRow = { location_id: 'loc-s', blocks: [{ type: 'lead_form', tag: 'still-tag', lead_source: 'still-src' }] }
   m.rateLimit.mockResolvedValue({ allowed: true })
   m.contact.mockResolvedValue('c1')
   m.stamp.mockResolvedValue({})
@@ -60,7 +58,7 @@ beforeEach(() => {
 describe('POST /api/public/leads — page (PAGES.1)', () => {
   it('page+studio sets tag/lead_source from the row\'s attribution; the body cannot set them', async () => {
     m.resolve.mockResolvedValueOnce(pageOk())
-    const r = await POST(req({ ...BODY, page: 'founders', studio: 'hatch-street', public_path: 'stillorgan', campaign: 'stillorgan-free-class', tag: 'evil', lead_source: 'evil' }))
+    const r = await POST(req({ ...BODY, page: 'founders', studio: 'hatch-street', public_path: 'stillorgan', campaign: 'anything', tag: 'evil', lead_source: 'evil' }))
     expect(r.status).toBe(200)
     expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: 'founders', studio: 'hatch-street' }))
     expect(m.rateLimit).toHaveBeenCalledWith(expect.anything(), 'lead:hatch-street:1.2.3.4', expect.anything())
@@ -68,8 +66,6 @@ describe('POST /api/public/leads — page (PAGES.1)', () => {
     expect(m.stamp).toHaveBeenCalledWith(expect.anything(), { contactId: 'c1', locationId: 'loc-h', leadSource: 'meta_founders' })
     expect(m.tag).toHaveBeenCalledWith(expect.anything(), { contactId: 'c1', locationId: 'loc-h', tag: 'hatch-street-founders' })
     expect(m.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/founders' }))
-    // LEAD_CAMPAIGNS is the legacy path only: no campaign welcome from a page.
-    expect(m.welcome).not.toHaveBeenCalled()
   })
 
   it("the page's lead_form block's own tag and lead source win", async () => {
@@ -93,21 +89,34 @@ describe('POST /api/public/leads — page (PAGES.1)', () => {
     expect(m.rateLimit).toHaveBeenCalledWith(expect.anything(), 'lead:unresolved:1.2.3.4', expect.anything())
   })
 
-  it('legacy: public_path and the campaign allowlist, as before', async () => {
+  it('no page: public_path names a studio page by slug; its lead_form block carries the tag and lead source', async () => {
+    m.resolve.mockResolvedValueOnce(pageOk([{ type: 'lead_form', tag: 'still-tag', lead_source: 'still-src' }], { locationId: 'loc-s', publicPath: 'stillorgan' }))
     const r = await POST(req({ ...BODY, public_path: 'stillorgan' }))
     expect(r.status).toBe(200)
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan' }))
+    expect(resolvePublicPageRequest.mock.calls[0][1].page).toBeUndefined()
     expect(m.rateLimit).toHaveBeenCalledWith(expect.anything(), 'lead:stillorgan:1.2.3.4', expect.anything())
     expect(m.tag).toHaveBeenCalledWith(expect.anything(), { contactId: 'c1', locationId: 'loc-s', tag: 'still-tag' })
     expect(m.stamp).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ leadSource: 'still-src' }))
     expect(m.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/stillorgan' }))
+  })
 
+  it('no page: a studio page with no lead_form block takes the lead defaults, and a campaign key is ignored', async () => {
+    m.resolve.mockResolvedValueOnce(pageOk([], { locationId: 'loc-s', publicPath: 'stillorgan' }))
     await POST(req({ ...BODY, public_path: 'stillorgan', campaign: 'stillorgan-free-class' }))
-    expect(m.tag).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ tag: 'stillorgan-free-trial' }))
+    expect(m.tag).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ tag: 'hatch-founding-member' }))
+    expect(m.stamp).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ leadSource: 'hatch_launch' }))
+  })
 
-    m.legacyRow = null
+  it('no page: an unknown studio page is a 400, a failed read a 503, before any capture', async () => {
+    m.resolve.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
     const none = await POST(req({ ...BODY, public_path: 'galway' }))
     expect(none.status).toBe(400)
     expect(await none.json()).toEqual({ success: false, error: 'This studio is not accepting sign-ups right now.' })
+    m.resolve.mockResolvedValueOnce({ ok: false, reason: 'unreadable' })
+    const failed = await POST(req({ ...BODY, public_path: 'stillorgan' }))
+    expect(failed.status).toBe(503)
+    expect(m.contact).not.toHaveBeenCalled()
   })
 
   it('legacy: a body with neither page nor public_path is a 400', async () => {

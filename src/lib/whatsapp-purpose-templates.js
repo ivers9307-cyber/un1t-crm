@@ -57,8 +57,8 @@ function shape(row) {
  *   3. else the purpose's fallback name at the studio, APPROVED, newest;
  *   4. else null (the sender skips as it did for a missing template).
  *
- * `fallbackName` overrides the purpose's default name (the ad-lead welcome is
- * configured per campaign in LEAD_CAMPAIGNS).
+ * `fallbackName` overrides the purpose's default name (a caller that names its own
+ * template, as the ad-lead welcome did).
  *
  * A failed read of the setting or of the chosen template is logged
  * (logError) and the default name is used, as it was before picks existed:

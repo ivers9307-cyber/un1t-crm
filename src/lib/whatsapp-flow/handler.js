@@ -9,7 +9,8 @@ import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen, TERMS_FLOW
 import { formatInZone, getLocationZone, LocationZoneReadError, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn, logError } from '@/lib/log'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
-import { un1tFunnelCopyFromBlocks, termsLabelText } from '@/lib/un1t-online-funnel-copy'
+import { un1tFunnelCopyFromTerms, termsLabelText } from '@/lib/un1t-online-funnel-copy'
+import { studioPageBlocksFor } from '@/lib/landing-pages'
 import { legalDocPathFor } from '@/lib/un1t-online-legal'
 import { getAppUrl } from '@/lib/app-url'
 
@@ -35,20 +36,20 @@ export async function flowTermsFor(db, locationId) {
     return { required: false }
   }
   if (s.membershipSource !== 'un1t_online' || !s.settings.funnelEnabled) return { required: false }
+  // The studio's own page: its slug is the terms page's path, its
+  // chrome.un1t_terms the operator's wording.
   let landing = null
   try {
-    const { data, error } = await db.from('landing_page_settings').select('public_path, blocks').eq('location_id', locationId).maybeSingle()
-    if (error) throw error
-    landing = data
+    landing = await studioPageBlocksFor(db, locationId)
   } catch (e) {
-    logWarn('whatsapp-flow', 'landing row unreadable; default terms copy used', { locationId, err: e })
+    logWarn('whatsapp-flow', 'studio page unreadable; default terms copy used', { locationId, err: e })
   }
-  const copy = un1tFunnelCopyFromBlocks(landing?.blocks)
+  const copy = un1tFunnelCopyFromTerms(landing?.terms)
   // Never ask someone to accept documents they cannot open: no link, no ask
   // (the processor then refuses to create an account without an acceptance).
   let url = ''
   try {
-    if (landing?.public_path) url = `${getAppUrl()}${legalDocPathFor(landing.public_path, 'terms')}`
+    if (landing?.publicPath) url = `${getAppUrl()}${legalDocPathFor(landing.publicPath, 'terms')}`
   } catch (e) {
     logWarn('whatsapp-flow', 'app url unset; terms link unavailable', { locationId, err: e })
   }

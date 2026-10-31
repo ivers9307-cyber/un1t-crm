@@ -122,29 +122,6 @@ export function resolvePageStudio({ page, studios, studioLocationId }) {
   return { studio, picker }
 }
 
-// PR1 fallbacks: until the studio pages are the only source, a path with no
-// kind='studio' page row falls back to landing_page_settings. PR3 deletes
-// these two helpers and their call sites.
-async function legacyLocationIdForPath(db, publicPath) {
-  const { data, error } = await db
-    .from('landing_page_settings')
-    .select('location_id')
-    .eq('public_path', publicPath)
-    .maybeSingle()
-  if (error) throw new PageReadError('Could not read the studio path', error)
-  return data?.location_id || null
-}
-
-async function legacyPathForLocation(db, locationId) {
-  const { data, error } = await db
-    .from('landing_page_settings')
-    .select('public_path')
-    .eq('location_id', locationId)
-    .maybeSingle()
-  if (error) throw new PageReadError('Could not read the studio path', error)
-  return data?.public_path || null
-}
-
 /**
  * The un1t.online terms-tick wording of a studio (UN1T_FUNNEL_COPY_KEYS): the
  * studio page's `chrome.un1t_terms` (the kind='studio' row whose primary is
@@ -181,8 +158,7 @@ export async function locationIdForPublicPath(db, orgId, publicPath) {
     .eq('slug', publicPath)
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio page', error)
-  if (data?.primary_location_id) return data.primary_location_id
-  return legacyLocationIdForPath(db, publicPath)
+  return data?.primary_location_id || null
 }
 
 /** A studio's public path: its studio page's slug, null when it has none. */
@@ -194,35 +170,50 @@ export async function studioPublicPath(db, locationId) {
     .eq('primary_location_id', locationId)
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio page', error)
-  if (data?.slug) return data.slug
-  return legacyPathForLocation(db, locationId)
+  return data?.slug || null
 }
 
+/** What a studio page's `chrome.un1t_terms` holds, as a plain object (never null). */
+const termsOf = (page) => (page?.chrome && typeof page.chrome === 'object' && page.chrome.un1t_terms
+  && typeof page.chrome.un1t_terms === 'object' ? page.chrome.un1t_terms : {})
+
 /**
- * PR1 legacy; PR3 reads the kind='studio' page. The studio's own landing copy
- * and public path, read where the processor and Mia's approval route read them
- * today (landing_page_settings by location_id). A miss answers empty; a failed
- * read throws PageReadError (copySourceForRequest catches it).
- * @returns {Promise<{ blocks: object[], publicPath: string | null }>}
+ * The studio's own page copy and public path, for the readers that hold only a
+ * location id (Mia's approval route, the booking processor, the WhatsApp
+ * flow): the kind='studio' page whose primary is the studio, its blocks merged
+ * with its studio row, its slug, and its `chrome.un1t_terms`. A studio with no
+ * page answers empty; a failed read throws PageReadError (callers decide:
+ * copySourceForRequest catches it).
+ * @returns {Promise<{ blocks: object[], publicPath: string | null, terms: object }>}
  */
 export async function studioPageBlocksFor(db, locationId) {
-  const { data, error } = await db
-    .from('landing_page_settings')
-    .select('public_path, blocks')
-    .eq('location_id', locationId)
+  const { data: page, error } = await db
+    .from('landing_pages')
+    .select(PAGE_COLUMNS)
+    .eq('kind', 'studio')
+    .eq('primary_location_id', locationId)
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio page', error)
-  return { blocks: Array.isArray(data?.blocks) ? data.blocks : [], publicPath: data?.public_path ?? null }
+  if (!page) return { blocks: [], publicPath: null, terms: {} }
+  const { studios } = await loadStudios(db, page)
+  const studio = studios.find((s) => s.location_id === locationId) || null
+  return {
+    blocks: studio ? mergedBlocksFor({ page, studio }) : (Array.isArray(page.blocks) ? page.blocks : []),
+    publicPath: page.slug || null,
+    terms: termsOf(page),
+  }
 }
 
 /**
  * The copy a request's confirmation is built from (the class_funnel block's
- * wording, the conversion URL's path): the page the request came from, merged
- * with that page's row for the request's studio, when it carries a page_id;
- * otherwise (or when that page is gone, or has no row for the studio) the
- * studio's own page. Never throws: a failed read logs ids only and falls back,
- * ending in empty copy, which every consumer resolves to its defaults.
- * @returns {Promise<{ blocks: object[], publicPath: string | null }>}
+ * wording, the conversion URL's path, the terms-tick wording): the page the
+ * request came from, merged with that page's row for the request's studio,
+ * when it carries a page_id; otherwise (or when that page is gone, or has no
+ * row for the studio) the studio's own page. `terms` is always the STUDIO
+ * page's `chrome.un1t_terms` (the tick is the studio's wording, whichever page
+ * the request came from). Never throws: a failed read logs ids only and falls
+ * back, ending in empty copy, which every consumer resolves to its defaults.
+ * @returns {Promise<{ blocks: object[], publicPath: string | null, terms: object }>}
  */
 export async function copySourceForRequest(db, { pageId, locationId }) {
   if (pageId) {
@@ -230,10 +221,11 @@ export async function copySourceForRequest(db, { pageId, locationId }) {
       const loaded = await loadPageById(db, pageId)
       const studio = loaded?.studios.find((s) => s.location_id === locationId) || null
       if (loaded && studio) {
-        return {
-          blocks: mergedBlocksFor({ page: loaded.page, studio }),
-          publicPath: await studioPublicPath(db, locationId),
-        }
+        const [publicPath, terms] = await Promise.all([
+          studioPublicPath(db, locationId),
+          studioTermsOf(db, loaded.page, locationId),
+        ])
+        return { blocks: mergedBlocksFor({ page: loaded.page, studio }), publicPath, terms }
       }
     } catch (err) {
       logWarn('landing-pages', 'request page unreadable; the studio page is used', { pageId, locationId, code: err?.cause?.code ?? err?.code ?? null })
@@ -243,8 +235,16 @@ export async function copySourceForRequest(db, { pageId, locationId }) {
     return await studioPageBlocksFor(db, locationId)
   } catch (err) {
     logWarn('landing-pages', 'studio page copy unreadable; defaults used', { locationId, code: err?.cause?.code ?? err?.code ?? null })
-    return { blocks: [], publicPath: null }
+    return { blocks: [], publicPath: null, terms: {} }
   }
+}
+
+// The studio's terms wording as seen from a resolved page: a studio page of
+// that studio carries it itself; any other page (a campaign) reads the
+// studio's page (studioTermsCopy never throws, a blip is the defaults).
+async function studioTermsOf(db, page, locationId) {
+  if (page?.kind === 'studio' && page.primary_location_id === locationId) return termsOf(page)
+  return studioTermsCopy(db, locationId)
 }
 
 /**
@@ -320,51 +320,79 @@ function rowAttribution(studioRow) {
   return out
 }
 
-// PR1 legacy, deleted in PR3: a request with no page names a studio by its
-// landing_page_settings.public_path, read exactly as the public routes read it
-// today. A throw propagates, as it did from each route's own read (a route
-// that caught one keeps catching it).
-async function resolveLegacyRequest(db, legacyPath) {
-  const publicPath = resolveLandingPath(legacyPath)
-  const { data, error } = await db.from('landing_page_settings')
-    .select('location_id, public_path, blocks').eq('public_path', publicPath).maybeSingle()
-  if (error) return UNREADABLE
-  if (!data?.location_id) return NOT_FOUND
-  return {
-    ok: true, pageId: null, page: null, studioRow: null,
-    locationId: data.location_id, publicPath, blocks: data.blocks, attribution: null,
+/**
+ * The attribution a studio row stands for: the default for the studio path and
+ * the page slug, with the row's non-blank values over it (never the request's).
+ */
+export function studioAttribution({ page, studioRow, publicPath }) {
+  return { ...defaultAttribution({ publicPath, slug: page.slug }), ...rowAttribution(studioRow) }
+}
+
+// A request with no `page` names a STUDIO PAGE by its slug (the old
+// `path`/`public_path` param: /stillorgan's own lead form, class funnel and
+// paid-trial card post this way). Same answer shape as the page form, for the
+// studio page's primary row. Only a live studio page takes a request (a draft
+// is a miss: stricter than the retired settings row, which had no state).
+// A failed read is unreadable, never a refusal.
+async function resolveLegacyRequest(db, legacyPath, hostname) {
+  const slug = resolveLandingPath(legacyPath)
+  try {
+    const orgId = await publicOrgIdForHost(hostname)
+    const loaded = await loadPageBySlug(db, { orgId, slug })
+    if (!loaded) return NOT_FOUND
+    const { page, studios } = loaded
+    if (page.kind !== 'studio' || !isPageVisible(page.publish_state)) return NOT_FOUND
+    const studioRow = resolvePageStudio({ page, studios }).studio
+    if (!studioRow?.enabled || !page.primary_location_id) return NOT_FOUND
+    return {
+      ok: true,
+      pageId: page.id,
+      page,
+      studioRow,
+      locationId: page.primary_location_id,
+      publicPath: slug,
+      blocks: mergedBlocksFor({ page, studio: studioRow }),
+      attribution: studioAttribution({ page, studioRow, publicPath: slug }),
+      terms: termsOf(page),
+    }
+  } catch (e) {
+    logWarn('landing-pages', 'studio page request unreadable', { slug, code: e?.cause?.code ?? e?.code ?? null })
+    return UNREADABLE
   }
 }
 
 /**
  * Which page, studio and attribution a public API request is about.
  *
- * With `page` (a slug): the live campaign page of that slug in the host's
- * organisation (draft, coming_soon and retired answer not_found: only a live
- * page takes a customer; in PR1 a studio page is not_found too). scope 'one' answers for its primary studio only: a `studio` that
- * names any other studio (or nothing) is not_found, so a one-studio page can
- * never be booked at another studio. scope 'all' needs `studio` (a public
- * path, or the old `hatch` spelling): missing is studio_required, a studio the
- * page is not switched on at is not_found. Platform ids, price and
- * attribution come from the page's studio row, never the request:
- * `attribution` is the default for the studio path and slug with the row's
- * non-blank values over it. Every read is scoped by the organisation and slug,
- * then the page id; a failed read is unreadable, never a refusal.
+ * With `page` (a slug): the live page of that slug in the host's organisation
+ * (draft, coming_soon and retired answer not_found: only a live page takes a
+ * customer). A studio page resolves like a one-studio page. scope 'one' answers
+ * for its primary studio only: a `studio` that names any other studio (or
+ * nothing) is not_found, so a one-studio page can never be booked at another
+ * studio. scope 'all' needs `studio` (a public path, or the old `hatch`
+ * spelling): missing is studio_required, a studio the page is not switched on
+ * at is not_found. Platform ids, price and attribution come from the page's
+ * studio row, never the request: `attribution` is the default for the studio
+ * path and slug with the row's non-blank values over it. Every read is scoped
+ * by the organisation and slug, then the page id; a failed read is unreadable,
+ * never a refusal.
  *
- * Without `page`: PR1 legacy (deleted in PR3), `legacyPath` through
- * resolveLandingPath and its landing_page_settings row; pageId, page,
- * studioRow and attribution are null (the route derives attribution from the
- * blocks as it always has).
+ * Without `page`: `legacyPath` (the old `path` / `public_path` param, which
+ * /stillorgan's own blocks still post) names a STUDIO PAGE by its slug
+ * (resolveLegacyRequest): the same answer, for that page's primary row.
+ *
+ * `terms` is the studio's terms-tick wording (its studio page's
+ * `chrome.un1t_terms`); hand it to un1tTermsPayload / un1tFunnelCopyFromTerms.
  *
  * `not_configured` is never answered here: each route judges its offer's
  * readiness with its own config function.
  *
- * @returns {Promise<{ ok: true, pageId: string|null, page: object|null, studioRow: object|null,
- *   locationId: string, publicPath: string, blocks: Array, attribution: object|null }
+ * @returns {Promise<{ ok: true, pageId: string, page: object, studioRow: object,
+ *   locationId: string, publicPath: string, blocks: Array, attribution: object, terms: object }
  *   | { ok: false, reason: 'not_found' | 'not_configured' | 'studio_required' | 'unreadable' }>}
  */
 export async function resolvePublicPageRequest(db, { hostname = null, page = null, studio = null, legacyPath = null } = {}) {
-  if (!given(page)) return resolveLegacyRequest(db, legacyPath)
+  if (!given(page)) return resolveLegacyRequest(db, legacyPath, hostname)
   const slug = normaliseSlug(page)
   if (!slug) return NOT_FOUND
   try {
@@ -373,8 +401,6 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
     if (!loaded) return NOT_FOUND
     const { page: row, studios } = loaded
     if (!isPageVisible(row.publish_state)) return NOT_FOUND
-    // PR1: studio pages still serve from landing_page_settings; PR3 lifts this and seeds their attribution.
-    if (row.kind !== 'campaign') return NOT_FOUND
 
     const named = given(studio)
     const requested = named ? studioParamToPublicPath(studio) : null
@@ -399,7 +425,10 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
 
     // The studio's public path keys the rate limits, the terms page and the
     // stored landing_path: a studio with none cannot take a request.
-    const publicPath = await studioPublicPath(db, studioRow.location_id)
+    const [publicPath, terms] = await Promise.all([
+      studioPublicPath(db, studioRow.location_id),
+      studioTermsOf(db, row, studioRow.location_id),
+    ])
     if (!publicPath) return NOT_FOUND
     return {
       ok: true,
@@ -409,7 +438,8 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
       locationId: studioRow.location_id,
       publicPath,
       blocks: mergedBlocksFor({ page: row, studio: studioRow }),
-      attribution: { ...defaultAttribution({ publicPath, slug: row.slug }), ...rowAttribution(studioRow) },
+      attribution: studioAttribution({ page: row, studioRow, publicPath }),
+      terms,
     }
   } catch (e) {
     logWarn('landing-pages', 'public page request unreadable', { slug, code: e?.cause?.code ?? e?.code ?? null })

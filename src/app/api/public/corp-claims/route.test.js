@@ -1,5 +1,7 @@
 // CORPPROMO.1 — POST /api/public/corp-claims. The promo decides the studio,
 // credits and expiry; refusals land before anything reaches un1t.online.
+// Without `page` the promo's public path names its studio page (the resolver's
+// legacy branch, mocked here: its own tests live beside it).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const m = vi.hoisted(() => ({
@@ -44,13 +46,19 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@/lib/landing-pages', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, resolvePublicPageRequest: vi.fn(actual.resolvePublicPageRequest), studioTermsCopy: vi.fn(async () => ({ terms_required_message: 'Tick the studio terms.' })) }
+  return { ...actual, resolvePublicPageRequest: vi.fn() }
 })
 
 import { POST } from './route'
 import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const LOC = 'loc-hatch'
+// The resolver's answer for the promo's studio page (the legacy, no-page branch).
+const studioPageOk = (extra = {}) => ({
+  ok: true, pageId: 'page-hatch', page: { id: 'page-hatch', slug: 'hatch-street', kind: 'studio' },
+  studioRow: { location_id: LOC, enabled: true, offer: {}, attribution: {} },
+  locationId: LOC, publicPath: 'hatch-street', blocks: [], attribution: {}, terms: {}, ...extra,
+})
 const BODY = { promo: 'hatch-3-free', first_name: 'Ann', last_name: 'Byrne', email: 'Ann@Work.ie', phone: '0871234567', consent: true, terms_accepted: true }
 const req = (body) => new Request('http://x/api/public/corp-claims', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 const call = async (body = BODY) => { const r = await POST(req(body)); return { status: r.status, json: await r.json() } }
@@ -60,10 +68,11 @@ beforeEach(() => {
   m.updates = []
   m.readErrors = {}
   m.reads = {
-    landing_page_settings: { location_id: LOC, blocks: [] },
     locations: { id: LOC, name: 'UN1T Hatch Street', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: { un1t_online: { writes_enabled: true, trial_product_id: 'tp' } } },
     contacts: { id: 'c-1', email: 'ann@work.ie', first_name: 'Ann', last_name: 'Byrne' },
   }
+  resolvePublicPageRequest.mockReset()
+  resolvePublicPageRequest.mockResolvedValue(studioPageOk())
   m.rateLimit.mockResolvedValue({ allowed: true })
   m.contact.mockResolvedValue('c-1')
   m.membership.mockResolvedValue({ ok: true, active: false })
@@ -82,6 +91,10 @@ describe('POST /api/public/corp-claims', () => {
     expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({
       location_id: LOC, contact_id: 'c-1', promo_key: 'hatch-3-free', customer_email: 'ann@work.ie', status: 'processing', terms_source: 'website', terms_version: 'v3',
     }))
+    // No page: the promo's public path names the studio page; the claim came from the promo's own form.
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'hatch-street' }))
+    expect(resolvePublicPageRequest.mock.calls[0][1].page).toBeUndefined()
+    expect(m.inserted.mock.calls[0][1]).not.toHaveProperty('page_id')
     expect(m.fulfil).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promo: expect.objectContaining({ credits: 3, expiresInDays: 7 }), trialProductId: 'tp' }))
     expect(m.tag).toHaveBeenCalledWith(expect.anything(), { contactId: 'c-1', locationId: LOC, tag: 'hatch-corp-promo' })
     expect(m.consent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ source: 'corp_promo', locationId: LOC }))
@@ -108,9 +121,26 @@ describe('POST /api/public/corp-claims', () => {
     expect(m.contact).not.toHaveBeenCalled()
   })
 
-  it('an unreadable landing row or location: 503', async () => {
-    m.readErrors.landing_page_settings = { code: '57014' }
+  it('an unreadable studio page or location: 503; no studio page for the promo: 400 not_available', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'unreadable' })
     expect((await call()).status).toBe(503)
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    const none = await call()
+    expect([none.status, none.json.code]).toEqual([400, 'not_available'])
+    m.readErrors.locations = { code: '57014' }
+    expect((await call()).status).toBe(503)
+    expect(m.contact).not.toHaveBeenCalled()
+  })
+
+  it("the studio page's words and terms wording come through: the corp_promo block's copy and its chrome terms", async () => {
+    resolvePublicPageRequest.mockResolvedValue(studioPageOk({
+      blocks: [{ type: 'corp_promo', promo_key: 'hatch-3-free', active_member_text: 'Studio words for members' }],
+      terms: { terms_required_message: 'Tick the studio terms.' },
+    }))
+    m.membership.mockResolvedValue({ ok: true, active: true })
+    expect((await call()).json.error).toBe('Studio words for members')
+    const noTick = await call({ ...BODY, terms_accepted: false })
+    expect([noTick.status, noTick.json.code, noTick.json.error]).toEqual([400, 'terms_required', 'Tick the studio terms.'])
   })
 
   it('an active member: 200 active_member, no claim row', async () => {
@@ -166,7 +196,7 @@ describe('POST /api/public/corp-claims — page (PAGES.1)', () => {
     ok: true, pageId: 'page-corp', page: { id: 'page-corp', slug: 'corp', offer_type: 'promo_credits' },
     studioRow: { location_id: LOC, enabled: true, offer: { promo_key: 'hatch-3-free' }, attribution: {} },
     locationId: LOC, publicPath: 'hatch-street', blocks: [{ type: 'corp_promo', promo_key: 'hatch-3-free', heading: 'Corp' }],
-    attribution: { tag: 'hatch-street-corp', lead_source: 'meta_corp' }, ...extra,
+    attribution: { tag: 'hatch-street-corp', lead_source: 'meta_corp' }, terms: {}, ...extra,
   })
 
   it('page=corp claims the row\'s promo_key; a body promo_key is ignored', async () => {
@@ -200,7 +230,7 @@ describe('POST /api/public/corp-claims — page (PAGES.1)', () => {
   })
 
   it('the terms tick on a page uses the studio terms wording', async () => {
-    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ terms: { terms_required_message: 'Tick the studio terms.' } }))
     const { status, json } = await call({ ...BODY, terms_accepted: false, page: 'corp' })
     expect([status, json.code, json.error]).toEqual([400, 'terms_required', 'Tick the studio terms.'])
   })

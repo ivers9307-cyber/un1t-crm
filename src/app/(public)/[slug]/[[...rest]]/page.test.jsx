@@ -13,7 +13,6 @@ const h = vi.hoisted(() => ({
   loadedByOrg: null,
   product: { un1t_id: 'UN1T-PROD-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'Trial' },
   reviews: [],
-  legacyBlocks: null,
   studioChrome: null,
   productError: null,
   calls: { load: [], reviews: [], legacy: [], tables: [] },
@@ -56,7 +55,6 @@ function makeDb() {
       gte: () => b, not: () => b, order: () => b, limit: () => b, in: () => b,
       maybeSingle: async () => {
         if (table === 'un1t_products') return h.productError ? { data: null, error: h.productError } : { data: h.product, error: null }
-        if (table === 'landing_page_settings') return { data: h.legacyBlocks ? { blocks: h.legacyBlocks } : null, error: null }
         // studioTermsCopy: the studio page's chrome (chrome.un1t_terms).
         if (table === 'landing_pages') return { data: h.studioChrome ? { chrome: h.studioChrome } : null, error: null }
         return { data: null, error: null }
@@ -172,7 +170,6 @@ beforeEach(() => {
   h.loadThrows = null
   h.loadedByOrg = null
   h.reviews = []
-  h.legacyBlocks = null
   h.studioChrome = null
   h.productError = null
   h.calls = { load: [], reviews: [], legacy: [], tables: [] }
@@ -277,8 +274,6 @@ describe('the [slug] page route', () => {
   it('the un1t.online terms tick keeps the studio\'s own wording, now from its studio page\'s chrome.un1t_terms (nothing visible changes)', async () => {
     h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
     h.studioChrome = { un1t_terms: { terms_label: 'CUSTOM {studio_name} {terms}', terms_link_label: 'the rules' } }
-    // The legacy row no longer speaks for it.
-    h.legacyBlocks = [{ type: 'class_funnel', terms_label: 'LEGACY {studio_name}' }]
     const paid = propsOf(await render({ slug: 'trial' }), 'paid')
     expect(paid.hatchTerms).toMatchObject({ label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules', terms_url: '/legal/un1t/hatch-street/terms' })
     h.loaded = { page: CORP, studios: CORP_STUDIOS }

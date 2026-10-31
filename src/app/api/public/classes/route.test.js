@@ -13,6 +13,14 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
   rateLimitResponse: vi.fn(() => Response.json({ success: false }, { status: 429 })),
 }))
+// The studio page the path names, as the resolver answers it (its own tests live beside it).
+vi.mock('@/lib/landing-pages', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolvePublicPageRequest: vi.fn(async () => ({
+    ok: true, pageId: 'p-s', page: { id: 'p-s', slug: 'stillorgan', kind: 'studio' }, studioRow: {},
+    locationId: 'loc-1', publicPath: 'stillorgan', blocks: [], attribution: {}, terms: {},
+  })),
+}))
 vi.mock('@/lib/glofox', () => ({
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
@@ -22,6 +30,7 @@ vi.mock('@/lib/glofox', () => ({
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { fetchUpcomingEvents } from '@/lib/glofox'
+import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const CAPACITY_KEY = /spot|capacity|size|booked|remaining|left|place|seat|full|waiting|limit/i
 
@@ -29,7 +38,7 @@ function makeDb() {
   const q = {
     select() { return q },
     eq() { return q },
-    maybeSingle: async () => ({ data: { location_id: 'loc-1' }, error: null }),
+    maybeSingle: async () => ({ data: null, error: null }),
   }
   return { from: () => q }
 }
@@ -65,5 +74,16 @@ describe('GET /api/public/classes — PUBCAP.1', () => {
     // And no count from the Glofox event leaks through as a value.
     const text = JSON.stringify(body.data.classes)
     for (const n of ['12', '9', '10', '3']) expect(text).not.toMatch(new RegExp(`:\\s*${n}[,}\\]]`))
+  })
+
+  it('reads the studio through the studio page the path names, and answers nothing for an unknown or unreadable one', async () => {
+    fetchUpcomingEvents.mockResolvedValue({ ok: true, events: [{ _id: 'a', name: 'BASE', time_start: 4102444800, size: 12, booked: 9, active: true, private: false }] })
+    await GET(new Request('https://crm.example/api/public/classes?path=stillorgan', { headers: { host: 'www.un1tdublin.com' } }))
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan', hostname: 'www.un1tdublin.com' }))
+    for (const reason of ['not_found', 'unreadable']) {
+      resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason })
+      const body = await (await GET(new Request('https://crm.example/api/public/classes?path=galway'))).json()
+      expect(body).toEqual({ success: true, data: { classes: [] } })
+    }
   })
 })

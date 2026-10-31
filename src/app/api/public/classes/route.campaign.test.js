@@ -25,7 +25,7 @@ vi.mock('@/lib/un1t-online-settings', () => ({
 
 vi.mock('@/lib/landing-pages', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, resolvePublicPageRequest: vi.fn(actual.resolvePublicPageRequest), studioTermsCopy: vi.fn(async () => ({})) }
+  return { ...actual, resolvePublicPageRequest: vi.fn() }
 })
 
 import { GET } from './route.js'
@@ -35,12 +35,17 @@ import { resolvePublicPageRequest } from '@/lib/landing-pages'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 
+// The studio page the `path` names, as the resolver answers it (its own tests live beside it).
 let blocks = []
+const studioOk = () => ({
+  ok: true, pageId: 'p-s', page: { id: 'p-s', slug: 'stillorgan', kind: 'studio' }, studioRow: {},
+  locationId: 'loc-1', publicPath: 'stillorgan', blocks, attribution: {}, terms: {},
+})
 function makeDb() {
   const q = {
     select() { return q },
     eq() { return q },
-    maybeSingle: async () => ({ data: { location_id: 'loc-1', public_path: 'stillorgan', blocks }, error: null }),
+    maybeSingle: async () => ({ data: null, error: null }),
   }
   return { from: () => q }
 }
@@ -56,6 +61,8 @@ beforeEach(() => {
   fetchUpcomingEvents.mockReset() // a queued once-value from a test that never fetched must not leak
   blocks = []
   createServerClient.mockReturnValue(makeDb())
+  resolvePublicPageRequest.mockReset()
+  resolvePublicPageRequest.mockImplementation(async () => studioOk())
 })
 
 describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
@@ -103,8 +110,8 @@ describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
     expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: false })
   })
 
-  it('a missing landing row under a campaign is not configured, not "no classes"', async () => {
-    createServerClient.mockReturnValue({ from: () => ({ select() { return this }, eq() { return this }, maybeSingle: async () => ({ data: null, error: null }) }) })
+  it('a missing studio page under a campaign is not configured, not "no classes"', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
     const body = await (await get('path=stillorgan&campaign=50plus')).json()
     expect(body.data.classes).toEqual([])
     expect(body.data.campaign).toEqual({ configured: false, timetable_unavailable: false })
@@ -124,7 +131,7 @@ describe('GET /api/public/classes — campaign (FIFTYPLUS.1)', () => {
 // `path` are ignored.
 const pageOk = (block, extra = {}) => ({
   ok: true, pageId: 'p-50', page: { id: 'p-50', slug: '50plus', offer_type: 'one_class' }, studioRow: {},
-  locationId: 'loc-1', publicPath: 'stillorgan', blocks: [block], attribution: { tag: 't', lead_source: 'l' }, ...extra,
+  locationId: 'loc-1', publicPath: 'stillorgan', blocks: [block], attribution: { tag: 't', lead_source: 'l' }, terms: {}, ...extra,
 })
 
 describe('GET /api/public/classes — page (PAGES.1)', () => {

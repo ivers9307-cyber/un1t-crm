@@ -102,7 +102,7 @@ function fakeDb(tables, { fail = () => false } = {}) {
 
 const hatchTables = (opts) => ({
   locations: [{ id: HATCH, membership_source: 'un1t_online', settings: { un1t_online: { writes_enabled: true, funnel_enabled: true } } }],
-  landing_page_settings: [{ location_id: HATCH, blocks: [{ type: 'class_funnel', min_notice_hours: 1 }] }],
+  landing_pages: [{ id: 'sp', organization_id: 'org-1', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: HATCH, offer_type: 'class_funnel', publish_state: 'live', chrome: {}, blocks: [{ type: 'class_funnel', min_notice_hours: 1 }] }],
   un1t_events: hatchEvents(opts),
   un1t_clients: [{ location_id: HATCH, un1t_user_id: 'usr-1', credit_balance: 3, credit_unlimited: false, synced_at: LATEST }],
   un1t_bookings: [],

@@ -20,7 +20,8 @@
 // writes. The tag and lead source are the row's attribution when it sets
 // them, else the registry's (what /corp has always written); the words and
 // the studio are the page's; the claim records `page_id`. Without `page` the
-// legacy promo path (PR1; PR3 deletes it) is unchanged.
+// body's `promo` key names the promo and its studio page (the promo's public
+// path is that page's slug): /corp's own form, same words, studio and terms.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -41,7 +42,7 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { zoneOfLocation } from '@/lib/location-time'
 import { logWarn, logError } from '@/lib/log'
-import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy } from '@/lib/landing-pages'
+import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 
 export const runtime = 'nodejs'
 
@@ -102,7 +103,7 @@ export async function POST(request) {
   let promo
   let copy
   let locationId
-  let termsBlocks
+  let terms
   let tag
   let leadSource
   let pageId = null
@@ -126,7 +127,7 @@ export async function POST(request) {
     copy = corpPromoCopyFromBlocks([block], promo.key)
     locationId = r.locationId
     pageId = r.pageId
-    termsBlocks = null // the studio's terms wording, read below only when needed
+    terms = r.terms
     const rowAttr = r.studioRow?.attribution || {}
     tag = str(rowAttr.tag) || promo.tag
     leadSource = str(rowAttr.lead_source) || promo.leadSource
@@ -136,17 +137,17 @@ export async function POST(request) {
     const limit = await checkRateLimit(db, `corpclaim:${promo.key}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
     if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
-    // PR1 legacy (PR3 deletes it): the promo's studio and its words, from its landing row.
-    const { data: page, error: pageErr } = await db.from('landing_page_settings')
-      .select('location_id, blocks').eq('public_path', promo.publicPath).maybeSingle()
-    if (pageErr) {
-      logError('corp-promo', 'landing row unreadable', { promo: promo.key, code: pageErr.code ?? null })
+    // The promo's studio and its words, from the studio page at the promo's
+    // public path. A failed read is 503, never a refusal.
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: promo.publicPath })
+    if (!r.ok && r.reason === 'unreadable') {
+      logError('corp-promo', 'studio page unreadable', { promo: promo.key })
       return unavailable()
     }
-    if (!page?.location_id) return notAvailable('This offer is not available right now.')
-    copy = corpPromoCopyFromBlocks(page.blocks, promo.key)
-    locationId = page.location_id
-    termsBlocks = page.blocks
+    if (!r.ok) return notAvailable('This offer is not available right now.')
+    copy = corpPromoCopyFromBlocks(r.blocks, promo.key)
+    locationId = r.locationId
+    terms = r.terms // no page_id: the claim came from the promo's own form, not the studio page
     tag = promo.tag
     leadSource = promo.leadSource
   }
@@ -163,11 +164,10 @@ export async function POST(request) {
 
   // A new un1t.online account needs the studio's terms and liability waiver.
   if (b.terms_accepted !== true) {
-    const blocks = pageId ? [{ type: 'class_funnel', ...(await studioTermsCopy(db, locationId)) }] : termsBlocks
-    const terms = un1tTermsPayload({ blocks, studioName: location.name, publicPath: promo.publicPath })
+    const termsPayload = un1tTermsPayload({ terms, studioName: location.name, publicPath: promo.publicPath })
     return NextResponse.json({
-      success: false, code: 'terms_required', error: terms.required_message,
-      issues: { terms_accepted: terms.required_message }, terms,
+      success: false, code: 'terms_required', error: termsPayload.required_message,
+      issues: { terms_accepted: termsPayload.required_message }, terms: termsPayload,
     }, { status: 400 })
   }
 
