@@ -32,6 +32,11 @@
 // passes EditableText through it (path ['eyebrow'] | ['heading'] |
 // ['subhead']). Without it the hero renders exactly as before.
 //
+// HEROVIDEO.2 — the coach clips are shot portrait, so the box leans that way:
+// 1.3fr against the card's 1fr (was 1.6fr), 640px tall from lg (was 560px),
+// 5:4 on a tablet (was 16:10), 4:5 on a phone as before. A portrait clip
+// loses less of itself to object-cover; the booking card gains width.
+//
 // The video box is the one dark island on a light page: `bg-black` sits on
 // the element whose text is white, which is the rule no-low-contrast-accent-
 // text asks for.
@@ -118,8 +123,8 @@ export default function CampaignHero({
 
   return (
     <section className="bg-white text-black pt-20 lg:pt-28 pb-10 lg:pb-16">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 grid gap-5 lg:gap-8 lg:grid-cols-[1.6fr_1fr] lg:items-stretch">
-        <div className="relative overflow-hidden rounded-3xl bg-black text-white aspect-[4/5] sm:aspect-[16/10] lg:aspect-auto lg:min-h-[560px]">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 grid gap-5 lg:gap-8 lg:grid-cols-[1.3fr_1fr] lg:items-stretch">
+        <div className="relative overflow-hidden rounded-3xl bg-black text-white aspect-[4/5] sm:aspect-[5/4] lg:aspect-auto lg:min-h-[640px]">
           {videoUrl ? (
             <video
               ref={videoRef}
