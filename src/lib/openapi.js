@@ -393,21 +393,99 @@ registry.registerPath({
   },
 })
 
+// PAGES.1 — the page a public form is on. Every public form posts the page's
+// slug and (on an all-studios page) the chosen studio's public path; the
+// route resolves the live landing_pages row and its studio row server-side,
+// so the studio, the offer and the attribution are the page's, never the body's.
+const PublicPageFields = {
+  page: z.string().max(40).optional().openapi({ example: '50plus', description: 'PAGES.1: the slug of the live landing page the form is on. When sent, the studio, offer and attribution come from that page and its studio row.' }),
+  studio: z.string().max(40).optional().openapi({ example: 'hatch-street', description: 'PAGES.1: with `page`, the chosen studio\'s public path (`hatch` still reads as hatch-street). Optional on a one-studio page; required on an all-studios page.' }),
+}
+const PAGE_REFUSALS = 'With `page`: 404 not_found (no live campaign page by that slug for this host\'s organisation, or the studio is not switched on for it), 400 studio_required (an all-studios page and no studio), 503 unavailable when the page read failed (never a refusal).'
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/classes',
+  tags: ['Public'],
+  summary: 'Bookable classes for a public class funnel (/start wizard, /50plus)',
+  description: 'Anonymous. Rate-limited to 30 per studio path per IP per 5 min. Legacy form: `?path=<public path>&campaign=<key>` reads the studio\'s landing row. PAGES.1 form: `?page=<slug>&studio=<public path>` reads the live page; a one_class page lists its allow-listed classes and reports `campaign.configured`, a class_funnel page lists the studio\'s timetable. With `page`, an unknown page is 200 with no classes and `campaign.configured: false`; a failed read is 200 with `campaign.timetable_unavailable: true` (never "no classes"); 400 studio_required on an all-studios page with no studio.',
+  request: { query: z.object({
+    path: z.string().optional().openapi({ description: 'Legacy: the studio public path (default stillorgan). Ignored when `page` is sent.' }),
+    campaign: z.string().optional().openapi({ description: 'Legacy: a campaign key (50plus). Ignored when `page` is sent.' }),
+    ...PublicPageFields,
+  }) },
+  responses: {
+    200: { description: '{ classes, terms?, campaign? }' },
+    400: { description: 'Invalid request or studio_required', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/class-booking',
+  tags: ['Public'],
+  summary: 'Book one class from a public class funnel (/start wizard, /50plus)',
+  description: `Anonymous, rate-limited. Body: { event_id, first_name, last_name, email, phone, consent: true, class_name?, starts_at?, attribution?, lead_event_id?, visit?, path? (legacy), campaign? (legacy), page?, studio? }. Captures the lead and books (or files a review card for) the chosen class at the studio. With \`page\`, the trial pair, the class allow-list, the tag and the lead source are the live page's and its studio row's; \`path\` and \`campaign\` are ignored. ${PAGE_REFUSALS}`,
+  request: { body: { content: { 'application/json': { schema: z.object({
+    event_id: z.string().max(64),
+    first_name: z.string().max(120),
+    last_name: z.string().max(120),
+    email: z.string().email().max(320),
+    phone: z.string().max(50),
+    consent: z.literal(true),
+    class_name: z.string().max(200).optional(),
+    starts_at: z.string().max(40).optional(),
+    path: z.string().max(64).optional().openapi({ description: 'Legacy: the studio public path. Ignored when `page` is sent.' }),
+    campaign: z.string().max(64).optional().openapi({ description: 'Legacy: a campaign key (50plus). Ignored when `page` is sent.' }),
+    ...PublicPageFields,
+  }).openapi('PublicClassBooking') } } } },
+  responses: {
+    200: { description: 'Booked, filed for review, or a refusal state the page shows' },
+    400: { description: 'Validation failed, studio_required, or the class is not bookable', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found: no live page by that slug, or the studio is not on it', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: the page, the studio or the timetable could not be read; try again', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/funnel-event',
+  tags: ['Public'],
+  summary: 'Record one public funnel step (telemetry)',
+  description: 'Anonymous. Rate-limited to 60 per studio path per IP per 10 min. Legacy form: `location_path` names the studio. PAGES.1 form: `page` (+ `studio`) names the live page; the row records its page_id and `location_path` is ignored. Telemetry never errors the client: an unknown step, an unknown page or a failed page read answers 200 { ignored: true }.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    step: z.string().optional(),
+    location_path: z.string().max(64).optional().openapi({ description: 'Legacy: the studio public path. Ignored when `page` is sent.' }),
+    ...PublicPageFields,
+  }).passthrough().openapi('PublicFunnelEvent') } } } },
+  responses: {
+    200: { description: 'Recorded, or { ignored: true }' },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/public/leads',
   tags: ['Public'],
   summary: 'Public waitlist / lead capture',
-  description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Studio resolved server-side from publicPath — caller cannot target an arbitrary location.',
+  description: `Anonymous. Rate-limited to 8 requests per studio path per IP per 15 min. Studio resolved server-side from public_path (legacy) or from \`page\` + \`studio\` (PAGES.1: the live page's studio row and attribution; \`public_path\` and \`campaign\` ignored); the caller cannot target an arbitrary location. \`public_path\` is required only without \`page\`. ${PAGE_REFUSALS}`,
   // Re-derive via .extend({}) so the .openapi() decorator is present: LeadSchema
   // is constructed in leads.js BEFORE extendZodWithOpenApi(z) runs here, so the
   // raw export lacks .openapi (zod v4 adds it per-instance at construction time).
   // .extend({}) yields an identical schema built under the extended z. leads.js untouched.
-  request: { body: { content: { 'application/json': { schema: LeadSchema.extend({}).openapi('LeadCapture') } } } },
+  request: { body: { content: { 'application/json': { schema: LeadSchema.extend({
+    public_path: z.string().max(120).optional().openapi({ description: 'Legacy: the studio public path. Required without `page`; ignored with it.' }),
+    ...PublicPageFields,
+  }).openapi('LeadCapture') } } } },
   responses: {
     200: { description: 'Lead captured' },
-    400: { description: 'Validation failed or studio not accepting sign-ups', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, studio not accepting sign-ups, or studio_required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found: no live page by that slug, or the studio is not on it', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: the page read failed; try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -444,7 +522,8 @@ registry.registerPath({
 
 // TRIALSTUDIO.6 — the /trial purchase body (the route's own Zod schema is the authority).
 const TrialPurchaseStart = z.object({
-  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan').openapi({ description: 'The studio. Absent means stillorgan (a page loaded before the studio choice).' }),
+  studio: z.string().max(40).optional().openapi({ description: 'The studio. Without `page`: a TRIAL_STUDIOS key (stillorgan | hatch), absent means stillorgan (a page loaded before the studio choice). With `page` (PAGES.1): the chosen studio\'s public path (hatch still reads as hatch-street).' }),
+  page: PublicPageFields.page,
   first_name: z.string().min(1).max(120),
   last_name: z.string().min(1).max(120),
   email: z.string().email().max(320),
@@ -463,19 +542,21 @@ registry.registerPath({
   tags: ['Public'],
   summary: 'Start a paid trial purchase (PAIDTRIAL.1, TRIALSTUDIO.6, the /trial page)',
   request: { body: { content: { 'application/json': { schema: TrialPurchaseStart } } } },
-  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\' (required), first_name, last_name, email, phone, consent: true, attribution?, lead_event_id?, visit?, return_path?: string (the page the buyer started on: /trial, /stillorgan or /hatch-street, else /trial; a redirect-based payment returns there), terms_accepted?: boolean }. The product comes from the chosen studio\'s paid_trial landing block; the price is the block\'s (Hatch: the mirrored un1t.online product\'s), never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead) against the chosen studio. Stillorgan: a buyer with a trial history is refused before any row or payment (200 { success: false, code: \'trial_used\', error, help: { cta_label } }); otherwise inserts an awaiting_payment trial_purchases row and opens the Revolut payment, returning { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. Hatch: no CRM charge; 400 terms_required (with the terms payload) without terms_accepted when the studio\'s un1t.online writes are on; an active member is refused before any un1t.online call (200 code active_member); otherwise inserts the row, finds or creates the un1t.online account and returns { purchaseId, redirect_url (un1t.online\'s hosted checkout, returned once, never stored), amount_cents, currency, product_name }. A refused or unclear un1t.online answer files the row for a call and answers 200 { success: false, code: \'help_filed\', error }.',
+  description: 'Anonymous. Rate-limited to 8 per landing path per IP per 15 min. PAGES.1: with `page` (+ `studio`, a public path) the studio\'s entry is built from the live page\'s paid_trial block merged with its studio row; ' + PAGE_REFUSALS + ' Body: { studio: \'stillorgan\' | \'hatch\' without page, a public path with it, first_name, last_name, email, phone, consent: true, attribution?, lead_event_id?, visit?, return_path?: string (the page the buyer started on: /trial, /stillorgan or /hatch-street, else /trial; a redirect-based payment returns there), terms_accepted?: boolean }. The product comes from the chosen studio\'s paid_trial landing block; the price is the block\'s (Hatch: the mirrored un1t.online product\'s), never the body\'s. Captures the lead like the class funnel (contact, lead_source, attribution, consent, deal, Meta Lead) against the chosen studio. Stillorgan: a buyer with a trial history is refused before any row or payment (200 { success: false, code: \'trial_used\', error, help: { cta_label } }); otherwise inserts an awaiting_payment trial_purchases row and opens the Revolut payment, returning { purchaseId, checkout: { provider, token, url }, amount_cents, currency, product_name }. Hatch: no CRM charge; 400 terms_required (with the terms payload) without terms_accepted when the studio\'s un1t.online writes are on; an active member is refused before any un1t.online call (200 code active_member); otherwise inserts the row, finds or creates the un1t.online account and returns { purchaseId, redirect_url (un1t.online\'s hosted checkout, returned once, never stored), amount_cents, currency, product_name }. A refused or unclear un1t.online answer files the row for a call and answers 200 { success: false, code: \'help_filed\', error }.',
   responses: {
     200: { description: 'Checkout opened (Stillorgan checkout / Hatch redirect_url), or a refusal state: trial_used, active_member, help_filed' },
-    400: { description: 'Validation failed (including an unknown studio), not_configured, payments_unavailable or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed (including an unknown studio), studio_required, not_configured, payments_unavailable or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found: no live paid-trial page by that slug, or the studio is not on it', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Lead capture or purchase row insert failed', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Provider checkout could not be opened (Stillorgan)', content: { 'application/json': { schema: ErrorResponse } } },
-    503: { description: 'unavailable: studio config, location, contact or eligibility read unreadable, or un1t.online busy (the row is marked failed); try again', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: the page, studio config, location, contact or eligibility read unreadable, or un1t.online busy (the row is marked failed); try again', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
 const CorpPromoClaim = z.object({
-  promo: z.string().openapi({ example: 'hatch-3-free', description: 'A promo key from src/lib/corp-promos.js; it decides the studio, credits and expiry.' }),
+  promo: z.string().max(60).optional().openapi({ example: 'hatch-3-free', description: 'A promo key from src/lib/corp-promos.js; it decides the studio, credits and expiry. Required without `page`; with `page` (PAGES.1) optional, and only accepted when it names the page studio row\'s own promo (anything else is not_found).' }),
+  ...PublicPageFields,
   first_name: z.string(),
   last_name: z.string(),
   email: z.string().email(),
@@ -493,13 +574,14 @@ registry.registerPath({
   tags: ['Public'],
   summary: 'Claim a /corp corporate promo (CORPPROMO.1)',
   request: { body: { content: { 'application/json': { schema: CorpPromoClaim } } } },
-  description: "Anonymous. Rate-limited to 8 per promo per IP per 15 min. Nothing is ever charged. The promo key decides the studio, the credits and their expiry (never the body). Captures the lead like /trial (contact, lead_source, attribution, consent, deal, Meta Lead). Refused before anything reaches un1t.online (200 { success: false, code, error }): active_member; already_claimed, free_trial_used (the email OR mobile already had a free trial at the studio) or trained (any non-cancelled booking or membership history at the studio). Otherwise inserts a corp_promo_claims row, finds or creates the un1t.online account and grants the credits through un1t.online: 200 { success: true, data: { credits, expires_at, title, message } }, or 200 code help_filed when un1t.online refused or answered unclearly (staff get an approvals card).",
+  description: "Anonymous. Rate-limited to 8 per promo per IP per 15 min. PAGES.1: with `page` (+ `studio`), the promo is the live page studio row's promo_key and the attribution is the row's; " + PAGE_REFUSALS + " Nothing is ever charged. The promo key decides the studio, the credits and their expiry (never the body). Captures the lead like /trial (contact, lead_source, attribution, consent, deal, Meta Lead). Refused before anything reaches un1t.online (200 { success: false, code, error }): active_member; already_claimed, free_trial_used (the email OR mobile already had a free trial at the studio) or trained (any non-cancelled booking or membership history at the studio). Otherwise inserts a corp_promo_claims row, finds or creates the un1t.online account and grants the credits through un1t.online: 200 { success: true, data: { credits, expires_at, title, message } }, or 200 code help_filed when un1t.online refused or answered unclearly (staff get an approvals card).",
   responses: {
     200: { description: 'Granted, or a refusal state: active_member, already_claimed, free_trial_used, trained, holds_credits, help_filed' },
-    400: { description: 'Validation failed, not_available (unknown or switched-off promo, writes off) or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, studio_required, not_available (unknown or switched-off promo, writes off) or terms_required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found: no live promo page by that slug, the studio is not on it, or `promo` names another promo', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Lead capture failed', content: { 'application/json': { schema: ErrorResponse } } },
-    503: { description: 'unavailable: a read failed or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'unavailable: the page or another read failed, or un1t.online is busy; try again (nothing granted)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -508,12 +590,21 @@ registry.registerPath({
   path: '/api/public/trial-purchases/help',
   tags: ['Public'],
   summary: 'Ask for a call instead of buying a trial (TRIALSTUDIO.5, the /trial page "I need help" button)',
-  description: 'Anonymous. Rate-limited to 5 per studio per IP per 15 min. Body: { studio: \'stillorgan\' | \'hatch\', first_name, last_name, email, phone }. Used when the buyer was refused before paying (Stillorgan trial history, Hatch active membership). Matches or creates the contact, re-runs the studio\'s eligibility read for the reasons, files one help_requested trial_purchases row (a Needs a call card; a second press reuses the open one) and alerts staff. No payment is taken. Returns { message, purchaseId }. 400 unknown_studio or not_configured.',
+  request: { body: { content: { 'application/json': { schema: z.object({
+    studio: z.string().max(40).optional().openapi({ description: 'Without `page`: stillorgan | hatch (required). With `page`: the chosen studio\'s public path.' }),
+    page: PublicPageFields.page,
+    first_name: z.string().max(120),
+    last_name: z.string().max(120),
+    email: z.string().email().max(320),
+    phone: z.string().max(50),
+  }).openapi('TrialPurchaseHelp') } } } },
+  description: 'Anonymous. Rate-limited to 5 per studio per IP per 15 min. PAGES.1: with `page` (+ `studio`), the studio\'s entry comes from the live page\'s studio row; ' + PAGE_REFUSALS + ' Body: { studio: \'stillorgan\' | \'hatch\' without page, a public path with it, page?, first_name, last_name, email, phone }. Used when the buyer was refused before paying (Stillorgan trial history, Hatch active membership). Matches or creates the contact, re-runs the studio\'s eligibility read for the reasons, files one help_requested trial_purchases row (a Needs a call card; a second press reuses the open one) and alerts staff. No payment is taken. Returns { message, purchaseId }. 400 unknown_studio or not_configured.',
   responses: {
     200: { description: 'Help request filed (or the open one reused)' },
-    400: { description: 'Validation failed, unknown_studio or not_configured', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, unknown_studio, studio_required or not_configured', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'not_found: no live paid-trial page by that slug, or the studio is not on it', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
-    503: { description: 'Landing row, contact or eligibility read unavailable', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Page, landing row, contact or eligibility read unavailable', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

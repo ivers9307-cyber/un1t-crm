@@ -698,4 +698,22 @@ describe('getOpenApiSpec', () => {
     expect(create.description).toMatch(/cutoff_hours \(0\.\.720, default 48/)
     expect(create.description).toMatch(/unpaid_hold_hours \(1\.\.720, default 48/)
   })
+
+  // PAGES.1 — every public form route documents the page fields and the page refusals.
+  it('documents page and studio on the six public page routes, with the 404 / 400 / 503 page refusals', () => {
+    const bodyProps = (op) => {
+      const ref = op?.requestBody?.content?.['application/json']?.schema?.$ref
+      return ref ? Object.keys(spec.components.schemas[ref.split('/').pop()].properties) : []
+    }
+    const classes = spec.paths['/api/public/classes'].get
+    expect(classes.parameters.map((p) => p.name)).toEqual(expect.arrayContaining(['page', 'studio']))
+    for (const path of ['/api/public/class-booking', '/api/public/trial-purchases', '/api/public/trial-purchases/help', '/api/public/corp-claims', '/api/public/leads']) {
+      const op = spec.paths[path].post
+      expect(bodyProps(op), path).toEqual(expect.arrayContaining(['page', 'studio']))
+      expect(Object.keys(op.responses), path).toEqual(expect.arrayContaining(['400', '404', '503']))
+    }
+    expect(bodyProps(spec.paths['/api/public/funnel-event'].post)).toEqual(expect.arrayContaining(['page', 'studio']))
+    expect(spec.components.schemas.CorpPromoClaim.required).not.toContain('promo')
+    expect(spec.components.schemas.TrialPurchaseStart.properties.studio.enum).toBeUndefined()
+  })
 })
