@@ -396,7 +396,8 @@ export async function proxy(request) {
   // session. It only decides whether AppShell draws the staff shell around the
   // preview; the [slug] route still answers 404 for a page the session cannot
   // view. Reserved app segments (/settings, /cars …) and /api/ never qualify.
-  const editSegment = pathname.slice(1).split('/')[0]
+  // Lowercased: /Settings is the settings segment too, never a page slug.
+  const editSegment = pathname.slice(1).split('/')[0].toLowerCase()
   const isEditPreview =
     request.nextUrl.searchParams?.get('edit') === '1' &&
     !pathname.startsWith('/api/') &&

@@ -38,10 +38,11 @@ const SLUG_MESSAGES = Object.freeze({
   taken: 'That path is already taken.',
   invalid: 'Use letters, numbers and dashes only, 2 to 40 characters.',
 })
-const NOT_READY_REASONS = Object.freeze({ needs_plan: 'needs a plan', no_platform: 'has no platform' })
+const NOT_READY_REASONS = Object.freeze({ needs_plan: 'needs a plan', no_platform: 'has no platform', switched_off: 'is switched off' })
+const STUDIO_PAGE_READ_ONLY = 'This studio page is edited from the Landing page editor until studio pages move here.'
 const PUBLISH_MESSAGES = Object.freeze({
   redirect_required: 'Give the path to send visitors to.',
-  studio_page: 'A studio page cannot be retired.',
+  studio_page: STUDIO_PAGE_READ_ONLY,
 })
 const REDIRECT_HINT = 'Use a path on this site that starts with /, like /trial.'
 
@@ -217,7 +218,7 @@ export default function PageHeaderCard({
         </div>
       )}
 
-      {!canEdit && (
+      {!canEdit && !isStudio && (
         <p className="text-sm text-un1t-muted">
           You can view this page but not edit it. {page.scope === 'all' ? 'An organisation admin edits all-studios pages.' : 'Ask an owner at this studio.'}
         </p>

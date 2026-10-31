@@ -12,7 +12,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { logError } = await import('@/lib/log')
 const { GET, PUT } = await import('./route.js')
-const { fakeDb, STILL_MANAGER, ORG_ADMIN, PAGE, STILL, jsonRequest } = await import('../../../../../tests/helpers/landing-pages-fixtures.js')
+const { fakeDb, STILL_MANAGER, STILL_COACH, ORG_ADMIN, PAGE, STILL, HATCH, jsonRequest } = await import('../../../../../tests/helpers/landing-pages-fixtures.js')
 
 const ctx = (id) => ({ params: Promise.resolve({ id }) })
 const put = (id, body) => PUT(jsonRequest(`/api/landing-pages/${id}`, 'PUT', body), ctx(id))
@@ -69,6 +69,31 @@ describe('GET /api/landing-pages/[id]', () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await get(PAGE.trial)).status).toBe(401)
   })
+
+  it('a coach without landing_page gets a 404 even at their own studio', async () => {
+    getCurrentUser.mockResolvedValue(STILL_COACH)
+    for (const id of [PAGE.trial, PAGE.fiftyplus, PAGE.stillorgan]) expect((await get(id)).status).toBe(404)
+  })
+
+  it('a non-editor gets the blocks through clientSafeBlocks; an editor as stored', async () => {
+    db.state.landing_pages.find((p) => p.id === PAGE.trial).blocks = [
+      { id: 'pt', type: 'paid_trial', heading: 'The Reset' },
+      { id: 'lf', type: 'lead_form', heading: 'Join', tag: 'operator-tag', lead_source: 'operator-source' },
+    ]
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const viewer = (await (await get(PAGE.trial)).json()).data
+    expect(viewer.page.blocks[1]).toEqual({ id: 'lf', type: 'lead_form', heading: 'Join' })
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
+    const editor = (await (await get(PAGE.trial)).json()).data
+    expect(editor.page.blocks[1]).toMatchObject({ tag: 'operator-tag', lead_source: 'operator-source' })
+  })
+
+  it('a one-studio page answers its primary\'s row only', async () => {
+    db.state.landing_page_studios.push({ page_id: PAGE.fiftyplus, location_id: HATCH, enabled: true, offer: {}, attribution: {}, sort_order: 1 })
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const { data } = await (await get(PAGE.fiftyplus)).json()
+    expect(data.studios.map((s) => s.location_id)).toEqual([STILL])
+  })
 })
 
 describe('PUT /api/landing-pages/[id]', () => {
@@ -102,12 +127,15 @@ describe('PUT /api/landing-pages/[id]', () => {
     expect(db.writes('landing_pages')).toEqual([])
   })
 
-  it('a studio page keeps its offer block where mig 792 put it', async () => {
+  it('a studio page is read-only until PR3: any body is 400 studio_page and nothing is written', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
-    const blocks = [{ id: 'h1', type: 'hero' }, { id: 'pt1', type: 'paid_trial', heading: 'Try us', plan_code: 'x' }]
-    expect((await put(PAGE.stillorgan, { blocks })).status).toBe(200)
-    expect(stored(db, PAGE.stillorgan).blocks[1]).toEqual({ id: 'pt1', type: 'paid_trial', heading: 'Try us' })
-    expect((await put(PAGE.stillorgan, { blocks: [{ id: 'h1', type: 'hero' }] })).status).toBe(400)
+    const blocks = [{ id: 'h1', type: 'hero' }, { id: 'pt1', type: 'paid_trial', heading: 'Try us' }]
+    for (const body of [{ blocks }, { title: 'New' }, { chrome: { un1t_terms: { terms_label: 'x' } } }, {}, { nonsense: true }]) {
+      const res = await put(PAGE.stillorgan, body)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toMatchObject({ error: 'studio_page' })
+    }
+    expect(db.writes('landing_pages')).toEqual([])
   })
 
   it('PUT renaming a page that was live writes a retired redirect row for the old slug', async () => {
@@ -134,14 +162,47 @@ describe('PUT /api/landing-pages/[id]', () => {
     expect(await taken.json()).toMatchObject({ error: 'taken' })
   })
 
-  it('a failed retired-row insert after the rename keeps the rename and answers 500', async () => {
+  it('the reserved settings, api and contacts refuse a rename with nothing written (Review Focus 2)', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    for (const slug of ['settings', 'api', 'contacts']) {
+      const res = await put(PAGE.fiftyplus, { slug, title: 'Changed' })
+      expect(res.status).toBe(400)
+      expect(await res.json()).toMatchObject({ success: false, error: 'reserved' })
+    }
+    expect(db.writes('landing_pages')).toEqual([])
+    expect(stored(db, PAGE.fiftyplus)).toMatchObject({ slug: '50plus', title: 'The 50+ Club' })
+  })
+
+  it('a failed retired-row insert undoes the rename (slug and the rest of the save) and answers 500', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     db = fakeDb({ failures: { 'landing_pages.insert': { message: 'boom', code: 'XX000' } } })
     createServerClient.mockReturnValue(db)
+    const res = await put(PAGE.fiftyplus, { slug: 'fifty-plus', title: 'Fifty plus' })
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ success: false, error: 'The page could not be renamed' })
+    expect(stored(db, PAGE.fiftyplus)).toMatchObject({ slug: '50plus', title: 'The 50+ Club' })
+    expect(db.state.landing_pages.filter((p) => p.slug === '50plus')).toHaveLength(1)
+    expect(logError).toHaveBeenCalledWith('landing-pages', expect.stringContaining('rename undone'), expect.objectContaining({ code: 'XX000' }))
+  })
+
+  it('when the undo fails too, the rename is kept and answered 500 with the renamed page; both failures logged', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    db = fakeDb({
+      failures: {
+        'landing_pages.insert': { message: 'boom', code: 'XX000' },
+        // The undo is the update that writes the old slug back.
+        'landing_pages.update': (q) => (q.payload.slug === '50plus' ? { message: 'down', code: 'XX001' } : null),
+      },
+    })
+    createServerClient.mockReturnValue(db)
     const res = await put(PAGE.fiftyplus, { slug: 'fifty-plus' })
     expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, error: 'The page was renamed, but its old address could not be redirected' })
+    expect(body.data.slug).toBe('fifty-plus')
     expect(stored(db, PAGE.fiftyplus).slug).toBe('fifty-plus')
-    expect(logError).toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledWith('landing-pages', 'page renamed but the old slug has no redirect', expect.objectContaining({ code: 'XX000' }))
+    expect(logError).toHaveBeenCalledWith('landing-pages', 'rename could not be undone', expect.objectContaining({ code: 'XX001' }))
   })
 
   it('a studio page keeps its slug: it is the studio\'s public path', async () => {
@@ -149,5 +210,6 @@ describe('PUT /api/landing-pages/[id]', () => {
     const res = await put(PAGE.stillorgan, { slug: 'stillorgan-2' })
     expect(res.status).toBe(400)
     expect(await res.json()).toMatchObject({ error: 'studio_page' })
+    expect(stored(db, PAGE.stillorgan).slug).toBe('stillorgan')
   })
 })

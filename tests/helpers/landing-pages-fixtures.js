@@ -63,7 +63,7 @@ export function fixtureTables() {
 }
 
 // The callers. A Stillorgan manager with landing_page there; an org admin of
-// UN1T; a master. Each carries the getCurrentUser fields the helpers read.
+// UN1T; a Stillorgan coach without landing_page; a master. Each carries the getCurrentUser fields the helpers read.
 export const STILL_MANAGER = {
   id: 'e0000000-0000-0000-0000-000000000001', role: 'manager',
   locations: [{ id: STILL, name: 'UN1T Stillorgan', role: 'manager', organization_id: ORG }],
@@ -78,6 +78,13 @@ export const ORG_ADMIN = {
   ],
   assignmentsByLocation: { [STILL]: { role: 'owner', permissions: {} }, [HATCH]: { role: 'owner', permissions: {} } },
   activeLocation: { id: STILL, organization_id: ORG }, activeOrganization: { id: ORG }, orgAdminOrgIds: [ORG],
+}
+// A coach at Stillorgan: a studio member without landing_page (role default off).
+export const STILL_COACH = {
+  id: 'e0000000-0000-0000-0000-000000000004', role: 'head_coach',
+  locations: [{ id: STILL, name: 'UN1T Stillorgan', role: 'head_coach', organization_id: ORG }],
+  assignmentsByLocation: { [STILL]: { role: 'head_coach', permissions: {} } },
+  activeLocation: { id: STILL, organization_id: ORG }, activeOrganization: { id: ORG }, orgAdminOrgIds: [],
 }
 export const MASTER = {
   id: 'e0000000-0000-0000-0000-000000000003', role: 'master', isMaster: true,

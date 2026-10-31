@@ -1,9 +1,10 @@
 'use client'
 // PAGES.1 — the New page form: title, path, which studios, offer type and an
 // optional page to start from. The path is pre-checked against
-// GET /api/landing-pages/slug-check 300 ms after the last keystroke, and
-// Create stays off until that check answers "available" for the path as it
-// now reads. POST /api/landing-pages is the authority (it re-checks the path
+// GET /api/landing-pages/slug-check 300 ms after the last keystroke (with the
+// chosen studio for a one-studio page, so it judges the organisation POST
+// will create the page in), and Create stays off until that check answers
+// "available" for the path and studio as they now read. POST /api/landing-pages is the authority (it re-checks the path
 // and the caller's rights); a created page opens in its editor.
 //
 // Client bundle: pure modules only, never @/lib/landing-pages or @/lib/auth.
@@ -11,8 +12,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button, Field, Modal } from '@/components/ui'
-import { OFFER_TYPES, OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
-import { BLOCK_TYPES } from '@/lib/landing-page-blocks'
+import { OFFER_TYPES, OFFER_TYPE_LABELS, OFFER_TYPE_DESCRIPTIONS } from '@/lib/landing-page-offers'
 import { normaliseSlug } from '@/lib/page-slug'
 
 const SLUG_CHECK_DELAY_MS = 300
@@ -33,12 +33,12 @@ const CREATE_ERRORS = Object.freeze({
   unavailable: 'Pages are unavailable right now. Try again in a minute.',
 })
 
-const NO_OFFER = { label: 'No offer', description: 'A page of content blocks only: no booking card or trial for sale.' }
-
-/** The label and description an offer type shows in the picker. */
+/** The label and description an offer type shows in the picker (page-level words, not the block's). */
 function offerTypeOption(offerType) {
-  const block = BLOCK_TYPES.find((b) => b.type === OFFER_BLOCK_TYPE[offerType])
-  return block ? { label: block.label, description: block.description } : NO_OFFER
+  return {
+    label: OFFER_TYPE_LABELS[offerType] || OFFER_TYPE_LABELS.none,
+    description: OFFER_TYPE_DESCRIPTIONS[offerType] || OFFER_TYPE_DESCRIPTIONS.none,
+  }
 }
 
 const INPUT = 'w-full rounded-md border border-un1t-border bg-white px-3 py-2 text-sm text-un1t-text focus:outline-none focus:ring-2 focus:ring-un1t-accent'
@@ -47,7 +47,7 @@ export default function NewPageDialog({ open, onClose, pages = [], studios = [],
   const router = useRouter()
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
-  // The last answer for a path: { slug, state: 'pending' | 'available' | <problem> }.
+  // The last answer for a path at a studio: { slug, target, state: 'pending' | 'available' | <problem> }.
   const [check, setCheck] = useState(null)
   const [scope, setScope] = useState(studios.length > 0 ? 'one' : 'all')
   const [studioId, setStudioId] = useState(studios[0]?.id || '')
@@ -56,42 +56,59 @@ export default function NewPageDialog({ open, onClose, pages = [], studios = [],
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const timer = useRef(null)
-  const latestSlug = useRef('')
+  const latest = useRef({ slug: '', target: '' })
+  // The studio the check judges: the chosen one on a one-studio page, '' (the
+  // active organisation) on an all-studios page.
+  const target = scope === 'one' ? studioId : ''
 
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  async function runSlugCheck(value) {
+  async function runSlugCheck(value, at) {
     const normal = normaliseSlug(value)
     if (!normal) {
-      setCheck({ slug: value, state: 'invalid' })
+      setCheck({ slug: value, target: at, state: 'invalid' })
       return
     }
     let state = 'unchecked'
     try {
-      const res = await fetch(`/api/landing-pages/slug-check?slug=${encodeURIComponent(normal)}`)
+      const studioParam = at ? `&location_id=${encodeURIComponent(at)}` : ''
+      const res = await fetch(`/api/landing-pages/slug-check?slug=${encodeURIComponent(normal)}${studioParam}`)
       const body = await res.json().catch(() => null)
       if (res.ok && body?.success) state = body.data?.available ? 'available' : (body.data?.problem || 'unchecked')
     } catch {
       state = 'unchecked'
     }
-    if (latestSlug.current === value) setCheck({ slug: value, state })
+    if (latest.current.slug === value && latest.current.target === at) setCheck({ slug: value, target: at, state })
   }
 
-  function onSlugChange(e) {
-    const value = e.target.value.toLowerCase()
-    setSlug(value)
-    latestSlug.current = value
+  function scheduleCheck(value, at) {
+    latest.current = { slug: value, target: at }
     clearTimeout(timer.current)
     if (!value.trim()) {
       setCheck(null)
       return
     }
-    setCheck({ slug: value, state: 'pending' })
-    timer.current = setTimeout(() => runSlugCheck(value), SLUG_CHECK_DELAY_MS)
+    setCheck({ slug: value, target: at, state: 'pending' })
+    timer.current = setTimeout(() => runSlugCheck(value, at), SLUG_CHECK_DELAY_MS)
   }
 
-  const slugClean = check?.slug === slug && check.state === 'available'
-  const slugError = check?.slug === slug ? SLUG_MESSAGES[check.state] : undefined
+  function onSlugChange(e) {
+    const value = e.target.value.toLowerCase()
+    setSlug(value)
+    scheduleCheck(value, target)
+  }
+
+  // A different studio (or scope) can mean a different organisation: check again.
+  function onTargetChange(nextScope, nextStudioId) {
+    setScope(nextScope)
+    setStudioId(nextStudioId)
+    const at = nextScope === 'one' ? nextStudioId : ''
+    if (slug && at !== latest.current.target) scheduleCheck(slug, at)
+  }
+
+  const checked = check?.slug === slug && check.target === target
+  const slugClean = checked && check.state === 'available'
+  const slugError = checked ? SLUG_MESSAGES[check.state] : undefined
   const scopeOk = scope === 'all' ? canCreateAll : Boolean(studioId)
   const canSubmit = Boolean(title.trim()) && slugClean && scopeOk && !saving
 
@@ -146,13 +163,13 @@ export default function NewPageDialog({ open, onClose, pages = [], studios = [],
           <div className="flex flex-wrap gap-4 text-sm text-un1t-text">
             {studios.length > 0 && (
               <label className="inline-flex items-center gap-2">
-                <input type="radio" name="new-page-scope" value="one" checked={scope === 'one'} onChange={() => setScope('one')} />
+                <input type="radio" name="new-page-scope" value="one" checked={scope === 'one'} onChange={() => onTargetChange('one', studioId)} />
                 One studio
               </label>
             )}
             {canCreateAll && (
               <label className="inline-flex items-center gap-2">
-                <input type="radio" name="new-page-scope" value="all" checked={scope === 'all'} onChange={() => setScope('all')} />
+                <input type="radio" name="new-page-scope" value="all" checked={scope === 'all'} onChange={() => onTargetChange('all', studioId)} />
                 All studios
               </label>
             )}
@@ -162,7 +179,7 @@ export default function NewPageDialog({ open, onClose, pages = [], studios = [],
         {scope === 'one' && studios.length > 0 && (
           <Field id="new-page-studio" label="Studio">
             {(p) => (
-              <select {...p} value={studioId} onChange={(e) => setStudioId(e.target.value)} className={INPUT}>
+              <select {...p} value={studioId} onChange={(e) => onTargetChange(scope, e.target.value)} className={INPUT}>
                 {studios.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             )}

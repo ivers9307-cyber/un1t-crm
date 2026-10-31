@@ -68,8 +68,25 @@ describe('PUT /api/landing-pages/[id]/studios/[locationId]', () => {
   })
 
   it('a page with no offer has no studio half to edit', async () => {
-    const res = await save(PAGE.hatch, HATCH, { enabled: true, offer: {}, attribution: {} })
+    db.state.landing_pages.find((p) => p.id === PAGE.fiftyplus).offer_type = 'none'
+    const res = await save(PAGE.fiftyplus, STILL, { enabled: true, offer: {}, attribution: {} })
     expect(res.status).toBe(400)
     expect(await res.json()).toMatchObject({ error: 'no_offer' })
+  })
+
+  it('a one-studio page has one row: any other studio is a 404, even one the page holds a stray row for', async () => {
+    db.state.landing_page_studios.push({ page_id: PAGE.fiftyplus, location_id: HATCH, enabled: false, offer: {}, attribution: {}, sort_order: 1 })
+    const res = await save(PAGE.fiftyplus, HATCH, { enabled: true, offer: {}, attribution: {} })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'not_found' })
+    expect(db.writes('landing_page_studios')).toEqual([])
+    expect((await save(PAGE.fiftyplus, STILL, { enabled: true, offer: { class_keywords: '50+' }, attribution: {} })).status).toBe(200)
+  })
+
+  it('a studio page is read-only until PR3: 400 studio_page, nothing written', async () => {
+    const res = await save(PAGE.stillorgan, STILL, { enabled: false, offer: {}, attribution: {} })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ error: 'studio_page' })
+    expect(db.writes('landing_page_studios')).toEqual([])
   })
 })

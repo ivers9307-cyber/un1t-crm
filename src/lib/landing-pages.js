@@ -15,7 +15,7 @@
 
 import {
   mergeOfferBlock, OFFER_BLOCK_TYPE, offerConfigured, defaultAttribution, ATTRIBUTION_KEYS,
-  splitOfferBlock, offerTypeOfBlock,
+  splitOfferBlock, offerTypeOfBlock, OFFER_TYPE_LABELS,
 } from '@/lib/landing-page-offers'
 import { newBlockOfType, newBlockId } from '@/lib/landing-page-blocks'
 import { resolveLandingPath } from '@/lib/public-landing'
@@ -27,7 +27,6 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin, adminOrganizationIds } from '@/lib/org-admin'
 import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/landing-page-schemas'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
-import { getUserLocationIds } from '@/lib/auth'
 import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
 import { logWarn, logError } from '@/lib/log'
 
@@ -53,6 +52,18 @@ export class PageReadError extends Error {
   }
 }
 
+/**
+ * The studio rows that belong to a page: a one-studio page has exactly one,
+ * its primary's (spec §1). Any other row a one-studio page holds (a page
+ * created before createPage inserted the primary's only) is ignored
+ * everywhere: the editor, the studio save (404), the publish gate, the list.
+ */
+export function pageStudioRows(page, rows) {
+  const list = Array.isArray(rows) ? rows : []
+  if (page?.scope !== 'one') return list
+  return list.filter((r) => r?.location_id === page.primary_location_id)
+}
+
 async function loadStudios(db, page) {
   const { data, error } = await db
     .from('landing_page_studios')
@@ -60,7 +71,7 @@ async function loadStudios(db, page) {
     .eq('page_id', page.id)
     .order('sort_order')
   if (error) throw new PageReadError('Could not read the page\'s studios', error)
-  return { page, studios: data || [] }
+  return { page, studios: pageStudioRows(page, data) }
 }
 
 /** The page at <slug> in an organisation with its studio rows, null when there is none; a failed read throws. */
@@ -263,16 +274,20 @@ export function offerReady({ page, studio, landingPath, product = null }) {
 const isMaster = (user) => Boolean(user && (user.isMaster || user.role === 'master'))
 
 /**
- * Master, an org admin of the page's org, (scope one) someone assigned to its
- * studio, or (scope all) anyone holding a studio of the page's organisation,
- * read-only for them: canEditPage still asks for an org admin (spec §8).
+ * Master, an org admin of the page's org, or someone holding `landing_page`
+ * (spec §8): at its studio (scope one), or at any of their studios in the
+ * page's organisation (scope all, read-only for a non-admin: canEditPage
+ * still asks for an org admin). A coach or receptionist without the
+ * permission sees no page at all.
  */
 export function canViewPage(user, page) {
   if (!user || !page) return false
   if (isMaster(user) || isOrgAdmin(user, page.organization_id)) return true
-  if (page.scope === 'one') return getUserLocationIds(user).includes(page.primary_location_id)
+  if (page.scope === 'one') return hasPermissionForLocation(user, page.primary_location_id, 'landing_page')
   if (page.scope === 'all') {
-    return Boolean(page.organization_id) && (user.locations || []).some((l) => l?.organization_id === page.organization_id)
+    return Boolean(page.organization_id) && (user.locations || []).some(
+      (l) => l?.organization_id === page.organization_id && hasPermissionForLocation(user, l.id, 'landing_page'),
+    )
   }
   return false
 }
@@ -492,13 +507,8 @@ export function studioRowView(row, { publicPath = null } = {}) {
   }
 }
 
-export const OFFER_TYPE_LABELS = Object.freeze({
-  paid_trial: 'Paid trial',
-  class_funnel: 'Class booking',
-  one_class: 'One free class',
-  promo_credits: 'Promo credits',
-  none: 'No offer',
-})
+// One vocabulary for the offer types: the New page dialog's labels.
+export { OFFER_TYPE_LABELS }
 
 // The studio offer key that names what is on sale, by offer type.
 const OFFER_NAME_KEY = Object.freeze({
@@ -508,10 +518,16 @@ const OFFER_NAME_KEY = Object.freeze({
   promo_credits: 'promo_key',
 })
 
-/** The list's "Offer" cell: the type, then the one studio's plan or product name, or "per studio". */
-export function offerSummary(page, rows) {
+/**
+ * The list's "Offer" cell: the type, then the one studio's plan or product
+ * name, or "per studio". The plan, product and keywords are studio-half
+ * values (EDITGATE.1), so only an editor (`canEdit`) gets them; a viewer gets
+ * the type label alone.
+ */
+export function offerSummary(page, rows, { canEdit = false } = {}) {
   const label = OFFER_TYPE_LABELS[page.offer_type] || OFFER_TYPE_LABELS.none
   if (!OFFER_BLOCK_TYPE[page.offer_type]) return label
+  if (!canEdit) return label
   if (page.scope === 'all') return `${label}, per studio`
   const row = (rows || []).find((r) => r.location_id === page.primary_location_id)
   const raw = row?.offer?.[OFFER_NAME_KEY[page.offer_type]]
@@ -557,6 +573,7 @@ export async function listPagesForUser(db, user) {
     if (!byPage.has(r.page_id)) byPage.set(r.page_id, [])
     byPage.get(r.page_id).push(r)
   }
+  for (const p of pages) if (byPage.has(p.id)) byPage.set(p.id, pageStudioRows(p, byPage.get(p.id)))
 
   // One public-path read per studio, only for pages that sell something.
   const needPath = new Set()
@@ -573,7 +590,8 @@ export async function listPagesForUser(db, user) {
       return { location_id: row.location_id, name: embeddedOne(row.locations)?.name || null, enabled: Boolean(row.enabled), ...readiness }
     }))
     const out = Object.fromEntries(LIST_FIELDS.map((k) => [k, page[k] ?? null]))
-    return { ...out, studios, offer_summary: offerSummary(page, pageRows), can_edit: canEditPage(user, page) }
+    const canEdit = canEditPage(user, page)
+    return { ...out, studios, offer_summary: offerSummary(page, pageRows, { canEdit }), can_edit: canEdit }
   }))
 }
 
@@ -636,9 +654,10 @@ const isUniqueViolation = (error) => error?.code === '23505'
 /**
  * Create a campaign page: the starter blocks (plus the content blocks of
  * `startFrom`, a page the route has already checked the caller may view),
- * then one studio row per ACTIVE studio of the organisation, sorted by name:
- * switched on only for a one-studio page's primary, with the default
- * attribution for the studio's public path (none when it has no path).
+ * then its studio rows, with the default attribution for each studio's public
+ * path (none when it has no path). A one-studio page gets exactly one row,
+ * its primary's, switched on (spec §1); an all-studios page one row per
+ * ACTIVE studio of the organisation, sorted by name, switched off.
  * Every read happens before the first write; a read failure throws
  * PageReadError. A studio-row insert that fails removes the page again.
  * @returns {Promise<{ ok: true, page: object, studios: object[] } | { ok: false, reason: 'taken' | 'failed', error?: object }>}
@@ -653,7 +672,8 @@ export async function createPage(db, { input, orgId, userId, brand, startFrom = 
     .eq('active', true)
     .order('name')
   if (locErr) throw new PageReadError('Could not read the organisation\'s studios', locErr)
-  const studios = Array.isArray(locs) ? locs : []
+  const active = Array.isArray(locs) ? locs : []
+  const studios = primary ? active.filter((l) => l.id === primary) : active
   const paths = await Promise.all(studios.map((l) => studioPublicPath(db, l.id)))
 
   const blocks = [...starterBlocks(input.offer_type, brand), ...copiedContentBlocks(startFrom?.blocks)]
@@ -680,7 +700,7 @@ export async function createPage(db, { input, orgId, userId, brand, startFrom = 
   const rows = studios.map((l, i) => ({
     page_id: page.id,
     location_id: l.id,
-    enabled: input.scope === 'one' && l.id === primary,
+    enabled: Boolean(primary),
     offer: {},
     attribution: paths[i] ? defaultAttribution({ publicPath: paths[i], slug }) : {},
     sort_order: i,
@@ -717,11 +737,14 @@ export async function updatePageRow(db, pageId, patch) {
 /**
  * Rename a page's slug together with the rest of `patch`. When the page has
  * been live, its old slug becomes a retired page that sends visitors to the
- * new one, written in the same request. A failed write of that row after the
- * rename keeps the rename and answers `retiredError` (the caller logs and
- * answers 500).
- * @returns {Promise<{ ok: true, page: object, retired: object | null, retiredError?: object }
- *   | { ok: false, reason: 'taken' | 'failed' | 'gone', error?: object }>}
+ * new one, written in the same request. When that row cannot be written the
+ * rename is undone (every patched column back to its loaded value, the slug
+ * included) and the answer is `retire_failed`: nothing changed, try again.
+ * Only when the undo fails too is the rename kept, answered with
+ * `retiredError` and `rollbackError` (the caller logs both and answers 500
+ * with the renamed page).
+ * @returns {Promise<{ ok: true, page: object, retired: object | null, retiredError?: object, rollbackError?: object }
+ *   | { ok: false, reason: 'taken' | 'failed' | 'gone' | 'retire_failed', error?: object }>}
  */
 export async function renameSlug(db, { page, slug, patch, userId }) {
   const saved = await updatePageRow(db, page.id, { ...patch, slug })
@@ -747,8 +770,15 @@ export async function renameSlug(db, { page, slug, patch, userId }) {
     })
     .select(PAGE_COLUMNS)
     .maybeSingle()
-  if (error || !retired) return { ok: true, page: saved.page, retired: null, retiredError: error || { message: 'no row' } }
-  return { ok: true, page: saved.page, retired }
+  if (!error && retired) return { ok: true, page: saved.page, retired }
+
+  const retiredError = error || { message: 'no row' }
+  const restore = { updated_by: userId }
+  for (const key of Object.keys(patch)) if (key !== 'updated_by') restore[key] = page[key] ?? null
+  restore.slug = page.slug
+  const undone = await updatePageRow(db, page.id, restore)
+  if (undone.ok) return { ok: false, reason: 'retire_failed', error: retiredError }
+  return { ok: true, page: saved.page, retired: null, retiredError, rollbackError: undone.error || { message: undone.reason } }
 }
 
 /**

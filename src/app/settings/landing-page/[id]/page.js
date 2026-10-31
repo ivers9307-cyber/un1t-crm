@@ -8,8 +8,12 @@
 // and gets the blocks through clientSafeBlocks (EDITGATE.1: a backfilled block
 // may still carry operator keys).
 // The studio lists (booking types, events) are read for a one-studio page's
-// studio only. A studio page (kind 'studio') opens here too, under a banner:
-// the public site still renders it from the legacy table until PR3.
+// studio only. Each studio row carries its readiness (studioRowReadiness, the
+// API's rule) so the editor's chip starts right; an unreadable one is left
+// unknown. A studio page (kind 'studio') opens here READ-ONLY for everyone,
+// under a banner pointing at the legacy editor: landing_page_settings stays
+// its one writer until PR3's cutover re-syncs it (the API refuses the write
+// too, 400 studio_page).
 
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -20,7 +24,9 @@ import { uuidLike } from '@/lib/schemas'
 import { getLocationBranding } from '@/lib/location-branding'
 import { resolveOrgChrome } from '@/lib/host-brand'
 import { clientSafeBlocks } from '@/lib/landing-page-blocks'
-import { loadPageById, canViewPage, canEditPage, studioRowView, studioPublicPath, PageReadError } from '@/lib/landing-pages'
+import {
+  loadPageById, canViewPage, canEditPage, studioRowView, studioPublicPath, studioRowReadiness, PageReadError,
+} from '@/lib/landing-pages'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import { logError } from '@/lib/log'
 
@@ -28,13 +34,29 @@ export const dynamic = 'force-dynamic'
 
 const EMPTY = Promise.resolve({ data: [] })
 
-function studiosFor(rows, canEdit, paths) {
-  return rows.map((row) => {
-    const view = studioRowView(row, { publicPath: paths.get(row.location_id) ?? null })
+function studiosFor(rows, canEdit, paths, readiness) {
+  return rows.map((row, i) => {
+    const view = { ...studioRowView(row, { publicPath: paths.get(row.location_id) ?? null }), ...(readiness[i] ? { readiness: readiness[i] } : {}) }
     if (canEdit) return view
     const { offer: _offer, attribution: _attribution, ...rest } = view
     return rest
   })
+}
+
+// Each row's readiness, judged with the path already read. Only when the path
+// is known (an unknown path is not "no platform"); a failed read leaves that
+// row's readiness unknown (logged) and the editor shows its local hint.
+async function readinessFor(db, page, rows, paths) {
+  return Promise.all(rows.map(async (row) => {
+    if (!paths.has(row.location_id)) return null
+    try {
+      return await studioRowReadiness(db, { page, row, publicPath: paths.get(row.location_id) })
+    } catch (err) {
+      if (!(err instanceof PageReadError)) throw err
+      logError('landing-page-settings', 'studio readiness unreadable', { pageId: page.id, locationId: row.location_id, code: err.cause?.code ?? null })
+      return null
+    }
+  }))
 }
 
 // Each studio's public path (one read per studio), for the editor's default
@@ -80,7 +102,8 @@ export default async function LandingPageEditorPage(props) {
   if (!loaded || !canViewPage(user, loaded.page)) notFound()
 
   const { page } = loaded
-  const canEdit = canEditPage(user, page)
+  const isStudioPage = page.kind === 'studio'
+  const canEdit = !isStudioPage && canEditPage(user, page)
   const primary = page.scope === 'one' ? page.primary_location_id : null
   const [eventTypesRes, eventsRes, brand, paths] = await Promise.all([
     primary ? db.from('event_types').select('id, name, slug').eq('location_id', primary).eq('active', true).order('name') : EMPTY,
@@ -88,6 +111,7 @@ export default async function LandingPageEditorPage(props) {
     brandFor(db, page, primary),
     studioPathsFor(db, loaded.studios, page.id),
   ])
+  const readiness = await readinessFor(db, page, loaded.studios, paths)
 
   return (
     <div className="p-6 max-w-[1800px]">
@@ -102,15 +126,21 @@ export default async function LandingPageEditorPage(props) {
           Back to pages
         </Link>
       </div>
-      {page.kind === 'studio' && (
+      {isStudioPage && (
         <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700">
-          Visitors see this studio page&apos;s earlier content until studio pages move to this editor.
+          This studio page is edited from the Landing page editor until studio pages move here.{' '}
+          <Link
+            href={`/settings/landing-page?location_id=${encodeURIComponent(page.primary_location_id || '')}`}
+            className="font-medium underline"
+          >
+            Open the Landing page editor
+          </Link>
         </div>
       )}
       <LandingPageSettingsForm
         key={page.id}
         page={canEdit ? page : { ...page, blocks: clientSafeBlocks(page.blocks) }}
-        studios={studiosFor(loaded.studios, canEdit, paths)}
+        studios={studiosFor(loaded.studios, canEdit, paths, readiness)}
         canEdit={canEdit}
         availableBookingTypes={eventTypesRes.data || []}
         availableEvents={eventsRes.data || []}

@@ -181,15 +181,36 @@ describe('landing-pages', () => {
     expect(offerReady({ page, studio: { offer: {}, attribution: {} }, landingPath: 'stillorgan' })).toBe(false)
   })
 
-  it('canViewPage: master, an org admin, a member of the one studio, or (all studios) anyone holding a studio of the org', () => {
+  it('canViewPage: master, an org admin, or landing_page at the one studio / at any studio of the org (all studios)', () => {
     const one = { ...page, scope: 'one', primary_location_id: 'loc-s' }
+    // A member with landing_page (a per-user override on a manager, whose default is off).
+    const editor = (id, org = 'org-un1t') => ({
+      role: 'manager', locations: [{ id, role: 'manager', organization_id: org }],
+      assignmentsByLocation: { [id]: { role: 'manager', permissions: { landing_page: true } } },
+    })
+    // A coach: a studio member without landing_page.
+    const coach = (id, org = 'org-un1t') => ({
+      role: 'head_coach', locations: [{ id, role: 'head_coach', organization_id: org }],
+      assignmentsByLocation: { [id]: { role: 'head_coach', permissions: {} } },
+    })
     expect(canViewPage({ role: 'master' }, page)).toBe(true)
     expect(canViewPage({ orgAdminOrgIds: ['org-un1t'] }, page)).toBe(true)
-    expect(canViewPage({ locations: [{ id: 'loc-s' }] }, one)).toBe(true)
-    expect(canViewPage({ locations: [{ id: 'loc-s' }] }, page)).toBe(false)
-    expect(canViewPage({ locations: [{ id: 'loc-s', organization_id: 'org-un1t' }] }, page)).toBe(true)
-    expect(canViewPage({ locations: [{ id: 'loc-x', organization_id: 'org-other' }] }, page)).toBe(false)
-    expect(canViewPage({ locations: [{ id: 'loc-other', organization_id: 'org-un1t' }] }, one)).toBe(false)
+    expect(canViewPage(editor('loc-s'), one)).toBe(true)
+    expect(canViewPage(editor('loc-s'), page)).toBe(true)
+    expect(canViewPage(editor('loc-x', 'org-other'), page)).toBe(false)
+    expect(canViewPage(editor('loc-other'), one)).toBe(false)
+    expect(canViewPage(coach('loc-s'), one)).toBe(false)
+    expect(canViewPage(coach('loc-s'), page)).toBe(false)
+    // landing_page at a studio of ANOTHER org does not open this org's all-studios page.
+    const mixed = {
+      role: 'manager',
+      locations: [{ id: 'loc-x', role: 'manager', organization_id: 'org-other' }, { id: 'loc-s', role: 'head_coach', organization_id: 'org-un1t' }],
+      assignmentsByLocation: {
+        'loc-x': { role: 'manager', permissions: { landing_page: true } },
+        'loc-s': { role: 'head_coach', permissions: {} },
+      },
+    }
+    expect(canViewPage(mixed, page)).toBe(false)
     expect(canViewPage(null, one)).toBe(false)
   })
 
@@ -299,11 +320,18 @@ describe('landing-pages: the pages API helpers', () => {
   })
 
   it('offerSummary, starterBlocks, copiedContentBlocks', () => {
-    expect(offerSummary(page, [])).toBe('Paid trial, per studio')
+    const edit = { canEdit: true }
+    expect(offerSummary(page, [], edit)).toBe('Paid trial, per studio')
     const one = { ...page, scope: 'one', primary_location_id: 'loc-s' }
-    expect(offerSummary(one, [{ location_id: 'loc-s', offer: { product_name: '14 Day Reset' } }])).toBe('Paid trial: 14 Day Reset')
-    expect(offerSummary(one, [])).toBe('Paid trial')
-    expect(offerSummary({ ...page, offer_type: 'none' }, [])).toBe('No offer')
+    const rows = [{ location_id: 'loc-s', offer: { product_name: '14 Day Reset' } }]
+    expect(offerSummary(one, rows, edit)).toBe('Paid trial: 14 Day Reset')
+    expect(offerSummary(one, [], edit)).toBe('Paid trial')
+    expect(offerSummary({ ...page, offer_type: 'none' }, [], edit)).toBe('No offer')
+    // A viewer gets the type label alone: never the studio's plan, product or keywords.
+    expect(offerSummary(one, rows)).toBe('Paid trial')
+    expect(offerSummary({ ...one, offer_type: 'one_class' }, [{ location_id: 'loc-s', offer: { class_keywords: '50+' } }])).toBe('One class')
+    expect(offerSummary({ ...one, offer_type: 'one_class' }, [{ location_id: 'loc-s', offer: { class_keywords: '50+' } }], edit)).toBe('One class: 50+')
+    expect(offerSummary(page, [])).toBe('Paid trial')
 
     expect(starterBlocks('none', 'UN1T').map((b) => b.type)).toEqual(['hero'])
     const [corp] = starterBlocks('promo_credits', 'UN1T')

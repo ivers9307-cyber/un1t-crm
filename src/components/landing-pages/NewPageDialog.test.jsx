@@ -61,7 +61,8 @@ describe('NewPageDialog', () => {
     expect(path.value).toBe('summer')
     expect(create.disabled).toBe(true)
     await settle()
-    expect(slugChecks().map(([u]) => u)).toEqual(['/api/landing-pages/slug-check?slug=summer'])
+    // A one-studio page (the default) is checked in the chosen studio's organisation.
+    expect(slugChecks().map(([u]) => u)).toEqual([`/api/landing-pages/slug-check?slug=summer&location_id=${HATCH}`])
     expect(screen.getByText('That path is already taken.')).toBeTruthy()
     expect(create.disabled).toBe(true)
 
@@ -79,6 +80,31 @@ describe('NewPageDialog', () => {
     expect(create.disabled).toBe(true)
     await settle()
     expect(screen.queryByRole('alert')).toBeNull()
+    expect(create.disabled).toBe(false)
+  })
+
+  it('checks again when the studio or the scope changes; All studios checks the active organisation', async () => {
+    renderDialog()
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Summer' } })
+    fireEvent.change(screen.getByLabelText('Path'), { target: { value: 'summer-26' } })
+    await settle()
+    const create = screen.getByRole('button', { name: 'Create page' })
+    expect(create.disabled).toBe(false)
+
+    fireEvent.change(screen.getByLabelText('Studio'), { target: { value: STILL } })
+    // The answer was for Hatch Street: Create waits for Stillorgan's.
+    expect(create.disabled).toBe(true)
+    await settle()
+    expect(create.disabled).toBe(false)
+
+    fireEvent.click(screen.getByLabelText('All studios'))
+    expect(create.disabled).toBe(true)
+    await settle()
+    expect(slugChecks().map(([u]) => u)).toEqual([
+      `/api/landing-pages/slug-check?slug=summer-26&location_id=${HATCH}`,
+      `/api/landing-pages/slug-check?slug=summer-26&location_id=${STILL}`,
+      '/api/landing-pages/slug-check?slug=summer-26',
+    ])
     expect(create.disabled).toBe(false)
   })
 
@@ -119,13 +145,28 @@ describe('NewPageDialog', () => {
     })
   })
 
-  it('describes each offer type and offers All studios to an organisation admin only', () => {
+  it('describes each offer type in page-level words and offers All studios to an organisation admin only', () => {
     renderDialog({ canCreateAll: false })
     expect(screen.queryByLabelText('All studios')).toBeNull()
     const offer = screen.getByLabelText('Offer')
     expect([...offer.options].map((o) => o.value)).toEqual(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'none'])
-    fireEvent.change(offer, { target: { value: 'none' } })
-    expect(screen.getByText('A page of content blocks only: no booking card or trial for sale.')).toBeTruthy()
+    expect([...offer.options].map((o) => o.textContent)).toEqual([
+      'Paid trial', 'Free class with a timetable', 'One class', 'Free classes (promo code)', 'No offer',
+    ])
+    const descriptions = {
+      paid_trial: 'A trial sold for a price: price card, buyer form, checkout, then the plan or product on their account.',
+      class_funnel: "Pick a class from the studio's timetable, leave details, book; optional consult upsell.",
+      one_class: 'A booking page for one class and one trial plan: coach video, date tiles, details, booked.',
+      promo_credits: 'A corporate or partner promo: a fixed number of free classes claimed with a code.',
+      none: 'A page of content blocks only: no booking card or trial for sale.',
+    }
+    for (const [value, text] of Object.entries(descriptions)) {
+      fireEvent.change(offer, { target: { value } })
+      expect(screen.getByText(text)).toBeTruthy()
+    }
+    // Never the block library's words (the old "Campaign funnel (own page)" label).
+    expect(screen.queryByText(/Campaign funnel|Edited here, never shown/)).toBeNull()
+    expect(document.body.textContent).not.toMatch(/\u2014/)
   })
 
   it('shows the server refusal and stays open', async () => {

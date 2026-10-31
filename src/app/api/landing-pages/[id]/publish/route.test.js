@@ -62,12 +62,30 @@ describe('POST /api/landing-pages/[id]/publish', () => {
     expect(stored(db, PAGE.fiftyplus).publish_state).toBe('live')
   })
 
-  it('a disabled studio does not count, even when its offer is ready', async () => {
+  it('a one-studio page whose primary is switched off is not ready, even when its offer is ready', async () => {
     stored(db, PAGE.fiftyplus).publish_state = 'draft'
     rowsOf(db, PAGE.fiftyplus)[0].enabled = false
     const res = await publish(PAGE.fiftyplus, { publish_state: 'live' })
     expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ error: 'not_ready', studios: [] })
+    expect(await res.json()).toEqual({
+      success: false, error: 'not_ready',
+      studios: [{ location_id: STILL, name: 'UN1T Stillorgan', reason: 'switched_off' }],
+    })
+    expect(stored(db, PAGE.fiftyplus).publish_state).toBe('draft')
+  })
+
+  it('a one-studio page judges its primary only: another studio\'s ready row never publishes it', async () => {
+    stored(db, PAGE.corp).publish_state = 'draft'
+    rowsOf(db, PAGE.corp)[0].offer = {} // the primary (Hatch Street) has no promo
+    // A stray ready, switched-on row for another studio (a page made before one-row create).
+    db.state.landing_page_studios.push({ page_id: PAGE.corp, location_id: STILL, enabled: true, offer: { promo_key: 'hatch-3-free' }, attribution: {}, sort_order: 1 })
+    const res = await publish(PAGE.corp, { publish_state: 'live' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ error: 'not_ready', studios: [{ location_id: HATCH, reason: 'needs_plan' }] })
+    expect(stored(db, PAGE.corp).publish_state).toBe('draft')
+
+    rowsOf(db, PAGE.corp)[0].offer = { promo_key: 'hatch-3-free' }
+    expect((await publish(PAGE.corp, { publish_state: 'live' })).status).toBe(200)
   })
 
   it('a un1t.online studio with writes off is no_platform', async () => {
@@ -83,13 +101,19 @@ describe('POST /api/landing-pages/[id]/publish', () => {
     expect((await publish(PAGE.trial, { publish_state: 'coming_soon' })).status).toBe(200)
     expect((await publish(PAGE.trial, { publish_state: 'draft' })).status).toBe(200)
     expect(stored(db, PAGE.trial).publish_state).toBe('draft')
-    expect((await publish(PAGE.hatch, { publish_state: 'live' })).status).toBe(200)
+    stored(db, PAGE.fiftyplus).offer_type = 'none'
+    rowsOf(db, PAGE.fiftyplus)[0].enabled = false
+    stored(db, PAGE.fiftyplus).publish_state = 'draft'
+    expect((await publish(PAGE.fiftyplus, { publish_state: 'live' })).status).toBe(200)
   })
 
-  it('a studio page is never retired; a viewer who cannot edit is 403; outside the view is 404', async () => {
-    const studio = await publish(PAGE.stillorgan, { publish_state: 'retired', redirect_to: '/trial' })
-    expect(studio.status).toBe(400)
-    expect(await studio.json()).toMatchObject({ error: 'studio_page' })
+  it('a studio page is read-only until PR3 (any state, 400 studio_page); a viewer who cannot edit is 403; outside the view is 404', async () => {
+    for (const body of [{ publish_state: 'retired', redirect_to: '/trial' }, { publish_state: 'draft' }, { publish_state: 'live' }]) {
+      const studio = await publish(PAGE.stillorgan, body)
+      expect(studio.status).toBe(400)
+      expect(await studio.json()).toMatchObject({ error: 'studio_page' })
+    }
+    expect(db.writes('landing_pages')).toEqual([])
 
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     expect((await publish(PAGE.trial, { publish_state: 'draft' })).status).toBe(403)

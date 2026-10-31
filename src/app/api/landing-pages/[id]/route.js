@@ -3,18 +3,22 @@
 //
 // Service role, so access is decided here: a page outside canViewPage is a
 // 404 (unknown and hidden ids answer alike), a page the caller may view but
-// not edit (canEditPage) is a 403 on PUT. kind, scope, primary_location_id
+// not edit (canEditPage) is a 403 on PUT, and on GET gets no studio half
+// and the blocks through clientSafeBlocks. kind, scope, primary_location_id
 // and offer_type are not updatable (the schema is strict). Blocks are stored
 // without any studio half (pageBlocksToStore); chrome.was_live is kept as
 // stored (publish owns it). A slug change on a page that has been live leaves
 // a retired page at the old slug that redirects to the new one (renameSlug).
-// A studio page's slug is its studio's public path and is not renamed here.
+// A studio page is read-only here until PR3 (400 studio_page for any body):
+// the legacy editor writes landing_page_settings, which the public site still
+// renders, and PR3's cutover re-syncs the studio rows from it.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { landingPageUpdateSchema } from '@/lib/landing-page-schemas'
+import { clientSafeBlocks } from '@/lib/landing-page-blocks'
 import { normaliseSlug, slugProblem } from '@/lib/page-slug'
 import {
   loadViewablePage, canEditPage, studioRowReadiness, studioRowView, studioPublicPath, pageBlocksToStore,
@@ -51,7 +55,10 @@ export async function GET(_request, { params }) {
         readiness: await studioRowReadiness(db, { page, row, publicPath }),
       }
     }))
-    return NextResponse.json({ success: true, data: { page, studios: rows, can_edit: canEdit } })
+    // A non-editor's blocks lose the operator keys a backfilled block may
+    // still carry (EDITGATE.1, as the [id] server page does).
+    const pageOut = canEdit ? page : { ...page, blocks: clientSafeBlocks(page.blocks) }
+    return NextResponse.json({ success: true, data: { page: pageOut, studios: rows, can_edit: canEdit } })
   } catch (err) {
     if (!(err instanceof PageReadError)) throw err
     logError('landing-pages', 'page unreadable', { pageId: id, code: err.cause?.code ?? null })
@@ -76,6 +83,9 @@ export async function PUT(request, { params }) {
   if (!loaded) return fail(404, 'not_found')
   const { page } = loaded
   if (!canEditPage(user, page)) return fail(403, 'You can view this page but not edit it')
+  // A studio page stays the legacy editor's (landing_page_settings) until PR3's
+  // cutover re-syncs it, so this route never writes one, whatever the body.
+  if (page.kind === 'studio') return fail(400, 'studio_page')
 
   const validation = await validateBody(request, landingPageUpdateSchema)
   if (!validation.ok) return validation.response
@@ -92,13 +102,18 @@ export async function PUT(request, { params }) {
 
   const newSlug = body.slug !== undefined ? normaliseSlug(body.slug) || body.slug : page.slug
   if (newSlug !== page.slug) {
-    if (page.kind === 'studio') return fail(400, 'studio_page')
     const problem = slugProblem(newSlug)
     if (problem) return fail(400, problem)
     const renamed = await renameSlug(db, { page, slug: newSlug, patch, userId: user.id })
+    if (!renamed.ok && renamed.reason === 'retire_failed') {
+      // The redirect for the old slug could not be written, so the rename was undone.
+      logError('landing-pages', 'rename undone: the old slug\'s redirect could not be written', { pageId: id, code: renamed.error?.code ?? null })
+      return fail(500, 'The page could not be renamed')
+    }
     if (!renamed.ok) return saveFailure(renamed, id)
     if (renamed.retiredError) {
       logError('landing-pages', 'page renamed but the old slug has no redirect', { pageId: id, code: renamed.retiredError.code ?? null })
+      logError('landing-pages', 'rename could not be undone', { pageId: id, code: renamed.rollbackError?.code ?? null })
       return fail(500, 'The page was renamed, but its old address could not be redirected', { data: renamed.page })
     }
     return NextResponse.json({ success: true, data: renamed.page })

@@ -185,16 +185,22 @@ describe('LandingPageSettingsForm (page mode)', () => {
     expect(screen.getByText('You can view this page but not edit it. Ask an owner at this studio.')).toBeTruthy()
   })
 
-  it('a studio page has no preview iframe and saves its un1t.online terms copy in the chrome', async () => {
-    const { container } = renderForm({ page: basePage({ kind: 'studio', slug: 'hatch-street', chrome: { un1t_terms: { waiver_link_label: 'waiver' } } }) })
+  it('a studio page (read-only until PR3, as the [id] page renders it): no preview, the terms copy shown disabled, no Save', () => {
+    const { container } = renderForm({
+      canEdit: false,
+      page: basePage({ kind: 'studio', slug: 'hatch-street', chrome: { un1t_terms: { waiver_link_label: 'waiver' } } }),
+    })
     expect(container.querySelector('iframe')).toBeNull()
     expect(screen.getByText('The preview shows here once studio pages move to this editor.')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Terms tick label'), { target: { value: '  I accept the {terms}  ' } })
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
-    expect(puts[0].body.chrome.un1t_terms).toEqual({
-      terms_label: 'I accept the {terms}', terms_link_label: null, waiver_link_label: 'waiver',
-      terms_required_message: null, legal_unavailable_message: null,
-    })
+    const waiver = screen.getByLabelText('Waiver link text')
+    expect(waiver.value).toBe('waiver')
+    expect(waiver.disabled).toBe(true)
+    expect(screen.getByLabelText('Terms tick label').disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull()
+    // The banner above the form says who edits it; the header adds no "ask an owner".
+    expect(screen.queryByText(/You can view this page but not edit it/)).toBeNull()
+    expect(puts).toEqual([])
   })
 
   it('an empty title is refused before any request', async () => {

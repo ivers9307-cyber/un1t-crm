@@ -2,11 +2,13 @@
 // retired.
 //
 // A page outside canViewPage is a 404; canEditPage decides the write (403).
-// Live on a page that sells something needs at least one switched-on studio
-// whose offer is ready (studioRowReadiness, the same rule as the list's chip),
-// else 409 not_ready naming each switched-on studio and why. Retired needs a
-// same-site redirect_to (the schema refuses anything else); a studio page is
-// never retired. Going live stamps chrome.was_live, which makes a later slug
+// A studio page is read-only here until PR3 (400 studio_page). Live on a page
+// that sells something needs a ready offer (studioRowReadiness, the same rule
+// as the list's chip): on a one-studio page its primary row, switched on
+// (else 409 not_ready naming it, `switched_off` when it is off); on an
+// all-studios page at least one switched-on studio (else 409 not_ready naming
+// each switched-on studio and why). Retired needs a same-site redirect_to
+// (the schema refuses anything else). Going live stamps chrome.was_live, which makes a later slug
 // change leave a redirect behind.
 
 import { NextResponse } from 'next/server'
@@ -36,23 +38,34 @@ export async function POST(request, { params }) {
     if (!loaded) return fail(404, 'not_found')
     const { page, studios } = loaded
     if (!canEditPage(user, page)) return fail(403, 'You can view this page but not publish it')
+    // Read-only until PR3: the public site still serves studio pages from landing_page_settings.
+    if (page.kind === 'studio') return fail(400, 'studio_page')
 
     const validation = await validateBody(request, landingPagePublishSchema)
     if (!validation.ok) return validation.response
     const { publish_state: state, redirect_to: redirectTo } = validation.data
 
-    if (state === 'retired') {
-      if (page.kind === 'studio') return fail(400, 'studio_page')
-      if (!redirectTo) return fail(400, 'redirect_required')
-    }
+    if (state === 'retired' && !redirectTo) return fail(400, 'redirect_required')
 
     if (state === 'live' && OFFER_BLOCK_TYPE[page.offer_type]) {
-      const enabled = studios.filter((r) => r.enabled)
-      const judged = await Promise.all(enabled.map(async (row) => ({ row, readiness: await studioRowReadiness(db, { page, row }) })))
-      if (!judged.some((j) => j.readiness.ready)) {
-        return fail(409, 'not_ready', {
-          studios: judged.map(({ row, readiness }) => ({ location_id: row.location_id, name: studioRowView(row).name, reason: readiness.reason })),
-        })
+      // A one-studio page sells at its primary only, so that row alone is
+      // judged: switched on and ready. An all-studios page needs any one.
+      if (page.scope === 'one') {
+        const row = studios.find((r) => r.location_id === page.primary_location_id) || null
+        const readiness = row?.enabled ? await studioRowReadiness(db, { page, row }) : null
+        if (!readiness?.ready) {
+          return fail(409, 'not_ready', {
+            studios: row ? [{ location_id: row.location_id, name: studioRowView(row).name, reason: readiness?.reason || 'switched_off' }] : [],
+          })
+        }
+      } else {
+        const enabled = studios.filter((r) => r.enabled)
+        const judged = await Promise.all(enabled.map(async (row) => ({ row, readiness: await studioRowReadiness(db, { page, row }) })))
+        if (!judged.some((j) => j.readiness.ready)) {
+          return fail(409, 'not_ready', {
+            studios: judged.map(({ row, readiness }) => ({ location_id: row.location_id, name: studioRowView(row).name, reason: readiness.reason })),
+          })
+        }
       }
     }
 

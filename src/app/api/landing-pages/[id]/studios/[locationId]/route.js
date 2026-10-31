@@ -3,9 +3,10 @@
 // attribution, whether the page is switched on there, and its picker order.
 //
 // A page outside canViewPage, and a studio that is not one of the page's own
-// rows, are 404s. The write is canEditPage's (403): on an all-studios page
-// that is an organisation admin, so a studio manager is refused even on their
-// own studio's row (spec §8). `offer` is parsed with the page's type schema
+// rows (on a one-studio page: anything but its primary), are 404s. A studio
+// page is read-only until PR3 (400 studio_page). The write is canEditPage's
+// (403): on an all-studios page that is an organisation admin, so a studio
+// manager is refused even on their own studio's row (spec §8). `offer` is parsed with the page's type schema
 // (studioOfferSchema, strict: an unknown key is a 400 with the issues). A page
 // with no offer has no studio half (400 no_offer). Answers the saved row and
 // its readiness (studioRowReadiness, the list's and the publish gate's rule).
@@ -37,6 +38,8 @@ export async function PUT(request, { params }) {
     if (!loaded) return fail(404, 'not_found')
     const { page, studios } = loaded
     if (!canEditPage(user, page)) return fail(403, 'You can view this page but not edit its studios')
+    // Read-only until PR3: the legacy editor owns a studio page's offer.
+    if (page.kind === 'studio') return fail(400, 'studio_page')
 
     const validation = await validateBody(request, landingPageStudioSchema)
     if (!validation.ok) return validation.response

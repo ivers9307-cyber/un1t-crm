@@ -39,7 +39,7 @@ export function pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx,
 
 export const PAGE_SAVE_MESSAGES = Object.freeze({
   offer_block_required: 'The offer section must stay first on this page.',
-  studio_page: 'A studio page keeps its studio\'s address.',
+  studio_page: 'This studio page is edited from the Landing page editor until studio pages move here.',
   reserved: 'That path is reserved.',
   taken: 'That path is already taken.',
   invalid: 'Use letters, numbers and dashes only, 2 to 40 characters.',

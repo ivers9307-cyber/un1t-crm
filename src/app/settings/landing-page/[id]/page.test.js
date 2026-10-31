@@ -1,6 +1,8 @@
 // /settings/landing-page/<id> — the page editor (PAGES.1). An unknown id, a
 // non-uuid and a page outside canViewPage are all a 404; a viewer who may not
-// edit gets the form read-only and never a studio row's offer or attribution.
+// edit gets the form read-only and never a studio row's offer or attribution;
+// a studio page is read-only for everyone until PR3; each row carries its
+// readiness.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -23,6 +25,7 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => ({
   canViewPage: vi.fn(() => true),
   canEditPage: vi.fn(() => true),
   studioPublicPath: vi.fn(async () => 'hatch-street'),
+  studioRowReadiness: vi.fn(async () => ({ ready: true, reason: 'ready' })),
 }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/components/LandingPageSettingsForm', () => ({ default: () => null }))
@@ -32,7 +35,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { resolveOrgChrome } from '@/lib/host-brand'
-import { loadPageById, canViewPage, canEditPage, studioPublicPath, PageReadError } from '@/lib/landing-pages'
+import { loadPageById, canViewPage, canEditPage, studioPublicPath, studioRowReadiness, PageReadError } from '@/lib/landing-pages'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import { logError } from '@/lib/log'
 
@@ -101,6 +104,7 @@ describe('/settings/landing-page/<id>', () => {
     loadPageById.mockReset().mockResolvedValue({ page: page(), studios: STUDIO_ROWS })
     canViewPage.mockReset().mockReturnValue(true)
     canEditPage.mockReset().mockReturnValue(true)
+    studioRowReadiness.mockReset().mockResolvedValue({ ready: true, reason: 'ready' })
   })
 
   it('sends a signed-out caller to /login and one without landing_page home', async () => {
@@ -134,8 +138,10 @@ describe('/settings/landing-page/<id>', () => {
     expect(form.props.page).toMatchObject({ id: ID, slug: 'summer' })
     expect(form.props.studios).toEqual([{
       location_id: LOC, name: 'UN1T Hatch Street', public_path: 'hatch-street', membership_source: 'glofox', enabled: true, sort_order: 0,
-      offer: { plan_code: 'TRIAL' }, attribution: { tag: 'summer' },
+      offer: { plan_code: 'TRIAL' }, attribution: { tag: 'summer' }, readiness: { ready: true, reason: 'ready' },
     }])
+    // Judged with the path already read: no second read per studio.
+    expect(studioRowReadiness).toHaveBeenCalledWith(db, expect.objectContaining({ publicPath: 'hatch-street' }))
     expect(form.props.availableBookingTypes).toEqual([{ id: 'et', name: 'Trial', slug: 'trial' }])
     expect(form.props.brand).toEqual({ companyName: 'UN1T Hatch Street', shortName: 'UN1T' })
     expect(db.reads).toContainEqual(['event_types', 'location_id', LOC])
@@ -148,7 +154,16 @@ describe('/settings/landing-page/<id>', () => {
     const tree = await open()
     const [form] = findAll(tree, LandingPageSettingsForm)
     expect(form.props.studios[0].public_path).toBeNull()
+    // An unknown path is not "no platform": the readiness is left unknown.
+    expect(form.props.studios[0]).not.toHaveProperty('readiness')
     expect(logError).toHaveBeenCalledWith('landing-page-settings', 'studio path unreadable', expect.objectContaining({ code: 'XX000' }))
+  })
+
+  it('an unreadable readiness leaves that row unknown and still opens the editor', async () => {
+    studioRowReadiness.mockRejectedValueOnce(new PageReadError('down', { code: 'XX002' }))
+    const [form] = findAll(await open(), LandingPageSettingsForm)
+    expect(form.props.studios[0]).not.toHaveProperty('readiness')
+    expect(logError).toHaveBeenCalledWith('landing-page-settings', 'studio readiness unreadable', expect.objectContaining({ locationId: LOC, code: 'XX002' }))
   })
 
   it('a viewer without edit gets canEdit false and no offer on studios', async () => {
@@ -174,11 +189,15 @@ describe('/settings/landing-page/<id>', () => {
     expect(db.reads).toHaveLength(0)
   })
 
-  it('a studio page carries the banner that visitors still see its earlier content', async () => {
-    loadPageById.mockResolvedValue({ page: page({ kind: 'studio', slug: 'hatch-street' }), studios: STUDIO_ROWS })
+  it('a studio page is read-only even for its editor, under a banner linking the legacy editor', async () => {
+    loadPageById.mockResolvedValue({ page: page({ kind: 'studio', slug: 'hatch-street', blocks: WITHHELD_BLOCKS }), studios: STUDIO_ROWS })
     const tree = await open()
-    expect(textOf(tree)).toContain("Visitors see this studio page's earlier content until studio pages move to this editor.")
-    expect(findAll(tree, LandingPageSettingsForm)).toHaveLength(1)
+    expect(textOf(tree)).toContain('This studio page is edited from the Landing page editor until studio pages move here.')
+    expect(hrefsOf(tree)).toContain(`/settings/landing-page?location_id=${LOC}`)
+    const [form] = findAll(tree, LandingPageSettingsForm)
+    expect(form.props.canEdit).toBe(false)
+    expect(form.props.studios[0]).not.toHaveProperty('offer')
+    expect(form.props.page.blocks).toEqual([{ id: 'b1', type: 'paid_trial', heading: 'Two weeks' }])
   })
 
   it('an unreadable page shows a message, never an editor', async () => {

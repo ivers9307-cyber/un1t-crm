@@ -168,6 +168,17 @@ describe('StudioOfferRow', () => {
     expect(puts[0].body.enabled).toBe(false)
   })
 
+  it('a un1t.online paid_trial row the server judged ready shows Ready on first render; without it, the local hint', async () => {
+    const row = un1tRow({ enabled: true, offer: { un1t_product_id: 'u-14' }, readiness: { ready: true, reason: 'ready' } })
+    render(<StudioOfferRow page={pageFor('paid_trial', 'paid_trial')} row={row} onSave={vi.fn()} canEdit={false} />)
+    // The local hint alone cannot judge a un1t.online product (it would say Needs a plan).
+    expect(screen.getByText('Ready')).toBeTruthy()
+    expect(screen.queryByText('Needs a plan')).toBeNull()
+    cleanup()
+    render(<StudioOfferRow page={pageFor('paid_trial', 'paid_trial')} row={{ ...row, readiness: undefined }} onSave={vi.fn()} canEdit={false} />)
+    expect(screen.getByText('Needs a plan')).toBeTruthy()
+  })
+
   it('a class_funnel row: trial plan, price, consult and the typed timetable with numbers as numbers', async () => {
     mount({ page: pageFor('class_funnel', 'class_funnel'), row: glofoxRow() })
     expect(screen.getByText(/One line per class/)).toBeTruthy()

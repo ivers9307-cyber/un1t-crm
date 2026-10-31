@@ -6,10 +6,11 @@
 // own Save: PUT /api/landing-pages/<page.id>/studios/<location_id> with
 // { enabled, offer, attribution }. Independent of the page form's Save.
 //
-// The chip starts as a local hint (offerConfigured on the merged block, which
-// cannot know the studio's path or its un1t.online product) and shows the
-// API's readiness after each save until the next edit: the server's answer
-// wins. onSave(location_id, { row, readiness }) lets the page keep `studios`
+// The chip starts as the server's readiness when the page carries it
+// (row.readiness), else a local hint (offerConfigured on the merged block,
+// which cannot know the studio's path or its un1t.online product); after an
+// edit it is the local hint, and after each save the API's readiness until
+// the next edit: the server's answer wins. onSave(location_id, { row, readiness }) lets the page keep `studios`
 // current. canEdit false: every control disabled, no Save, no catalogue fetch.
 
 import { useMemo, useState } from 'react'
@@ -62,7 +63,9 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
   const [fields, setFields] = useState(() => fieldsFromOffer(blockType, row.offer))
   const [attr, setAttr] = useState(() => attributionDraft(row.attribution))
   const [stored, setStored] = useState(row.attribution || {})
-  const [serverReadiness, setServerReadiness] = useState(null)
+  // Seeded from the server's answer when the page carries one (row.readiness),
+  // so a un1t.online row the local hint cannot judge starts right.
+  const [serverReadiness, setServerReadiness] = useState(() => (row.readiness?.reason ? row.readiness : null))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [savedAt, setSavedAt] = useState(null)

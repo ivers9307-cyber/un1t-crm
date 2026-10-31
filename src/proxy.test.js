@@ -232,6 +232,32 @@ describe('staff ?edit=1 page preview', () => {
     expect(stamped(res)).toBeNull()
   })
 
+  it('/Settings?edit=1 (a reserved segment in another case) passes without the header', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/Settings', search: '?edit=1' }))
+    expect(admitted(res)).toBe(true)
+    expect(stamped(res)).toBeNull()
+  })
+
+  it('a forged inbound x-public-page is stripped: only the proxy stamps it, and only on ?edit=1', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const forged = (search) => {
+      const req = makeReq({ path: '/january', search })
+      req.headers.set('x-public-page', 'forged')
+      return req
+    }
+    // With ?edit=1 the outgoing header is the proxy's own (withPublicPageHeader writes '1').
+    const preview = await proxy(forged('?edit=1'))
+    expect(admitted(preview)).toBe(true)
+    expect(stamped(preview)).toBe('1')
+    // Without it the forged copy never reaches the page.
+    const plain = await proxy(forged(''))
+    expect(admitted(plain)).toBe(true)
+    expect(stamped(plain)).toBeNull()
+    // The request headers are re-stated downstream (so a forged copy left behind would show here).
+    expect(plain.headers.get('x-middleware-request-host')).toBe('crm.un1tdublin.com')
+  })
+
   it('an anonymous /january?edit=1 is redirected to /login as before', async () => {
     const res = await proxy(makeReq({ path: '/january', search: '?edit=1' }))
     expect(admitted(res)).toBe(false)

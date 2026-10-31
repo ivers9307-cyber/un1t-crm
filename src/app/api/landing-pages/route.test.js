@@ -17,7 +17,7 @@ const { getCurrentUser } = await import('@/lib/auth')
 const { resolveLocationBrand, resolveOrgChrome } = await import('@/lib/host-brand')
 const { GET, POST } = await import('./route.js')
 const {
-  fakeDb, STILL_MANAGER, ORG_ADMIN, MASTER, ORG, STILL, HATCH, CLOSED, PAGE, jsonRequest,
+  fakeDb, STILL_MANAGER, STILL_COACH, ORG_ADMIN, MASTER, ORG, STILL, HATCH, CLOSED, PAGE, jsonRequest,
 } = await import('../../../../tests/helpers/landing-pages-fixtures.js')
 
 const list = () => new Request('http://localhost/api/landing-pages')
@@ -47,8 +47,9 @@ describe('GET /api/landing-pages', () => {
     expect(Object.keys(bySlug).sort()).toEqual(['50plus', 'stillorgan', 'trial'])
     expect(bySlug.trial.can_edit).toBe(false)
     expect(bySlug['50plus'].can_edit).toBe(true)
-    expect(bySlug.trial.offer_summary).toBe('Paid trial, per studio')
-    expect(bySlug['50plus'].offer_summary).toBe('One free class: 50+')
+    // A viewer gets the offer type alone; an editor the studio's plan / keywords too.
+    expect(bySlug.trial.offer_summary).toBe('Paid trial')
+    expect(bySlug['50plus'].offer_summary).toBe('One class: 50+')
     expect(bySlug.trial.studios).toEqual([
       { location_id: STILL, name: 'UN1T Stillorgan', enabled: true, ready: true, reason: 'ready' },
       { location_id: HATCH, name: 'UN1T Hatch Street', enabled: true, ready: true, reason: 'ready' },
@@ -56,6 +57,20 @@ describe('GET /api/landing-pages', () => {
     // The list never carries the blocks, the chrome or a location's settings.
     expect(bySlug.trial).not.toHaveProperty('blocks')
     expect(JSON.stringify(data)).not.toContain('writes_enabled')
+  })
+
+  it('a coach without landing_page sees nothing, at their own studio included', async () => {
+    getCurrentUser.mockResolvedValue(STILL_COACH)
+    const res = await GET(list())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual([])
+  })
+
+  it('a one-studio page lists its primary\'s row only, even if it holds another', async () => {
+    db.state.landing_page_studios.push({ page_id: PAGE.fiftyplus, location_id: HATCH, enabled: true, offer: {}, attribution: {}, sort_order: 1 })
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
+    const { data } = await (await GET(list())).json()
+    expect(data.find((p) => p.slug === '50plus').studios.map((s) => s.location_id)).toEqual([STILL])
   })
 
   it('an org admin sees every page of the organisation, a master every organisation', async () => {
@@ -79,9 +94,14 @@ describe('GET /api/landing-pages', () => {
 describe('POST /api/landing-pages', () => {
   it('POST refuses a reserved slug (400 reserved), a taken slug (409 taken), an all-studios page from a non-admin (403)', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
-    const reserved = await POST(create({ ...NEW_ONE, slug: 'settings' }))
-    expect(reserved.status).toBe(400)
-    expect(await reserved.json()).toMatchObject({ success: false, error: 'reserved' })
+    // settings and api are app segments; contacts is a route-group segment (Review Focus 2).
+    for (const slug of ['settings', 'api', 'contacts']) {
+      const reserved = await POST(create({ ...NEW_ONE, slug }))
+      expect(reserved.status).toBe(400)
+      expect(await reserved.json()).toMatchObject({ success: false, error: 'reserved' })
+    }
+    expect(db.writes('landing_pages')).toEqual([])
+    expect(db.writes('landing_page_studios')).toEqual([])
 
     const invalid = await POST(create({ ...NEW_ONE, slug: 'Not A Slug' }))
     expect(invalid.status).toBe(400)
@@ -129,7 +149,7 @@ describe('POST /api/landing-pages', () => {
     expect(db.state.landing_pages.find((p) => p.id === data.id)).toMatchObject({ created_by: ORG_ADMIN.id, updated_by: ORG_ADMIN.id })
   })
 
-  it('a one-studio page switches on its primary only and is branded by that studio', async () => {
+  it('a one-studio page gets exactly one studio row, its primary\'s, switched on, and is branded by that studio', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     const res = await POST(create(NEW_ONE))
     expect(res.status).toBe(201)
@@ -140,7 +160,8 @@ describe('POST /api/landing-pages', () => {
     expect(data.blocks[0]).not.toHaveProperty('campaign')
     expect(resolveLocationBrand).toHaveBeenCalledWith(expect.objectContaining({ locationId: STILL }))
     const rows = db.state.landing_page_studios.filter((r) => r.page_id === data.id)
-    expect(Object.fromEntries(rows.map((r) => [r.location_id, r.enabled]))).toEqual({ [STILL]: true, [HATCH]: false })
+    expect(rows.map((r) => [r.location_id, r.enabled])).toEqual([[STILL, true]])
+    expect(rows[0].attribution).toEqual({ tag: 'stillorgan-january', lead_source: 'meta_january' })
   })
 
   it('a one-studio page at an inactive studio is a 404', async () => {

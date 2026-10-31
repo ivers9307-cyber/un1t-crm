@@ -164,16 +164,33 @@ describe('PageHeaderCard', () => {
     expect(screen.getByText('All studios')).toBeTruthy()
   })
 
-  it('a studio page has no Rename or Retire and edits its un1t.online terms copy', () => {
-    const { onTermsChange } = renderCard({ page: basePage({ kind: 'studio', slug: 'hatch-street', publish_state: 'live' }) })
-    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Unpublish' })).toBeTruthy()
+  it('a studio page (read-only until PR3): no buttons, its un1t.online terms copy shown disabled', () => {
+    renderCard({
+      canEdit: false,
+      terms: { terms_label: 'I accept' },
+      page: basePage({ kind: 'studio', slug: 'hatch-street', publish_state: 'live' }),
+    })
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
     const label = screen.getByLabelText('Terms tick label')
-    expect(label.placeholder).toBe(DEFAULT_FUNNEL_TERMS_COPY.terms_label)
+    expect(label.value).toBe('I accept')
+    expect(label.disabled).toBe(true)
     expect(screen.getByLabelText('Message when a document cannot load').placeholder).toBe(DEFAULT_FUNNEL_TERMS_COPY.legal_unavailable_message)
-    fireEvent.change(label, { target: { value: 'I accept' } })
-    expect(onTermsChange).toHaveBeenCalledWith({ terms_label: 'I accept' })
+    // The editor page's banner names the legacy editor; no "ask an owner" here.
+    expect(screen.queryByText(/You can view this page but not edit it/)).toBeNull()
+  })
+
+  it('a refused studio_page answer reads as the studio page note', async () => {
+    answer = { ok: false, status: 400, body: { success: false, error: 'studio_page' } }
+    renderCard()
+    await click('Publish')
+    expect(screen.getByRole('alert').textContent).toBe('This studio page is edited from the Landing page editor until studio pages move here.')
+  })
+
+  it('a one-studio page whose studio is switched off says so', async () => {
+    answer = { ok: false, status: 409, body: { success: false, error: 'not_ready', studios: [{ location_id: HATCH, name: 'UN1T Hatch Street', reason: 'switched_off' }] } }
+    renderCard()
+    await click('Publish')
+    expect(screen.getByRole('alert').textContent).toBe('Not ready to go live: UN1T Hatch Street (is switched off).')
   })
 
   it('a campaign page shows no terms copy fields', () => {
