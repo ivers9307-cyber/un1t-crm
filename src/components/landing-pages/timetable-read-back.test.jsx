@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// PAGES.1 — the one timetable read-back, used by the studio rows and the
-// legacy class_funnel editor (studio pages, until PR3).
+// PAGES.1 — the one timetable read-back, under the studio rows' typed-in
+// timetable (studio-offer-fields.jsx).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
@@ -9,8 +9,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 vi.mock('@/lib/supabase', () => ({ createBrowserClient: () => ({}) }))
 
 import { TimetableReadBack } from './timetable-read-back'
-import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
-import { newBlockOfType } from '@/lib/landing-page-blocks'
+import { StudioOfferFields } from './studio-offer-fields'
 
 const TEXT = 'Mon-Tue 06:15 Strength\nSat 9am Conditioning\nwhenever'
 
@@ -43,10 +42,10 @@ describe('TimetableReadBack', () => {
     expect(screen.getByText('No class times could be read yet.')).toBeTruthy()
   })
 
-  it('the legacy class_funnel editor shows the same read-back', () => {
-    const block = { ...newBlockOfType('class_funnel'), id: 'b-cf', timetable: TEXT }
+  it('a studio row\'s free-class timetable shows the same read-back', () => {
+    const row = { location_id: 'loc-s', name: 'UN1T Stillorgan', membership_source: 'glofox' }
     const { container } = render(
-      <LandingPageSettingsForm locationId="loc-s" initialSettings={{ blocks: [block] }} availableBookingTypes={[]} />,
+      <StudioOfferFields blockType="class_funnel" row={row} load={false} fields={{ timetable: TEXT }} set={vi.fn()} />,
     )
     expectReadBack(container)
   })

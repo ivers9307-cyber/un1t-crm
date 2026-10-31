@@ -83,10 +83,34 @@ describe('PUT /api/landing-pages/[id]/studios/[locationId]', () => {
     expect((await save(PAGE.fiftyplus, STILL, { enabled: true, offer: { class_keywords: '50+' }, attribution: {} })).status).toBe(200)
   })
 
-  it('a studio page is read-only until PR3: 400 studio_page, nothing written', async () => {
-    const res = await save(PAGE.stillorgan, STILL, { enabled: false, offer: {}, attribution: {} })
-    expect(res.status).toBe(400)
-    expect(await res.json()).toMatchObject({ error: 'studio_page' })
+  it('a studio page\'s one row is editable by its studio\'s editor', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const res = await save(PAGE.stillorgan, STILL, {
+      enabled: true, offer: { membership_id: 'm2', plan_code: 'p2', price_cents: 4500 }, attribution: { tag: 'stillorgan-trial' },
+    })
+    expect(res.status).toBe(200)
+    expect(rowOf(db, PAGE.stillorgan, STILL)).toMatchObject({
+      offer: { membership_id: 'm2', plan_code: 'p2', price_cents: 4500 }, attribution: { tag: 'stillorgan-trial' }, updated_by: STILL_MANAGER.id,
+    })
+    expect((await res.json()).data.readiness).toEqual({ ready: true, reason: 'ready' })
+    // Its only row is its studio's: another studio is a 404.
+    expect((await save(PAGE.stillorgan, HATCH, { enabled: true, offer: {}, attribution: {} })).status).toBe(404)
+  })
+
+  it('UN1TWRITE.18: a priced free-class funnel at a un1t.online studio is refused; free there, or priced at Glofox, saves', async () => {
+    const hatch = db.state.landing_pages.find((p) => p.id === PAGE.hatch)
+    hatch.offer_type = 'class_funnel'
+    hatch.blocks = [{ id: 'cf', type: 'class_funnel', heading: 'Book a class' }]
+    const priced = await save(PAGE.hatch, HATCH, { enabled: true, offer: { price_cents: 1500 }, attribution: {} })
+    expect(priced.status).toBe(400)
+    expect((await priced.json()).error).toBe('Paid intros are not available at a un1t.online studio: anything paid goes through un1t.online checkout.')
     expect(db.writes('landing_page_studios')).toEqual([])
+
+    expect((await save(PAGE.hatch, HATCH, { enabled: true, offer: { price_cents: 0, timetable: 'Mon 09:00 Strength' }, attribution: {} })).status).toBe(200)
+
+    const still = db.state.landing_pages.find((p) => p.id === PAGE.stillorgan)
+    still.offer_type = 'class_funnel'
+    still.blocks = [{ id: 'cf2', type: 'class_funnel' }]
+    expect((await save(PAGE.stillorgan, STILL, { enabled: true, offer: { trial_membership_id: 'tm', trial_plan_code: 'tp', price_cents: 1500 }, attribution: {} })).status).toBe(200)
   })
 })

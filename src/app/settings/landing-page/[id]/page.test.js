@@ -189,14 +189,24 @@ describe('/settings/landing-page/<id>', () => {
     expect(db.reads).toHaveLength(0)
   })
 
-  it('a studio page is read-only even for its editor, under a banner linking the legacy editor', async () => {
+  it('a studio page opens editable for its studio\'s editor, with no banner and its row\'s offer', async () => {
     loadPageById.mockResolvedValue({ page: page({ kind: 'studio', slug: 'hatch-street', blocks: WITHHELD_BLOCKS }), studios: STUDIO_ROWS })
     const tree = await open()
-    expect(textOf(tree)).toContain('This studio page is edited from the Landing page editor until studio pages move here.')
-    expect(hrefsOf(tree)).toContain(`/settings/landing-page?location_id=${LOC}`)
+    expect(textOf(tree)).not.toContain('until studio pages move here')
+    expect(hrefsOf(tree).some((h) => h.includes('location_id='))).toBe(false)
     const [form] = findAll(tree, LandingPageSettingsForm)
+    expect(form.props.canEdit).toBe(true)
+    expect(form.props.studios[0].offer).toEqual({ plan_code: 'TRIAL' })
+    expect(form.props.page.blocks).toEqual(WITHHELD_BLOCKS)
+  })
+
+  it('a studio page a viewer may not edit stays read-only without the studio half', async () => {
+    canEditPage.mockReturnValue(false)
+    loadPageById.mockResolvedValue({ page: page({ kind: 'studio', slug: 'hatch-street', blocks: WITHHELD_BLOCKS }), studios: STUDIO_ROWS })
+    const [form] = findAll(await open(), LandingPageSettingsForm)
     expect(form.props.canEdit).toBe(false)
     expect(form.props.studios[0]).not.toHaveProperty('offer')
+    expect(form.props.studios[0]).not.toHaveProperty('attribution')
     expect(form.props.page.blocks).toEqual([{ id: 'b1', type: 'paid_trial', heading: 'Two weeks' }])
   })
 

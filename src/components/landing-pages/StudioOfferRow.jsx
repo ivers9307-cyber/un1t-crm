@@ -18,7 +18,9 @@ import { Loader2 } from 'lucide-react'
 import {
   OFFER_BLOCK_TYPE, mergeOfferBlock, offerConfigured, defaultAttribution,
 } from '@/lib/landing-page-offers'
-import { pageSaveMessage } from '@/components/landing-pages/page-save'
+import {
+  pageSaveMessage, attributionDraft, attributionToSend, studioRowSaveBody,
+} from '@/components/landing-pages/page-save'
 import { Field, Input } from '@/components/landing-pages/fields'
 import { StudioOfferFields, fieldsFromOffer, offerFromFields } from '@/components/landing-pages/studio-offer-fields'
 
@@ -26,28 +28,6 @@ const CHIPS = {
   ready: ['Ready', 'bg-green-500/10 text-green-700'],
   needs_plan: ['Needs a plan', 'bg-amber-500/10 text-amber-700'],
   no_platform: ['No platform', 'bg-gray-500/10 text-gray-700'],
-}
-
-function attributionDraft(attribution) {
-  return {
-    tag: typeof attribution?.tag === 'string' ? attribution.tag : '',
-    lead_source: typeof attribution?.lead_source === 'string' ? attribution.lead_source : '',
-  }
-}
-
-/**
- * The attribution a save sends: the non-blank tag and lead source (blank =
- * use the default). A stored Meta page URL, which this row does not edit,
- * goes back unchanged so a save never drops it.
- */
-function attributionToSend(draft, stored) {
-  const out = {}
-  for (const key of ['tag', 'lead_source']) {
-    const v = (draft[key] || '').trim()
-    if (v) out[key] = v
-  }
-  if (typeof stored?.event_source_url === 'string' && stored.event_source_url) out.event_source_url = stored.event_source_url
-  return out
 }
 
 function swallowEnter(e) {
@@ -95,7 +75,7 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
       const r = await fetch(`/api/landing-pages/${page.id}/studios/${row.location_id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled, offer, attribution }),
+        body: JSON.stringify(studioRowSaveBody({ enabled, offer, attribution: attr, storedAttribution: stored })),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(pageSaveMessage(j, r.status)); return }

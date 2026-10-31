@@ -1,10 +1,10 @@
-// /settings/landing-page has three modes (PAGES.1):
+// /settings/landing-page has two modes (PAGES.1):
 //   - no query: the Pages list (every page the caller can view);
 //   - ?page=chooser: the front-page (chooser) editor, organisation admins only
 //     (C141 ORGROLE.2: PUT /api/chooser-settings answers 403 to anyone else,
-//     assertChooserEdit), so an owner without the grant gets the list;
-//   - ?location_id=<id>: the legacy studio editor, until studio pages move to
-//     the page editor in PR3.
+//     assertChooserEdit), so an owner without the grant gets the list. Its
+//     tiles are the organisation's studio pages.
+// Any other query (the retired ?location_id= studio editor) is the list.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -24,7 +24,6 @@ vi.mock('@/lib/landing-pages', () => {
   class PageReadError extends Error {}
   return { listPagesForUser: vi.fn(), PageReadError }
 })
-vi.mock('@/components/LandingPageSettingsForm', () => ({ default: () => null }))
 vi.mock('@/components/ChooserEditorForm', () => ({ default: () => null }))
 vi.mock('@/components/landing-pages/PagesList', () => ({ default: () => null }))
 
@@ -33,7 +32,6 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { listPagesForUser, PageReadError } from '@/lib/landing-pages'
-import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import ChooserEditorForm from '@/components/ChooserEditorForm'
 import PagesList from '@/components/landing-pages/PagesList'
 
@@ -41,21 +39,28 @@ const ORG = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const LOC = 'a1a1a1a1-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const LOC2 = 'b2b2b2b2-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 
+const STUDIO_PAGES = [
+  {
+    primary_location_id: LOC, slug: 'hatch-street', publish_state: 'live', locations: { name: 'UN1T Hatch Street' },
+    chrome: { chooser_label: 'Hatch Street', chooser_cta_text: 'Book', chooser_image_url: 'https://cdn.example/hatch.jpg', logo_url: 'x' },
+  },
+  { primary_location_id: LOC2, slug: 'stillorgan', publish_state: 'draft', locations: null, chrome: {} },
+]
+
 function makeDb() {
   const tables = []
+  const filters = []
   const from = (table) => {
     tables.push(table)
     const chain = {
-      select: () => chain, eq: () => chain, in: () => chain, not: () => chain, order: () => chain,
-      maybeSingle: () => Promise.resolve({ data: null, error: null }),
-      then: (res) => Promise.resolve({
-        data: table === 'landing_page_settings' ? [{ location_id: LOC, public_path: 'x', locations: { name: 'X' } }] : [],
-        error: null,
-      }).then(res),
+      select: () => chain, in: () => chain, not: () => chain, order: () => chain,
+      eq: (col, val) => { filters.push([table, col, val]); return chain },
+      maybeSingle: () => Promise.resolve({ data: table === 'chooser_settings' ? { id: 'default', headline: 'Pick', intro: null, tile_order: ['stillorgan'] } : null, error: null }),
+      then: (res) => Promise.resolve({ data: table === 'landing_pages' ? STUDIO_PAGES : [], error: null }).then(res),
     }
     return chain
   }
-  return { tables, from }
+  return { tables, filters, from }
 }
 
 const owner = (orgAdminOrgIds) => ({
@@ -159,13 +164,33 @@ describe('/settings/landing-page', () => {
     expect(linkHrefs(tree)).toContain('/settings/landing-page')
   })
 
-  it('?location_id opens the legacy studio editor with a link back to the pages', async () => {
+  it('the chooser editor\'s tiles come from the studio pages of the active organisation', async () => {
+    getCurrentUser.mockResolvedValue(owner([ORG]))
+    const tree = await LandingPageSettingsPage({ searchParams: Promise.resolve({ page: 'chooser' }) })
+    const [chooser] = findAll(tree, ChooserEditorForm)
+    expect(chooser.props.initialChooser).toMatchObject({ id: 'default', headline: 'Pick' })
+    expect(chooser.props.initialTiles).toEqual([
+      {
+        location_id: LOC, public_path: 'hatch-street', name: 'UN1T Hatch Street',
+        chooser_label: 'Hatch Street', chooser_cta_text: 'Book', chooser_image_url: 'https://cdn.example/hatch.jpg', publish_state: 'live',
+      },
+      {
+        location_id: LOC2, public_path: 'stillorgan', name: 'stillorgan',
+        chooser_label: null, chooser_cta_text: null, chooser_image_url: null, publish_state: 'hidden',
+      },
+    ])
+    expect(db.filters).toEqual(expect.arrayContaining([
+      ['landing_pages', 'kind', 'studio'],
+      ['landing_pages', 'organization_id', ORG],
+    ]))
+    expect(db.tables).not.toContain('landing_page_settings')
+  })
+
+  it('?location_id (the retired studio editor) opens the Pages list', async () => {
     getCurrentUser.mockResolvedValue(owner([]))
     const tree = await LandingPageSettingsPage({ searchParams: Promise.resolve({ location_id: LOC }) })
-    const [form] = findAll(tree, LandingPageSettingsForm)
-    expect(form.props).toMatchObject({ locationId: LOC, publicPath: 'x' })
-    expect(findAll(tree, PagesList)).toHaveLength(0)
-    expect(listPagesForUser).not.toHaveBeenCalled()
-    expect(linkHrefs(tree)).toContain('/settings/landing-page')
+    expect(findAll(tree, PagesList)).toHaveLength(1)
+    expect(listPagesForUser).toHaveBeenCalled()
+    expect(db.tables).not.toContain('landing_page_settings')
   })
 })

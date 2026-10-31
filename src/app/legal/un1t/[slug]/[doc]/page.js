@@ -3,7 +3,7 @@
 // documents the class funnel's terms tick links to.
 //
 // slug = the studio page's slug (PAGES.1: the kind='studio' landing_pages row
-// of the host's organisation; it was landing_page_settings.public_path). The text is
+// of the host's organisation, the studio's public path). The text is
 // un1t.online's own, read with the studio's token (readUn1tLegalDocs, cached
 // an hour), because the snapshot marks those reads bearer-secured and a
 // browser cannot fetch them itself. Rendered as TEXT (white-space: pre-wrap),

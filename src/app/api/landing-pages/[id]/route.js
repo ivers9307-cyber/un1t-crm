@@ -9,9 +9,11 @@
 // without any studio half (pageBlocksToStore); chrome.was_live is kept as
 // stored (publish owns it). A slug change on a page that has been live leaves
 // a retired page at the old slug that redirects to the new one (renameSlug).
-// A studio page is read-only here until PR3 (400 studio_page for any body):
-// the legacy editor writes landing_page_settings, which the public site still
-// renders, and PR3's cutover re-syncs the studio rows from it.
+// A studio page (kind 'studio') saves like any one-studio page, its offer
+// block kept wherever it sits (pageBlocksToStore), except that its slug is
+// never renamed (400 studio_page, nothing written): the slug is the studio's
+// public path, which the chooser's tile order, trial-studios.js and the
+// per-studio pixel key on.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -83,13 +85,12 @@ export async function PUT(request, { params }) {
   if (!loaded) return fail(404, 'not_found')
   const { page } = loaded
   if (!canEditPage(user, page)) return fail(403, 'You can view this page but not edit it')
-  // A studio page stays the legacy editor's (landing_page_settings) until PR3's
-  // cutover re-syncs it, so this route never writes one, whatever the body.
-  if (page.kind === 'studio') return fail(400, 'studio_page')
 
   const validation = await validateBody(request, landingPageUpdateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+  const newSlug = body.slug !== undefined ? normaliseSlug(body.slug) || body.slug : page.slug
+  if (page.kind === 'studio' && newSlug !== page.slug) return fail(400, 'studio_page')
 
   const patch = { updated_by: user.id }
   if (body.title !== undefined) patch.title = body.title
@@ -100,7 +101,6 @@ export async function PUT(request, { params }) {
   }
   if (body.chrome !== undefined) patch.chrome = mergedChrome(page.chrome, body.chrome)
 
-  const newSlug = body.slug !== undefined ? normaliseSlug(body.slug) || body.slug : page.slug
   if (newSlug !== page.slug) {
     const problem = slugProblem(newSlug)
     if (problem) return fail(400, problem)

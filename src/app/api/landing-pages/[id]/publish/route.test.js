@@ -107,14 +107,31 @@ describe('POST /api/landing-pages/[id]/publish', () => {
     expect((await publish(PAGE.fiftyplus, { publish_state: 'live' })).status).toBe(200)
   })
 
-  it('a studio page is read-only until PR3 (any state, 400 studio_page); a viewer who cannot edit is 403; outside the view is 404', async () => {
-    for (const body of [{ publish_state: 'retired', redirect_to: '/trial' }, { publish_state: 'draft' }, { publish_state: 'live' }]) {
-      const studio = await publish(PAGE.stillorgan, body)
-      expect(studio.status).toBe(400)
-      expect(await studio.json()).toMatchObject({ error: 'studio_page' })
+  it('a studio page cannot be retired; it publishes, unpublishes and goes coming soon like any one-studio page', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    for (const body of [{ publish_state: 'retired', redirect_to: '/trial' }, { publish_state: 'retired' }]) {
+      const res = await publish(PAGE.stillorgan, body)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toMatchObject({ error: 'studio_page' })
     }
     expect(db.writes('landing_pages')).toEqual([])
 
+    expect((await publish(PAGE.stillorgan, { publish_state: 'draft' })).status).toBe(200)
+    expect(stored(db, PAGE.stillorgan)).toMatchObject({ publish_state: 'draft', redirect_to: null })
+    expect((await publish(PAGE.stillorgan, { publish_state: 'coming_soon' })).status).toBe(200)
+    // Its one row's offer is ready (a Glofox studio with a plan), so it goes live.
+    const live = await publish(PAGE.stillorgan, { publish_state: 'live' })
+    expect(live.status).toBe(200)
+    expect(stored(db, PAGE.stillorgan)).toMatchObject({ publish_state: 'live', chrome: { was_live: true } })
+
+    // Live judges its row like any one-studio page.
+    rowsOf(db, PAGE.stillorgan)[0].offer = {}
+    stored(db, PAGE.stillorgan).publish_state = 'draft'
+    expect(await (await publish(PAGE.stillorgan, { publish_state: 'live' })).json())
+      .toMatchObject({ error: 'not_ready', studios: [{ location_id: STILL, reason: 'needs_plan' }] })
+  })
+
+  it('a viewer who cannot edit is 403; outside the view is 404', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     expect((await publish(PAGE.trial, { publish_state: 'draft' })).status).toBe(403)
     expect((await publish(PAGE.corp, { publish_state: 'draft' })).status).toBe(404)

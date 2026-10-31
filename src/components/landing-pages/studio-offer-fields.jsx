@@ -4,7 +4,7 @@
 // one small field group per block type over a flat `fields` map (every value
 // a string while it is edited; offerFromFields turns it into the row's
 // `offer`). The Glofox plan list and the un1t.online products are loaded per
-// studio from the same endpoints the legacy block editors use.
+// studio from the studio's own endpoints (glofox-memberships, un1t-online).
 
 import { useEffect, useState } from 'react'
 import { STUDIO_OFFER_KEYS } from '@/lib/landing-page-offers'
@@ -131,7 +131,7 @@ function PaidTrialFields({ row, load, fields, set }) {
   )
 }
 
-// The typed-in timetable, with the legacy editor's hints and its read-back.
+// The typed-in timetable, with its hints and its read-back.
 function TimetableFields({ fields, set }) {
   const text = fields.timetable || ''
   return (

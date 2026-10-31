@@ -2,7 +2,9 @@
 //
 // Final-review F2 / M6 — the paid_trial block editor: a un1t.online studio
 // edits the new-account email (subject + message); a Glofox studio does not
-// see it. Every studio reads the hint to re-check the product's words.
+// see it. Every studio reads the hint to re-check the product's words. The
+// editor is the page half only (PAGES.1): the plan, product, price and labels
+// are each studio row's (StudioOfferRow).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 
@@ -21,7 +23,7 @@ afterEach(() => cleanup())
 describe('PaidTrialEdit', () => {
   it('a un1t.online studio edits the new-account email; the edit reaches the block', () => {
     const onUpdate = vi.fn()
-    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={onUpdate} locationId="loc-h" membershipSource="un1t_online" />)
+    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={onUpdate} membershipSource="un1t_online" />)
     expect(screen.getByText('New account email — subject')).toBeTruthy()
     expect(screen.getByText('New account email — message')).toBeTruthy()
     const subject = screen.getByDisplayValue(PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject)
@@ -33,19 +35,19 @@ describe('PaidTrialEdit', () => {
   })
 
   it('a Glofox studio does not see the un1t.online account email', () => {
-    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} locationId="loc-s" membershipSource="glofox" />)
+    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} membershipSource="glofox" />)
     expect(screen.queryByText('New account email — subject')).toBeNull()
   })
 
   it("shows the hint to check the product's words above the heading", () => {
-    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} locationId="loc-h" membershipSource="un1t_online" />)
+    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} membershipSource="un1t_online" />)
     const hint = screen.getByText("Check the heading, button and paid messages name this studio's product.")
     const heading = screen.getByText('Heading')
     expect(hint.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('pageOnly shows no plan picker, price, product or studio label', () => {
-    render(<PaidTrialEdit pageOnly block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} locationId="loc-s" membershipSource="glofox" />)
+  it('shows no plan picker, price, product or studio label, and loads no catalogue', () => {
+    render(<PaidTrialEdit block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} membershipSource="glofox" />)
     expect(screen.queryByText('Glofox product granted after payment')).toBeNull()
     expect(screen.queryByText('un1t.online product')).toBeNull()
     expect(screen.queryByText('Price (€)')).toBeNull()

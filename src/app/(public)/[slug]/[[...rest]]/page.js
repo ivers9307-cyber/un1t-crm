@@ -393,7 +393,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
 // Step 5: a studio page (/stillorgan) and its two sub-pages, as
 // /welcome/[location] rendered them. Reads the page row and its one studio row
 // (and, for a page with no logo of its own, the existing logo fallback);
-// nothing from landing_page_settings otherwise. Everything the browser gets
+// nothing else. Everything the browser gets
 // is client-safe: trialStudioView, the terms payload, clientSafeBlocks, and
 // named location fields (the studio row's locations.settings stays here, read
 // by the status page for its status_page copy only).

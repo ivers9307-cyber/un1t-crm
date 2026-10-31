@@ -2,7 +2,9 @@
 // retired.
 //
 // A page outside canViewPage is a 404; canEditPage decides the write (403).
-// A studio page is read-only here until PR3 (400 studio_page). Live on a page
+// A studio page publishes like any one-studio page but is never retired
+// (400 studio_page): a studio's main page is unpublished (draft), and its slug
+// stays the studio's public path. Live on a page
 // that sells something needs a ready offer (studioRowReadiness, the same rule
 // as the list's chip): on a one-studio page its primary row, switched on
 // (else 409 not_ready naming it, `switched_off` when it is off); on an
@@ -38,12 +40,12 @@ export async function POST(request, { params }) {
     if (!loaded) return fail(404, 'not_found')
     const { page, studios } = loaded
     if (!canEditPage(user, page)) return fail(403, 'You can view this page but not publish it')
-    // Read-only until PR3: the public site still serves studio pages from landing_page_settings.
-    if (page.kind === 'studio') return fail(400, 'studio_page')
 
     const validation = await validateBody(request, landingPagePublishSchema)
     if (!validation.ok) return validation.response
     const { publish_state: state, redirect_to: redirectTo } = validation.data
+
+    if (state === 'retired' && page.kind === 'studio') return fail(400, 'studio_page')
 
     if (state === 'retired' && !redirectTo) return fail(400, 'redirect_required')
 

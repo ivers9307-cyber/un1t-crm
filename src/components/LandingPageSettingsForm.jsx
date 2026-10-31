@@ -1,40 +1,35 @@
 'use client'
 
-// LandingPageSettingsForm — block-based editor for the public
-// /welcome page (Phase 3b, mig 128).
+// LandingPageSettingsForm — the block-based editor of one landing page (a
+// landing_pages row, PAGES.1), at /settings/landing-page/<id>. Every page, a
+// studio page (kind 'studio') included, is edited here.
 //
 // Structure:
-//   - blocks state (array of { id, type, ...content })
+//   - blocks state (array of { id, type, ...content }), seeded from
+//     page.blocks; the logo and Instagram fields seed from page.chrome
 //   - DndContext + SortableContext wraps the list so blocks can be
 //     dragged into any order
 //   - Each block renders inside a SortableBlockCard with: drag
 //     handle, type label, collapse/expand toggle, delete button,
 //     and a per-type BlockEditPanel for the content fields
 //   - "+ Add section" button at the bottom opens a picker over
-//     BLOCK_TYPES; clicking a type appends a default block
-//   - Save = PUT /api/landing-page-settings { blocks }
-//
-// The flat columns from Phase 2/3a (hero_headline, pillars, gallery,
-// etc.) are NO LONGER read or written by this form. They stay on
-// disk for rollback safety. Mig 128 backfilled the blocks column
-// from those flat columns at migration time.
+//     BLOCK_TYPES (never an offer type); clicking a type appends a block
+//   - The page's offer block is pinned (no drag, move, copy or delete) and
+//     edited through OfferBlockEditor: the page half here, each studio's half
+//     in its StudioOfferRow (its own Save). On a campaign page it is
+//     blocks[0]; on a studio page it stays wherever it sits (mig 792 kept each
+//     studio's own order), and a save never moves it.
+//   - Save = PUT /api/landing-pages/<id> with pageSaveBody's { title, blocks,
+//     chrome }: the stored chrome with the form's fields over it, never
+//     was_live, and on a studio page the un1t.online terms copy as
+//     chrome.un1t_terms (PageHeaderCard edits it).
+//   - The preview iframe is /<slug>?edit=1 (&studio=<path> for a chosen
+//     studio on an all-studios page). With canEdit false every control is
+//     disabled and there is no Save.
 //
 // Adding a new block type: register in src/lib/landing-page-blocks.js,
-// add a case to BlockEditPanel below, and add a renderer to
-// src/app/welcome/page.js. Three-file change.
-//
-// PAGES.1 — two modes, chosen by the `page` prop (pageMode):
-//   - legacy (no `page`): a studio's landing_page_settings row, props
-//     locationId / initialSettings / publicPath / membershipSource; Save =
-//     PUT /api/landing-page-settings; preview /welcome/<path>?edit=1. The
-//     studio pages still render from that table until PR3.
-//   - page (`page`, `studios`, `canEdit`): a landing_pages row edited at
-//     /settings/landing-page/<id>. Blocks and the logo / Instagram fields seed
-//     from page.blocks and page.chrome; Save = PUT /api/landing-pages/<id>
-//     { title, blocks, chrome } (the stored chrome with the form's fields over
-//     it, never was_live); preview /<slug>?edit=1; PageHeaderCard above the
-//     form holds the title, path, status and (studio page) terms copy. With
-//     canEdit false every control is disabled and there is no Save.
+// add a case to BlockEditPanel below, and a renderer to
+// src/components/landing-page/BlockRenderers.jsx.
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { uploadLandingMedia, captureVideoPoster } from '@/lib/landing-media-upload'
@@ -55,74 +50,73 @@ import {
 import {
   BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId, OFFER_DEFAULT,
 } from '@/lib/landing-page-blocks'
-import { buildTrialOptions } from '@/lib/glofox-trial-options'
-import { centsToEuros, eurosToCents } from '@/lib/price-format'
+import { centsToEuros } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
-import { DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
-import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
+import { CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
 import OfferBlockEditor from '@/components/landing-pages/OfferBlockEditor'
 import { OFFER_BLOCK_TYPE, isStudioOwnedPath } from '@/lib/landing-page-offers'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
-import { TimetableReadBack } from '@/components/landing-pages/timetable-read-back'
-import { storedChrome, termsForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
+import { pageSaveBody, logoWidthForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
 // each other and ignore the noise from extensions / dev tools.
 const MESSAGE_NAMESPACE = 'lp-editor'
 
+// The index of a page's pinned offer block in `list`, -1 when there is none:
+// the first block of the offer's block type, which on a campaign page must be
+// blocks[0] (`anywhere` false) and on a studio page may sit anywhere.
+function pinnedOfferIndex(list, offerBlockType, anywhere) {
+  if (!offerBlockType || !Array.isArray(list)) return -1
+  if (anywhere) return list.findIndex((b) => b?.type === offerBlockType)
+  return list[0]?.type === offerBlockType ? 0 : -1
+}
+
 // W1.S1b — `brand` is the studio's resolved brand ({ companyName, shortName },
 // getLocationBranding on the server page): new blocks' consent defaults, the
 // logo hints and the embed snippet's title name it, never a literal gym.
 export default function LandingPageSettingsForm({
-  locationId: legacyLocationId, membershipSource: legacyMembershipSource = null, initialSettings,
-  availableBookingTypes, publicPath: legacyPublicPath = null, availableEvents = [], brand = null,
-  page = null, studios = [], canEdit = true,
+  page, studios = [], canEdit = true, availableBookingTypes, availableEvents = [], brand = null,
 }) {
-  // PAGES.1 — page mode (see the header). currentPage follows every answer
-  // the API returns (save, rename, publish) so the slug and chrome stay fresh.
-  const pageMode = Boolean(page)
+  // currentPage follows every answer the API returns (save, rename, publish)
+  // so the slug and chrome stay fresh.
   const [currentPage, setCurrentPage] = useState(page)
   const [title, setTitle] = useState(page?.title || '')
   const [terms, setTerms] = useState(() => ({ ...(page?.chrome?.un1t_terms || {}) }))
-  const readOnly = pageMode && !canEdit
-  const showPreview = !pageMode || page.kind !== 'studio'
-  const locationId = pageMode ? page.primary_location_id || null : legacyLocationId
-  const membershipSource = pageMode
-    ? studios.find((s) => s.location_id === page.primary_location_id)?.membership_source || null
-    : legacyMembershipSource
-  const publicPath = pageMode ? null : legacyPublicPath
-  const pageId = pageMode ? currentPage.id : null
-  const seed = pageMode ? (page.chrome || {}) : initialSettings
+  const readOnly = !canEdit
+  const locationId = page.primary_location_id || null
+  const primaryRow = studios.find((s) => s.location_id === page.primary_location_id) || null
+  const membershipSource = primaryRow?.membership_source || null
+  // The studio's public path, for the free-class funnel's /start/<path> hint.
+  const publicPath = primaryRow?.public_path || null
+  const pageId = currentPage.id
+  const seed = page.chrome || {}
 
   const brandName = (brand?.companyName || '').trim()
   const wordmarkText = (brand?.shortName || '').trim() || brandName
-  // LP multi-page: the preview iframe + "View live" links point at the
-  // SELECTED studio's public page when known (public_path from mig 227),
-  // falling back to the generic /welcome for a single-studio install.
-  // A page row previews at its own slug (&studio=<path> for a chosen studio).
-  // PAGES.1 — the studio an all-studios page previews as (its public path,
-  // '' = the page's own picker). Not page content: never saved, never dirty.
+  // The page previews and links at its own slug. The studio an all-studios
+  // page previews as (its public path, '' = the page's own picker) is not
+  // page content: never saved, never dirty.
   const [previewStudio, setPreviewStudio] = useState('')
-  const previewSrc = pageMode
-    ? `/${currentPage.slug}?edit=1${previewStudio ? `&studio=${encodeURIComponent(previewStudio)}` : ''}`
-    : publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
-  const liveUrl = pageMode ? `/${currentPage.slug}` : publicPath ? `/${publicPath}` : '/welcome'
+  const previewSrc = `/${currentPage.slug}?edit=1${previewStudio ? `&studio=${encodeURIComponent(previewStudio)}` : ''}`
+  const liveUrl = `/${currentPage.slug}`
   // Seed from saved blocks; if none, blocksOrDefault returns the
   // starter set so the form is never blank on first open.
-  const [blocks, setBlocks] = useState(() => blocksOrDefault(pageMode ? page.blocks : initialSettings?.blocks))
-  // PAGES.1 — page mode: blocks[0] is the page's offer block, pinned (no
-  // drag, move, copy or delete; edited through OfferBlockEditor). A page with
-  // an offer whose first block is not one gets a notice instead.
-  // The pinned block must be of the page's own offer type (a none page has none).
-  const offerBlockType = pageMode ? OFFER_BLOCK_TYPE[page.offer_type] || null : null
-  const pinnedOffer = offerBlockType && blocks[0]?.type === offerBlockType ? blocks[0] : null
-  const offerMissing = pageMode && !pinnedOffer && Boolean(page.offer_type) && page.offer_type !== 'none'
-  const sortableBlocks = pinnedOffer ? blocks.slice(1) : blocks
+  const [blocks, setBlocks] = useState(() => blocksOrDefault(page.blocks))
+  // The page's offer block, pinned (no drag, move, copy or delete; edited
+  // through OfferBlockEditor): of the page's own offer type (a none page has
+  // none), blocks[0] on a campaign page, wherever it sits on a studio page. A
+  // page with an offer and no such block gets a notice instead.
+  const offerBlockType = OFFER_BLOCK_TYPE[page.offer_type] || null
+  const offerAnywhere = page.kind === 'studio'
+  const pinnedIndex = pinnedOfferIndex(blocks, offerBlockType, offerAnywhere)
+  const pinnedOffer = pinnedIndex >= 0 ? blocks[pinnedIndex] : null
+  const offerMissing = !pinnedOffer && Boolean(offerBlockType)
+  const sortableBlocks = useMemo(() => (pinnedIndex >= 0 ? blocks.filter((_, i) => i !== pinnedIndex) : blocks), [blocks, pinnedIndex])
   // The studio rows, kept current by each row's own save (Task 17's preview
   // select reads `enabled` from them).
   const [studioRows, setStudioRows] = useState(studios)
@@ -134,9 +128,6 @@ export default function LandingPageSettingsForm({
   const [expanded, setExpanded] = useState(() => new Set(blocks.map((b) => b.id)))
   const [activeDragId, setActiveDragId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  // FIFTYPLUS.1 — why the last "+ Add section" was refused (a second
-  // campaign_funnel with the same key), shown under the picker.
-  const [addNotice, setAddNotice] = useState(null)
 
   // Site chrome (mig 129) — logo lives outside the blocks array
   // because it always renders regardless of section ordering.
@@ -155,14 +146,12 @@ export default function LandingPageSettingsForm({
   const [error,  setError]  = useState(null)
   const [savedAt, setSavedAt] = useState(null)
 
-  // PAGES.1 — unsaved edits in page mode: everything Save sends, against
-  // what was last saved (the first render's values until a save lands).
-  // The header card holds the publish buttons back while it differs.
-  const editSnapshot = pageMode
-    ? pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
-    : null
+  // Unsaved edits: everything Save sends, against what was last saved (the
+  // first render's values until a save lands). The header card holds the
+  // publish buttons back while it differs.
+  const editSnapshot = pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
   const [savedSnapshot, setSavedSnapshot] = useState(editSnapshot)
-  const dirty = pageMode && editSnapshot !== savedSnapshot
+  const dirty = editSnapshot !== savedSnapshot
 
   // Per-key upload spinner / error so multiple file inputs across
   // multiple blocks can show their own status without trampling.
@@ -179,7 +168,7 @@ export default function LandingPageSettingsForm({
   const activeBlock = blocks.find((b) => b.id === activeDragId)
 
   // ── Live preview iframe (Phase 3c) ────────────────────────
-  // Right-pane iframe loads /welcome?edit=1, which mounts the
+  // Right-pane iframe loads /<slug>?edit=1, which mounts the
   // EditModeOverlay client component. The overlay posts a 'ready'
   // message on mount; we respond with the current state and then
   // push every subsequent state change so typing in the form
@@ -190,24 +179,17 @@ export default function LandingPageSettingsForm({
   const cardRefs = useRef({})
 
   const buildState = useCallback(() => {
-    let widthPxOrNull = null
-    const parsed = parseInt(logoWidthPx, 10)
-    if (Number.isFinite(parsed)) {
-      widthPxOrNull = Math.min(600, Math.max(40, parsed))
-    }
     return {
       namespace: MESSAGE_NAMESPACE,
       type: 'state',
       blocks,
       logoUrl: logoUrl.trim() || null,
       logoAlt: logoAlt.trim() || null,
-      logoWidthPx: widthPxOrNull,
-      // Mig 3c.3 — iframe needs locationId to attribute uploads
-      // (EditableImage / HeroMediaTools call /api/landing-page-
-      // settings/media which validates location ownership).
+      logoWidthPx: logoWidthForSave(logoWidthPx),
+      // The page's studio (none on an all-studios page) and the page id its
+      // uploads attribute to (EditableImage / HeroMediaTools post page_id).
       locationId,
-      // PAGES.1 — a page row's id, for its uploads (Task 18).
-      ...(pageId ? { pageId } : {}),
+      pageId,
     }
   }, [blocks, logoUrl, logoAlt, logoWidthPx, locationId, pageId])
 
@@ -229,9 +211,10 @@ export default function LandingPageSettingsForm({
       if (!msg || typeof msg !== 'object' || msg.namespace !== MESSAGE_NAMESPACE) return
       // PAGES.1 — read-only: the preview may be clicked, never edited.
       if (readOnly && msg.type !== 'ready' && msg.type !== 'block-clicked') return
-      // PAGES.1 — the pinned offer block (page mode's blocks[0]) is never
-      // moved, copied or deleted from the preview, and nothing goes above it.
-      const pinnedIn = (list) => (offerBlockType && list[0]?.type === offerBlockType ? list[0].id : null)
+      // PAGES.1 — the pinned offer block is never moved, copied or deleted
+      // from the preview; on a campaign page nothing goes above it.
+      const pinnedAt = (list) => pinnedOfferIndex(list, offerBlockType, offerAnywhere)
+      const pinnedIn = (list) => list[pinnedAt(list)]?.id ?? null
       if (msg.type === 'ready') {
         // Send initial state right away.
         const win = iframeRef.current?.contentWindow
@@ -254,8 +237,7 @@ export default function LandingPageSettingsForm({
         // focus-aware DOM write keep the cursor stable.
         // PAGES.1 — never the pinned offer block's studio half (the iframe is a message boundary).
         setBlocks((prev) => {
-          const pinned = pinnedIn(prev)
-          if (pinned && msg.blockId === pinned && isStudioOwnedPath(prev[0].type, msg.path)) return prev
+          if (msg.blockId === pinnedIn(prev) && isStudioOwnedPath(offerBlockType, msg.path)) return prev
           return prev.map((b) => (b.id === msg.blockId ? setByPath(b, msg.path, msg.value) : b))
         })
       } else if (msg.type === 'move-block' && msg.blockId && (msg.direction === 'up' || msg.direction === 'down')) {
@@ -265,8 +247,10 @@ export default function LandingPageSettingsForm({
           if (i < 0) return prev
           const j = msg.direction === 'up' ? i - 1 : i + 1
           if (j < 0 || j >= prev.length) return prev
-          const pinned = pinnedIn(prev)
-          if (pinned && (i === 0 || j === 0)) return prev
+          // The pinned block never moves itself; a studio page's other blocks
+          // may pass it, but nothing passes above a campaign page's.
+          const at = pinnedAt(prev)
+          if (at >= 0 && (i === at || (j === at && !offerAnywhere))) return prev
           const next = prev.slice()
           ;[next[i], next[j]] = [next[j], next[i]]
           return next
@@ -300,9 +284,10 @@ export default function LandingPageSettingsForm({
         // existing[n-1] and existing[n]).
         let added = null
         try { added = newBlockOfType(msg.blockType, { brand: brandName }) } catch { return }
-        if (pageMode && BLOCK_TYPES.some((t) => t.offer && t.type === added.type)) return
+        if (BLOCK_TYPES.some((t) => t.offer && t.type === added.type)) return
         setBlocks((prev) => {
-          const idx = Math.max(pinnedIn(prev) ? 1 : 0, Math.min(prev.length, msg.atIndex))
+          const floor = !offerAnywhere && pinnedAt(prev) === 0 ? 1 : 0
+          const idx = Math.max(floor, Math.min(prev.length, msg.atIndex))
           const next = prev.slice()
           next.splice(idx, 0, added)
           return next
@@ -312,9 +297,8 @@ export default function LandingPageSettingsForm({
         setExpanded((prev) => new Set(prev).add(added.id))
       } else if (msg.type === 'edit-chrome' && typeof msg.field === 'string') {
         // LP3c.5 — site chrome (logo) swap from the iframe. Logo
-        // isn't a block; chrome lives in flat columns on
-        // landing_page_settings (mig 129). For now only the
-        // logoUrl field is editable from the iframe — alt text +
+        // isn't a block; it lives on the page's chrome. For now only
+        // the logoUrl field is editable from the iframe; alt text and
         // width still go through the form on the left.
         if (msg.field === 'logoUrl')          setLogoUrl(msg.value || '')
         else if (msg.field === 'logoAlt')     setLogoAlt(msg.value || '')
@@ -323,7 +307,7 @@ export default function LandingPageSettingsForm({
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [buildState, brandName, readOnly, pageMode, offerBlockType])
+  }, [buildState, brandName, readOnly, offerBlockType, offerAnywhere])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -335,9 +319,6 @@ export default function LandingPageSettingsForm({
   }
   function addBlock(type) {
     const block = newBlockOfType(type, { brand: brandName })
-    const refusal = campaignFunnelAddRefusal(blocks, block)
-    if (refusal) { setAddNotice(refusal); return }
-    setAddNotice(null)
     setBlocks((prev) => [...prev, block])
     setExpanded((prev) => new Set(prev).add(block.id))
     setPickerOpen(false)
@@ -377,9 +358,8 @@ export default function LandingPageSettingsForm({
     setProgress((prev) => ({ ...prev, [key]: null }))
     const res = await uploadLandingMedia({
       file,
-      // PAGES.1: a page's uploads attribute to the page (a scope='all' page has
-      // no studio); the legacy editor keeps its studio.
-      ...(pageId ? { pageId } : { locationId }),
+      // A page's uploads attribute to the page (a scope='all' page has no studio).
+      pageId,
       kind,
       autoplay,
       onProgress: (p) => setProgress((prev) => ({ ...prev, [key]: p })),
@@ -394,65 +374,32 @@ export default function LandingPageSettingsForm({
   }
 
   // ── Save ──────────────────────────────────────────────────
+  // The stored chrome goes back with the form's fields over it (pageSaveBody:
+  // was_live is the server's, never sent; a studio page adds its terms copy).
   async function handleSave(e) {
     e?.preventDefault?.()
     if (readOnly) return
     setError(null)
     setSaving(true)
     try {
-      // Coerce + clamp logo width on save (the input keeps it as
-      // a string so mid-edit empty state doesn't snap; clamp to
-      // the same 40-600 range as the API + DB CHECK constraint).
-      let widthPxOrNull = null
-      const parsed = parseInt(logoWidthPx, 10)
-      if (Number.isFinite(parsed)) {
-        widthPxOrNull = Math.min(600, Math.max(40, parsed))
-      }
-      const chromeFields = {
-        logo_url:      logoUrl.trim() || null,
-        logo_alt:      logoAlt.trim() || null,
-        logo_width_px: widthPxOrNull,
-        show_instagram_feed: showInstagramFeed,
-      }
-      if (pageMode) {
-        const sent = editSnapshot
-        await savePage(chromeFields)
-        setSavedSnapshot(sent)
-      } else await saveLegacy(chromeFields)
+      const sent = editSnapshot
+      const body = pageSaveBody({ page: currentPage, title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
+      if (!body.title) throw new Error('Give the page a title.')
+      const r = await fetch(`/api/landing-pages/${currentPage.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j.success === false) throw new Error(pageSaveMessage(j, r.status))
+      if (j.data) setCurrentPage(j.data)
+      setSavedSnapshot(sent)
       setSavedAt(new Date())
     } catch (err) {
       setError(err.message || 'Save failed')
     } finally {
       setSaving(false)
     }
-  }
-
-  // Legacy mode: the studio's landing_page_settings row.
-  async function saveLegacy(chromeFields) {
-    const r = await fetch('/api/landing-page-settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ location_id: locationId, blocks, ...chromeFields }),
-    })
-    const j = await r.json()
-    if (!r.ok || j.success === false) throw new Error(j.error || `Save failed (${r.status})`)
-  }
-
-  // PAGES.1 page mode: the landing_pages row. The stored chrome goes back
-  // with the form's fields over it (was_live is the server's, never sent).
-  async function savePage(chromeFields) {
-    const trimmedTitle = title.trim()
-    if (!trimmedTitle) throw new Error('Give the page a title.')
-    const chrome = { ...storedChrome(currentPage.chrome), ...chromeFields }
-    if (currentPage.kind === 'studio') chrome.un1t_terms = termsForSave(terms)
-    const r = await fetch(`/api/landing-pages/${currentPage.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: trimmedTitle, blocks, chrome }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!r.ok || j.success === false) throw new Error(pageSaveMessage(j, r.status))
-    if (j.data) setCurrentPage(j.data)
   }
 
   const formEl = (
@@ -553,7 +500,7 @@ export default function LandingPageSettingsForm({
         </label>
       </section>
 
-      {/* PAGES.1 — page mode: the pinned offer block, above the sortable list. */}
+      {/* The pinned offer block, above the sortable list. */}
       {offerMissing && (
         <p role="note" className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700">This page&apos;s offer block is missing. Ask the team.</p>
       )}
@@ -573,7 +520,7 @@ export default function LandingPageSettingsForm({
               canEdit={canEdit}
               renderPageHalf={(b, onUpdate) => (
                 <OfferPageHalf
-                  block={b} onUpdate={onUpdate} locationId={locationId} membershipSource={pageHalfSource}
+                  block={b} onUpdate={onUpdate} membershipSource={pageHalfSource} publicPath={publicPath}
                   uploadMedia={uploadMedia} uploading={uploading} uploadErr={uploadErr} progress={progress}
                 />
               )}
@@ -615,7 +562,6 @@ export default function LandingPageSettingsForm({
                   uploading={uploading}
                   uploadErr={uploadErr}
                   progress={progress}
-                  locationId={locationId}
                   membershipSource={membershipSource}
                   publicPath={publicPath}
                 />
@@ -643,10 +589,9 @@ export default function LandingPageSettingsForm({
         >
           <Plus size={14} /> Add section
         </button>
-        {addNotice && <p className="mt-2 text-xs text-red-700" role="alert">{addNotice}</p>}
         {pickerOpen && (
           <div className="absolute z-30 left-0 right-0 mt-2 bg-un1t-surface border border-un1t-border rounded-lg shadow-xl p-2 grid grid-cols-1 md:grid-cols-2 gap-1">
-            {BLOCK_TYPES.filter((t) => !pageMode || !t.offer).map((t) => (
+            {BLOCK_TYPES.filter((t) => !t.offer).map((t) => (
               <button
                 key={t.type}
                 type="button"
@@ -692,19 +637,11 @@ export default function LandingPageSettingsForm({
       </div>
       </fieldset>
       {/* ── Right pane — live preview iframe (xl+ screens only) ─
-          Loads /welcome?edit=1, which mounts EditModeOverlay and
+          Loads /<slug>?edit=1, which mounts EditModeOverlay and
           re-renders from the postMessage state we push from
           buildState() above. Click any block in the iframe →
           its edit panel auto-expands + scrolls into view in the
           left pane. */}
-      {/* PAGES.1 — a studio page row renders from the legacy table until
-          PR3, so its preview would show other content: a note instead. */}
-      {!showPreview && (
-        <aside className="hidden xl:block xl:sticky xl:top-4 border border-un1t-border rounded-lg bg-un1t-surface p-4 text-sm text-un1t-subtle">
-          The preview shows here once studio pages move to this editor.
-        </aside>
-      )}
-      {showPreview && (
       <aside className="hidden xl:block xl:sticky xl:top-4">
         <div className="border border-un1t-border rounded-lg overflow-hidden bg-un1t-bg">
           <div className="flex items-center justify-between px-3 py-2 bg-un1t-surface border-b border-un1t-border text-[11px] text-un1t-subtle">
@@ -721,7 +658,7 @@ export default function LandingPageSettingsForm({
               ⟳
             </button>
           </div>
-          {pageMode && <PreviewStudioBar page={currentPage} studios={studioRows} value={previewStudio} onChange={setPreviewStudio} />}
+          <PreviewStudioBar page={currentPage} studios={studioRows} value={previewStudio} onChange={setPreviewStudio} />
           <iframe
             ref={iframeRef}
             src={previewSrc}
@@ -731,11 +668,9 @@ export default function LandingPageSettingsForm({
           />
         </div>
       </aside>
-      )}
     </form>
   )
 
-  if (!pageMode) return formEl
   return (
     <div className="space-y-4">
       <PageHeaderCard
@@ -790,7 +725,7 @@ function PreviewStudioBar({ page, studios, value, onChange }) {
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
   availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
-  locationId, membershipSource, publicPath, brandName,
+  membershipSource, publicPath, brandName,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -850,7 +785,6 @@ function SortableBlockCard({
             uploading={uploading}
             uploadErr={uploadErr}
             progress={progress}
-            locationId={locationId}
             membershipSource={membershipSource}
             publicPath={publicPath}
           />
@@ -877,14 +811,15 @@ function PinnedOfferCard({ block, expanded, onToggleExpand, children }) {
   )
 }
 
-// PAGES.1 — the page half of the pinned offer block: the type's own editor
-// with pageOnly (OfferBlockEditor's renderPageHalf).
+// PAGES.1 — the page half of an offer block: the type's own editor
+// (OfferBlockEditor's renderPageHalf for the pinned block; BlockEditPanel for
+// any other offer block, whose studio half a save would drop anyway).
 function OfferPageHalf({ block, ...props }) {
   switch (block?.type) {
-    case 'paid_trial': return <PaidTrialEdit pageOnly block={block} {...props} />
-    case 'class_funnel': return <ClassFunnelEdit pageOnly block={block} availableBookingTypes={[]} {...props} />
-    case 'campaign_funnel': return <CampaignFunnelEdit pageOnly block={block} {...props} />
-    case 'corp_promo': return <CorpPromoEdit pageOnly block={block} {...props} />
+    case 'paid_trial': return <PaidTrialEdit block={block} {...props} />
+    case 'class_funnel': return <ClassFunnelEdit block={block} {...props} />
+    case 'campaign_funnel': return <CampaignFunnelEdit block={block} {...props} />
+    case 'corp_promo': return <CorpPromoEdit block={block} {...props} />
     default: return null
   }
 }
@@ -920,15 +855,6 @@ function summaryFor(block) {
   }
 }
 
-// FIFTYPLUS.1 — one campaign_funnel per campaign key on a row: its page reads
-// the FIRST block for the key, so a second would be edited and never shown.
-// Exported for its test (CampaignFunnelEdit.test.jsx).
-export function campaignFunnelAddRefusal(blocks, block) {
-  if (!block || block.type !== 'campaign_funnel') return null
-  const dup = (Array.isArray(blocks) ? blocks : []).some((b) => b && b.type === 'campaign_funnel' && b.campaign === block.campaign)
-  return dup ? `This page already has a campaign funnel for /${block.campaign}. Edit that one instead.` : null
-}
-
 // ─────────────────────────────────────────────────────────────
 // BlockEditPanel — type-dispatch to the right edit form.
 // ─────────────────────────────────────────────────────────────
@@ -939,10 +865,10 @@ function BlockEditPanel(props) {
     case 'booking':     return <BookingEdit     {...props} />
     case 'event':       return <EventEdit       {...props} />
     case 'lead_form':   return <LeadFormEdit    {...props} />
-    case 'class_funnel': return <ClassFunnelEdit {...props} />
-    case 'paid_trial':  return <PaidTrialEdit   {...props} />
-    case 'campaign_funnel': return <CampaignFunnelEdit {...props} />
-    case 'corp_promo':  return <CorpPromoEdit   {...props} />
+    case 'class_funnel':
+    case 'paid_trial':
+    case 'campaign_funnel':
+    case 'corp_promo':  return <OfferPageHalf   {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -1188,59 +1114,12 @@ function LeadFormEdit({ block, onUpdate }) {
 // WITH Glofox ignores all of this and keeps listing its live classes; a
 // un1t.online studio lists its synced classes instead of the typed text
 // (HATCHSTART.1) but keeps the notice and the confirmation email.
-// PAGES.1 — `pageOnly` (page mode): the timetable, first date and notice are
-// the studio rows' (StudioOfferRow); the confirmation email stays here.
-function ManualTimetableFields({ block, onUpdate, publicPath, pageOnly = false }) {
-  const text = typeof block.timetable === 'string' ? block.timetable : ''
+// PAGES.1 — the timetable, first date and notice are the studio rows'
+// (StudioOfferRow); the confirmation email stays here.
+function ManualTimetableFields({ block, onUpdate, publicPath }) {
   return (
     <div className="pt-4 mt-2 border-t border-un1t-border space-y-4">
-      {pageOnly && (
-        <p className="text-[11px] text-un1t-muted">Each studio&apos;s typed-in timetable, first bookable date and minimum notice are on its row below. The confirmation email is the same for every studio.</p>
-      )}
-      {!pageOnly && (<>
-      <div>
-        <p className="text-sm font-medium text-un1t-text">Typed-in timetable (studio without Glofox)</p>
-        <p className="text-[11px] text-un1t-muted mt-1">
-          Only used when this studio has no Glofox connection. Visitors pick one of these times and leave their details. Nothing is booked automatically: each request appears in Approvals for staff to create the account and booking by hand.
-        </p>
-        <p className="text-[11px] text-un1t-muted mt-1">
-          A studio that runs on un1t.online ignores the typed-in timetable and the first bookable date: visitors see its real classes from un1t.online. The minimum notice and the confirmation email below still apply.
-        </p>
-      </div>
-      <Field
-        label="Weekly timetable"
-        hint="One line per class: day, time, class name. Several days or times can share a line, e.g. “Mon-Fri 06:15, 07:15 Strength” or “Sat 9am Conditioning”."
-      >
-        <Textarea
-          value={text}
-          onChange={(v) => onUpdate({ timetable: v })}
-          maxLength={4000}
-          rows={8}
-          placeholder={'Mon-Fri 06:15 Strength\nMon-Fri 18:00 Conditioning\nSat 09:00 Strength'}
-        />
-        <TimetableReadBack text={text} />
-      </Field>
-      <Field label="First bookable date" hint="Optional. No class before this date is offered, e.g. the studio's opening day.">
-        <input
-          type="date"
-          value={block.timetable_start_date || ''}
-          onChange={(e) => onUpdate({ timetable_start_date: e.target.value })}
-          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-        />
-      </Field>
-      <Field label="Minimum notice (hours)" hint={`A class starting sooner than this is not offered, so staff have time to book it by hand. Blank = ${DEFAULT_MIN_NOTICE_HOURS} hours.`}>
-        <Input
-          value={block.min_notice_hours === 0 ? '0' : (block.min_notice_hours || '')}
-          onChange={(v) => {
-            const t = v.trim()
-            const n = Number(t)
-            onUpdate({ min_notice_hours: t === '' || !Number.isFinite(n) || n < 0 ? '' : n })
-          }}
-          maxLength={3}
-          placeholder={String(DEFAULT_MIN_NOTICE_HOURS)}
-        />
-      </Field>
-      </>)}
+      <p className="text-[11px] text-un1t-muted">Each studio&apos;s typed-in timetable, first bookable date and minimum notice are on its row below. The confirmation email is the same for every studio.</p>
       {/* MANUALCONFIRM.1 — the email the customer gets when staff approve. */}
       <Field label="Confirmation email subject" hint="Sent when staff approve a request. You can use {first_name}, {class_name}, {class_time}, {studio_name} and {address}. Blank keeps the default.">
         <Input value={block.confirm_email_subject || ''} onChange={(v) => onUpdate({ confirm_email_subject: v })} maxLength={150} placeholder={DEFAULT_MANUAL_CONFIRM_EMAIL.subject} />
@@ -1330,36 +1209,9 @@ const CORP_PROMO_TEXTS = [
   ['email_body', 'Confirmation email — body ({first_name}, {credits}, {expires_on}, {studio_name})', 1200, 4],
 ]
 
-// PAGES.1 — the paid_trial, campaign_funnel and corp_promo blocks no longer
-// drive the campaign pages (/trial, /50plus, /corp): those are landing_pages
-// rows now (mig 792), edited by the team until the Pages editor ships. Shown
-// at the top of the three editors so an operator does not edit the wrong copy.
-export function offerBlockNoticeText(block) {
-  switch (block?.type) {
-    case 'paid_trial':
-      return 'This block drives the trial card on this studio page only. The /trial page is now its own page and, until the Pages editor ships, is edited by the team.'
-    case 'campaign_funnel': {
-      const where = block.campaign ? `/${block.campaign}` : 'its campaign page'
-      return `This block no longer drives ${where}. That page is now its own page and, until the Pages editor ships, is edited by the team.`
-    }
-    case 'corp_promo':
-      return 'This block no longer drives /corp. That page is now its own page and, until the Pages editor ships, is edited by the team.'
-    default:
-      return null
-  }
-}
-
-export function OfferBlockNotice({ block }) {
-  const text = offerBlockNoticeText(block)
-  if (!text) return null
-  return (
-    <p role="note" className="mb-3 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700">{text}</p>
-  )
-}
-
-// PAGES.1 — `pageOnly` (page mode): the page half only; the promo key is the
-// studio row's (StudioOfferRow), and there is no legacy notice.
-export function CorpPromoEdit({ block, onUpdate, pageOnly = false }) {
+// PAGES.1 — the page half only; the promo key is the studio row's
+// (StudioOfferRow).
+export function CorpPromoEdit({ block, onUpdate }) {
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
     const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
@@ -1368,12 +1220,6 @@ export function CorpPromoEdit({ block, onUpdate, pageOnly = false }) {
   }
   return (
     <>
-      {!pageOnly && <OfferBlockNotice block={block} />}
-      {!pageOnly && (
-      <Field label="Promo" hint="Blank applies these words to every /corp promo at this studio. The credits and their expiry are fixed per promo.">
-        <Input value={block.promo_key || ''} onChange={(v) => onUpdate({ promo_key: v.trim() })} maxLength={60} placeholder="hatch-3-free" />
-      </Field>
-      )}
       {CORP_PROMO_TEXTS.slice(0, 4).map(([key, label, max, rows]) => (
         <Field key={key} label={label}>
           {rows > 1
@@ -1397,50 +1243,12 @@ export function CorpPromoEdit({ block, onUpdate, pageOnly = false }) {
   )
 }
 
-// PAGES.1 — `pageOnly` (page mode): the page half only. The plan or product,
-// price, length, product name and picker label are the studio rows'
-// (StudioOfferRow); `membershipSource` then only says whether to show the
-// un1t.online copy fields.
-export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, pageOnly = false }) {
+// PAIDTRIAL.1 / PAGES.1 — the page half of the paid trial: its words. The
+// plan or product, price, length, product name and picker label are the
+// studio rows' (StudioOfferRow); `membershipSource` only says whether to show
+// the un1t.online copy fields. Exported for its test (PaidTrialEdit.test.jsx).
+export function PaidTrialEdit({ block, onUpdate, membershipSource }) {
   const isUn1tOnline = membershipSource === 'un1t_online'
-  const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
-  useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [memberships, setMemberships] = useState([])
-  const [membershipsLoading, setMembershipsLoading] = useState(false)
-  useEffect(() => {
-    if (!locationId || isUn1tOnline || pageOnly) return
-    let alive = true
-    setMembershipsLoading(true)
-    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
-      .then((r) => r.ok ? r.json() : null)
-      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
-      .catch(() => {})
-      .finally(() => { if (alive) setMembershipsLoading(false) })
-    return () => { alive = false }
-  }, [locationId, isUn1tOnline, pageOnly])
-  // A un1t.online studio sells one of its mirrored paid products (the GET
-  // answers `paid_products`; the text input stays until it arrives).
-  const [paidProducts, setPaidProducts] = useState([])
-  const [paidProductsLoading, setPaidProductsLoading] = useState(false)
-  useEffect(() => {
-    if (!locationId || !isUn1tOnline || pageOnly) return
-    let alive = true
-    setPaidProductsLoading(true)
-    fetch(`/api/locations/${locationId}/un1t-online`, { cache: 'no-store' })
-      .then((r) => r.ok ? r.json() : null)
-      .then((j) => { if (alive && j && j.success !== false) setPaidProducts(Array.isArray(j.data?.paid_products) ? j.data.paid_products : []) })
-      .catch(() => {})
-      .finally(() => { if (alive) setPaidProductsLoading(false) })
-    return () => { alive = false }
-  }, [locationId, isUn1tOnline, pageOnly])
-  const productId = block.un1t_product_id || ''
-  const productKnown = paidProducts.some((p) => p.un1t_id === productId)
-  const planKey = (block.membership_id && block.plan_code) ? `${block.membership_id}:${block.plan_code}` : ''
-  const setPlan = (value) => {
-    const [mid, pc] = value ? value.split(':') : ['', '']
-    onUpdate({ membership_id: mid || '', plan_code: pc || '' })
-  }
-  const planOptions = buildTrialOptions(memberships, planKey)
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
     const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
@@ -1449,12 +1257,6 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, p
   }
   return (
     <>
-      {!pageOnly && <OfferBlockNotice block={block} />}
-      {!pageOnly && (
-      <Field label="Studio label on /trial" hint="The name on this studio's choice card. Blank shows the studio's own name.">
-        <Input value={block.studio_label || ''} onChange={(v) => onUpdate({ studio_label: v })} maxLength={60} />
-      </Field>
-      )}
       <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
         <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
       </Field>
@@ -1469,26 +1271,6 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, p
       <Field label="Sub-copy">
         <Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} />
       </Field>
-      {!pageOnly && (
-      <Field label="Product name" hint="On the checkout line, the receipt and the confirmation email.">
-        <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="The 14 Day Reset" />
-      </Field>
-      )}
-      {!isUn1tOnline && !pageOnly && (
-        <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
-          <Input
-            value={priceDraft}
-            onChange={(v) => { setPriceDraft(v); const c = eurosToCents(v); if (c !== null) onUpdate({ price_cents: c }) }}
-            maxLength={10}
-            placeholder="39"
-          />
-        </Field>
-      )}
-      {!pageOnly && (
-      <Field label="Trial length (days)">
-        <Input value={String(block.duration_days ?? 14)} onChange={(v) => { const n = parseInt(v, 10); if (Number.isFinite(n)) onUpdate({ duration_days: n }) }} maxLength={3} placeholder="14" />
-      </Field>
-      )}
       <Field label="What's included" hint="Three ticks on the price panel. Blank lines are skipped.">
         <div className="space-y-2">
           <Input value={ticks[0] || ''} onChange={(v) => setTick(0, v)} maxLength={120} placeholder="Unlimited classes for 14 days" />
@@ -1511,59 +1293,6 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, p
       {isUn1tOnline && (
         <Field label="Being confirmed — message" hint="Shown after un1t.online's checkout until the purchase is confirmed (up to about 15 minutes).">
           <Textarea value={block.pending_body || ''} onChange={(v) => onUpdate({ pending_body: v })} maxLength={400} rows={2} />
-        </Field>
-      )}
-      {!isUn1tOnline && !pageOnly && (
-        <Field
-          label="Glofox product granted after payment"
-          hint="REQUIRED. A €0 plan in Glofox for this trial (the money is taken here, not by Glofox). Until both ids are set the page sells nothing."
-        >
-          {planOptions.length > 0 ? (
-            <select
-              value={planKey}
-              onChange={(e) => setPlan(e.target.value)}
-              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-            >
-              <option value="">— Not set (page sells nothing) —</option>
-              {planOptions.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          ) : (
-            <Input
-              value={planKey}
-              onChange={(v) => setPlan(v)}
-              maxLength={120}
-              placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode'}
-            />
-          )}
-        </Field>
-      )}
-      {isUn1tOnline && !pageOnly && (
-        <Field
-          label="un1t.online product"
-          hint="The product in un1t.online. The price shown on /trial is the product's live price."
-        >
-          {paidProducts.length > 0 ? (
-            <select
-              value={productId}
-              onChange={(e) => onUpdate({ un1t_product_id: e.target.value })}
-              className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-            >
-              <option value="">— Not set (page sells nothing) —</option>
-              {productId && !productKnown && <option value={productId}>{productId}</option>}
-              {paidProducts.map((p) => (
-                <option key={p.un1t_id} value={p.un1t_id}>{`${p.title} · €${centsToEuros(p.price_cents)}`}</option>
-              ))}
-            </select>
-          ) : (
-            <Input
-              value={productId}
-              onChange={(v) => onUpdate({ un1t_product_id: v.trim() })}
-              maxLength={64}
-              placeholder={paidProductsLoading ? 'Loading un1t.online products…' : 'un1t.online product id'}
-            />
-          )}
         </Field>
       )}
       <Field label="Already had a trial — message" hint="Shown when the buyer's email has had a trial at this studio.">
@@ -1608,36 +1337,10 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, p
   )
 }
 
-// PAGES.1 — `pageOnly` (page mode): the page half only. The trial plan, price,
-// consult and typed timetable are the studio rows' (StudioOfferRow).
-function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath, pageOnly = false }) {
-  const bts = availableBookingTypes || []
-  // Price is edited as a raw euros string (draft) and only coerced to integer
-  // cents on write — a fully-controlled input re-derived from cents each
-  // keystroke would eat the decimal point ("29.50" → 29 → 2950 cents wrong).
-  // Resync only when the edited block changes identity.
-  const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
-  useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [memberships, setMemberships] = useState([])
-  const [membershipsLoading, setMembershipsLoading] = useState(false)
-  useEffect(() => {
-    if (!locationId || pageOnly) return
-    let alive = true
-    setMembershipsLoading(true)
-    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
-      .then((r) => r.ok ? r.json() : null)
-      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
-      .catch(() => {})
-      .finally(() => { if (alive) setMembershipsLoading(false) })
-    return () => { alive = false }
-  }, [locationId, pageOnly])
-  const trialKey = (block.trial_membership_id && block.trial_plan_code)
-    ? `${block.trial_membership_id}:${block.trial_plan_code}` : ''
-  const setTrial = (value) => {
-    const [mid, pc] = value ? value.split(':') : ['', '']
-    onUpdate({ trial_membership_id: mid || '', trial_plan_code: pc || '' })
-  }
-  const trialOptions = buildTrialOptions(memberships, trialKey)
+// PAGES.1 — the page half of the free-class funnel: its words. The trial
+// plan, price, consult and typed timetable are the studio rows'
+// (StudioOfferRow).
+function ClassFunnelEdit({ block, onUpdate, publicPath }) {
   return (
     <>
       <Field label="Heading">
@@ -1665,123 +1368,29 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
         <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder={DEFAULT_CLASS_FUNNEL_CTA_LABEL} />
       </Field>
       <Un1tFunnelCopyFields block={block} onUpdate={onUpdate} />
-      <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} pageOnly={pageOnly} />
-      {!pageOnly && (<>
-      <Field
-        label="Trial product granted on booking"
-        hint="Which Glofox membership/plan a NEW member gets on booking. Leave on the location default unless this funnel should grant a different intro offer."
-      >
-        {trialOptions.length > 0 ? (
-          <select
-            value={trialKey}
-            onChange={(e) => setTrial(e.target.value)}
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-          >
-            <option value="">— Use location default —</option>
-            {trialOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        ) : (
-          <Input
-            value={trialKey}
-            onChange={(v) => setTrial(v)}
-            maxLength={120}
-            placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode (optional)'}
-          />
-        )}
-        {membershipsLoading && trialOptions.length > 0 && (
-          <p className="text-[11px] text-un1t-muted mt-1">Loading membership list…</p>
-        )}
+      <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} />
+      <Field label="Consult booked — title">
+        <Input value={block.consult_done_title || ''} onChange={(v) => onUpdate({ consult_done_title: v })} maxLength={120} placeholder="You're booked 🎉" />
       </Field>
-      <Field
-        label="Price (€)"
-        hint="Leave blank for a FREE trial (today's behaviour). If set, the funnel charges this for the chosen trial product — the location's payment rail must be configured."
-      >
-        <Input
-          value={priceDraft}
-          onChange={(v) => { setPriceDraft(v); onUpdate({ price_cents: eurosToCents(v) }) }}
-          maxLength={10}
-          placeholder="e.g. 29"
-        />
+      <Field label="Consult booked — message">
+        <Textarea value={block.consult_done_body || ''} onChange={(v) => onUpdate({ consult_done_body: v })} maxLength={400} rows={2} />
       </Field>
-      <Field
-        label="Free-consult upsell"
-        hint={bts.length === 0
-          ? 'No active booking types here — leave empty for no upsell. Create one under Bookings → Booking types.'
-          : 'Optional. Pick the booking type offered after a class is booked. Leave empty for no upsell.'}
-      >
-        {bts.length > 0 ? (
-          <select
-            value={block.consult_slug || ''}
-            onChange={(e) => onUpdate({ consult_slug: e.target.value })}
-            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-          >
-            <option value="">— No consult upsell —</option>
-            {bts.map((bt) => (
-              <option key={bt.id} value={bt.slug}>{bt.name} ({bt.slug})</option>
-            ))}
-            {block.consult_slug && !bts.some((bt) => bt.slug === block.consult_slug) && (
-              <option value={block.consult_slug}>{block.consult_slug} (no longer active)</option>
-            )}
-          </select>
-        ) : (
-          <Input value={block.consult_slug || ''} onChange={(v) => onUpdate({ consult_slug: v })} maxLength={200} placeholder="free-un1t-consultation" />
-        )}
-      </Field>
-      </>)}
-      {(block.consult_slug || pageOnly) && (
-        <>
-          <Field label="Consult booked — title">
-            <Input value={block.consult_done_title || ''} onChange={(v) => onUpdate({ consult_done_title: v })} maxLength={120} placeholder="You're booked 🎉" />
-          </Field>
-          <Field label="Consult booked — message">
-            <Textarea value={block.consult_done_body || ''} onChange={(v) => onUpdate({ consult_done_body: v })} maxLength={400} rows={2} />
-          </Field>
-        </>
-      )}
     </>
   )
 }
 
-// FIFTYPLUS.1 — the campaign_funnel block editor (its page: /<campaign>).
-// The trial plan is REQUIRED: the page takes no booking until both ids are
-// set, and never falls back to the studio's default trial (the generic one).
-// Exported for its test (CampaignFunnelEdit.test.jsx).
-const SECTION_LABELS = { stats: 'Numbers (stats)', video_testimonials: 'Member videos', reviews: 'Google reviews' }
-// PAGES.1 — `pageOnly` (page mode): the page half only. No campaign key (the
-// page's slug replaces it), no section ticks (the page's own blocks are its
-// sections), and the trial plan, keywords and tracking are the studio rows'.
-export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, uploading, uploadErr, progress, pageOnly = false }) {
+// FIFTYPLUS.1 / PAGES.1 — the page half of the campaign funnel: the coach
+// video, poster, words, steps and the three expect cards. The trial plan, the
+// class keywords and the tracking are the studio rows' (StudioOfferRow); the
+// page's slug stands for the campaign key and its own blocks are its
+// sections. Exported for its test (CampaignFunnelEdit.test.jsx).
+export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
   const k = (suffix) => `${block.id}-${suffix}`
-  const [memberships, setMemberships] = useState([])
-  useEffect(() => {
-    if (!locationId || pageOnly) return
-    let alive = true
-    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
-      .then((r) => r.ok ? r.json() : null)
-      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
-      .catch(() => {})
-    return () => { alive = false }
-  }, [locationId, pageOnly])
-  const planKey = (block.trial_membership_id && block.trial_plan_code) ? `${block.trial_membership_id}:${block.trial_plan_code}` : ''
-  const setPlan = (value) => {
-    const [mid, pc] = value ? value.split(':') : ['', '']
-    onUpdate({ trial_membership_id: mid || '', trial_plan_code: pc || '' })
-  }
-  const planOptions = buildTrialOptions(memberships, planKey)
   const cards = Array.isArray(block.expect_cards) ? block.expect_cards : []
   const setCard = (i, patch) => {
     const next = [0, 1, 2].map((j) => ({ title: '', body: '', ...(cards[j] || {}) }))
     next[i] = { ...next[i], ...patch }
     onUpdate({ expect_cards: next })
-  }
-  const sections = Array.isArray(block.show_sections) ? block.show_sections : [...CAMPAIGN_FUNNEL_SECTIONS]
-  const toggleSection = (name) => {
-    const next = sections.includes(name)
-      ? sections.filter((s) => s !== name)
-      : CAMPAIGN_FUNNEL_SECTIONS.filter((s) => s === name || sections.includes(s))
-    onUpdate({ show_sections: next })
   }
   const D = CAMPAIGN_FUNNEL_COPY_DEFAULTS
   // The video's poster: captured from the clip when none was uploaded.
@@ -1796,24 +1405,8 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
     const video_url = await uploadMedia({ file, kind: 'video', key: k('video'), autoplay: true })
     if (video_url) onUpdate({ video_url, poster_url: poster_url || null })
   }
-  const selectCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   return (
     <>
-      {!pageOnly && (<>
-      <OfferBlockNotice block={block} />
-      <Field label="Page" hint="The page this block drives. Fixed per campaign.">
-        <input value={block.campaign || ''} readOnly aria-label="Campaign key" className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-muted" />
-      </Field>
-      <Field label="Glofox trial plan" hint="REQUIRED. The plan put on a new person's account before their booking. Until it is set the page takes no bookings, and it never falls back to the studio's default trial.">
-        <select aria-label="Glofox trial plan" value={planKey} onChange={(e) => setPlan(e.target.value)} className={selectCls}>
-          <option value="">— Not set (page takes no bookings) —</option>
-          {planOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </Field>
-      <Field label="Classes offered (keywords)" hint="One per line. A class is offered only when its name contains any of them (case does not matter). Empty offers nothing.">
-        <Textarea value={block.class_keywords || ''} onChange={(v) => onUpdate({ class_keywords: v })} maxLength={400} rows={2} placeholder="50+" />
-      </Field>
-      </>)}
       <Field label="Coach video" hint="MP4 / WebM, up to 50MB. Starts muted on loop with a Tap for sound button, so burn the captions in. Tip: 720p, 20 to 40 seconds.">
         <MediaSlot
           url={block.video_url || ''}
@@ -1853,7 +1446,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
       <Field label="Booked — title"><Input value={block.done_title || ''} onChange={(v) => onUpdate({ done_title: v })} maxLength={120} placeholder={D.done_title} /></Field>
       <Field label="Booked — message"><Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} placeholder={D.done_body} /></Field>
       <Field label="No classes — message" hint="Shown when no class is open to book in the next two weeks."><Textarea value={block.no_classes_text || ''} onChange={(v) => onUpdate({ no_classes_text: v })} maxLength={400} rows={2} placeholder={D.no_classes_text} /></Field>
-      <Field label="Not configured — message" hint={pageOnly ? 'Shown at a studio with no trial plan set on its row.' : 'Shown while no trial plan is set above.'}><Textarea value={block.not_configured_text || ''} onChange={(v) => onUpdate({ not_configured_text: v })} maxLength={400} rows={2} placeholder={D.not_configured_text} /></Field>
+      <Field label="Not configured — message" hint="Shown at a studio with no trial plan set on its row."><Textarea value={block.not_configured_text || ''} onChange={(v) => onUpdate({ not_configured_text: v })} maxLength={400} rows={2} placeholder={D.not_configured_text} /></Field>
       <Field label="Timetable unavailable — message"><Textarea value={block.timetable_unavailable_text || ''} onChange={(v) => onUpdate({ timetable_unavailable_text: v })} maxLength={400} rows={2} placeholder={D.timetable_unavailable_text} /></Field>
       <Field label="What to expect — eyebrow"><Input value={block.expect_eyebrow || ''} onChange={(v) => onUpdate({ expect_eyebrow: v })} maxLength={80} placeholder={D.expect_eyebrow} /></Field>
       <Field label="What to expect — heading"><Input value={block.expect_heading || ''} onChange={(v) => onUpdate({ expect_heading: v })} maxLength={200} placeholder={D.expect_heading} /></Field>
@@ -1867,25 +1460,6 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
           ))}
         </div>
       </Field>
-      {!pageOnly && (<>
-      <Field label="Sections under the hero" hint="This page's own sections, shown in the light look.">
-        <div className="space-y-1.5">
-          {CAMPAIGN_FUNNEL_SECTIONS.map((name) => (
-            <label key={name} className="flex items-center gap-2 text-sm text-un1t-text">
-              <input type="checkbox" checked={sections.includes(name)} onChange={() => toggleSection(name)} className="w-4 h-4" />
-              {SECTION_LABELS[name]}
-            </label>
-          ))}
-        </div>
-      </Field>
-      <Field label="Tracking (advanced)" hint="Blank uses the defaults shown. The tag goes on every lead; the lead source and the Meta page URL are what the reports and the server Lead carry.">
-        <div className="space-y-2">
-          <Input value={block.tag || ''} onChange={(v) => onUpdate({ tag: v })} maxLength={80} placeholder={`stillorgan-${block.campaign || ''}`} />
-          <Input value={block.lead_source || ''} onChange={(v) => onUpdate({ lead_source: v })} maxLength={80} placeholder={`meta_${block.campaign || ''}`} />
-          <Input value={block.event_source_url || ''} onChange={(v) => onUpdate({ event_source_url: v })} maxLength={300} placeholder={`https://www.un1tdublin.com/${block.campaign || ''}`} />
-        </div>
-      </Field>
-      </>)}
     </>
   )
 }

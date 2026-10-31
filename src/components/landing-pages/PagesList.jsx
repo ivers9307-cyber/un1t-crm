@@ -4,10 +4,9 @@
 // "+ New page" button that opens NewPageDialog. The rows are
 // listPagesForUser's, handed down by the server page.
 //
-// A studio page (kind 'studio') still renders and is edited from the legacy
-// studio editor until PR3, so its link opens /settings/landing-page?location_id=;
-// a campaign page opens the page editor at /settings/landing-page/<id>. A row
-// the caller cannot edit says "View" (the editor renders it read-only).
+// Every row, a studio page (kind 'studio') included, opens the page editor at
+// /settings/landing-page/<id>. A row the caller cannot edit says "View" (the
+// editor renders it read-only).
 //
 // Client bundle: pure modules only, never @/lib/landing-pages or @/lib/auth.
 
@@ -28,10 +27,7 @@ const STATUS_CHIPS = Object.freeze({
 const CHIP = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium'
 
 /** Where a row's Edit (or View) link goes. */
-function editorHref(page) {
-  if (page.kind === 'studio') return `/settings/landing-page?location_id=${encodeURIComponent(page.primary_location_id || '')}`
-  return `/settings/landing-page/${page.id}`
-}
+const editorHref = (page) => `/settings/landing-page/${page.id}`
 
 function StudiosCell({ page }) {
   const studios = page.studios || []

@@ -127,15 +127,41 @@ describe('PUT /api/landing-pages/[id]', () => {
     expect(db.writes('landing_pages')).toEqual([])
   })
 
-  it('a studio page is read-only until PR3: any body is 400 studio_page and nothing is written', async () => {
+  it('a studio page\'s blocks and chrome save; its slug does not', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
-    const blocks = [{ id: 'h1', type: 'hero' }, { id: 'pt1', type: 'paid_trial', heading: 'Try us' }]
-    for (const body of [{ blocks }, { title: 'New' }, { chrome: { un1t_terms: { terms_label: 'x' } } }, {}, { nonsense: true }]) {
-      const res = await put(PAGE.stillorgan, body)
-      expect(res.status).toBe(400)
-      expect(await res.json()).toMatchObject({ error: 'studio_page' })
-    }
-    expect(db.writes('landing_pages')).toEqual([])
+    // mig 792 kept the studio's own order: the offer block need not be first.
+    const blocks = [{ id: 'h1', type: 'hero', headline: 'Strong' }, { id: 'pt1', type: 'paid_trial', heading: 'Try us', plan_code: 'leak' }]
+    const res = await put(PAGE.stillorgan, {
+      title: 'UN1T Stillorgan',
+      slug: 'stillorgan', // the stored slug: not a rename
+      blocks,
+      chrome: { un1t_terms: { terms_label: 'I agree', waiver_link_label: null } },
+    })
+    expect(res.status).toBe(200)
+    const row = stored(db, PAGE.stillorgan)
+    expect(row.blocks).toEqual([blocks[0], { id: 'pt1', type: 'paid_trial', heading: 'Try us' }])
+    expect(row.chrome).toEqual({ un1t_terms: { terms_label: 'I agree', waiver_link_label: null } })
+    expect(row.slug).toBe('stillorgan')
+
+    // Without its offer block a studio page with an offer is refused.
+    const missing = await put(PAGE.stillorgan, { blocks: [blocks[0]] })
+    expect(missing.status).toBe(400)
+    expect(await missing.json()).toMatchObject({ error: 'offer_block_required' })
+
+    // The slug is the studio's public path: a rename is refused before any write.
+    const before = db.writes('landing_pages').length
+    const renamed = await put(PAGE.stillorgan, { slug: 'stillorgan-2', title: 'Changed' })
+    expect(renamed.status).toBe(400)
+    expect(await renamed.json()).toMatchObject({ error: 'studio_page' })
+    expect(db.writes('landing_pages')).toHaveLength(before)
+    expect(stored(db, PAGE.stillorgan)).toMatchObject({ slug: 'stillorgan', title: 'UN1T Stillorgan' })
+  })
+
+  it('a studio page reports can_edit to its studio\'s editor, with its row\'s offer', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const { data } = await (await get(PAGE.stillorgan)).json()
+    expect(data.can_edit).toBe(true)
+    expect(data.studios[0].offer).toMatchObject({ plan_code: 'p' })
   })
 
   it('PUT renaming a page that was live writes a retired redirect row for the old slug', async () => {
@@ -205,11 +231,4 @@ describe('PUT /api/landing-pages/[id]', () => {
     expect(logError).toHaveBeenCalledWith('landing-pages', 'rename could not be undone', expect.objectContaining({ code: 'XX001' }))
   })
 
-  it('a studio page keeps its slug: it is the studio\'s public path', async () => {
-    getCurrentUser.mockResolvedValue(STILL_MANAGER)
-    const res = await put(PAGE.stillorgan, { slug: 'stillorgan-2' })
-    expect(res.status).toBe(400)
-    expect(await res.json()).toMatchObject({ error: 'studio_page' })
-    expect(stored(db, PAGE.stillorgan).slug).toBe('stillorgan')
-  })
 })

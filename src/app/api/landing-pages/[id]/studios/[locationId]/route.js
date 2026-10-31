@@ -3,13 +3,16 @@
 // attribution, whether the page is switched on there, and its picker order.
 //
 // A page outside canViewPage, and a studio that is not one of the page's own
-// rows (on a one-studio page: anything but its primary), are 404s. A studio
-// page is read-only until PR3 (400 studio_page). The write is canEditPage's
+// rows (on a one-studio page, a studio page included: anything but its
+// primary), are 404s. The write is canEditPage's
 // (403): on an all-studios page that is an organisation admin, so a studio
 // manager is refused even on their own studio's row (spec §8). `offer` is parsed with the page's type schema
 // (studioOfferSchema, strict: an unknown key is a 400 with the issues). A page
-// with no offer has no studio half (400 no_offer). Answers the saved row and
-// its readiness (studioRowReadiness, the list's and the publish gate's rule).
+// with no offer has no studio half (400 no_offer). UN1TWRITE.18: a priced
+// class_funnel at a un1t.online studio is refused (400): anything paid there
+// goes through un1t.online checkout (the row's locations embed carries the
+// studio's membership_source, so no extra read). Answers the saved row and its
+// readiness (studioRowReadiness, the list's and the publish gate's rule).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -21,6 +24,9 @@ import {
   loadViewablePage, canEditPage, studioRowReadiness, studioRowView, studioPublicPath, saveStudioRow, PageReadError,
 } from '@/lib/landing-pages'
 import { logError } from '@/lib/log'
+
+const UN1T_PAID_INTRO_REFUSAL = 'Paid intros are not available at a un1t.online studio: anything paid goes through un1t.online checkout.'
+const embeddedOne = (v) => (Array.isArray(v) ? v[0] || null : v || null)
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,8 +44,6 @@ export async function PUT(request, { params }) {
     if (!loaded) return fail(404, 'not_found')
     const { page, studios } = loaded
     if (!canEditPage(user, page)) return fail(403, 'You can view this page but not edit its studios')
-    // Read-only until PR3: the legacy editor owns a studio page's offer.
-    if (page.kind === 'studio') return fail(400, 'studio_page')
 
     const validation = await validateBody(request, landingPageStudioSchema)
     if (!validation.ok) return validation.response
@@ -54,6 +58,10 @@ export async function PUT(request, { params }) {
     if (!offer.success) {
       const issues = offer.error.issues.map((i) => ({ path: ['offer', ...i.path].join('.'), message: i.message }))
       return fail(400, 'Invalid request body', { issues })
+    }
+    if (blockType === 'class_funnel' && Number(offer.data.price_cents) > 0
+      && embeddedOne(row.locations)?.membership_source === 'un1t_online') {
+      return fail(400, UN1T_PAID_INTRO_REFUSAL)
     }
 
     const patch = { enabled: body.enabled, offer: offer.data, attribution: body.attribution, updated_by: user.id }

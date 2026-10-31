@@ -3,8 +3,8 @@
 //
 // Both pages hardcoded Stillorgan's landing-page logo URL. The
 // operator-editable source for a landing page's logo is the studio page's
-// chrome.logo_url (PAGES.1; it was landing_page_settings.logo_url, which
-// mig 792 copied over) — the SAME field /stillorgan and /hatch-street render
+// chrome.logo_url (PAGES.1; mig 792 copied each studio's logo there) — the
+// SAME field /stillorgan and /hatch-street render
 // through (src/app/(public)/[slug]), and whose live value is byte-identical
 // to the URL these pages hardcoded, so resolution changes nothing visually
 // for UN1T today.
@@ -20,7 +20,7 @@
 import { createServerClient } from './supabase'
 
 // The exact URL /start + /free-class hardcoded before SAAS-7 —
-// Stillorgan's landing_page_settings.logo_url as of the migration.
+// Stillorgan's landing-page logo as of the migration.
 // Kept as the explicit fallback so the pages render pixel-identically
 // on a missing row / DB blip.
 export const STILLORGAN_LANDING_LOGO =

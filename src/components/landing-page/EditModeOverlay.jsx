@@ -1,8 +1,8 @@
 'use client'
 
-// EditModeOverlay — client component mounted by /welcome when the
-// page is loaded in edit mode (?edit=1) inside the operator
-// settings iframe. Receives blocks + chrome state from the parent
+// EditModeOverlay — client component mounted by the public [slug] route
+// when a page is loaded in edit mode (/<slug>?edit=1) inside the operator
+// settings iframe (LandingPageSettingsForm). Receives blocks + chrome state from the parent
 // window via postMessage and re-renders on every update so the
 // preview tracks the operator's keystrokes in near-realtime.
 //
@@ -33,8 +33,10 @@
 // renders the page's own layout (EditOfferLayout) above the blocks; the
 // pinned offer block is that region, never a block of the list (no toolbar,
 // nothing inserts above it), and the hero blocks a frosted or one_class page
-// uses only as its photo are not listed, as on the public page. Without it
-// (/welcome/[location]) the overlay is unchanged. An inline edit of the
+// uses only as its photo are not listed, as on the public page. A studio
+// page's layout is 'blocks' with no offerBlockId: its offer block keeps its
+// place in the list, and the editor refuses to move, copy or delete it. An inline
+// edit of the
 // pinned block's studio keys or attribution is never posted.
 //
 // The booking widget click is the one place we DON'T intercept —
@@ -192,8 +194,7 @@ export default function EditModeOverlay({
   }
   function emitChromeEdit(field, value) {
     // LP3c.5 — site chrome (logo) edits. Logo isn't a block so it
-    // can't go through 'edit-field'; chrome lives in flat columns
-    // on landing_page_settings (mig 129).
+    // can't go through 'edit-field'; it lives on the page's chrome.
     emit({ type: 'edit-chrome', field, value })
     // Optimistically update local state so the iframe re-renders
     // immediately without waiting for the parent's state push.
