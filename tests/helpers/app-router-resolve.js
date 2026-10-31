@@ -31,7 +31,14 @@ export const APP_DIR = path.join(import.meta.dirname, '../../src/app')
 export const PAGE_FILES = ['page.js', 'page.jsx']
 export const ENDPOINT_FILES = ['page.js', 'page.jsx', 'route.js', 'route.ts']
 
-const isRouteGroup = (name) => /^\(.+\)$/.test(name)
+// PAGES.1 — the (public) group holds /[slug]/[[...rest]], the one public page
+// route. It matches EVERY path Next has no more specific route for, but it
+// answers only a slug that is a landing_pages row (a database fact) and 404s
+// everything else. For "does a file answer this URL" it therefore answers
+// nothing: counting it would make every dead link and dead rewrite resolve.
+const DATA_DRIVEN_GROUPS = new Set(['(public)'])
+
+const isRouteGroup = (name) => /^\(.+\)$/.test(name) && !DATA_DRIVEN_GROUPS.has(name)
 const isDynamic = (name) => /^\[.+\]$/.test(name)
 
 /**

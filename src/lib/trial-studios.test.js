@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mocks = vi.hoisted(() => ({ logWarn: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: mocks.logWarn, logError: vi.fn(), logInfo: vi.fn() }))
 
-import { TRIAL_STUDIOS, studioByKey, loadTrialStudios, trialRedirectFor, readPaidTrialAccountEmailCopy } from './trial-studios'
+import { TRIAL_STUDIOS, studioByKey, loadTrialStudios, trialEntryFromRow, trialRedirectFor, readPaidTrialAccountEmailCopy } from './trial-studios'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from './paid-trial'
 
 const STILLORGAN_BLOCK = { type: 'paid_trial', price_cents: 3900, currency: 'EUR', membership_id: 'm1', plan_code: 'p1', product_name: 'The 14 Day Reset' }
@@ -134,6 +134,31 @@ describe('loadTrialStudios', () => {
     expect(out.every((s) => s.config === null && s.block === null)).toBe(true)
     expect(out.every((s) => s.unreadable === true)).toBe(true)
     expect(mocks.logWarn).toHaveBeenCalledTimes(1)
+  })
+})
+
+// PAGES.1 — one entry from a landing_page_studios row and its merged block.
+describe('trialEntryFromRow', () => {
+  const studioRow = (over = {}) => ({ location_id: 'loc-h', locations: { id: 'loc-h', name: 'Hatch', membership_source: 'un1t_online', settings: { un1t_online: { writes_enabled: true } } }, ...over })
+  it('builds the loadTrialStudios shape: TRIAL_STUDIOS key for a known path, the product read, the config', async () => {
+    const { db, calls } = fakeDb({ pages: [] })
+    const out = await trialEntryFromRow(db, { row: studioRow(), publicPath: 'hatch-street', mergedBlock: HATCH_BLOCK })
+    expect(out).toMatchObject({ key: 'hatch', publicPath: 'hatch-street', locationId: 'loc-h', membershipSource: 'un1t_online', block: HATCH_BLOCK, product: PRODUCT, sellable: true })
+    expect(out.config).toMatchObject({ provider: 'un1t_online', priceCents: 3900 })
+    expect(calls.products).toEqual([['location_id', 'loc-h'], ['un1t_id', 'p-1']])
+    expect(JSON.stringify(out)).not.toContain('writes_enabled')
+  })
+  it('an unknown path keys by the path; no block or writes off is not sellable; a product error is unreadable', async () => {
+    const glofox = { location_id: 'loc-n', locations: { membership_source: 'glofox' } }
+    const other = await trialEntryFromRow(fakeDb({ pages: [] }).db, { row: glofox, publicPath: 'newtown', mergedBlock: STILLORGAN_BLOCK })
+    expect(other).toMatchObject({ key: 'newtown', sellable: true })
+    const none = await trialEntryFromRow(fakeDb({ pages: [] }).db, { row: glofox, publicPath: 'newtown', mergedBlock: null })
+    expect(none).toMatchObject({ key: 'newtown', block: null, sellable: false, config: null })
+    const off = await trialEntryFromRow(fakeDb({ pages: [] }).db, { row: studioRow({ locations: { membership_source: 'un1t_online', settings: {} } }), publicPath: 'hatch-street', mergedBlock: HATCH_BLOCK })
+    expect(off).toMatchObject({ sellable: false, config: null })
+    expect(off.unreadable).toBeUndefined()
+    const err = await trialEntryFromRow(fakeDb({ pages: [], product: { data: null, error: { message: 'x' } } }).db, { row: studioRow(), publicPath: 'hatch-street', mergedBlock: HATCH_BLOCK })
+    expect(err).toMatchObject({ sellable: false, unreadable: true })
   })
 })
 
