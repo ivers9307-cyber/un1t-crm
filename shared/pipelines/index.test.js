@@ -124,3 +124,14 @@ describe('acquisition_un1t classify: 2 attended + expired trial', () => {
     expect(glofoxClassify(snapshot([8, 5], { trial_expires_at: ago(1) }), NOW)).toBe('second_class')
   })
 })
+
+// PIPE3.3 — the two Stillorgan claim boards are contacts-input modules.
+describe('PIPE3 — paid_trial and programmes', () => {
+  it('registers paid_trial and programmes as contacts-input modules', () => {
+    expect(getBoardModule('paid_trial')).toBeTruthy()
+    expect(getBoardModule('paid_trial').inputSource).toBeUndefined()
+    expect(getBoardModule('programmes').inputSource).toBeUndefined()
+    expect(getBoardModule('programmes').stages.map((s) => s.slug)).toEqual(['programme_lead', 'programme_first_class', 'programme_converted'])
+    expect(getBoardModule('paid_trial').stages.map((s) => s.slug)).toEqual(['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted'])
+  })
+})

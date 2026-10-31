@@ -75,8 +75,12 @@ describe('classify', () => {
     expect(classify({ glofox_membership_status: 'member', converted_at: iso(T0 + 3 * DAY_MS) }, T0 + 4 * DAY_MS, claim)).toBe('paid_trial_converted')
     expect(classify({ glofox_membership_status: 'credit_member', converted_at: null }, T0 + 20 * DAY_MS, claim)).toBe('paid_trial_converted')
   })
-  it('a Class Pack bought after the grant is Converted; the 10 trial credits are not', () => {
+  it('a Class Pack stamped after the trial ENDED is Converted; a stamp inside the window is the trial\'s own credits', () => {
     expect(classify({ glofox_membership_status: 'trial', pack_customer_at: iso(T0 + 16 * DAY_MS) }, T0 + 17 * DAY_MS, claim)).toBe('paid_trial_converted')
+    expect(classify({ glofox_membership_status: 'trial', pack_customer_at: iso(T0 + 14 * DAY_MS) }, T0 + 15 * DAY_MS, claim)).toBe('paid_trial_converted')
+    // The real buyer on 2026-10-30: stamped 4 minutes after the grant, 10 credits.
+    expect(classify({ glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: iso(T0 + 4 * 60_000) }, T0 + DAY_MS, claim)).toBe('paid_trial_new_lead')
+    expect(classify({ glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: iso(T0 + 4 * 60_000) }, T0 + 14 * DAY_MS, claim)).toBe('paid_trial_done')
     expect(classify({ glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: iso(T0 - DAY_MS) }, T0 + DAY_MS, claim)).toBe('paid_trial_new_lead')
   })
   it('throws without a claim', () => {
@@ -119,7 +123,7 @@ describe('helpers', () => {
     expect(attendedSince({}, T0)).toBe(0)
     expect(attendedSince(null, T0)).toBe(0)
   })
-  it('convertedSince: member status, or a pack stamp at/after the instant', () => {
+  it('convertedSince: member status, or a pack stamp at/after the pack instant', () => {
     expect(convertedSince({ glofox_membership_status: 'member' }, T0)).toBe(true)
     expect(convertedSince({ glofox_membership_status: 'credit_member' }, T0)).toBe(true)
     expect(convertedSince({ pack_customer_at: iso(T0) }, T0)).toBe(true)

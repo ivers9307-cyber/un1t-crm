@@ -12,8 +12,11 @@
 //   • trial_credits_remaining — the 14 Day Reset lands as 10 credits, and the
 //     acquisition rule files 4+ credits as a Class Pack (a sticky conversion).
 //     Verified on prod 2026-10-31: the one synced buyer sat in Class Pack.
-//   • pack_customer_at BEFORE the claim start — same reason. A pack bought
-//     AFTER the trial started is a conversion (FUNNEL.3) and is Converted here.
+//   • pack_customer_at inside the trial window — same reason: the sync stamps
+//     it minutes AFTER the grant (prod, 2026-10-30 19:48, four minutes after a
+//     19:44 grant), so "a stamp after the start" is the trial's own credits.
+//     A pack stamped at or after the trial's END is a conversion (FUNNEL.3)
+//     and is Converted here. Ruling in the SDD ledger, Task 3.
 //
 // Every instant is epoch ms; no wall-clock date parsing (TZ invariant).
 // Pure, no IO. Lives in shared/ so the phone can import the taxonomy.
@@ -26,7 +29,7 @@ export const QUIET_DAYS = 60
 /** Converted stays on the board this long after converted_at (the acquisition board's window). */
 export const CONVERTED_WINDOW_DAYS = 60
 export const DEFAULT_DURATION_DAYS = 14
-export const MEMBER_STATUSES = Object.freeze(['member', 'credit_member'])
+export const CONVERTED_MEMBER_STATUSES = Object.freeze(['member', 'credit_member'])
 
 // A trial_purchases row that is a claim: granted, or paid and on its way.
 const PAID_PENDING_STATUSES = new Set(['queued', 'processing', 'needs_review'])
@@ -107,12 +110,12 @@ export function attendedSince(contact, sinceMs) {
   return Math.max(counted, lastMs != null && lastMs >= sinceMs ? 1 : 0)
 }
 
-/** A member status, or a Class Pack bought at/after `sinceMs`. */
-export function convertedSince(contact, sinceMs) {
+/** A member status at any time, or a Class Pack stamped at/after `packSinceMs`. */
+export function convertedSince(contact, packSinceMs) {
   if (!contact || typeof contact !== 'object') return false
-  if (MEMBER_STATUSES.includes(contact.glofox_membership_status)) return true
+  if (CONVERTED_MEMBER_STATUSES.includes(contact.glofox_membership_status)) return true
   const packMs = parseMs(contact.pack_customer_at)
-  return packMs != null && packMs >= sinceMs
+  return packMs != null && packMs >= packSinceMs
 }
 
 /** The later of last_attended_at and last_payment_at, or null. */
@@ -132,7 +135,7 @@ export function lastActivityMs(contact) {
 export function claimLive(claim, contact, now = Date.now()) {
   if (!claim) return false
   const activity = lastActivityMs(contact)
-  if (convertedSince(contact, claim.start)) {
+  if (convertedSince(contact, claim.end)) {
     const since = parseMs(contact?.converted_at) ?? Math.max(claim.start, activity ?? claim.start)
     return now - since < CONVERTED_WINDOW_DAYS * DAY_MS
   }
@@ -146,7 +149,7 @@ export function claimLive(claim, contact, now = Date.now()) {
  */
 export function classify(contact, now = Date.now(), claim = null) {
   if (!claim) throw new TypeError('paid-trial classify needs a live claim')
-  if (convertedSince(contact, claim.start)) return 'paid_trial_converted'
+  if (convertedSince(contact, claim.end)) return 'paid_trial_converted'
   if (now >= claim.end) return 'paid_trial_done'
   if (now >= claim.start + 7 * DAY_MS) return 'paid_trial_day_7'
   if (attendedSince(contact, claim.start) >= 1) return 'paid_trial_first_class'
