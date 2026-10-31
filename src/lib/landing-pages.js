@@ -327,10 +327,17 @@ function rowAttribution(studioRow) {
 }
 
 /**
- * The attribution a studio row stands for: the default for the studio path and
- * the page slug, with the row's non-blank values over it (never the request's).
+ * The attribution a studio row stands for (never the request's). A campaign
+ * page: the default for the studio path and the page slug, with the row's
+ * non-blank values over it. A STUDIO page (kind 'studio'): the row's non-blank
+ * values only, so a key the row leaves blank is absent and each route falls
+ * back to its own config function's default (paidTrialConfigFromBlocks'
+ * `<path>-trial` / meta_trial, leadConfigFromBlocks', classFunnelConfigFromBlocks'):
+ * the values the studio pages carried before PAGES.1 (spec §9), never
+ * `stillorgan-stillorgan` / `meta_stillorgan`.
  */
 export function studioAttribution({ page, studioRow, publicPath }) {
+  if (page?.kind === 'studio') return rowAttribution(studioRow)
   return { ...defaultAttribution({ publicPath, slug: page.slug }), ...rowAttribution(studioRow) }
 }
 
@@ -378,8 +385,10 @@ async function resolveLegacyRequest(db, legacyPath, hostname, requireEnabled) {
  * studio. scope 'all' needs `studio` (a public path, or the old `hatch`
  * spelling): missing is studio_required, a studio the page is not switched on
  * at is not_found. Platform ids, price and attribution come from the page's
- * studio row, never the request: `attribution` is the default for the studio
- * path and slug with the row's non-blank values over it. Every read is scoped
+ * studio row, never the request: `attribution` is studioAttribution's (a
+ * campaign page: the default for the studio path and slug with the row's
+ * non-blank values over it; a studio page: the row's non-blank values only,
+ * the route's own defaults filling the rest). Every read is scoped
  * by the organisation and slug, then the page id; a failed read is unreadable,
  * never a refusal.
  *
@@ -705,7 +714,8 @@ const isUniqueViolation = (error) => error?.code === '23505'
  * then its studio rows, with the default attribution for each studio's public
  * path (none when it has no path). A one-studio page gets exactly one row,
  * its primary's, switched on (spec §1); an all-studios page one row per
- * ACTIVE studio of the organisation, sorted by name, switched off.
+ * ACTIVE studio of the organisation, sorted by name, switched off (a host-event
+ * anchor location, `is_host_anchor`, is not a studio and gets none).
  * Every read happens before the first write; a read failure throws
  * PageReadError. A studio-row insert that fails removes the page again.
  * @returns {Promise<{ ok: true, page: object, studios: object[] } | { ok: false, reason: 'taken' | 'failed', error?: object }>}
@@ -715,13 +725,15 @@ export async function createPage(db, { input, orgId, userId, brand, startFrom = 
   const primary = input.scope === 'one' ? input.primary_location_id : null
   const { data: locs, error: locErr } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, is_host_anchor')
     .eq('organization_id', orgId)
     .eq('active', true)
     .order('name')
   if (locErr) throw new PageReadError('Could not read the organisation\'s studios', locErr)
   const active = Array.isArray(locs) ? locs : []
-  const studios = primary ? active.filter((l) => l.id === primary) : active
+  // A one-studio page keeps the primary it names; an all-studios page lists
+  // studios only (a host-event anchor is not one).
+  const studios = primary ? active.filter((l) => l.id === primary) : active.filter((l) => !l.is_host_anchor)
   const paths = await Promise.all(studios.map((l) => studioPublicPath(db, l.id)))
 
   const blocks = [...starterBlocks(input.offer_type, brand), ...copiedContentBlocks(startFrom?.blocks)]
@@ -952,10 +964,14 @@ const STUDIO_SLUG_ATTEMPTS = 50
  * `skipped` answers are not failures: 'no_organization' (nothing to scope the
  * slug by) and 'no_slug' (the name yields no valid slug: a slug of fewer than
  * two characters, or none free within 50 tries). The caller logs and warns.
+ * 'host_anchor': a host-event anchor location (`is_host_anchor`, mig 388) is
+ * not a studio and gets no studio page; nothing is read or written, and the
+ * caller skips it silently.
  * A failed read throws PageReadError.
- * @returns {Promise<{ ok: true, page: object } | { ok: false, reason: 'no_organization' | 'no_slug' | 'failed', error?: object }>}
+ * @returns {Promise<{ ok: true, page: object } | { ok: false, reason: 'no_organization' | 'no_slug' | 'host_anchor' | 'failed', error?: object }>}
  */
 export async function createStudioPageForLocation(db, { location, userId }) {
+  if (location?.is_host_anchor === true) return { ok: false, reason: 'host_anchor' }
   const orgId = location?.organization_id
   if (!orgId || !location?.id) return { ok: false, reason: 'no_organization' }
   const base = normaliseSlug(toSlug(location.name || ''))
@@ -1010,10 +1026,13 @@ export async function createStudioPageForLocation(db, { location, userId }) {
  * A studio added to an organisation gets a switched-off row on every
  * scope='all' page of that organisation that has none for it yet (spec §1:
  * the editor shows it as "not yet set up"), sort_order after the page's last.
+ * A host-event anchor location (`hostAnchor`: the row's `is_host_anchor`) is not
+ * a studio: it gets no row, with nothing read or written.
  * Reads before writing; a failed read throws PageReadError.
  * @returns {Promise<{ ok: true, added: number } | { ok: false, error: object }>}
  */
-export async function addStudioToOrgPages(db, { orgId, locationId, userId = null }) {
+export async function addStudioToOrgPages(db, { orgId, locationId, hostAnchor = false, userId = null }) {
+  if (hostAnchor === true) return { ok: true, added: 0 }
   const { data: pages, error: pagesErr } = await db
     .from('landing_pages')
     .select('id')

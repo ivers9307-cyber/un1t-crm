@@ -23,14 +23,15 @@
 //      pageCtas, the Events link, JSON-LD), from the page row and its one
 //      studio row only, inside StudioShell (the /welcome typography). It
 //      serves /<slug>/events and /<slug>/status (StudioEventsPage,
-//      StudioStatusPage). Its forms and card post the way /welcome's did (by
-//      public path / studio key, no `page`): the public routes take studio
-//      pages in a later task.
+//      StudioStatusPage). Its forms and paid-trial card post `page=<slug>`
+//      (the studio page's own slug), so the public routes resolve the studio
+//      page's row through resolvePublicPageRequest. Its logo is the page's
+//      chrome.logo_url or none (the wordmark), never another studio's.
 //
-// Next serves a static route before this dynamic one, so /trial, /50plus and
-// /corp keep rendering from their code routes until Task 8 deletes them; this
-// route answers any slug with no static route. The proxy admits a page slug
-// (and anything under it) and sets x-public-page, and AppShellServer hands
+// Every public page (/trial, /50plus, /corp and the studio pages) renders
+// here: Next serves a static route before this dynamic one, so this route
+// answers any slug with no static route. The proxy admits a page slug (and
+// anything under it) and sets x-public-page, and AppShellServer hands
 // AppShell the slug list, so the client shell renders it bare.
 //
 // The browser gets only client-safe props: trialStudioView (never a plan,
@@ -194,8 +195,16 @@ async function studioMetadata(page, studios, sub) {
 
 export async function generateMetadata(props) {
   try {
-    const { loaded, editMode, rest } = await readPage(props)
-    if (!loaded || !shown(loaded.page, editMode)) return {}
+    const { loaded, editMode, rest, failed } = await readPage(props)
+    if (!loaded || !shown(loaded.page, editMode)) {
+      // A missing or hidden studio page's root answers the host's brand as
+      // /welcome/[location] did; a hidden campaign page (and a failed read)
+      // keep the defaults.
+      const atRoot = !(Array.isArray(rest) && rest.length)
+      const studioPath = loaded ? loaded.page.kind === 'studio' : !failed
+      if (atRoot && studioPath) return { title: await resolveGymSiteName({ host: (await headers()).get('host') }) }
+      return {}
+    }
     const { page } = loaded
     if (page.kind === 'studio') return await studioMetadata(page, loaded.studios, pageSubpath(page, rest))
     const c = isObj(page.chrome) ? page.chrome : {}
@@ -425,7 +434,9 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
     resolveOrgChrome({ orgId: page.organization_id }),
   ])
   const footer = { brand: chrome.companyName, studios: chrome.studios, legalName: chrome.legalName }
-  const logoUrl = str(c.logo_url) || await getLandingLogo(page.slug, STILLORGAN_LANDING_LOGO)
+  // The page's own logo, else none (the wordmark renders), as /welcome/[location]
+  // did: never the Stillorgan mark on another studio's page.
+  const logoUrl = str(c.logo_url) || null
   const logoAlt = str(c.logo_alt) || brand.companyName
   const logoWidthPx = Number(c.logo_width_px) || 200
 

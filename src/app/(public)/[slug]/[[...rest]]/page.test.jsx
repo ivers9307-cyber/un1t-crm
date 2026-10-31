@@ -737,8 +737,31 @@ describe('studio pages on the [slug] route', () => {
       robots: { index: false },
     })
     expect(await meta('stillorgan', ['x'])).toEqual({})
-    h.loaded = { page: { ...STILL, publish_state: 'draft' }, studios: [stillRow()] }
-    expect(await meta('stillorgan')).toEqual({})
+  })
+
+  it("metadata: a hidden or missing studio page's root answers the host brand, as /welcome/[location] did; a hidden campaign page keeps {}", async () => {
+    for (const publish_state of ['draft', 'coming_soon']) {
+      h.loaded = { page: { ...STILL, publish_state }, studios: [stillRow()] }
+      expect(await meta('stillorgan')).toEqual({ title: 'Host Brand' })
+    }
+    h.loaded = null
+    expect(await meta('stillorgan')).toEqual({ title: 'Host Brand' })
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    expect(await meta('50plus')).toEqual({})
+  })
+
+  it('a studio page with no chrome.logo_url renders no logo image, no JSON-LD logo, and the overlay gets null (never the Stillorgan mark)', async () => {
+    const noLogo = { ...HATCH, chrome: { un1t_terms: {} } }
+    h.loaded = { page: noLogo, studios: [hatchRow()] }
+    const html = await render({ slug: 'hatch-street' })
+    expect(html).not.toContain('https://x/logo.png')
+    expect(html).not.toMatch(/<img[^>]*alt="UN1T Hatch Street"/)
+    expect(propsOf(html, 'jsonld')).not.toHaveProperty('logo')
+    const events = propsOf(await render({ slug: 'hatch-street', rest: ['events'] }), 'events')
+    expect(events.logo.url).toBeNull()
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    const overlay = propsOf(await render({ slug: 'hatch-street', sp: { edit: '1' } }), 'overlay')
+    expect(overlay.initialLogoUrl).toBeNull()
   })
 
   it('edit mode on a studio page: the overlay gets client-safe blocks, the blocks layout and the card as a disabled preview, sellable or not', async () => {

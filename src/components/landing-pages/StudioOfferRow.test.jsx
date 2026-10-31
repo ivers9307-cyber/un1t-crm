@@ -91,6 +91,13 @@ describe('StudioOfferRow', () => {
     expect(screen.getAllByText(/Blank uses the default for this studio\./)).toHaveLength(2)
   })
 
+  it('a studio page shows no `<path>-<slug>` placeholder: blank keeps each form\'s own default', () => {
+    mount({ page: { ...pageFor('paid_trial', 'paid_trial'), slug: 'stillorgan', kind: 'studio' }, row: glofoxRow({ public_path: 'stillorgan' }) })
+    expect(screen.getByLabelText('Tag').hasAttribute('placeholder')).toBe(false)
+    expect(screen.getByLabelText('Lead source').hasAttribute('placeholder')).toBe(false)
+    expect(screen.getAllByText(/Blank uses the default for this studio\./)).toHaveLength(2)
+  })
+
   it('Enter in a row input does not submit the page form; Enter in a textarea is a new line', () => {
     mount({ page: pageFor('one_class', 'campaign_funnel'), row: glofoxRow() })
     const tag = screen.getByLabelText('Tag')

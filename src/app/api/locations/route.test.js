@@ -44,7 +44,7 @@ const OWNER = { ...MASTER, role: 'owner', profileRole: 'owner' }
 // that fabricated `is_host_anchor` would pass even if the route selected
 // only `id, slug`); the fabricated row carries only what the insert wrote
 // plus the db-generated id.
-function makeDb({ insertError = null, pages = [], pageStudios = [], pageInsertError = null, studioRowInsertError = null } = {}) {
+function makeDb({ insertError = null, pages = [], pageStudios = [], pageInsertError = null, studioRowInsertError = null, createdExtra = {} } = {}) {
   const inserts = []
   const selects = []
   // PAGES.1: landing_pages / landing_page_studios are filter-aware in-memory
@@ -77,7 +77,7 @@ function makeDb({ insertError = null, pages = [], pageStudios = [], pageInsertEr
         select: (cols) => { selects.push(cols); return b },
         single: () => Promise.resolve(insertError
           ? { data: null, error: insertError }
-          : { data: { id: NEW_ID, ...inserts.at(-1) }, error: null }),
+          : { data: { id: NEW_ID, ...inserts.at(-1), ...createdExtra }, error: null }),
       }
       return b
     },
@@ -315,6 +315,22 @@ describe('POST /api/locations — the studio page (PAGES.1)', () => {
     expect(db.tables.landing_page_studios.some((r) => r.page_id === 'all-other' || r.page_id === 'one-1')).toBe(false)
     // The new studio's own page row is the enabled one.
     expect(db.tables.landing_page_studios.filter((r) => r.location_id === NEW_ID && r.enabled)).toHaveLength(1)
+  })
+
+  it('a host-event anchor location gets no studio page and no all-studios rows, silently', async () => {
+    // is_host_anchor (mig 388) marks "Pride Training Club (host events)": not a studio.
+    createServerClient.mockReturnValue(db = makeDb({
+      pages: [{ id: 'all-1', organization_id: ORG, scope: 'all', slug: 'trial', kind: 'campaign' }],
+      createdExtra: { is_host_anchor: true },
+    }))
+    const res = await POST(post(VALID))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.warnings).toBeUndefined()
+    expect(db.tables.landing_pages.filter((p) => p.kind === 'studio')).toEqual([])
+    expect(db.tables.landing_page_studios).toEqual([])
+    expect(logError).not.toHaveBeenCalled()
   })
 
   it('an inactive location gets its page but no all-studios rows', async () => {

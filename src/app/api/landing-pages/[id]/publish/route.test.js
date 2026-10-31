@@ -124,11 +124,21 @@ describe('POST /api/landing-pages/[id]/publish', () => {
     expect(live.status).toBe(200)
     expect(stored(db, PAGE.stillorgan)).toMatchObject({ publish_state: 'live', chrome: { was_live: true } })
 
-    // Live judges its row like any one-studio page.
+  })
+
+  it('a studio page skips the offer-readiness gate: unpublished with its trial not ready (or switched off), it goes live again', async () => {
+    // Its card only shows when sellable; the page is the studio's home, not an
+    // offer page (the chooser PUT sets it live with no gate either).
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
     rowsOf(db, PAGE.stillorgan)[0].offer = {}
     stored(db, PAGE.stillorgan).publish_state = 'draft'
-    expect(await (await publish(PAGE.stillorgan, { publish_state: 'live' })).json())
-      .toMatchObject({ error: 'not_ready', studios: [{ location_id: STILL, reason: 'needs_plan' }] })
+    const notReady = await publish(PAGE.stillorgan, { publish_state: 'live' })
+    expect(notReady.status).toBe(200)
+    expect(stored(db, PAGE.stillorgan)).toMatchObject({ publish_state: 'live', chrome: { was_live: true } })
+    rowsOf(db, PAGE.stillorgan)[0].enabled = false
+    stored(db, PAGE.stillorgan).publish_state = 'draft'
+    expect((await publish(PAGE.stillorgan, { publish_state: 'live' })).status).toBe(200)
+    expect(stored(db, PAGE.stillorgan).publish_state).toBe('live')
   })
 
   it('a viewer who cannot edit is 403; outside the view is 404', async () => {

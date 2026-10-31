@@ -121,7 +121,7 @@ function resolvePageFunnel(r) {
     const cfg = campaignFunnelConfig(block, { landingPath })
     const copy = campaignFunnelCopy(block || {})
     return {
-      tag: a.tag, leadSource: a.lead_source, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
+      tag: a.tag || cfg.tag, leadSource: a.lead_source || cfg.leadSource, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
       trialMembershipId: cfg.trialMembershipId, trialPlanCode: cfg.trialPlanCode,
       priceCents: 0, currency: 'EUR',
       allowKeywords: cfg.allowKeywords,
@@ -134,7 +134,9 @@ function resolvePageFunnel(r) {
     const cfg = classFunnelConfigFromBlocks(r.blocks, landingPath)
     return {
       ...cfg,
-      tag: a.tag, leadSource: a.lead_source, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
+      // A studio page's attribution holds only the row's own values: a blank
+      // key keeps the class funnel's default (the pre-PAGES.1 value, spec §9).
+      tag: a.tag || cfg.tag, leadSource: a.lead_source || cfg.leadSource, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
       allowKeywords: null,
       timetableUnavailableText: classFunnelTimetableUnavailableMessage(r.blocks),
       notConfigured: false,

@@ -249,4 +249,24 @@ describe('publicWelcomePathForLocation — per-location domain landing (mig 432)
     const db = { from() { throw new Error('boom') } }
     expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe(null)
   })
+
+  // A draft or coming_soon studio page is not admitted by the proxy: /welcome
+  // 307ing there looped (draft) or 404'd (coming_soon). Only a live page counts;
+  // anything else is null, so /welcome renders the chooser.
+  it('only a LIVE studio page counts: draft / coming_soon / retired → null (the chooser renders)', async () => {
+    function filteringDb(row) {
+      const filters = {}
+      const chain = {
+        select: () => chain,
+        eq: (col, val) => { filters[col] = val; return chain },
+        maybeSingle: async () => ({ data: Object.entries(filters).every(([c, v]) => row[c] === v) ? row : null, error: null }),
+      }
+      return { from: () => chain }
+    }
+    const base = { slug: 'hatch-street', kind: 'studio', primary_location_id: 'loc-1' }
+    for (const publish_state of ['draft', 'coming_soon', 'retired']) {
+      expect(await publicWelcomePathForLocation(filteringDb({ ...base, publish_state }), 'loc-1')).toBe(null)
+    }
+    expect(await publicWelcomePathForLocation(filteringDb({ ...base, publish_state: 'live' }), 'loc-1')).toBe('/hatch-street')
+  })
 })

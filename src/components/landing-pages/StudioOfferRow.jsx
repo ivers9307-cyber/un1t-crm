@@ -63,8 +63,11 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
   const [chipLabel, chipCls] = CHIPS[reason] || CHIPS.needs_plan
 
   // The server's default is named for the studio's public path: shown only
-  // when the row knows it (studioRowView's public_path).
-  const defaults = row.public_path ? defaultAttribution({ publicPath: row.public_path, slug: page?.slug || '' }) : null
+  // when the row knows it (studioRowView's public_path). A studio page has no
+  // such default: a blank key keeps each form's own default (studioAttribution).
+  const defaults = row.public_path && page?.kind !== 'studio'
+    ? defaultAttribution({ publicPath: row.public_path, slug: page?.slug || '' })
+    : null
   const blankHint = defaults ? 'Blank uses the default shown.' : 'Blank uses the default for this studio.'
 
   async function save() {

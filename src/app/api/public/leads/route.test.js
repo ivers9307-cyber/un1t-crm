@@ -76,6 +76,21 @@ describe('POST /api/public/leads — page (PAGES.1)', () => {
     expect(m.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://x.example/f' }))
   })
 
+  it("a studio page lead with a blank tag keeps leadConfigFromBlocks' defaults (spec §9)", async () => {
+    // A studio page's attribution carries only the row's own values; this row has none.
+    const studioPage = { id: 'page-s', slug: 'hatch-street', kind: 'studio', offer_type: 'paid_trial' }
+    m.resolve.mockResolvedValueOnce(pageOk([{ type: 'lead_form', tag: '  ', lead_source: '' }], { page: studioPage, attribution: {} }))
+    expect((await POST(req({ ...BODY, page: 'hatch-street' }))).status).toBe(200)
+    expect(m.tag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'hatch-founding-member' }))
+    expect(m.stamp).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ leadSource: 'hatch_launch' }))
+    expect(m.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/hatch-street' }))
+    // The lead_form block's own values still win on a studio page.
+    m.resolve.mockResolvedValueOnce(pageOk([{ type: 'lead_form', tag: 'still-tag', lead_source: 'still-src' }], { page: { ...studioPage, slug: 'stillorgan' }, attribution: {} }))
+    await POST(req({ ...BODY, page: 'stillorgan' }))
+    expect(m.tag).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ tag: 'still-tag' }))
+    expect(m.stamp).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ leadSource: 'still-src' }))
+  })
+
   it('refusals: not_found 404, studio_required 400, unreadable 503, before any capture', async () => {
     m.resolve.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
     let r = await POST(req({ ...BODY, page: 'founders', studio: 'galway' }))

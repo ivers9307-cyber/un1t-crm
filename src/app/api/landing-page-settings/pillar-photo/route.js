@@ -5,8 +5,8 @@
 // are exactly 3 slots and re-uploading slot 0 should replace the
 // previous slot-0 photo, not leave both on disk.
 //
-// Returns the public URL — caller patches pillars[slot].photo_url
-// via PUT /api/landing-page-settings.
+// Returns the public URL — caller patches the pillars block's
+// items[slot].photo_url via PUT /api/landing-pages/<id> (PAGES.1).
 //
 // Master OR owner at the location.
 

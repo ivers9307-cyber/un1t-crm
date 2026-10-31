@@ -1,7 +1,8 @@
 // /api/landing-page-settings/hero-video — upload the landing page
 // hero background video (mig 127, Phase 3a). Mirrors hero-image:
 // multipart form, stores in 'branding' bucket, returns public URL.
-// Caller PUTs /api/landing-page-settings with the new hero_video_url.
+// The caller saves the URL into the page's hero block with
+// PUT /api/landing-pages/<id> (PAGES.1).
 //
 // MP4 + WebM only — those autoplay reliably across modern browsers
 // when set to muted+playsinline. MOV/AVI would need server-side

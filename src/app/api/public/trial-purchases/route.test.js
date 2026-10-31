@@ -587,7 +587,8 @@ describe('POST /api/public/trial-purchases — page (PAGES.1)', () => {
     resolvePublicPageRequest.mockResolvedValueOnce({
       ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'stillorgan', kind: 'studio', offer_type: 'paid_trial' }, studioRow: row,
       locationId: 'loc1', publicPath: 'stillorgan', blocks: [{ id: 'pt', type: 'paid_trial', duration_days: 14, ...row.offer }],
-      attribution: { tag: 'stillorgan-stillorgan', lead_source: 'meta_stillorgan' }, terms: {},
+      // A studio page's attribution holds only the row's own values (none here).
+      attribution: {}, terms: {},
     })
     const r = await POST(req({ ...BODY, page: 'stillorgan', studio: 'stillorgan', price_cents: 1 }))
     expect(r.status).toBe(200)
@@ -597,6 +598,10 @@ describe('POST /api/public/trial-purchases — page (PAGES.1)', () => {
     expect(mocks.read.mock.calls.some(([t, f]) => t === 'landing_pages' && f.some((x) => x[1] === 'slug' && x[2] === 'trial'))).toBe(false)
     expect(mocks.read.mock.calls.some(([t]) => t === 'landing_page_studios')).toBe(false)
     expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 5900 }))
+    // Spec §9: paidTrialConfigFromBlocks' defaults, as before PAGES.1 (never stillorgan-stillorgan).
+    expect(mocks.tag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'stillorgan-trial' }))
+    expect(mocks.updated).toHaveBeenCalledWith('contacts', { lead_source: 'meta_trial' }, expect.anything())
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/trial' }))
   })
 
   it('the terms tick on a page uses the studio terms wording', async () => {

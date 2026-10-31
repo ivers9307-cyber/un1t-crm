@@ -66,6 +66,8 @@ describe('mig 795 landing_page_settings re-sync, closed and dated', () => {
     expect(u).toMatch(/case when cf\.b is null then '\{\}'::jsonb else jsonb_build_object\('un1t_terms'/i)
     const setClause = u.slice(u.search(/\sset\s/i), u.search(/\sfrom\s/i))
     expect(setClause.length).toBeGreaterThan(50)
+    // updated_at is the trigger's (now(), the apply time), never assigned here
+    expect(setClause).not.toMatch(/\bupdated_at =/i)
     for (const col of ['offer_type', 'kind', 'scope', 'slug', 'primary_location_id', 'organization_id', 'redirect_to']) {
       expect(setClause, col).not.toMatch(new RegExp(`\\b${col} =`, 'i'))
     }
@@ -101,6 +103,8 @@ describe('mig 795 landing_page_settings re-sync, closed and dated', () => {
     expect([...i.matchAll(/insert into/gi)].length).toBe(1)
     expect(i).toMatch(/\bfalse\b,\s*'\{\}'::jsonb,\s*'\{\}'::jsonb/i)
     expect(i).toMatch(/l\.active/i)
+    // a host-event anchor location is not a studio: no row for it
+    expect(i).toMatch(/and not coalesce\(l\.is_host_anchor, false\)/i)
     expect(i).toMatch(/l\.organization_id = p\.organization_id/i)
     expect(i).toMatch(/not exists/i)
     expect(i).toMatch(/on conflict \(page_id, location_id\) do nothing;$/i)

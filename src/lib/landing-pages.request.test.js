@@ -135,10 +135,22 @@ describe('resolvePublicPageRequest', () => {
     const db = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [STUDIO_ROW_S] } })
     const r = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', page: 'stillorgan' })
     expect(r).toMatchObject({ ok: true, pageId: 'p-s', locationId: 'loc-s', publicPath: 'stillorgan', studioRow: STUDIO_ROW_S })
-    expect(r.attribution).toEqual({ tag: 'stillorgan-stillorgan', lead_source: 'meta_still' })
+    // A studio page carries only the row's non-blank values: no
+    // stillorgan-stillorgan default (each route keeps its own defaults).
+    expect(r.attribution).toEqual({ lead_source: 'meta_still' })
     expect(r.terms).toEqual({ terms_link_label: 'T and Cs' })
     expect(await resolvePublicPageRequest(db, { page: 'stillorgan', studio: 'stillorgan' })).toMatchObject({ ok: true })
     expect(await resolvePublicPageRequest(db, { page: 'stillorgan', studio: 'hatch-street' })).toEqual({ ok: false, reason: 'not_found' })
+  })
+
+  it('a studio page whose row holds no attribution answers {} on both branches (spec §9: the routes keep their own defaults)', async () => {
+    const db = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [{ ...STUDIO_ROW_S, attribution: {} }] } })
+    const byPage = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', page: 'stillorgan' })
+    expect(byPage.ok).toBe(true)
+    expect(byPage.attribution).toEqual({})
+    const byPath = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', legacyPath: 'stillorgan' })
+    expect(byPath.ok).toBe(true)
+    expect(byPath.attribution).toEqual({})
   })
 
   it('a campaign page answers the context studio\'s terms wording, read from that studio\'s page', async () => {
@@ -167,9 +179,9 @@ describe('resolvePublicPageRequest', () => {
     const r = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', legacyPath: ' Stillorgan ' })
     expect(r).toMatchObject({
       ok: true, pageId: 'p-s', locationId: 'loc-s', publicPath: 'stillorgan', studioRow: STUDIO_ROW_S,
-      attribution: { tag: 'stillorgan-stillorgan', lead_source: 'meta_still' },
       terms: { terms_link_label: 'T and Cs' },
     })
+    expect(r.attribution).toEqual({ lead_source: 'meta_still' })
     expect(r.page.id).toBe('p-s')
     // The merged blocks carry the studio half; the lead_form block is untouched.
     expect(r.blocks.find((b) => b.type === 'class_funnel')).toMatchObject({ heading: 'Try a class', trial_plan_code: 'tp' })

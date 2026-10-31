@@ -226,8 +226,9 @@ WHERE ps.page_id = p.id
 -- The page: blocks (the page half of the offer type's block plus every
 -- non-offer block), chrome (the legacy logo/chooser columns over the page's own
 -- chrome, un1t_terms rebuilt as 792 section 6 does), publish_state (a retired
--- page stays retired). updated_at = s.updated_at is what 792 wrote for a
--- backfilled page; the update_updated_at trigger stamps now() over it.
+-- page stays retired). updated_at is not set here: the update_updated_at
+-- trigger stamps now() (the apply time) on every row this touches, whatever
+-- the statement says, which is also what makes a second run find nothing newer.
 UPDATE public.landing_pages AS p
 SET blocks = private.landing_page_studio_blocks(s.blocks, p.offer_type),
     chrome = (p.chrome - 'logo_url' - 'logo_alt' - 'logo_width_px' - 'chooser_label' - 'chooser_cta_text' - 'chooser_image_url')
@@ -242,8 +243,7 @@ SET blocks = private.landing_page_studio_blocks(s.blocks, p.offer_type),
          ))) END,
     publish_state = CASE WHEN p.publish_state = 'retired' THEN 'retired'
                          ELSE CASE s.publish_state WHEN 'live' THEN 'live' WHEN 'coming_soon' THEN 'coming_soon' ELSE 'draft' END
-                    END,
-    updated_at = s.updated_at
+                    END
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id
 CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'class_funnel') AS b) AS cf
@@ -327,7 +327,9 @@ ON CONFLICT (page_id, location_id) DO NOTHING;
 -- landing_page_studios row gets one, enabled = false with an empty offer, so the
 -- editor lists the studio and staff configure and switch it on. sort_order
 -- continues after the page's highest existing one, in the studios' creation
--- order. A row that exists is never touched.
+-- order. A row that exists is never touched. A host-event anchor location
+-- (locations.is_host_anchor, mig 388: "Pride Training Club (host events)") is
+-- not a studio and gets no row, as every studio list in the app excludes it.
 INSERT INTO public.landing_page_studios (page_id, location_id, enabled, offer, attribution, sort_order)
 SELECT
   p.id,
@@ -339,6 +341,7 @@ SELECT
     + (row_number() OVER (PARTITION BY p.id ORDER BY l.created_at, l.id) - 1)::integer
 FROM public.landing_pages AS p
 JOIN public.locations AS l ON l.organization_id = p.organization_id AND l.active
+  AND NOT COALESCE(l.is_host_anchor, false)
 WHERE p.scope = 'all'
   AND NOT EXISTS (
     SELECT 1 FROM public.landing_page_studios AS e
@@ -350,8 +353,8 @@ ON CONFLICT (page_id, location_id) DO NOTHING;
 -- 5. The old table is closed and dated for drop
 -- ---------------------------------------------------------------------------
 -- Nothing reads it (PR1-PR3). It held table-level grants to authenticated and
--- two policies TO anon, authenticated (landing_page_settings_public_read
--- among them); every one goes. RLS stays on with no policy. The
+-- four policies: landing_page_settings_public_read TO anon, authenticated, and
+-- the _ins, _upd and _del write policies TO authenticated; every one goes. RLS stays on with no policy. The
 -- landing_page_settings_touch_updated_at trigger stays (harmless). The data
 -- stays for rollback until the drop migration.
 REVOKE ALL ON public.landing_page_settings FROM anon, authenticated, PUBLIC;

@@ -4,7 +4,7 @@
 // photos to the same location without one overwriting another.
 //
 // Returns the public URL — the caller appends an item to the
-// gallery JSONB array via PUT /api/landing-page-settings.
+// gallery block's items via PUT /api/landing-pages/<id> (PAGES.1).
 //
 // Master OR owner at the location.
 

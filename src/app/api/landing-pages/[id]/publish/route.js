@@ -4,8 +4,10 @@
 // A page outside canViewPage is a 404; canEditPage decides the write (403).
 // A studio page publishes like any one-studio page but is never retired
 // (400 studio_page): a studio's main page is unpublished (draft), and its slug
-// stays the studio's public path. Live on a page
-// that sells something needs a ready offer (studioRowReadiness, the same rule
+// stays the studio's public path. A studio page also skips the offer-readiness
+// gate: it is the studio's home, not an offer page, and its card only shows
+// when sellable (the chooser PUT sets it live with no gate either). Live on a
+// campaign page that sells something needs a ready offer (studioRowReadiness, the same rule
 // as the list's chip): on a one-studio page its primary row, switched on
 // (else 409 not_ready naming it, `switched_off` when it is off); on an
 // all-studios page at least one switched-on studio (else 409 not_ready naming
@@ -49,7 +51,7 @@ export async function POST(request, { params }) {
 
     if (state === 'retired' && !redirectTo) return fail(400, 'redirect_required')
 
-    if (state === 'live' && OFFER_BLOCK_TYPE[page.offer_type]) {
+    if (state === 'live' && page.kind !== 'studio' && OFFER_BLOCK_TYPE[page.offer_type]) {
       // A one-studio page sells at its primary only, so that row alone is
       // judged: switched on and ready. An all-studios page needs any one.
       if (page.scope === 'one') {

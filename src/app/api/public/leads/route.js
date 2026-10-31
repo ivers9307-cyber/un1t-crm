@@ -45,13 +45,19 @@ const RouteLeadSchema = LeadSchema.extend({
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
-// PAGES.1 — the studio and attribution of a resolved page request.
+// PAGES.1 — the studio and attribution of a resolved page request. A studio
+// page's attribution holds only the row's own values (studioAttribution), so a
+// blank key falls back to leadConfigFromBlocks' defaults: the tag and lead
+// source a studio page's lead form carried before PAGES.1 (spec §9). A
+// campaign page's attribution always carries its defaults, so the fallback
+// never reaches it.
 function pageLeadConfig(r) {
   const lf = (Array.isArray(r.blocks) ? r.blocks : []).find((b) => b && typeof b === 'object' && b.type === 'lead_form')
+  const defaults = leadConfigFromBlocks(r.blocks)
   return {
     locationId: r.locationId,
-    tag: str(lf?.tag) || r.attribution.tag,
-    leadSource: str(lf?.lead_source) || r.attribution.lead_source,
+    tag: str(lf?.tag) || str(r.attribution.tag) || defaults.tag,
+    leadSource: str(lf?.lead_source) || str(r.attribution.lead_source) || defaults.leadSource,
     eventSourceUrl: str(r.attribution.event_source_url) || `https://www.un1tdublin.com/${r.page.slug}`,
   }
 }

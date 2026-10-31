@@ -51,6 +51,8 @@ vi.mock('@/lib/meta-capi', async (importOriginal) => ({
 import { POST } from './route.js'
 import { sendWebsiteConversion } from '@/lib/meta-capi'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { writeContactTag } from '@/lib/contact-tags'
+import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const book = (attribution, headers = {}) => POST(new Request('http://localhost/api/public/class-booking', {
   method: 'POST',
@@ -63,6 +65,25 @@ const book = (attribution, headers = {}) => POST(new Request('http://localhost/a
 }))
 
 beforeEach(() => { vi.clearAllMocks() })
+
+// PAGES.1 spec §9 — a studio page posting page=<slug> whose row holds no
+// attribution keeps the class funnel's own defaults (the pre-PAGES.1 values),
+// never `<path>-<slug>` / `meta_<slug>`.
+describe('POST /api/public/class-booking — a studio page keeps the class funnel defaults', () => {
+  it('a blank row attribution falls back to classFunnelConfigFromBlocks', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({
+      ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'hatch-street', kind: 'studio', offer_type: 'class_funnel' }, studioRow: {},
+      locationId: 'L1', publicPath: 'hatch-street', blocks: [{ type: 'class_funnel' }], attribution: {}, terms: {},
+    })
+    const res = await POST(new Request('http://localhost/api/public/class-booking', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ page: 'hatch-street', event_id: 'ev-1', first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567', consent: true }),
+    }))
+    expect(res.status).toBe(200)
+    expect(writeContactTag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'hatch-street-start' }))
+    expect(writeContactTag).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: undefined }))
+  })
+})
 
 // SOURCE-LABEL.1 — a class-booking lead is not a race entrant. The helper's
 // INSERT default is source 'race_signup'; this route must override it on

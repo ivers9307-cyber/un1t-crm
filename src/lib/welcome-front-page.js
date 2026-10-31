@@ -134,7 +134,7 @@ export async function loadFrontPage(db = null, { orgId = null } = {}) {
  * (PAGES.1; /welcome/<slug> redirects there), so a location-scoped tenant domain lands strays on the one studio
  * rather than the org chooser. Returns null when there is no location
  * (whole-org / unmapped / legacy hostname) or the location has no
- * public landing path, in which case the caller renders the chooser
+ * LIVE studio page, in which case the caller renders the chooser
  * exactly as today. Fail-soft: any error → null (never blocks the
  * public page).
  *
@@ -147,11 +147,15 @@ export async function publicWelcomePathForLocation(db, locationId) {
   try {
     const client = db || createServerClient()
     // One studio page per location (partial unique index), so no ordering.
+    // Only a LIVE page: the proxy admits no other, so a draft slug looped
+    // /welcome → /<slug> → /welcome, and a coming_soon one 404'd instead of
+    // showing the chooser.
     const { data } = await client
       .from('landing_pages')
       .select('slug')
       .eq('kind', 'studio')
       .eq('primary_location_id', locationId)
+      .eq('publish_state', 'live')
       .maybeSingle()
     return data?.slug ? `/${data.slug}` : null
   } catch {

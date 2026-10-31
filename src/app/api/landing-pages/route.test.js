@@ -149,6 +149,16 @@ describe('POST /api/landing-pages', () => {
     expect(db.state.landing_pages.find((p) => p.id === data.id)).toMatchObject({ created_by: ORG_ADMIN.id, updated_by: ORG_ADMIN.id })
   })
 
+  it('an all-studios page gets no row for a host-event anchor location (not a studio)', async () => {
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
+    db.state.locations.push({ id: 'loc-anchor', name: 'Pride Training Club (host events)', organization_id: ORG, active: true, is_host_anchor: true, membership_source: 'none', settings: {} })
+    const res = await POST(create({ title: 'Spring', slug: 'spring', kind: 'campaign', scope: 'all', offer_type: 'paid_trial' }))
+    expect(res.status).toBe(201)
+    const { data } = await res.json()
+    const rows = db.state.landing_page_studios.filter((r) => r.page_id === data.id)
+    expect(rows.map((r) => r.location_id)).toEqual([HATCH, STILL])
+  })
+
   it('a one-studio page gets exactly one studio row, its primary\'s, switched on, and is branded by that studio', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     const res = await POST(create(NEW_ONE))

@@ -137,10 +137,13 @@ export async function POST(request) {
   // organisation's all-studios pages. The location exists and is seeded by
   // now, so a failure here is logged (ids only) and handed back as a warning,
   // never a failed create: the editor shows the studio's page as missing.
+  // A host-event anchor location (is_host_anchor) is not a studio: it gets no
+  // studio page and no all-studios rows, silently (no warning: nothing is missing).
   const warnings = []
+  const hostAnchor = created.is_host_anchor === true
   try {
     const page = await createStudioPageForLocation(db, { location: created, userId: user.id })
-    if (!page.ok) {
+    if (!page.ok && page.reason !== 'host_anchor') {
       warnings.push('studio_page_not_created')
       const log = page.reason === 'failed' ? logError : logWarn
       log('locations', 'new studio page not created', { locationId: created.id, reason: page.reason, code: page.error?.code ?? null })
@@ -154,7 +157,7 @@ export async function POST(request) {
   // is next saved (spec section 1).
   if (created.active !== false) {
     try {
-      const added = await addStudioToOrgPages(db, { orgId: created.organization_id, locationId: created.id, userId: user.id })
+      const added = await addStudioToOrgPages(db, { orgId: created.organization_id, locationId: created.id, hostAnchor, userId: user.id })
       if (!added.ok) logError('locations', 'new studio not added to the organisation pages', { locationId: created.id, code: added.error?.code ?? null })
     } catch (err) {
       logError('locations', 'new studio not added to the organisation pages', { locationId: created.id, code: err?.cause?.code ?? err?.code ?? null })
