@@ -65,7 +65,7 @@ function Eyebrow({ children, dark = true }) {
 // FIFTYPLUS.1 — `tone` ('dark' | 'light'): a light page (/50plus) passes
 // 'light' so the one still-dark section it reuses (video testimonials)
 // renders on the pale surface. Never read from block data.
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false, tone = 'dark' }) {
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, page = null, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false, tone = 'dark' }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -82,7 +82,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} wordmark={wordmark} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
-    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} wordmark={wordmark} locationName={locationName} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} compact={trialShown} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} page={page} wordmark={wordmark} locationName={locationName} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} compact={trialShown} />
     // MANUALFUNNEL.1 — a funnel switched off the main page still renders in
     // the editor (so its copy and timetable stay editable) and at /start/{path}.
     case 'class_funnel': return (localOnEdit || classFunnelShownOnLanding(block))
@@ -423,7 +423,7 @@ export function EventBlock({ block }) {
 // funnel button whatever the block's offer/second_path say; just the
 // heading, subtext and the capture form in its light tone. Still
 // anchored at #waitlist so every secondary CTA resolves.
-function LeadFormCompact({ block, onEdit, publicPath, campaign, locationName }) {
+function LeadFormCompact({ block, onEdit, publicPath, campaign, page, locationName }) {
   return (
     <section id="waitlist" className="scroll-mt-20 bg-lp-pale text-black py-16 md:py-20 border-t border-black/10">
       <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-[1fr_1.2fr] gap-10 items-center">
@@ -443,6 +443,7 @@ function LeadFormCompact({ block, onEdit, publicPath, campaign, locationName }) 
           <WaitlistWidget
             publicPath={publicPath}
             campaign={campaign}
+            page={page}
             buttonLabel={block.button_label}
             successMessage={block.success_message}
             consentLabel={block.consent_label}
@@ -455,9 +456,9 @@ function LeadFormCompact({ block, onEdit, publicPath, campaign, locationName }) 
   )
 }
 
-export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', compact = false }) {
+export function LeadFormBlock({ block, onEdit, publicPath, campaign, page = null, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', compact = false }) {
   if (compact) {
-    return <LeadFormCompact block={block} onEdit={onEdit} publicPath={publicPath} campaign={campaign} locationName={locationName} />
+    return <LeadFormCompact block={block} onEdit={onEdit} publicPath={publicPath} campaign={campaign} page={page} locationName={locationName} />
   }
   // offerOf() is the one place that decides whether there is an offer
   // to show; a malformed group returns null and we render exactly
@@ -511,6 +512,7 @@ export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondar
                   <WaitlistWidget
                     publicPath={publicPath}
                     campaign={campaign}
+                    page={page}
                     buttonLabel={block.button_label}
                     successMessage={block.success_message}
                     consentLabel={block.consent_label}
@@ -541,6 +543,7 @@ export function LeadFormBlock({ block, onEdit, publicPath, campaign, ctaSecondar
               <WaitlistWidget
                 publicPath={publicPath}
                 campaign={campaign}
+                page={page}
                 buttonLabel={block.button_label}
                 successMessage={block.success_message}
                 consentLabel={block.consent_label}

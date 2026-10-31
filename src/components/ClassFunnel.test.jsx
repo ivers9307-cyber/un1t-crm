@@ -30,6 +30,7 @@ let refuseOnce = null
 beforeEach(() => {
   posts = []
   global.fetch = vi.fn(async (url, init) => {
+    if (url === '/api/public/funnel-event') { posts.events = [...(posts.events || []), JSON.parse(init.body)]; return { ok: true, json: async () => ({}) } }
     if (String(url).startsWith('/api/public/classes')) return { json: async () => ({ success: true, data: { classes: [CLASS], terms } }) }
     if (url === '/api/public/class-booking') {
       posts.push(JSON.parse(init.body))
@@ -92,5 +93,37 @@ describe('UN1TWRITE.18 — ClassFunnel terms tick', () => {
     fireEvent.click(screen.getByText(/Confirm my class/))
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0]).not.toHaveProperty('terms_accepted')
+  })
+})
+
+describe('PAGES.1 — ClassFunnel page prop', () => {
+  it('with a page it lists, books and reports by page and studio, never path', async () => {
+    terms = { required: false }
+    render(<ClassFunnel publicPath="hatch-street" page="free-week" consultSlug="" locationName="Hatch Street" />)
+    fireEvent.click((await screen.findByText(/BASE/)).closest('button'))
+    const listUrl = fetch.mock.calls.map((c) => String(c[0])).find((u) => u.startsWith('/api/public/classes'))
+    expect(listUrl).toBe('/api/public/classes?page=free-week&studio=hatch-street')
+    fireEvent.change(screen.getByPlaceholderText('First name'), { target: { value: 'Sam' } })
+    fireEvent.change(screen.getByPlaceholderText('Last name'), { target: { value: 'Byrne' } })
+    fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'sam@example.com' } })
+    fireEvent.change(screen.getByPlaceholderText('Phone'), { target: { value: '0871234567' } })
+    fireEvent.click(screen.getByText(/Confirm my class/))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toMatchObject({ page: 'free-week', studio: 'hatch-street', event_id: 'un1t:e-1' })
+    expect(posts[0]).not.toHaveProperty('path')
+    expect(posts.events[0]).toMatchObject({ page: 'free-week', studio: 'hatch-street' })
+    expect(posts.events[0]).not.toHaveProperty('location_path')
+  })
+
+  it('without a page it sends path and location_path as before', async () => {
+    terms = { required: false }
+    await toDetails()
+    const listUrl = fetch.mock.calls.map((c) => String(c[0])).find((u) => u.startsWith('/api/public/classes'))
+    expect(listUrl).toBe('/api/public/classes?path=hatch-street')
+    fireEvent.click(screen.getByText(/Confirm my class/))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toMatchObject({ path: 'hatch-street' })
+    expect(posts[0]).not.toHaveProperty('page')
+    expect(posts.events[0]).toMatchObject({ location_path: 'hatch-street' })
   })
 })

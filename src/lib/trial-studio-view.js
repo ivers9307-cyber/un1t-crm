@@ -35,6 +35,9 @@ export function trialStudioView(entry, brand) {
   const name = brand?.companyName || brand?.locationName || (entry.key === 'hatch' ? 'Hatch Street' : 'Stillorgan')
   return {
     key: entry.key,
+    // PAGES.1 — the studio's public path (a URL segment, client-safe): a page's
+    // funnel names the studio by it when it posts.
+    publicPath: entry.publicPath || null,
     label: (typeof block.studio_label === 'string' && block.studio_label.trim()) || name,
     // The POST sells each studio through its own provider only; agree with it.
     sellable: Boolean(entry.sellable && entry.locationId && entry.config?.provider === (entry.key === 'hatch' ? 'un1t_online' : 'glofox')),

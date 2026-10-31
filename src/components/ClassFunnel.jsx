@@ -19,6 +19,7 @@ import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
 import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
+import { customerErrorText } from '@/lib/page-request-errors'
 
 // MATCHQUALITY.1 — Meta's `_fbp` cookie, or null. Never throws (no document
 // during SSR, cookies blocked, no Pixel yet).
@@ -63,6 +64,12 @@ export default function ClassFunnel(props) {
   // consultSlug is different: an explicit '' means "no consult upsell" and MUST
   // be honoured, so read it straight from props and only default when absent.
   const consultSlug = props?.consultSlug ?? DEFAULTS.consultSlug
+  // PAGES.1 — on a page (the [slug] route passes its slug) the class list, the
+  // booking and the funnel events name `{ page, studio: publicPath }`, and the
+  // server reads the trial, timetable and attribution from the page's studio
+  // row; with no page they name `path` / `location_path` as before.
+  const page = typeof props?.page === 'string' && props.page ? props.page : null
+  const where = page ? { page, studio: publicPath } : null
   // STARTCONV.1 — LAND ON THE PICKER, not the form.
   //
   // Measured 2026-08-20: of 138 people who arrived from the 3-Class Trial
@@ -147,7 +154,7 @@ export default function ClassFunnel(props) {
         headers: { 'Content-Type': 'application/json' },
         keepalive: true,
         body: JSON.stringify({
-          location_path: publicPath, funnel: 'start', step,
+          ...(where || { location_path: publicPath }), funnel: 'start', step,
           session_id: sessionRef.current,
           ad_provider: a.meta_ad_id ? 'meta' : undefined,
           ad_external_id: a.meta_ad_id,
@@ -230,7 +237,7 @@ export default function ClassFunnel(props) {
   useEffect(() => {
     if (step !== 'classpick') return
     setClassesLoading(true)
-    fetch(`/api/public/classes?path=${encodeURIComponent(publicPath)}`)
+    fetch(where ? `/api/public/classes?${new URLSearchParams(where).toString()}` : `/api/public/classes?path=${encodeURIComponent(publicPath)}`)
       .then((r) => r.json())
       .then((j) => {
         const list = (j.success && j.data?.classes) ? j.data.classes : []
@@ -333,7 +340,7 @@ export default function ClassFunnel(props) {
       const r = await fetch('/api/public/class-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: publicPath,
+          ...(where || { path: publicPath }),
           event_id: c.event_id, class_name: c.name, starts_at: c.starts_at,
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
@@ -365,7 +372,7 @@ export default function ClassFunnel(props) {
           setError('That class filled up while you were typing. Pick another one — your details are saved.')
           return
         }
-        setError(j.error || 'Something went wrong — please try again.'); return
+        setError(customerErrorText(j.error, 'Something went wrong — please try again.')); return
       }
       // BROWSERLEAD.1 — the server has sent its Lead; send the browser twin
       // (no-op without consent). Before any payment step: the lead exists

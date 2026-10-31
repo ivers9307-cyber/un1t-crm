@@ -288,7 +288,9 @@ export default async function PublicPage(props) {
   const heroBlock = content.find((b) => b.type === 'hero')
   const bodyBlocks = layout === 'blocks' ? content : content.filter((b) => b.type !== 'hero')
   const reviewsData = await loadReviews(db, contextLocationId, bodyBlocks.find((b) => b.type === 'reviews'))
-  const blockProps = { publicPath: contextPath, wordmark: chrome.shortName, locationName: studioName, reviewsData }
+  // PAGES.1 — every form on the page posts `{ page, studio }` (Task 7): the
+  // public routes resolve the studio row and its attribution from the page.
+  const blockProps = { publicPath: contextPath, page: page.slug, wordmark: chrome.shortName, locationName: studioName, reviewsData }
   const heroImageUrl = str(heroBlock?.image_url) || HERO_IMAGE
 
   if (page.offer_type === 'paid_trial') {
@@ -313,6 +315,7 @@ export default async function PublicPage(props) {
             cancelled={cancelled}
             hatchTerms={hatchTerms}
             returnPath={`/${page.slug}`}
+            page={page.slug}
           />
         )}
       />
@@ -327,7 +330,7 @@ export default async function PublicPage(props) {
         tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps}
         hero={{ videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }}
         expect={{ eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards }}
-        offer={<CampaignFunnel publicPath={contextPath} campaign={page.slug} copy={campaignFunnelClientCopy(copy)} locationName={studioName} />}
+        offer={<CampaignFunnel publicPath={contextPath} campaign={page.slug} page={page.slug} copy={campaignFunnelClientCopy(copy)} locationName={studioName} />}
       />
     )
   }
@@ -348,7 +351,7 @@ export default async function PublicPage(props) {
       <FrostedCardLayout
         tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps}
         anchor="corp" heroImageUrl={heroImageUrl}
-        offer={<CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} />}
+        offer={<CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} page={page.slug} studio={contextPath} />}
       />
     )
   }
@@ -363,6 +366,7 @@ export default async function PublicPage(props) {
         offer={(
           <ClassFunnel
             publicPath={contextPath}
+            page={page.slug}
             locationName={contextBrand?.locationName || ''}
             // '' is "no consult upsell" and must be passed explicitly: an
             // absent prop falls back to Stillorgan's booking type.

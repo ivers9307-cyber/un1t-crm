@@ -19,6 +19,7 @@ import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import TrialTermsTick from './TrialTermsTick'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK } from './trial-card'
+import { customerErrorText } from '@/lib/page-request-errors'
 
 const CLAIM_PATH = '/api/public/corp-claims'
 
@@ -37,10 +38,15 @@ function utmFromUrl() {
 }
 
 /**
- * @param {{ promoKey: string|null, copy: object, terms: object|null }} props
+ * @param {{ promoKey: string|null, copy: object, terms: object|null, page?: string|null, studio?: string|null }} props
  *   promoKey null ⇒ no live promo: the card shows copy.unavailable_text.
+ *   PAGES.1 — with `page` (the [slug] route passes the page's slug, and
+ *   `studio` its studio's public path) the claim names `{ page, studio }` and
+ *   the server takes the promo from the page's studio row (the `promo` sent
+ *   alongside must name that same promo); without it the claim names the
+ *   promo alone, as before.
  */
-export default function CorpPromoFunnel({ promoKey, copy, terms }) {
+export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, studio = null }) {
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -68,6 +74,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(page ? { page, ...(studio ? { studio } : {}) } : {}),
           promo: promoKey,
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
@@ -78,8 +85,8 @@ export default function CorpPromoFunnel({ promoKey, copy, terms }) {
         }),
       })
       const j = await res.json().catch(() => ({}))
-      if (res.status >= 500 || (!res.ok && !j.code)) { setError(j.error || 'Something went wrong on our side. Please try again in a moment.'); return }
-      if (j.code === 'terms_required' || (res.status === 400 && j.error)) { setError(j.error); return }
+      if (res.status >= 500 || (!res.ok && !j.code)) { setError(customerErrorText(j.error, 'Something went wrong on our side. Please try again in a moment.')); return }
+      if (j.code === 'terms_required' || (res.status === 400 && j.error)) { setError(customerErrorText(j.error, 'Something went wrong on our side. Please try again in a moment.')); return }
       fireBrowserLead({
         pixelIds: metaPixelIdsForPath(window.location.pathname),
         eventId: leadEventId,

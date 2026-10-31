@@ -20,7 +20,7 @@
 //   cta         { href, label }                   header, blocks, footer
 //   footer      { brand, studios, legalName }     SiteFooter
 //   blocks      content blocks, in order          BlockRenderer
-//   blockProps  { publicPath, wordmark, locationName, reviewsData }, passed
+//   blockProps  { publicPath, page, wordmark, locationName, reviewsData }, passed
 //               to every BlockRenderer with `tone`, `ctaHref`, `ctaLabel`
 // FrostedCardLayout also takes:
 //   anchor        the card section's id (the CTA target, without '#')
@@ -68,6 +68,7 @@ function Blocks({ blocks = [], blockProps = {}, cta = {}, tone }) {
       block={b}
       tone={tone}
       publicPath={blockProps.publicPath}
+      page={blockProps.page || null}
       reviewsData={blockProps.reviewsData || null}
       ctaHref={cta.href || null}
       ctaLabel={cta.label}

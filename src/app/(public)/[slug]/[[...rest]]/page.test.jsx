@@ -175,7 +175,7 @@ describe('the [slug] page route', () => {
     expect(html).toMatch(/<section class="bg-lp-pale text-black[^"]*"><div class="max-w-6xl mx-auto px-6">/)
     expectClientSafe(html)
     const funnel = propsOf(html, 'campaign')
-    expect(funnel).toMatchObject({ publicPath: 'stillorgan', campaign: '50plus', locationName: 'UN1T Stillorgan' })
+    expect(funnel).toMatchObject({ publicPath: 'stillorgan', campaign: '50plus', page: '50plus', locationName: 'UN1T Stillorgan' })
     expect(funnel.copy.heading).toBe('A free trial of The 50+ Club')
     expect(funnel.copy.trial_membership_id).toBeUndefined()
     expect(funnel.copy.class_keywords).toBeUndefined()
@@ -190,6 +190,8 @@ describe('the [slug] page route', () => {
     expect(paid.studios[0]).toMatchObject({ priceCents: 3900, label: 'UN1T Stillorgan' })
     expect(paid.initialStudio).toBeNull()
     expect(paid.returnPath).toBe('/trial')
+    expect(paid.page).toBe('trial')
+    expect(paid.studios.map((s) => s.publicPath)).toEqual(['stillorgan', 'hatch-street'])
     expect(paid.hatchTerms).toMatchObject({ required: true, terms_url: '/legal/un1t/hatch-street/terms' })
     expect(html).toContain('https://x/trial-logo.png')
     expect(html).toContain('4.9')
@@ -269,10 +271,10 @@ describe('the [slug] page route', () => {
     h.loaded = { page: CLASSF, studios: CLASSF_STUDIOS }
     const html = await render({ slug: 'hatch-classes' })
     const props = propsOf(html, 'classfunnel')
-    const ALLOWED = ['classDoneBody', 'classDoneTitle', 'consentLabel', 'consultDoneBody', 'consultDoneTitle', 'consultSlug', 'heading', 'locationName', 'publicPath', 'subhead']
+    const ALLOWED = ['classDoneBody', 'classDoneTitle', 'consentLabel', 'consultDoneBody', 'consultDoneTitle', 'consultSlug', 'heading', 'locationName', 'page', 'publicPath', 'subhead']
     for (const k of Object.keys(props)) expect(ALLOWED, k).toContain(k)
     expect(html).not.toContain('Mon 07:00 HIIT') // the studio's typed timetable stays on the server
-    expect(props).toMatchObject({ publicPath: 'hatch-street', locationName: 'Hatch Street', heading: 'Book your first class', subhead: 'Pick a time', consultSlug: '' })
+    expect(props).toMatchObject({ publicPath: 'hatch-street', page: 'hatch-classes', locationName: 'Hatch Street', heading: 'Book your first class', subhead: 'Pick a time', consultSlug: '' })
     expect(html).toContain('href="#start"')
     expectClientSafe(html)
   })
@@ -298,6 +300,7 @@ describe('the [slug] page route', () => {
     h.loaded = { page: CORP, studios: CORP_STUDIOS }
     const root = propsOf(await render({ slug: 'corp' }), 'corp')
     expect(root.promoKey).toBe('hatch-3-free')
+    expect(root).toMatchObject({ page: 'corp', studio: 'hatch-street' })
     expect(root.copy.heading).toBe('3 free classes at Hatch Street')
     expect(root.terms).toMatchObject({ required: true, terms_url: '/legal/un1t/hatch-street/terms' })
     const sub = propsOf(await render({ slug: 'corp', rest: ['hatch-3-free'] }), 'corp')
