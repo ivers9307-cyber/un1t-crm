@@ -22,6 +22,7 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => ({
   loadPageById: vi.fn(),
   canViewPage: vi.fn(() => true),
   canEditPage: vi.fn(() => true),
+  studioPublicPath: vi.fn(async () => 'hatch-street'),
 }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 vi.mock('@/components/LandingPageSettingsForm', () => ({ default: () => null }))
@@ -31,7 +32,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { resolveOrgChrome } from '@/lib/host-brand'
-import { loadPageById, canViewPage, canEditPage, PageReadError } from '@/lib/landing-pages'
+import { loadPageById, canViewPage, canEditPage, studioPublicPath, PageReadError } from '@/lib/landing-pages'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import { logError } from '@/lib/log'
 
@@ -132,7 +133,7 @@ describe('/settings/landing-page/<id>', () => {
     expect(form.props.canEdit).toBe(true)
     expect(form.props.page).toMatchObject({ id: ID, slug: 'summer' })
     expect(form.props.studios).toEqual([{
-      location_id: LOC, name: 'UN1T Hatch Street', membership_source: 'glofox', enabled: true, sort_order: 0,
+      location_id: LOC, name: 'UN1T Hatch Street', public_path: 'hatch-street', membership_source: 'glofox', enabled: true, sort_order: 0,
       offer: { plan_code: 'TRIAL' }, attribution: { tag: 'summer' },
     }])
     expect(form.props.availableBookingTypes).toEqual([{ id: 'et', name: 'Trial', slug: 'trial' }])
@@ -140,6 +141,14 @@ describe('/settings/landing-page/<id>', () => {
     expect(db.reads).toContainEqual(['event_types', 'location_id', LOC])
     expect(hrefsOf(tree)).toContain('/settings/landing-page')
     expect(JSON.stringify(form.props)).not.toContain('secret')
+  })
+
+  it('an unreadable studio path leaves public_path null and still opens the editor', async () => {
+    studioPublicPath.mockRejectedValueOnce(new PageReadError('down', { code: 'XX000' }))
+    const tree = await open()
+    const [form] = findAll(tree, LandingPageSettingsForm)
+    expect(form.props.studios[0].public_path).toBeNull()
+    expect(logError).toHaveBeenCalledWith('landing-page-settings', 'studio path unreadable', expect.objectContaining({ code: 'XX000' }))
   })
 
   it('a viewer without edit gets canEdit false and no offer on studios', async () => {

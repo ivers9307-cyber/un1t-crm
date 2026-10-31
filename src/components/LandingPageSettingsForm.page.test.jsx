@@ -13,7 +13,7 @@ vi.mock('@/lib/supabase', () => ({ createBrowserClient: () => ({}) }))
 
 import LandingPageSettingsForm from './LandingPageSettingsForm'
 import { newBlockOfType, BLOCK_TYPES } from '@/lib/landing-page-blocks'
-import { splitOfferBlock } from '@/lib/landing-page-offers'
+import { splitOfferBlock, STUDIO_OFFER_KEYS, ATTRIBUTION_KEYS, DROPPED_BLOCK_KEYS } from '@/lib/landing-page-offers'
 
 const HATCH = '11111111-1111-1111-1111-111111111111'
 const STUDIOS = [{ location_id: HATCH, name: 'UN1T Hatch Street', membership_source: 'un1t_online', enabled: true, sort_order: 0 }]
@@ -193,7 +193,18 @@ describe('LandingPageSettingsForm (page mode): the pinned offer block', () => {
     fireEvent.change(screen.getByDisplayValue('A free trial of The 50+ Club'), { target: { value: 'Try it' } })
     expect(screen.getByText('Save your changes first.')).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
-    expect(puts[0].body.blocks[0]).toMatchObject({ id: 'b-offer', heading: 'Try it' })
+    const saved = puts[0].body.blocks[0]
+    expect(saved).toMatchObject({ id: 'b-offer', heading: 'Try it' })
+    // The page save never carries the studio half of the offer.
+    for (const key of [...STUDIO_OFFER_KEYS.campaign_funnel, ...ATTRIBUTION_KEYS, ...DROPPED_BLOCK_KEYS.campaign_funnel]) {
+      expect(saved, key).not.toHaveProperty(key)
+    }
+  })
+
+  it('a first block of another offer type is not pinned: the offer is missing', () => {
+    renderForm({ page: offerPage({ offer_type: 'paid_trial' }), studios: OFFER_STUDIOS })
+    expect(screen.getByText("This page's offer block is missing. Ask the team.")).toBeTruthy()
+    expect(screen.queryByText('Pinned')).toBeNull()
   })
 
   it('a page with an offer whose first block is not one says so, with no pinned card', () => {

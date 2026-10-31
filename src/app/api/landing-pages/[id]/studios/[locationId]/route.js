@@ -17,7 +17,7 @@ import { validateBody } from '@/lib/validate'
 import { landingPageStudioSchema } from '@/lib/landing-page-schemas'
 import { OFFER_BLOCK_TYPE, studioOfferSchema } from '@/lib/landing-page-offers'
 import {
-  loadViewablePage, canEditPage, studioRowReadiness, studioRowView, saveStudioRow, PageReadError,
+  loadViewablePage, canEditPage, studioRowReadiness, studioRowView, studioPublicPath, saveStudioRow, PageReadError,
 } from '@/lib/landing-pages'
 import { logError } from '@/lib/log'
 
@@ -63,8 +63,9 @@ export async function PUT(request, { params }) {
     }
     // The saved columns over the loaded row, which carries the locations embed.
     const merged = { ...row, ...saved.row }
-    const readiness = await studioRowReadiness(db, { page, row: merged })
-    return NextResponse.json({ success: true, data: { row: studioRowView(merged), readiness } })
+    const publicPath = await studioPublicPath(db, locationId)
+    const readiness = await studioRowReadiness(db, { page, row: merged, publicPath })
+    return NextResponse.json({ success: true, data: { row: studioRowView(merged, { publicPath }), readiness } })
   } catch (err) {
     if (!(err instanceof PageReadError)) throw err
     logError('landing-pages', 'studio row read failed', { pageId: id, locationId, code: err.cause?.code ?? null })

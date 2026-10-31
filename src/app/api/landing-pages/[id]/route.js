@@ -17,7 +17,7 @@ import { validateBody } from '@/lib/validate'
 import { landingPageUpdateSchema } from '@/lib/landing-page-schemas'
 import { normaliseSlug, slugProblem } from '@/lib/page-slug'
 import {
-  loadViewablePage, canEditPage, studioRowReadiness, studioRowView, pageBlocksToStore,
+  loadViewablePage, canEditPage, studioRowReadiness, studioRowView, studioPublicPath, pageBlocksToStore,
   mergedChrome, updatePageRow, renameSlug, PageReadError,
 } from '@/lib/landing-pages'
 import { logError } from '@/lib/log'
@@ -41,12 +41,14 @@ export async function GET(_request, { params }) {
     // to an editor only: a read-only viewer gets the switch and the readiness
     // (EDITGATE.1 parity: the ?edit=1 preview withholds the same keys).
     const ordered = studios.slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    // One path read per studio, shared by the view (the tag default) and the readiness.
     const rows = await Promise.all(ordered.map(async (row) => {
-      const { offer, attribution, ...view } = studioRowView(row)
+      const publicPath = await studioPublicPath(db, row.location_id)
+      const { offer, attribution, ...view } = studioRowView(row, { publicPath })
       return {
         ...view,
         ...(canEdit ? { offer, attribution } : {}),
-        readiness: await studioRowReadiness(db, { page, row }),
+        readiness: await studioRowReadiness(db, { page, row, publicPath }),
       }
     }))
     return NextResponse.json({ success: true, data: { page, studios: rows, can_edit: canEdit } })

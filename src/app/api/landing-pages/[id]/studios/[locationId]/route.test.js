@@ -37,6 +37,7 @@ describe('PUT /api/landing-pages/[id]/studios/[locationId]', () => {
     expect(ok.status).toBe(200)
     const { data } = await ok.json()
     expect(data.readiness).toEqual({ ready: true, reason: 'ready' })
+    expect(data.row.public_path).toBe('stillorgan')
     expect(data.row).toMatchObject({ location_id: STILL, name: 'UN1T Stillorgan', enabled: true, sort_order: 2, offer: { plan_code: 'p2' } })
     expect(JSON.stringify(data)).not.toContain('branch_id')
     expect(rowOf(db, PAGE.trial, STILL)).toMatchObject({ offer: { membership_id: 'm2', price_cents: 4900 }, attribution: { tag: 'stillorgan-trial' }, updated_by: ORG_ADMIN.id })

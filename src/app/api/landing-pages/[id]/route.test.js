@@ -35,6 +35,8 @@ describe('GET /api/landing-pages/[id]', () => {
     expect(data.page.slug).toBe('trial')
     expect(data.can_edit).toBe(false)
     expect(data.studios.map((s) => [s.location_id, s.readiness.reason])).toEqual([[STILL, 'ready'], [expect.any(String), 'ready']])
+    // Each row carries its studio's public path (the editor's default tag).
+    expect(data.studios.map((s) => s.public_path)).toEqual(['stillorgan', 'hatch-street'])
     expect(JSON.stringify(data)).not.toContain('settings')
   })
 

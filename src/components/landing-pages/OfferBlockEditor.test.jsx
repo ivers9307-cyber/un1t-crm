@@ -1,12 +1,10 @@
 // @vitest-environment jsdom
 //
-// PAGES.1 — the pinned offer block: the page half (the type's editor with
-// pageOnly) and then one studio row per studio, in sort order.
+// PAGES.1 — the pinned offer block: the page half (drawn by the caller's
+// renderPageHalf; the form passes the type's editor with pageOnly) and then
+// one studio row per studio, in sort order.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
-
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }))
-vi.mock('@/lib/supabase', () => ({ createBrowserClient: () => ({}) }))
 
 import OfferBlockEditor from './OfferBlockEditor'
 import { newBlockOfType } from '@/lib/landing-page-blocks'
@@ -34,10 +32,15 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
+// A stand-in page half: one heading input wired to onUpdate.
+const renderPageHalf = (b, onUpdate) => (
+  <input aria-label="Heading" value={b.heading || ''} onChange={(e) => onUpdate({ heading: e.target.value })} />
+)
+
 const mount = (props = {}) => render(
   <OfferBlockEditor
     page={page} block={block} studios={STUDIOS} onUpdateBlock={vi.fn()} onSaveStudio={vi.fn()} canEdit
-    locationId={null} membershipSource={null} uploadMedia={vi.fn()} uploading={{}} uploadErr={{}} progress={{}}
+    renderPageHalf={renderPageHalf}
     {...props}
   />,
 )
@@ -48,22 +51,24 @@ describe('OfferBlockEditor', () => {
     const names = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent)
     expect(names).toEqual(['UN1T Stillorgan', 'UN1T Hatch Street'])
     expect(screen.getAllByRole('checkbox', { name: /^Switched on at / })).toHaveLength(2)
-    expect(screen.getAllByRole('combobox', { name: 'Glofox trial plan' })).toHaveLength(2)
+    // Stillorgan (Glofox) picks a plan; Hatch Street (un1t.online) cannot.
+    expect(screen.getAllByRole('combobox', { name: 'Glofox trial plan' })).toHaveLength(1)
+    expect(screen.getByText('This studio books through un1t.online; Glofox plans do not apply.')).toBeTruthy()
     expect(screen.getAllByLabelText('Classes offered (keywords)')).toHaveLength(2)
     expect(screen.getByText('Ready')).toBeTruthy()
     expect(screen.getByText('Needs a plan')).toBeTruthy()
-    // The page half: the words stay, the studio half is not on the block editor.
-    expect(screen.getByText('Heading')).toBeTruthy()
-    expect(screen.queryByLabelText('Campaign key')).toBeNull()
-    await screen.findAllByRole('option', { name: 'Intro trial — Free week' })
+    // The page half comes from renderPageHalf, above the rows.
+    const heading = screen.getByLabelText('Heading')
+    expect(heading.compareDocumentPosition(screen.getByText('UN1T Stillorgan')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await screen.findByRole('option', { name: 'Intro trial — Free week' })
   })
 
   it('page-half edits go to onUpdateBlock; a studio save goes to onSaveStudio', async () => {
     const onUpdateBlock = vi.fn()
     const onSaveStudio = vi.fn()
     mount({ onUpdateBlock, onSaveStudio })
-    await screen.findAllByRole('option', { name: 'Intro trial — Free week' })
-    fireEvent.change(screen.getByDisplayValue('A free trial of The 50+ Club'), { target: { value: 'Try it' } })
+    await screen.findByRole('option', { name: 'Intro trial — Free week' })
+    fireEvent.change(screen.getByLabelText('Heading'), { target: { value: 'Try it' } })
     expect(onUpdateBlock).toHaveBeenCalledWith({ heading: 'Try it' })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save UN1T Stillorgan' })) })
     expect(puts.map((p) => p.url)).toEqual(['/api/landing-pages/p-1/studios/loc-s'])

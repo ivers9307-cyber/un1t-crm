@@ -1,3 +1,5 @@
+'use client'
+
 // PAGES.1 — one studio's half of a page's offer (a landing_page_studios row):
 // whether the page is switched on there, the type's studio fields
 // (studio-offer-fields.jsx), the tag and lead source, a readiness chip and its
@@ -47,6 +49,10 @@ function attributionToSend(draft, stored) {
   return out
 }
 
+function swallowEnter(e) {
+  if (e.key === 'Enter' && e.target?.tagName === 'INPUT') e.preventDefault()
+}
+
 export default function StudioOfferRow({ page, row, onSave, canEdit }) {
   const blockType = OFFER_BLOCK_TYPE[page?.offer_type] || null
   const pageBlock = (Array.isArray(page?.blocks) ? page.blocks : []).find((b) => b?.type === blockType) || { type: blockType }
@@ -73,7 +79,10 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
   const reason = serverReadiness?.reason || (localReady ? 'ready' : 'needs_plan')
   const [chipLabel, chipCls] = CHIPS[reason] || CHIPS.needs_plan
 
-  const defaults = defaultAttribution({ publicPath: row.public_path || (row.name || '').toLowerCase(), slug: page?.slug || '' })
+  // The server's default is named for the studio's public path: shown only
+  // when the row knows it (studioRowView's public_path).
+  const defaults = row.public_path ? defaultAttribution({ publicPath: row.public_path, slug: page?.slug || '' }) : null
+  const blankHint = defaults ? 'Blank uses the default shown.' : 'Blank uses the default for this studio.'
 
   async function save() {
     if (!canEdit) return
@@ -104,7 +113,8 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
 
   return (
     <section className="border border-un1t-border rounded-lg bg-un1t-bg p-3 space-y-3">
-      <fieldset disabled={!canEdit} className="min-w-0 space-y-3">
+      {/* Enter in a row's text input would submit the page form around it. */}
+      <fieldset disabled={!canEdit} onKeyDown={swallowEnter} className="min-w-0 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-un1t-text">{name}</h4>
           <span className={`text-[11px] font-medium rounded-full px-2 py-0.5 ${chipCls}`}>{chipLabel}</span>
@@ -121,11 +131,11 @@ export default function StudioOfferRow({ page, row, onSave, canEdit }) {
         </label>
         <StudioOfferFields blockType={blockType} row={row} load={Boolean(canEdit)} fields={fields} set={setField} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Tag" hint="On every lead from this studio. Blank uses the default shown.">
-            <Input ariaLabel="Tag" value={attr.tag} onChange={(v) => setAttrField({ tag: v })} maxLength={80} placeholder={defaults.tag} />
+          <Field label="Tag" hint={`On every lead from this studio. ${blankHint}`}>
+            <Input ariaLabel="Tag" value={attr.tag} onChange={(v) => setAttrField({ tag: v })} maxLength={80} placeholder={defaults?.tag} />
           </Field>
-          <Field label="Lead source" hint="What the reports and the server Lead carry. Blank uses the default shown.">
-            <Input ariaLabel="Lead source" value={attr.lead_source} onChange={(v) => setAttrField({ lead_source: v })} maxLength={80} placeholder={defaults.lead_source} />
+          <Field label="Lead source" hint={`What the reports and the server Lead carry. ${blankHint}`}>
+            <Input ariaLabel="Lead source" value={attr.lead_source} onChange={(v) => setAttrField({ lead_source: v })} maxLength={80} placeholder={defaults?.lead_source} />
           </Field>
         </div>
       </fieldset>

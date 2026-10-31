@@ -4,7 +4,7 @@
 // studio fields, the tracking inputs, a readiness chip and its own Save
 // (PUT /api/landing-pages/<id>/studios/<locationId>).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, createEvent } from '@testing-library/react'
 
 import StudioOfferRow from './StudioOfferRow'
 import { newBlockOfType } from '@/lib/landing-page-blocks'
@@ -74,13 +74,56 @@ describe('StudioOfferRow', () => {
     expect(onSave.mock.calls[0][1].row.enabled).toBe(true)
   })
 
-  it('placeholders the tracking inputs with the default attribution; blank sends no key', async () => {
-    mount({ page: pageFor('one_class', 'campaign_funnel'), row: glofoxRow() })
-    expect(screen.getByLabelText('Tag').getAttribute('placeholder')).toBe('un1t stillorgan-50plus')
+  it('placeholders the tracking inputs with the default for the studio path; blank sends no key', async () => {
+    mount({ page: pageFor('one_class', 'campaign_funnel'), row: glofoxRow({ public_path: 'stillorgan' }) })
+    expect(screen.getByLabelText('Tag').getAttribute('placeholder')).toBe('stillorgan-50plus')
     expect(screen.getByLabelText('Lead source').getAttribute('placeholder')).toBe('meta_50plus')
+    expect(screen.getAllByText(/Blank uses the default shown\./)).toHaveLength(2)
     await save()
     expect(puts[0].body.attribution).toEqual({})
     expect(puts[0].body.offer).toEqual({})
+  })
+
+  it('a studio whose path is unknown shows no placeholder, only that blank uses its default', () => {
+    mount({ page: pageFor('one_class', 'campaign_funnel'), row: glofoxRow({ public_path: null }) })
+    expect(screen.getByLabelText('Tag').hasAttribute('placeholder')).toBe(false)
+    expect(screen.getByLabelText('Lead source').hasAttribute('placeholder')).toBe(false)
+    expect(screen.getAllByText(/Blank uses the default for this studio\./)).toHaveLength(2)
+  })
+
+  it('Enter in a row input does not submit the page form; Enter in a textarea is a new line', () => {
+    mount({ page: pageFor('one_class', 'campaign_funnel'), row: glofoxRow() })
+    const tag = screen.getByLabelText('Tag')
+    const enter = createEvent.keyDown(tag, { key: 'Enter' })
+    fireEvent(tag, enter)
+    expect(enter.defaultPrevented).toBe(true)
+    const keywords = screen.getByLabelText('Classes offered (keywords)')
+    const newline = createEvent.keyDown(keywords, { key: 'Enter' })
+    fireEvent(keywords, newline)
+    expect(newline.defaultPrevented).toBe(false)
+  })
+
+  it('at a un1t.online studio the Glofox plan picker gives way to a note', () => {
+    for (const [offerType, blockType] of [['one_class', 'campaign_funnel'], ['class_funnel', 'class_funnel']]) {
+      render(<StudioOfferRow page={pageFor(offerType, blockType)} row={un1tRow()} onSave={vi.fn()} canEdit />)
+      expect(screen.queryByRole('combobox', { name: 'Glofox trial plan' }), blockType).toBeNull()
+      expect(screen.getByText('This studio books through un1t.online; Glofox plans do not apply.')).toBeTruthy()
+      cleanup()
+    }
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('a failed save keeps the typed draft', async () => {
+    answer = () => ({ ok: false, status: 503, json: async () => ({ success: false, error: 'unavailable' }) })
+    mount({ page: pageFor('one_class', 'campaign_funnel'), row: glofoxRow() })
+    fireEvent.change(screen.getByLabelText('Classes offered (keywords)'), { target: { value: 'elites' } })
+    fireEvent.change(screen.getByLabelText('Tag'), { target: { value: 'still-elites' } })
+    await save()
+    expect(screen.getByText('The page could not be reached. Try again in a minute.')).toBeTruthy()
+    expect(screen.getByLabelText('Classes offered (keywords)').value).toBe('elites')
+    expect(screen.getByLabelText('Tag').value).toBe('still-elites')
+    await save()
+    expect(puts[1].body).toEqual(puts[0].body)
   })
 
   it('the switch saves enabled', async () => {

@@ -473,12 +473,17 @@ export async function studioRowReadiness(db, { page, row, publicPath }) {
   return offerReady({ page, studio: row, landingPath: path }) ? READY : NEEDS_PLAN
 }
 
-/** A studio row as a client may see it: never the `locations.settings` embed. */
-export function studioRowView(row) {
+/**
+ * A studio row as a client may see it: never the `locations.settings` embed.
+ * `publicPath` is the studio's public path (studioPublicPath) when the caller
+ * read it, so the editor can show the default tag; null when unknown.
+ */
+export function studioRowView(row, { publicPath = null } = {}) {
   const loc = embeddedOne(row?.locations)
   return {
     location_id: row.location_id,
     name: loc?.name || null,
+    public_path: typeof publicPath === 'string' && publicPath ? publicPath : null,
     membership_source: loc?.membership_source || null,
     enabled: Boolean(row.enabled),
     offer: row.offer && typeof row.offer === 'object' ? row.offer : {},

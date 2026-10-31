@@ -1,16 +1,19 @@
+'use client'
+
 // PAGES.1 — the studio half of each offer type, as StudioOfferRow edits it:
 // one small field group per block type over a flat `fields` map (every value
 // a string while it is edited; offerFromFields turns it into the row's
 // `offer`). The Glofox plan list and the un1t.online products are loaded per
 // studio from the same endpoints the legacy block editors use.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { STUDIO_OFFER_KEYS } from '@/lib/landing-page-offers'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
 import { liveCorpPromos } from '@/lib/corp-promos'
-import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
+import { DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
+import { TimetableReadBack } from '@/components/landing-pages/timetable-read-back'
 
 const NUMBER_KEYS = new Set(['price_cents', 'duration_days', 'min_notice_hours'])
 const RAW_TEXT_KEYS = new Set(['timetable', 'class_keywords'])
@@ -78,6 +81,9 @@ function TrialPlanPicker({ row, load, fields, set, idKey, codeKey, hint, emptyLa
     const [mid, pc] = v ? v.split(':') : ['', '']
     set({ [idKey]: mid || '', [codeKey]: pc || '' })
   }
+  if (row.membership_source === 'un1t_online') {
+    return <p className="text-[11px] text-un1t-muted">This studio books through un1t.online; Glofox plans do not apply.</p>
+  }
   return (
     <Field label="Glofox trial plan" hint={loading ? 'Loading Glofox products…' : hint}>
       <select aria-label="Glofox trial plan" value={value} onChange={(e) => onChange(e.target.value)} className={selectCls}>
@@ -125,13 +131,9 @@ function PaidTrialFields({ row, load, fields, set }) {
   )
 }
 
-const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
 // The typed-in timetable, with the legacy editor's hints and its read-back.
 function TimetableFields({ fields, set }) {
   const text = fields.timetable || ''
-  const { slots, rejected } = useMemo(() => parseManualTimetable(text), [text])
-  const byDay = DAY_NAMES.map((name, i) => ({ name, times: slots.filter((s) => s.dow === i + 1) })).filter((d) => d.times.length > 0)
   return (
     <div className="space-y-3 pt-3 border-t border-un1t-border">
       <p className="text-[11px] text-un1t-muted">
@@ -139,22 +141,7 @@ function TimetableFields({ fields, set }) {
       </p>
       <Field label="Weekly timetable" hint="One line per class: day, time, class name. Several days or times can share a line, e.g. “Mon-Fri 06:15, 07:15 Strength” or “Sat 9am Conditioning”.">
         <Textarea ariaLabel="Weekly timetable" value={text} onChange={(v) => set({ timetable: v })} maxLength={4000} rows={5} placeholder={'Mon-Fri 06:15 Strength\nSat 09:00 Strength'} />
-        {text.trim() && (
-          <div className="mt-2 rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-xs text-un1t-text space-y-1">
-            {byDay.length === 0 ? <p className="text-red-700">No class times could be read yet.</p> : (
-              <>
-                <p className="text-un1t-subtle">How it reads ({slots.length} class {slots.length === 1 ? 'time' : 'times'} a week):</p>
-                {byDay.map((d) => <p key={d.name}><span className="font-medium">{d.name}</span> {d.times.map((t) => `${t.time} ${t.name}`).join(' · ')}</p>)}
-              </>
-            )}
-            {rejected.length > 0 && (
-              <div className="text-red-700 pt-1">
-                <p>Not understood, so not shown to visitors:</p>
-                {rejected.map((line, i) => <p key={`${i}-${line}`} className="font-mono">{line}</p>)}
-              </div>
-            )}
-          </div>
-        )}
+        <TimetableReadBack text={text} />
       </Field>
       <Field label="First bookable date" hint="Optional. No class before this date is offered, e.g. the studio's opening day.">
         <input type="date" aria-label="First bookable date" value={fields.timetable_start_date || ''} onChange={(e) => set({ timetable_start_date: e.target.value })} className={selectCls} />

@@ -20,7 +20,7 @@ import { uuidLike } from '@/lib/schemas'
 import { getLocationBranding } from '@/lib/location-branding'
 import { resolveOrgChrome } from '@/lib/host-brand'
 import { clientSafeBlocks } from '@/lib/landing-page-blocks'
-import { loadPageById, canViewPage, canEditPage, studioRowView, PageReadError } from '@/lib/landing-pages'
+import { loadPageById, canViewPage, canEditPage, studioRowView, studioPublicPath, PageReadError } from '@/lib/landing-pages'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import { logError } from '@/lib/log'
 
@@ -28,13 +28,25 @@ export const dynamic = 'force-dynamic'
 
 const EMPTY = Promise.resolve({ data: [] })
 
-function studiosFor(rows, canEdit) {
+function studiosFor(rows, canEdit, paths) {
   return rows.map((row) => {
-    const view = studioRowView(row)
+    const view = studioRowView(row, { publicPath: paths.get(row.location_id) ?? null })
     if (canEdit) return view
     const { offer: _offer, attribution: _attribution, ...rest } = view
     return rest
   })
+}
+
+// Each studio's public path (one read per studio), for the editor's default
+// tag. Only a hint: an unreadable path leaves it unknown (logged), never the page.
+async function studioPathsFor(db, rows, pageId) {
+  try {
+    return new Map(await Promise.all(rows.map(async (r) => [r.location_id, await studioPublicPath(db, r.location_id)])))
+  } catch (err) {
+    if (!(err instanceof PageReadError)) throw err
+    logError('landing-page-settings', 'studio path unreadable', { pageId, code: err.cause?.code ?? null })
+    return new Map()
+  }
 }
 
 async function brandFor(db, page, primary) {
@@ -70,10 +82,11 @@ export default async function LandingPageEditorPage(props) {
   const { page } = loaded
   const canEdit = canEditPage(user, page)
   const primary = page.scope === 'one' ? page.primary_location_id : null
-  const [eventTypesRes, eventsRes, brand] = await Promise.all([
+  const [eventTypesRes, eventsRes, brand, paths] = await Promise.all([
     primary ? db.from('event_types').select('id, name, slug').eq('location_id', primary).eq('active', true).order('name') : EMPTY,
     primary ? db.from('race_events').select('id, name, slug, kind').eq('location_id', primary).eq('active', true).order('race_date', { ascending: false }) : EMPTY,
     brandFor(db, page, primary),
+    studioPathsFor(db, loaded.studios, page.id),
   ])
 
   return (
@@ -97,7 +110,7 @@ export default async function LandingPageEditorPage(props) {
       <LandingPageSettingsForm
         key={page.id}
         page={canEdit ? page : { ...page, blocks: clientSafeBlocks(page.blocks) }}
-        studios={studiosFor(loaded.studios, canEdit)}
+        studios={studiosFor(loaded.studios, canEdit, paths)}
         canEdit={canEdit}
         availableBookingTypes={eventTypesRes.data || []}
         availableEvents={eventsRes.data || []}

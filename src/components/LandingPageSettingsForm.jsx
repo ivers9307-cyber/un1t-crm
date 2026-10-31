@@ -58,15 +58,16 @@ import {
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
-import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
+import { DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
 import OfferBlockEditor from '@/components/landing-pages/OfferBlockEditor'
-import { offerTypeOfBlock } from '@/lib/landing-page-offers'
+import { OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
+import { TimetableReadBack } from '@/components/landing-pages/timetable-read-back'
 import { storedChrome, termsForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
 
 // PostMessage namespace shared with src/components/landing-page/
@@ -112,7 +113,9 @@ export default function LandingPageSettingsForm({
   // PAGES.1 — page mode: blocks[0] is the page's offer block, pinned (no
   // drag, move, copy or delete; edited through OfferBlockEditor). A page with
   // an offer whose first block is not one gets a notice instead.
-  const pinnedOffer = pageMode && offerTypeOfBlock(blocks[0]?.type) !== null ? blocks[0] : null
+  // The pinned block must be of the page's own offer type (a none page has none).
+  const offerBlockType = pageMode ? OFFER_BLOCK_TYPE[page.offer_type] || null : null
+  const pinnedOffer = offerBlockType && blocks[0]?.type === offerBlockType ? blocks[0] : null
   const offerMissing = pageMode && !pinnedOffer && Boolean(page.offer_type) && page.offer_type !== 'none'
   const sortableBlocks = pinnedOffer ? blocks.slice(1) : blocks
   // The studio rows, kept current by each row's own save (Task 17's preview
@@ -121,6 +124,8 @@ export default function LandingPageSettingsForm({
   const onSaveStudio = useCallback((locId, { row }) => {
     setStudioRows((prev) => prev.map((s) => (s.location_id === locId ? { ...s, ...row } : s)))
   }, [])
+  // The un1t.online copy fields (paid trial) show when any studio is on it.
+  const pageHalfSource = studioRows.some((s) => s.membership_source === 'un1t_online') ? 'un1t_online' : membershipSource
   const [expanded, setExpanded] = useState(() => new Set(blocks.map((b) => b.id)))
   const [activeDragId, setActiveDragId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -221,7 +226,7 @@ export default function LandingPageSettingsForm({
       if (readOnly && msg.type !== 'ready' && msg.type !== 'block-clicked') return
       // PAGES.1 — the pinned offer block (page mode's blocks[0]) is never
       // moved, copied or deleted from the preview, and nothing goes above it.
-      const pinnedIn = (list) => (pageMode && offerTypeOfBlock(list[0]?.type) !== null ? list[0].id : null)
+      const pinnedIn = (list) => (offerBlockType && list[0]?.type === offerBlockType ? list[0].id : null)
       if (msg.type === 'ready') {
         // Send initial state right away.
         const win = iframeRef.current?.contentWindow
@@ -287,7 +292,7 @@ export default function LandingPageSettingsForm({
         // existing[n-1] and existing[n]).
         let added = null
         try { added = newBlockOfType(msg.blockType, { brand: brandName }) } catch { return }
-        if (pageMode && offerTypeOfBlock(added.type) !== null) return
+        if (pageMode && BLOCK_TYPES.some((t) => t.offer && t.type === added.type)) return
         setBlocks((prev) => {
           const idx = Math.max(pinnedIn(prev) ? 1 : 0, Math.min(prev.length, msg.atIndex))
           const next = prev.slice()
@@ -310,7 +315,7 @@ export default function LandingPageSettingsForm({
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [buildState, brandName, readOnly, pageMode])
+  }, [buildState, brandName, readOnly, pageMode, offerBlockType])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -556,12 +561,12 @@ export default function LandingPageSettingsForm({
               onUpdateBlock={(patch) => updateBlock(pinnedOffer.id, patch)}
               onSaveStudio={onSaveStudio}
               canEdit={canEdit}
-              locationId={locationId}
-              membershipSource={membershipSource}
-              uploadMedia={uploadMedia}
-              uploading={uploading}
-              uploadErr={uploadErr}
-              progress={progress}
+              renderPageHalf={(b, onUpdate) => (
+                <OfferPageHalf
+                  block={b} onUpdate={onUpdate} locationId={locationId} membershipSource={pageHalfSource}
+                  uploadMedia={uploadMedia} uploading={uploading} uploadErr={uploadErr} progress={progress}
+                />
+              )}
             />
           </PinnedOfferCard>
         </div>
@@ -825,6 +830,18 @@ function PinnedOfferCard({ block, expanded, onToggleExpand, children }) {
       {expanded && <div className="border-t border-un1t-border p-4 space-y-3">{children}</div>}
     </div>
   )
+}
+
+// PAGES.1 — the page half of the pinned offer block: the type's own editor
+// with pageOnly (OfferBlockEditor's renderPageHalf).
+function OfferPageHalf({ block, ...props }) {
+  switch (block?.type) {
+    case 'paid_trial': return <PaidTrialEdit pageOnly block={block} {...props} />
+    case 'class_funnel': return <ClassFunnelEdit pageOnly block={block} availableBookingTypes={[]} {...props} />
+    case 'campaign_funnel': return <CampaignFunnelEdit pageOnly block={block} {...props} />
+    case 'corp_promo': return <CorpPromoEdit pageOnly block={block} {...props} />
+    default: return null
+  }
 }
 
 function labelFor(type) {
@@ -1126,15 +1143,10 @@ function LeadFormEdit({ block, onUpdate }) {
 // WITH Glofox ignores all of this and keeps listing its live classes; a
 // un1t.online studio lists its synced classes instead of the typed text
 // (HATCHSTART.1) but keeps the notice and the confirmation email.
-const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
 // PAGES.1 — `pageOnly` (page mode): the timetable, first date and notice are
 // the studio rows' (StudioOfferRow); the confirmation email stays here.
 function ManualTimetableFields({ block, onUpdate, publicPath, pageOnly = false }) {
   const text = typeof block.timetable === 'string' ? block.timetable : ''
-  const { slots, rejected } = useMemo(() => parseManualTimetable(text), [text])
-  const byDay = DAY_NAMES.map((name, i) => ({ name, times: slots.filter((s) => s.dow === i + 1) }))
-    .filter((d) => d.times.length > 0)
   return (
     <div className="pt-4 mt-2 border-t border-un1t-border space-y-4">
       {pageOnly && (
@@ -1161,29 +1173,7 @@ function ManualTimetableFields({ block, onUpdate, publicPath, pageOnly = false }
           rows={8}
           placeholder={'Mon-Fri 06:15 Strength\nMon-Fri 18:00 Conditioning\nSat 09:00 Strength'}
         />
-        {text.trim() && (
-          <div className="mt-2 rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-xs text-un1t-text space-y-1">
-            {byDay.length === 0 ? (
-              <p className="text-red-700">No class times could be read yet.</p>
-            ) : (
-              <>
-                <p className="text-un1t-subtle">How it reads ({slots.length} class {slots.length === 1 ? 'time' : 'times'} a week):</p>
-                {byDay.map((d) => (
-                  <p key={d.name}>
-                    <span className="font-medium">{d.name}</span>{' '}
-                    {d.times.map((s) => `${s.time} ${s.name}`).join(' · ')}
-                  </p>
-                ))}
-              </>
-            )}
-            {rejected.length > 0 && (
-              <div className="text-red-700 pt-1">
-                <p>Not understood, so not shown to visitors:</p>
-                {rejected.map((line, i) => <p key={`${i}-${line}`} className="font-mono">{line}</p>)}
-              </div>
-            )}
-          </div>
-        )}
+        <TimetableReadBack text={text} />
       </Field>
       <Field label="First bookable date" hint="Optional. No class before this date is offered, e.g. the studio's opening day.">
         <input
@@ -1575,7 +1565,7 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, p
 
 // PAGES.1 — `pageOnly` (page mode): the page half only. The trial plan, price,
 // consult and typed timetable are the studio rows' (StudioOfferRow).
-export function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath, pageOnly = false }) {
+function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath, pageOnly = false }) {
   const bts = availableBookingTypes || []
   // Price is edited as a raw euros string (draft) and only coerced to integer
   // cents on write — a fully-controlled input re-derived from cents each
