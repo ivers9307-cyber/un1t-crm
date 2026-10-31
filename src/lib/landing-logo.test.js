@@ -6,12 +6,14 @@ import {
 } from './landing-logo.js'
 
 // supabase-builder mock for the helper's single query shape:
-// from('landing_page_settings').select().eq().maybeSingle().
+// from('landing_pages').select().eq().eq().maybeSingle() (PAGES.1: the studio
+// page's chrome.logo_url). `seen` records what was read.
 function mockDb(result) {
   return {
-    from() { return this },
+    seen: { tables: [], eq: [] },
+    from(t) { this.seen.tables.push(t); return this },
     select() { return this },
-    eq() { return this },
+    eq(c, v) { this.seen.eq.push([c, v]); return this },
     maybeSingle() {
       if (result instanceof Error) return Promise.reject(result)
       return Promise.resolve(result)
@@ -47,8 +49,20 @@ describe('resolveLandingLogo', () => {
 
 describe('getLandingLogo', () => {
   it('returns the configured logo for the public path', async () => {
-    const db = mockDb({ data: { logo_url: 'https://cdn/logo.png' }, error: null })
+    const db = mockDb({ data: { chrome: { logo_url: 'https://cdn/logo.png' } }, error: null })
     expect(await getLandingLogo('stillorgan', 'fb', db)).toBe('https://cdn/logo.png')
+  })
+
+  it('reads the kind=studio landing_pages row at that slug (PAGES.1), not landing_page_settings', async () => {
+    const db = mockDb({ data: { chrome: { logo_url: 'https://cdn/logo.png' } }, error: null })
+    await getLandingLogo('hatch-street', 'fb', db)
+    expect(db.seen.tables).toEqual(['landing_pages'])
+    expect(db.seen.eq).toEqual([['kind', 'studio'], ['slug', 'hatch-street']])
+  })
+
+  it('falls back when the page has no chrome or no logo in it', async () => {
+    expect(await getLandingLogo('stillorgan', 'fb', mockDb({ data: { chrome: null }, error: null }))).toBe('fb')
+    expect(await getLandingLogo('stillorgan', 'fb', mockDb({ data: { chrome: { tone: 'dark' } }, error: null }))).toBe('fb')
   })
 
   it('falls back on a missing row', async () => {

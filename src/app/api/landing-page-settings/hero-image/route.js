@@ -1,9 +1,9 @@
 // /api/landing-page-settings/hero-image — upload the landing page
 // hero background image. Mirrors the race TV-logo upload route
 // (mig 092) — multipart form, stores in the existing 'branding'
-// bucket, returns the public URL. Caller is then expected to PUT
-// /api/landing-page-settings with the new hero_image_url so the
-// upload route owns the bytes, not the row.
+// bucket, returns the public URL. The caller then saves the URL into
+// the page's hero block with PUT /api/landing-pages/<id> (PAGES.1) so
+// the upload route owns the bytes, not the row.
 //
 // Master OR owner at the location.
 

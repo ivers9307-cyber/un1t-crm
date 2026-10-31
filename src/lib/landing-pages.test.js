@@ -19,7 +19,7 @@ import {
   PAGE_PUBLISH_STATES, isPageVisible, isPageReachable, PAGE_COLUMNS, STUDIO_ROW_COLUMNS,
   loadPageBySlug, loadPageById, PageReadError, publicOrgIdForHost, studioParamToPublicPath,
   resolvePageStudio, locationIdForPublicPath, studioPublicPath, mergedBlocksFor, offerReady,
-  canViewPage, canEditPage, studioTermsCopy,
+  canViewPage, canEditPage, studioTermsCopy, listStudioPageSlugs,
   studioRowReadiness, pageBlocksToStore, mergedChrome, offerSummary, copiedContentBlocks, starterBlocks, pageWasLive,
 } from './landing-pages.js'
 import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
@@ -135,29 +135,23 @@ describe('landing-pages', () => {
     expect(studioParamToPublicPath(null)).toBeNull()
   })
 
-  it('locationIdForPublicPath: the studio page row wins, then landing_page_settings', async () => {
+  it('locationIdForPublicPath: the studio page row at that slug, null when there is none (no fallback table)', async () => {
     const withPage = makeDb({ landing_pages: { single: { data: { primary_location_id: 'loc-s' }, error: null } } })
     expect(await locationIdForPublicPath(withPage, 'org-un1t', 'stillorgan')).toBe('loc-s')
     expect(withPage.calls[0].eq).toEqual([['organization_id', 'org-un1t'], ['kind', 'studio'], ['slug', 'stillorgan']])
-    const legacy = makeDb({
-      landing_pages: { single: { data: null, error: null } },
-      landing_page_settings: { single: { data: { location_id: 'loc-legacy' }, error: null } },
-    })
-    expect(await locationIdForPublicPath(legacy, 'org-un1t', 'stillorgan')).toBe('loc-legacy')
-    expect(legacy.calls[1].eq).toEqual([['public_path', 'stillorgan']])
     const none = makeDb({})
     expect(await locationIdForPublicPath(none, 'org-un1t', 'nowhere')).toBeNull()
+    expect(none.calls.map((c) => c.table)).toEqual(['landing_pages'])
+    const failed = makeDb({ landing_pages: { single: { data: null, error: { code: 'XX' } } } })
+    await expect(locationIdForPublicPath(failed, 'org-un1t', 'stillorgan')).rejects.toThrow()
   })
 
-  it('studioPublicPath: the studio page slug, then landing_page_settings', async () => {
+  it('studioPublicPath: the studio page slug, null when the studio has no page (no fallback table)', async () => {
     const withPage = makeDb({ landing_pages: { single: { data: { slug: 'stillorgan' }, error: null } } })
     expect(await studioPublicPath(withPage, 'loc-s')).toBe('stillorgan')
-    const legacy = makeDb({
-      landing_pages: { single: { data: null, error: null } },
-      landing_page_settings: { single: { data: { public_path: 'hatch-street' }, error: null } },
-    })
-    expect(await studioPublicPath(legacy, 'loc-h')).toBe('hatch-street')
-    expect(await studioPublicPath(makeDb({}), 'loc-x')).toBeNull()
+    const none = makeDb({})
+    expect(await studioPublicPath(none, 'loc-x')).toBeNull()
+    expect(none.calls.map((c) => c.table)).toEqual(['landing_pages'])
   })
 
   it('mergedBlocksFor merges the studio half onto the offer block only', () => {
@@ -250,13 +244,17 @@ describe('landing-pages', () => {
     expect(await publicOrgIdForHost('')).toBe('org-un1t')
   })
 
-  it('studioTermsCopy reads the class_funnel terms wording off the legacy row by location; defaults on a miss, an error or a throw', async () => {
-    const db = makeDb({ landing_page_settings: { single: { data: { blocks: [{ type: 'hero' }, { type: 'class_funnel', terms_label: 'CUSTOM {studio_name}' }] }, error: null } } })
+  it('studioTermsCopy reads the studio page\'s chrome.un1t_terms by location (and nothing else); defaults on a miss, an error or a throw', async () => {
+    const db = makeDb({ landing_pages: { single: { data: { chrome: { logo_url: 'x', un1t_terms: { terms_label: 'CUSTOM {studio_name}', waiver_link_label: '  ' } } }, error: null } } })
     const got = await studioTermsCopy(db, 'loc-h')
     expect(got).toEqual({ ...DEFAULT_FUNNEL_TERMS_COPY, terms_label: 'CUSTOM {studio_name}' })
-    expect(db.calls[0]).toMatchObject({ table: 'landing_page_settings', select: 'blocks', eq: [['location_id', 'loc-h']] })
+    expect(db.calls).toHaveLength(1)
+    expect(db.calls[0]).toMatchObject({ table: 'landing_pages', select: 'chrome', eq: [['kind', 'studio'], ['primary_location_id', 'loc-h']] })
+    // An empty un1t_terms (today's rows) and a page with no chrome are the defaults.
+    expect(await studioTermsCopy(makeDb({ landing_pages: { single: { data: { chrome: { un1t_terms: {} } }, error: null } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy(makeDb({ landing_pages: { single: { data: { chrome: null }, error: null } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy(makeDb({}), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
-    expect(await studioTermsCopy(makeDb({ landing_page_settings: { single: { data: null, error: { code: 'XX', message: 'secret' } } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy(makeDb({ landing_pages: { single: { data: null, error: { code: 'XX', message: 'secret' } } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy({ from: () => { throw new Error('net') } }, 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy(makeDb({}), null)).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
   })
@@ -342,5 +340,20 @@ describe('landing-pages: the pages API helpers', () => {
     expect(copied).toHaveLength(1)
     expect(copied[0]).toMatchObject({ type: 'gallery', items: [{ url: 'https://x/a.jpg' }] })
     expect(copied[0].id).not.toBe('g')
+  })
+})
+
+describe('listStudioPageSlugs', () => {
+  it("is the slugs of the organisation's live studio pages, scoped by organisation, kind and state", async () => {
+    const db = makeDb({ landing_pages: { list: { data: [{ slug: 'stillorgan' }, { slug: 'hatch-street' }, { slug: '' }, {}], error: null } } })
+    expect(await listStudioPageSlugs(db, 'org-un1t')).toEqual(['stillorgan', 'hatch-street'])
+    expect(db.calls[0].eq).toEqual([['organization_id', 'org-un1t'], ['kind', 'studio'], ['publish_state', 'live']])
+  })
+  it('a failed read, a thrown one, or no organisation is [] (never a throw)', async () => {
+    expect(await listStudioPageSlugs(makeDb({ landing_pages: { list: { data: null, error: { code: 'XX' } } } }), 'org-un1t')).toEqual([])
+    expect(await listStudioPageSlugs({ from() { throw new Error('boom') } }, 'org-un1t')).toEqual([])
+    const untouched = makeDb({})
+    expect(await listStudioPageSlugs(untouched, null)).toEqual([])
+    expect(untouched.calls).toEqual([])
   })
 })

@@ -2,6 +2,7 @@
 // attribution a public API request is about. The page row decides every one of
 // them; the request only names the page and (on an all-studios page) the
 // studio. A one-studio page never answers for another studio (Review Focus 4).
+// A request with no `page` names a STUDIO PAGE by its slug (Task 23).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantOrgId: vi.fn(async () => null) }))
@@ -30,8 +31,17 @@ const TRIAL_H_ON = { ...TRIAL_H, enabled: true }
 // Studio pages: the public path <-> location map.
 const PATHS = { stillorgan: 'loc-s', 'hatch-street': 'loc-h' }
 
+// The studio page of Stillorgan: its own row, its terms wording in the chrome.
+const STUDIO_S = {
+  id: 'p-s', organization_id: 'org-un1t', slug: 'stillorgan', kind: 'studio', scope: 'one',
+  primary_location_id: 'loc-s', offer_type: 'class_funnel', publish_state: 'live',
+  blocks: [{ id: 'cf', type: 'class_funnel', heading: 'Try a class' }, { id: 'lf', type: 'lead_form', tag: 'still-tag' }],
+  chrome: { un1t_terms: { terms_link_label: 'T and Cs' } },
+}
+const STUDIO_ROW_S = { page_id: 'p-s', location_id: 'loc-s', enabled: true, sort_order: 0, offer: { trial_plan_code: 'tp' }, attribution: { lead_source: 'meta_still' } }
+
 // A fake that answers each query from what it filtered on.
-function makeDb({ pages = {}, studios = {}, legacy = null, failStudios = false } = {}) {
+function makeDb({ pages = {}, studios = {}, failPages = false, failStudios = false } = {}) {
   const calls = []
   return {
     calls,
@@ -50,8 +60,8 @@ function makeDb({ pages = {}, studios = {}, legacy = null, failStudios = false }
             const slug = Object.keys(PATHS).find((k) => PATHS[k] === eq.primary_location_id)
             return { data: slug ? { slug } : null, error: null }
           }
+          if (table === 'landing_pages' && failPages) return { data: null, error: { code: 'XX' } }
           if (table === 'landing_pages') return { data: pages[eq.slug] || null, error: null }
-          if (table === 'landing_page_settings') return legacy || { data: null, error: null }
           return { data: null, error: null }
         },
         then(resolve, reject) {
@@ -121,11 +131,35 @@ describe('resolvePublicPageRequest', () => {
     expect(await resolvePublicPageRequest(none, { page: 'Not A Slug!' })).toEqual({ ok: false, reason: 'not_found' })
   })
 
-  it('PR1: a studio page is not_found, even live (it still serves from landing_page_settings)', async () => {
-    const STUDIO = { ...ONE, id: 'p-s', slug: 'stillorgan', kind: 'studio', offer_type: 'class_funnel', blocks: [{ type: 'class_funnel' }] }
-    const db = makeDb({ pages: { stillorgan: STUDIO }, studios: { 'p-s': [{ ...ROW_S, page_id: 'p-s', attribution: {} }] } })
-    expect(await resolvePublicPageRequest(db, { page: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
-    expect(await resolvePublicPageRequest(db, { page: 'stillorgan', studio: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+  it('a studio page named by page=<slug> resolves like a one-studio page, with its terms wording', async () => {
+    const db = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [STUDIO_ROW_S] } })
+    const r = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', page: 'stillorgan' })
+    expect(r).toMatchObject({ ok: true, pageId: 'p-s', locationId: 'loc-s', publicPath: 'stillorgan', studioRow: STUDIO_ROW_S })
+    // A studio page carries only the row's non-blank values: no
+    // stillorgan-stillorgan default (each route keeps its own defaults).
+    expect(r.attribution).toEqual({ lead_source: 'meta_still' })
+    expect(r.terms).toEqual({ terms_link_label: 'T and Cs' })
+    expect(await resolvePublicPageRequest(db, { page: 'stillorgan', studio: 'stillorgan' })).toMatchObject({ ok: true })
+    expect(await resolvePublicPageRequest(db, { page: 'stillorgan', studio: 'hatch-street' })).toEqual({ ok: false, reason: 'not_found' })
+  })
+
+  it('a studio page whose row holds no attribution answers {} on both branches (spec §9: the routes keep their own defaults)', async () => {
+    const db = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [{ ...STUDIO_ROW_S, attribution: {} }] } })
+    const byPage = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', page: 'stillorgan' })
+    expect(byPage.ok).toBe(true)
+    expect(byPage.attribution).toEqual({})
+    const byPath = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', legacyPath: 'stillorgan' })
+    expect(byPath.ok).toBe(true)
+    expect(byPath.attribution).toEqual({})
+  })
+
+  it('a campaign page answers the context studio\'s terms wording, read from that studio\'s page', async () => {
+    const db = makeDb({ pages: { '50plus': ONE }, studios: { 'p-50': [ROW_S] } })
+    const r = await resolvePublicPageRequest(db, { page: '50plus' })
+    // The fake's studio-page read carries no chrome: every key is its default.
+    expect(r.ok).toBe(true)
+    expect(r.terms).toMatchObject({ terms_link_label: 'terms and conditions', waiver_link_label: 'liability waiver' })
+    expect(db.calls.some((c) => c.table === 'landing_pages' && c.eq.kind === 'studio' && c.eq.primary_location_id === 'loc-s')).toBe(true)
   })
 
   it('reads the page in the host organisation', async () => {
@@ -140,23 +174,67 @@ describe('resolvePublicPageRequest', () => {
     expect(await resolvePublicPageRequest(db, { page: '50plus' })).toEqual({ ok: false, reason: 'unreadable' })
   })
 
-  it('legacy: no page → landing_page_settings by path, pageId null', async () => {
-    const db = makeDb({ legacy: { data: { location_id: 'loc-s', public_path: 'stillorgan', blocks: [{ type: 'class_funnel' }] }, error: null } })
-    const r = await resolvePublicPageRequest(db, { legacyPath: ' Stillorgan ' })
-    expect(r).toEqual({
-      ok: true, pageId: null, page: null, studioRow: null, locationId: 'loc-s', publicPath: 'stillorgan',
-      blocks: [{ type: 'class_funnel' }], attribution: null,
+  it('no page: the legacy path names a STUDIO PAGE by slug (live, in the host org), answered like the page form', async () => {
+    const db = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [STUDIO_ROW_S] } })
+    const r = await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', legacyPath: ' Stillorgan ' })
+    expect(r).toMatchObject({
+      ok: true, pageId: 'p-s', locationId: 'loc-s', publicPath: 'stillorgan', studioRow: STUDIO_ROW_S,
+      terms: { terms_link_label: 'T and Cs' },
     })
-    expect(db.calls).toEqual([{ table: 'landing_page_settings', eq: { public_path: 'stillorgan' } }])
+    expect(r.attribution).toEqual({ lead_source: 'meta_still' })
+    expect(r.page.id).toBe('p-s')
+    // The merged blocks carry the studio half; the lead_form block is untouched.
+    expect(r.blocks.find((b) => b.type === 'class_funnel')).toMatchObject({ heading: 'Try a class', trial_plan_code: 'tp' })
+    expect(r.blocks.find((b) => b.type === 'lead_form')).toMatchObject({ tag: 'still-tag' })
+    const read = db.calls.find((c) => c.table === 'landing_pages')
+    expect(read.eq).toEqual({ organization_id: 'org-un1t', slug: 'stillorgan' })
+    expect(db.calls.some((c) => c.table === 'landing_page_studios' && c.eq.page_id === 'p-s')).toBe(true)
 
     // No path defaults to stillorgan, as the routes always have.
-    const dflt = makeDb({ legacy: { data: { location_id: 'loc-s', public_path: 'stillorgan', blocks: [] }, error: null } })
+    const dflt = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [STUDIO_ROW_S] } })
     expect((await resolvePublicPageRequest(dflt, {})).publicPath).toBe('stillorgan')
-    expect(dflt.calls[0].eq).toEqual({ public_path: 'stillorgan' })
+    expect(dflt.calls[0].eq.slug).toBe('stillorgan')
+  })
 
+  it('no page: a missing page, a campaign page, a draft studio page and a switched-off row are not_found', async () => {
     expect(await resolvePublicPageRequest(makeDb({}), { legacyPath: 'galway' })).toEqual({ ok: false, reason: 'not_found' })
-    expect(await resolvePublicPageRequest(makeDb({ legacy: { data: null, error: { code: 'XX' } } }), { legacyPath: 'stillorgan' }))
+    // A campaign page is no studio: its slug cannot be posted as a studio path.
+    const camp = makeDb({ pages: { '50plus': ONE }, studios: { 'p-50': [ROW_S] } })
+    expect(await resolvePublicPageRequest(camp, { legacyPath: '50plus' })).toEqual({ ok: false, reason: 'not_found' })
+    const draft = makeDb({ pages: { stillorgan: { ...STUDIO_S, publish_state: 'draft' } }, studios: { 'p-s': [STUDIO_ROW_S] } })
+    expect(await resolvePublicPageRequest(draft, { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+    const off = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [{ ...STUDIO_ROW_S, enabled: false }] } })
+    expect(await resolvePublicPageRequest(off, { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+    const noRow = makeDb({ pages: { stillorgan: STUDIO_S }, studios: {} })
+    expect(await resolvePublicPageRequest(noRow, { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+  })
+
+  it('requireEnabled: false lets a content-block route past a switched-off row (all three branches), only when a row exists', async () => {
+    const off = (row) => ({ ...row, enabled: false })
+    const one = makeDb({ pages: { '50plus': ONE }, studios: { 'p-50': [off(ROW_S)] } })
+    expect(await resolvePublicPageRequest(one, { page: '50plus' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(one, { page: '50plus', requireEnabled: false })).toMatchObject({ ok: true, locationId: 'loc-s' })
+    const all = makeDb({ pages: { trial: ALL }, studios: { 'p-trial': [TRIAL_S, TRIAL_H] } })
+    expect(await resolvePublicPageRequest(all, { page: 'trial', studio: 'hatch-street' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(all, { page: 'trial', studio: 'hatch-street', requireEnabled: false })).toMatchObject({ ok: true, locationId: 'loc-h' })
+    // No row for the studio at all is still not_found.
+    expect(await resolvePublicPageRequest(makeDb({ pages: { trial: ALL }, studios: { 'p-trial': [TRIAL_S] } }), { page: 'trial', studio: 'hatch-street', requireEnabled: false })).toEqual({ ok: false, reason: 'not_found' })
+    const studio = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [off(STUDIO_ROW_S)] } })
+    expect(await resolvePublicPageRequest(studio, { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(studio, { legacyPath: 'stillorgan', requireEnabled: false })).toMatchObject({ ok: true, locationId: 'loc-s' })
+  })
+
+  it('no page: a failed read is unreadable, never a refusal', async () => {
+    expect(await resolvePublicPageRequest(makeDb({ failPages: true }), { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'unreadable' })
+    expect(await resolvePublicPageRequest(makeDb({ pages: { stillorgan: STUDIO_S }, failStudios: true }), { legacyPath: 'stillorgan' }))
       .toEqual({ ok: false, reason: 'unreadable' })
+  })
+
+  it('never reads the retired settings table', async () => {
+    const db = makeDb({ pages: { stillorgan: STUDIO_S, '50plus': ONE }, studios: { 'p-s': [STUDIO_ROW_S], 'p-50': [ROW_S] } })
+    await resolvePublicPageRequest(db, { legacyPath: 'stillorgan' })
+    await resolvePublicPageRequest(db, { page: '50plus' })
+    expect(db.calls.map((c) => c.table)).not.toContain('landing_page_settings')
   })
 })
 

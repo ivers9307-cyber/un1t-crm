@@ -8,8 +8,9 @@
 // PAGES.1 — `page` + `studio` (studio optional on a one-studio page): the
 // location is the live page's resolved studio and the row records `page_id`;
 // `location_path` is ignored. A page that does not resolve is ignored (200),
-// as an unknown path always was. Without `page` the legacy location_path read
-// (PR1; PR3 deletes it) is unchanged.
+// as an unknown path always was. Without `page`, `location_path` names a STUDIO
+// PAGE by its slug (the /start funnel's own events): its primary studio and
+// page id are the row's.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -36,7 +37,7 @@ export async function POST(request) {
     if (!fields.success) return ignored()
     // Resolved first, then limited on the RESOLVED studio path (the legacy
     // key for that studio); nothing resolved shares an 'unresolved' bucket.
-    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: fields.data.page, studio: fields.data.studio })
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: fields.data.page, studio: fields.data.studio, requireEnabled: false })
     const limit = await checkRateLimit(db, `funnelevt:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 60, windowMs: 10 * 60_000 })
     if (!limit.allowed) return rateLimitResponse(limit, 'Too many events.')
     const event = parseFunnelEvent(body)
@@ -57,11 +58,11 @@ export async function POST(request) {
   const event = parseFunnelEvent(body)
   // Unknown/invalid step → silently ignore (200) rather than error the client.
   if (!event) return ignored()
-  // PR1 legacy (PR3 deletes it): the studio's landing_page_settings row.
-  const { data: page } = await db.from('landing_page_settings')
-    .select('location_id').eq('public_path', publicPath).maybeSingle()
-  if (!page?.location_id) return ignored()
-  return insertEvent(db, { locationId: page.location_id, pageId: null }, event)
+  // The studio page the path names. Telemetry never errors the client: a
+  // miss or a failed read is ignored (the resolver logs the failure).
+  const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: publicPath, requireEnabled: false })
+  if (!r.ok) return ignored()
+  return insertEvent(db, { locationId: r.locationId, pageId: r.pageId }, event)
 }
 
 // Best-effort: a failed insert is logged (the code only) and still answers success.

@@ -1,8 +1,8 @@
 'use client'
 
-// EditModeOverlay — client component mounted by /welcome when the
-// page is loaded in edit mode (?edit=1) inside the operator
-// settings iframe. Receives blocks + chrome state from the parent
+// EditModeOverlay — client component mounted by the public [slug] route
+// when a page is loaded in edit mode (/<slug>?edit=1) inside the operator
+// settings iframe (LandingPageSettingsForm). Receives blocks + chrome state from the parent
 // window via postMessage and re-renders on every update so the
 // preview tracks the operator's keystrokes in near-realtime.
 //
@@ -33,8 +33,11 @@
 // renders the page's own layout (EditOfferLayout) above the blocks; the
 // pinned offer block is that region, never a block of the list (no toolbar,
 // nothing inserts above it), and the hero blocks a frosted or one_class page
-// uses only as its photo are not listed, as on the public page. Without it
-// (/welcome/[location]) the overlay is unchanged. An inline edit of the
+// uses only as its photo are not listed, as on the public page. A studio
+// page's layout is 'blocks' with offerBlockId naming its offer block: that
+// block keeps its place in the list, without a toolbar (the editor refuses to
+// move, copy or delete it). An inline
+// edit of the
 // pinned block's studio keys or attribution is never posted.
 //
 // The booking widget click is the one place we DON'T intercept —
@@ -100,6 +103,12 @@ export default function EditModeOverlay({
   const heroBlock = region ? blocks.find((b) => b?.type === 'hero') || null : null
   const listed = (block) => !region || (block.id !== pinnedId && block.type !== 'hero')
   const firstGap = pinned && blocks[0]?.id === pinnedId ? 1 : 0
+  // The page's offer block on any layout: on a 'blocks' layout (a studio
+  // page, whose offer block sits among its blocks) it stays listed, but with
+  // no toolbar (the editor refuses to move, copy or delete it) and no studio
+  // key written from here.
+  const lockedId = offerLayout?.offerBlockId || null
+  const locked = lockedId ? blocks.find((b) => b?.id === lockedId) || null : null
   // A frosted page's cue under the card scrolls to the blocks, as on the public page.
   const wrapList = (list) => (region?.kind === 'frosted' ? <div id={learnMoreIdFor(region.anchor)} className="scroll-mt-20">{list}</div> : list)
   const cta = offerLayout ? { ctaHref: offerLayout.cta?.href || null, ctaLabel: offerLayout.cta?.label, tone: offerLayout.tone === 'light' ? 'light' : 'dark' } : {}
@@ -172,7 +181,7 @@ export default function EditModeOverlay({
   // setByPath walker applies it to the blocks array.
   function emitFieldEdit(blockId, path, value) {
     // PAGES.1 — the pinned offer block's studio half is never written from here.
-    if (pinnedId && blockId === pinnedId && isStudioOwnedPath(pinned?.type, path)) return
+    if (lockedId && blockId === lockedId && isStudioOwnedPath(locked?.type, path)) return
     emit({ type: 'edit-field', blockId, path, value })
   }
 
@@ -192,8 +201,7 @@ export default function EditModeOverlay({
   }
   function emitChromeEdit(field, value) {
     // LP3c.5 — site chrome (logo) edits. Logo isn't a block so it
-    // can't go through 'edit-field'; chrome lives in flat columns
-    // on landing_page_settings (mig 129).
+    // can't go through 'edit-field'; it lives on the page's chrome.
     emit({ type: 'edit-chrome', field, value })
     // Optimistically update local state so the iframe re-renders
     // immediately without waiting for the parent's state push.
@@ -273,16 +281,18 @@ export default function EditModeOverlay({
                   up/down, duplicate, delete. Click bubbling stopped
                   on each button so the wrapping select handler
                   doesn't fire. */}
-              <BlockToolbar
-                blockLabel={blockLabel}
-                isSelected={isSelected}
-                isFirst={isFirst}
-                isLast={isLast}
-                onMoveUp={() => moveBlock(block.id, 'up')}
-                onMoveDown={() => moveBlock(block.id, 'down')}
-                onDuplicate={() => duplicateBlock(block.id)}
-                onDelete={() => deleteBlock(block.id, blockLabel)}
-              />
+              {block.id !== lockedId && (
+                <BlockToolbar
+                  blockLabel={blockLabel}
+                  isSelected={isSelected}
+                  isFirst={isFirst}
+                  isLast={isLast}
+                  onMoveUp={() => moveBlock(block.id, 'up')}
+                  onMoveDown={() => moveBlock(block.id, 'down')}
+                  onDuplicate={() => duplicateBlock(block.id)}
+                  onDelete={() => deleteBlock(block.id, blockLabel)}
+                />
+              )}
             </div>
             {/* Insert-section gap AFTER this block. */}
             <InsertGap

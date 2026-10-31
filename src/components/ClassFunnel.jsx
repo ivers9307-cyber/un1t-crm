@@ -15,7 +15,7 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
 import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel-lead'
-import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
+import { metaPixelIdsForPath, pageLocationIdFromDocument } from '@/lib/meta-pixel-paths'
 import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 import { classFunnelConsentDefault } from '@/lib/landing-page-blocks'
 import { termsLabelSegments, stripDashes } from '@/lib/un1t-online-funnel-copy'
@@ -378,7 +378,7 @@ export default function ClassFunnel(props) {
       // (no-op without consent). Before any payment step: the lead exists
       // from here whether or not the intro is paid for.
       fireBrowserLead({
-        pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname) : [],
+        pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname, { primaryLocationId: pageLocationIdFromDocument() }) : [],
         eventId: leadEventId,
         userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
         contentName: c.name,

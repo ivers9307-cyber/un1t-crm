@@ -7,30 +7,43 @@
 //      a tenant_domains host, else UN1T Group). `?edit=1` from a signed-in
 //      user is the editor's preview iframe on the CRM host: their active
 //      organisation instead. An anonymous `?edit=1` is an ordinary visit.
-//   2. The page by (organisation, slug). PR1 serves kind='campaign' only: a
-//      studio page 404s here and keeps rendering through next.config's
-//      rewrite to /welcome/[location]. draft and coming_soon 404 (edit mode
+//   2. The page by (organisation, slug): a campaign page or a studio page
+//      (kind='studio', /stillorgan). draft and coming_soon 404 (edit mode
 //      previews them); retired redirects to `redirect_to` with the query kept.
 //      A failed read is a 404 with a warning, never a 500 for paid traffic.
+//      A paid-trial buyer back from a checkout (?purchase=) on a studio path
+//      whose page is missing or hidden goes on to /trial, which can resume it.
 //   3. The studio: scope='one' is the primary's row; scope='all' is the
 //      enabled row `?studio=` names, else none yet (the offer shows its
 //      picker over the enabled rows). A page switched on at no studio 404s.
 //   4. Layout by offer type (layoutFor), the offer card built only from the
 //      client-view helpers, then the page's content blocks, then the footer.
+//   5. A studio page (renderStudioPage) is always the blocks layout: what
+//      /welcome/[location] rendered (TRIALFIRST's card in its first hero,
+//      pageCtas, the Events link, JSON-LD), from the page row and its one
+//      studio row only, inside StudioShell (the /welcome typography). It
+//      serves /<slug>/events and /<slug>/status (StudioEventsPage,
+//      StudioStatusPage). Its forms and paid-trial card post `page=<slug>`
+//      (the studio page's own slug), so the public routes resolve the studio
+//      page's row through resolvePublicPageRequest. Its logo is the page's
+//      chrome.logo_url or none (the wordmark), never another studio's.
 //
-// Next serves a static route before this dynamic one, so /trial, /50plus and
-// /corp keep rendering from their code routes until Task 8 deletes them; this
-// route answers any slug with no static route. The proxy admits a page slug
-// (and anything under it) and sets x-public-page, so AppShell renders it bare.
+// Every public page (/trial, /50plus, /corp and the studio pages) renders
+// here: Next serves a static route before this dynamic one, so this route
+// answers any slug with no static route. The proxy admits a page slug (and
+// anything under it) and sets x-public-page, and AppShellServer hands
+// AppShell the slug list, so the client shell renders it bare.
 //
 // The browser gets only client-safe props: trialStudioView (never a plan,
 // membership or product id), campaignFunnelClientCopy (never the trial ids or
 // the class keywords), the corp promo's words, the terms payload. A studio
-// row's `locations.settings` and `attribution` never leave this file, except
-// in edit mode, where the overlay gets the merged blocks for a user who may
-// view the page (canViewPage), as /welcome/[location] does for its editor,
+// row's `locations.settings` and `attribution` never reach the browser (the
+// settings go to StudioStatusPage, a server component, for its status_page
+// copy only). In edit mode the overlay gets the merged blocks for a user who
+// may view the page (canViewPage), as /welcome/[location] did for its editor,
 // through clientSafeBlocks, and `offerLayout`: the same layout and offer card
-// the public page renders for the previewed studio (offerElementFor).
+// the public page renders for the previewed studio (offerElementFor; a
+// studio page's card rides in its hero as `trialPreview`).
 
 import { headers } from 'next/headers'
 import { notFound, redirect } from 'next/navigation'
@@ -43,15 +56,16 @@ import {
 } from '@/lib/landing-pages'
 import { OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
 import { layoutFor, redirectTarget, pageSubpath } from '@/lib/landing-page-render'
-import { trialEntryFromRow } from '@/lib/trial-studios'
+import { trialEntryFromRow, TRIAL_STUDIOS } from '@/lib/trial-studios'
 import { trialStudioView } from '@/lib/trial-studio-view'
 import { parseTrialReturn } from '@/lib/trial-return-path'
 import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
+import { resolveGymSiteName } from '@/lib/default-site-name'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
 import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
 import { classFunnelCtaLabel } from '@/lib/public-landing'
-import { pageCtas, clientSafeBlocks } from '@/lib/landing-page-blocks'
+import { pageCtas, clientSafeBlocks, blocksOrDefault } from '@/lib/landing-page-blocks'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 import { resolveOrgChrome, resolveLocationBrand } from '@/lib/host-brand'
 import { logWarn } from '@/lib/log'
@@ -61,6 +75,9 @@ import CampaignFunnel from '@/components/landing-page/CampaignFunnel'
 import CorpPromoFunnel from '@/components/landing-page/CorpPromoFunnel'
 import ClassFunnel from '@/components/ClassFunnel'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
+import StudioShell from '@/components/landing-page/StudioShell'
+import StudioEventsPage from '@/components/landing-page/StudioEventsPage'
+import StudioStatusPage from '@/components/landing-page/StudioStatusPage'
 
 export const dynamic = 'force-dynamic'
 
@@ -117,13 +134,79 @@ async function readPage(props) {
 }
 
 // Is this page shown at all to this request (retired is handled by the caller)?
-const shown = (page, editMode) => page.kind === 'campaign' && (page.publish_state === 'live' || (editMode && page.publish_state !== 'retired'))
+// Both kinds the route serves are public only when live; a studio page that is
+// coming soon 404s as /welcome/[location] did.
+const SERVED_KINDS = ['campaign', 'studio']
+const shown = (page, editMode) => SERVED_KINDS.includes(page.kind) && (page.publish_state === 'live' || (editMode && page.publish_state !== 'retired'))
+
+// The studio page's location, as embedded on its studio row (STUDIO_ROW_COLUMNS).
+const embeddedOne = (v) => (Array.isArray(v) ? v[0] : v) || null
+const studioRowOf = (page, studios) => resolvePageStudio({ page, studios }).studio
+
+// TRIALFIRST.1 — a buyer redirected back from a checkout (?purchase=) to a
+// studio path whose page is gone, hidden or unreadable goes on to /trial,
+// which can resume any studio's purchase, rather than seeing a 404 after
+// paying. Only the studio paths a buyer can be returned to (TRIAL_STUDIOS,
+// trial-return-path.js) and only the page itself, never a sub-page.
+function resumeElsewhere(slug, rest, sp) {
+  if (Array.isArray(rest) && rest.length) return
+  if (!TRIAL_STUDIOS.some((s) => s.publicPath === slug)) return
+  const { resumePurchaseId, cancelled } = parseTrialReturn(sp)
+  if (!resumePurchaseId) return
+  const key = slug === 'hatch-street' ? 'hatch' : 'stillorgan'
+  redirect(`/trial?purchase=${resumePurchaseId}&studio=${key}${cancelled ? '&cancelled=1' : ''}`)
+}
+
+// The three /welcome/[location] pages' metadata, kept to the character (their
+// em-dashes included): the studio's name, its brand as the OG site name, the
+// host's brand when neither resolves. Customer-visible strings unchanged by
+// the move, by rule.
+async function studioMetadata(page, studios, sub) {
+  const loc = embeddedOne(studioRowOf(page, studios)?.locations)
+  if (sub.kind === 'status') {
+    const name = loc?.name || await resolveGymSiteName({ host: (await headers()).get('host') })
+    return {
+      title: `${name} — System status`,
+      description: `Live service status for ${name}. Booking, messaging, payments and email.`,
+      robots: { index: false }, // status page shouldn't compete with the studio's real pages
+    }
+  }
+  if (sub.kind !== 'root' && sub.kind !== 'events') return {}
+  const host = (await headers()).get('host')
+  const brand = (await resolveLocationBrand({ locationId: page.primary_location_id })).companyName || await resolveGymSiteName({ host })
+  const studioName = loc?.name || brand
+  if (sub.kind === 'events') {
+    const title = `Events — ${studioName}`
+    const description = `Upcoming races, workshops and open days at ${studioName}. Book your spot.`
+    return { title, description, openGraph: { title, description, siteName: brand, type: 'website' } }
+  }
+  const hero = blocksOrDefault(page.blocks).find((b) => b.type === 'hero')
+  const heroImage = hero?.image_url || null
+  const description = hero?.subtext || 'Coach-led strength + conditioning, built for racing. Book your free consultation.'
+  const title = `${studioName} — Strength + conditioning, built for racing`
+  const c = isObj(page.chrome) ? page.chrome : {}
+  return {
+    title,
+    description,
+    openGraph: { title, description, siteName: brand, type: 'website', ...(heroImage ? { images: [{ url: heroImage }] } : {}) },
+    ...(c.noindex ? { robots: { index: false, follow: false } } : {}),
+  }
+}
 
 export async function generateMetadata(props) {
   try {
-    const { loaded, editMode } = await readPage(props)
-    if (!loaded || !shown(loaded.page, editMode)) return {}
+    const { loaded, editMode, rest, failed } = await readPage(props)
+    if (!loaded || !shown(loaded.page, editMode)) {
+      // A missing or hidden studio page's root answers the host's brand as
+      // /welcome/[location] did; a hidden campaign page (and a failed read)
+      // keep the defaults.
+      const atRoot = !(Array.isArray(rest) && rest.length)
+      const studioPath = loaded ? loaded.page.kind === 'studio' : !failed
+      if (atRoot && studioPath) return { title: await resolveGymSiteName({ host: (await headers()).get('host') }) }
+      return {}
+    }
     const { page } = loaded
+    if (page.kind === 'studio') return await studioMetadata(page, loaded.studios, pageSubpath(page, rest))
     const c = isObj(page.chrome) ? page.chrome : {}
     // The meta title (else the page title), then the brand: the meta title is
     // the words before ' | <company>', as the page title is (mig 792 seeds the
@@ -179,18 +262,21 @@ async function loadReviews(db, locationId, reviewsBlock) {
 }
 
 // un1t.online's terms tick for a studio, worded as /trial and /corp word it
-// today: the class_funnel copy on the studio's legacy landing row
-// (studioTermsCopy, PR1; PR3 reads the studio page's chrome.un1t_terms).
+// today: the studio page's chrome.un1t_terms (studioTermsCopy).
 async function termsFor(db, locationId, { studioName, publicPath }) {
   const copy = await studioTermsCopy(db, locationId)
-  return un1tTermsPayload({ blocks: [{ type: 'class_funnel', ...copy }], studioName, publicPath })
+  return un1tTermsPayload({ terms: copy, studioName, publicPath })
 }
 
 // The paid trial's per-studio card data: the loadTrialStudios entry built from
 // the studio row (trialEntryFromRow), its client view, and its terms tick.
+// A studio page is its studio's public path (its slug) and words its tick
+// from its own chrome.un1t_terms, so it reads neither again; a studio page
+// switched off on its own row sells nothing.
 async function paidTrialItems(db, page, rows) {
+  const isStudioPage = page.kind === 'studio'
   return Promise.all(rows.map(async (row) => {
-    const publicPath = await safePublicPath(db, row.location_id)
+    const publicPath = isStudioPage ? page.slug : await safePublicPath(db, row.location_id)
     const block = mergedBlocksFor({ page, studio: row }).find((b) => isObj(b) && b.type === 'paid_trial') || null
     const brand = await resolveLocationBrand({ locationId: row.location_id })
     let entry
@@ -198,14 +284,19 @@ async function paidTrialItems(db, page, rows) {
       entry = await trialEntryFromRow(db, { row, publicPath, mergedBlock: block })
     } catch (e) {
       logWarn('public-page', 'paid trial studio unreadable; not for sale', { locationId: row.location_id, code: e?.code ?? null })
-      entry = { key: null, publicPath, locationId: row.location_id, membershipSource: null, block, product: null, sellable: false, config: null }
+      // The key trialEntryFromRow would have given, so a returning buyer's card still names its studio.
+      const key = TRIAL_STUDIOS.find((s) => s.publicPath === publicPath)?.key || publicPath || null
+      entry = { key, publicPath, locationId: row.location_id, membershipSource: null, block, product: null, sellable: false, config: null }
     }
     // No public path: no terms page and no way back from a checkout, so nothing for sale.
-    if (!publicPath) entry = { ...entry, sellable: false, config: null }
+    if (!publicPath || (isStudioPage && row.enabled === false)) entry = { ...entry, sellable: false, config: null }
     entry = { ...entry, key: entry.key || row.location_id }
     const view = trialStudioView(entry, brand)
+    const studioName = brand?.locationName || view.label
     const hatchTerms = entry.membershipSource === 'un1t_online' && view.sellable
-      ? await termsFor(db, row.location_id, { studioName: brand?.locationName || view.label, publicPath })
+      ? (isStudioPage
+          ? un1tTermsPayload({ terms: isObj(page.chrome) ? page.chrome.un1t_terms : null, studioName, publicPath })
+          : await termsFor(db, row.location_id, { studioName, publicPath }))
       : null
     return { row, entry, view, hatchTerms }
   }))
@@ -219,7 +310,7 @@ async function paidTrialItems(db, page, rows) {
 // card renders disabled in the preview (PaidTrialFunnel's `preview`) and never
 // resumes a checkout; every other card stays live, as the editor tests it.
 async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, preview = false }) {
-  const kind = layoutFor(page.offer_type)
+  const kind = layoutFor(page.offer_type, page.kind)
 
   if (page.offer_type === 'paid_trial') {
     const { resumePurchaseId, cancelled } = preview ? { resumePurchaseId: null, cancelled: false } : parseTrialReturn(sp)
@@ -308,20 +399,173 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
   return { kind, cta: { href: primary?.href || null, label: primary?.label } }
 }
 
+// A studio page's offer block id (the first block of its offer type, wherever
+// it sits), null when the page sells nothing or has no such block.
+function studioOfferBlockId(page, blocks) {
+  const type = OFFER_BLOCK_TYPE[page.offer_type]
+  if (!type) return null
+  return blocks.find((b) => isObj(b) && b.type === type)?.id || null
+}
+
+// Step 5: a studio page (/stillorgan) and its two sub-pages, as
+// /welcome/[location] rendered them. Reads the page row and its one studio row
+// (and, for a page with no logo of its own, the existing logo fallback);
+// nothing else. Everything the browser gets
+// is client-safe: trialStudioView, the terms payload, clientSafeBlocks, and
+// named location fields (the studio row's locations.settings stays here, read
+// by the status page for its status_page copy only).
+async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
+  const studio = studioRowOf(page, studios)
+  const location = embeddedOne(studio?.locations)
+  const locationId = page.primary_location_id
+
+  if (sub.kind === 'status') {
+    if (!location?.id) notFound()
+    return (
+      <StudioShell pageLocationId={locationId}>
+        <StudioStatusPage db={db} location={{ id: location.id, name: location.name || null, settings: location.settings || null, timezone: location.timezone || null }} />
+      </StudioShell>
+    )
+  }
+
+  const c = isObj(page.chrome) ? page.chrome : {}
+  const [brand, chrome] = await Promise.all([
+    resolveLocationBrand({ locationId }),
+    resolveOrgChrome({ orgId: page.organization_id }),
+  ])
+  const footer = { brand: chrome.companyName, studios: chrome.studios, legalName: chrome.legalName }
+  // The page's own logo, else none (the wordmark renders), as /welcome/[location]
+  // did: never the Stillorgan mark on another studio's page.
+  const logoUrl = str(c.logo_url) || null
+  const logoAlt = str(c.logo_alt) || brand.companyName
+  const logoWidthPx = Number(c.logo_width_px) || 200
+
+  if (sub.kind === 'events') {
+    if (!location?.id) notFound()
+    return (
+      <StudioShell pageLocationId={locationId}>
+        <StudioEventsPage
+          db={db}
+          slug={page.slug}
+          location={{ id: location.id, name: location.name || null, timezone: location.timezone || null }}
+          brand={brand}
+          logo={{ url: logoUrl, alt: logoAlt, widthPx: logoWidthPx }}
+          footer={footer}
+          showInstagramFeed={c.show_instagram_feed !== false}
+        />
+      </StudioShell>
+    )
+  }
+
+  // An empty row renders the default blocks, as /welcome/[location] did.
+  const merged = blocksOrDefault(mergedBlocksFor({ page, studio }))
+  // Only a paid trial leaves the blocks: its card goes in the hero (and its
+  // block renders nothing on a public page). Every other offer block keeps its
+  // place and BlockRenderer draws it as the legacy page did (a class_funnel
+  // shown on the landing posts against the studio's public path; the
+  // renderer hands the funnel named words only, never the studio row's ids).
+  const offerIdx = page.offer_type === 'paid_trial' ? merged.findIndex((b) => isObj(b) && b.type === 'paid_trial') : -1
+  const content = merged.filter((b, i) => i !== offerIdx && isObj(b))
+  const tone = c.tone === 'light' ? 'light' : 'dark'
+  const returnPath = `/${page.slug}`
+
+  // TRIALFIRST.1 — the studio's paid trial, from its own row. Shown =
+  // sellable, or a buyer back from a checkout (a return always lands on the
+  // card, which reads the purchase's own state). The editor preview shows the
+  // card disabled, sellable or not, and never resumes a checkout.
+  const { resumePurchaseId, cancelled } = editMode ? { resumePurchaseId: null, cancelled: false } : parseTrialReturn(sp)
+  const trialItem = page.offer_type === 'paid_trial' && studio
+    ? (await paidTrialItems(db, page, [studio]))[0]
+    : null
+  const view = trialItem?.view || null
+  const hatchTerms = trialItem?.hatchTerms || null
+
+  if (editMode) {
+    const trialPreview = view ? { studio: view, returnPath, resumePurchaseId: null, cancelled: false, hatchTerms, preview: true, page: page.slug } : null
+    const { primary } = pageCtas(merged, { trialShown: Boolean(trialPreview) })
+    return (
+      <StudioShell>
+        <EditModeOverlay
+          // EDITGATE.1: the studio half (plan ids, product id, attribution) never rides the RSC payload.
+          initialBlocks={clientSafeBlocks(merged)}
+          initialLogoUrl={logoUrl}
+          initialLogoAlt={logoAlt}
+          initialLogoWidthPx={logoWidthPx}
+          fallbackLogoAlt={brand.companyName}
+          wordmark={brand.shortName}
+          locationName={brand.locationName}
+          footer={footer}
+          // The blocks layout: no pinned offer region; the card rides in the
+          // first hero as on the public page, disabled (preview: true). The
+          // offer block, wherever it sits, is named so the overlay gives it no
+          // toolbar (the editor never moves, copies or deletes it).
+          offerLayout={{ kind: 'blocks', tone, cta: { href: primary?.href || null, label: primary?.label }, offerBlockId: studioOfferBlockId(page, merged) }}
+          trialPreview={trialPreview}
+        />
+      </StudioShell>
+    )
+  }
+
+  const trialShown = Boolean(view && (view.sellable || resumePurchaseId))
+  // `page`: the card posts the studio page's slug, so the purchase is priced from this page's own row.
+  const trial = trialShown ? { studio: view, returnPath, resumePurchaseId, cancelled, hatchTerms, preview: false, page: page.slug } : null
+  const { primary: cta, secondary: cta2 } = pageCtas(merged, { trialShown })
+  const reviewsData = await loadReviews(db, locationId, content.find((b) => b.type === 'reviews'))
+  const hero = content.find((b) => b.type === 'hero')
+  // Gym structured data: name, url, hero image, logo. No aggregateRating
+  // (reviews are entered by hand since mig 410; never invent one).
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Gym',
+    name: location?.name || brand.companyName,
+    url: `https://un1tdublin.com/${page.slug}`,
+    ...(hero?.image_url ? { image: hero.image_url } : {}),
+    ...(logoUrl ? { logo: logoUrl } : {}),
+  }
+
+  return (
+    <StudioShell pageLocationId={locationId}>
+      <BlocksLayout
+        tone={tone}
+        logo={{ url: logoUrl, alt: logoAlt, widthPx: logoWidthPx, wordmark: brand.shortName }}
+        cta={{ href: cta?.href || null, label: cta?.label, labelShort: cta?.labelShort || '' }}
+        cta2={cta2 || null}
+        footer={footer}
+        blocks={content}
+        // `page`: the content forms (lead form) post the studio page's slug and go through the page branch.
+        blockProps={{ publicPath: page.slug, page: page.slug, wordmark: brand.shortName, locationName: brand.locationName, reviewsData }}
+        eventsHref={`/${page.slug}/events`}
+        trial={trial}
+        trialShown={trialShown}
+        jsonLd={jsonLd}
+      />
+    </StudioShell>
+  )
+}
+
 export default async function PublicPage(props) {
   const req = await readPage(props)
-  if (req.failed || !req.loaded) notFound()
+  if (req.failed || !req.loaded) {
+    resumeElsewhere(req.slug, req.rest, req.sp)
+    notFound()
+  }
   const { db, sp, editMode } = req
   const { page, studios } = req.loaded
-  if (page.kind !== 'campaign') notFound()
+  if (!SERVED_KINDS.includes(page.kind)) notFound()
   if (page.publish_state === 'retired') {
     const target = redirectTarget(page, req.rest, sp, { studioFromSegment: studioParamToPublicPath })
     if (target) redirect(target)
+    // A retired studio page with nowhere to go still sends a returning buyer on.
+    if (page.kind === 'studio') resumeElsewhere(page.slug, req.rest, sp)
     notFound()
   }
-  if (!shown(page, editMode)) notFound()
+  if (!shown(page, editMode)) {
+    if (page.kind === 'studio') resumeElsewhere(page.slug, req.rest, sp)
+    notFound()
+  }
   const sub = pageSubpath(page, req.rest)
   if (sub.kind === 'unknown') notFound()
+  if (page.kind === 'studio') return renderStudioPage({ db, page, studios, sp, sub, editMode })
 
   // Step 3: the studio. A wrong `?studio=` is no studio (the picker shows).
   let studioLocationId = null
@@ -342,6 +586,10 @@ export default async function PublicPage(props) {
   // chosen one, else (an all-studios page with none chosen yet) the first
   // enabled one, so reviews and stats show that studio's until one is picked.
   const context = studio || offerRows[0] || null
+  // The studio the Meta pixel follows (data-page-location): the page's primary,
+  // else the studio the visitor chose; an all-studios page with none chosen
+  // yet names none (the fallback context studio above is for copy only).
+  const pixelLocationId = page.primary_location_id || studio?.location_id || null
   const contextLocationId = context?.location_id || page.primary_location_id || null
 
   const merged = mergedBlocksFor({ page, studio: context })
@@ -369,7 +617,7 @@ export default async function PublicPage(props) {
     ? await paidTrialItems(db, page, offerRows.length ? offerRows : (editMode && context ? [context] : []))
     : []
 
-  const layout = layoutFor(page.offer_type)
+  const layout = layoutFor(page.offer_type, page.kind)
   // The card and the coach video are the hero on these two layouts.
   const heroBlock = content.find((b) => b.type === 'hero')
   const bodyBlocks = layout === 'blocks' ? content : content.filter((b) => b.type !== 'hero')
@@ -424,10 +672,10 @@ export default async function PublicPage(props) {
   const shared = { tone, logo, cta: built.cta, footer, blocks: bodyBlocks, blockProps }
 
   if (built.kind === 'frosted') {
-    return <FrostedCardLayout {...shared} anchor={built.anchor} heroImageUrl={built.heroImageUrl} scrollCueLabel={built.scrollCueLabel} offer={built.offer} />
+    return <FrostedCardLayout {...shared} pageLocationId={pixelLocationId} anchor={built.anchor} heroImageUrl={built.heroImageUrl} scrollCueLabel={built.scrollCueLabel} offer={built.offer} />
   }
   if (built.kind === 'one_class') {
-    return <OneClassLayout {...shared} hero={built.hero} expect={built.expect} offer={built.offer} />
+    return <OneClassLayout {...shared} pageLocationId={pixelLocationId} hero={built.hero} expect={built.expect} offer={built.offer} />
   }
-  return <BlocksLayout {...shared} />
+  return <BlocksLayout {...shared} pageLocationId={pixelLocationId} />
 }

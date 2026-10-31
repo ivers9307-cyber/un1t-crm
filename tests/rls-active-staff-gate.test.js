@@ -276,9 +276,11 @@ describe('RLSACTIVE.1 — inline policies that read a profile table carry the ac
     // less the four allowlisted staff_allowances policies (dropped by mig 692
     // MEMBERWRITESWEEP.2, staff_allowances is service-role only), less the
     // four org_settings policies (gated; dropped by mig 730
-    // ORGSETCLIENTWRITE.1, org_settings is service-role only).
-    expect(inline.length).toBeGreaterThanOrEqual(40)
-    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(40)
+    // ORGSETCLIENTWRITE.1, org_settings is service-role only), less the three
+    // gated landing_page_settings write policies (_ins, _upd, _del; dropped by
+    // mig 795, PAGES.1 PR3: the deprecated table is closed to every client).
+    expect(inline.length).toBeGreaterThanOrEqual(37)
+    expect(inline.filter((p) => policyGated(p.body)).length).toBeGreaterThanOrEqual(37)
     expect(inline.map((p) => `${p.table} :: ${p.name}`)).toContain('public.invoices_queue :: inbound_invoices_read')
   })
 

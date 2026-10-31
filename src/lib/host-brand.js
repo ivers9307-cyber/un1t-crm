@@ -203,7 +203,7 @@ export async function resolveLocationBrand({ locationId = null, db = null, nowMs
  * (org_settings.short_name, else the brand), the legal holder for the
  * copyright line (legal_trading_name → legal_entity_name → the brand), and
  * the org's LIVE studio pages for the footer ("Studios": locations.name →
- * /welcome/<public_path>, oldest studio first). Never another org's studio.
+ * /<slug> of its studio page, oldest studio first). Never another org's studio.
  *
  * @param {{ orgId?: string|null, db?: object|null, nowMs?: number }} [opts]
  * @returns {Promise<{ orgId: string|null, companyName: string, shortName: string, legalName: string, studios: Array<{ name: string, href: string }> }>}
@@ -241,19 +241,23 @@ export async function resolveOrgChrome({ orgId = null, db = null, nowMs = Date.n
     let studios = []
     let pageErr = null
     if (locs.length) {
+      // PAGES.1: the org's LIVE studio pages (scoped by the org id, so a page
+      // can never name another tenant's studio), canonical link /<slug>.
       const { data: pageRows, error } = await client
-        .from('landing_page_settings')
-        .select('location_id, public_path, publish_state')
-        .in('location_id', locs.map((l) => l.id))
+        .from('landing_pages')
+        .select('primary_location_id, slug, publish_state')
+        .eq('organization_id', key)
+        .eq('kind', 'studio')
+        .in('primary_location_id', locs.map((l) => l.id))
       pageErr = error
       const byLocation = new Map(
         ((!pageErr && pageRows) || [])
-          .filter((r) => r.public_path && isPubliclyVisible(r.publish_state))
-          .map((r) => [r.location_id, r.public_path]),
+          .filter((r) => r.slug && isPubliclyVisible(r.publish_state))
+          .map((r) => [r.primary_location_id, r.slug]),
       )
       studios = locs
         .filter((l) => byLocation.has(l.id) && trim(l.name))
-        .map((l) => Object.freeze({ name: trim(l.name), href: `/welcome/${byLocation.get(l.id)}` }))
+        .map((l) => Object.freeze({ name: trim(l.name), href: `/${byLocation.get(l.id)}` }))
     }
 
     failed = Boolean(osErr || locErr || pageErr) || !companyName

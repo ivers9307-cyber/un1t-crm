@@ -28,8 +28,9 @@ const rows = [
   { organization_id: ORG, slug: 'soon', kind: 'campaign', publish_state: 'coming_soon' },
   { organization_id: ORG, slug: 'old', kind: 'campaign', publish_state: 'retired' },
   { organization_id: ORG, slug: 'draft', kind: 'campaign', publish_state: 'draft' },
-  // PR1: a studio page is not admitted by the edge tier (still /welcome + PUBLIC_PATHS).
+  // PR3: a studio page is a page like any other (served by the [slug] route).
   { organization_id: ORG, slug: 'downtown', kind: 'studio', publish_state: 'live' },
+  { organization_id: ORG, slug: 'uptown', kind: 'studio', publish_state: 'draft' },
   { organization_id: 'org-other', slug: 'elsewhere', kind: 'campaign', publish_state: 'live' },
 ]
 
@@ -53,7 +54,7 @@ describe('listPublicPageSlugs', () => {
   it('lists live, coming_soon and retired slugs for the org, cached for 60s', async () => {
     const db = counted(makeFakeDb({ landing_pages: rows }))
     const first = await listPublicPageSlugs(ORG, { db, nowMs: 1000 })
-    expect([...first].sort()).toEqual(['january', 'old', 'soon'])
+    expect([...first].sort()).toEqual(['downtown', 'january', 'old', 'soon'])
     await listPublicPageSlugs(ORG, { db, nowMs: 1000 + PUBLIC_PAGES_CACHE_TTL_MS - 1 })
     expect(db.spy).toHaveBeenCalledTimes(1)
     await listPublicPageSlugs(ORG, { db, nowMs: 1000 + PUBLIC_PAGES_CACHE_TTL_MS })
@@ -63,28 +64,28 @@ describe('listPublicPageSlugs', () => {
   it('caches per organisation', async () => {
     const db = counted(makeFakeDb({ landing_pages: rows }))
     expect(await listPublicPageSlugs('org-other', { db, nowMs: 5 })).toEqual(['elsewhere'])
-    expect([...(await listPublicPageSlugs(ORG, { db, nowMs: 5 }))].sort()).toEqual(['january', 'old', 'soon'])
+    expect([...(await listPublicPageSlugs(ORG, { db, nowMs: 5 }))].sort()).toEqual(['downtown', 'january', 'old', 'soon'])
     expect(db.spy).toHaveBeenCalledTimes(2)
   })
 
-  it('fallback when the read throws: UN1T Group answers the five campaign slugs (no studio page in PR1), an unknown org answers []', async () => {
+  it('fallback when the read throws: UN1T Group answers the five former code routes and its two studio pages, an unknown org answers []', async () => {
     expect(await listPublicPageSlugs(UN1T_GROUP_ORG_ID, { db: throwingDb, nowMs: 1 }))
-      .toEqual(['trial', '50plus', 'corp', 'start', 'free-class'])
+      .toEqual(['trial', '50plus', 'corp', 'start', 'free-class', 'stillorgan', 'hatch-street'])
     expect(await listPublicPageSlugs('org-unknown', { db: throwingDb, nowMs: 1 })).toEqual([])
-    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).toHaveLength(5)
-    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).not.toContain('stillorgan')
-    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).not.toContain('hatch-street')
+    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).toHaveLength(7)
   })
 
-  it('reads campaign pages only (PR1): a live studio page is not listed', async () => {
+  it('reads every page kind (PR3): a live studio page is listed, a draft one is not', async () => {
     const db = makeFakeDb({ landing_pages: rows })
-    expect(await listPublicPageSlugs(ORG, { db, nowMs: 1 })).not.toContain('downtown')
+    const slugs = await listPublicPageSlugs(ORG, { db, nowMs: 1 })
+    expect(slugs).toContain('downtown')
+    expect(slugs).not.toContain('uptown')
   })
 
   it('an errored read answers the fallback too, and the failure is cached for the window', async () => {
     const failing = {
       from: vi.fn(() => ({
-        select: () => ({ eq: () => ({ eq: () => ({ in: async () => ({ data: null, error: { message: 'boom' } }) }) }) }),
+        select: () => ({ eq: () => ({ in: async () => ({ data: null, error: { message: 'boom' } }) }) }),
       })),
     }
     expect(await listPublicPageSlugs(UN1T_GROUP_ORG_ID, { db: failing, nowMs: 1 })).toContain('trial')

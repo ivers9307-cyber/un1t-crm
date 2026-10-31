@@ -46,13 +46,10 @@ const nextConfig = {
   async rewrites() {
     return [
       // ─── Two-location marketing site (un1tdublin.com split) ───────
-      // Clean public URLs for each studio's landing page. The split
-      // chooser lives at /welcome; these map the pretty paths to the
-      // per-studio pages (resolved by landing_page_settings.public_path).
-      { source: '/stillorgan',         destination: '/welcome/stillorgan' },
-      { source: '/hatch-street',       destination: '/welcome/hatch-street' },
-      { source: '/stillorgan/events',  destination: '/welcome/stillorgan/events' },
-      { source: '/hatch-street/events', destination: '/welcome/hatch-street/events' },
+      // The studio pages (/stillorgan, /hatch-street and their /events,
+      // /status) are landing_pages rows served by the (public)/[slug] route
+      // since PAGES.1; the four pretty-path rewrites to /welcome/<path> are
+      // gone, and /welcome/<path> itself now redirects to /<path>.
 
       // Apex marketing domain: when someone lands on the bare
       // un1tdublin.com root, serve the split chooser (/welcome) rather

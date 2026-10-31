@@ -2,27 +2,21 @@
 //
 // Two-location split (un1tdublin.com): this page is now the SPLIT
 // CHOOSER — two full-screen panels, click left → Stillorgan, right →
-// Hatch Street. Each studio's full marketing page lives at
-// /welcome/[location] (public_path), surfaced as /stillorgan and
-// /hatch-street via next.config rewrites.
+// Hatch Street. Each studio's full marketing page is its studio page at
+// /<slug> (PAGES.1: the one [slug] route; /welcome/<slug> redirects there),
+// so the tiles link straight to /<slug>.
 //
 // The chooser is operator-editable from /settings/landing-page
 // (?page=chooser → ChooserEditorForm → PUT /api/chooser-settings):
 //   - page-level headline + intro (chooser_settings — per-org row
 //     since SAAS-6 / mig 414)
-//   - per-tile label / CTA text / cover image / order
-//     (landing_page_settings.chooser_* + chooser_settings.tile_order)
+//   - per-tile label / CTA text / cover image / order (the studio page's
+//     chrome.chooser_* + chooser_settings.tile_order)
 // This render reads ALL of those so the editor round-trips end-to-end.
 //
-// Edit mode (?edit=1) still mounts EditModeOverlay for the live-preview
-// iframe inside /settings/landing-page, which drives the overlay via
-// postMessage. The editor branch runs BEFORE the chooser render.
-// EDITGATE.1 — it is honoured only for a signed-in staff session (the
-// iframe is same-origin with the editor, so it carries the CRM cookies),
-// seeded from one of THAT session's studios and with client-safe blocks;
-// everyone else gets the chooser. It used to hand the estate's most
-// recently edited page, product ids and attribution included, to any
-// visitor who appended ?edit=1.
+// `?edit=1` is an ordinary request here: the chooser editor has no live
+// preview (the old edit-mode overlay branch, and the session read behind it,
+// are gone with the legacy form).
 //
 // WEBSITE-REDESIGN 2026-06: display typography (font-display, set by
 // the /welcome layout), staggered entrance, film grain, ENTER pill
@@ -33,13 +27,9 @@ import Link from 'next/link'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { blocksOrDefault, clientSafeBlocks } from '@/lib/landing-page-blocks'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import { loadFrontPage, publicWelcomePathForLocation } from '@/lib/welcome-front-page'
 import { resolveTenantLocationId, resolveTenantOrgId } from '@/lib/tenant-domains-edge'
 import { resolveGymSiteName } from '@/lib/default-site-name'
-import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,39 +41,6 @@ const loadFrontPageForHost = cache(async (host) => {
   const orgId = await resolveTenantOrgId(host)
   return loadFrontPage(null, { orgId })
 })
-
-// EDITGATE.1 — the studios of the signed-in staff session (master: every
-// active studio), or null for no session, a session with no studio, and a
-// failed read: ?edit=1 is then an ordinary public request.
-async function editorStudioIds() {
-  try {
-    const user = await getCurrentUser()
-    const ids = user ? getUserLocationIds(user) : []
-    return ids.length > 0 ? ids : null
-  } catch {
-    return null
-  }
-}
-
-// Edit-mode seed: the most-recently-edited row among the session's own
-// studios (EDITGATE.1; it used to be any row in the estate). The overlay
-// is postMessage-driven so the seed is just the initial paint; which row
-// seeds it doesn't affect the editing experience.
-async function loadEditSeed(locationIds) {
-  try {
-    const db = createServerClient()
-    const { data } = await db
-      .from('landing_page_settings')
-      .select('*, locations:location_id ( organization_id )')
-      .in('location_id', locationIds)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    return data || null
-  } catch {
-    return null
-  }
-}
 
 // Front-page data (org chooser row + the org's studio tiles) lives in
 // src/lib/welcome-front-page.js — SAAS-6 made chooser_settings
@@ -146,39 +103,10 @@ function TileBody({ s, brand }) {
   )
 }
 
-export default async function WelcomePage(props) {
-  const searchParams = await props.searchParams
-
-  // Edit-mode preview iframe, for a staff session only (EDITGATE.1).
-  const editorStudios = searchParams?.edit === '1' ? await editorStudioIds() : null
-  if (editorStudios) {
-    const row = await loadEditSeed(editorStudios)
-    const blocks = clientSafeBlocks(blocksOrDefault(row?.blocks))
-    // W1.S1b — the seed row's own studio brand and its organisation's
-    // footer chrome (both cached), the same footer /welcome/[location]
-    // renders live, so the preview matches the page; never a literal.
-    const [seedBrand, chrome] = await Promise.all([
-      resolveLocationBrand({ locationId: row?.location_id || null }),
-      resolveOrgChrome({ orgId: row?.locations?.organization_id || null }),
-    ])
-    const footer = { brand: chrome.companyName, studios: chrome.studios, legalName: chrome.legalName }
-    return (
-      <EditModeOverlay
-        initialBlocks={blocks}
-        initialLogoUrl={row?.logo_url || null}
-        initialLogoAlt={row?.logo_alt || seedBrand.companyName}
-        fallbackLogoAlt={seedBrand.companyName}
-        wordmark={seedBrand.shortName}
-        locationName={seedBrand.locationName}
-        initialLogoWidthPx={row?.logo_width_px || 200}
-        footer={footer}
-      />
-    )
-  }
-
+export default async function WelcomePage() {
   // Repset per-location domains (mig 432): if this host maps to a
   // LOCATION-SCOPED tenant_domains row, strays land on that ONE
-  // studio's public welcome page rather than the org chooser. NEW
+  // studio's page (/<slug>) rather than the org chooser. NEW
   // branch — engages ONLY when the host resolves to a non-null
   // location_id. A whole-org row (location_id NULL), the legacy
   // in-code hostnames (un1tdublin.com never has a row), and any
@@ -230,7 +158,7 @@ export default async function WelcomePage(props) {
             <TileBody s={s} brand={brand} />
           </div>
         ) : (
-          <Link key={s.path} href={`/welcome/${s.path}`} className={tileWrapClasses}>
+          <Link key={s.path} href={`/${s.path}`} className={tileWrapClasses}>
             <TileBody s={s} brand={brand} />
           </Link>
         )

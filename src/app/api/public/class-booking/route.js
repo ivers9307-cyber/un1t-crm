@@ -12,7 +12,8 @@
 // allow-listed validation read and (from the row's `attribution`) the tag,
 // lead source and CAPI eventSourceUrl; `path` and `campaign` are ignored and
 // the body can never set any of them. The queued row records `page_id`.
-// Without `page` the legacy path (PR1; PR3 deletes it) is unchanged.
+// Without `page`, `path` names a STUDIO PAGE by its slug (/stillorgan's own
+// class funnel): its merged class_funnel block decides everything the same way.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -32,7 +33,7 @@ import { locationCanTakePayments } from '@/lib/location-payments'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
-import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy } from '@/lib/landing-pages'
+import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 import { offerConfigured } from '@/lib/landing-page-offers'
 
 export const runtime = 'nodejs'
@@ -120,7 +121,7 @@ function resolvePageFunnel(r) {
     const cfg = campaignFunnelConfig(block, { landingPath })
     const copy = campaignFunnelCopy(block || {})
     return {
-      tag: a.tag, leadSource: a.lead_source, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
+      tag: a.tag || cfg.tag, leadSource: a.lead_source || cfg.leadSource, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
       trialMembershipId: cfg.trialMembershipId, trialPlanCode: cfg.trialPlanCode,
       priceCents: 0, currency: 'EUR',
       allowKeywords: cfg.allowKeywords,
@@ -133,7 +134,9 @@ function resolvePageFunnel(r) {
     const cfg = classFunnelConfigFromBlocks(r.blocks, landingPath)
     return {
       ...cfg,
-      tag: a.tag, leadSource: a.lead_source, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
+      // A studio page's attribution holds only the row's own values: a blank
+      // key keeps the class funnel's default (the pre-PAGES.1 value, spec §9).
+      tag: a.tag || cfg.tag, leadSource: a.lead_source || cfg.leadSource, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
       allowKeywords: null,
       timetableUnavailableText: classFunnelTimetableUnavailableMessage(r.blocks),
       notConfigured: false,
@@ -155,7 +158,8 @@ export async function POST(request) {
   let landingPath
   let locationId
   let pageId = null
-  let termsBlocks
+  let terms
+  let pageBlocks
   let funnel
   if (b.page) {
     // PAGES.1 — resolved first, then limited on the RESOLVED studio path (the
@@ -176,7 +180,8 @@ export async function POST(request) {
     landingPath = r.publicPath
     locationId = r.locationId
     pageId = r.pageId
-    termsBlocks = null // read below, only when the tick is needed
+    terms = r.terms
+    pageBlocks = r.blocks
   } else {
     landingPath = resolveLandingPath(b.path)
     // SAAS-6: tenant-keyed by the RESOLVED landing path so one location's booking
@@ -184,14 +189,20 @@ export async function POST(request) {
     const limit = await checkRateLimit(db, `classbook:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
     if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
-    // PR1 legacy (PR3 deletes it): the studio's landing_page_settings row. A
-    // miss or a failed read is "not available", as it always was.
-    const legacy = await resolvePublicPageRequest(db, { legacyPath: landingPath })
+    // The studio page the path names. A miss is "not available", as it
+    // always was; a failed read is 503, never a refusal.
+    const legacy = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: landingPath })
+    if (!legacy.ok && legacy.reason === 'unreadable') {
+      const refusal = pageRequestRefusal('unreadable')
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
     if (!legacy.ok) {
       return NextResponse.json({ success: false, error: 'Class booking is not available right now.' }, { status: 400 })
     }
     locationId = legacy.locationId
-    termsBlocks = legacy.blocks
+    pageId = legacy.pageId
+    terms = legacy.terms
+    pageBlocks = legacy.blocks
     funnel = resolveFunnel(legacy.blocks, landingPath, resolveCampaignKey(b.campaign))
   }
   const name = `${b.first_name} ${b.last_name}`.trim()
@@ -230,12 +241,11 @@ export async function POST(request) {
     // The tick's wording rides on the refusal, so a page that loaded before
     // the funnel switched on (or whose class list read missed it) can show
     // the tick and try again instead of being refused with nothing to tick.
-    // A page request takes the studio's own terms wording (studioTermsCopy).
-    const blocks = pageId ? [{ type: 'class_funnel', ...(await studioTermsCopy(db, locationId)) }] : termsBlocks
-    const terms = un1tTermsPayload({ blocks, studioName: un1tStudioName, publicPath: landingPath })
+    // The studio's own terms wording (the resolver's `terms`).
+    const termsPayload = un1tTermsPayload({ terms, studioName: un1tStudioName, publicPath: landingPath })
     return NextResponse.json({
-      success: false, code: 'terms_required', error: terms.required_message,
-      issues: { terms_accepted: terms.required_message }, terms,
+      success: false, code: 'terms_required', error: termsPayload.required_message,
+      issues: { terms_accepted: termsPayload.required_message }, terms: termsPayload,
     }, { status: 400 })
   }
 
@@ -268,8 +278,8 @@ export async function POST(request) {
   let timetableErr = null
   try {
     const r = funnel.allowKeywords
-      ? await readPublicClasses(db, locationId, 14, { allowKeywords: funnel.allowKeywords })
-      : await readPublicClasses(db, locationId, 14)
+      ? await readPublicClasses(db, locationId, 14, { allowKeywords: funnel.allowKeywords, blocks: pageBlocks })
+      : await readPublicClasses(db, locationId, 14, { blocks: pageBlocks })
     timetableErr = r.error
     chosen = r.classes.find((c) => c.event_id === b.event_id) || null
   } catch (e) {

@@ -92,8 +92,9 @@ export const BRANDS = [
     organizationId: UN1T_GROUP_ORG_ID, // W1.L4
     allowedPaths: [
       '/welcome',
-      '/stillorgan',    // pretty path → next.config rewrites to /welcome/stillorgan
-      '/hatch-street',  // pretty path → next.config rewrites to /welcome/hatch-street
+      // PAGES.1 — the studio pages (/stillorgan, /hatch-street) are database
+      // pages, public through the slug tier (src/lib/public-pages-edge.js; its
+      // in-code fallback carries them through a DB outage), so no entry here.
       '/offers',        // OFFERS.7: weekend "lock in" sale pages (src/app/offers)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
       '/terms',         // Terms of Service (Meta App Review + site footer)

@@ -13,6 +13,11 @@ vi.mock('@/lib/location-time', async (importOriginal) => ({
   ...(await importOriginal()),
   getLocationZone: vi.fn(async () => 'Europe/Dublin'),
 }))
+// A studio with no Glofox reads its timetable off the blocks the caller passes
+// (the resolved page's merged blocks); a caller with only a studio gets the
+// studio's own page, stubbed here (landing-pages.copy-source.test.js covers it).
+const mocks = vi.hoisted(() => ({ studioBlocks: vi.fn() }))
+vi.mock('@/lib/landing-pages', () => ({ studioPageBlocksFor: mocks.studioBlocks }))
 import { shapePublicClass, listPublicClasses, readPublicClasses, parseHiddenKeywords, isClassHidden, isClassAllowed, isEventFull, PUBLIC_CLASS_KEYS } from './public-classes'
 import { fetchUpcomingEvents, glofoxCredentialsForLocation } from '@/lib/glofox'
 
@@ -22,7 +27,10 @@ function makeDb(settings) {
   return api
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  mocks.studioBlocks.mockResolvedValue({ blocks: [], publicPath: null, terms: {} })
+})
 // PUBCAP.1 — any key that could tell a customer how full a class is.
 const CAPACITY_KEY = /spot|capacity|size|booked|remaining|left|place|seat|full|waiting|limit/i
 
@@ -157,13 +165,13 @@ describe('readPublicClasses — REGISTRYREAD.1a', () => {
 // MANUALFUNNEL.1 — a studio with no Glofox lists the timetable its operator
 // wrote on the class_funnel block.
 describe('readPublicClasses — manual timetable (no Glofox)', () => {
-  function landingDb(result) {
+  function locDb() {
     const calls = []
     const b = {
       from: (t) => { calls.push(['from', t]); return b },
       select: (c) => { calls.push(['select', c]); return b },
       eq: (c, v) => { calls.push(['eq', c, v]); return b },
-      maybeSingle: async () => result,
+      maybeSingle: async () => ({ data: null, error: null }),
     }
     return { db: b, calls }
   }
@@ -174,10 +182,10 @@ describe('readPublicClasses — manual timetable (no Glofox)', () => {
   }
   const TIMETABLE = 'Mon-Sun 06:15 Strength\nMon-Sun 18:00 Conditioning'
 
-  it('lists the block timetable in the public class shape, read by location, and never calls Glofox', async () => {
+  it('lists the timetable of the blocks it is given in the public class shape, and never calls Glofox or the studio page', async () => {
     await noGlofox()
-    const { db, calls } = landingDb({ data: { blocks: [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 0 }] }, error: null })
-    const out = await readPublicClasses(db, 'HATCH', 7)
+    const { db, calls } = locDb()
+    const out = await readPublicClasses(db, 'HATCH', 7, { blocks: [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 0 }] })
     expect(out.error).toBeNull()
     expect(out.classes.length).toBeGreaterThanOrEqual(12)
     for (const c of out.classes) {
@@ -185,43 +193,62 @@ describe('readPublicClasses — manual timetable (no Glofox)', () => {
       expect(c.event_id.startsWith('manual-')).toBe(true)
       expect(Date.parse(c.starts_at)).toBeGreaterThan(Date.now())
     }
-    expect(calls).toEqual([
-      ['from', 'landing_page_settings'], ['select', 'blocks'], ['eq', 'location_id', 'HATCH'],
-      // HATCHSTART.1: is it a un1t.online studio? (No: the stub's row has no membership_source.)
-      ['from', 'locations'], ['select', 'membership_source, settings'], ['eq', 'id', 'HATCH'],
-    ])
+    // Only the HATCHSTART.1 membership-source read: is it a un1t.online studio? (No: the stub's row has no membership_source.)
+    expect(calls).toEqual([['from', 'locations'], ['select', 'membership_source, settings'], ['eq', 'id', 'HATCH']])
+    expect(mocks.studioBlocks).not.toHaveBeenCalled()
     expect(fetchUpcomingEvents).not.toHaveBeenCalled()
+  })
+
+  it('with no blocks given (a caller that holds only a studio) the studio\'s own page is read, by location', async () => {
+    await noGlofox()
+    mocks.studioBlocks.mockResolvedValueOnce({ blocks: [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 0 }], publicPath: 'hatch-street', terms: {} })
+    const { db } = locDb()
+    const out = await readPublicClasses(db, 'HATCH', 7)
+    expect(mocks.studioBlocks).toHaveBeenCalledWith(db, 'HATCH')
+    expect(out.error).toBeNull()
+    expect(out.classes.length).toBeGreaterThanOrEqual(12)
+    // listPublicClasses carries the blocks through, too.
+    await noGlofox()
+    mocks.studioBlocks.mockClear()
+    const listed = await listPublicClasses(locDb().db, 'HATCH', 7, { blocks: [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 0 }] })
+    expect(listed.length).toBeGreaterThanOrEqual(12)
+    expect(mocks.studioBlocks).not.toHaveBeenCalled()
   })
 
   it('the 14-day read the booking route validates against contains every class the 7-day list shows', async () => {
     const blocks = [{ type: 'class_funnel', timetable: TIMETABLE }]
     await noGlofox()
-    const shown = await readPublicClasses(landingDb({ data: { blocks }, error: null }).db, 'HATCH', 7)
+    const shown = await readPublicClasses(locDb().db, 'HATCH', 7, { blocks })
     await noGlofox()
-    const valid = await readPublicClasses(landingDb({ data: { blocks }, error: null }).db, 'HATCH', 14)
+    const valid = await readPublicClasses(locDb().db, 'HATCH', 14, { blocks })
     const ids = new Set(valid.classes.map((c) => c.event_id))
     expect(shown.classes.length).toBeGreaterThan(0)
     for (const c of shown.classes) expect(ids.has(c.event_id)).toBe(true)
   })
 
-  it('a landing row that could not be read is an error, not an empty timetable', async () => {
+  it('a studio page that could not be read is an error, not an empty timetable', async () => {
     await noGlofox()
-    const out = await readPublicClasses(landingDb({ data: null, error: { message: 'boom' } }).db, 'HATCH', 7)
+    mocks.studioBlocks.mockRejectedValueOnce(Object.assign(new Error('Could not read the studio page'), { cause: { code: 'XX' } }))
+    const out = await readPublicClasses(locDb().db, 'HATCH', 7)
     expect(out).toEqual({ classes: [], error: 'manual_timetable_unreadable' })
   })
 
-  it('no landing row, or a block with no timetable, is an empty list with no error', async () => {
+  it('no studio page, empty blocks, or a block with no timetable is an empty list with no error', async () => {
     await noGlofox()
-    expect(await readPublicClasses(landingDb({ data: null, error: null }).db, 'HATCH', 7)).toEqual({ classes: [], error: null })
+    mocks.studioBlocks.mockResolvedValueOnce({ blocks: [], publicPath: null, terms: {} })
+    expect(await readPublicClasses(locDb().db, 'HATCH', 7)).toEqual({ classes: [], error: null })
     await noGlofox()
-    expect(await readPublicClasses(landingDb({ data: { blocks: [{ type: 'class_funnel' }] }, error: null }).db, 'HATCH', 7)).toEqual({ classes: [], error: null })
+    expect(await readPublicClasses(locDb().db, 'HATCH', 7, { blocks: [] })).toEqual({ classes: [], error: null })
+    await noGlofox()
+    expect(await readPublicClasses(locDb().db, 'HATCH', 7, { blocks: [{ type: 'class_funnel' }] })).toEqual({ classes: [], error: null })
   })
 
   it('a studio WITH Glofox never reads the manual timetable', async () => {
-    const { db, calls } = landingDb({ data: { blocks: [{ type: 'class_funnel', timetable: TIMETABLE }] }, error: null })
-    const out = await readPublicClasses(db, 'L', 7)
+    const { db, calls } = locDb()
+    const out = await readPublicClasses(db, 'L', 7, { blocks: [{ type: 'class_funnel', timetable: TIMETABLE }] })
     expect(out.classes.map((c) => c.event_id)).toEqual(['e1'])
     expect(calls).toEqual([])
+    expect(mocks.studioBlocks).not.toHaveBeenCalled()
   })
 })
 
@@ -233,8 +260,8 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
   const ev = (over = {}) => ({ un1t_id: 'u-1', title: 'RALLY ', starts_at: at(24), capacity: 36, bookings_count: 3, ...over })
   const TIMETABLE = 'Mon-Sun 06:15 Strength'
 
-  function un1tDb({ landing = { data: { blocks: [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 12 }] }, error: null },
-    location = { data: { membership_source: 'un1t_online', settings: {} }, error: null },
+  const BLOCKS = [{ type: 'class_funnel', timetable: TIMETABLE, min_notice_hours: 12 }]
+  function un1tDb({ location = { data: { membership_source: 'un1t_online', settings: {} }, error: null },
     events = { data: [ev()], error: null } } = {}) {
     const reads = []
     return {
@@ -253,7 +280,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
             // UN1TBOOK.19's freshness read (newest synced_at): none stamped here,
             // so no cutoff applies (un1t-stale-events.test.js covers the filter).
             range: (a, z) => { r.ops.push(['range', a, z]); return Promise.resolve({ data: [], error: null }) },
-            maybeSingle: async () => (table === 'locations' ? location : landing),
+            maybeSingle: async () => (table === 'locations' ? location : { data: null, error: null }),
           }
           return b
         },
@@ -270,7 +297,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     await noGlofox()
     const { db, reads } = un1tDb()
     const before = Date.now()
-    const out = await readPublicClasses(db, 'HATCH', 7)
+    const out = await readPublicClasses(db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.error).toBeNull()
     const r = reads.find((x) => x.table === 'un1t_events' && !x.ops.some((o) => o[0] === 'range'))
     expect(r.ops).toContainEqual(['select', 'un1t_id, title, starts_at, capacity, bookings_count'])
@@ -290,7 +317,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
   it('shapes each class to exactly PUBLIC_CLASS_KEYS, id un1t:<id>, name trimmed, no capacity figure', async () => {
     await noGlofox()
     const startsAt = at(24)
-    const out = await readPublicClasses(un1tDb({ events: { data: [ev({ starts_at: startsAt })], error: null } }).db, 'HATCH', 7)
+    const out = await readPublicClasses(un1tDb({ events: { data: [ev({ starts_at: startsAt })], error: null } }).db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.classes).toHaveLength(1)
     const [c] = out.classes
     expect(Object.keys(c).sort()).toEqual([...PUBLIC_CLASS_KEYS].sort())
@@ -310,7 +337,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
 
   it('never lists the hand-written timetable at a un1t.online studio', async () => {
     await noGlofox()
-    const out = await readPublicClasses(un1tDb({ events: { data: [], error: null } }).db, 'HATCH', 7)
+    const out = await readPublicClasses(un1tDb({ events: { data: [], error: null } }).db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out).toEqual({ classes: [], error: null })
   })
 
@@ -321,7 +348,7 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
       ev({ un1t_id: 'open', capacity: 10, bookings_count: 9, starts_at: at(25) }),
       ev({ un1t_id: 'nocap', capacity: null, bookings_count: 4, starts_at: at(26) }),
     ], error: null }
-    const out = await readPublicClasses(un1tDb({ events }).db, 'HATCH', 7)
+    const out = await readPublicClasses(un1tDb({ events }).db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.classes.map((c) => c.event_id)).toEqual(['un1t:open', 'un1t:nocap'])
   })
 
@@ -329,23 +356,23 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     await noGlofox()
     const location = { data: { membership_source: 'un1t_online', settings: { un1t_online: { hidden_class_keywords: 'el1tes' } } }, error: null }
     const events = { data: [ev({ un1t_id: 'a', title: 'EL1TES' }), ev({ un1t_id: 'b', title: 'DUO', starts_at: at(25) })], error: null }
-    const out = await readPublicClasses(un1tDb({ location, events }).db, 'HATCH', 7)
+    const out = await readPublicClasses(un1tDb({ location, events }).db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.classes.map((c) => c.name)).toEqual(['DUO'])
   })
 
   it('an unreadable location row or un1t_events read is an error, never classes or the manual timetable', async () => {
     await noGlofox()
-    expect(await readPublicClasses(un1tDb({ location: { data: null, error: { message: 'boom' } } }).db, 'HATCH', 7))
+    expect(await readPublicClasses(un1tDb({ location: { data: null, error: { message: 'boom' } } }).db, 'HATCH', 7, { blocks: BLOCKS }))
       .toEqual({ classes: [], error: 'un1t_settings_unreadable' })
     await noGlofox()
-    expect(await readPublicClasses(un1tDb({ events: { data: null, error: { message: 'boom' } } }).db, 'HATCH', 7))
+    expect(await readPublicClasses(un1tDb({ events: { data: null, error: { message: 'boom' } } }).db, 'HATCH', 7, { blocks: BLOCKS }))
       .toEqual({ classes: [], error: 'un1t_events_unreadable' })
   })
 
   it('a studio with no Glofox and another membership source keeps the hand-written timetable', async () => {
     await noGlofox()
     const { db, reads } = un1tDb({ location: { data: { membership_source: 'none', settings: {} }, error: null } })
-    const out = await readPublicClasses(db, 'HATCH', 7)
+    const out = await readPublicClasses(db, 'HATCH', 7, { blocks: BLOCKS })
     expect(out.classes.length).toBeGreaterThan(0)
     for (const c of out.classes) expect(c.event_id.startsWith('manual-')).toBe(true)
     expect(reads.some((r) => r.table === 'un1t_events')).toBe(false)

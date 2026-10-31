@@ -12,8 +12,8 @@
 // PAGES.1 — `page` + `studio` (a public path): the studio's entry comes from
 // the live page's studio row (trialEntryFromRow on the page's merged
 // paid_trial block) and the help row records `page_id`; which eligibility
-// read runs is the studio's membership_source. Without `page` the legacy
-// studio key path (PR1; PR3 deletes it) is unchanged.
+// read runs is the studio's membership_source. Without `page` the studio
+// key names a row of the live `trial` page (loadTrialStudios).
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -80,7 +80,7 @@ export async function POST(request) {
     isUn1t = entry.membershipSource === 'un1t_online'
     pageId = r.pageId
   } else {
-    // PR1 legacy (PR3 deletes it).
+    // No page: the studio key names a row of the trial page.
     const studio = studioByKey(b.studio)
     if (!studio) {
       return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })

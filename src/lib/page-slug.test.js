@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { normaliseSlug, slugProblem, RESERVED_PAGE_SLUGS } from './page-slug.js'
+import { normaliseSlug, slugProblem, RESERVED_PAGE_SLUGS, publicPageSegmentMatches } from './page-slug.js'
 import { appRouteSegments } from '../../tests/helpers/app-route-segments.js'
 
 describe('page-slug', () => {
@@ -25,5 +25,22 @@ describe('page-slug', () => {
     expect(slugProblem('settings')).toBe('reserved')
     expect(slugProblem('Bad Slug')).toBe('invalid')
     expect(slugProblem('january')).toBeNull()
+  })
+  // PAGES.1 — the segment rule the proxy and AppShell share (AppShell, a
+  // client component, cannot import the edge module).
+  it('publicPageSegmentMatches: exact on the first segment, never a reserved one', () => {
+    const slugs = ['stillorgan', 'hatch-street', 'settings']
+    expect(publicPageSegmentMatches('/stillorgan', slugs)).toBe(true)
+    expect(publicPageSegmentMatches('/stillorgan/events', slugs)).toBe(true)
+    expect(publicPageSegmentMatches('/hatch-street/status', slugs)).toBe(true)
+    expect(publicPageSegmentMatches('/stillorganx', slugs)).toBe(false)
+    expect(publicPageSegmentMatches('/x/stillorgan', slugs)).toBe(false)
+    expect(publicPageSegmentMatches('/settings', slugs)).toBe(false)
+    expect(publicPageSegmentMatches('/_next/x', ['_next'])).toBe(false)
+    expect(publicPageSegmentMatches('/', slugs)).toBe(false)
+    expect(publicPageSegmentMatches('', slugs)).toBe(false)
+    expect(publicPageSegmentMatches(null, slugs)).toBe(false)
+    expect(publicPageSegmentMatches('/stillorgan', [])).toBe(false)
+    expect(publicPageSegmentMatches('/stillorgan', undefined)).toBe(false)
   })
 })

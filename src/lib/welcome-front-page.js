@@ -15,6 +15,9 @@ import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import { tileModeFor } from '@/lib/landing-page-visibility'
 
+// PAGES.1: the tile columns of a kind='studio' landing_pages row.
+const TILE_COLUMNS = 'slug, chrome, blocks, publish_state, locations:primary_location_id ( name )'
+
 // Default left→right order when the operator hasn't set tile_order.
 export const TILE_ORDER = ['stillorgan', 'hatch-street']
 
@@ -24,8 +27,9 @@ export const FRONT_PAGE_ORG_SLUG = 'un1t-group'
 
 /**
  * Load the whole front page: the org's chooser row (headline / intro /
- * tile_order) plus every studio tile OF THAT ORG (label, CTA, cover,
- * hero-image fallback). Tiles are returned in the operator's saved
+ * tile_order) plus every studio tile OF THAT ORG (PAGES.1: its kind='studio'
+ * landing_pages row; label, CTA and cover are the page's chrome.chooser_*,
+ * then the location name and the hero image). Tiles are returned in the operator's saved
  * order, falling back to TILE_ORDER. Fail-soft: any error renders the
  * empty chooser rather than 500ing the public page.
  *
@@ -57,9 +61,18 @@ export async function loadFrontPage(db = null, { orgId = null } = {}) {
             .select('headline, intro, tile_order')
             .eq('id', 'default')
             .maybeSingle(),
-      client.from('landing_page_settings')
-        .select('public_path, chooser_label, chooser_cta_text, chooser_image_url, blocks, publish_state, locations:location_id ( name, organization_id )')
-        .not('public_path', 'is', null),
+      // PAGES.1 — a tile is a studio page of THIS organisation (another
+      // tenant's studios must never render on this org's front page). When
+      // the org can't be resolved (transitional) the unfiltered set is
+      // identical in today's single-marketing-domain reality.
+      org?.id
+        ? client.from('landing_pages')
+            .select(TILE_COLUMNS)
+            .eq('kind', 'studio')
+            .eq('organization_id', org.id)
+        : client.from('landing_pages')
+            .select(TILE_COLUMNS)
+            .eq('kind', 'studio'),
     ])
 
     let chooser = chooserRes.data
@@ -78,28 +91,24 @@ export async function loadFrontPage(db = null, { orgId = null } = {}) {
       ? chooser.tile_order
       : TILE_ORDER
 
-    // Tiles are the org's locations only — another tenant's studios
-    // must never render on this org's front page. When the org can't
-    // be resolved (transitional) the unfiltered set is identical in
-    // today's single-marketing-domain reality.
-    const rows = (tilesRes.data || [])
-      .filter((r) => !org?.id || r.locations?.organization_id === org.id)
-
-    const byPath = new Map(rows.map((r) => [r.public_path, r]))
+    // The path of a tile is its page slug (chooser_settings.tile_order holds slugs).
+    const byPath = new Map((tilesRes.data || []).map((r) => [r.slug, r]))
     const tiles = order
       .map((path) => byPath.get(path))
       .filter(Boolean)
       .map((r) => {
+        const chrome = r.chrome && typeof r.chrome === 'object' ? r.chrome : {}
         const hero = blocksOrDefault(r.blocks).find((b) => b.type === 'hero')
-        const mode = tileModeFor(r.publish_state)   // 'active' | 'coming_soon' | 'hidden'
+        // 'active' | 'coming_soon' | 'hidden'; a draft or retired page is hidden.
+        const mode = tileModeFor(r.publish_state)
         return {
-          path: r.public_path,
-          // Operator label wins over the location name; fall back to path.
-          name: (r.chooser_label && r.chooser_label.trim())
+          path: r.slug,
+          // Operator label wins over the location name; fall back to the slug.
+          name: (typeof chrome.chooser_label === 'string' && chrome.chooser_label.trim())
             || r.locations?.name
-            || r.public_path,
-          cta: (r.chooser_cta_text && r.chooser_cta_text.trim()) || 'Enter',
-          cover: r.chooser_image_url || hero?.image_url || null,
+            || r.slug,
+          cta: (typeof chrome.chooser_cta_text === 'string' && chrome.chooser_cta_text.trim()) || 'Enter',
+          cover: chrome.chooser_image_url || hero?.image_url || null,
           mode,
           // coming_soon tiles render dimmed + non-clickable (the old
           // DISABLED_TILE_PATHS behaviour); hidden tiles are removed below.
@@ -121,31 +130,34 @@ export async function loadFrontPage(db = null, { orgId = null } = {}) {
 /**
  * Repset per-location domains (mig 432): given the location_id a
  * request host maps to (resolveTenantLocationId, tenant-domains-edge),
- * return the public welcome path for THAT studio — /welcome/<public_path>
- * — so a location-scoped tenant domain lands strays on the one studio
+ * return the public path for THAT studio, its studio page's /<slug>
+ * (PAGES.1; /welcome/<slug> redirects there), so a location-scoped tenant domain lands strays on the one studio
  * rather than the org chooser. Returns null when there is no location
  * (whole-org / unmapped / legacy hostname) or the location has no
- * public landing path, in which case the caller renders the chooser
+ * LIVE studio page, in which case the caller renders the chooser
  * exactly as today. Fail-soft: any error → null (never blocks the
  * public page).
  *
  * @param {import('@supabase/supabase-js').SupabaseClient|null} db  Injectable for tests.
  * @param {string|null} locationId  From resolveTenantLocationId(host).
- * @returns {Promise<string|null>}  '/welcome/<public_path>' or null.
+ * @returns {Promise<string|null>}  '/<slug>' or null.
  */
 export async function publicWelcomePathForLocation(db, locationId) {
   if (!locationId) return null
   try {
     const client = db || createServerClient()
+    // One studio page per location (partial unique index), so no ordering.
+    // Only a LIVE page: the proxy admits no other, so a draft slug looped
+    // /welcome → /<slug> → /welcome, and a coming_soon one 404'd instead of
+    // showing the chooser.
     const { data } = await client
-      .from('landing_page_settings')
-      .select('public_path')
-      .eq('location_id', locationId)
-      .not('public_path', 'is', null)
-      .order('updated_at', { ascending: false })
-      .limit(1)
+      .from('landing_pages')
+      .select('slug')
+      .eq('kind', 'studio')
+      .eq('primary_location_id', locationId)
+      .eq('publish_state', 'live')
       .maybeSingle()
-    return data?.public_path ? `/welcome/${data.public_path}` : null
+    return data?.slug ? `/${data.slug}` : null
   } catch {
     return null
   }

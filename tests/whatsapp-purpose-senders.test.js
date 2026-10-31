@@ -15,7 +15,8 @@ const CALLERS = [
   ['src/app/api/agent/membership-requests/[id]/route.js', "purpose: 'class_confirmed'"],
   ['src/app/api/public/book/route.js', "purpose: 'consult_confirmed'"],
   ['src/lib/event-waitlist.js', "purpose: 'event_waitlist_offer'"],
-  ['src/app/api/public/leads/route.js', "purpose: 'meta_ad_welcome'"],
+  // PAGES.1 PR3 removed the leads route's Meta-ad WhatsApp welcome (and
+  // LEAD_CAMPAIGNS): a campaign is a page of its own, so that row is gone.
 ]
 
 describe('automatic WhatsApp senders name a purpose (uses the studio\'s purpose template)', () => {

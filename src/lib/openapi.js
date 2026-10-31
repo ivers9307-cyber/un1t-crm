@@ -12621,7 +12621,7 @@ registry.registerPath({
   path: '/api/landing-pages/{id}',
   tags: ['Landing pages'],
   summary: 'Save a page\'s title, slug, blocks and chrome',
-  description: 'Session cookie; canEditPage (403). kind, scope, primary_location_id and offer_type are not updatable. On a page with an offer the offer block must be first (a studio page: present); every offer block is stored without its studio half. chrome.was_live is server-owned. A slug change on a page that has been live writes a retired page at the old slug redirecting to the new one; a studio page\'s slug is not renamed (400 studio_page).',
+  description: 'Session cookie; canEditPage (403). kind, scope, primary_location_id and offer_type are not updatable. A studio page (kind studio) saves like any one-studio page. On a page with an offer the offer block must be first (a studio page: present, wherever it sits); every offer block is stored without its studio half. chrome.was_live is server-owned. A slug change on a page that has been live writes a retired page at the old slug redirecting to the new one; a studio page\'s slug is not renamed (400 studio_page).',
   security: [{ CookieAuth: [] }],
   request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: LandingPageUpdate } } } },
   responses: {
@@ -12659,12 +12659,12 @@ registry.registerPath({
   path: '/api/landing-pages/{id}/studios/{locationId}',
   tags: ['Landing pages'],
   summary: 'Save one studio\'s half of a page\'s offer, its attribution and whether the page is on there',
-  description: 'Session cookie; canEditPage (403: on an all-studios page an organisation admin, so a studio manager is refused even on their own row). The studio must be one of the page\'s rows (404). `offer` is parsed with the page\'s offer type schema (strict: an unknown key is 400 with issues); a page with no offer has none (400 no_offer). Answers { row, readiness: { ready, reason } }.',
+  description: 'Session cookie; canEditPage (403: on an all-studios page an organisation admin, so a studio manager is refused even on their own row). The studio must be one of the page\'s rows (404; a one-studio page, a studio page included, has its primary\'s row only). `offer` is parsed with the page\'s offer type schema (strict: an unknown key is 400 with issues); a page with no offer has none (400 no_offer). A priced class_funnel at a un1t.online studio is 400 (anything paid there goes through un1t.online checkout). Answers { row, readiness: { ready, reason } }.',
   security: [{ CookieAuth: [] }],
   request: { params: z.object({ id: uuidLike, locationId: uuidLike }), body: { content: { 'application/json': { schema: LandingPageStudioPut } } } },
   responses: {
     200: { description: '{ success, data: { row, readiness } }' },
-    400: { description: 'Validation failed or no_offer', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation failed, no_offer, or a paid intro at a un1t.online studio', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'You may view the page but not edit its studios', content: { 'application/json': { schema: ErrorResponse } } },
     404: LANDING_PAGE_404,

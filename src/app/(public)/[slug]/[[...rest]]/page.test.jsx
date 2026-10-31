@@ -13,8 +13,9 @@ const h = vi.hoisted(() => ({
   loadedByOrg: null,
   product: { un1t_id: 'UN1T-PROD-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'Trial' },
   reviews: [],
-  legacyBlocks: null,
-  calls: { load: [], reviews: [], legacy: [] },
+  studioChrome: null,
+  productError: null,
+  calls: { load: [], reviews: [], legacy: [], tables: [] },
 }))
 
 vi.mock('next/headers', () => ({ headers: async () => new Map([['host', h.host]]) }))
@@ -48,12 +49,14 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => {
 
 function makeDb() {
   const q = (table) => {
+    h.calls.tables.push(table)
     const b = {
       select: () => b, eq: (c, v) => { if (table === 'google_reviews') h.calls.reviews.push([c, v]); return b },
       gte: () => b, not: () => b, order: () => b, limit: () => b, in: () => b,
       maybeSingle: async () => {
-        if (table === 'un1t_products') return { data: h.product, error: null }
-        if (table === 'landing_page_settings') return { data: h.legacyBlocks ? { blocks: h.legacyBlocks } : null, error: null }
+        if (table === 'un1t_products') return h.productError ? { data: null, error: h.productError } : { data: h.product, error: null }
+        // studioTermsCopy: the studio page's chrome (chrome.un1t_terms).
+        if (table === 'landing_pages') return { data: h.studioChrome ? { chrome: h.studioChrome } : null, error: null }
         return { data: null, error: null }
       },
       then: (resolve, reject) => Promise.resolve(table === 'google_reviews' ? { data: h.reviews, error: null } : { data: null, error: null }).then(resolve, reject),
@@ -73,17 +76,24 @@ vi.mock('@/lib/host-brand', () => ({
 }))
 vi.mock('@/lib/landing-logo', () => ({ getLandingLogo: vi.fn(async () => 'https://x/logo.png'), STILLORGAN_LANDING_LOGO: 'https://x/logo.png' }))
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
+vi.mock('@/lib/default-site-name', () => ({ resolveGymSiteName: vi.fn(async () => 'Host Brand') }))
+vi.mock('@/fonts/poppins', () => ({ poppinsBody: { variable: 'font-var' } }))
 
 vi.mock('@/components/landing-page/PaidTrialFunnel', () => ({ default: (props) => <div data-testid="paid">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/CampaignFunnel', () => ({ default: (props) => <div data-testid="campaign">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/CorpPromoFunnel', () => ({ default: (props) => <div data-testid="corp">{JSON.stringify(props)}</div> }))
+vi.mock('@/components/WaitlistWidget', () => ({ default: (props) => <div data-testid="waitlist">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/ClassFunnel', () => ({ default: (props) => <div data-testid="classfunnel">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/EditModeOverlay', () => ({ default: (props) => <div data-testid="overlay">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/RevealManager', () => ({ default: () => null }))
 vi.mock('@/components/VisitOriginCapture', () => ({ default: () => null }))
+vi.mock('@/components/landing-page/JsonLd', () => ({ default: ({ data }) => <div data-testid="jsonld">{JSON.stringify(data)}</div> }))
+vi.mock('@/components/landing-page/StudioEventsPage', () => ({ default: ({ db, ...props }) => <div data-testid="events">{JSON.stringify({ ...props, hasDb: Boolean(db) })}</div> }))
+vi.mock('@/components/landing-page/StudioStatusPage', () => ({ default: ({ db, ...props }) => <div data-testid="status">{JSON.stringify({ ...props, hasDb: Boolean(db) })}</div> }))
 
 import Page, { generateMetadata } from './page.js'
 import { notFound, redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import { logWarn } from '@/lib/log'
 import { PageReadError } from '@/lib/landing-pages'
 
@@ -161,8 +171,9 @@ beforeEach(() => {
   h.loadThrows = null
   h.loadedByOrg = null
   h.reviews = []
-  h.legacyBlocks = null
-  h.calls = { load: [], reviews: [], legacy: [] }
+  h.studioChrome = null
+  h.productError = null
+  h.calls = { load: [], reviews: [], legacy: [], tables: [] }
 })
 
 describe('the [slug] page route', () => {
@@ -261,14 +272,15 @@ describe('the [slug] page route', () => {
     expect(disabled.studios.map((s) => s.key)).toEqual(['stillorgan', 'hatch'])
   })
 
-  it('the un1t.online terms tick keeps the studio\'s own wording from its legacy class_funnel block (nothing visible changes)', async () => {
+  it('the un1t.online terms tick keeps the studio\'s own wording, now from its studio page\'s chrome.un1t_terms (nothing visible changes)', async () => {
     h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
-    h.legacyBlocks = [{ type: 'class_funnel', terms_label: 'CUSTOM {studio_name} {terms}', terms_link_label: 'the rules' }]
+    h.studioChrome = { un1t_terms: { terms_label: 'CUSTOM {studio_name} {terms}', terms_link_label: 'the rules' } }
     const paid = propsOf(await render({ slug: 'trial' }), 'paid')
     expect(paid.hatchTerms).toMatchObject({ label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules', terms_url: '/legal/un1t/hatch-street/terms' })
     h.loaded = { page: CORP, studios: CORP_STUDIOS }
     const corp = propsOf(await render({ slug: 'corp' }), 'corp')
     expect(corp.terms).toMatchObject({ label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules' })
+    expect(h.calls.tables).not.toContain('landing_page_settings')
   })
 
   it('a checkout return carries the purchase and the cancel flag to the card', async () => {
@@ -294,11 +306,6 @@ describe('the [slug] page route', () => {
     expect(await outcome({ slug: '50plus' })).toBe('NEXT_NOT_FOUND')
     h.loaded = null
     expect(await outcome({ slug: 'nothing-here' })).toBe('NEXT_NOT_FOUND')
-  })
-
-  it('a studio-kind page 404s in PR1 (left to /welcome/[location])', async () => {
-    h.loaded = { page: { ...TRIAL, kind: 'studio', slug: 'stillorgan', scope: 'one', primary_location_id: 'loc-s' }, studios: [TRIAL_STUDIOS_ROWS[0]] }
-    expect(await outcome({ slug: 'stillorgan' })).toBe('NEXT_NOT_FOUND')
   })
 
   it('an unreadable landing_pages read renders nothing but still never throws: notFound()', async () => {
@@ -495,5 +502,357 @@ describe('the [slug] page route', () => {
     expect(indexed.title).not.toContain('—')
     h.loaded = { page: { ...TRIAL, publish_state: 'draft' }, studios: [] }
     expect(await generateMetadata({ params: Promise.resolve({ slug: 'trial' }), searchParams: Promise.resolve({}) })).toEqual({})
+  })
+})
+
+// ── PAGES.1 PR3 — the studio pages (/stillorgan, /hatch-street) ──────────────
+// What /welcome/[location] (+ /events, /status) rendered, from the studio page
+// row and its one studio row: TRIALFIRST's card in the first hero, pageCtas,
+// the Events link, JSON-LD, and the same metadata strings.
+const studioLoc = (id, name, membership_source, settings = { secret_token: 'SEKRET' }) => ({ id, name, membership_source, timezone: 'Europe/Dublin', settings })
+const STILL = {
+  id: 'ps', organization_id: 'org-un1t', slug: 'stillorgan', title: 'Stillorgan', kind: 'studio', scope: 'one',
+  primary_location_id: 'loc-s', offer_type: 'paid_trial', publish_state: 'live', redirect_to: null,
+  chrome: { logo_url: 'https://x/still-logo.png', un1t_terms: {} },
+  blocks: [
+    { id: 'h', type: 'hero', headline: 'Hi', subtext: 'Train with us', image_url: 'https://x/hero.jpg' },
+    { id: 'lf', type: 'lead_form', heading: 'Keep me posted' },
+    { id: 's1', type: 'stats', items: [{ number: '4.9', label: 'Rating' }] },
+    { id: 'pt', type: 'paid_trial', cta_label: 'Start my 14 Day Reset' },
+  ],
+}
+const stillRow = (over = {}) => row('loc-s', {
+  offer: { membership_id: 'GLOFOX-MEM-S', plan_code: 'GLOFOX-PLAN-S', price_cents: 3900 },
+  attribution: { tag: 'trial-tag' },
+  locations: studioLoc('loc-s', 'UN1T Stillorgan', 'glofox'),
+  ...over,
+})
+const HATCH = {
+  ...STILL, id: 'ph', slug: 'hatch-street', title: 'Hatch Street', primary_location_id: 'loc-h',
+  chrome: { logo_url: 'https://x/hatch-logo.png', un1t_terms: { terms_label: 'CUSTOM {studio_name} {terms}', terms_link_label: 'the rules' } },
+}
+const hatchRow = (over = {}) => row('loc-h', {
+  offer: { un1t_product_id: 'UN1T-PROD-1' },
+  locations: studioLoc('loc-h', 'UN1T Hatch Street', 'un1t_online', { un1t_online: { writes_enabled: true }, secret_token: 'SEKRET' }),
+  ...over,
+})
+const PURCHASE = '11111111-1111-1111-1111-111111111111'
+const meta = (slug, rest) => generateMetadata({ params: Promise.resolve({ slug, rest }), searchParams: Promise.resolve({}) })
+
+describe('the page root names its studio for the pixel (PAGES.1)', () => {
+  const attr = (html) => html.match(/data-page-location="([^"]*)"/g)
+
+  it('a Hatch Street studio page stamps data-page-location with Hatch Street\'s location, on the page and on its sub-pages', async () => {
+    h.loaded = { page: HATCH, studios: [hatchRow()] }
+    expect(attr(await render({ slug: 'hatch-street' }))).toEqual(['data-page-location="loc-h"'])
+    expect(attr(await render({ slug: 'hatch-street', rest: ['events'] }))).toEqual(['data-page-location="loc-h"'])
+    expect(attr(await render({ slug: 'hatch-street', rest: ['status'] }))).toEqual(['data-page-location="loc-h"'])
+  })
+
+  it('/corp (primary Hatch) stamps Hatch; /50plus (primary Stillorgan) stamps Stillorgan', async () => {
+    h.loaded = { page: CORP, studios: CORP_STUDIOS }
+    expect(attr(await render({ slug: 'corp' }))).toEqual(['data-page-location="loc-h"'])
+    h.loaded = { page: FIFTY, studios: FIFTY_STUDIOS }
+    expect(attr(await render({ slug: '50plus' }))).toEqual(['data-page-location="loc-s"'])
+  })
+
+  it('an all-studios page stamps the studio ?studio= resolved to, and none until one is chosen', async () => {
+    h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
+    const html = await render({ slug: 'trial', sp: { studio: 'hatch' } })
+    expect(attr(html)).toEqual(['data-page-location="loc-h"'])
+    expect(attr(await render({ slug: 'trial' }))).toBeNull()
+  })
+})
+
+describe('studio pages on the [slug] route', () => {
+  it('a studio page renders hero + blocks with the trial card and pageCtas', async () => {
+    h.loaded = { page: STILL, studios: [stillRow()] }
+    const html = await render({ slug: 'stillorgan' })
+    // The /welcome layout's shell (font + #lp-shell), then the dark page.
+    expect(html).toMatch(/^(<link [^>]*>)*<div id="lp-shell" data-page-location="loc-s" class="font-var font-body"><div class="min-h-screen bg-black text-white antialiased">/)
+    expect(html.match(/id="trial"/g)).toHaveLength(1)
+    const paid = propsOf(html, 'paid')
+    expect(paid).toMatchObject({ initialStudio: 'stillorgan', returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: false })
+    expect(paid.studios).toHaveLength(1)
+    expect(paid.studios[0]).toMatchObject({ key: 'stillorgan', publicPath: 'stillorgan', sellable: true, priceCents: 3900, label: 'UN1T Stillorgan' })
+    // The card posts the studio page's own slug, so the purchase is priced from
+    // the studio page's row (not the /trial page's), and so do its content forms.
+    expect(paid.page).toBe('stillorgan')
+    expect(propsOf(html, 'waitlist')).toMatchObject({ publicPath: 'stillorgan', page: 'stillorgan' })
+    // pageCtas: the trial owns the primary CTA (header, footer).
+    expect(html.match(/href="#trial"/g).length).toBeGreaterThanOrEqual(2)
+    expect(html).toContain('Start my 14 Day Reset')
+    expect(html).toContain('href="/stillorgan/events"')
+    expect(html).toContain('4.9')
+    expect(html).toContain('https://x/still-logo.png')
+    expect(propsOf(html, 'jsonld')).toEqual({
+      '@context': 'https://schema.org', '@type': 'Gym', name: 'UN1T Stillorgan', url: 'https://un1tdublin.com/stillorgan',
+      image: 'https://x/hero.jpg', logo: 'https://x/still-logo.png',
+    })
+    expectClientSafe(html)
+    // Only the page row and its studio row: no legacy landing row read.
+    expect(h.calls.tables).not.toContain('landing_page_settings')
+  })
+
+  it('the card renders once with two heroes, and a page with no hero gets a render-only one', async () => {
+    h.loaded = { page: { ...STILL, blocks: [...STILL.blocks, { id: 'h2', type: 'hero', headline: 'Again' }] }, studios: [stillRow()] }
+    const two = await render({ slug: 'stillorgan' })
+    expect(two.match(/data-testid="paid"/g)).toHaveLength(1)
+    expect(two.match(/id="trial"/g)).toHaveLength(1)
+    h.loaded = { page: { ...STILL, blocks: STILL.blocks.filter((b) => b.type !== 'hero') }, studios: [stillRow()] }
+    const none = await render({ slug: 'stillorgan' })
+    expect(none).toContain('id="trial"')
+    expect(propsOf(none, 'paid').studios[0].key).toBe('stillorgan')
+  })
+
+  it('an unsellable trial renders the classic hero with no card; the CTAs fall back to the page\'s own', async () => {
+    h.loaded = { page: { ...STILL, blocks: STILL.blocks.filter((b) => b.type !== 'lead_form') }, studios: [stillRow({ offer: {} })] }
+    const html = await render({ slug: 'stillorgan' })
+    expect(html).not.toContain('id="trial"')
+    expect(html).not.toContain('data-testid="paid"')
+    expect(html).toContain('lp-marquee-track')
+    expect(html).toContain('href="#book"')
+    expect(html).not.toContain('href="#trial"')
+    // A studio switched off on its own page sells nothing either.
+    h.loaded = { page: STILL, studios: [stillRow({ enabled: false })] }
+    expect(await render({ slug: 'stillorgan' })).not.toContain('id="trial"')
+  })
+
+  it('a return with ?purchase= shows the card even when the trial is no longer sellable, with the cancel flag', async () => {
+    h.loaded = { page: STILL, studios: [stillRow({ offer: {} })] }
+    const paid = propsOf(await render({ slug: 'stillorgan', sp: { purchase: PURCHASE, cancelled: '1' } }), 'paid')
+    expect(paid).toMatchObject({ resumePurchaseId: PURCHASE, cancelled: true, initialStudio: 'stillorgan' })
+    expect(paid.studios[0].sellable).toBe(false)
+  })
+
+  it('a Hatch Street studio page: the card carries the tick worded from its own chrome.un1t_terms; an unreadable product is the classic hero unless a buyer is returning', async () => {
+    h.loaded = { page: HATCH, studios: [hatchRow()] }
+    const html = await render({ slug: 'hatch-street' })
+    const paid = propsOf(html, 'paid')
+    expect(paid).toMatchObject({ initialStudio: 'hatch', returnPath: '/hatch-street' })
+    expect(paid.studios[0]).toMatchObject({ key: 'hatch', sellable: true })
+    expect(paid.hatchTerms).toMatchObject({ required: true, label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules', terms_url: '/legal/un1t/hatch-street/terms' })
+    expect(html).toContain('href="/hatch-street/events"')
+    expectClientSafe(html)
+    // The page row speaks for its terms: no studio page re-read, no legacy row.
+    expect(h.calls.tables).not.toContain('landing_page_settings')
+    expect(h.calls.tables).not.toContain('landing_pages')
+
+    h.productError = { code: 'XX', message: 'boom secret' }
+    vi.mocked(logWarn).mockClear()
+    const degraded = await render({ slug: 'hatch-street' })
+    expect(degraded).not.toContain('id="trial"')
+    expect(degraded).toContain('lp-marquee-track')
+    // Logged with ids only: the error text never reaches the log.
+    expect(logWarn).toHaveBeenCalled()
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain('boom secret')
+    const returning = propsOf(await render({ slug: 'hatch-street', sp: { purchase: PURCHASE } }), 'paid')
+    expect(returning).toMatchObject({ resumePurchaseId: PURCHASE })
+    expect(returning.studios[0]).toMatchObject({ key: 'hatch', sellable: false })
+  })
+
+  it('a missing or unpublished studio page with ?purchase= sends the buyer on to /trial; without a return it 404s; coming_soon 404s', async () => {
+    h.loaded = { page: { ...STILL, publish_state: 'draft' }, studios: [stillRow()] }
+    expect(await outcome({ slug: 'stillorgan', sp: { purchase: PURCHASE, cancelled: '1' } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=stillorgan&cancelled=1`)
+    h.loaded = { page: { ...HATCH, publish_state: 'coming_soon' }, studios: [hatchRow()] }
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch`)
+    expect(await outcome({ slug: 'hatch-street' })).toBe('NEXT_NOT_FOUND')
+    h.loaded = null
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch`)
+    expect(await outcome({ slug: 'stillorgan' })).toBe('NEXT_NOT_FOUND')
+    // Nobody is sent back to a path that was never a studio's.
+    expect(await outcome({ slug: 'nowhere', sp: { purchase: PURCHASE } })).toBe('NEXT_NOT_FOUND')
+    h.loadThrows = new Error('network')
+    expect(await outcome({ slug: 'stillorgan', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=stillorgan`)
+    h.loadThrows = null
+    // A retired studio page with nowhere to send people still sends a returning buyer on.
+    h.loaded = { page: { ...HATCH, publish_state: 'retired', redirect_to: null }, studios: [hatchRow()] }
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE, cancelled: '1' } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch&cancelled=1`)
+    expect(await outcome({ slug: 'hatch-street' })).toBe('NEXT_NOT_FOUND')
+    // With a target, the page's own redirect wins (the query kept).
+    h.loaded = { page: { ...HATCH, publish_state: 'retired', redirect_to: '/trial' }, studios: [hatchRow()] }
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}`)
+  })
+
+  it('/stillorgan/events renders the events page for that studio; /stillorgan/status the status page; /stillorgan/x 404s', async () => {
+    h.loaded = { page: { ...STILL, chrome: { ...STILL.chrome, show_instagram_feed: false } }, studios: [stillRow()] }
+    const events = await render({ slug: 'stillorgan', rest: ['events'] })
+    expect(events).toMatch(/^(<link [^>]*>)*<div id="lp-shell"/)
+    expect(events).not.toContain('data-testid="paid"')
+    expect(propsOf(events, 'events')).toEqual({
+      slug: 'stillorgan',
+      location: { id: 'loc-s', name: 'UN1T Stillorgan', timezone: 'Europe/Dublin' },
+      brand: { companyName: 'UN1T Stillorgan', locationName: 'Stillorgan', shortName: 'UN1T' },
+      logo: { url: 'https://x/still-logo.png', alt: 'UN1T Stillorgan', widthPx: 200 },
+      footer: { brand: 'UN1T', studios: [], legalName: 'Champ Fitness Ltd' },
+      showInstagramFeed: false,
+      hasDb: true,
+    })
+    const status = await render({ slug: 'stillorgan', rest: ['status'] })
+    expect(status).toMatch(/^(<link [^>]*>)*<div id="lp-shell"/)
+    const sp = propsOf(status, 'status')
+    expect(sp.location).toMatchObject({ id: 'loc-s', name: 'UN1T Stillorgan', timezone: 'Europe/Dublin' })
+    expect(sp.hasDb).toBe(true)
+    expect(await outcome({ slug: 'stillorgan', rest: ['x'] })).toBe('NEXT_NOT_FOUND')
+    expect(await outcome({ slug: 'stillorgan', rest: ['events', 'x'] })).toBe('NEXT_NOT_FOUND')
+    // A draft studio page's sub-pages are as hidden as the page.
+    h.loaded = { page: { ...STILL, publish_state: 'draft' }, studios: [stillRow()] }
+    expect(await outcome({ slug: 'stillorgan', rest: ['events'] })).toBe('NEXT_NOT_FOUND')
+    expect(await outcome({ slug: 'stillorgan', rest: ['status'] })).toBe('NEXT_NOT_FOUND')
+  })
+
+  it('metadata: the same title, description and openGraph the three /welcome pages produced', async () => {
+    h.loaded = { page: STILL, studios: [stillRow()] }
+    expect(await meta('stillorgan')).toEqual({
+      title: 'UN1T Stillorgan — Strength + conditioning, built for racing',
+      description: 'Train with us',
+      openGraph: {
+        title: 'UN1T Stillorgan — Strength + conditioning, built for racing',
+        description: 'Train with us',
+        siteName: 'UN1T Stillorgan',
+        type: 'website',
+        images: [{ url: 'https://x/hero.jpg' }],
+      },
+    })
+    h.loaded = { page: { ...STILL, blocks: [{ id: 'h', type: 'hero' }] }, studios: [stillRow()] }
+    expect(await meta('stillorgan')).toMatchObject({
+      description: 'Coach-led strength + conditioning, built for racing. Book your free consultation.',
+      openGraph: { type: 'website' },
+    })
+    expect((await meta('stillorgan')).openGraph).not.toHaveProperty('images')
+    h.loaded = { page: STILL, studios: [stillRow()] }
+    expect(await meta('stillorgan', ['events'])).toEqual({
+      title: 'Events — UN1T Stillorgan',
+      description: 'Upcoming races, workshops and open days at UN1T Stillorgan. Book your spot.',
+      openGraph: {
+        title: 'Events — UN1T Stillorgan',
+        description: 'Upcoming races, workshops and open days at UN1T Stillorgan. Book your spot.',
+        siteName: 'UN1T Stillorgan',
+        type: 'website',
+      },
+    })
+    expect(await meta('stillorgan', ['status'])).toEqual({
+      title: 'UN1T Stillorgan — System status',
+      description: 'Live service status for UN1T Stillorgan. Booking, messaging, payments and email.',
+      robots: { index: false },
+    })
+    expect(await meta('stillorgan', ['x'])).toEqual({})
+  })
+
+  it("metadata: a hidden or missing studio page's root answers the host brand, as /welcome/[location] did; a hidden campaign page keeps {}", async () => {
+    for (const publish_state of ['draft', 'coming_soon']) {
+      h.loaded = { page: { ...STILL, publish_state }, studios: [stillRow()] }
+      expect(await meta('stillorgan')).toEqual({ title: 'Host Brand' })
+    }
+    h.loaded = null
+    expect(await meta('stillorgan')).toEqual({ title: 'Host Brand' })
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    expect(await meta('50plus')).toEqual({})
+  })
+
+  it('a studio page with no chrome.logo_url renders no logo image, no JSON-LD logo, and the overlay gets null (never the Stillorgan mark)', async () => {
+    const noLogo = { ...HATCH, chrome: { un1t_terms: {} } }
+    h.loaded = { page: noLogo, studios: [hatchRow()] }
+    const html = await render({ slug: 'hatch-street' })
+    expect(html).not.toContain('https://x/logo.png')
+    expect(html).not.toMatch(/<img[^>]*alt="UN1T Hatch Street"/)
+    expect(propsOf(html, 'jsonld')).not.toHaveProperty('logo')
+    const events = propsOf(await render({ slug: 'hatch-street', rest: ['events'] }), 'events')
+    expect(events.logo.url).toBeNull()
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    const overlay = propsOf(await render({ slug: 'hatch-street', sp: { edit: '1' } }), 'overlay')
+    expect(overlay.initialLogoUrl).toBeNull()
+  })
+
+  it('edit mode on a studio page: the overlay gets client-safe blocks, the blocks layout and the card as a disabled preview, sellable or not', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...STILL, publish_state: 'draft' }, studios: [stillRow()] }
+    const html = await render({ slug: 'stillorgan', sp: { edit: '1', purchase: PURCHASE } })
+    expect(html).toMatch(/^(<link [^>]*>)*<div id="lp-shell"/)
+    const overlay = propsOf(html, 'overlay')
+    expect(overlay.initialBlocks.map((b) => b.id)).toEqual(['h', 'lf', 's1', 'pt'])
+    expect(overlay.initialBlocks[3]).toMatchObject({ type: 'paid_trial', cta_label: 'Start my 14 Day Reset' })
+    // The offer block (last on the page) is named, so the overlay gives it no toolbar.
+    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks', tone: 'dark', offerBlockId: 'pt', cta: { href: '#trial', label: 'Start my 14 Day Reset' } })
+    expect(overlay.trialPreview).toMatchObject({ returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: true, page: 'stillorgan' })
+    expect(overlay.trialPreview.studio).toMatchObject({ key: 'stillorgan', sellable: true })
+    expect(overlay).toMatchObject({ initialLogoUrl: 'https://x/still-logo.png', initialLogoAlt: 'UN1T Stillorgan', initialLogoWidthPx: 200, wordmark: 'UN1T', locationName: 'Stillorgan' })
+    expectClientSafe(html)
+    h.loaded = { page: STILL, studios: [stillRow({ offer: {} })] }
+    const unsellable = propsOf(await render({ slug: 'stillorgan', sp: { edit: '1' } }), 'overlay')
+    expect(unsellable.trialPreview).toMatchObject({ preview: true })
+    expect(unsellable.trialPreview.studio).toMatchObject({ key: 'stillorgan', sellable: false })
+  })
+
+  it('EDITGATE.1 on a studio page: ?edit=1 from anyone who may not view it is the public render with nothing withheld leaking', async () => {
+    const offer = stillRow().offer
+    h.loaded = { page: STILL, studios: [stillRow({ offer })] }
+    const anon = await render({ slug: 'stillorgan', sp: { edit: '1' } })
+    expect(anon).not.toContain('data-testid="overlay"')
+    expect(propsOf(anon, 'paid')).toMatchObject({ preview: false })
+    expectClientSafe(anon)
+    h.loaded = { page: { ...STILL, publish_state: 'draft' }, studios: [stillRow({ offer })] }
+    expect(await outcome({ slug: 'stillorgan', sp: { edit: '1' } })).toBe('NEXT_NOT_FOUND')
+    // A staff session without the page's permission at its studio.
+    h.user = { id: 'u2', isMaster: false, role: 'staff', activeOrganization: { id: 'org-un1t' }, locationIds: ['loc-h'] }
+    h.loaded = { page: STILL, studios: [stillRow({ offer })] }
+    const other = await render({ slug: 'stillorgan', sp: { edit: '1' } })
+    expect(other).not.toContain('data-testid="overlay"')
+    expectClientSafe(other)
+    // A failed session read is anonymous, never a preview.
+    getCurrentUser.mockRejectedValueOnce(new Error('auth down'))
+    const failed = await render({ slug: 'stillorgan', sp: { edit: '1' } })
+    expect(failed).not.toContain('data-testid="overlay"')
+    expect(propsOf(failed, 'paid')).toMatchObject({ preview: false })
+  })
+})
+
+describe('studio pages: other offer types and empty rows', () => {
+  // mig 792 makes a studio page offer_type class_funnel when its legacy row had
+  // a class_funnel block and no paid_trial block: the block keeps its place.
+  const CF_PAGE = (show) => ({
+    ...STILL, offer_type: 'class_funnel',
+    blocks: [
+      { id: 'h', type: 'hero', headline: 'Hi' },
+      { id: 'cf', type: 'class_funnel', heading: 'Book your first class', subhead: 'Pick a time', ...(show === undefined ? {} : { show_on_landing: show }) },
+      { id: 's1', type: 'stats', items: [{ number: '4.9', label: 'Rating' }] },
+    ],
+  })
+  const cfRow = () => stillRow({ offer: { trial_membership_id: 'elite-m', trial_plan_code: 'elite-p', class_keywords: '50+' } })
+
+  it('a class_funnel studio page shown on the landing renders the funnel in its place, posting against the studio path, ids withheld', async () => {
+    for (const show of [true, undefined]) {
+      h.loaded = { page: CF_PAGE(show), studios: [cfRow()] }
+      const html = await render({ slug: 'stillorgan' })
+      const funnel = propsOf(html, 'classfunnel')
+      expect(funnel, String(show)).toMatchObject({ publicPath: 'stillorgan', heading: 'Book your first class', subhead: 'Pick a time', locationName: 'Stillorgan' })
+      // In blocks order: after the hero, before the stats.
+      expect(html.indexOf('data-testid="classfunnel"')).toBeLessThan(html.indexOf('4.9'))
+      expect(html).not.toContain('data-testid="paid"')
+      expectClientSafe(html)
+    }
+  })
+
+  it('a class_funnel studio page with show_on_landing false does not render the funnel', async () => {
+    h.loaded = { page: CF_PAGE(false), studios: [cfRow()] }
+    const html = await render({ slug: 'stillorgan' })
+    expect(html).not.toContain('data-testid="classfunnel"')
+    expect(html).toContain('4.9')
+    expectClientSafe(html)
+  })
+
+  it('a studio page with no blocks renders the default blocks, as /welcome/[location] did', async () => {
+    h.loaded = { page: { ...STILL, offer_type: 'none', blocks: [] }, studios: [stillRow({ offer: {} })] }
+    const html = await render({ slug: 'stillorgan' })
+    expect(html).toContain('lp-marquee-track') // the default hero
+    expect(html).toContain('id="book"') // the default booking block
+  })
+
+  it('a page with no paid trial studio gets no editor preview card', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...STILL, offer_type: 'none', blocks: STILL.blocks.filter((b) => b.type !== 'paid_trial') }, studios: [stillRow({ offer: {} })] }
+    const overlay = propsOf(await render({ slug: 'stillorgan', sp: { edit: '1' } }), 'overlay')
+    expect(overlay.trialPreview).toBeNull()
+    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks', offerBlockId: null })
   })
 })

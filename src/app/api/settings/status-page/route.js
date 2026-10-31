@@ -13,6 +13,7 @@ import { validateBody } from '@/lib/validate'
 import { DEFAULT_COPY, pruneStatusOverrides } from '@/lib/status-page'
 import { logError } from '@/lib/log'
 import { mergeLocationSettings, settingsSaveFailure } from '@/lib/location-settings'
+import { studioPublicPath } from '@/lib/landing-pages'
 
 export const runtime = 'nodejs'
 
@@ -49,18 +50,20 @@ export async function GET() {
     logError('settings-status-page', 'settings read failed', { locationId: gate.locationId, err: locErr?.message || 'no row' })
     return NextResponse.json({ success: false, code: 'settings_unreadable', error: 'Could not load the status page copy just now.' }, { status: 500 })
   }
-  // Public URL for the preview link — resolved by public_path like the page.
-  const { data: lp } = await db
-    .from('landing_page_settings')
-    .select('public_path')
-    .eq('location_id', gate.locationId)
-    .maybeSingle()
+  // Public URL for the preview link: the studio page's slug (PAGES.1), the
+  // path the page itself is served at. A failed read only drops the link.
+  let publicPath = null
+  try {
+    publicPath = await studioPublicPath(db, gate.locationId)
+  } catch (err) {
+    logError('settings-status-page', 'studio page path unreadable', { locationId: gate.locationId, code: err?.cause?.code ?? null })
+  }
 
   return NextResponse.json({
     success: true,
     overrides: loc?.settings?.status_page || {},
     defaults: DEFAULT_COPY,
-    publicPath: lp?.public_path || null,
+    publicPath: publicPath || null,
     location: { id: gate.locationId, name: loc?.name || null },
   })
 }

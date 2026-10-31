@@ -6,8 +6,10 @@
 // Hatch Street: no CRM charge ever; the CRM finds or creates the un1t.online
 // account and hands back un1t.online's hosted checkout URL.
 //
-// The studio loader and the eligibility reads run for real against the fake
-// database below (one fixture list per table); the un1t.online primitives,
+// The studio loader (the `trial` page's studio rows) and the eligibility reads
+// run for real against the fake database below (one fixture list per table;
+// `pages` below is one entry per studio: its public path and the paid_trial
+// block fields its row on the trial page carries); the un1t.online primitives,
 // the legal-documents read, the customer host and the staff alert are mocked.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Un1tWriteRefused } from '@/lib/un1t-online-write'
@@ -65,6 +67,7 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 
+vi.mock('@/lib/brands', async (importOriginal) => ({ ...(await importOriginal()), UN1T_GROUP_ORG_ID: 'org-un1t' }))
 vi.mock('@/lib/landing-pages', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, resolvePublicPageRequest: vi.fn(actual.resolvePublicPageRequest), studioTermsCopy: vi.fn(async () => ({ terms_required_message: 'Tick the Hatch page terms.' })) }
@@ -77,7 +80,6 @@ const SELLABLE = [{ id: 'b1', type: 'paid_trial', price_cents: 3900, currency: '
 const HATCH_PRODUCT_ID = '674d62bf-4d4b-4231-b1ba-d53543657bea'
 const HATCH_BLOCKS = [
   { id: 'h1', type: 'paid_trial', duration_days: 14, product_name: 'The UN1T Trial', un1t_product_id: HATCH_PRODUCT_ID, active_member_text: 'You are already a member.', help_cta_label: 'Help me', help_sent_text: 'The Hatch team will call you.' },
-  { id: 'h2', type: 'class_funnel', terms_required_message: 'Tick the Hatch terms, please.' },
 ]
 const BODY = { studio: 'stillorgan', first_name: 'Ava', last_name: 'Byrne', email: 'Ava@Example.com', phone: '0851234567', consent: true, lead_event_id: 'lead-abcdefgh', attribution: { utm_campaign: 'c1', ad_provider: 'meta', ad_external_id: 'ad9', fbclid: 'xyz', fbp: 'fb.1.1.2' } }
 const HATCH_BODY = { ...BODY, studio: 'hatch', terms_accepted: true }
@@ -102,16 +104,44 @@ const filterValue = (filters, col) => filters.find((f) => f[0] === 'eq' && f[1] 
 
 const trialUpdates = () => mocks.updated.mock.calls.filter(([t]) => t === 'trial_purchases').map(([, patch, filters]) => ({ patch, filters }))
 
-async function readFixture(table, filters) {
-  const s = mocks.state
-  if (table === 'landing_page_settings') {
-    if (s.pagesError) return { data: null, error: s.pagesError }
-    const path = filterValue(filters, 'public_path')
-    if (path) return { data: s.pages.find((p) => p.public_path === path) || null, error: null }
+// The trial page the fixture serves: every studio's paid_trial fields are its
+// own row's `offer`, over a block that carries only its id and type.
+const TRIAL_PAGE = {
+  id: 'p-trial', organization_id: 'org-un1t', slug: 'trial', kind: 'campaign', scope: 'all', primary_location_id: null,
+  offer_type: 'paid_trial', publish_state: 'live', chrome: {}, blocks: [{ id: 'pt', type: 'paid_trial' }],
+}
+const trialRows = (s) => s.pages.map((p, i) => {
+  const block = (p.blocks || []).find((b) => b.type === 'paid_trial') || null
+  const { id: _id, type: _type, ...offer } = block || {}
+  return {
+    page_id: 'p-trial', location_id: p.location_id, enabled: p.enabled !== false, sort_order: i, offer, attribution: {},
     // loadTrialStudios embeds the location's settings (TRIALSTUDIO.10: a
     // un1t.online studio with its writes off is not for sale): the same
     // object the route's own locations read sees.
-    return { data: s.pages.map((p) => ({ ...p, locations: p.locations && { ...p.locations, settings: s.locations[p.location_id]?.settings } })), error: null }
+    locations: p.locations && { ...p.locations, settings: s.locations[p.location_id]?.settings },
+  }
+})
+
+async function readFixture(table, filters) {
+  const s = mocks.state
+  if (table === 'landing_pages') {
+    if (s.pagesError) return { data: null, error: s.pagesError }
+    // studioPublicPath: the studio page of a location (its slug).
+    const loc = filterValue(filters, 'primary_location_id')
+    if (loc) return { data: { slug: s.pages.find((p) => p.location_id === loc)?.public_path ?? null }, error: null }
+    // listStudioPageSlugs: the live studio pages of the host's organisation.
+    if (filterValue(filters, 'kind') === 'studio' && filterValue(filters, 'slug') === undefined) {
+      if (s.studioSlugsError) return { data: null, error: s.studioSlugsError }
+      s.studioSlugReads = (s.studioSlugReads || 0) + 1
+      return { data: (s.studioSlugs || ['stillorgan', 'hatch-street']).map((slug) => ({ slug })), error: null }
+    }
+    // loadTrialStudios: the trial page in the group organisation.
+    if (filterValue(filters, 'slug') === 'trial') return { data: s.noTrialPage ? null : { ...TRIAL_PAGE, publish_state: s.trialState || 'live' }, error: null }
+    throw new Error('unexpected landing_pages read')
+  }
+  if (table === 'landing_page_studios') {
+    if (s.studiosError) return { data: null, error: s.studiosError }
+    return { data: trialRows(s), error: null }
   }
   if (table === 'un1t_products') return { data: s.product, error: null }
   if (table === 'locations') return { data: s.locations[filterValue(filters, 'id')] || null, error: null }
@@ -179,11 +209,33 @@ describe('POST /api/public/trial-purchases', () => {
     expect((await r.json()).code).toBe('not_configured')
     expect(mocks.contact).not.toHaveBeenCalled()
   })
-  it('answers 503, not not_configured, when the landing row cannot be read', async () => {
+  it('answers 503, not not_configured, when the trial page cannot be read', async () => {
     mocks.state.pagesError = new Error('db')
     const r = await POST(req(BODY))
     expect(r.status).toBe(503)
     expect((await r.json()).code).toBe('unavailable')
+    mocks.state.pagesError = null
+    mocks.state.studiosError = new Error('db')
+    expect((await POST(req(BODY))).status).toBe(503)
+  })
+  it('no page: the studio key names a row of the live trial page; no trial page, a draft one or a switched-off row is not_configured, never a 503', async () => {
+    const ok = await POST(req(BODY))
+    expect(ok.status).toBe(200)
+    expect(mocks.read.mock.calls.some(([t]) => t === 'landing_page_studios')).toBe(true)
+    const trialRead = mocks.read.mock.calls.find(([t, f]) => t === 'landing_pages' && f.some((x) => x[1] === 'slug'))
+    expect(trialRead[1]).toContainEqual(['eq', 'organization_id', 'org-un1t'])
+    expect(trialRead[1]).toContainEqual(['eq', 'slug', 'trial'])
+    mocks.contact.mockClear()
+    for (const patch of [{ noTrialPage: true }, { trialState: 'draft' }, { trialState: 'retired' }]) {
+      mocks.state = { ...freshState(), ...patch }
+      const r = await POST(req(BODY))
+      expect([r.status, (await r.json()).code]).toEqual([400, 'not_configured'])
+    }
+    mocks.state = freshState()
+    mocks.state.pages[0].enabled = false
+    const off = await POST(req(BODY))
+    expect([off.status, (await off.json()).code]).toEqual([400, 'not_configured'])
+    expect(mocks.contact).not.toHaveBeenCalled()
   })
   it('captures the lead, inserts the row at the BLOCK price and opens the payment', async () => {
     const r = await POST(req({ ...BODY, price_cents: 100 }))
@@ -274,6 +326,31 @@ describe('POST /api/public/trial-purchases', () => {
     expect(r.status).toBe(200)
     expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/stillorgan' }))
   })
+  it("a studio slug of the host's org is accepted; another org's or an unknown path is /trial (read once, scoped to the host's org, live studio pages only)", async () => {
+    mocks.state.studioSlugs = ['stillorgan', 'dundrum']
+    await POST(req({ ...BODY, return_path: '/dundrum' }))
+    expect(mocks.payment).toHaveBeenLastCalledWith(expect.objectContaining({ returnPath: '/dundrum' }))
+    expect(mocks.state.studioSlugReads).toBe(1)
+    const read = mocks.read.mock.calls.find(([t, f]) => t === 'landing_pages' && f.some((x) => x[1] === 'kind'))
+    expect(read[1]).toContainEqual(['eq', 'organization_id', 'org-un1t'])
+    expect(read[1]).toContainEqual(['eq', 'kind', 'studio'])
+    expect(read[1]).toContainEqual(['eq', 'publish_state', 'live'])
+    await POST(req({ ...BODY, return_path: '/hatch-street' }))
+    expect(mocks.payment).toHaveBeenLastCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+    await POST(req({ ...BODY, return_path: '/50plus' }))
+    expect(mocks.payment).toHaveBeenLastCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+  })
+  it('a failed studio-slug read never fails the purchase: the return path is /trial', async () => {
+    mocks.state.studioSlugsError = new Error('db')
+    const r = await POST(req({ ...BODY, return_path: '/stillorgan' }))
+    expect(r.status).toBe(200)
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+  })
+  it('a body with no return_path, or /trial, reads no studio pages', async () => {
+    await POST(req(BODY))
+    await POST(req({ ...BODY, return_path: '/trial' }))
+    expect(mocks.state.studioSlugReads).toBeUndefined()
+  })
   it('an unknown return_path falls back to /trial', async () => {
     const r = await POST(req({ ...BODY, return_path: '/evil' }))
     expect(r.status).toBe(200)
@@ -298,7 +375,7 @@ describe('POST /api/public/trial-purchases', () => {
     const r = await POST(req({ ...HATCH_BODY, terms_accepted: undefined }))
     expect(r.status).toBe(400)
     const j = await r.json()
-    expect(j).toMatchObject({ success: false, code: 'terms_required', error: 'Tick the Hatch terms, please.' })
+    expect(j).toMatchObject({ success: false, code: 'terms_required', error: 'Tick the Hatch page terms.' })
     expect(j.terms).toMatchObject({
       required: true,
       terms_url: '/legal/un1t/hatch-street/terms',
@@ -501,6 +578,30 @@ describe('POST /api/public/trial-purchases — page (PAGES.1)', () => {
     expect(r.status).toBe(200)
     expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ page_id: 'page-trial', location_id: 'loc1', amount_cents: 4900, membership_id: 'm1', landing_path: 'stillorgan' })
     expect(mocks.payment).toHaveBeenCalled()
+  })
+
+  it("a studio page's purchase is priced from the studio page's row, even with the /trial page unpublished", async () => {
+    // The card on /stillorgan posts { page: 'stillorgan', studio: 'stillorgan' }; the resolver answers the studio page.
+    const row = { page_id: 'page-studio', location_id: 'loc1', enabled: true, sort_order: 0, offer: { membership_id: 'm9', plan_code: 'p9', price_cents: 5900, product_name: 'Studio Page Trial' }, attribution: {}, locations: { id: 'loc1', name: 'Stillorgan', membership_source: 'glofox', settings: {} } }
+    mocks.state.noTrialPage = true
+    resolvePublicPageRequest.mockResolvedValueOnce({
+      ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'stillorgan', kind: 'studio', offer_type: 'paid_trial' }, studioRow: row,
+      locationId: 'loc1', publicPath: 'stillorgan', blocks: [{ id: 'pt', type: 'paid_trial', duration_days: 14, ...row.offer }],
+      // A studio page's attribution holds only the row's own values (none here).
+      attribution: {}, terms: {},
+    })
+    const r = await POST(req({ ...BODY, page: 'stillorgan', studio: 'stillorgan', price_cents: 1 }))
+    expect(r.status).toBe(200)
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: 'stillorgan', studio: 'stillorgan' }))
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ page_id: 'page-studio', location_id: 'loc1', amount_cents: 5900, membership_id: 'm9', plan_code: 'p9', landing_path: 'stillorgan' })
+    // Nothing read the trial page: the studio page's own row priced it.
+    expect(mocks.read.mock.calls.some(([t, f]) => t === 'landing_pages' && f.some((x) => x[1] === 'slug' && x[2] === 'trial'))).toBe(false)
+    expect(mocks.read.mock.calls.some(([t]) => t === 'landing_page_studios')).toBe(false)
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 5900 }))
+    // Spec §9: paidTrialConfigFromBlocks' defaults, as before PAGES.1 (never stillorgan-stillorgan).
+    expect(mocks.tag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'stillorgan-trial' }))
+    expect(mocks.updated).toHaveBeenCalledWith('contacts', { lead_source: 'meta_trial' }, expect.anything())
+    expect(mocks.capi).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/trial' }))
   })
 
   it('the terms tick on a page uses the studio terms wording', async () => {

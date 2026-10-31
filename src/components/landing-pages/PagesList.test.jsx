@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
 // PAGES.1 — the Pages list at /settings/landing-page: one row per page with
-// its path, studios, offer, status chip and the right editor link (a studio
-// page still opens the legacy studio editor until PR3).
+// its path, studios, offer, status chip and its editor link (every page, a
+// studio page included, opens /settings/landing-page/<id>).
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 
@@ -63,13 +63,18 @@ describe('PagesList', () => {
 
     const studio = rowFor('Stillorgan')
     expect(within(studio).getByText('Draft').className).toContain('bg-gray-500/10 text-gray-700')
-    expect(within(studio).getByRole('link', { name: 'Edit' }).getAttribute('href'))
-      .toBe(`/settings/landing-page?location_id=${STILL}`)
 
     const retired = rowFor('Old promo')
     expect(within(retired).getByText('Retired').className).toContain('bg-gray-500/10 text-gray-700')
     expect(within(retired).queryByRole('link', { name: 'Edit' })).toBeNull()
     expect(within(retired).getByRole('link', { name: 'View' }).getAttribute('href')).toBe('/settings/landing-page/p-4')
+  })
+
+  it('a studio row links to the row editor', () => {
+    render(<PagesList pages={PAGES} canCreate studios={[]} />)
+    const studio = rowFor('Stillorgan')
+    expect(within(studio).getByRole('link', { name: 'Edit' }).getAttribute('href')).toBe('/settings/landing-page/p-3')
+    expect(document.body.innerHTML).not.toContain('location_id=')
   })
 
   it('hides + New page without canCreate', () => {

@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let pageBlocks = []
+let pageTerms = {}
 let locRow = null
 let existingRow = null
 const inserts = []
@@ -17,7 +18,6 @@ const db = {
       update: (row) => { updates.push({ table, row }); return b },
       insert: (row) => { inserts.push({ table, row }); return b },
       maybeSingle: async () => {
-        if (table === 'landing_page_settings') return { data: { location_id: 'L1', blocks: pageBlocks }, error: null }
         if (table === 'locations') return { data: locRow, error: null }
         if (table === 'class_booking_requests' && existingRow) return { data: existingRow, error: null }
         if (table === 'class_booking_requests' && inserts.some((i) => i.table === table)) return { data: { id: 'Q1', class_name: 'BASE' }, error: null }
@@ -29,6 +29,15 @@ const db = {
   },
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
+vi.mock('@/lib/landing-pages', async (importOriginal) => ({
+  ...(await importOriginal()),
+  // The studio page the `path` names, as the resolver answers it (its own tests live beside it).
+  resolvePublicPageRequest: vi.fn(async () => ({
+    ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'hatch-street', kind: 'studio', offer_type: 'class_funnel' }, studioRow: {},
+    locationId: 'L1', publicPath: 'hatch-street', blocks: pageBlocks,
+    attribution: { tag: 'hatch-street-hatch-street', lead_source: 'meta_hatch-street' }, terms: pageTerms,
+  })),
+}))
 vi.mock('@/lib/rate-limit', () => ({
   getClientIp: () => '1.2.3.4',
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
@@ -79,6 +88,7 @@ beforeEach(() => {
   updates.length = 0
   existingRow = null
   pageBlocks = [{ type: 'class_funnel' }]
+  pageTerms = {}
   locRow = { id: 'L1', membership_source: 'glofox', settings: {} }
   settings = un1t(true)
 })
@@ -99,7 +109,7 @@ describe('UN1TWRITE.18 — terms and waiver tick', () => {
   })
 
   it("funnel on: the operator's message is used", async () => {
-    pageBlocks = [{ type: 'class_funnel', terms_required_message: 'Tick the box to go on.' }]
+    pageTerms = { terms_required_message: 'Tick the box to go on.' }
     const j = await (await book({ terms_accepted: false })).json()
     expect(j.error).toBe('Tick the box to go on.')
   })

@@ -4,10 +4,13 @@
 // SAAS-6: per-ORGANIZATION rows (mig 414; was a singleton from mig
 // 228). Each tenant brand gets its own front page — one
 // chooser_settings row per org holding the page-level headline/intro +
-// tile order; per-tile label / CTA / cover live on
-// landing_page_settings (the ORG's locations only) and are edited
-// together here in one PUT so the operator saves the whole front page
-// at once.
+// tile order; per-tile label / CTA / cover live on the studio page's
+// chrome (PAGES.1: the ORG's kind='studio' landing_pages rows, one per
+// studio; chrome.chooser_label / chooser_cta_text / chooser_image_url)
+// and are edited together here in one PUT so the operator saves the
+// whole front page at once. A tile's publish_state is its studio page's:
+// hidden is a draft page (a retired page also reads as hidden, and a save
+// that leaves a hidden tile hidden keeps it retired).
 //
 // Org resolution: explicit ?organization_id wins, else the caller's
 // activeOrganization (src/lib/chooser-access.js). Reads need org
@@ -24,7 +27,9 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { chooserRowId, resolveChooserOrgId, assertChooserRead, assertChooserEdit } from '@/lib/chooser-access'
 import { uuidLike } from '@/lib/schemas'
-import { PUBLISH_STATES } from '@/lib/landing-page-visibility'
+import { PUBLISH_STATES, tileStateToPageState, pageStateToTileState } from '@/lib/landing-page-visibility'
+import { loadStudioPagesByLocation, savePageFields, PageReadError } from '@/lib/landing-pages'
+import { logError } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -56,9 +61,12 @@ export async function GET(request) {
   const db = createServerClient()
   const [chooserRes, tilesRes] = await Promise.all([
     db.from('chooser_settings').select('*').eq('organization_id', orgId).maybeSingle(),
-    db.from('landing_page_settings')
-      .select('location_id, public_path, chooser_label, chooser_cta_text, chooser_image_url, publish_state, locations:location_id ( name, organization_id )')
-      .not('public_path', 'is', null),
+    // PAGES.1 — the org's studio pages (scoped by the org id: another
+    // tenant's studios never surface, or become editable, in this chooser).
+    db.from('landing_pages')
+      .select('primary_location_id, slug, chrome, publish_state, locations:primary_location_id ( name )')
+      .eq('kind', 'studio')
+      .eq('organization_id', orgId),
   ])
   return NextResponse.json({
     success: true,
@@ -67,19 +75,16 @@ export async function GET(request) {
       // it (upsert-on-first-edit below).
       chooser: chooserRes.data
         || { id: chooserRowId(orgId), organization_id: orgId, headline: null, intro: null, tile_order: [] },
-      // Tiles are the ORG's locations only — another tenant's studios
-      // must never surface (or become editable) in this org's chooser.
-      tiles: (tilesRes.data || [])
-        .filter((t) => t.locations?.organization_id === orgId)
-        .map((t) => ({
-          location_id: t.location_id,
-          public_path: t.public_path,
-          name: t.locations?.name || t.public_path,
-          chooser_label: t.chooser_label,
-          chooser_cta_text: t.chooser_cta_text,
-          chooser_image_url: t.chooser_image_url,
-          publish_state: t.publish_state,
-        })),
+      tiles: (tilesRes.data || []).map((t) => ({
+        location_id: t.primary_location_id,
+        public_path: t.slug,
+        name: t.locations?.name || t.slug,
+        chooser_label: t.chrome?.chooser_label ?? null,
+        chooser_cta_text: t.chrome?.chooser_cta_text ?? null,
+        chooser_image_url: t.chrome?.chooser_image_url ?? null,
+        // The page's four states as the editor's three (draft, retired: hidden).
+        publish_state: pageStateToTileState(t.publish_state),
+      })),
     },
   })
 }
@@ -105,6 +110,22 @@ export async function PUT(request) {
   const orgLocationIds = new Set((orgLocs || []).map((l) => l.id))
   for (const t of body.tiles) {
     if (!orgLocationIds.has(t.location_id)) {
+      return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    }
+  }
+
+  // Every tile's studio page is read BEFORE the first write: a tile with no
+  // studio page in this org answers 404 and nothing is saved.
+  let pages
+  try {
+    pages = await loadStudioPagesByLocation(db, { orgId, locationIds: body.tiles.map((t) => t.location_id) })
+  } catch (err) {
+    if (!(err instanceof PageReadError)) throw err
+    logError('chooser-settings', 'studio pages unreadable', { orgId, code: err.cause?.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not read the studio pages. Try again.' }, { status: 500 })
+  }
+  for (const t of body.tiles) {
+    if (!pages.has(t.location_id)) {
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
   }
@@ -135,16 +156,33 @@ export async function PUT(request) {
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
   }
 
-  // 2. Per-tile label/CTA overrides (org-checked above). Only touch
-  //    rows the caller sent; each is scoped by location_id so we never
-  //    clobber a sibling.
+  // 2. Per-tile label / CTA (and visibility) on the studio page (read and
+  //    org-checked above). The chooser keys MERGE into the page's chrome,
+  //    which holds the logo, tone and terms copy as well. Each write is
+  //    scoped by the page id inside this org, so a sibling is never clobbered.
   for (const t of body.tiles) {
-    const tilePatch = { chooser_label: t.chooser_label ?? null, chooser_cta_text: t.chooser_cta_text ?? null }
-    if (t.publish_state) tilePatch.publish_state = t.publish_state
-    const { error } = await db.from('landing_page_settings')
-      .update(tilePatch)
-      .eq('location_id', t.location_id)
-    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+    const page = pages.get(t.location_id)
+    const patch = {
+      chrome: {
+        ...(page.chrome && typeof page.chrome === 'object' ? page.chrome : {}),
+        chooser_label: t.chooser_label ?? null,
+        chooser_cta_text: t.chooser_cta_text ?? null,
+      },
+      updated_by: user.id || null,
+    }
+    // Only a change of state is written, so a retired page that shows as
+    // hidden keeps its redirect when the operator saves something else.
+    if (t.publish_state && pageStateToTileState(page.publish_state) !== t.publish_state) {
+      patch.publish_state = tileStateToPageState(t.publish_state)
+      // A redirect belongs only to a retired page (table CHECK).
+      patch.redirect_to = null
+      if (patch.publish_state === 'live') patch.chrome.was_live = true
+    }
+    const saved = await savePageFields(db, { orgId, pageId: page.id, patch })
+    if (!saved.ok) {
+      const status = saved.reason === 'gone' ? 404 : 400
+      return NextResponse.json({ success: false, error: saved.error?.message || 'Not found' }, { status })
+    }
   }
 
   return NextResponse.json({ success: true })

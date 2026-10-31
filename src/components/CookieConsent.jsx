@@ -22,7 +22,7 @@
 // hosts only, or update that statement. Flagged 2026-06-19.
 
 import { useEffect, useRef, useState } from 'react'
-import { SITE_META_PIXEL_ID, metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
+import { SITE_META_PIXEL_ID, metaPixelIdsForPath, pageLocationIdFromDocument } from '@/lib/meta-pixel-paths'
 import { reportConsent } from '@/lib/consent-telemetry'
 
 const STORAGE_KEY = 'un1t_cookie_consent_v1'
@@ -99,7 +99,7 @@ function loadMarketing() {
     // METADATASET.1 — a studio with its own Meta dataset (Hatch Street) gets
     // its pixel too on its own pages; every page still loads the site pixel.
     // `track` goes to every initialised pixel.
-    for (const id of metaPixelIdsForPath(window.location.pathname)) window.fbq('init', id)
+    for (const id of metaPixelIdsForPath(window.location.pathname, { primaryLocationId: pageLocationIdFromDocument() })) window.fbq('init', id)
     window.fbq('track', 'PageView')
   }
 

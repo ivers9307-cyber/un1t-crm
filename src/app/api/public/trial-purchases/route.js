@@ -1,7 +1,7 @@
 // POST /api/public/trial-purchases — PAIDTRIAL.1: start a paid trial purchase
 // from the /trial page. TRIALSTUDIO.6: the body names the studio
-// (`stillorgan` | `hatch`); the product comes from that studio's landing row
-// (its paid_trial block, loadTrialStudios); the price is the BLOCK's (or, at
+// (`stillorgan` | `hatch`); the product comes from that studio's row on the
+// `trial` page (its paid_trial block, loadTrialStudios); the price is the BLOCK's (or, at
 // Hatch, the mirrored un1t.online product's), never the client's. Captures the
 // lead exactly as the class funnel does (contact, lead_source, attribution,
 // consent, deal placement, Meta Lead) against the chosen studio, then:
@@ -22,8 +22,9 @@
 // (trialEntryFromRow on the page's paid_trial block merged with the row's
 // offer and attribution), so the plan or product, the price and the tag and
 // lead source are the row's; the purchase row records `page_id`. Which
-// provider sells is the studio's membership_source. Without `page` the legacy
-// studio key path (PR1; PR3 deletes it) is unchanged.
+// provider sells is the studio's membership_source. Without `page` (a studio
+// page's own card posts the studio key and its return path) the studio key
+// names a row of the `trial` page (loadTrialStudios).
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -35,7 +36,7 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
 import { studioByKey, loadTrialStudios, trialEntryFromRow } from '@/lib/trial-studios'
-import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy } from '@/lib/landing-pages'
+import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy, listStudioPageSlugs, publicOrgIdForHost } from '@/lib/landing-pages'
 import { stillorganTrialHistory, hatchActiveMembership } from '@/lib/trial-eligibility'
 import { createTrialPurchasePayment } from '@/lib/trial-purchase-payments'
 import { startUn1tTrialCheckout } from '@/lib/trial-purchase-un1t-checkout'
@@ -56,7 +57,8 @@ const Schema = z.object({
   studio: z.string().trim().max(40).optional(),
   page: z.string().trim().max(40).optional(),
   // TRIALFIRST.1: the page the buyer started on, so a redirect-based payment
-  // returns there. Allowlisted by normalizeTrialReturnPath; unknown → /trial.
+  // returns there. Allowlisted by normalizeTrialReturnPath (/trial or a live studio
+  // page's slug in the host's organisation); unknown → /trial.
   return_path: z.string().max(64).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
@@ -94,7 +96,13 @@ export async function POST(request) {
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const b = validation.data
-  const returnPath = normalizeTrialReturnPath(b.return_path)
+  // PAGES.1 — the return path is /trial or a live studio page of the HOST's
+  // organisation, read once per request (only when the body names one; a
+  // failed read is [], so only /trial validates). Never a free-form path.
+  const returnSlugs = b.return_path && b.return_path !== '/trial'
+    ? await listStudioPageSlugs(db, await publicOrgIdForHost(request.headers.get('host')))
+    : []
+  const returnPath = normalizeTrialReturnPath(b.return_path, { slugs: returnSlugs })
 
   let entry
   let isHatch
@@ -128,7 +136,7 @@ export async function POST(request) {
     studioKey = entry.key
     pageId = r.pageId
   } else {
-    // PR1 legacy (PR3 deletes it). A page loaded before the studio choice
+    // No page: the studio key names a row of the trial page. A page loaded before the studio choice
     // shipped posts no studio: it was the Stillorgan page, so that is the
     // default (never a 400 for paid traffic).
     const studio = studioByKey(b.studio ?? 'stillorgan')
@@ -174,20 +182,9 @@ export async function POST(request) {
   // gated on writes_enabled (this is not the funnel). The tick's wording rides
   // on the refusal so the page can show it and try again.
   if (un1tWrites && b.terms_accepted !== true) {
-    let termsBlocks
-    if (pageId) {
-      // A page request: the studio's own terms wording, as the page renders it.
-      termsBlocks = [{ type: 'class_funnel', ...(await studioTermsCopy(db, locationId)) }]
-    } else {
-      const { data: page, error: pageErr } = await db.from('landing_page_settings')
-        .select('blocks').eq('public_path', landingPath).eq('location_id', locationId).maybeSingle()
-      if (pageErr) {
-        logError('trialbuy', 'landing row unreadable', { err: pageErr, locationId })
-        return unavailable()
-      }
-      termsBlocks = page?.blocks
-    }
-    const terms = un1tTermsPayload({ blocks: termsBlocks, studioName: location.name, publicPath: landingPath })
+    // The studio's own terms wording, as the page renders it (the studio
+    // page's chrome.un1t_terms; a blip answers the defaults, never a refusal).
+    const terms = un1tTermsPayload({ terms: await studioTermsCopy(db, locationId), studioName: location.name, publicPath: landingPath })
     return NextResponse.json({
       success: false, code: 'terms_required', error: terms.required_message,
       issues: { terms_accepted: terms.required_message }, terms,

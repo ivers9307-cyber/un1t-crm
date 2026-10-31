@@ -1,8 +1,8 @@
 'use client'
 
 // PAGES.1 — how a typed-in timetable reads (parseManualTimetable): the class
-// times by weekday and the lines it could not read. Shared by the legacy
-// ManualTimetableFields and the studio rows (studio-offer-fields.jsx).
+// times by weekday and the lines it could not read, under the studio rows'
+// timetable field (studio-offer-fields.jsx).
 // Renders nothing for a blank timetable.
 
 import { useMemo } from 'react'

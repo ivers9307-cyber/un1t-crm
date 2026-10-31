@@ -1,10 +1,11 @@
 // PAGES.1 — POST /api/public/funnel-event with `page` + `studio`: the row's
 // location is the page's resolved studio and it records the page. Telemetry
 // never errors the client: a page that does not resolve is ignored (200).
-// Without `page` the legacy location_path read is unchanged.
+// Without `page`, location_path names a studio page by slug (the resolver's
+// legacy branch) and the row records that page.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const m = vi.hoisted(() => ({ rateLimit: vi.fn(), resolve: vi.fn(), inserted: vi.fn(), legacyRow: null, insertError: null }))
+const m = vi.hoisted(() => ({ rateLimit: vi.fn(), resolve: vi.fn(), inserted: vi.fn(), insertError: null }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/landing-pages', async (orig) => ({ ...(await orig()), resolvePublicPageRequest: m.resolve }))
@@ -13,7 +14,7 @@ vi.mock('@/lib/supabase', () => ({
     from: (table) => {
       const q = {
         select: () => q, eq: () => q,
-        maybeSingle: async () => ({ data: table === 'landing_page_settings' ? m.legacyRow : null, error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
         insert: async (row) => { m.inserted(table, row); return { data: null, error: m.insertError } },
       }
       return q
@@ -29,7 +30,6 @@ const pageOk = () => ({ ok: true, pageId: 'page-50', page: { id: 'page-50', slug
 
 beforeEach(() => {
   vi.clearAllMocks()
-  m.legacyRow = { location_id: 'loc-legacy' }
   m.insertError = null
   m.rateLimit.mockResolvedValue({ allowed: true })
 })
@@ -60,13 +60,32 @@ describe('POST /api/public/funnel-event — page (PAGES.1)', () => {
     expect(logWarn).toHaveBeenCalledWith('funnel-event', 'insert failed', expect.objectContaining({ code: '23502' }))
   })
 
-  it('legacy: location_path decides the studio and nothing records a page', async () => {
+  it('no page: location_path names a studio page; its location and page id are the row\'s', async () => {
+    m.resolve.mockResolvedValueOnce({ ...pageOk(), pageId: 'page-studio', locationId: 'loc-studio', publicPath: 'stillorgan' })
     const r = await POST(req({ ...EVENT, location_path: 'stillorgan' }))
     expect(await r.json()).toEqual({ success: true })
-    expect(m.resolve).not.toHaveBeenCalled()
+    expect(m.resolve).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan' }))
+    expect(m.resolve.mock.calls[0][1].page).toBeUndefined()
     expect(m.rateLimit).toHaveBeenCalledWith(expect.anything(), 'funnelevt:stillorgan:1.2.3.4', expect.anything())
-    const row = m.inserted.mock.calls[0][1]
-    expect(row.location_id).toBe('loc-legacy')
-    expect(row).not.toHaveProperty('page_id')
+    expect(m.inserted).toHaveBeenCalledWith('funnel_events', expect.objectContaining({ location_id: 'loc-studio', page_id: 'page-studio' }))
+  })
+
+  it('content-block route: a switched-off offer row never drops an event, on either branch (requireEnabled: false)', async () => {
+    m.resolve.mockResolvedValueOnce(pageOk())
+    await POST(req({ ...EVENT, page: '50plus' }))
+    expect(m.resolve).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ page: '50plus', requireEnabled: false }))
+    m.resolve.mockResolvedValueOnce(pageOk())
+    await POST(req({ ...EVENT, location_path: 'stillorgan' }))
+    expect(m.resolve).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan', requireEnabled: false }))
+  })
+
+  it('no page: an unknown studio page or a failed read is ignored, never an error', async () => {
+    for (const reason of ['not_found', 'unreadable']) {
+      m.resolve.mockResolvedValueOnce({ ok: false, reason })
+      const r = await POST(req({ ...EVENT, location_path: 'galway' }))
+      expect(r.status).toBe(200)
+      expect(await r.json()).toEqual({ success: true, data: { ignored: true } })
+    }
+    expect(m.inserted).not.toHaveBeenCalled()
   })
 })

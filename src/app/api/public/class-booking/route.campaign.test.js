@@ -3,18 +3,18 @@
 // and the allow-listed validation read. No trial pair (or no such block) is
 // refused not_configured, never a fallback to the class_funnel block's trial,
 // which is the generic one. Without `campaign` the route is unchanged.
+// Without `page`, `path` names a studio page by slug (the resolver's legacy
+// branch, stubbed below from `pageBlocks`: its own tests live beside it).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let pageBlocks = []
 let inserted = null
 const db = {
-  from(table) {
+  from() {
     const b = {
       select: () => b, eq: () => b, is: () => b, in: () => b, limit: () => b, update: () => b,
       insert: (row) => { inserted = row; return { select: () => ({ maybeSingle: async () => ({ data: { id: 'req-1', class_name: row.class_name }, error: null }) }) } },
-      maybeSingle: async () => (table === 'landing_page_settings'
-        ? { data: { location_id: 'L1', blocks: pageBlocks }, error: null }
-        : { data: null, error: null }),
+      maybeSingle: async () => ({ data: null, error: null }),
       then: (resolve, reject) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
     }
     return b
@@ -41,7 +41,7 @@ vi.mock('@/lib/un1t-online-settings', () => ({
 vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), logWarn: vi.fn() }))
 vi.mock('@/lib/landing-pages', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, resolvePublicPageRequest: vi.fn(actual.resolvePublicPageRequest), studioTermsCopy: vi.fn(async () => ({})) }
+  return { ...actual, resolvePublicPageRequest: vi.fn() }
 })
 
 import { POST } from './route.js'
@@ -63,7 +63,20 @@ const book = (extra = {}) => POST(new Request('http://localhost/api/public/class
   }),
 }))
 
-beforeEach(() => { vi.clearAllMocks(); pageBlocks = []; inserted = null })
+// The studio page the path names, as the resolver answers it.
+const studioOk = (blocks) => ({
+  ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'stillorgan', kind: 'studio', offer_type: 'class_funnel' }, studioRow: {},
+  locationId: 'L1', publicPath: 'stillorgan', blocks,
+  attribution: { tag: 'stillorgan-stillorgan', lead_source: 'meta_stillorgan' }, terms: {},
+})
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  pageBlocks = []
+  inserted = null
+  resolvePublicPageRequest.mockReset()
+  resolvePublicPageRequest.mockImplementation(async () => studioOk(pageBlocks))
+})
 
 describe('POST /api/public/class-booking — campaign (FIFTYPLUS.1)', () => {
   it('books on the campaign block: allow-list read, its trial pair and tag, price 0', async () => {
@@ -76,7 +89,7 @@ describe('POST /api/public/class-booking — campaign (FIFTYPLUS.1)', () => {
     const res = await book()
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true, data: { queued: true } })
-    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14, { allowKeywords: ['50+'] })
+    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14, { allowKeywords: ['50+'], blocks: pageBlocks })
     expect(inserted).toMatchObject({ trial_membership_id: 'elite-m', trial_plan_code: 'elite-p', status: 'queued', class_name: 'THE 50+ CLUB' })
     expect(writeContactTag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'stillorgan-50plus' }))
     expect(createClassBookingPayment).not.toHaveBeenCalled()
@@ -124,7 +137,7 @@ describe('POST /api/public/class-booking — campaign (FIFTYPLUS.1)', () => {
     findOrCreateRaceContact.mockResolvedValueOnce('c1')
     const res = await book({ campaign: undefined, event_id: 'ev-1' })
     expect(res.status).toBe(200)
-    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14)
+    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14, { blocks: pageBlocks })
     expect(inserted).toMatchObject({ trial_membership_id: 'gen-m', trial_plan_code: 'gen-p' })
     expect(writeContactTag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'stillorgan-start' }))
   })
@@ -149,7 +162,7 @@ describe('POST /api/public/class-booking — page (PAGES.1)', () => {
     expect(res.status).toBe(200)
     expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: '50plus', studio: 'stillorgan' }))
     expect(checkRateLimit.mock.calls[0][1]).toBe('classbook:stillorgan:1.2.3.4')
-    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14, { allowKeywords: ['50+'] })
+    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14, { allowKeywords: ['50+'], blocks: [PAGE_BLOCK] })
     expect(inserted).toMatchObject({ page_id: 'page-50', location_id: 'L1', trial_membership_id: 'row-m', trial_plan_code: 'row-p', status: 'queued' })
     expect(writeContactTag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'row-tag' }))
     expect(sendWebsiteConversion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/50plus' }))
@@ -195,7 +208,7 @@ describe('POST /api/public/class-booking — page (PAGES.1)', () => {
     const res = await book({ page: 'first-class', campaign: undefined, event_id: 'ev-1', price_cents: 1, amount_cents: 1, currency: 'USD', tag: 'evil' })
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true, data: { requiresPayment: true, paymentId: 'pay-1' } })
-    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14)
+    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14, { blocks: [CF] })
     expect(inserted).toMatchObject({ page_id: 'page-cf', status: 'awaiting_payment', trial_membership_id: 'cf-m', trial_plan_code: 'cf-p', location_id: 'L1' })
     expect(createClassBookingPayment).toHaveBeenCalledTimes(1)
     expect(createClassBookingPayment.mock.calls[0][0]).toMatchObject({ amountCents: 2500, currency: 'EUR' })
@@ -207,11 +220,26 @@ describe('POST /api/public/class-booking — page (PAGES.1)', () => {
     expect((await book({ page: 'corp' })).status).toBe(404)
   })
 
-  it('without page the legacy row is read and nothing records a page', async () => {
+  it('without page the path names a studio page: it is read through the resolver, and the queued row records that page', async () => {
     pageBlocks = [CFG]
     readPublicClasses.mockResolvedValueOnce({ classes: [FIFTY], error: null })
     findOrCreateRaceContact.mockResolvedValueOnce('c1')
     expect((await book()).status).toBe(200)
-    expect(inserted).not.toHaveProperty('page_id')
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan' }))
+    expect(resolvePublicPageRequest.mock.calls[0][1].page).toBeUndefined()
+    expect(checkRateLimit.mock.calls[0][1]).toBe('classbook:stillorgan:1.2.3.4')
+    expect(inserted).toMatchObject({ page_id: 'page-studio', location_id: 'L1' })
+  })
+
+  it('without page an unknown studio page is 400 not available, and a failed read is 503, before any capture', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    const none = await book({ path: 'galway', campaign: undefined })
+    expect(none.status).toBe(400)
+    expect(await none.json()).toEqual({ success: false, error: 'Class booking is not available right now.' })
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'unreadable' })
+    const failed = await book({ campaign: undefined })
+    expect(failed.status).toBe(503)
+    expect((await failed.json()).code).toBe('unavailable')
+    expect(findOrCreateRaceContact).not.toHaveBeenCalled()
   })
 })

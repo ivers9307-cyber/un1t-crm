@@ -10,10 +10,9 @@
 // The studio lists (booking types, events) are read for a one-studio page's
 // studio only. Each studio row carries its readiness (studioRowReadiness, the
 // API's rule) so the editor's chip starts right; an unreadable one is left
-// unknown. A studio page (kind 'studio') opens here READ-ONLY for everyone,
-// under a banner pointing at the legacy editor: landing_page_settings stays
-// its one writer until PR3's cutover re-syncs it (the API refuses the write
-// too, 400 studio_page).
+// unknown. A studio page (kind 'studio') is edited here like any one-studio
+// page (its slug is not renameable and it is never retired; the API refuses
+// both with 400 studio_page).
 
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -102,8 +101,7 @@ export default async function LandingPageEditorPage(props) {
   if (!loaded || !canViewPage(user, loaded.page)) notFound()
 
   const { page } = loaded
-  const isStudioPage = page.kind === 'studio'
-  const canEdit = !isStudioPage && canEditPage(user, page)
+  const canEdit = canEditPage(user, page)
   const primary = page.scope === 'one' ? page.primary_location_id : null
   const [eventTypesRes, eventsRes, brand, paths] = await Promise.all([
     primary ? db.from('event_types').select('id, name, slug').eq('location_id', primary).eq('active', true).order('name') : EMPTY,
@@ -126,17 +124,6 @@ export default async function LandingPageEditorPage(props) {
           Back to pages
         </Link>
       </div>
-      {isStudioPage && (
-        <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700">
-          This studio page is edited from the Landing page editor until studio pages move here.{' '}
-          <Link
-            href={`/settings/landing-page?location_id=${encodeURIComponent(page.primary_location_id || '')}`}
-            className="font-medium underline"
-          >
-            Open the Landing page editor
-          </Link>
-        </div>
-      )}
       <LandingPageSettingsForm
         key={page.id}
         page={canEdit ? page : { ...page, blocks: clientSafeBlocks(page.blocks) }}

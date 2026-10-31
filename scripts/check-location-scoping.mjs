@@ -112,9 +112,11 @@ const SCOPING_HELPERS = [
   // src/lib/landing-pages.js (PAGES.1) — resolvePublicPageRequest reads the
   // page by organization_id (the host's, publicOrgIdForHost) + slug, then its
   // studio rows by page_id, and answers only a location_id that is one of
-  // that page's own studio rows (a one-studio page only its primary); its PR1
-  // legacy branch reads landing_page_settings by public_path, the public
-  // site's tenant selector the routes used before. (studioTermsCopy and
+  // that page's own studio rows (a one-studio page only its primary); its
+  // no-`page` branch (the legacy path / public_path param) reads the studio
+  // page at that slug the same way (kind='studio', the host's organisation, a
+  // live page, its primary's row), so a path can only ever name one of the
+  // organisation's own studios. (studioTermsCopy and
   // copySourceForRequest are NOT listed: each reads by a location_id or page
   // id its caller already resolved, so they scope nothing themselves.)
   'resolvePublicPageRequest(',
@@ -239,7 +241,7 @@ const SCOPING_HELPERS = [
   // active studio's organisation (orgLocationIdsFor → siblingLocationIds); a
   // lookup error narrows to the active studio alone. Verified in
   // src/app/(members)/events/page.js, src/app/api/events/route.js and
-  // src/app/welcome/[location]/events/page.js.
+  // src/components/landing-page/StudioEventsPage.jsx.
   'sharedEventsOrFilterFor(',
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
@@ -397,9 +399,6 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/donate/route.js': {
     race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
   },
-  'src/app/api/public/funnel-event/route.js': {
-    landing_page_settings: 'Public funnel beacon: resolves public_path → location_id and only INSERTS a funnel event for that location; unknown paths are ignored.',
-  },
   'src/app/api/public/class-booking-payments/[id]/route.js': {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
   },
@@ -465,18 +464,13 @@ export const EXEMPT = {
     sale_offers:
       'Public sale product page: row resolved by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer 404s until Wave 2 gives tenants their own offers route. Price is rendered server-side from the row so the client can never supply an amount.',
   },
-  'src/app/legal/un1t/[slug]/[doc]/page.js': {
-    landing_page_settings:
-      'UN1TWRITE.17 — public legal page resolved by public_path (the path IS the tenant selector); 404s unless the studio is un1t.online, and renders only that studio\'s published terms or waiver text.',
-  },
-  'src/app/welcome/page.js': {
-    landing_page_settings:
-      'Public split-chooser: renders every location\'s published chooser tiles by design; the ?edit=1 seed reads the most-recently-edited row but only previews the same published marketing content.',
-  },
-  'src/app/welcome/[location]/status/page.js': {
-    landing_page_settings:
-      'Public status page: public_path → location resolution (the path IS the published tenant selector); renders only the coy member view from buildStatusView(), never internal detail.',
-  },
+  // PAGES.1 (Task 22): src/app/legal/un1t/[slug]/[doc]/page.js and
+  // src/app/welcome/page.js carried landing_page_settings exemptions here
+  // (public path as the tenant selector; the chooser's published tiles). Both
+  // now read landing_pages only through loadPageBySlug (scoped by the host's
+  // organisation id and the slug) and loadFrontPage / publicWelcomePathForLocation
+  // (kind='studio' and the organisation, or the location), so neither file
+  // queries a tenant table itself and neither needs an entry.
 
   // The first page scan's four real findings needed NO exemption in the end:
   // both fixes landed before this check did, so the pages carry their own

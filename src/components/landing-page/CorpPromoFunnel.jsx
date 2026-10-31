@@ -15,7 +15,7 @@
 import { useState } from 'react'
 import { readVisitOrigin } from '@/lib/visit-origin'
 import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel-lead'
-import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
+import { metaPixelIdsForPath, pageLocationIdFromDocument } from '@/lib/meta-pixel-paths'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import TrialTermsTick from './TrialTermsTick'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK } from './trial-card'
@@ -88,7 +88,7 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
       if (res.status >= 500 || (!res.ok && !j.code)) { setError(customerErrorText(j.error, 'Something went wrong on our side. Please try again in a moment.')); return }
       if (j.code === 'terms_required' || (res.status === 400 && j.error)) { setError(customerErrorText(j.error, 'Something went wrong on our side. Please try again in a moment.')); return }
       fireBrowserLead({
-        pixelIds: metaPixelIdsForPath(window.location.pathname),
+        pixelIds: metaPixelIdsForPath(window.location.pathname, { primaryLocationId: pageLocationIdFromDocument() }),
         eventId: leadEventId,
         userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
         contentName: promoKey,

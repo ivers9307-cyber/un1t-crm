@@ -7,8 +7,8 @@ import path from 'node:path'
 import { flowTokenFor, resolveFlowConfigByToken } from './config.js'
 
 // FLOWTOKENDEDUP.1 (C73) — no app code builds the token string by hand. The
-// last two (send-flow/route.js, meta-ad-whatsapp-welcome.js) moved onto
-// flowTokenFor. Matches `flowToken: \`…` / `flow_token = \`…` and the like.
+// last two (send-flow/route.js and the since-retired ad-lead welcome) moved
+// onto flowTokenFor. Matches `flowToken: \`…` / `flow_token = \`…` and the like.
 const SRC = path.resolve(__dirname, '../..')
 const HAND_MINT = /flow_?token\s*[:=]\s*`/i
 

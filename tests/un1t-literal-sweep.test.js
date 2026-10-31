@@ -165,6 +165,10 @@ const SWEPT = [
   'src/app/welcome/[location]/page.js',
   'src/app/welcome/[location]/events/page.js',
   'src/app/welcome/[location]/status/page.js',
+  // PAGES.1 — the studio pages moved onto the [slug] route and these two.
+  'src/app/(public)/[slug]/[[...rest]]/page.js',
+  'src/components/landing-page/StudioEventsPage.jsx',
+  'src/components/landing-page/StudioStatusPage.jsx',
   'src/app/event/[slug]/page.js',
   'src/app/embed/event/[slug]/page.js',
   'src/app/api/public/events/[slug]/register/route.js',

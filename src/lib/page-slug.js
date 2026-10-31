@@ -57,6 +57,22 @@ export function slugProblem(slug) {
   return null
 }
 
+/**
+ * True when the path's FIRST segment is one of the page slugs. Exact on the
+ * segment (`/stillorganx` is not `/stillorgan`); `/`, an empty segment and a
+ * `_` segment are never pages, and neither is a reserved app segment: a row
+ * slugged `settings` (hand-made, or written before the name was reserved)
+ * must never open /settings to the public. Pure, so AppShell (a client
+ * component) can share it with the proxy's isPublicPagePath.
+ */
+export function publicPageSegmentMatches(pathname, slugs) {
+  if (typeof pathname !== 'string' || !pathname.startsWith('/') || !Array.isArray(slugs) || !slugs.length) return false
+  const segment = pathname.slice(1).split('/')[0]
+  if (!segment || segment.startsWith('_')) return false
+  if (RESERVED_PAGE_SLUGS.has(segment)) return false
+  return slugs.includes(segment)
+}
+
 // A retired page's redirect target: a path on this host only. `//evil.com`
 // (protocol-relative) and `/\evil.com` would send visitors off-site through
 // redirect(). The publish route's schema (landing-page-schemas.js) and the

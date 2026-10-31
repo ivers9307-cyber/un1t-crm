@@ -382,8 +382,9 @@ describe('customer-facing surfaces resolve the brand of the host\'s organisation
   it.each([
     'src/app/event/[slug]/page.js',
     'src/app/embed/event/[slug]/page.js',
-    'src/app/welcome/[location]/page.js',
-    'src/app/welcome/[location]/events/page.js',
+    // PAGES.1 — the studio pages' metadata (all three /welcome/[location]
+    // pages', now redirects) lives on the [slug] route.
+    'src/app/(public)/[slug]/[[...rest]]/page.js',
   ])('%s OG metadata names the resolved brand, not a UN1T literal', (rel) => {
     const src = repoFile(rel)
     const meta = src.slice(src.indexOf('export async function generateMetadata'), src.indexOf('export default'))

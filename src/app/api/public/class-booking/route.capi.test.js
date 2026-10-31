@@ -3,20 +3,30 @@
 // landing URL (as fbc), the visitor's IP and their browser.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The studio page's blocks the resolver answers with, and its terms wording.
+let pageBlocks = [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }]
+let pageTerms = {}
 const db = {
-  from(table) {
+  from() {
     const b = {
       select: () => b, eq: () => b, is: () => b, in: () => b, limit: () => b, update: () => b,
       insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'cbr-1', class_name: 'Strength' }, error: null }) }) }),
-      maybeSingle: async () => (table === 'landing_page_settings'
-        ? { data: { location_id: 'L1', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }] }, error: null }
-        : { data: null, error: null }),
+      maybeSingle: async () => ({ data: null, error: null }),
       then: (resolve, reject) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
     }
     return b
   },
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
+vi.mock('@/lib/landing-pages', async (importOriginal) => ({
+  ...(await importOriginal()),
+  // The studio page the `path` names, as the resolver answers it (its own tests live beside it).
+  resolvePublicPageRequest: vi.fn(async () => ({
+    ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'hatch-street', kind: 'studio', offer_type: 'class_funnel' }, studioRow: {},
+    locationId: 'L1', publicPath: 'hatch-street', blocks: pageBlocks,
+    attribution: { tag: 'hatch-street-hatch-street', lead_source: 'meta_hatch-street' }, terms: pageTerms,
+  })),
+}))
 vi.mock('@/lib/rate-limit', () => ({
   getClientIp: () => '203.0.113.9',
   checkRateLimit: vi.fn(async () => ({ allowed: true })),
@@ -41,6 +51,8 @@ vi.mock('@/lib/meta-capi', async (importOriginal) => ({
 import { POST } from './route.js'
 import { sendWebsiteConversion } from '@/lib/meta-capi'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { writeContactTag } from '@/lib/contact-tags'
+import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const book = (attribution, headers = {}) => POST(new Request('http://localhost/api/public/class-booking', {
   method: 'POST',
@@ -53,6 +65,25 @@ const book = (attribution, headers = {}) => POST(new Request('http://localhost/a
 }))
 
 beforeEach(() => { vi.clearAllMocks() })
+
+// PAGES.1 spec §9 — a studio page posting page=<slug> whose row holds no
+// attribution keeps the class funnel's own defaults (the pre-PAGES.1 values),
+// never `<path>-<slug>` / `meta_<slug>`.
+describe('POST /api/public/class-booking — a studio page keeps the class funnel defaults', () => {
+  it('a blank row attribution falls back to classFunnelConfigFromBlocks', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({
+      ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'hatch-street', kind: 'studio', offer_type: 'class_funnel' }, studioRow: {},
+      locationId: 'L1', publicPath: 'hatch-street', blocks: [{ type: 'class_funnel' }], attribution: {}, terms: {},
+    })
+    const res = await POST(new Request('http://localhost/api/public/class-booking', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ page: 'hatch-street', event_id: 'ev-1', first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567', consent: true }),
+    }))
+    expect(res.status).toBe(200)
+    expect(writeContactTag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'hatch-street-start' }))
+    expect(writeContactTag).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: undefined }))
+  })
+})
 
 // SOURCE-LABEL.1 — a class-booking lead is not a race entrant. The helper's
 // INSERT default is source 'race_signup'; this route must override it on
@@ -102,9 +133,7 @@ describe('POST /api/public/class-booking — visit origin', () => {
       is: (col) => { b._is = col; return b },
       update: (patch) => { updates.push({ table, patch, b }); return b },
       insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'cbr-1', class_name: 'Strength' }, error: null }) }) }),
-      maybeSingle: async () => (table === 'landing_page_settings'
-        ? { data: { location_id: 'L1', blocks: [{ type: 'class_funnel' }] }, error: null }
-        : { data: null, error: null }),
+      maybeSingle: async () => ({ data: null, error: null }),
       then: (resolve, reject) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
     }
     return b

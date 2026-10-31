@@ -10,6 +10,8 @@
 //   • legacy master flow (no explicit org → activeOrganization) works
 //   • upsert-on-first-edit creates the org's row (id 'org:<uuid>')
 //   • tiles are bounded to the org's locations (read filter + write 404)
+//   • PAGES.1: a tile is the org's kind='studio' landing_pages row; label, CTA
+//     and visibility are written onto it (chrome merged, hidden → draft)
 //
 // We use the REAL chooser-access helpers + isOrgAdmin —
 // only getCurrentUser and the Supabase client are stubbed.
@@ -82,7 +84,7 @@ const orgAStaff = {
 // tests can assert exactly which row was touched (or that none was).
 
 function makeDb({ chooserRow = null, tiles = [], orgLocations = [] } = {}) {
-  const writes = { chooserUpdates: [], chooserInserts: [], tileUpdates: [] }
+  const writes = { chooserUpdates: [], chooserInserts: [], tileUpdates: [], tileReads: [] }
   const db = {
     from(table) {
       if (table === 'chooser_settings') {
@@ -96,13 +98,32 @@ function makeDb({ chooserRow = null, tiles = [], orgLocations = [] } = {}) {
           insert: async (row) => { writes.chooserInserts.push(row); return { error: null } },
         }
       }
-      if (table === 'landing_page_settings') {
-        return {
-          select: () => ({ not: () => Promise.resolve({ data: tiles, error: null }) }),
-          update: (patch) => ({
-            eq: async (col, val) => { writes.tileUpdates.push({ patch, col, val }); return { error: null } },
-          }),
+      if (table === 'landing_pages') {
+        // Filter-aware: .eq()/.in() really filter the page rows, so a route
+        // that forgets the org or kind filter fails here.
+        const filters = []
+        const rows = () => tiles.filter((r) => filters.every(([c, v]) => (
+          Array.isArray(v) ? v.includes(r[c]) : r[c] === v
+        )))
+        const b = {
+          select: () => b,
+          eq: (c, v) => { filters.push([c, v]); return b },
+          in: (c, v) => { filters.push([c, v]); return b },
+          then: (ok, bad) => { writes.tileReads.push([...filters]); return Promise.resolve({ data: rows(), error: null }).then(ok, bad) },
+          update: (patch) => {
+            const u = { filters: [] }
+            const ub = {
+              eq: (c, v) => { u.filters.push([c, v]); return ub },
+              select: () => ub,
+              maybeSingle: async () => {
+                writes.tileUpdates.push({ patch, filters: u.filters })
+                return { data: { id: u.filters.find(([c]) => c === 'id')?.[1] }, error: null }
+              },
+            }
+            return ub
+          },
         }
+        return b
       }
       if (table === 'locations') {
         return {
@@ -114,6 +135,13 @@ function makeDb({ chooserRow = null, tiles = [], orgLocations = [] } = {}) {
   }
   return { db, writes }
 }
+
+// A studio page row as the route reads it.
+const page = (over = {}) => ({
+  id: 'page-a', organization_id: ORG_A, kind: 'studio', primary_location_id: LOC_A, slug: 'stillorgan',
+  chrome: { logo_url: 'https://cdn/logo.png', tone: 'dark' }, publish_state: 'live', locations: { name: 'Stillorgan' },
+  ...over,
+})
 
 function req(url, { method = 'GET', body } = {}) {
   return new Request(`http://test.local${url}`, {
@@ -280,8 +308,9 @@ describe('chooser-settings tile org bounds (SAAS-6)', () => {
     const { db } = makeDb({
       chooserRow: { id: 'default', organization_id: ORG_A, tile_order: [] },
       tiles: [
-        { location_id: LOC_A, public_path: 'stillorgan', locations: { name: 'Stillorgan', organization_id: ORG_A } },
-        { location_id: LOC_B, public_path: 'rival-gym', locations: { name: 'Rival', organization_id: ORG_B } },
+        page(),
+        page({ id: 'page-b', organization_id: ORG_B, primary_location_id: LOC_B, slug: 'rival-gym', locations: { name: 'Rival' } }),
+        page({ id: 'page-c', kind: 'campaign', primary_location_id: null, slug: 'summer' }),
       ],
     })
     createServerClient.mockReturnValue(db)
@@ -292,9 +321,30 @@ describe('chooser-settings tile org bounds (SAAS-6)', () => {
     expect(body.data.tiles.map((t) => t.public_path)).toEqual(['stillorgan'])
   })
 
+  it('GET reports a studio page as a tile: chrome.chooser_* fields, draft and retired as hidden', async () => {
+    getCurrentUser.mockResolvedValue(orgAAdmin)
+    const { db } = makeDb({
+      chooserRow: { id: 'default', organization_id: ORG_A, tile_order: [] },
+      tiles: [
+        page({ chrome: { chooser_label: 'STILLORGAN', chooser_cta_text: 'Come in', chooser_image_url: 'https://cdn/c.jpg' } }),
+        page({ id: 'p2', primary_location_id: 'l2', slug: 'draft-one', publish_state: 'draft', locations: { name: 'Draft' } }),
+        page({ id: 'p3', primary_location_id: 'l3', slug: 'gone-one', publish_state: 'retired', locations: null }),
+        page({ id: 'p4', primary_location_id: 'l4', slug: 'soon', publish_state: 'coming_soon', chrome: null, locations: null }),
+      ],
+    })
+    createServerClient.mockReturnValue(db)
+    const body = await (await GET(req('/api/chooser-settings'))).json()
+    expect(body.data.tiles).toEqual([
+      { location_id: LOC_A, public_path: 'stillorgan', name: 'Stillorgan', chooser_label: 'STILLORGAN', chooser_cta_text: 'Come in', chooser_image_url: 'https://cdn/c.jpg', publish_state: 'live' },
+      { location_id: 'l2', public_path: 'draft-one', name: 'Draft', chooser_label: null, chooser_cta_text: null, chooser_image_url: null, publish_state: 'hidden' },
+      { location_id: 'l3', public_path: 'gone-one', name: 'gone-one', chooser_label: null, chooser_cta_text: null, chooser_image_url: null, publish_state: 'hidden' },
+      { location_id: 'l4', public_path: 'soon', name: 'soon', chooser_label: null, chooser_cta_text: null, chooser_image_url: null, publish_state: 'coming_soon' },
+    ])
+  })
+
   it('PUT refuses a tile whose location is outside the org (404, no writes)', async () => {
     getCurrentUser.mockResolvedValue(orgAAdmin)
-    const { db, writes } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }] })
+    const { db, writes } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }], tiles: [page()] })
     createServerClient.mockReturnValue(db)
 
     const res = await PUT(req('/api/chooser-settings', {
@@ -306,18 +356,81 @@ describe('chooser-settings tile org bounds (SAAS-6)', () => {
     expect(writes.tileUpdates).toHaveLength(0)
   })
 
-  it('PUT updates a tile inside the org', async () => {
+  it('PUT refuses a tile whose studio has no page in the org (404 before ANY write)', async () => {
     getCurrentUser.mockResolvedValue(orgAAdmin)
-    const { db, writes } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }] })
+    // LOC_A is the org's, but its only studio page belongs to another org.
+    const { db, writes } = makeDb({
+      chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }],
+      tiles: [page({ organization_id: ORG_B })],
+    })
     createServerClient.mockReturnValue(db)
 
     const res = await PUT(req('/api/chooser-settings', {
       method: 'PUT',
-      body: { tile_order: ['stillorgan'], tiles: [{ location_id: LOC_A, public_path: 'stillorgan', chooser_label: 'STILLORGAN' }] },
+      body: { tile_order: ['stillorgan'], tiles: [{ location_id: LOC_A, public_path: 'stillorgan', chooser_label: 'X' }] },
+    }))
+    expect(res.status).toBe(404)
+    expect(writes.chooserUpdates).toHaveLength(0)
+    expect(writes.tileUpdates).toHaveLength(0)
+  })
+
+  it('PUT writes a tile\'s label and CTA into the studio page chrome, merged, scoped to the page and the org', async () => {
+    getCurrentUser.mockResolvedValue(orgAAdmin)
+    const { db, writes } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }], tiles: [page()] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(req('/api/chooser-settings', {
+      method: 'PUT',
+      body: { tile_order: ['stillorgan'], tiles: [{ location_id: LOC_A, public_path: 'stillorgan', chooser_label: 'STILLORGAN', chooser_cta_text: 'Come in', publish_state: 'live' }] },
     }))
     expect(res.status).toBe(200)
+    // The read was kind + org + location.
+    expect(writes.tileReads[0]).toEqual([['kind', 'studio'], ['organization_id', ORG_A], ['primary_location_id', [LOC_A]]])
     expect(writes.tileUpdates).toHaveLength(1)
-    expect(writes.tileUpdates[0]).toMatchObject({ col: 'location_id', val: LOC_A })
-    expect(writes.tileUpdates[0].patch.chooser_label).toBe('STILLORGAN')
+    const { patch, filters } = writes.tileUpdates[0]
+    expect(filters).toEqual([['id', 'page-a'], ['organization_id', ORG_A]])
+    // Merged: the logo and tone survive; no state change was written (live stays live).
+    expect(patch.chrome).toEqual({ logo_url: 'https://cdn/logo.png', tone: 'dark', chooser_label: 'STILLORGAN', chooser_cta_text: 'Come in' })
+    expect(patch.publish_state).toBeUndefined()
+    expect(patch.updated_by).toBe('admin-a')
+  })
+
+  it('PUT maps hidden to draft (clearing redirect_to) and live stamps was_live', async () => {
+    getCurrentUser.mockResolvedValue(orgAAdmin)
+    const { db, writes } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }], tiles: [page()] })
+    createServerClient.mockReturnValue(db)
+    const put = (state) => PUT(req('/api/chooser-settings', {
+      method: 'PUT',
+      body: { tile_order: [], tiles: [{ location_id: LOC_A, public_path: 'stillorgan', publish_state: state }] },
+    }))
+
+    expect((await put('hidden')).status).toBe(200)
+    expect(writes.tileUpdates[0].patch).toMatchObject({ publish_state: 'draft', redirect_to: null })
+
+    // A draft page sent live: live, and the page remembers it has been public.
+    const { db: db2, writes: w2 } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }], tiles: [page({ publish_state: 'draft' })] })
+    createServerClient.mockReturnValue(db2)
+    expect((await put('live')).status).toBe(200)
+    expect(w2.tileUpdates[0].patch).toMatchObject({ publish_state: 'live', redirect_to: null })
+    expect(w2.tileUpdates[0].patch.chrome.was_live).toBe(true)
+
+    const { db: db3, writes: w3 } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }], tiles: [page()] })
+    createServerClient.mockReturnValue(db3)
+    expect((await put('coming_soon')).status).toBe(200)
+    expect(w3.tileUpdates[0].patch).toMatchObject({ publish_state: 'coming_soon', redirect_to: null })
+  })
+
+  it('PUT leaves a retired page retired when its hidden tile is saved as hidden', async () => {
+    getCurrentUser.mockResolvedValue(orgAAdmin)
+    const { db, writes } = makeDb({ chooserRow: { id: 'default' }, orgLocations: [{ id: LOC_A }], tiles: [page({ publish_state: 'retired' })] })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req('/api/chooser-settings', {
+      method: 'PUT',
+      body: { tile_order: [], tiles: [{ location_id: LOC_A, public_path: 'stillorgan', publish_state: 'hidden', chooser_label: 'S' }] },
+    }))
+    expect(res.status).toBe(200)
+    expect(writes.tileUpdates[0].patch.publish_state).toBeUndefined()
+    expect(writes.tileUpdates[0].patch.redirect_to).toBeUndefined()
+    expect(writes.tileUpdates[0].patch.chrome.chooser_label).toBe('S')
   })
 })

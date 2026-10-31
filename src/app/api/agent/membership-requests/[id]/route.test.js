@@ -939,8 +939,11 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
     },
   })
 
+  // The studio's own page row (kind='studio'), as the landing_pages read answers it.
+  const studioPageRow = (page) => ({ id: 'sp', organization_id: 'o1', slug: page.public_path, kind: 'studio', scope: 'one', primary_location_id: 'L1', offer_type: null, publish_state: 'live', chrome: {}, blocks: page.blocks })
+
   // A double that answers each table: the card, the contact's email + phone,
-  // the studio's landing row, and the queue row the sync returns.
+  // the studio's page, and the queue row the sync returns.
   function manualDb(row, log, { contact = { email: 'sam@example.com', phone: '0871234567' }, page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }] }, queueRows = [{ id: 'cbr-9' }], linkedPageId = null, pageTables = {} } = {}) {
     return {
       from(table) {
@@ -955,9 +958,8 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
           async maybeSingle() {
             if (patch) return { data: { id: row.id }, error: null }
             if (table === 'class_booking_requests') return { data: { page_id: linkedPageId }, error: null }
-            if (table === 'landing_pages') return { data: (pageTables.landing_pages || [])[0] ?? null, error: null }
+            if (table === 'landing_pages') return { data: (pageTables.landing_pages || [studioPageRow(page)])[0] ?? null, error: null }
             if (table === 'contacts') return { data: contact, error: null }
-            if (table === 'landing_page_settings') return { data: page, error: null }
             if (table === 'locations') return { data: { name: 'UN1T Hatch Street', address: 'Vault 8, Hatch Street Upper, Dublin 2' }, error: null }
             return { data: row, error: null }
           },
@@ -986,6 +988,12 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
   })
 
   // PAGES.1
+  it('a queue row with no page_id: the Schedule URL comes from the studio\'s own page, read by location', async () => {
+    db = manualDb(manualRow(), updates)
+    await approve()
+    expect(sendWebsiteConversion.mock.calls[0][1].eventSourceUrl).toBe('https://www.un1tdublin.com/start/hatch-street')
+  })
+
   it('a queue row carrying a page_id: the Schedule URL and the confirmation copy come from that page, not the studio row', async () => {
     const pageTables = {
       landing_pages: [{ id: 'p-1', organization_id: 'o1', slug: 'hatch-street', kind: 'studio', primary_location_id: 'L1', scope: 'one', offer_type: null, blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/from-the-page' }] }],
@@ -1061,18 +1069,18 @@ describe('PATCH class_booking approval — manual booking emails the customer', 
     },
   })
   function manualDb(row, log, { contact = { id: 'c1', first_name: 'Sam', name: 'Sam Byrne', email: 'sam@example.com', phone: '0871234567' } } = {}) {
-    const page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', confirm_email_subject: 'See you soon' }] }
+    const page = { id: 'sp', organization_id: 'o1', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: 'L1', offer_type: null, publish_state: 'live', chrome: {}, blocks: [{ type: 'class_funnel', confirm_email_subject: 'See you soon' }] }
     return {
       from(table) {
         let patch = null
         const b = {
-          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b,
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b, order: () => b,
           update(p) { patch = p; log.push({ table, patch: p }); return b },
           then(resolve, reject) { return Promise.resolve({ data: table === 'class_booking_requests' ? [{ id: 'cbr-9' }] : [], error: null }).then(resolve, reject) },
           async maybeSingle() {
             if (patch) return { data: { id: row.id }, error: null }
             if (table === 'contacts') return { data: contact, error: null }
-            if (table === 'landing_page_settings') return { data: page, error: null }
+            if (table === 'landing_pages') return { data: page, error: null }
             if (table === 'locations') return { data: { name: 'UN1T Hatch Street', address: 'Vault 8, Hatch Street Upper, Dublin 2' }, error: null }
             return { data: row, error: null }
           },

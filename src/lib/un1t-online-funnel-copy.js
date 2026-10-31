@@ -25,15 +25,24 @@ function classFunnelBlock(blocks) {
   return list.find((b) => b && typeof b === 'object' && b.type === 'class_funnel') || null
 }
 
-/** The block's un1t.online copy, each blank field falling back to its default. */
-export function un1tFunnelCopyFromBlocks(blocks) {
-  const cf = classFunnelBlock(blocks)
+/**
+ * PAGES.1 — the un1t.online copy from a plain object of the five keys (a
+ * studio page's `chrome.un1t_terms`), each blank or absent key falling back to
+ * its default. Anything that is not an object is all defaults.
+ */
+export function un1tFunnelCopyFromTerms(terms) {
+  const src = terms && typeof terms === 'object' ? terms : null
   const out = {}
   for (const key of UN1T_FUNNEL_COPY_KEYS) {
-    const v = cf?.[key]
+    const v = src?.[key]
     out[key] = typeof v === 'string' && v.trim() ? v.trim() : DEFAULT_FUNNEL_TERMS_COPY[key]
   }
   return out
+}
+
+/** The block's un1t.online copy, each blank field falling back to its default. */
+export function un1tFunnelCopyFromBlocks(blocks) {
+  return un1tFunnelCopyFromTerms(classFunnelBlock(blocks))
 }
 
 /**
@@ -118,9 +127,11 @@ export function legalDocPathFor(publicPath, doc) {
  * name filled, {terms}/{waiver} kept for the links), the link labels, the
  * message and the two page urls. One builder for the class list and the
  * booking route's 400, so the two can never disagree on the wording.
+ * The words come from `terms` (a studio page's chrome.un1t_terms, PAGES.1)
+ * when it is given, else from the class_funnel block in `blocks`.
  */
-export function un1tTermsPayload({ blocks, studioName, publicPath }) {
-  const copy = un1tFunnelCopyFromBlocks(blocks)
+export function un1tTermsPayload({ blocks, terms, studioName, publicPath }) {
+  const copy = terms !== undefined ? un1tFunnelCopyFromTerms(terms) : un1tFunnelCopyFromBlocks(blocks)
   return {
     required: true,
     label: stripDashes(copy.terms_label.replace(/\{studio_name\}/g, String(studioName || '').trim() || 'the studio')),

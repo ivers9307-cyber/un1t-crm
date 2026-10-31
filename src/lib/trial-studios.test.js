@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ logWarn: vi.fn() }))
 vi.mock('@/lib/log', () => ({ logWarn: mocks.logWarn, logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/brands', () => ({ UN1T_GROUP_ORG_ID: 'org-un1t', resolveBrand: vi.fn(() => null) }))
+vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantOrgId: vi.fn(async () => null) }))
 
 import { TRIAL_STUDIOS, studioByKey, loadTrialStudios, trialEntryFromRow, trialRedirectFor, readPaidTrialAccountEmailCopy } from './trial-studios'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from './paid-trial'
@@ -11,18 +13,50 @@ const STILLORGAN_BLOCK = { type: 'paid_trial', price_cents: 3900, currency: 'EUR
 const HATCH_BLOCK = { type: 'paid_trial', un1t_product_id: 'p-1', product_name: 'The UN1T Trial' }
 const PRODUCT = { un1t_id: 'p-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur' }
 
-// A db whose landing_page_settings read and un1t_products read are scripted.
-function fakeDb({ pages, pagesError = null, product = { data: PRODUCT, error: null } }) {
-  const calls = { landing: [], products: [] }
+// A db serving the `trial` page (landing_pages by org + slug), its studio rows
+// (landing_page_studios by page id), the studio pages' slugs (landing_pages by
+// kind + primary location) and the un1t_products read. `pages` is one entry
+// per studio: its location, public path, locations embed and the paid_trial
+// block fields its row carries as its `offer`.
+function fakeDb({ pages, pagesError = null, studiosError = null, noTrialPage = false, trialState = 'live', pageBlocks, product = { data: PRODUCT, error: null } }) {
+  const calls = { pages: [], studios: [], paths: [], products: [] }
+  const trialPage = {
+    id: 'p-trial', organization_id: 'org-un1t', slug: 'trial', kind: 'campaign', scope: 'all', primary_location_id: null,
+    offer_type: 'paid_trial', publish_state: trialState, chrome: {},
+    blocks: pageBlocks || [{ id: 'pt', type: 'paid_trial' }],
+  }
+  const studioRows = (pages || []).map((p, i) => {
+    const { id: _id, type: _type, ...offer } = (p.blocks || []).find((b) => b.type === 'paid_trial') || {}
+    return { page_id: 'p-trial', location_id: p.location_id, enabled: p.enabled !== false, sort_order: p.sort_order ?? i, offer, attribution: p.attribution || {}, locations: p.locations }
+  })
   const db = {
     from: (table) => {
-      if (table === 'landing_page_settings') {
-        return { select: (cols) => ({ in: async (col, vals) => { calls.landing.push({ cols, col, vals }); return { data: pages, error: pagesError } } }) }
+      const eq = {}
+      const q = {
+        select: (cols) => { q.cols = cols; return q },
+        eq: (c, v) => { eq[c] = v; if (table === 'un1t_products') calls.products.push([c, v]); return q },
+        order: () => q,
+        maybeSingle: async () => {
+          if (table === 'landing_pages' && eq.primary_location_id) {
+            calls.paths.push(eq)
+            const hit = (pages || []).find((p) => p.location_id === eq.primary_location_id)
+            return { data: hit?.public_path ? { slug: hit.public_path } : null, error: null }
+          }
+          if (table === 'landing_pages') {
+            calls.pages.push({ cols: q.cols, eq })
+            if (pagesError) return { data: null, error: pagesError }
+            return { data: noTrialPage ? null : trialPage, error: null }
+          }
+          if (table === 'un1t_products') { calls.productCols = q.cols; return product }
+          throw new Error(`unexpected table ${table}`)
+        },
+        then: (res, rej) => {
+          if (table !== 'landing_page_studios') throw new Error(`unexpected table ${table}`)
+          calls.studios.push({ cols: q.cols, eq })
+          return Promise.resolve(studiosError ? { data: null, error: studiosError } : { data: studioRows, error: null }).then(res, rej)
+        },
       }
-      if (table === 'un1t_products') {
-        return { select: (cols) => { const q = { eq: (c, v) => { calls.products.push([c, v]); return q }, maybeSingle: async () => product }; calls.productCols = cols; return q } }
-      }
-      throw new Error(`unexpected table ${table}`)
+      return q
     },
   }
   return { db, calls }
@@ -50,12 +84,16 @@ describe('studioByKey', () => {
 })
 
 describe('loadTrialStudios', () => {
-  it('loads both studios with one landing read and one product read', async () => {
+  it('loads both studios from the trial page\'s rows: one page read, one studios read, one product read', async () => {
     const { db, calls } = fakeDb({ pages: rows() })
     const out = await loadTrialStudios(db)
-    expect(calls.landing).toHaveLength(1)
-    expect(calls.landing[0].vals).toEqual(['stillorgan', 'hatch-street'])
-    expect(calls.landing[0].cols).toContain('locations:location_id ( membership_source, settings )')
+    expect(calls.pages).toHaveLength(1)
+    expect(calls.pages[0].eq).toEqual({ organization_id: 'org-un1t', slug: 'trial' })
+    expect(calls.studios).toHaveLength(1)
+    expect(calls.studios[0].eq).toEqual({ page_id: 'p-trial' })
+    expect(calls.studios[0].cols).toContain('locations:location_id ( id, name, membership_source, settings, timezone )')
+    // Each enabled row's public path is its studio page's slug.
+    expect(calls.paths.map((e) => e.primary_location_id).sort()).toEqual(['loc-h', 'loc-s'])
     expect(calls.products).toEqual([['location_id', 'loc-h'], ['un1t_id', 'p-1']])
     // The product's type is read: only a one-off is for sale (F3).
     expect(calls.productCols.split(',').map((c) => c.trim())).toContain('type')
@@ -64,7 +102,40 @@ describe('loadTrialStudios', () => {
     expect(out[0].config).toMatchObject({ provider: 'glofox', priceCents: 3900 })
     expect(out[1]).toMatchObject({ publicPath: 'hatch-street', locationId: 'loc-h', membershipSource: 'un1t_online', sellable: true, product: PRODUCT })
     expect(out[1].config).toMatchObject({ provider: 'un1t_online', un1tProductId: 'p-1', priceCents: 3900, currency: 'EUR' })
-    expect(out[1].block).toBe(HATCH_BLOCK)
+    // The block is the page's block merged with the row's offer, the row's attribution on top (tag and lead source filled by default).
+    expect(out[1].block).toMatchObject({ type: 'paid_trial', un1t_product_id: 'p-1', product_name: 'The UN1T Trial', tag: 'hatch-street-trial', lead_source: 'meta_trial' })
+    expect(out[1].config).toMatchObject({ tag: 'hatch-street-trial', leadSource: 'meta_trial' })
+  })
+  it('a row\'s own attribution wins over the defaults', async () => {
+    const pages = rows()
+    pages[1].attribution = { tag: 'hatch-row-tag', lead_source: 'meta_hatch_trial', event_source_url: 'https://www.un1tdublin.com/hatch-trial' }
+    const out = await loadTrialStudios(fakeDb({ pages }).db)
+    expect(out[1].config).toMatchObject({ tag: 'hatch-row-tag', leadSource: 'meta_hatch_trial', eventSourceUrl: 'https://www.un1tdublin.com/hatch-trial' })
+  })
+  it('a switched-off row is not offered; the known key answers empty, and rows order by sort_order after the known keys', async () => {
+    const pages = rows()
+    pages[1].enabled = false
+    const off = await loadTrialStudios(fakeDb({ pages }).db)
+    expect(off[1]).toMatchObject({ key: 'hatch', locationId: null, sellable: false, config: null })
+    expect(off[1].unreadable).toBeUndefined()
+    // A third enabled studio rides after the two known ones, keyed by its path.
+    const third = [...rows(), { location_id: 'loc-n', public_path: 'newtown', blocks: [STILLORGAN_BLOCK], locations: { membership_source: 'glofox' } }]
+    const out = await loadTrialStudios(fakeDb({ pages: third }).db)
+    expect(out.map((s) => s.key)).toEqual(['stillorgan', 'hatch', 'newtown'])
+  })
+  it('a studio with no studio page (no public path) is not offered', async () => {
+    const pages = rows()
+    pages[1].public_path = null
+    const out = await loadTrialStudios(fakeDb({ pages }).db)
+    expect(out[1]).toMatchObject({ key: 'hatch', locationId: null, sellable: false })
+    expect(out[0].sellable).toBe(true)
+  })
+  it('only a live trial page sells: none, a draft, a retired or a coming_soon page answers every known studio empty (not unreadable)', async () => {
+    for (const opts of [{ noTrialPage: true }, { trialState: 'draft' }, { trialState: 'retired' }, { trialState: 'coming_soon' }]) {
+      const out = await loadTrialStudios(fakeDb({ pages: rows(), ...opts }).db)
+      expect(out.map((s) => s.key)).toEqual(['stillorgan', 'hatch'])
+      expect(out.every((s) => s.sellable === false && s.locationId === null && s.unreadable === undefined)).toBe(true)
+    }
   })
   it('accepts the locations embed as a one-element array', async () => {
     const pages = rows()
@@ -78,7 +149,8 @@ describe('loadTrialStudios', () => {
       pages[1].locations = { membership_source: 'un1t_online', settings }
       const { db, calls } = fakeDb({ pages })
       const out = await loadTrialStudios(db)
-      expect(out[1]).toMatchObject({ key: 'hatch', locationId: 'loc-h', membershipSource: 'un1t_online', block: HATCH_BLOCK, sellable: false, config: null })
+      expect(out[1]).toMatchObject({ key: 'hatch', locationId: 'loc-h', membershipSource: 'un1t_online', sellable: false, config: null })
+      expect(out[1].block).toMatchObject({ type: 'paid_trial', un1t_product_id: 'p-1' })
       expect(out[1]).not.toHaveProperty('unreadable')
       expect(calls.products).toEqual([])
       expect(out[0].sellable).toBe(true)
@@ -89,14 +161,20 @@ describe('loadTrialStudios', () => {
       expect(JSON.stringify(s)).not.toContain('writes_enabled')
     }
   })
-  it('a missing Hatch row or block is not sellable', async () => {
+  it('a missing Hatch row or a page with no paid_trial block is not sellable', async () => {
     const noRow = await loadTrialStudios(fakeDb({ pages: [rows()[0]] }).db)
     expect(noRow[1]).toMatchObject({ key: 'hatch', locationId: null, membershipSource: null, block: null, product: null, sellable: false, config: null })
     expect(noRow[0].sellable).toBe(true)
-    const { db, calls } = fakeDb({ pages: rows([{ type: 'hero' }]) })
+    const { db, calls } = fakeDb({ pages: rows(), pageBlocks: [{ id: 'h', type: 'hero' }] })
     const noBlock = await loadTrialStudios(db)
     expect(noBlock[1]).toMatchObject({ locationId: 'loc-h', block: null, sellable: false, config: null })
+    expect(noBlock[0]).toMatchObject({ locationId: 'loc-s', block: null, sellable: false })
     expect(calls.products).toEqual([])
+    // A row with no product id on its offer holds a block but sells nothing, and reads no product.
+    const bare = fakeDb({ pages: rows([{ type: 'paid_trial', product_name: 'x' }]) })
+    const bareOut = await loadTrialStudios(bare.db)
+    expect(bareOut[1]).toMatchObject({ locationId: 'loc-h', sellable: false, config: null })
+    expect(bare.calls.products).toEqual([])
   })
   it('a un1t block with no mirrored product, or an inactive one, is not sellable', async () => {
     const none = await loadTrialStudios(fakeDb({ pages: rows(), product: { data: null, error: null } }).db)
@@ -106,8 +184,6 @@ describe('loadTrialStudios', () => {
     // Nothing for sale is not the same as "could not read": no flag on these.
     expect(none[1].unreadable).toBeUndefined()
     expect(inactive[1].unreadable).toBeUndefined()
-    const noBlock = await loadTrialStudios(fakeDb({ pages: rows([{ type: 'hero' }]) }).db)
-    expect(noBlock[1].unreadable).toBeUndefined()
   })
   it('a recurring un1t.online product is not sellable', async () => {
     for (const type of ['recurring', 'subscription', undefined]) {
@@ -128,12 +204,15 @@ describe('loadTrialStudios', () => {
     expect(meta).toMatchObject({ locationId: 'loc-h', un1tId: 'p-1' })
     expect(JSON.stringify(meta)).not.toContain('secret')
   })
-  it('a landing read error marks every studio not sellable', async () => {
-    const out = await loadTrialStudios(fakeDb({ pages: null, pagesError: { message: 'down' } }).db)
-    expect(out.map((s) => s.sellable)).toEqual([false, false])
-    expect(out.every((s) => s.config === null && s.block === null)).toBe(true)
-    expect(out.every((s) => s.unreadable === true)).toBe(true)
-    expect(mocks.logWarn).toHaveBeenCalledTimes(1)
+  it('a trial page or studios read error marks every studio not sellable and unreadable', async () => {
+    for (const opts of [{ pagesError: { message: 'down' } }, { studiosError: { message: 'down' } }]) {
+      mocks.logWarn.mockClear()
+      const out = await loadTrialStudios(fakeDb({ pages: rows(), ...opts }).db)
+      expect(out.map((s) => s.sellable)).toEqual([false, false])
+      expect(out.every((s) => s.config === null && s.block === null)).toBe(true)
+      expect(out.every((s) => s.unreadable === true)).toBe(true)
+      expect(mocks.logWarn).toHaveBeenCalledTimes(1)
+    }
   })
 })
 
@@ -162,29 +241,48 @@ describe('trialEntryFromRow', () => {
   })
 })
 
-// Final-review F2 — the settle sweep's explanation email copy, off the studio's block.
+// Final-review F2 — the settle sweep's explanation email copy, off the studio page's block.
 describe('readPaidTrialAccountEmailCopy', () => {
-  function copyDb({ data = null, error = null, throws = false } = {}) {
-    const calls = []
-    const q = {
-      select: (cols) => { calls.push(['select', cols]); return q },
-      eq: (c, v) => { calls.push(['eq', c, v]); return q },
-      in: async (c, v) => { calls.push(['in', c, v]); if (throws) throw new Error('net secret'); return { data, error } },
-    }
-    return { db: { from: (t) => { calls.push(['from', t]); return q } }, calls }
+  const STUDIO_PAGE = {
+    id: 'p-h', organization_id: 'org-un1t', slug: 'hatch-street', kind: 'studio', scope: 'one', primary_location_id: 'loc-h',
+    offer_type: 'paid_trial', publish_state: 'live', chrome: {}, blocks: [{ type: 'hero' }, { id: 'pt', type: 'paid_trial', account_email_subject: 'S {product_name}', account_email_body: 'B {product_name}' }],
   }
-  it("reads the location's trial landing rows and answers the block's copy", async () => {
-    const { db, calls } = copyDb({ data: [{ public_path: 'hatch-street', blocks: [{ type: 'hero' }, { ...HATCH_BLOCK, account_email_subject: 'S {product_name}', account_email_body: 'B {product_name}' }] }] })
+  const STUDIO_ROW = { page_id: 'p-h', location_id: 'loc-h', enabled: true, sort_order: 0, offer: { product_name: 'The UN1T Trial' }, attribution: {} }
+  function copyDb({ page = STUDIO_PAGE, studios = [STUDIO_ROW], pageError = null, throws = false } = {}) {
+    const calls = []
+    const db = {
+      from: (table) => {
+        const eq = {}
+        calls.push({ table, eq })
+        const q = {
+          select: () => q,
+          eq: (c, v) => { eq[c] = v; return q },
+          order: () => q,
+          maybeSingle: async () => { if (throws) throw new Error('net secret'); return { data: pageError ? null : page, error: pageError } },
+          then: (res, rej) => Promise.resolve({ data: studios, error: null }).then(res, rej),
+        }
+        return q
+      },
+    }
+    return { db, calls }
+  }
+  it("reads the studio's page by location and answers its paid_trial block's copy", async () => {
+    const { db, calls } = copyDb()
     expect(await readPaidTrialAccountEmailCopy(db, 'loc-h')).toEqual({ subject: 'S {product_name}', body: 'B {product_name}' })
-    expect(calls).toContainEqual(['from', 'landing_page_settings'])
-    expect(calls).toContainEqual(['eq', 'location_id', 'loc-h'])
-    expect(calls).toContainEqual(['in', 'public_path', ['stillorgan', 'hatch-street']])
+    expect(calls[0]).toEqual({ table: 'landing_pages', eq: { kind: 'studio', primary_location_id: 'loc-h' } })
+    expect(calls.map((c) => c.table)).toEqual(['landing_pages', 'landing_page_studios'])
   })
-  it('a blank field, a missing block, a read error or a throw answers the defaults and logs ids only', async () => {
+  it('the row\'s offer is merged over the block before the copy is read', async () => {
+    const out = await readPaidTrialAccountEmailCopy(copyDb({ studios: [{ ...STUDIO_ROW, offer: { account_email_subject: 'Row subject' } }] }).db, 'loc-h')
+    expect(out.subject).toBe('Row subject')
+  })
+  it('a blank field, a missing block or page, a read error or a throw answers the defaults and logs ids only', async () => {
     const defaults = { subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject, body: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body }
-    expect(await readPaidTrialAccountEmailCopy(copyDb({ data: [{ blocks: [{ ...HATCH_BLOCK, account_email_subject: '  ' }] }] }).db, 'loc-h')).toEqual(defaults)
-    expect(await readPaidTrialAccountEmailCopy(copyDb({ data: [] }).db, 'loc-h')).toEqual(defaults)
-    expect(await readPaidTrialAccountEmailCopy(copyDb({ error: { code: 'XX000', message: 'secret' } }).db, 'loc-h')).toEqual(defaults)
+    expect(await readPaidTrialAccountEmailCopy(copyDb({ page: { ...STUDIO_PAGE, blocks: [{ id: 'pt', type: 'paid_trial', account_email_subject: '  ' }] }, studios: [] }).db, 'loc-h')).toEqual(defaults)
+    expect(await readPaidTrialAccountEmailCopy(copyDb({ page: { ...STUDIO_PAGE, blocks: [{ type: 'hero' }] } }).db, 'loc-h')).toEqual(defaults)
+    expect(await readPaidTrialAccountEmailCopy(copyDb({ page: null }).db, 'loc-h')).toEqual(defaults)
+    expect(mocks.logWarn).not.toHaveBeenCalled()
+    expect(await readPaidTrialAccountEmailCopy(copyDb({ pageError: { code: 'XX000', message: 'secret' } }).db, 'loc-h')).toEqual(defaults)
     expect(await readPaidTrialAccountEmailCopy(copyDb({ throws: true }).db, 'loc-h')).toEqual(defaults)
     expect(mocks.logWarn).toHaveBeenCalledTimes(2)
     for (const [, , meta] of mocks.logWarn.mock.calls) {

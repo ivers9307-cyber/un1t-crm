@@ -14,7 +14,7 @@ vi.mock('@/lib/meta-pixel-lead', () => ({
   newLeadEventId: () => 'lead-id', pixelUserData: () => ({}), fireBrowserLead: vi.fn(),
   fireBrowserInitiateCheckout: vi.fn(), checkoutEventIdFor: (id) => `c-${id}`,
 }))
-vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [] }))
+vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [], pageLocationIdFromDocument: () => null }))
 vi.mock('@/lib/visit-origin', () => ({ readVisitOrigin: () => null }))
 vi.mock('./ClassFunnelCheckout', () => ({ default: () => null }))
 vi.mock('./BlockRenderers', () => ({
@@ -198,6 +198,19 @@ describe('EditModeOverlay on an offer layout (PAGES.1)', () => {
     expect(sent('block-clicked')).toEqual([{ namespace: 'lp-editor', type: 'block-clicked', blockId: 'pt1' }])
     // The frosted card's own words are not edited in place (the left panel edits them).
     expect(region.querySelectorAll('[contenteditable]')).toHaveLength(0)
+  })
+
+  it('a blocks layout naming its offer block (a studio page) lists it without a toolbar; its studio keys are never posted', () => {
+    const PT = { id: 'pt', type: 'paid_trial', heading: 'Try us' }
+    render(<EditModeOverlay initialBlocks={[HERO, STATS, PT]} offerLayout={{ kind: 'blocks', cta: { href: null }, offerBlockId: 'pt' }} />)
+    expect(screen.getByTestId('block-pt')).toBeTruthy()
+    expect(screen.queryByTitle('Delete Paid trial product')).toBeNull()
+    expect(screen.queryByTitle(/Move Paid trial product/)).toBeNull()
+    expect(screen.queryByTitle('Duplicate Paid trial product')).toBeNull()
+    expect(screen.getByTitle('Delete Stats')).toBeTruthy()
+    expect(screen.getByTitle('Delete Hero')).toBeTruthy()
+    // Nothing else changes: an insert gap before and after every block.
+    expect(screen.getAllByRole('button', { name: /Add section here/ })).toHaveLength(4)
   })
 
   it('a blocks layout adds nothing: every block renders with its toolbar', () => {

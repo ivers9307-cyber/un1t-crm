@@ -164,26 +164,37 @@ describe('PageHeaderCard', () => {
     expect(screen.getByText('All studios')).toBeTruthy()
   })
 
-  it('a studio page (read-only until PR3): no buttons, its un1t.online terms copy shown disabled', () => {
-    renderCard({
-      canEdit: false,
+  it('a studio page: its terms copy is editable with its hint; it publishes and unpublishes but has no Rename or Retire', async () => {
+    const { onTermsChange } = renderCard({
       terms: { terms_label: 'I accept' },
       page: basePage({ kind: 'studio', slug: 'hatch-street', publish_state: 'live' }),
     })
-    expect(screen.queryAllByRole('button')).toHaveLength(0)
     const label = screen.getByLabelText('Terms tick label')
     expect(label.value).toBe('I accept')
-    expect(label.disabled).toBe(true)
+    expect(label.disabled).toBe(false)
     expect(screen.getByLabelText('Message when a document cannot load').placeholder).toBe(DEFAULT_FUNNEL_TERMS_COPY.legal_unavailable_message)
-    // The editor page's banner names the legacy editor; no "ask an owner" here.
-    expect(screen.queryByText(/You can view this page but not edit it/)).toBeNull()
+    expect(screen.getByText(/A Glofox studio never shows it/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Waiver link text'), { target: { value: 'waiver' } })
+    expect(onTermsChange).toHaveBeenCalledWith({ terms_label: 'I accept', waiver_link_label: 'waiver' })
+
+    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull()
+    await click('Unpublish')
+    expect(sentBody()).toEqual({ publish_state: 'draft' })
   })
 
-  it('a refused studio_page answer reads as the studio page note', async () => {
+  it('a studio page a viewer may not edit shows its terms copy disabled and who edits it', () => {
+    renderCard({ canEdit: false, page: basePage({ kind: 'studio', slug: 'hatch-street' }) })
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(screen.getByLabelText('Terms tick label').disabled).toBe(true)
+    expect(screen.getByText('You can view this page but not edit it. Ask an owner at this studio.')).toBeTruthy()
+  })
+
+  it('a refused studio_page answer says a studio page is unpublished, never retired', async () => {
     answer = { ok: false, status: 400, body: { success: false, error: 'studio_page' } }
     renderCard()
     await click('Publish')
-    expect(screen.getByRole('alert').textContent).toBe('This studio page is edited from the Landing page editor until studio pages move here.')
+    expect(screen.getByRole('alert').textContent).toBe('A studio page is never retired: unpublish it instead.')
   })
 
   it('a one-studio page whose studio is switched off says so', async () => {

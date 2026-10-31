@@ -39,10 +39,9 @@ const SLUG_MESSAGES = Object.freeze({
   invalid: 'Use letters, numbers and dashes only, 2 to 40 characters.',
 })
 const NOT_READY_REASONS = Object.freeze({ needs_plan: 'needs a plan', no_platform: 'has no platform', switched_off: 'is switched off' })
-const STUDIO_PAGE_READ_ONLY = 'This studio page is edited from the Landing page editor until studio pages move here.'
 const PUBLISH_MESSAGES = Object.freeze({
   redirect_required: 'Give the path to send visitors to.',
-  studio_page: STUDIO_PAGE_READ_ONLY,
+  studio_page: 'A studio page is never retired: unpublish it instead.',
 })
 const REDIRECT_HINT = 'Use a path on this site that starts with /, like /trial.'
 
@@ -203,6 +202,7 @@ export default function PageHeaderCard({
       {isStudio && (
         <div className="space-y-2 border-t border-un1t-border pt-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">un1t.online terms copy</h3>
+          <p className="text-[11px] text-un1t-muted">The terms tick a un1t.online studio&apos;s booking shows. A Glofox studio never shows it. Blank uses the default.</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {UN1T_FUNNEL_COPY_KEYS.map((key) => (
               <div key={key}>
@@ -218,7 +218,7 @@ export default function PageHeaderCard({
         </div>
       )}
 
-      {!canEdit && !isStudio && (
+      {!canEdit && (
         <p className="text-sm text-un1t-muted">
           You can view this page but not edit it. {page.scope === 'all' ? 'An organisation admin edits all-studios pages.' : 'Ask an owner at this studio.'}
         </p>

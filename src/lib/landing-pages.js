@@ -17,17 +17,18 @@ import {
   mergeOfferBlock, OFFER_BLOCK_TYPE, offerConfigured, defaultAttribution, ATTRIBUTION_KEYS,
   splitOfferBlock, offerTypeOfBlock, OFFER_TYPE_LABELS,
 } from '@/lib/landing-page-offers'
-import { newBlockOfType, newBlockId } from '@/lib/landing-page-blocks'
+import { newBlockOfType, newBlockId, defaultBlocks } from '@/lib/landing-page-blocks'
 import { resolveLandingPath } from '@/lib/public-landing'
 import { publicOrgIdForHost } from '@/lib/public-pages-edge'
-import { normaliseSlug } from '@/lib/page-slug'
+import { normaliseSlug, slugProblem } from '@/lib/page-slug'
+import { toSlug } from '@/lib/slug'
 import { TRIAL_STUDIOS, trialEntryFromRow } from '@/lib/trial-studios'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin, adminOrganizationIds } from '@/lib/org-admin'
 import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/landing-page-schemas'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
-import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
+import { un1tFunnelCopyFromTerms } from '@/lib/un1t-online-funnel-copy'
 import { logWarn, logError } from '@/lib/log'
 
 // The edge-safe half lives in its own module so the proxy can import it.
@@ -42,7 +43,7 @@ export const isPageVisible = (state) => state === 'live'
 export const isPageReachable = (state) => ['live', 'coming_soon', 'retired'].includes(state)
 
 export const PAGE_COLUMNS = 'id, organization_id, slug, title, kind, scope, primary_location_id, offer_type, blocks, chrome, publish_state, redirect_to, updated_at'
-export const STUDIO_ROW_COLUMNS = 'page_id, location_id, enabled, offer, attribution, sort_order, locations:location_id ( id, name, membership_source, settings )'
+export const STUDIO_ROW_COLUMNS = 'page_id, location_id, enabled, offer, attribution, sort_order, locations:location_id ( id, name, membership_source, settings, timezone )'
 
 export class PageReadError extends Error {
   constructor(message, cause) {
@@ -121,51 +122,29 @@ export function resolvePageStudio({ page, studios, studioLocationId }) {
   return { studio, picker }
 }
 
-// PR1 fallbacks: until the studio pages are the only source, a path with no
-// kind='studio' page row falls back to landing_page_settings. PR3 deletes
-// these two helpers and their call sites.
-async function legacyLocationIdForPath(db, publicPath) {
-  const { data, error } = await db
-    .from('landing_page_settings')
-    .select('location_id')
-    .eq('public_path', publicPath)
-    .maybeSingle()
-  if (error) throw new PageReadError('Could not read the studio path', error)
-  return data?.location_id || null
-}
-
-async function legacyPathForLocation(db, locationId) {
-  const { data, error } = await db
-    .from('landing_page_settings')
-    .select('public_path')
-    .eq('location_id', locationId)
-    .maybeSingle()
-  if (error) throw new PageReadError('Could not read the studio path', error)
-  return data?.public_path || null
-}
-
 /**
- * PR1 legacy, deleted in PR3 with the two helpers above: the un1t.online
- * terms-tick wording of a studio (UN1T_FUNNEL_COPY_KEYS), read where /trial
- * and /corp read it today, the class_funnel block on the studio's
- * landing_page_settings row. mig 792 also copies it to the studio page's
- * `chrome.un1t_terms`, which PR3 switches to. Never throws: a miss or a failed
- * read answers the defaults (logged with the id only).
+ * The un1t.online terms-tick wording of a studio (UN1T_FUNNEL_COPY_KEYS): the
+ * studio page's `chrome.un1t_terms` (the kind='studio' row whose primary is
+ * the location; mig 792 copied the legacy class_funnel wording there). Never
+ * throws: a miss or a failed read answers the defaults (logged with the id
+ * only), and each blank key is its default (un1tFunnelCopyFromTerms).
  * @returns {Promise<object>} every UN1T_FUNNEL_COPY_KEYS key, resolved
  */
 export async function studioTermsCopy(db, locationId) {
-  if (!locationId) return un1tFunnelCopyFromBlocks(null)
+  if (!locationId) return un1tFunnelCopyFromTerms(null)
   try {
     const { data, error } = await db
-      .from('landing_page_settings')
-      .select('blocks')
-      .eq('location_id', locationId)
+      .from('landing_pages')
+      .select('chrome')
+      .eq('kind', 'studio')
+      .eq('primary_location_id', locationId)
       .maybeSingle()
-    if (error) throw Object.assign(new Error('landing row unreadable'), { code: error.code ?? null })
-    return un1tFunnelCopyFromBlocks(Array.isArray(data?.blocks) ? data.blocks : null)
+    if (error) throw Object.assign(new Error('studio page unreadable'), { code: error.code ?? null })
+    const chrome = data?.chrome && typeof data.chrome === 'object' ? data.chrome : null
+    return un1tFunnelCopyFromTerms(chrome?.un1t_terms)
   } catch (err) {
     logWarn('landing-pages', 'studio terms copy unreadable; defaults used', { locationId, code: err?.code ?? null })
-    return un1tFunnelCopyFromBlocks(null)
+    return un1tFunnelCopyFromTerms(null)
   }
 }
 
@@ -179,8 +158,7 @@ export async function locationIdForPublicPath(db, orgId, publicPath) {
     .eq('slug', publicPath)
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio page', error)
-  if (data?.primary_location_id) return data.primary_location_id
-  return legacyLocationIdForPath(db, publicPath)
+  return data?.primary_location_id || null
 }
 
 /** A studio's public path: its studio page's slug, null when it has none. */
@@ -192,35 +170,54 @@ export async function studioPublicPath(db, locationId) {
     .eq('primary_location_id', locationId)
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio page', error)
-  if (data?.slug) return data.slug
-  return legacyPathForLocation(db, locationId)
+  return data?.slug || null
 }
 
 /**
- * PR1 legacy; PR3 reads the kind='studio' page. The studio's own landing copy
- * and public path, read where the processor and Mia's approval route read them
- * today (landing_page_settings by location_id). A miss answers empty; a failed
- * read throws PageReadError (copySourceForRequest catches it).
- * @returns {Promise<{ blocks: object[], publicPath: string | null }>}
+ * A studio page's `chrome.un1t_terms` as a plain object (never null): the
+ * UNRESOLVED stored value, blank or missing keys and all. Pass it through
+ * un1tFunnelCopyFromTerms (or un1tTermsPayload({ terms })) to get the words.
+ */
+const termsOf = (page) => (page?.chrome && typeof page.chrome === 'object' && page.chrome.un1t_terms
+  && typeof page.chrome.un1t_terms === 'object' ? page.chrome.un1t_terms : {})
+
+/**
+ * The studio's own page copy and public path, for the readers that hold only a
+ * location id (Mia's approval route, the booking processor, the WhatsApp
+ * flow): the kind='studio' page whose primary is the studio, its blocks merged
+ * with its studio row, its slug, and its `chrome.un1t_terms`. A studio with no
+ * page answers empty; a failed read throws PageReadError (callers decide:
+ * copySourceForRequest catches it).
+ * @returns {Promise<{ blocks: object[], publicPath: string | null, terms: object }>}
  */
 export async function studioPageBlocksFor(db, locationId) {
-  const { data, error } = await db
-    .from('landing_page_settings')
-    .select('public_path, blocks')
-    .eq('location_id', locationId)
+  const { data: page, error } = await db
+    .from('landing_pages')
+    .select(PAGE_COLUMNS)
+    .eq('kind', 'studio')
+    .eq('primary_location_id', locationId)
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio page', error)
-  return { blocks: Array.isArray(data?.blocks) ? data.blocks : [], publicPath: data?.public_path ?? null }
+  if (!page) return { blocks: [], publicPath: null, terms: {} }
+  const { studios } = await loadStudios(db, page)
+  const studio = studios.find((s) => s.location_id === locationId) || null
+  return {
+    blocks: studio ? mergedBlocksFor({ page, studio }) : (Array.isArray(page.blocks) ? page.blocks : []),
+    publicPath: page.slug || null,
+    terms: termsOf(page),
+  }
 }
 
 /**
  * The copy a request's confirmation is built from (the class_funnel block's
- * wording, the conversion URL's path): the page the request came from, merged
- * with that page's row for the request's studio, when it carries a page_id;
- * otherwise (or when that page is gone, or has no row for the studio) the
- * studio's own page. Never throws: a failed read logs ids only and falls back,
- * ending in empty copy, which every consumer resolves to its defaults.
- * @returns {Promise<{ blocks: object[], publicPath: string | null }>}
+ * wording, the conversion URL's path, the terms-tick wording): the page the
+ * request came from, merged with that page's row for the request's studio,
+ * when it carries a page_id; otherwise (or when that page is gone, or has no
+ * row for the studio) the studio's own page. `terms` is always the STUDIO
+ * page's `chrome.un1t_terms` (the tick is the studio's wording, whichever page
+ * the request came from). Never throws: a failed read logs ids only and falls
+ * back, ending in empty copy, which every consumer resolves to its defaults.
+ * @returns {Promise<{ blocks: object[], publicPath: string | null, terms: object }>}
  */
 export async function copySourceForRequest(db, { pageId, locationId }) {
   if (pageId) {
@@ -228,10 +225,11 @@ export async function copySourceForRequest(db, { pageId, locationId }) {
       const loaded = await loadPageById(db, pageId)
       const studio = loaded?.studios.find((s) => s.location_id === locationId) || null
       if (loaded && studio) {
-        return {
-          blocks: mergedBlocksFor({ page: loaded.page, studio }),
-          publicPath: await studioPublicPath(db, locationId),
-        }
+        const [publicPath, terms] = await Promise.all([
+          studioPublicPath(db, locationId),
+          studioTermsOf(db, loaded.page, locationId),
+        ])
+        return { blocks: mergedBlocksFor({ page: loaded.page, studio }), publicPath, terms }
       }
     } catch (err) {
       logWarn('landing-pages', 'request page unreadable; the studio page is used', { pageId, locationId, code: err?.cause?.code ?? err?.code ?? null })
@@ -241,8 +239,18 @@ export async function copySourceForRequest(db, { pageId, locationId }) {
     return await studioPageBlocksFor(db, locationId)
   } catch (err) {
     logWarn('landing-pages', 'studio page copy unreadable; defaults used', { locationId, code: err?.cause?.code ?? err?.code ?? null })
-    return { blocks: [], publicPath: null }
+    return { blocks: [], publicPath: null, terms: {} }
   }
+}
+
+// The studio's terms wording as seen from a resolved page, to pass through
+// un1tFunnelCopyFromTerms: a studio page of that studio carries it itself
+// (the unresolved chrome.un1t_terms); any other page (a campaign) reads the
+// studio's page (studioTermsCopy never throws, a blip is the resolved
+// defaults). Either shape is accepted by un1tFunnelCopyFromTerms.
+async function studioTermsOf(db, page, locationId) {
+  if (page?.kind === 'studio' && page.primary_location_id === locationId) return termsOf(page)
+  return studioTermsCopy(db, locationId)
 }
 
 /**
@@ -318,51 +326,94 @@ function rowAttribution(studioRow) {
   return out
 }
 
-// PR1 legacy, deleted in PR3: a request with no page names a studio by its
-// landing_page_settings.public_path, read exactly as the public routes read it
-// today. A throw propagates, as it did from each route's own read (a route
-// that caught one keeps catching it).
-async function resolveLegacyRequest(db, legacyPath) {
-  const publicPath = resolveLandingPath(legacyPath)
-  const { data, error } = await db.from('landing_page_settings')
-    .select('location_id, public_path, blocks').eq('public_path', publicPath).maybeSingle()
-  if (error) return UNREADABLE
-  if (!data?.location_id) return NOT_FOUND
-  return {
-    ok: true, pageId: null, page: null, studioRow: null,
-    locationId: data.location_id, publicPath, blocks: data.blocks, attribution: null,
+/**
+ * The attribution a studio row stands for (never the request's). A campaign
+ * page: the default for the studio path and the page slug, with the row's
+ * non-blank values over it. A STUDIO page (kind 'studio'): the row's non-blank
+ * values only, so a key the row leaves blank is absent and each route falls
+ * back to its own config function's default (paidTrialConfigFromBlocks'
+ * `<path>-trial` / meta_trial, leadConfigFromBlocks', classFunnelConfigFromBlocks'):
+ * the values the studio pages carried before PAGES.1 (spec §9), never
+ * `stillorgan-stillorgan` / `meta_stillorgan`.
+ */
+export function studioAttribution({ page, studioRow, publicPath }) {
+  if (page?.kind === 'studio') return rowAttribution(studioRow)
+  return { ...defaultAttribution({ publicPath, slug: page.slug }), ...rowAttribution(studioRow) }
+}
+
+// A request with no `page` names a STUDIO PAGE by its slug (the old
+// `path`/`public_path` param: /stillorgan's own lead form, class funnel and
+// paid-trial card post this way). Same answer shape as the page form, for the
+// studio page's primary row. Only a live studio page takes a request (a draft
+// is a miss: stricter than the retired settings row, which had no state).
+// A failed read is unreadable, never a refusal.
+async function resolveLegacyRequest(db, legacyPath, hostname, requireEnabled) {
+  const slug = resolveLandingPath(legacyPath)
+  try {
+    const orgId = await publicOrgIdForHost(hostname)
+    const loaded = await loadPageBySlug(db, { orgId, slug })
+    if (!loaded) return NOT_FOUND
+    const { page, studios } = loaded
+    if (page.kind !== 'studio' || !isPageVisible(page.publish_state)) return NOT_FOUND
+    const studioRow = resolvePageStudio({ page, studios }).studio
+    if (!studioRow || (requireEnabled && !studioRow.enabled) || !page.primary_location_id) return NOT_FOUND
+    return {
+      ok: true,
+      pageId: page.id,
+      page,
+      studioRow,
+      locationId: page.primary_location_id,
+      publicPath: slug,
+      blocks: mergedBlocksFor({ page, studio: studioRow }),
+      attribution: studioAttribution({ page, studioRow, publicPath: slug }),
+      terms: termsOf(page),
+    }
+  } catch (e) {
+    logWarn('landing-pages', 'studio page request unreadable', { slug, code: e?.cause?.code ?? e?.code ?? null })
+    return UNREADABLE
   }
 }
 
 /**
  * Which page, studio and attribution a public API request is about.
  *
- * With `page` (a slug): the live campaign page of that slug in the host's
- * organisation (draft, coming_soon and retired answer not_found: only a live
- * page takes a customer; in PR1 a studio page is not_found too). scope 'one' answers for its primary studio only: a `studio` that
- * names any other studio (or nothing) is not_found, so a one-studio page can
- * never be booked at another studio. scope 'all' needs `studio` (a public
- * path, or the old `hatch` spelling): missing is studio_required, a studio the
- * page is not switched on at is not_found. Platform ids, price and
- * attribution come from the page's studio row, never the request:
- * `attribution` is the default for the studio path and slug with the row's
- * non-blank values over it. Every read is scoped by the organisation and slug,
- * then the page id; a failed read is unreadable, never a refusal.
+ * With `page` (a slug): the live page of that slug in the host's organisation
+ * (draft, coming_soon and retired answer not_found: only a live page takes a
+ * customer). A studio page resolves like a one-studio page. scope 'one' answers
+ * for its primary studio only: a `studio` that names any other studio (or
+ * nothing) is not_found, so a one-studio page can never be booked at another
+ * studio. scope 'all' needs `studio` (a public path, or the old `hatch`
+ * spelling): missing is studio_required, a studio the page is not switched on
+ * at is not_found. Platform ids, price and attribution come from the page's
+ * studio row, never the request: `attribution` is studioAttribution's (a
+ * campaign page: the default for the studio path and slug with the row's
+ * non-blank values over it; a studio page: the row's non-blank values only,
+ * the route's own defaults filling the rest). Every read is scoped
+ * by the organisation and slug, then the page id; a failed read is unreadable,
+ * never a refusal.
  *
- * Without `page`: PR1 legacy (deleted in PR3), `legacyPath` through
- * resolveLandingPath and its landing_page_settings row; pageId, page,
- * studioRow and attribution are null (the route derives attribution from the
- * blocks as it always has).
+ * Without `page`: `legacyPath` (the old `path` / `public_path` param, which
+ * /stillorgan's own blocks still post) names a STUDIO PAGE by its slug
+ * (resolveLegacyRequest): the same answer, for that page's primary row.
+ *
+ * `terms` is the studio's terms-tick wording (its studio page's
+ * `chrome.un1t_terms`); hand it to un1tTermsPayload / un1tFunnelCopyFromTerms.
+ *
+ * `requireEnabled` (default true): a studio row switched off refuses the
+ * request, as an OFFER route (classes, class-booking, trial-purchases,
+ * corp-claims) needs. A content-block route (leads, funnel-event) passes false:
+ * a live page with a row for the studio takes the request even when that row's
+ * offer is switched off.
  *
  * `not_configured` is never answered here: each route judges its offer's
  * readiness with its own config function.
  *
- * @returns {Promise<{ ok: true, pageId: string|null, page: object|null, studioRow: object|null,
- *   locationId: string, publicPath: string, blocks: Array, attribution: object|null }
+ * @returns {Promise<{ ok: true, pageId: string, page: object, studioRow: object,
+ *   locationId: string, publicPath: string, blocks: Array, attribution: object, terms: object }
  *   | { ok: false, reason: 'not_found' | 'not_configured' | 'studio_required' | 'unreadable' }>}
  */
-export async function resolvePublicPageRequest(db, { hostname = null, page = null, studio = null, legacyPath = null } = {}) {
-  if (!given(page)) return resolveLegacyRequest(db, legacyPath)
+export async function resolvePublicPageRequest(db, { hostname = null, page = null, studio = null, legacyPath = null, requireEnabled = true } = {}) {
+  if (!given(page)) return resolveLegacyRequest(db, legacyPath, hostname, requireEnabled)
   const slug = normaliseSlug(page)
   if (!slug) return NOT_FOUND
   try {
@@ -371,8 +422,6 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
     if (!loaded) return NOT_FOUND
     const { page: row, studios } = loaded
     if (!isPageVisible(row.publish_state)) return NOT_FOUND
-    // PR1: studio pages still serve from landing_page_settings; PR3 lifts this and seeds their attribution.
-    if (row.kind !== 'campaign') return NOT_FOUND
 
     const named = given(studio)
     const requested = named ? studioParamToPublicPath(studio) : null
@@ -384,12 +433,16 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
         if (!locationId || locationId !== row.primary_location_id) return NOT_FOUND
       }
       studioRow = resolvePageStudio({ page: row, studios }).studio
-      if (!studioRow?.enabled) return NOT_FOUND
+      if (!studioRow || (requireEnabled && !studioRow.enabled)) return NOT_FOUND
     } else if (row.scope === 'all') {
       if (!requested) return { ok: false, reason: 'studio_required' }
       const locationId = await locationIdForPublicPath(db, orgId, requested)
       if (!locationId) return NOT_FOUND
-      studioRow = resolvePageStudio({ page: row, studios, studioLocationId: locationId }).studio
+      // An offer route needs the page switched on at the studio (the picker's enabled rows);
+      // a content-block route (requireEnabled false) takes any row the page holds for it.
+      studioRow = requireEnabled
+        ? resolvePageStudio({ page: row, studios, studioLocationId: locationId }).studio
+        : studios.find((r) => r.location_id === locationId) || null
       if (!studioRow) return NOT_FOUND
     } else {
       return NOT_FOUND
@@ -397,7 +450,10 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
 
     // The studio's public path keys the rate limits, the terms page and the
     // stored landing_path: a studio with none cannot take a request.
-    const publicPath = await studioPublicPath(db, studioRow.location_id)
+    const [publicPath, terms] = await Promise.all([
+      studioPublicPath(db, studioRow.location_id),
+      studioTermsOf(db, row, studioRow.location_id),
+    ])
     if (!publicPath) return NOT_FOUND
     return {
       ok: true,
@@ -407,7 +463,8 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
       locationId: studioRow.location_id,
       publicPath,
       blocks: mergedBlocksFor({ page: row, studio: studioRow }),
-      attribution: { ...defaultAttribution({ publicPath, slug: row.slug }), ...rowAttribution(studioRow) },
+      attribution: studioAttribution({ page: row, studioRow, publicPath }),
+      terms,
     }
   } catch (e) {
     logWarn('landing-pages', 'public page request unreadable', { slug, code: e?.cause?.code ?? e?.code ?? null })
@@ -657,7 +714,8 @@ const isUniqueViolation = (error) => error?.code === '23505'
  * then its studio rows, with the default attribution for each studio's public
  * path (none when it has no path). A one-studio page gets exactly one row,
  * its primary's, switched on (spec §1); an all-studios page one row per
- * ACTIVE studio of the organisation, sorted by name, switched off.
+ * ACTIVE studio of the organisation, sorted by name, switched off (a host-event
+ * anchor location, `is_host_anchor`, is not a studio and gets none).
  * Every read happens before the first write; a read failure throws
  * PageReadError. A studio-row insert that fails removes the page again.
  * @returns {Promise<{ ok: true, page: object, studios: object[] } | { ok: false, reason: 'taken' | 'failed', error?: object }>}
@@ -667,13 +725,15 @@ export async function createPage(db, { input, orgId, userId, brand, startFrom = 
   const primary = input.scope === 'one' ? input.primary_location_id : null
   const { data: locs, error: locErr } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, is_host_anchor')
     .eq('organization_id', orgId)
     .eq('active', true)
     .order('name')
   if (locErr) throw new PageReadError('Could not read the organisation\'s studios', locErr)
   const active = Array.isArray(locs) ? locs : []
-  const studios = primary ? active.filter((l) => l.id === primary) : active
+  // A one-studio page keeps the primary it names; an all-studios page lists
+  // studios only (a host-event anchor is not one).
+  const studios = primary ? active.filter((l) => l.id === primary) : active.filter((l) => !l.is_host_anchor)
   const paths = await Promise.all(studios.map((l) => studioPublicPath(db, l.id)))
 
   const blocks = [...starterBlocks(input.offer_type, brand), ...copiedContentBlocks(startFrom?.blocks)]
@@ -821,4 +881,189 @@ export async function saveStudioRow(db, { pageId, locationId, patch }) {
   if (error) return { ok: false, reason: 'failed', error }
   if (!data) return { ok: false, reason: 'gone' }
   return { ok: true, row: data }
+}
+
+/**
+ * The kind='studio' pages of an organisation for a set of locations, as a Map
+ * of location id to { id, chrome, publish_state } (a location with no studio
+ * page is absent). Scoped by the organisation, so another tenant's studio can
+ * never come back. The chooser's tile routes read through it. A failed read
+ * throws PageReadError.
+ */
+export async function loadStudioPagesByLocation(db, { orgId, locationIds }) {
+  const ids = [...new Set((locationIds || []).filter(Boolean))]
+  if (!ids.length) return new Map()
+  const { data, error } = await db
+    .from('landing_pages')
+    .select('id, primary_location_id, chrome, publish_state')
+    .eq('kind', 'studio')
+    .eq('organization_id', orgId)
+    .in('primary_location_id', ids)
+  if (error) throw new PageReadError('Could not read the studio pages', error)
+  return new Map((data || []).map((r) => [r.primary_location_id, r]))
+}
+
+/**
+ * The slugs of an organisation's LIVE studio pages: where a paid-trial buyer may
+ * be sent back to after a redirect-based payment (trial-return-path.js). Never
+ * throws: a failed read answers [], so only /trial validates. Scoped by the
+ * organisation, so another tenant's studio page is never a return path.
+ * @returns {Promise<string[]>}
+ */
+export async function listStudioPageSlugs(db, orgId) {
+  if (!orgId) return []
+  try {
+    const { data, error } = await db
+      .from('landing_pages')
+      .select('slug')
+      .eq('organization_id', orgId)
+      .eq('kind', 'studio')
+      .eq('publish_state', 'live')
+    if (error || !Array.isArray(data)) return []
+    return data.map((r) => r?.slug).filter((s) => typeof s === 'string' && s)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Write columns onto one page row (by id, inside the organisation).
+ * @returns {Promise<{ ok: true } | { ok: false, reason: 'failed' | 'gone', error?: object }>}
+ */
+export async function savePageFields(db, { orgId, pageId, patch }) {
+  const { data, error } = await db
+    .from('landing_pages')
+    .update(patch)
+    .eq('id', pageId)
+    .eq('organization_id', orgId)
+    .select('id')
+    .maybeSingle()
+  if (error) return { ok: false, reason: 'failed', error }
+  if (!data) return { ok: false, reason: 'gone' }
+  return { ok: true }
+}
+
+// The slug a new studio's page starts at: the location name's slug, trimmed so
+// that the numeric suffix still fits the 40-character limit.
+function studioSlugCandidate(base, n) {
+  if (n === 1) return base
+  const suffix = `-${n}`
+  return `${base.slice(0, 40 - suffix.length).replace(/-+$/, '')}${suffix}`
+}
+
+const STUDIO_SLUG_ATTEMPTS = 50
+
+/**
+ * A new location's studio page (R7): a draft kind='studio' page, slug the
+ * location name's slug made unique in the organisation (-2, -3, ... when the
+ * slug is taken or reserved), the default blocks, no offer, and its one studio
+ * row switched on. Every read happens before the first write; a studio-row
+ * insert that fails removes the page again (the studio page never exists
+ * without its row).
+ *
+ * `skipped` answers are not failures: 'no_organization' (nothing to scope the
+ * slug by) and 'no_slug' (the name yields no valid slug: a slug of fewer than
+ * two characters, or none free within 50 tries). The caller logs and warns.
+ * 'host_anchor': a host-event anchor location (`is_host_anchor`, mig 388) is
+ * not a studio and gets no studio page; nothing is read or written, and the
+ * caller skips it silently.
+ * A failed read throws PageReadError.
+ * @returns {Promise<{ ok: true, page: object } | { ok: false, reason: 'no_organization' | 'no_slug' | 'host_anchor' | 'failed', error?: object }>}
+ */
+export async function createStudioPageForLocation(db, { location, userId }) {
+  if (location?.is_host_anchor === true) return { ok: false, reason: 'host_anchor' }
+  const orgId = location?.organization_id
+  if (!orgId || !location?.id) return { ok: false, reason: 'no_organization' }
+  const base = normaliseSlug(toSlug(location.name || ''))
+  if (!base) return { ok: false, reason: 'no_slug' }
+
+  let slug = null
+  for (let n = 1; n <= STUDIO_SLUG_ATTEMPTS; n += 1) {
+    const candidate = studioSlugCandidate(base, n)
+    if (slugProblem(candidate)) continue
+    if (!(await slugTakenInOrg(db, { orgId, slug: candidate }))) { slug = candidate; break }
+  }
+  if (!slug) return { ok: false, reason: 'no_slug' }
+
+  const { data: page, error: pageErr } = await db
+    .from('landing_pages')
+    .insert({
+      organization_id: orgId,
+      slug,
+      title: location.name,
+      kind: 'studio',
+      scope: 'one',
+      primary_location_id: location.id,
+      offer_type: 'none',
+      blocks: defaultBlocks(),
+      chrome: { tone: 'dark', noindex: false, show_instagram_feed: true },
+      publish_state: 'draft',
+      created_by: userId ?? null,
+      updated_by: userId ?? null,
+    })
+    .select(PAGE_COLUMNS)
+    .single()
+  if (pageErr || !page) return { ok: false, reason: 'failed', error: pageErr }
+
+  const { error: rowErr } = await db.from('landing_page_studios').insert({
+    page_id: page.id,
+    location_id: location.id,
+    enabled: true,
+    offer: {},
+    attribution: {},
+    sort_order: 0,
+    updated_by: userId ?? null,
+  })
+  if (rowErr) {
+    const { error: undoErr } = await db.from('landing_pages').delete().eq('id', page.id)
+    if (undoErr) logError('landing-pages', 'new studio page without its studio row could not be removed', { pageId: page.id, code: undoErr.code ?? null })
+    return { ok: false, reason: 'failed', error: rowErr }
+  }
+  return { ok: true, page }
+}
+
+/**
+ * A studio added to an organisation gets a switched-off row on every
+ * scope='all' page of that organisation that has none for it yet (spec §1:
+ * the editor shows it as "not yet set up"), sort_order after the page's last.
+ * A host-event anchor location (`hostAnchor`: the row's `is_host_anchor`) is not
+ * a studio: it gets no row, with nothing read or written.
+ * Reads before writing; a failed read throws PageReadError.
+ * @returns {Promise<{ ok: true, added: number } | { ok: false, error: object }>}
+ */
+export async function addStudioToOrgPages(db, { orgId, locationId, hostAnchor = false, userId = null }) {
+  if (hostAnchor === true) return { ok: true, added: 0 }
+  const { data: pages, error: pagesErr } = await db
+    .from('landing_pages')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('scope', 'all')
+  if (pagesErr) throw new PageReadError('Could not read the organisation\'s pages', pagesErr)
+  const ids = (pages || []).map((p) => p.id)
+  if (!ids.length) return { ok: true, added: 0 }
+
+  const { data: existing, error: rowsErr } = await db
+    .from('landing_page_studios')
+    .select('page_id, location_id, sort_order')
+    .in('page_id', ids)
+  if (rowsErr) throw new PageReadError('Could not read the pages\' studios', rowsErr)
+  const max = new Map(ids.map((id) => [id, -1]))
+  const has = new Set()
+  for (const r of existing || []) {
+    max.set(r.page_id, Math.max(max.get(r.page_id) ?? -1, Number(r.sort_order) || 0))
+    if (r.location_id === locationId) has.add(r.page_id)
+  }
+  const rows = ids.filter((id) => !has.has(id)).map((id) => ({
+    page_id: id,
+    location_id: locationId,
+    enabled: false,
+    offer: {},
+    attribution: {},
+    sort_order: max.get(id) + 1,
+    updated_by: userId,
+  }))
+  if (!rows.length) return { ok: true, added: 0 }
+  const { error } = await db.from('landing_page_studios').insert(rows)
+  if (error) return { ok: false, error }
+  return { ok: true, added: rows.length }
 }

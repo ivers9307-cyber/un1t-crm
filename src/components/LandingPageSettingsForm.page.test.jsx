@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 //
-// PAGES.1 — LandingPageSettingsForm in page mode (a `page` prop): it edits a
-// landing_pages row, saves PUT /api/landing-pages/<id> with { title, blocks,
+// PAGES.1 — LandingPageSettingsForm: it edits a landing_pages row (a studio
+// page included), saves PUT /api/landing-pages/<id> with { title, blocks,
 // chrome }, previews /<slug>?edit=1, and renders read-only for a viewer who
-// may not edit. The legacy studio mode (locationId + initialSettings) is
-// untouched until studio pages move here in PR3.
+// may not edit.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 
@@ -84,7 +83,7 @@ describe('LandingPageSettingsForm (page mode)', () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({ success: false, error: 'offer_block_required' }) }))
     renderForm()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
-    expect(screen.getByText('The offer section must stay first on this page.')).toBeTruthy()
+    expect(screen.getByText('This page\'s offer section is missing, so it cannot be saved. Ask the team.')).toBeTruthy()
   })
 
   it('a 200-character logo alt (the legacy table limit) is sent as is', async () => {
@@ -185,22 +184,53 @@ describe('LandingPageSettingsForm (page mode)', () => {
     expect(screen.getByText('You can view this page but not edit it. Ask an owner at this studio.')).toBeTruthy()
   })
 
-  it('a studio page (read-only until PR3, as the [id] page renders it): no preview, the terms copy shown disabled, no Save', () => {
-    const { container } = renderForm({
-      canEdit: false,
-      page: basePage({ kind: 'studio', slug: 'hatch-street', chrome: { un1t_terms: { waiver_link_label: 'waiver' } } }),
-    })
-    expect(container.querySelector('iframe')).toBeNull()
-    expect(screen.getByText('The preview shows here once studio pages move to this editor.')).toBeTruthy()
+  it('a studio page previews at its slug like any page, with Save', () => {
+    const { container } = renderForm({ page: basePage({ kind: 'studio', slug: 'hatch-street' }) })
+    expect(container.querySelector('iframe').getAttribute('src')).toBe('/hatch-street?edit=1')
+    expect(screen.queryByText(/preview shows here once/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull()
+  })
+
+  it('a studio page\'s un1t terms fields save into chrome.un1t_terms', async () => {
+    renderForm({ page: basePage({ kind: 'studio', slug: 'hatch-street', chrome: { tone: 'dark', un1t_terms: { waiver_link_label: 'waiver' } } }) })
     const waiver = screen.getByLabelText('Waiver link text')
     expect(waiver.value).toBe('waiver')
-    expect(waiver.disabled).toBe(true)
-    expect(screen.getByLabelText('Terms tick label').disabled).toBe(true)
-    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Unpublish' })).toBeNull()
-    // The banner above the form says who edits it; the header adds no "ask an owner".
-    expect(screen.queryByText(/You can view this page but not edit it/)).toBeNull()
-    expect(puts).toEqual([])
+    expect(waiver.disabled).toBe(false)
+    fireEvent.change(screen.getByLabelText('Terms tick label'), { target: { value: '  I accept the {terms}  ' } })
+    // A terms edit is an unsaved change.
+    expect(screen.getByText('Save your changes first.')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts).toHaveLength(1)
+    expect(puts[0].body.chrome.un1t_terms).toEqual({
+      terms_label: 'I accept the {terms}', terms_link_label: null, waiver_link_label: 'waiver',
+      terms_required_message: null, legal_unavailable_message: null,
+    })
+    expect(screen.queryByText('Save your changes first.')).toBeNull()
+  })
+
+  it('a class_funnel offer block edits the funnel emails only: the terms wording is the header card\'s alone', () => {
+    const CF = { ...splitOfferBlock(newBlockOfType('class_funnel', { brand: 'UN1T' })).page, id: 'b-cf', terms_label: 'old block words' }
+    renderForm({
+      page: basePage({ kind: 'studio', slug: 'hatch-street', offer_type: 'class_funnel', blocks: [HERO, CF] }),
+      studios: [{ ...STUDIOS[0], offer: {}, attribution: {} }],
+    })
+    expect(screen.getByText('New account email: subject (un1t.online studios)')).toBeTruthy()
+    expect(screen.getByText('Trial already used email: message (un1t.online studios)')).toBeTruthy()
+    for (const label of ['Terms tick (un1t.online studios)', 'Terms link text (un1t.online studios)', 'Waiver link text (un1t.online studios)',
+      'Terms not ticked: message (un1t.online studios)', 'Terms page could not load: message (un1t.online studios)']) {
+      expect(screen.queryByText(label), label).toBeNull()
+    }
+    expect(screen.queryByDisplayValue('old block words')).toBeNull()
+    // One set of terms fields on the page: the header card's.
+    expect(screen.getAllByLabelText('Terms tick label')).toHaveLength(1)
+  })
+
+  it('a campaign page shows no terms fields and sends none it did not hold', async () => {
+    renderForm()
+    expect(screen.queryByLabelText('Terms tick label')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts[0].body.chrome).not.toHaveProperty('un1t_terms')
   })
 
   it('an empty title is refused before any request', async () => {
@@ -285,6 +315,28 @@ describe('LandingPageSettingsForm (page mode): the pinned offer block', () => {
     renderForm({ page: offerPage({ blocks: [HERO, PILLARS] }), studios: OFFER_STUDIOS })
     expect(screen.getByText("This page's offer block is missing. Ask the team.")).toBeTruthy()
     expect(screen.queryByText('Pinned')).toBeNull()
+  })
+
+  it('a studio page pins its offer block where it sits: no "missing" notice, and a save keeps the order', async () => {
+    const TRIAL = { ...splitOfferBlock(newBlockOfType('paid_trial', { brand: 'UN1T' })).page, id: 'b-trial' }
+    const studioPage = basePage({ kind: 'studio', slug: 'hatch-street', offer_type: 'paid_trial', blocks: [HERO, PILLARS, TRIAL] })
+    renderForm({ page: studioPage, studios: OFFER_STUDIOS })
+    expect(screen.queryByText("This page's offer block is missing. Ask the team.")).toBeNull()
+    expect(screen.getByText('Pinned')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /^Drag / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Drag Hero', 'Drag Pillars'])
+    expect(screen.getAllByRole('button', { name: 'Delete section' })).toHaveLength(2)
+
+    // The preview cannot delete, copy or move it; other blocks may pass it.
+    await send({ type: 'delete-block', blockId: 'b-trial' })
+    await send({ type: 'duplicate-block', blockId: 'b-trial' })
+    await send({ type: 'move-block', blockId: 'b-trial', direction: 'up' })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts[0].body.blocks.map((b) => b.id)).toEqual(['b-hero', 'b-pillars', 'b-trial'])
+
+    await send({ type: 'move-block', blockId: 'b-pillars', direction: 'down' })
+    await send({ type: 'add-block', blockType: 'stats', atIndex: 0 })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts[1].body.blocks.map((b) => b.type)).toEqual(['stats', 'hero', 'paid_trial', 'pillars'])
   })
 
   it('a page with no offer has no pinned card', () => {

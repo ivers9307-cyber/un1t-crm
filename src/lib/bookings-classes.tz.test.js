@@ -269,10 +269,11 @@ describe('TZ.7 America/New_York follows New York across DST', () => {
 
   describe('readPublicClasses uses the location\'s zone', () => {
     // A tolerant db: locations answers the studio's zone (or fails),
-    // landing_page_settings answers the timetable block.
+    // The timetable block comes in through the `blocks` option (the resolved
+    // page's merged blocks), so no landing read is stubbed here.
     // HATCHSTART.1: the membership-source read (not a un1t.online studio
     // here) is a different select on locations and never fails.
-    function studioDb({ zone = NY, zoneError = null, blocks = null } = {}) {
+    function studioDb({ zone = NY, zoneError = null } = {}) {
       const b = {
         _t: null,
         _cols: null,
@@ -280,7 +281,6 @@ describe('TZ.7 America/New_York follows New York across DST', () => {
         maybeSingle: async () => {
           if (b._t === 'locations' && b._cols === 'membership_source, settings') return { data: { membership_source: 'none', settings: {} }, error: null }
           if (b._t === 'locations') return zoneError ? { data: null, error: zoneError } : { data: { id: 'NYC', timezone: zone }, error: null }
-          if (b._t === 'landing_page_settings') return { data: { blocks }, error: null }
           return { data: null, error: null }
         },
       }
@@ -296,14 +296,14 @@ describe('TZ.7 America/New_York follows New York across DST', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       vi.setSystemTime(new Date('2026-07-01T04:00:00Z'))
       noGlofox()
-      const out = await readPublicClasses(studioDb({ blocks }), 'NYC', 1)
+      const out = await readPublicClasses(studioDb(), 'NYC', 1, { blocks })
       expect(out.error).toBeNull()
       expect(out.classes.map((c) => [c.starts_at, c.day, c.time])).toEqual([['2026-07-01T13:00:00.000Z', '2026-07-01', '09:00']])
     })
 
     it('an unreadable zone is an error for a manual timetable, never a Dublin guess', async () => {
       noGlofox()
-      const out = await readPublicClasses(studioDb({ blocks, zoneError: { message: 'boom' } }), 'NYC', 7)
+      const out = await readPublicClasses(studioDb({ zoneError: { message: 'boom' } }), 'NYC', 7, { blocks })
       expect(out).toEqual({ classes: [], error: 'location_zone_unreadable' })
     })
 

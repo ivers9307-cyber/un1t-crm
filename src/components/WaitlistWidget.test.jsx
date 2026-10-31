@@ -31,12 +31,13 @@ function fillAndSubmit() {
 }
 
 describe('WaitlistWidget', () => {
-  it('off a page it posts public_path and the campaign, as before', async () => {
+  it('off a page it posts public_path, as before, and never a campaign', async () => {
     render(<WaitlistWidget publicPath="stillorgan" campaign="stillorgan-free-class" />)
     fillAndSubmit()
     expect(await screen.findByText(/on the list/)).toBeTruthy()
     expect(posts[0].url).toBe('/api/public/leads')
-    expect(posts[0].body).toMatchObject({ first_name: 'Ann', public_path: 'stillorgan', campaign: 'stillorgan-free-class' })
+    expect(posts[0].body).toMatchObject({ first_name: 'Ann', public_path: 'stillorgan' })
+    expect(posts[0].body).not.toHaveProperty('campaign')
     expect(posts[0].body).not.toHaveProperty('page')
   })
 

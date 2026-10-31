@@ -15,6 +15,7 @@ import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { logWarn } from '@/lib/log'
 import { parseHiddenKeywords } from '@/lib/class-keywords'
 import { freshCutoff, onlyFreshEvents } from '@/lib/un1t-online-freshness'
+import { studioPageBlocksFor } from '@/lib/landing-pages'
 
 // The exact Intl options the Dublin formatters used, so a Dublin studio's
 // day/time/label text is byte-identical (TZ.7).
@@ -102,12 +103,16 @@ export function isClassAllowed(name, allowKeywords) {
  * Resolve a location's live, bookable classes for the next `days` days.
  * Never throws. `opts.allowKeywords` (FIFTYPLUS.1): null lists every class;
  * an array keeps only the classes isClassAllowed admits, after the deny-list.
+ * `opts.blocks` (PAGES.1): the page the request named, merged with its studio
+ * row (resolvePublicPageRequest's `blocks`); a studio with no Glofox reads its
+ * typed timetable and minimum notice off them. Left out (a caller that holds
+ * only a studio, such as the WhatsApp Flow), the studio's own page is read.
  * @returns {Promise<{ classes: object[], error: (string|null) }>}
  *   error 'glofox_settings_unreadable' — the studio's Glofox settings could
  *     not be READ (a DB blip): not "no classes", not "not configured".
  *   error 'glofox_unreachable' — Glofox did not answer.
  *   error 'manual_timetable_unreadable' — a studio with no Glofox whose
- *     landing row (where its hand-written timetable lives) could not be read.
+ *     studio page (where its hand-written timetable lives) could not be read.
  *   error 'location_zone_unreadable' — a studio with no Glofox whose
  *     timezone could not be read (TZ.7): its timetable is wall clock in that
  *     zone, so it cannot be turned into class times on a guessed clock. A
@@ -121,10 +126,10 @@ export function isClassAllowed(name, allowKeywords) {
  *   class_funnel block (MANUALFUNNEL.1), or { classes: [], error: null } when
  *   it has none.
  */
-export async function readPublicClasses(db, locationId, days = 7, { allowKeywords = null } = {}) {
+export async function readPublicClasses(db, locationId, days = 7, { allowKeywords = null, blocks } = {}) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   if (creds.readError) return { classes: [], error: creds.readError }
-  if (missingGlofoxCredentialsForLocation(creds).length) return readNoGlofoxClasses(db, locationId, days, { allowKeywords })
+  if (missingGlofoxCredentialsForLocation(creds).length) return readNoGlofoxClasses(db, locationId, days, { allowKeywords, blocks })
   // REGISTRYREAD.1a: the deny-list rides on the SAME read as the credentials.
   // A second read used to fail OPEN — a blip answered {} and listed (and let
   // the funnel book) every hidden class.
@@ -159,14 +164,20 @@ export async function readPublicClasses(db, locationId, days = 7, { allowKeyword
 // Street) lists its REAL timetable instead: the classes the un1t.online sync
 // mirrored into un1t_events. The hand-written text is not read for it at all,
 // because it drifts from what the studio actually runs.
-async function readNoGlofoxClasses(db, locationId, days, { allowKeywords = null } = {}) {
-  const { data, error } = await db.from('landing_page_settings')
-    .select('blocks').eq('location_id', locationId).maybeSingle()
-  if (error) return { classes: [], error: 'manual_timetable_unreadable' }
+async function readNoGlofoxClasses(db, locationId, days, { allowKeywords = null, blocks: given } = {}) {
+  let blocks = given
+  if (!Array.isArray(blocks)) {
+    try {
+      blocks = (await studioPageBlocksFor(db, locationId)).blocks
+    } catch (err) {
+      logWarn('public-classes', 'studio page unreadable; timetable not listed', { locationId, code: err?.cause?.code ?? err?.code ?? null })
+      return { classes: [], error: 'manual_timetable_unreadable' }
+    }
+  }
   const source = await readUn1tListingSource(db, locationId)
   if (source.error) return { classes: [], error: source.error }
-  if (source.un1t) return readUn1tClasses(db, locationId, days, { blocks: data?.blocks, hidden: source.hidden, allowKeywords })
-  const cfg = manualTimetableConfigFromBlocks(data?.blocks)
+  if (source.un1t) return readUn1tClasses(db, locationId, days, { blocks, hidden: source.hidden, allowKeywords })
+  const cfg = manualTimetableConfigFromBlocks(blocks)
   if (!cfg) return { classes: [], error: null }
   const zone = await readListingZone(db, locationId)
   if (!zone) return { classes: [], error: 'location_zone_unreadable' }
@@ -254,6 +265,6 @@ async function readUn1tClasses(db, locationId, days, { blocks, hidden, allowKeyw
 
 // Old contract ([] on any failure) for the public list route and the
 // WhatsApp Flow, where an empty screen is the honest fallback.
-export async function listPublicClasses(db, locationId, days = 7) {
-  return (await readPublicClasses(db, locationId, days)).classes
+export async function listPublicClasses(db, locationId, days = 7, { blocks } = {}) {
+  return (await readPublicClasses(db, locationId, days, { blocks })).classes
 }

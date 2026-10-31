@@ -1,8 +1,7 @@
 // Best-effort WhatsApp booking confirmation for campaign booking pages
 // (/start). Sent as a UTILITY template (no 24h window after a web booking),
 // straight to the lead's normalised phone, then wa_phone is backfilled so
-// the message logs to a conversation and any reply routes to Mia. Mirrors
-// the send pattern in meta-ad-whatsapp-welcome.js. Never throws.
+// the message logs to a conversation and any reply routes to Mia. Never throws.
 
 import { contactWhatsAppNumber } from '@/lib/phone-validate'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
