@@ -6996,6 +6996,42 @@ registry.registerPath({
   },
 })
 
+// PIPE3.8 — the Programmes pipeline board's entry rules (a studio setting).
+const ProgrammeRulesBody = z.object({
+  lead_sources: z.array(z.string().min(1).max(80)).max(20).describe('Landing-page lead sources that place a lead on the Programmes board (e.g. meta_50plus)'),
+  glofox_plan_patterns: z.array(z.string().min(1).max(80)).max(20).describe('Substrings of a Glofox trial plan name that place its holder on the Programmes board (e.g. elites trial)'),
+})
+registry.register('ProgrammeRulesBody', ProgrammeRulesBody)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/pipeline-programmes',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's Programmes pipeline board rules",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  description: 'Any member of the studio may read: { has_board, lead_sources, glofox_plan_patterns, can_edit }. Stored at locations.settings.pipelines.programmes; the match is recorded per contact in pipeline_board_claims (mig 797).',
+  responses: {
+    200: { description: 'The rules' },
+    403: { description: 'Not a member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/pipeline-programmes',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set a studio's Programmes pipeline board rules (owner / master at the studio)",
+  request: { params: z.object({ id: z.string().uuid() }), body: { content: { 'application/json': { schema: ProgrammeRulesBody } } } },
+  description: 'Membership first (assertLocationAccess), then master or owner AT the studio. Entries are stored lower-cased and trimmed; the settings jsonb is merged.',
+  responses: {
+    200: { description: 'The rules after the write' },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
 // only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.
 registry.registerPath({
