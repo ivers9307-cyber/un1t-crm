@@ -405,6 +405,43 @@ export function blocksOrDefault(savedBlocks) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// EDITGATE.1 — what may leave the server for a browser as a BLOCK.
+//
+// The public page renders blocks on the server and hands client
+// components named props, so a block's operator configuration (the
+// Glofox trial / plan ids a funnel grants, the un1t.online product it
+// sells, the lead attribution it files) never reaches a visitor. The
+// editor preview (/welcome/<path>?edit=1) is the one place a whole
+// block object is passed to a client component (EditModeOverlay's
+// initialBlocks), so it goes through here first. The editor itself
+// pushes the full blocks over postMessage from the settings form, which
+// loaded them through the permission-checked settings page; the first
+// paint is all this seed is for.
+//
+// A key listed here is withheld from that seed; the test pins each one
+// to a key its type's factory writes. `campaign_funnel` (#2256, the
+// /50plus campaign page) withholds its class allow-list and attribution.
+// ─────────────────────────────────────────────────────────────
+export const CLIENT_WITHHELD_KEYS = Object.freeze({
+  class_funnel:    ['trial_membership_id', 'trial_plan_code'],
+  paid_trial:      ['membership_id', 'plan_code', 'un1t_product_id', 'tag', 'lead_source', 'event_source_url'],
+  lead_form:       ['tag', 'lead_source'],
+  campaign_funnel: ['class_keywords', 'tag', 'lead_source', 'event_source_url', 'trial_membership_id', 'trial_plan_code'],
+})
+
+export function clientSafeBlocks(blocks) {
+  if (!Array.isArray(blocks)) return []
+  return blocks.map((block) => {
+    if (!block || typeof block !== 'object') return block
+    const withheld = CLIENT_WITHHELD_KEYS[block.type]
+    if (!withheld) return block
+    const safe = { ...block }
+    for (const key of withheld) delete safe[key]
+    return safe
+  })
+}
+
+// ─────────────────────────────────────────────────────────────
 // Validation — Zod schema used by the API PUT route to validate
 // the incoming blocks payload. Strict-mode disabled here because
 // each block has type-specific fields and a discriminated union

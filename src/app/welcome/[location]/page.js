@@ -11,6 +11,14 @@
 // shared BlockRenderers. Editing happens in /settings/landing-page
 // (per active location); the live-preview iframe still uses ?edit=1.
 //
+// EDITGATE.1 — ?edit=1 is honoured only for a signed-in staff session with
+// access to the page's studio (the iframe is same-origin with the editor, so
+// it carries the CRM session cookies); anyone else gets the public render,
+// and a draft page 404s for them as it always did. The overlay seed is also
+// `clientSafeBlocks`: the whole blocks array used to reach any browser that
+// appended ?edit=1, carrying the Glofox / un1t.online product ids and the
+// lead attribution the public page never shows.
+//
 // WEBSITE-REDESIGN 2026-06 additions (public render only):
 //   · Sticky glass header with a CTA computed from the page's OWN
 //     funnel blocks (lead_form → #waitlist, booking → #book, event →
@@ -32,7 +40,8 @@ import { headers } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
 import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
 import { resolveGymSiteName } from '@/lib/default-site-name'
-import { blocksOrDefault, pageCtas } from '@/lib/landing-page-blocks'
+import { blocksOrDefault, clientSafeBlocks, pageCtas } from '@/lib/landing-page-blocks'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import RevealManager from '@/components/landing-page/RevealManager'
@@ -97,6 +106,20 @@ async function loadPageTrial(db, { row, publicPath, brand, resumePurchaseId, can
   return { trial, trialShown, studio }
 }
 
+// EDITGATE.1 — the editor preview is for a staff session at this page's
+// studio (master: every active studio, via getUserLocationIds). A missing
+// row, no session, a session elsewhere and a failed session read all answer
+// false: the request is then an ordinary public one.
+async function canPreviewAsStaff(row) {
+  if (!row?.location_id) return false
+  try {
+    const user = await getCurrentUser()
+    return Boolean(user) && getUserLocationIds(user).includes(row.location_id)
+  } catch {
+    return false
+  }
+}
+
 // W1.L4 — the OG site name is THIS studio's brand (company_settings →
 // org_settings → location name) and the not-found title is the host's
 // organisation brand; neither is a literal.
@@ -137,7 +160,7 @@ export default async function StudioLandingPage(props) {
   // operator can preview before publishing. A buyer coming back from a
   // checkout to a page that is gone is sent on to /trial, which can resume
   // any studio's purchase, rather than shown a 404 after paying.
-  const isEditPreview = searchParams?.edit === '1'
+  const isEditPreview = searchParams?.edit === '1' && (await canPreviewAsStaff(row))
   if (!row || (!isEditPreview && !isPubliclyVisible(row.publish_state))) {
     if (resumePurchaseId) {
       const key = params.location === 'hatch-street' ? 'hatch' : 'stillorgan'
@@ -195,7 +218,7 @@ export default async function StudioLandingPage(props) {
   if (isEditPreview) {
     return (
       <EditModeOverlay
-        initialBlocks={blocks}
+        initialBlocks={clientSafeBlocks(blocks)}
         initialLogoUrl={logoUrl}
         initialLogoAlt={logoAlt}
         initialLogoWidthPx={logoWidthPx}
