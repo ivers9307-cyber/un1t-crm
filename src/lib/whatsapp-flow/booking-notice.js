@@ -130,20 +130,34 @@ export async function readPaidTrialReply(db, locationId, { pageId = null } = {})
   if (!resolved?.ok) throw new PaidTrialReplyReadError(resolved?.reason || 'unknown')
   const text = operatorText(resolved.settings, 'flow_paid_trial_text')
   if (!text) return null
-  if (pageId && (await pageOffersFreeTrial(db, pageId))) return null
+  if (pageId && (await pageOffersFreeTrial(db, pageId, locationId))) return null
   const { stripEmDashes } = await import('@/lib/agent/core')
   return stripEmDashes(text).trim() || null
 }
 
-async function pageOffersFreeTrial(db, pageId) {
+// The page must also be THIS studio's: its own studio (a one-studio page) or
+// switched on for it (an all-studio page's landing_page_studios row). The
+// route already sets page_id from the page it served, so this is a second
+// fence: a page of another studio is "no page", and the paid trial applies.
+async function pageOffersFreeTrial(db, pageId, locationId) {
+  const page = await readOrThrow(() => db.from('landing_pages')
+    .select('offer_type, scope, primary_location_id').eq('id', pageId).maybeSingle())
+  if (!page || !FREE_TRIAL_PAGE_OFFERS.includes(page.offer_type)) return false
+  if (page.scope === 'one') return page.primary_location_id === locationId
+  const studio = await readOrThrow(() => db.from('landing_page_studios')
+    .select('enabled').eq('page_id', pageId).eq('location_id', locationId).maybeSingle())
+  return studio?.enabled === true
+}
+
+async function readOrThrow(query) {
   let res
   try {
-    res = await db.from('landing_pages').select('offer_type').eq('id', pageId).maybeSingle()
+    res = await query()
   } catch {
     throw new PaidTrialReplyReadError('page_unreadable')
   }
   if (res?.error) throw new PaidTrialReplyReadError('page_unreadable')
-  return FREE_TRIAL_PAGE_OFFERS.includes(res?.data?.offer_type)
+  return res?.data ?? null
 }
 
 async function confirmationText(settings, { className, classTime }) {

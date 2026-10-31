@@ -255,26 +255,53 @@ describe('PAIDTRIALONLY.1 — the paid trial reply', () => {
   // PAGETRIAL.1 — a booking from a page whose own offer is a free class keeps
   // its free trial; the studio's paid trial covers every other booking.
   const PAID = { ok: true, settings: { flow_paid_trial_text: 'Try the Reset: https://x.test/trial' }, location: { id: 'loc1' } }
-  function pageDb(result) {
+  // One answer per table; an Error rejects.
+  function pageDb(result, studio = { data: null, error: null }) {
     const calls = []
-    const chain = {
-      select: (cols) => { calls.push(['select', cols]); return chain },
-      eq: (col, val) => { calls.push(['eq', col, val]); return chain },
-      maybeSingle: async () => (result instanceof Error ? Promise.reject(result) : result),
+    const chainFor = (r) => {
+      const chain = {
+        select: (cols) => { calls.push(['select', cols]); return chain },
+        eq: (col, val) => { calls.push(['eq', col, val]); return chain },
+        maybeSingle: async () => (r instanceof Error ? Promise.reject(r) : r),
+      }
+      return chain
     }
-    return { calls, from: (t) => { calls.push(['from', t]); return chain } }
+    return { calls, from: (t) => { calls.push(['from', t]); return chainFor(t === 'landing_page_studios' ? studio : result) } }
   }
+  const onePage = (offerType, loc = 'loc1') => ({ data: { offer_type: offerType, scope: 'one', primary_location_id: loc }, error: null })
 
   it.each(['one_class', 'class_funnel'])('readPaidTrialReply: a %s page keeps its free trial where the studio sells a paid one', async (offerType) => {
     resolveAgentSettings.mockResolvedValueOnce(PAID)
-    const db = pageDb({ data: { offer_type: offerType }, error: null })
+    const db = pageDb(onePage(offerType))
     expect(await readPaidTrialReply(db, 'loc1', { pageId: 'p1' })).toBeNull()
     expect(db.calls).toEqual(expect.arrayContaining([['from', 'landing_pages'], ['eq', 'id', 'p1']]))
   })
 
   it('readPaidTrialReply: a paid trial page gets the studio paid trial', async () => {
     resolveAgentSettings.mockResolvedValueOnce(PAID)
-    expect(await readPaidTrialReply(pageDb({ data: { offer_type: 'paid_trial' }, error: null }), 'loc1', { pageId: 'p1' })).toBe('Try the Reset: https://x.test/trial')
+    expect(await readPaidTrialReply(pageDb(onePage('paid_trial')), 'loc1', { pageId: 'p1' })).toBe('Try the Reset: https://x.test/trial')
+  })
+
+  it('readPaidTrialReply: another studio\'s free-class page is no page here (the paid trial applies)', async () => {
+    resolveAgentSettings.mockResolvedValueOnce(PAID)
+    expect(await readPaidTrialReply(pageDb(onePage('one_class', 'loc-other')), 'loc1', { pageId: 'p1' })).toBe('Try the Reset: https://x.test/trial')
+  })
+
+  it.each([
+    ['switched on here', { data: { enabled: true }, error: null }, null],
+    ['switched off here', { data: { enabled: false }, error: null }, 'Try the Reset: https://x.test/trial'],
+    ['not offered here', { data: null, error: null }, 'Try the Reset: https://x.test/trial'],
+  ])('readPaidTrialReply: an all-studio free-class page %s', async (_label, studio, expected) => {
+    resolveAgentSettings.mockResolvedValueOnce(PAID)
+    const db = pageDb({ data: { offer_type: 'one_class', scope: 'all', primary_location_id: null }, error: null }, studio)
+    expect(await readPaidTrialReply(db, 'loc1', { pageId: 'p1' })).toBe(expected)
+    expect(db.calls).toEqual(expect.arrayContaining([['from', 'landing_page_studios'], ['eq', 'page_id', 'p1'], ['eq', 'location_id', 'loc1']]))
+  })
+
+  it('readPaidTrialReply: an unreadable studio row for an all-studio page throws', async () => {
+    resolveAgentSettings.mockResolvedValueOnce(PAID)
+    const db = pageDb({ data: { offer_type: 'one_class', scope: 'all', primary_location_id: null }, error: null }, { data: null, error: { message: 'boom' } })
+    await expect(readPaidTrialReply(db, 'loc1', { pageId: 'p1' })).rejects.toBeInstanceOf(PaidTrialReplyReadError)
   })
 
   it('readPaidTrialReply: a page that no longer exists gets the studio paid trial', async () => {
