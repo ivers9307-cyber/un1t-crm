@@ -851,6 +851,24 @@ describe('page slugs are public from the database', () => {
     }
   })
 
+  it('the studio paths are in no in-code allowlist: /stillorgan is public only through the slug tier, and a look-alike is not (PAGES.1 Task 25)', async () => {
+    for (const p of ['/stillorgan', '/hatch-street']) {
+      expect(marketingBrand().allowedPaths, p).not.toContain(p)
+      expect(DB_BRAND_DEFAULTS.allowedPaths, p).not.toContain(p)
+    }
+    // With no slug list the marketing host falls back to the chooser and the CRM host to /login.
+    pageSlugsImpl = async () => []
+    expect(rewrittenTo(await proxy(makeReq({ host: MARKETING_HOST, path: '/stillorgan' })))).toMatch(/\/welcome$/)
+    expect((await proxy(makeReq({ host: CRM_HOST, path: '/stillorgan' }))).headers.get('location')).toMatch(/\/login/)
+    // With the real fallback list the page is admitted (stamped), a look-alike is not.
+    pageSlugsImpl = async (orgId) => [...(PUBLIC_PAGE_SLUGS_FALLBACK[orgId] || [])]
+    const marketing = await proxy(makeReq({ host: MARKETING_HOST, path: '/stillorgan' }))
+    expect(admitted(marketing)).toBe(true)
+    expect(forwarded(marketing, 'x-public-page')).toBe('1')
+    expect(rewrittenTo(await proxy(makeReq({ host: MARKETING_HOST, path: '/stillorganx' })))).toMatch(/\/welcome$/)
+    expect((await proxy(makeReq({ host: CRM_HOST, path: '/stillorganx' }))).headers.get('location')).toMatch(/\/login/)
+  })
+
   it('a tenant host whose organisation has no pages still rewrites /january', async () => {
     tenantBrandImpl = async () => ({
       id: 'tenant:x', hostnames: [TENANT_HOST],
@@ -944,11 +962,18 @@ describe('page slugs are public from the database', () => {
       const html = renderToStaticMarkup(<AppShell user={null} isPublicPage={false} publicPageSlugs={['stillorgan', 'hatch-street']}><p>page-body</p></AppShell>)
       expect(html, path).toContain('page-body')
     }
-    // /stillorgan is still in PUBLIC_PATHS until Task 25 takes it out; a studio
-    // page that never was proves the list alone admits it.
+    // /stillorgan is in no in-code list any more (PAGES.1 Task 25): the slug
+    // list, or the proxy's header, is all that admits it. Control: with
+    // neither, no user and no list, the shell renders nothing.
+    pathnameImpl = '/stillorgan'
+    expect(renderToStaticMarkup(<AppShell user={null} isPublicPage={false} publicPageSlugs={[]}><p>page-body</p></AppShell>)).toBe('')
+    expect(renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)).toBe('')
+    expect(renderToStaticMarkup(<AppShell user={null} isPublicPage><p>page-body</p></AppShell>)).toContain('page-body')
+    pathnameImpl = '/hatch-street'
+    expect(renderToStaticMarkup(<AppShell user={null} publicPageSlugs={[]}><p>page-body</p></AppShell>)).toBe('')
+    // A studio page created later is public through the list alone.
     pathnameImpl = '/downtown/status'
     expect(renderToStaticMarkup(<AppShell user={null} publicPageSlugs={['downtown']}><p>page-body</p></AppShell>)).toContain('page-body')
-    expect(renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)).toBe('')
   })
 
   it('control — a look-alike segment (/stillorganx) and a reserved one (/settings) are not admitted by the slug list', () => {

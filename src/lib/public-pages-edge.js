@@ -3,8 +3,10 @@
 // path used to be hand-listed in FOUR places (proxy publicPaths, AppShell
 // PUBLIC_PATHS, the un1t-marketing allowedPaths, DB_BRAND_DEFAULTS), so a new
 // page needed a deploy. The proxy now asks THIS module for the organisation's
-// page slugs and admits `/<slug>` and `/<slug>/…`; the in-code lists stay as
-// the guaranteed fallback and are not trimmed here.
+// page slugs and admits `/<slug>` and `/<slug>/…`. The in-code lists that
+// remain are the non-page surfaces (the chooser, legal, payments, tokens ...);
+// the pages themselves, studio pages included, are public through this module
+// alone, with PUBLIC_PAGE_SLUGS_FALLBACK as the guaranteed answer on an outage.
 //
 // Edge-safe on purpose: the proxy (Next middleware, edge runtime) imports it,
 // so it may import only edge-safe modules (brands, tenant-domains-edge, the

@@ -28,12 +28,10 @@ import UsageTracker from './UsageTracker'
 // '/event-pay/<id>' (the Revolut checkout page reached from "Book & pay").
 // Without it, a public buyer with no session gets bounced to /login after
 // clicking Pay Now. Mirrors the allowlist in proxy.js. Do not drop on refactor.
-// '/stillorgan' + '/hatch-street' are the studio pretty-paths: next.config
-// rewrites them to /welcome/<studio>, but the browser URL — and therefore
-// usePathname() here — stays the pretty path. Without them a logged-out
-// visitor to the public studio page is bounced to /login on hydration (the
-// server renders fine; this client gate is what redirects). Mirrors the
-// brand allowlist in src/lib/brands.js — add a new studio's path in BOTH.
+// PAGES.1 — '/stillorgan' + '/hatch-street' are NOT listed any more: a studio
+// page is a `landing_pages` row (kind='studio') like any campaign page, public
+// through `publicPageSlugs` / the proxy's x-public-page header (below), so a
+// new studio's page needs no entry here or in src/lib/brands.js.
 // '/h' — public host mailing-list signup pages (/h/[slug], HOST-EMAIL.2).
 // '/unsubscribe' — the unsubscribe pages (global /unsubscribe/[token] AND the
 // per-host /unsubscribe/host/[token]): anonymous email recipients arrive with
@@ -80,7 +78,7 @@ import UsageTracker from './UsageTracker'
 // list, which is raw startsWith and therefore keeps one).
 // BOOKINGSELF.1 — '/book/manage': the customer's own booking page (cancel,
 // reschedule); covered by '/book', listed so the flow survives a narrowing.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done', '/fee-appeal', '/pay-link']
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done', '/fee-appeal', '/pay-link']
 
 // PAGES.1 — `isPublicPage` is the proxy's x-public-page header, read ONCE by
 // the root layout, so it is stale after a soft navigation (a <Link> from an

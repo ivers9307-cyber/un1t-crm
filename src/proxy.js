@@ -128,7 +128,8 @@ export async function proxy(request) {
     // when it is also a page it must carry the x-public-page header, or
     // AppShell renders it and then blanks it to /login (a tenant_domains
     // brand can list /trial, /start or /free-class, which have left
-    // PUBLIC_PATHS since they became pages). Only a 'rewrite' brand
+    // PUBLIC_PATHS since they became pages; /stillorgan and /hatch-street left the
+    // lists the same way, studio pages being database pages). Only a 'rewrite' brand
     // (the marketing-site shape, whose strays go to a landing) serves pages: a
     // 'reject' brand is an isolated surface (host.un1tdublin.com serves the
     // host portal and 404s everything else, pay.* serves payments), and it can
