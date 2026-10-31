@@ -258,9 +258,9 @@ async function resolveLegacyRequest(db, legacyPath) {
 /**
  * Which page, studio and attribution a public API request is about.
  *
- * With `page` (a slug): the live page of that slug in the host's organisation
- * (draft, coming_soon and retired answer not_found: only a live page takes a
- * customer). scope 'one' answers for its primary studio only: a `studio` that
+ * With `page` (a slug): the live campaign page of that slug in the host's
+ * organisation (draft, coming_soon and retired answer not_found: only a live
+ * page takes a customer; in PR1 a studio page is not_found too). scope 'one' answers for its primary studio only: a `studio` that
  * names any other studio (or nothing) is not_found, so a one-studio page can
  * never be booked at another studio. scope 'all' needs `studio` (a public
  * path, or the old `hatch` spelling): missing is studio_required, a studio the
@@ -292,7 +292,8 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
     if (!loaded) return NOT_FOUND
     const { page: row, studios } = loaded
     if (!isPageVisible(row.publish_state)) return NOT_FOUND
-    if (row.kind !== 'campaign' && row.kind !== 'studio') return NOT_FOUND
+    // PR1: studio pages still serve from landing_page_settings; PR3 lifts this and seeds their attribution.
+    if (row.kind !== 'campaign') return NOT_FOUND
 
     const named = given(studio)
     const requested = named ? studioParamToPublicPath(studio) : null

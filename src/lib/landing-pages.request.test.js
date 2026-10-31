@@ -121,6 +121,13 @@ describe('resolvePublicPageRequest', () => {
     expect(await resolvePublicPageRequest(none, { page: 'Not A Slug!' })).toEqual({ ok: false, reason: 'not_found' })
   })
 
+  it('PR1: a studio page is not_found, even live (it still serves from landing_page_settings)', async () => {
+    const STUDIO = { ...ONE, id: 'p-s', slug: 'stillorgan', kind: 'studio', offer_type: 'class_funnel', blocks: [{ type: 'class_funnel' }] }
+    const db = makeDb({ pages: { stillorgan: STUDIO }, studios: { 'p-s': [{ ...ROW_S, page_id: 'p-s', attribution: {} }] } })
+    expect(await resolvePublicPageRequest(db, { page: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(db, { page: 'stillorgan', studio: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+  })
+
   it('reads the page in the host organisation', async () => {
     const db = makeDb({ pages: { '50plus': ONE }, studios: { 'p-50': [ROW_S] } })
     await resolvePublicPageRequest(db, { hostname: 'www.un1tdublin.com', page: '50plus' })

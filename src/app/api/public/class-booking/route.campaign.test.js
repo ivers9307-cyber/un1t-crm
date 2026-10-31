@@ -183,6 +183,25 @@ describe('POST /api/public/class-booking — page (PAGES.1)', () => {
     expect(findOrCreateRaceContact).not.toHaveBeenCalled()
   })
 
+  it('a paid class_funnel page: the row price opens the payment (a body price is ignored), awaiting_payment with page_id, tag from the row attribution', async () => {
+    const CF = { type: 'class_funnel', trial_membership_id: 'cf-m', trial_plan_code: 'cf-p', price_cents: 2500, currency: 'EUR', consult_slug: '' }
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({
+      page: { id: 'page-cf', slug: 'first-class', offer_type: 'class_funnel' }, pageId: 'page-cf', blocks: [CF],
+      attribution: { tag: 'stillorgan-first-class', lead_source: 'meta_first-class' },
+    }))
+    readPublicClasses.mockResolvedValueOnce({ classes: [{ event_id: 'ev-1', name: 'BASE', starts_at: '2099-01-01T08:00:00Z' }], error: null })
+    findOrCreateRaceContact.mockResolvedValueOnce('c1')
+    createClassBookingPayment.mockResolvedValueOnce({ paymentId: 'pay-1', checkout: { provider: 'revolut' } })
+    const res = await book({ page: 'first-class', campaign: undefined, event_id: 'ev-1', price_cents: 1, amount_cents: 1, currency: 'USD', tag: 'evil' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ success: true, data: { requiresPayment: true, paymentId: 'pay-1' } })
+    expect(readPublicClasses).toHaveBeenCalledWith(expect.anything(), 'L1', 14)
+    expect(inserted).toMatchObject({ page_id: 'page-cf', status: 'awaiting_payment', trial_membership_id: 'cf-m', trial_plan_code: 'cf-p', location_id: 'L1' })
+    expect(createClassBookingPayment).toHaveBeenCalledTimes(1)
+    expect(createClassBookingPayment.mock.calls[0][0]).toMatchObject({ amountCents: 2500, currency: 'EUR' })
+    expect(writeContactTag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'stillorgan-first-class' }))
+  })
+
   it('a page whose offer is not a class is not_found', async () => {
     resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ page: { id: 'p', slug: 'corp', offer_type: 'promo_credits' }, blocks: [{ type: 'corp_promo' }] }))
     expect((await book({ page: 'corp' })).status).toBe(404)
