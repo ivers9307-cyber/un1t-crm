@@ -734,6 +734,8 @@ git commit -m "PAGES.1 — pages API: list, create, update, publish, studio rows
 
 - [ ] Steps: failing tests → implement → `npx vitest run 'src/app/(public)' src/app/welcome src/public-compliance-paths.test.jsx && npm run build` → PASS → commit `PAGES.1 — studio pages, events and status on the [slug] route; /welcome/<path> redirects`.
 
+- Note (final review of PR1, 31 Oct 2026). Before PR3: redesign how AppShell learns a DB page is public on soft navigation (the `x-public-page` header is read once in the root layout and does not update on client-side navigation; a `<Link>` from an in-code public page to a DB page bounces an anonymous visitor to /login once the studio paths leave `PUBLIC_PATHS`). Options: a client-readable public slug list, or no client redirect when the server already admitted the page. PR1 also restricts the edge slug tier to `kind = 'campaign'` (`listPublicPageSlugs` and `PUBLIC_PAGE_SLUGS_FALLBACK` in `src/lib/public-pages-edge.js`): this task lifts that, adding `stillorgan` and `hatch-street` back to the fallback.
+
 ---
 
 ### Task 22: Chooser, logo, front page and new-studio hook read `landing_pages`
