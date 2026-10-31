@@ -539,12 +539,37 @@ const hatchRow = (over = {}) => row('loc-h', {
 const PURCHASE = '11111111-1111-1111-1111-111111111111'
 const meta = (slug, rest) => generateMetadata({ params: Promise.resolve({ slug, rest }), searchParams: Promise.resolve({}) })
 
+describe('the page root names its studio for the pixel (PAGES.1)', () => {
+  const attr = (html) => html.match(/data-page-location="([^"]*)"/g)
+
+  it('a Hatch Street studio page stamps data-page-location with Hatch Street\'s location, on the page and on its sub-pages', async () => {
+    h.loaded = { page: HATCH, studios: [hatchRow()] }
+    expect(attr(await render({ slug: 'hatch-street' }))).toEqual(['data-page-location="loc-h"'])
+    expect(attr(await render({ slug: 'hatch-street', rest: ['events'] }))).toEqual(['data-page-location="loc-h"'])
+    expect(attr(await render({ slug: 'hatch-street', rest: ['status'] }))).toEqual(['data-page-location="loc-h"'])
+  })
+
+  it('/corp (primary Hatch) stamps Hatch; /50plus (primary Stillorgan) stamps Stillorgan', async () => {
+    h.loaded = { page: CORP, studios: CORP_STUDIOS }
+    expect(attr(await render({ slug: 'corp' }))).toEqual(['data-page-location="loc-h"'])
+    h.loaded = { page: FIFTY, studios: FIFTY_STUDIOS }
+    expect(attr(await render({ slug: '50plus' }))).toEqual(['data-page-location="loc-s"'])
+  })
+
+  it('an all-studios page stamps the studio ?studio= resolved to, and none until one is chosen', async () => {
+    h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
+    const html = await render({ slug: 'trial', sp: { studio: 'hatch' } })
+    expect(attr(html)).toEqual(['data-page-location="loc-h"'])
+    expect(attr(await render({ slug: 'trial' }))).toBeNull()
+  })
+})
+
 describe('studio pages on the [slug] route', () => {
   it('a studio page renders hero + blocks with the trial card and pageCtas', async () => {
     h.loaded = { page: STILL, studios: [stillRow()] }
     const html = await render({ slug: 'stillorgan' })
     // The /welcome layout's shell (font + #lp-shell), then the dark page.
-    expect(html).toMatch(/^(<link [^>]*>)*<div id="lp-shell" class="font-var font-body"><div class="min-h-screen bg-black text-white antialiased">/)
+    expect(html).toMatch(/^(<link [^>]*>)*<div id="lp-shell" data-page-location="loc-s" class="font-var font-body"><div class="min-h-screen bg-black text-white antialiased">/)
     expect(html.match(/id="trial"/g)).toHaveLength(1)
     const paid = propsOf(html, 'paid')
     expect(paid).toMatchObject({ initialStudio: 'stillorgan', returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: false })

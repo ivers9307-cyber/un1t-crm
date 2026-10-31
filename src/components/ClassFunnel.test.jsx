@@ -8,7 +8,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 
 vi.mock('@/lib/funnel-track', () => ({ trackFunnelStep: vi.fn() }))
 vi.mock('@/lib/meta-pixel-lead', () => ({ newLeadEventId: () => 'lead-id-123', pixelUserData: () => ({}), fireBrowserLead: vi.fn() }))
-vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [] }))
+vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [], pageLocationIdFromDocument: () => null }))
 vi.mock('@/components/landing-page/ClassFunnelCheckout', () => ({ default: () => null }))
 
 import ClassFunnel from './ClassFunnel'

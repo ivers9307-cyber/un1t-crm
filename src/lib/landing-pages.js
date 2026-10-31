@@ -892,6 +892,29 @@ export async function loadStudioPagesByLocation(db, { orgId, locationIds }) {
 }
 
 /**
+ * The slugs of an organisation's LIVE studio pages: where a paid-trial buyer may
+ * be sent back to after a redirect-based payment (trial-return-path.js). Never
+ * throws: a failed read answers [], so only /trial validates. Scoped by the
+ * organisation, so another tenant's studio page is never a return path.
+ * @returns {Promise<string[]>}
+ */
+export async function listStudioPageSlugs(db, orgId) {
+  if (!orgId) return []
+  try {
+    const { data, error } = await db
+      .from('landing_pages')
+      .select('slug')
+      .eq('organization_id', orgId)
+      .eq('kind', 'studio')
+      .eq('publish_state', 'live')
+    if (error || !Array.isArray(data)) return []
+    return data.map((r) => r?.slug).filter((s) => typeof s === 'string' && s)
+  } catch {
+    return []
+  }
+}
+
+/**
  * Write columns onto one page row (by id, inside the organisation).
  * @returns {Promise<{ ok: true } | { ok: false, reason: 'failed' | 'gone', error?: object }>}
  */

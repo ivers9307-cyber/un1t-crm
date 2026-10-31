@@ -14,7 +14,7 @@ vi.mock('@/lib/meta-pixel-lead', () => ({
   newLeadEventId: () => 'lead-id', pixelUserData: () => ({}), fireBrowserLead: vi.fn(),
   fireBrowserInitiateCheckout: vi.fn(), checkoutEventIdFor: (id) => `c-${id}`,
 }))
-vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [] }))
+vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [], pageLocationIdFromDocument: () => null }))
 vi.mock('@/lib/visit-origin', () => ({ readVisitOrigin: () => null }))
 vi.mock('./ClassFunnelCheckout', () => ({ default: () => null }))
 vi.mock('./BlockRenderers', () => ({

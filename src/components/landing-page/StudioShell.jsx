@@ -10,11 +10,13 @@
 
 import { poppinsBody as poppins } from '@/fonts/poppins'
 
-export default function StudioShell({ children }) {
+// `pageLocationId`: the studio the page speaks for, as `data-page-location`
+// (read by pageLocationIdFromDocument for the studio's Meta pixel).
+export default function StudioShell({ children, pageLocationId = null }) {
   // id="lp-shell": reveal-arm.js adds `lp-armed` to THIS element during HTML
   // parse; suppressHydrationWarning covers that one pre-hydration mutation.
   return (
-    <div id="lp-shell" suppressHydrationWarning className={`${poppins.variable} font-body`}>
+    <div id="lp-shell" data-page-location={pageLocationId || undefined} suppressHydrationWarning className={`${poppins.variable} font-body`}>
       {children}
     </div>
   )

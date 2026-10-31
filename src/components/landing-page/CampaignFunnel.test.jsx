@@ -8,7 +8,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 
 vi.mock('@/lib/funnel-track', () => ({ trackFunnelStep: vi.fn() }))
 vi.mock('@/lib/meta-pixel-lead', () => ({ newLeadEventId: () => 'lead-id-123', pixelUserData: () => ({}), fireBrowserLead: vi.fn() }))
-vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [] }))
+vi.mock('@/lib/meta-pixel-paths', () => ({ metaPixelIdsForPath: () => [], pageLocationIdFromDocument: () => null }))
 vi.mock('@/lib/visit-origin', () => ({ readVisitOrigin: () => null }))
 
 import CampaignFunnel, { cadenceGroups, ctaLabelFor } from './CampaignFunnel'

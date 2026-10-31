@@ -19,7 +19,7 @@ import {
   PAGE_PUBLISH_STATES, isPageVisible, isPageReachable, PAGE_COLUMNS, STUDIO_ROW_COLUMNS,
   loadPageBySlug, loadPageById, PageReadError, publicOrgIdForHost, studioParamToPublicPath,
   resolvePageStudio, locationIdForPublicPath, studioPublicPath, mergedBlocksFor, offerReady,
-  canViewPage, canEditPage, studioTermsCopy,
+  canViewPage, canEditPage, studioTermsCopy, listStudioPageSlugs,
   studioRowReadiness, pageBlocksToStore, mergedChrome, offerSummary, copiedContentBlocks, starterBlocks, pageWasLive,
 } from './landing-pages.js'
 import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
@@ -340,5 +340,20 @@ describe('landing-pages: the pages API helpers', () => {
     expect(copied).toHaveLength(1)
     expect(copied[0]).toMatchObject({ type: 'gallery', items: [{ url: 'https://x/a.jpg' }] })
     expect(copied[0].id).not.toBe('g')
+  })
+})
+
+describe('listStudioPageSlugs', () => {
+  it("is the slugs of the organisation's live studio pages, scoped by organisation, kind and state", async () => {
+    const db = makeDb({ landing_pages: { list: { data: [{ slug: 'stillorgan' }, { slug: 'hatch-street' }, { slug: '' }, {}], error: null } } })
+    expect(await listStudioPageSlugs(db, 'org-un1t')).toEqual(['stillorgan', 'hatch-street'])
+    expect(db.calls[0].eq).toEqual([['organization_id', 'org-un1t'], ['kind', 'studio'], ['publish_state', 'live']])
+  })
+  it('a failed read, a thrown one, or no organisation is [] (never a throw)', async () => {
+    expect(await listStudioPageSlugs(makeDb({ landing_pages: { list: { data: null, error: { code: 'XX' } } } }), 'org-un1t')).toEqual([])
+    expect(await listStudioPageSlugs({ from() { throw new Error('boom') } }, 'org-un1t')).toEqual([])
+    const untouched = makeDb({})
+    expect(await listStudioPageSlugs(untouched, null)).toEqual([])
+    expect(untouched.calls).toEqual([])
   })
 })

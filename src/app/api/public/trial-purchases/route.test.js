@@ -129,6 +129,12 @@ async function readFixture(table, filters) {
     // studioPublicPath: the studio page of a location (its slug).
     const loc = filterValue(filters, 'primary_location_id')
     if (loc) return { data: { slug: s.pages.find((p) => p.location_id === loc)?.public_path ?? null }, error: null }
+    // listStudioPageSlugs: the live studio pages of the host's organisation.
+    if (filterValue(filters, 'kind') === 'studio' && filterValue(filters, 'slug') === undefined) {
+      if (s.studioSlugsError) return { data: null, error: s.studioSlugsError }
+      s.studioSlugReads = (s.studioSlugReads || 0) + 1
+      return { data: (s.studioSlugs || ['stillorgan', 'hatch-street']).map((slug) => ({ slug })), error: null }
+    }
     // loadTrialStudios: the trial page in the group organisation.
     if (filterValue(filters, 'slug') === 'trial') return { data: s.noTrialPage ? null : { ...TRIAL_PAGE, publish_state: s.trialState || 'live' }, error: null }
     throw new Error('unexpected landing_pages read')
@@ -319,6 +325,31 @@ describe('POST /api/public/trial-purchases', () => {
     const r = await POST(req({ ...BODY, return_path: '/stillorgan' }))
     expect(r.status).toBe(200)
     expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/stillorgan' }))
+  })
+  it("a studio slug of the host's org is accepted; another org's or an unknown path is /trial (read once, scoped to the host's org, live studio pages only)", async () => {
+    mocks.state.studioSlugs = ['stillorgan', 'dundrum']
+    await POST(req({ ...BODY, return_path: '/dundrum' }))
+    expect(mocks.payment).toHaveBeenLastCalledWith(expect.objectContaining({ returnPath: '/dundrum' }))
+    expect(mocks.state.studioSlugReads).toBe(1)
+    const read = mocks.read.mock.calls.find(([t, f]) => t === 'landing_pages' && f.some((x) => x[1] === 'kind'))
+    expect(read[1]).toContainEqual(['eq', 'organization_id', 'org-un1t'])
+    expect(read[1]).toContainEqual(['eq', 'kind', 'studio'])
+    expect(read[1]).toContainEqual(['eq', 'publish_state', 'live'])
+    await POST(req({ ...BODY, return_path: '/hatch-street' }))
+    expect(mocks.payment).toHaveBeenLastCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+    await POST(req({ ...BODY, return_path: '/50plus' }))
+    expect(mocks.payment).toHaveBeenLastCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+  })
+  it('a failed studio-slug read never fails the purchase: the return path is /trial', async () => {
+    mocks.state.studioSlugsError = new Error('db')
+    const r = await POST(req({ ...BODY, return_path: '/stillorgan' }))
+    expect(r.status).toBe(200)
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ returnPath: '/trial' }))
+  })
+  it('a body with no return_path, or /trial, reads no studio pages', async () => {
+    await POST(req(BODY))
+    await POST(req({ ...BODY, return_path: '/trial' }))
+    expect(mocks.state.studioSlugReads).toBeUndefined()
   })
   it('an unknown return_path falls back to /trial', async () => {
     const r = await POST(req({ ...BODY, return_path: '/evil' }))

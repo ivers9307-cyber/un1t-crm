@@ -413,7 +413,7 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
   if (sub.kind === 'status') {
     if (!location?.id) notFound()
     return (
-      <StudioShell>
+      <StudioShell pageLocationId={locationId}>
         <StudioStatusPage db={db} location={{ id: location.id, name: location.name || null, settings: location.settings || null, timezone: location.timezone || null }} />
       </StudioShell>
     )
@@ -432,7 +432,7 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
   if (sub.kind === 'events') {
     if (!location?.id) notFound()
     return (
-      <StudioShell>
+      <StudioShell pageLocationId={locationId}>
         <StudioEventsPage
           db={db}
           slug={page.slug}
@@ -513,7 +513,7 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
   }
 
   return (
-    <StudioShell>
+    <StudioShell pageLocationId={locationId}>
       <BlocksLayout
         tone={tone}
         logo={{ url: logoUrl, alt: logoAlt, widthPx: logoWidthPx, wordmark: brand.shortName }}
@@ -575,6 +575,10 @@ export default async function PublicPage(props) {
   // chosen one, else (an all-studios page with none chosen yet) the first
   // enabled one, so reviews and stats show that studio's until one is picked.
   const context = studio || offerRows[0] || null
+  // The studio the Meta pixel follows (data-page-location): the page's primary,
+  // else the studio the visitor chose; an all-studios page with none chosen
+  // yet names none (the fallback context studio above is for copy only).
+  const pixelLocationId = page.primary_location_id || studio?.location_id || null
   const contextLocationId = context?.location_id || page.primary_location_id || null
 
   const merged = mergedBlocksFor({ page, studio: context })
@@ -657,10 +661,10 @@ export default async function PublicPage(props) {
   const shared = { tone, logo, cta: built.cta, footer, blocks: bodyBlocks, blockProps }
 
   if (built.kind === 'frosted') {
-    return <FrostedCardLayout {...shared} anchor={built.anchor} heroImageUrl={built.heroImageUrl} scrollCueLabel={built.scrollCueLabel} offer={built.offer} />
+    return <FrostedCardLayout {...shared} pageLocationId={pixelLocationId} anchor={built.anchor} heroImageUrl={built.heroImageUrl} scrollCueLabel={built.scrollCueLabel} offer={built.offer} />
   }
   if (built.kind === 'one_class') {
-    return <OneClassLayout {...shared} hero={built.hero} expect={built.expect} offer={built.offer} />
+    return <OneClassLayout {...shared} pageLocationId={pixelLocationId} hero={built.hero} expect={built.expect} offer={built.offer} />
   }
-  return <BlocksLayout {...shared} />
+  return <BlocksLayout {...shared} pageLocationId={pixelLocationId} />
 }

@@ -101,10 +101,13 @@ function Blocks({ blocks = [], blockProps = {}, cta = {}, cta2 = null, tone, tri
   ))
 }
 
-export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [], blockProps, anchor = 'offer', heroImageUrl = null, offer = null, scrollCueLabel = null }) {
+// PAGES.1 — `pageLocationId` is the studio the page speaks for, stamped on the
+// root element as `data-page-location` so the browser's Meta pixel code
+// (pageLocationIdFromDocument) can load that studio's dataset without a round trip.
+export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [], blockProps, anchor = 'offer', heroImageUrl = null, offer = null, scrollCueLabel = null, pageLocationId = null }) {
   const learnMoreId = learnMoreIdFor(anchor)
   return (
-    <div className={shellClass(tone)}>
+    <div className={shellClass(tone)} data-page-location={pageLocationId || undefined}>
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />
@@ -121,9 +124,9 @@ export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [
   )
 }
 
-export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [], blockProps, hero = {}, offer = null, expect = {} }) {
+export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [], blockProps, hero = {}, offer = null, expect = {}, pageLocationId = null }) {
   return (
-    <div className={shellClass(tone)}>
+    <div className={shellClass(tone)} data-page-location={pageLocationId || undefined}>
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />
@@ -149,7 +152,7 @@ export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [],
   )
 }
 
-export function BlocksLayout({ tone = 'dark', logo, cta, footer, blocks = [], blockProps, cta2 = null, eventsHref = null, trial = null, trialShown = false, jsonLd = null }) {
+export function BlocksLayout({ tone = 'dark', logo, cta, footer, blocks = [], blockProps, cta2 = null, eventsHref = null, trial = null, trialShown = false, jsonLd = null, pageLocationId = null }) {
   // TRIALFIRST.1 — the card lives in the first hero only (one #trial on the
   // page); a page with no hero gets a render-only one so the card always has
   // a home. It is never saved to the row.
@@ -158,7 +161,7 @@ export function BlocksLayout({ tone = 'dark', logo, cta, footer, blocks = [], bl
   const rendered = shownTrial && !hasHero ? [{ id: 'hero-trial', type: 'hero' }, ...blocks] : blocks
   const trialHero = shownTrial ? rendered.find((b) => b?.type === 'hero') : null
   return (
-    <div className={shellClass(tone)}>
+    <div className={shellClass(tone)} data-page-location={pageLocationId || undefined}>
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />

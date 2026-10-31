@@ -43,7 +43,7 @@ import { useEffect, useRef, useState } from 'react'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
 import { newLeadEventId, pixelUserData, fireBrowserLead, fireBrowserInitiateCheckout, checkoutEventIdFor } from '@/lib/meta-pixel-lead'
-import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
+import { metaPixelIdsForPath, pageLocationIdFromDocument } from '@/lib/meta-pixel-paths'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { formatTrialPrice, trialTicks, PAID_TRIAL_PENDING_BODY } from '@/lib/paid-trial'
 import ClassFunnelCheckout from './ClassFunnelCheckout'
@@ -176,7 +176,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
     let leaving = false
     const leadEventId = newLeadEventId()
     const fireLead = (contentName) => fireBrowserLead({
-      pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname) : [],
+      pixelIds: typeof window !== 'undefined' ? metaPixelIdsForPath(window.location.pathname, { primaryLocationId: pageLocationIdFromDocument() }) : [],
       eventId: leadEventId,
       userData: pixelUserData({ email: form.email, phone: form.phone, firstName: form.first_name, lastName: form.last_name }),
       contentName,
