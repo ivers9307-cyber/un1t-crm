@@ -572,7 +572,8 @@ export async function processClassBookingRequest(db, request) {
     if (person.readFailed) return toReview('account_check_failed')
     // PAIDTRIALONLY.1 — no free trial where the studio sells a paid one. A
     // failed read throws: the queue retries rather than mint a free trial.
-    const paidTrialText = await readPaidTrialReply(db, request.location_id)
+    // PAGETRIAL.1 — a page that offers a free class keeps its free trial.
+    const paidTrialText = await readPaidTrialReply(db, request.location_id, { pageId: request.page_id })
     if (paidTrialText) return closeWithPaidTrialReply(db, request, paidTrialText)
     // Truly brand-new (not found in Glofox, no sibling anywhere) → create +
     // grant the trial credit. Only a clean create/link is safe;
@@ -642,7 +643,7 @@ export async function processClassBookingRequest(db, request) {
       if (!(await rescueSiblingBalance())) {
         // PAIDTRIALONLY.1 — never attended and nothing to book with: where the
         // free trial is retired, this is the paid trial, not a credit grant.
-        const paidTrialText = await readPaidTrialReply(db, request.location_id)
+        const paidTrialText = await readPaidTrialReply(db, request.location_id, { pageId: request.page_id })
         if (paidTrialText) return closeWithPaidTrialReply(db, request, paidTrialText)
         return toReview('needs_credit_grant')
       }

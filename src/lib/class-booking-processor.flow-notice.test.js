@@ -165,6 +165,18 @@ describe('PAIDTRIALONLY.1 — paid trial only', () => {
     expect(findOrCreateGlofoxMember).toHaveBeenCalledWith(expect.objectContaining({ createIfMissing: true, attachTrial: true }))
   })
 
+  it('PAGETRIAL.1: both reads ask with the row\'s page, so a free-class page keeps its trial', async () => {
+    readPaidTrialReply.mockResolvedValue(null)
+    findOrCreateGlofoxMember.mockImplementation(noAccount)
+    await processClassBookingRequest(makeDb(newcomer), { ...req, page_id: 'p-50plus' })
+    expect(readPaidTrialReply).toHaveBeenCalledWith(expect.anything(), 'L', { pageId: 'p-50plus' })
+    readPaidTrialReply.mockClear()
+    fetchUserCredits.mockResolvedValueOnce([])
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    await processClassBookingRequest(makeDb(member), { ...req, page_id: 'p-50plus' })
+    expect(readPaidTrialReply).toHaveBeenCalledWith(expect.anything(), 'L', { pageId: 'p-50plus' })
+  })
+
   it('an unreadable reply setting throws (the queue retries) and mints nothing', async () => {
     readPaidTrialReply.mockRejectedValue(new Error('unreadable'))
     findOrCreateGlofoxMember.mockImplementation(noAccount)

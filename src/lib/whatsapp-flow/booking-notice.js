@@ -104,22 +104,60 @@ export class PaidTrialReplyReadError extends Error {
   }
 }
 
+// PAGETRIAL.1 — a page whose own offer is a free class. Staff pick the offer
+// per page, so one studio can run a free trial for one audience (/50plus) and
+// sell the paid trial to another (/trial, its studio page) at the same time.
+export const FREE_TRIAL_PAGE_OFFERS = Object.freeze(['one_class', 'class_funnel'])
+
 /**
  * PAIDTRIALONLY.1 — the studio's flow_paid_trial_text, or null when it is not
  * set (new people are booked with the free trial, as before). Unlike
  * studioCopy this never falls back: an unreadable setting THROWS, so the
  * queue retries rather than give a free trial the studio may have retired.
+ *
+ * PAGETRIAL.1 — with `pageId` (the queue row's page_id), a booking from a
+ * page whose offer is a free class is null too: the page's offer wins over
+ * the studio default. A row with no page (the WhatsApp Flow, Mia), a paid
+ * trial page, or a page since deleted keeps the studio's setting. The page is
+ * read only when the studio sells a paid trial, and a failed read THROWS for
+ * the same reason the setting does.
  * @returns {Promise<string|null>}
  * @throws {PaidTrialReplyReadError}
  */
-export async function readPaidTrialReply(db, locationId) {
+export async function readPaidTrialReply(db, locationId, { pageId = null } = {}) {
   const { resolveAgentSettings } = await import('@/lib/agent/settings-resolve')
   const resolved = await resolveAgentSettings(db, locationId)
   if (!resolved?.ok) throw new PaidTrialReplyReadError(resolved?.reason || 'unknown')
   const text = operatorText(resolved.settings, 'flow_paid_trial_text')
   if (!text) return null
+  if (pageId && (await pageOffersFreeTrial(db, pageId, locationId))) return null
   const { stripEmDashes } = await import('@/lib/agent/core')
   return stripEmDashes(text).trim() || null
+}
+
+// The page must also be THIS studio's: its own studio (a one-studio page) or
+// switched on for it (an all-studio page's landing_page_studios row). The
+// route already sets page_id from the page it served, so this is a second
+// fence: a page of another studio is "no page", and the paid trial applies.
+async function pageOffersFreeTrial(db, pageId, locationId) {
+  const page = await readOrThrow(() => db.from('landing_pages')
+    .select('offer_type, scope, primary_location_id').eq('id', pageId).maybeSingle())
+  if (!page || !FREE_TRIAL_PAGE_OFFERS.includes(page.offer_type)) return false
+  if (page.scope === 'one') return page.primary_location_id === locationId
+  const studio = await readOrThrow(() => db.from('landing_page_studios')
+    .select('enabled').eq('page_id', pageId).eq('location_id', locationId).maybeSingle())
+  return studio?.enabled === true
+}
+
+async function readOrThrow(query) {
+  let res
+  try {
+    res = await query()
+  } catch {
+    throw new PaidTrialReplyReadError('page_unreadable')
+  }
+  if (res?.error) throw new PaidTrialReplyReadError('page_unreadable')
+  return res?.data ?? null
 }
 
 async function confirmationText(settings, { className, classTime }) {
