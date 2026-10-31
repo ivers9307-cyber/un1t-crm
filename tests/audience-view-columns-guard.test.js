@@ -45,6 +45,9 @@ const VIRTUAL_TYPES = new Set(['tag', 'event', 'location_list'])
 export const AUDIENCE_VIEW_EXCLUDED = Object.freeze({
   un1t_user_id: { why: 'sync bookkeeping for un1t.online, not an audience field', expires: '2027-10-16' },
   un1t_synced_at: { why: 'sync bookkeeping for un1t.online, not an audience field', expires: '2027-10-16' },
+  // ATTHISTORY.1 (mig 793) — the cursor of the one-time Glofox history read;
+  // the audience fact it produces is last_attended_at, already on the view.
+  glofox_history_synced_at: { why: 'sync bookkeeping for the Glofox history read (mig 793), not an audience field', expires: '2027-10-31' },
 })
 
 /** contacts columns the replayed view lacks, minus the exclusions. */
