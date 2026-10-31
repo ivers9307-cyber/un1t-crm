@@ -12,7 +12,8 @@ const h = vi.hoisted(() => ({
   loadThrows: null,
   product: { un1t_id: 'UN1T-PROD-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'Trial' },
   reviews: [],
-  calls: { load: [], reviews: [] },
+  legacyBlocks: null,
+  calls: { load: [], reviews: [], legacy: [] },
 }))
 
 vi.mock('next/headers', () => ({ headers: async () => new Map([['host', h.host]]) }))
@@ -48,7 +49,11 @@ function makeDb() {
     const b = {
       select: () => b, eq: (c, v) => { if (table === 'google_reviews') h.calls.reviews.push([c, v]); return b },
       gte: () => b, not: () => b, order: () => b, limit: () => b, in: () => b,
-      maybeSingle: async () => (table === 'un1t_products' ? { data: h.product, error: null } : { data: null, error: null }),
+      maybeSingle: async () => {
+        if (table === 'un1t_products') return { data: h.product, error: null }
+        if (table === 'landing_page_settings') return { data: h.legacyBlocks ? { blocks: h.legacyBlocks } : null, error: null }
+        return { data: null, error: null }
+      },
       then: (resolve, reject) => Promise.resolve(table === 'google_reviews' ? { data: h.reviews, error: null } : { data: null, error: null }).then(resolve, reject),
     }
     return b
@@ -128,6 +133,17 @@ const TRIAL_STUDIOS_ROWS = [
   row('loc-x', { sort_order: 2, enabled: false, offer: { membership_id: 'm-x', plan_code: 'p-x', price_cents: 3900 } }),
 ]
 
+const CLASSF = {
+  id: 'pcf', organization_id: 'org-un1t', slug: 'hatch-classes', title: 'Hatch classes', kind: 'campaign', scope: 'one',
+  primary_location_id: 'loc-h', offer_type: 'class_funnel', publish_state: 'live', redirect_to: null, chrome: {},
+  blocks: [{ id: 'cf', type: 'class_funnel', heading: 'Book your first class', subhead: 'Pick a time', cta_label: 'Book now' }],
+}
+const CLASSF_STUDIOS = [row('loc-h', {
+  offer: { trial_membership_id: 'elite-m', trial_plan_code: 'elite-p', price_cents: 0, timetable: 'Mon 07:00 HIIT' },
+  attribution: { tag: 'trial-tag', lead_source: 'meta_50plus' },
+  locations: loc('loc-h', 'un1t_online'),
+})]
+
 const CORP = {
   id: 'pc', organization_id: 'org-un1t', slug: 'corp', title: 'Corporate promo', kind: 'campaign', scope: 'one',
   primary_location_id: 'loc-h', offer_type: 'promo_credits', publish_state: 'live', redirect_to: null, chrome: { noindex: true },
@@ -142,7 +158,8 @@ beforeEach(() => {
   h.loaded = null
   h.loadThrows = null
   h.reviews = []
-  h.calls = { load: [], reviews: [] }
+  h.legacyBlocks = null
+  h.calls = { load: [], reviews: [], legacy: [] }
 })
 
 describe('the [slug] page route', () => {
@@ -187,6 +204,16 @@ describe('the [slug] page route', () => {
     const disabled = propsOf(await render({ slug: 'trial', sp: { studio: 'xtown' } }), 'paid')
     expect(disabled.initialStudio).toBeNull()
     expect(disabled.studios.map((s) => s.key)).toEqual(['stillorgan', 'hatch'])
+  })
+
+  it('the un1t.online terms tick keeps the studio\'s own wording from its legacy class_funnel block (nothing visible changes)', async () => {
+    h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
+    h.legacyBlocks = [{ type: 'class_funnel', terms_label: 'CUSTOM {studio_name} {terms}', terms_link_label: 'the rules' }]
+    const paid = propsOf(await render({ slug: 'trial' }), 'paid')
+    expect(paid.hatchTerms).toMatchObject({ label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules', terms_url: '/legal/un1t/hatch-street/terms' })
+    h.loaded = { page: CORP, studios: CORP_STUDIOS }
+    const corp = propsOf(await render({ slug: 'corp' }), 'corp')
+    expect(corp.terms).toMatchObject({ label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules' })
   })
 
   it('a checkout return carries the purchase and the cancel flag to the card', async () => {
@@ -238,6 +265,30 @@ describe('the [slug] page route', () => {
     expect(html).not.toContain('data-testid="paid"')
   })
 
+  it('a class_funnel page hands ClassFunnel named words only, posting against the studio\'s own path', async () => {
+    h.loaded = { page: CLASSF, studios: CLASSF_STUDIOS }
+    const html = await render({ slug: 'hatch-classes' })
+    const props = propsOf(html, 'classfunnel')
+    const ALLOWED = ['classDoneBody', 'classDoneTitle', 'consentLabel', 'consultDoneBody', 'consultDoneTitle', 'consultSlug', 'heading', 'locationName', 'publicPath', 'subhead']
+    for (const k of Object.keys(props)) expect(ALLOWED, k).toContain(k)
+    expect(html).not.toContain('Mon 07:00 HIIT') // the studio's typed timetable stays on the server
+    expect(props).toMatchObject({ publicPath: 'hatch-street', locationName: 'Hatch Street', heading: 'Book your first class', subhead: 'Pick a time', consultSlug: '' })
+    expect(html).toContain('href="#start"')
+    expectClientSafe(html)
+  })
+
+  it('a class_funnel or one_class page whose studio has no public path is not for sale: 404 (never Stillorgan, never ?path=null); edit mode still previews', async () => {
+    h.loaded = { page: { ...CLASSF, primary_location_id: 'loc-z' }, studios: [{ ...CLASSF_STUDIOS[0], location_id: 'loc-z' }] }
+    expect(await outcome({ slug: 'hatch-classes' })).toBe('NEXT_NOT_FOUND')
+    h.loaded = { page: { ...FIFTY, primary_location_id: 'loc-z' }, studios: [{ ...FIFTY_STUDIOS[0], location_id: 'loc-z' }] }
+    expect(await outcome({ slug: '50plus' })).toBe('NEXT_NOT_FOUND')
+    expect(logWarn).toHaveBeenCalledWith('public-page', expect.stringContaining('no public path'), expect.objectContaining({ locationId: 'loc-z' }))
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    expect(html).toContain('data-testid="overlay"')
+    expect(html).not.toContain('data-testid="campaign"')
+  })
+
   it('anything under a slug that the page does not serve 404s', async () => {
     h.loaded = { page: FIFTY, studios: FIFTY_STUDIOS }
     expect(await outcome({ slug: '50plus', rest: ['x'] })).toBe('NEXT_NOT_FOUND')
@@ -272,6 +323,17 @@ describe('the [slug] page route', () => {
     expect(overlay.initialBlocks[0]).toMatchObject({ type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+' })
     expect(overlay.initialLogoUrl).toBe('https://x/logo.png')
     expect(overlay.footer).toMatchObject({ brand: 'UN1T', legalName: 'Champ Fitness Ltd' })
+  })
+
+  it('a signed-in user who may not view the page gets no overlay: a draft 404s, a live page is the public render with nothing secret', async () => {
+    h.user = { id: 'u2', isMaster: false, role: 'staff', activeOrganization: { id: 'org-un1t' }, locationIds: ['loc-h'] }
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    expect(await outcome({ slug: '50plus', sp: { edit: '1' } })).toBe('NEXT_NOT_FOUND')
+    h.loaded = { page: FIFTY, studios: FIFTY_STUDIOS }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    expect(html).not.toContain('data-testid="overlay"')
+    expect(html).toContain('data-testid="campaign"')
+    expectClientSafe(html)
   })
 
   it('an anonymous ?edit=1 is an ordinary visit: the host\'s organisation, and a draft 404s', async () => {

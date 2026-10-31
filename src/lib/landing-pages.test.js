@@ -19,8 +19,9 @@ import {
   PAGE_PUBLISH_STATES, isPageVisible, isPageReachable, PAGE_COLUMNS, STUDIO_ROW_COLUMNS,
   loadPageBySlug, loadPageById, PageReadError, publicOrgIdForHost, studioParamToPublicPath,
   resolvePageStudio, locationIdForPublicPath, studioPublicPath, mergedBlocksFor, offerReady,
-  canViewPage, canEditPage,
+  canViewPage, canEditPage, studioTermsCopy,
 } from './landing-pages.js'
+import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { resolveBrand } from '@/lib/brands'
 import { resolveTenantOrgId } from '@/lib/tenant-domains-edge'
@@ -223,5 +224,16 @@ describe('landing-pages', () => {
     expect(await publicOrgIdForHost('crm.un1tdublin.com')).toBe('org-un1t')
     expect(await publicOrgIdForHost(null)).toBe('org-un1t')
     expect(await publicOrgIdForHost('')).toBe('org-un1t')
+  })
+
+  it('studioTermsCopy reads the class_funnel terms wording off the legacy row by location; defaults on a miss, an error or a throw', async () => {
+    const db = makeDb({ landing_page_settings: { single: { data: { blocks: [{ type: 'hero' }, { type: 'class_funnel', terms_label: 'CUSTOM {studio_name}' }] }, error: null } } })
+    const got = await studioTermsCopy(db, 'loc-h')
+    expect(got).toEqual({ ...DEFAULT_FUNNEL_TERMS_COPY, terms_label: 'CUSTOM {studio_name}' })
+    expect(db.calls[0]).toMatchObject({ table: 'landing_page_settings', select: 'blocks', eq: [['location_id', 'loc-h']] })
+    expect(await studioTermsCopy(makeDb({}), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy(makeDb({ landing_page_settings: { single: { data: null, error: { code: 'XX', message: 'secret' } } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy({ from: () => { throw new Error('net') } }, 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy(makeDb({}), null)).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
   })
 })

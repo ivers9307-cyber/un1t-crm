@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
 import { STUDIO_OFFER_KEYS, ATTRIBUTION_KEYS, DROPPED_BLOCK_KEYS } from '../src/lib/landing-page-offers.js'
+import { UN1T_FUNNEL_COPY_KEYS } from '../src/lib/un1t-online-funnel-copy.js'
 
 const SQL = sqlCode(readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/792_landing_pages.sql'), 'utf8'))
 
@@ -36,6 +37,14 @@ describe('mig 792 landing_pages', () => {
     expect(SQL).toMatch(/on conflict \(organization_id, slug\) do nothing/i)
     expect(SQL).toMatch(/redirect_to[\s\S]{0,200}'\/trial\?studio=stillorgan'/)
     expect(SQL).toMatch(/comment on table public\.landing_page_settings is 'DEPRECATED \(mig 792\)/i)
+  })
+  it('copies every un1t.online terms key off the class_funnel block into the studio page chrome (un1t_terms)', () => {
+    const terms = SQL.match(/jsonb_build_object\('un1t_terms',[\s\S]*?\)\)\) END/)?.[0] || ''
+    expect(terms).not.toBe('')
+    for (const k of UN1T_FUNNEL_COPY_KEYS) {
+      expect(terms, k).toContain(`'${k}', NULLIF(cf.b->>'${k}', '')`)
+    }
+    expect(SQL).toMatch(/landing_page_first_block\(s\.blocks, 'class_funnel'\) AS b\) AS cf/)
   })
   it('adds page_id to the request tables', () => {
     for (const t of ['class_booking_requests', 'trial_purchases', 'corp_promo_claims', 'funnel_events']) {

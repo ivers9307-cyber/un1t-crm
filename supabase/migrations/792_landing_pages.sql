@@ -324,12 +324,26 @@ SELECT
   ot.offer_type,
   private.landing_page_studio_blocks(s.blocks, ot.offer_type),
   private.landing_page_backfill_chrome(s.logo_url, s.logo_alt, s.logo_width_px, s.show_instagram_feed,
-    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, false, 'dark'),
+    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, false, 'dark')
+  -- un1t_terms: the un1t.online terms-tick wording off the row's first
+  -- class_funnel block (UN1T_FUNNEL_COPY_KEYS in
+  -- src/lib/un1t-online-funnel-copy.js, edit the two together). The studio
+  -- page keeps no class_funnel block when its offer is paid_trial, so this is
+  -- the copy's home on the new rows; PR1 still reads landing_page_settings
+  -- (studioTermsCopy). Absent when the row has no class_funnel block.
+  || CASE WHEN cf.b IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('un1t_terms', jsonb_strip_nulls(jsonb_build_object(
+       'terms_label', NULLIF(cf.b->>'terms_label', ''),
+       'terms_link_label', NULLIF(cf.b->>'terms_link_label', ''),
+       'waiver_link_label', NULLIF(cf.b->>'waiver_link_label', ''),
+       'terms_required_message', NULLIF(cf.b->>'terms_required_message', ''),
+       'legal_unavailable_message', NULLIF(cf.b->>'legal_unavailable_message', '')
+     ))) END,
   CASE s.publish_state WHEN 'live' THEN 'live' WHEN 'coming_soon' THEN 'coming_soon' ELSE 'draft' END,
   s.updated_at,
   s.updated_at
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id
+CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'class_funnel') AS b) AS cf
 CROSS JOIN LATERAL (
   SELECT CASE
     WHEN private.landing_page_first_block(s.blocks, 'paid_trial') IS NOT NULL THEN 'paid_trial'

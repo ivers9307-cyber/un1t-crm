@@ -37,7 +37,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { publicOrgIdForHost } from '@/lib/public-pages-edge'
 import {
   loadPageBySlug, resolvePageStudio, studioParamToPublicPath, locationIdForPublicPath,
-  mergedBlocksFor, studioPublicPath, canViewPage,
+  mergedBlocksFor, studioPublicPath, canViewPage, studioTermsCopy,
 } from '@/lib/landing-pages'
 import { OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
 import { layoutFor, redirectTarget, pageSubpath } from '@/lib/landing-page-render'
@@ -161,13 +161,20 @@ async function loadReviews(db, locationId, reviewsBlock) {
   }
 }
 
+// un1t.online's terms tick for a studio, worded as /trial and /corp word it
+// today: the class_funnel copy on the studio's legacy landing row
+// (studioTermsCopy, PR1; PR3 reads the studio page's chrome.un1t_terms).
+async function termsFor(db, locationId, { studioName, publicPath }) {
+  const copy = await studioTermsCopy(db, locationId)
+  return un1tTermsPayload({ blocks: [{ type: 'class_funnel', ...copy }], studioName, publicPath })
+}
+
 // The paid trial's per-studio card data: the loadTrialStudios entry built from
 // the studio row (trialEntryFromRow), its client view, and its terms tick.
 async function paidTrialItems(db, page, rows) {
   return Promise.all(rows.map(async (row) => {
     const publicPath = await safePublicPath(db, row.location_id)
-    const blocks = mergedBlocksFor({ page, studio: row })
-    const block = blocks.find((b) => isObj(b) && b.type === 'paid_trial') || null
+    const block = mergedBlocksFor({ page, studio: row }).find((b) => isObj(b) && b.type === 'paid_trial') || null
     const brand = await resolveLocationBrand({ locationId: row.location_id })
     let entry
     try {
@@ -181,7 +188,7 @@ async function paidTrialItems(db, page, rows) {
     entry = { ...entry, key: entry.key || row.location_id }
     const view = trialStudioView(entry, brand)
     const hatchTerms = entry.membershipSource === 'un1t_online' && view.sellable
-      ? un1tTermsPayload({ blocks, studioName: brand?.locationName || view.label, publicPath })
+      ? await termsFor(db, row.location_id, { studioName: brand?.locationName || view.label, publicPath })
       : null
     return { row, entry, view, hatchTerms }
   }))
@@ -267,6 +274,15 @@ export default async function PublicPage(props) {
     )
   }
 
+  // A funnel posts against its studio's public path; without one there is
+  // nothing to book (ClassFunnel would fall back to Stillorgan, CampaignFunnel
+  // would ask for ?path=null), so the page is not for sale: a 404, as a
+  // paid-trial studio with no path is not sellable. Edit mode returned above.
+  if ((page.offer_type === 'class_funnel' || page.offer_type === 'one_class') && !contextPath) {
+    logWarn('public-page', 'studio has no public path; offer not for sale', { slug: page.slug, locationId: contextLocationId })
+    notFound()
+  }
+
   const layout = layoutFor(page.offer_type)
   // The card and the coach video are the hero on these two layouts.
   const heroBlock = content.find((b) => b.type === 'hero')
@@ -326,7 +342,7 @@ export default async function PublicPage(props) {
     const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey)
     const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
     const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
-    const terms = promo ? un1tTermsPayload({ blocks: merged, studioName: corpStudioName, publicPath: promo.publicPath }) : null
+    const terms = promo ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
     const cta = { href: '#corp', label: copy.cta_label }
     return (
       <FrostedCardLayout

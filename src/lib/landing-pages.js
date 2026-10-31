@@ -18,6 +18,8 @@ import { TRIAL_STUDIOS } from '@/lib/trial-studios'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin } from '@/lib/org-admin'
 import { getUserLocationIds } from '@/lib/auth'
+import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
+import { logWarn } from '@/lib/log'
 
 // The edge-safe half lives in its own module so the proxy can import it.
 export { publicOrgIdForHost } from '@/lib/public-pages-edge'
@@ -119,6 +121,31 @@ async function legacyPathForLocation(db, locationId) {
     .maybeSingle()
   if (error) throw new PageReadError('Could not read the studio path', error)
   return data?.public_path || null
+}
+
+/**
+ * PR1 legacy, deleted in PR3 with the two helpers above: the un1t.online
+ * terms-tick wording of a studio (UN1T_FUNNEL_COPY_KEYS), read where /trial
+ * and /corp read it today, the class_funnel block on the studio's
+ * landing_page_settings row. mig 792 also copies it to the studio page's
+ * `chrome.un1t_terms`, which PR3 switches to. Never throws: a miss or a failed
+ * read answers the defaults (logged with the id only).
+ * @returns {Promise<object>} every UN1T_FUNNEL_COPY_KEYS key, resolved
+ */
+export async function studioTermsCopy(db, locationId) {
+  if (!locationId) return un1tFunnelCopyFromBlocks(null)
+  try {
+    const { data, error } = await db
+      .from('landing_page_settings')
+      .select('blocks')
+      .eq('location_id', locationId)
+      .maybeSingle()
+    if (error) throw Object.assign(new Error('landing row unreadable'), { code: error.code ?? null })
+    return un1tFunnelCopyFromBlocks(Array.isArray(data?.blocks) ? data.blocks : null)
+  } catch (err) {
+    logWarn('landing-pages', 'studio terms copy unreadable; defaults used', { locationId, code: err?.code ?? null })
+    return un1tFunnelCopyFromBlocks(null)
+  }
 }
 
 /** A studio's public path (/stillorgan) to its location id, null when no studio has that path. */
