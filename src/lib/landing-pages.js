@@ -183,10 +183,13 @@ export function canViewPage(user, page) {
   return page.scope === 'one' && getUserLocationIds(user).includes(page.primary_location_id)
 }
 
-/** scope one: the landing_page permission at its studio; scope all: an org admin. Master passes both. */
+/**
+ * scope one: the landing_page permission at its studio; scope all: an org admin.
+ * No master shortcut: a master passes through the helpers (isOrgAdmin admits
+ * one; resolvePermission admits one once the studio's feature gate is on).
+ */
 export function canEditPage(user, page) {
   if (!user) return false
-  if (isMaster(user)) return true
   if (page.scope === 'one') return hasPermissionForLocation(user, page.primary_location_id, 'landing_page')
   return isOrgAdmin(user, page.organization_id)
 }

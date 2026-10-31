@@ -10,12 +10,18 @@ vi.mock('@/lib/brands', () => ({
   resolveBrand: vi.fn(() => null),
 }))
 
+vi.mock('@/lib/permissions', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, hasPermissionForLocation: vi.fn(actual.hasPermissionForLocation) }
+})
+
 import {
   PAGE_PUBLISH_STATES, isPageVisible, isPageReachable, PAGE_COLUMNS, STUDIO_ROW_COLUMNS,
   loadPageBySlug, loadPageById, PageReadError, publicOrgIdForHost, studioParamToPublicPath,
   resolvePageStudio, locationIdForPublicPath, studioPublicPath, mergedBlocksFor, offerReady,
   canViewPage, canEditPage,
 } from './landing-pages.js'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { resolveBrand } from '@/lib/brands'
 import { resolveTenantOrgId } from '@/lib/tenant-domains-edge'
 
@@ -193,8 +199,17 @@ describe('landing-pages', () => {
     expect(canEditPage(manager, page)).toBe(false)
     expect(canEditPage({ orgAdminOrgIds: ['org-un1t'] }, page)).toBe(true)
     expect(canEditPage({ role: 'master' }, page)).toBe(true)
-    expect(canEditPage({ role: 'master' }, one)).toBe(true)
     expect(canEditPage({ role: 'staff', locations: [], assignmentsByLocation: {} }, one)).toBe(false)
+  })
+
+  it('canEditPage: a master goes through the helper, so a studio with the landing_page feature off refuses them', () => {
+    const one = { ...page, scope: 'one', primary_location_id: 'loc-s' }
+    const master = { role: 'master' }
+    hasPermissionForLocation.mockReturnValueOnce(true)
+    expect(canEditPage(master, one)).toBe(true)
+    expect(hasPermissionForLocation).toHaveBeenLastCalledWith(master, 'loc-s', 'landing_page')
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    expect(canEditPage(master, one)).toBe(false)
   })
 
   it('publicOrgIdForHost: un1tdublin.com → UN1T Group; a tenant host → its org; the CRM host → UN1T Group', async () => {
