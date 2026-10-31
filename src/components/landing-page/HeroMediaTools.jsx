@@ -15,6 +15,7 @@
 
 import { useRef, useState } from 'react'
 import { uploadLandingMedia } from '@/lib/landing-media-upload'
+import MediaPicker from './MediaPicker'
 
 export default function HeroMediaTools({
   imageUrl, videoUrl, locationId, pageId = null,
@@ -25,6 +26,9 @@ export default function HeroMediaTools({
   // Video uploads now transcode in-browser (can take ~1-2 min) — show
   // the compress/upload status so the toolbar doesn't look frozen.
   const [status, setStatus] = useState(null) // null | { phase, percent }
+  // MEDIALIB.1 — "Choose existing": which kind the picker is open for.
+  const [picking, setPicking] = useState(null) // null | 'image' | 'video'
+  const canChoose = Boolean(pageId || locationId)
   return (
     <div
       className="absolute top-4 right-4 z-30 flex items-center gap-2 bg-black/70 backdrop-blur rounded-md p-1 text-xs text-white"
@@ -36,6 +40,13 @@ export default function HeroMediaTools({
         label={imageUrl ? 'Change image' : 'Add image'}
         onClick={() => imgInput.current?.click()}
       />
+      {canChoose && (
+        <ToolButton
+          label="Choose existing"
+          title="Pick an image already uploaded for your pages"
+          onClick={() => setPicking('image')}
+        />
+      )}
       {imageUrl && (
         <ToolButton
           label="✕"
@@ -48,6 +59,13 @@ export default function HeroMediaTools({
         label={videoUrl ? 'Change video' : 'Add video'}
         onClick={() => vidInput.current?.click()}
       />
+      {canChoose && (
+        <ToolButton
+          label="Choose existing"
+          title="Pick a video already uploaded for your pages"
+          onClick={() => setPicking('video')}
+        />
+      )}
       {videoUrl && (
         <ToolButton
           label="✕"
@@ -75,6 +93,13 @@ export default function HeroMediaTools({
         accept="video/*"
         className="hidden"
         onChange={(e) => uploadAndApply(e, 'video', { locationId, pageId }, onChangeVideo, setStatus)}
+      />
+      {/* The chosen URL goes through the same setter an upload uses. */}
+      <MediaPicker
+        open={picking !== null}
+        kind={picking || 'image'}
+        onClose={() => setPicking(null)}
+        onPick={(item) => { if (picking === 'video') onChangeVideo?.(item.url); else onChangeImage?.(item.url) }}
       />
     </div>
   )
