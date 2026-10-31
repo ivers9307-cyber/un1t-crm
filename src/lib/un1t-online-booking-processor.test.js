@@ -91,6 +91,19 @@ describe('processUn1tClassBookingRequest', () => {
     expect(deps.sendWebsiteConversion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventName: 'Schedule', eventId: 'classbooking-q-1' }))
   })
 
+  it('PAGES.1: a request carrying a page_id reads its confirmation copy from that page merged with its studio row; without one it reads the studio page', async () => {
+    tables.landing_pages = [
+      { id: 'p-1', organization_id: 'org-1', slug: 'hatch-camp', kind: 'campaign', scope: 'one', primary_location_id: LOC, offer_type: null, publish_state: 'live', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/hatch-camp' }] },
+      { id: 'sp', organization_id: 'org-1', slug: 'hatch-street', kind: 'studio', primary_location_id: LOC, blocks: [] },
+    ]
+    tables.landing_page_studios = [{ page_id: 'p-1', location_id: LOC, enabled: true, sort_order: 0, offer: {}, attribution: {} }]
+    tables.landing_page_settings = [{ location_id: LOC, public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/legacy' }] }]
+    await run(request({ page_id: 'p-1' }))
+    expect(deps.sendWebsiteConversion).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/hatch-camp' }))
+    await run(request({ page_id: null }))
+    expect(deps.sendWebsiteConversion).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventSourceUrl: 'https://www.un1tdublin.com/legacy' }))
+  })
+
   it('TRIALREGRANT.1: a credit re-grant (claimed the trial, never used, run out) books exactly as after a trial grant', async () => {
     deps.ensureUn1tAccount.mockImplementation(async () => { order.push('account'); return { kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' } })
     deps.grantTrial.mockImplementation(async () => { order.push('trial'); return { outcome: 'granted', method: 'credit_regrant', ledgerId: 'l-rg' } })

@@ -117,8 +117,14 @@ const SCOPING_HELPERS = [
   // site's tenant selector the routes used before. studioTermsCopy reads
   // landing_page_settings by the location_id the caller resolved from the
   // page's own rows.
+  // copySourceForRequest reads landing_pages by pk (the page_id stamped on the
+  // caller's own queue row), landing_page_studios by that page_id and keeps only
+  // the row whose location_id is the caller's own row's location, then
+  // studioPublicPath by that location; without a page it reads
+  // landing_page_settings by the same location_id.
   'resolvePublicPageRequest(',
   'studioTermsCopy(',
+  'copySourceForRequest(',
   // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
   // through contactsAtStudio filters on the studio it is asked for.
   'contactsAtStudio(',

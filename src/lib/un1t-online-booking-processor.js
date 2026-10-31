@@ -38,6 +38,7 @@ import { sendUn1tTrialUsedEmail as trialUsedEmailOp, sendUn1tAccountEmail } from
 import { trialUsedHandoff as handoffOp } from './un1t-online-trial-used.js'
 import { MEMBERSHIP_ACTIVE_STATUSES } from './un1t-online-map.js'
 import { freshCutoff } from './un1t-online-freshness.js'
+import { copySourceForRequest } from './landing-pages.js'
 import { logError, logWarn } from './log'
 
 export const UN1T_PROVIDER = 'un1t_online'
@@ -114,18 +115,20 @@ async function stampRow(db, id, fields) {
 }
 
 /** The landing row (copy, conversion URL) and the studio (name, address, zone), best-effort. */
-export async function readStudioContextForApproval(db, locationId) {
-  return readStudioContext(db, locationId)
+export async function readStudioContextForApproval(db, locationId, pageId = null) {
+  return readStudioContext(db, locationId, pageId)
 }
-async function readStudioContext(db, locationId) {
+async function readStudioContext(db, locationId, pageId = null) {
   const out = { blocks: null, publicPath: null, studioName: null, address: null, zone: null }
   try {
-    const [{ data: page }, { data: loc }] = await Promise.all([
-      db.from('landing_page_settings').select('public_path, blocks').eq('location_id', locationId).maybeSingle(),
+    // PAGES.1: the copy comes from the page the request came from (its page_id),
+    // else the studio's own page. copySourceForRequest never throws.
+    const [source, { data: loc }] = await Promise.all([
+      copySourceForRequest(db, { pageId: pageId ?? null, locationId }),
       db.from('locations').select('name, address, timezone').eq('id', locationId).maybeSingle(),
     ])
-    out.blocks = page?.blocks ?? null
-    out.publicPath = page?.public_path ?? null
+    out.blocks = source.blocks
+    out.publicPath = source.publicPath
     out.studioName = loc?.name ?? null
     out.address = loc?.address ?? null
     out.zone = loc?.timezone ?? null
@@ -352,7 +355,7 @@ async function runFunnel(db, request, ctx, deps, holder) {
       await stampRow(db, request.id, { status: 'failed', last_error: 'trial_used_handed_to_mia', un1t_steps: { ...steps, trial_used: 'handed_to_mia' } })
       return { outcome: 'failed', detail: 'trial_used_handed_to_mia' }
     }
-    const studio = await readStudioContext(db, request.location_id)
+    const studio = await readStudioContext(db, request.location_id, request.page_id ?? null)
     let mail
     try {
       mail = await d.sendUn1tTrialUsedEmail(db, {
@@ -373,7 +376,7 @@ async function runFunnel(db, request, ctx, deps, holder) {
   await stampRow(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingRef, un1t_steps: steps })
 
   // 7. Emails.
-  const studio = await readStudioContext(db, request.location_id)
+  const studio = await readStudioContext(db, request.location_id, request.page_id ?? null)
   Object.assign(steps, await un1tAfterBooking(db, {
     request, contact, account, settings, studio: { ...studio, studioName: studio.studioName || ctx.studioName }, origin: 'funnel', writer,
   }, deps))

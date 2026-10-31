@@ -527,13 +527,22 @@ export async function PATCH(request, { params }) {
     let manualPage = null
     let manualLocation = null
     try {
-      const [{ data: c }, { data: page }, { data: loc }] = await Promise.all([
+      // PAGES.1: the copy comes from the page the linked queue row was filed
+      // from (class_booking_requests.page_id), else the studio's own page.
+      // A miss or a failed read is "no page": copySourceForRequest then reads
+      // the studio page, and never throws.
+      const { data: linked, error: linkedErr } = await db.from('class_booking_requests')
+        .select('page_id').eq('approval_request_id', id).limit(1).maybeSingle()
+      if (linkedErr) logWarn('agent-requests', 'manual booking: linked queue row unreadable; the studio page is used', { requestId: id, err: linkedErr })
+      const { copySourceForRequest } = await import('@/lib/landing-pages')
+      const [{ data: c }, source, { data: loc }] = await Promise.all([
         db.from('contacts').select('id, first_name, last_name, name, email, phone').eq('id', row.contact_id).maybeSingle(),
-        db.from('landing_page_settings').select('public_path, blocks').eq('location_id', row.location_id).maybeSingle(),
+        copySourceForRequest(db, { pageId: (!linkedErr && linked?.page_id) || null, locationId: row.location_id }),
         db.from('locations').select('name, address, timezone').eq('id', row.location_id).maybeSingle(),
       ])
+      const page = { blocks: source.blocks, public_path: source.publicPath }
       manualContact = c || null
-      manualPage = page || null
+      manualPage = page
       manualLocation = loc || null
       if (c && (c.email || c.phone)) {
         const { sendWebsiteConversion } = await import('@/lib/meta-capi')

@@ -179,6 +179,55 @@ export async function studioPublicPath(db, locationId) {
 }
 
 /**
+ * PR1 legacy; PR3 reads the kind='studio' page. The studio's own landing copy
+ * and public path, read where the processor and Mia's approval route read them
+ * today (landing_page_settings by location_id). A miss answers empty; a failed
+ * read throws PageReadError (copySourceForRequest catches it).
+ * @returns {Promise<{ blocks: object[], publicPath: string | null }>}
+ */
+export async function studioPageBlocksFor(db, locationId) {
+  const { data, error } = await db
+    .from('landing_page_settings')
+    .select('public_path, blocks')
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the studio page', error)
+  return { blocks: Array.isArray(data?.blocks) ? data.blocks : [], publicPath: data?.public_path ?? null }
+}
+
+/**
+ * The copy a request's confirmation is built from (the class_funnel block's
+ * wording, the conversion URL's path): the page the request came from, merged
+ * with that page's row for the request's studio, when it carries a page_id;
+ * otherwise (or when that page is gone, or has no row for the studio) the
+ * studio's own page. Never throws: a failed read logs ids only and falls back,
+ * ending in empty copy, which every consumer resolves to its defaults.
+ * @returns {Promise<{ blocks: object[], publicPath: string | null }>}
+ */
+export async function copySourceForRequest(db, { pageId, locationId }) {
+  if (pageId) {
+    try {
+      const loaded = await loadPageById(db, pageId)
+      const studio = loaded?.studios.find((s) => s.location_id === locationId) || null
+      if (loaded && studio) {
+        return {
+          blocks: mergedBlocksFor({ page: loaded.page, studio }),
+          publicPath: await studioPublicPath(db, locationId),
+        }
+      }
+    } catch (err) {
+      logWarn('landing-pages', 'request page unreadable; the studio page is used', { pageId, locationId, code: err?.cause?.code ?? err?.code ?? null })
+    }
+  }
+  try {
+    return await studioPageBlocksFor(db, locationId)
+  } catch (err) {
+    logWarn('landing-pages', 'studio page copy unreadable; defaults used', { locationId, code: err?.cause?.code ?? err?.code ?? null })
+    return { blocks: [], publicPath: null }
+  }
+}
+
+/**
  * The page's blocks with the offer block (first of the offer type's block type)
  * merged with the studio's half. A campaign_funnel block gets the page slug
  * back as `campaign`: the split drops that key and campaignFunnelConfig falls
