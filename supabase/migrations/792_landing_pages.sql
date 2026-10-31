@@ -24,6 +24,9 @@
 -- src/lib/landing-page-offers.js; private.landing_page_block_page_half and
 -- private.landing_page_block_studio_half below spell the same lists in SQL, and
 -- tests/migration-792-landing-pages.test.js pins the two together. Edit both.
+-- Those two and the other backfill helpers (section 5) exist only for this
+-- file's backfill and are dropped at its end (section 12); a re-run creates
+-- them again and drops them again.
 --
 -- Access: both tables are closed to every client session (RLS on, no policy,
 -- no grant to anon/authenticated): every read and write is a service-role
@@ -589,5 +592,17 @@ ON CONFLICT (organization_id, slug) DO NOTHING;
 -- 11. The old table is deprecated, not dropped
 -- ---------------------------------------------------------------------------
 COMMENT ON TABLE public.landing_page_settings IS 'DEPRECATED (mig 792): replaced by landing_pages + landing_page_studios. Read by the studio pages until PR3; dropped by a later migration.';
+
+-- ---------------------------------------------------------------------------
+-- 12. The backfill helpers go: nothing but the backfill above calls them (the
+--     app splits blocks in src/lib/landing-page-offers.js). The trigger
+--     function landing_page_studios_same_org stays.
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS private.landing_page_backfill_chrome(text, text, integer, boolean, text, text, text, boolean, text);
+DROP FUNCTION IF EXISTS private.landing_page_content_blocks(jsonb, text[]);
+DROP FUNCTION IF EXISTS private.landing_page_studio_blocks(jsonb, text);
+DROP FUNCTION IF EXISTS private.landing_page_first_block(jsonb, text, text);
+DROP FUNCTION IF EXISTS private.landing_page_block_studio_half(jsonb);
+DROP FUNCTION IF EXISTS private.landing_page_block_page_half(jsonb);
 
 COMMIT;

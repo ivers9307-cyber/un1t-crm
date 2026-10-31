@@ -68,6 +68,12 @@ describe('mig 792 landing_pages', () => {
     expect(SQL).toMatch(/begin;\s*set local lock_timeout = '5s';/i)
     expect(SQL).not.toMatch(/create index[^;]*\(page_id\)/i)
   })
+  it('drops every private backfill helper it created, and keeps the trigger function', () => {
+    const created = [...SQL.matchAll(/create or replace function (private\.landing_page_[a-z_]+)\(/gi)].map((m) => m[1].toLowerCase())
+    expect(created.length).toBe(6)
+    for (const fn of created) expect(SQL, fn).toMatch(new RegExp(`drop function if exists ${fn.replace('.', '\\.')}\\(`, 'i'))
+    expect(SQL).not.toMatch(/drop function if exists public\.landing_page_studios_same_org/i)
+  })
   it('refuses a studio row outside the page organisation', () => {
     expect(SQL).toMatch(/create trigger landing_page_studios_same_org\s+before insert or update on public\.landing_page_studios/i)
     expect(SQL).toMatch(/revoke execute on function public\.landing_page_studios_same_org\(\) from public, anon, authenticated/i)

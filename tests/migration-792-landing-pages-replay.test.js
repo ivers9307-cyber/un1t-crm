@@ -161,10 +161,12 @@ describe('mig 792 backfill (PGlite replay)', () => {
     await db.close()
   })
 
-  it('runs twice cleanly', async () => {
+  it('runs twice cleanly and leaves no backfill helper behind', async () => {
     const db = await boot({ stillBlocks: [PAID('s')], hatchBlocks: [PAID('h')] })
     await runSql(db, MIG_792)
     expect((await db.query("SELECT count(*)::int AS n FROM public.landing_pages WHERE slug IN ('50plus', 'corp')")).rows[0].n).toBe(2)
+    const fns = (await db.query("SELECT n.nspname || '.' || p.proname AS fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname LIKE 'landing_page%' ORDER BY 1")).rows.map((r) => r.fn)
+    expect(fns).toEqual(['public.landing_page_studios_same_org'])
     await db.close()
   })
 })
