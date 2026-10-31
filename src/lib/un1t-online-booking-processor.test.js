@@ -314,6 +314,12 @@ describe('processUn1tClassBookingRequest — paid trial only (PAIDTRIALONLY.1)',
     expect(deps.grantTrial).not.toHaveBeenCalled()
   })
 
+  it('PAGETRIAL.1: the read asks with the row\'s page, so a free-class page keeps its trial', async () => {
+    deps.readPaidTrialReply.mockResolvedValue(null)
+    await run(request({ page_id: 'p-free' }))
+    expect(deps.readPaidTrialReply).toHaveBeenCalledWith(expect.anything(), LOC, { pageId: 'p-free' })
+  })
+
   it('an unreadable reply setting is a retry, before any write', async () => {
     deps.readPaidTrialReply.mockRejectedValue(new Error('unreadable'))
     await expect(run()).rejects.toBeInstanceOf(Un1tFunnelRetry)

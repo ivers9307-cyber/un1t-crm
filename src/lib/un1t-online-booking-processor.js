@@ -324,10 +324,11 @@ async function runFunnel(db, request, ctx, deps, holder) {
   if (typeof contact.email !== 'string' || !contact.email.trim()) return card('no_email')
 
   // PAIDTRIALONLY.1 — read before any write: an unreadable setting retries
-  // rather than give a free trial the studio may have retired.
+  // rather than give a free trial the studio may have retired. PAGETRIAL.1 —
+  // a booking from a page that offers a free class keeps its free trial.
   let paidTrialText
   try {
-    paidTrialText = await d.readPaidTrialReply(db, request.location_id)
+    paidTrialText = await d.readPaidTrialReply(db, request.location_id, { pageId: request.page_id })
   } catch {
     throw retry('paid_trial_reply_unreadable')
   }
