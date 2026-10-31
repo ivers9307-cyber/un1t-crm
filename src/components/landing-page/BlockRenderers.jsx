@@ -1034,7 +1034,15 @@ export function SiteHeader({
   ctaLabel = 'Book a free consult',
   ctaLabelShort = '',
   eventsHref = null,
+  // HEROHEADER.1 — the page tone. The fixed bar was always black glass, which
+  // reads as a grey band across a LIGHT page (/50plus); light gets white glass
+  // and dark text. The logo is capped at 48px tall as well as 170px wide: a
+  // landscape logo file at 150px wide stood 84px tall and pushed the bar to
+  // 117px, under which the hero's top padding (80 / 112px) left the top of
+  // the coach video hidden behind it.
+  tone = 'dark',
 }) {
+  const light = tone === 'light'
   // The header is the tightest surface on the page — logo + Events +
   // button in one row, ~167px left for the button at 375px. A long
   // CTA overflows and gets clipped by the sticky bar, with no
@@ -1045,7 +1053,9 @@ export function SiteHeader({
     <header
       className={
         sticky
-          ? 'fixed inset-x-0 top-0 z-40 bg-black/55 backdrop-blur-md border-b border-white/10'
+          ? (light
+            ? 'fixed inset-x-0 top-0 z-40 bg-white/80 backdrop-blur-md border-b border-black/10'
+            : 'fixed inset-x-0 top-0 z-40 bg-black/55 backdrop-blur-md border-b border-white/10')
           : 'absolute inset-x-0 top-0 z-20'
       }
     >
@@ -1063,11 +1073,11 @@ export function SiteHeader({
           <img
             src={logoUrl}
             alt={logoAlt}
-            style={{ width: `${Math.min(logoWidthPx, 170)}px`, height: 'auto' }}
+            style={{ maxWidth: `${Math.min(logoWidthPx, 170)}px`, maxHeight: '48px', width: 'auto', height: 'auto' }}
             className="object-contain"
           />
         ) : (
-          <div className="font-display font-extrabold text-2xl tracking-widest text-white">{wordmark}</div>
+          <div className={`font-display font-extrabold text-2xl tracking-widest ${light ? 'text-black' : 'text-white'}`}>{wordmark}</div>
         )}
         {/* HEADER-FIT.1 — this row is the tightest surface on the site.
             At 375px the logo leaves it ~185px, and with Events present
@@ -1085,7 +1095,7 @@ export function SiteHeader({
             over-long label degrades visibly instead of disappearing. */}
         <div className="flex items-center gap-4 min-w-0">
           {eventsHref && (
-            <Link href={eventsHref} className="hidden min-[420px]:inline-block text-white/80 hover:text-white transition-colors text-sm font-medium shrink-0">Events</Link>
+            <Link href={eventsHref} className={`hidden min-[420px]:inline-block transition-colors text-sm font-medium shrink-0 ${light ? 'text-black/70 hover:text-black' : 'text-white/80 hover:text-white'}`}>Events</Link>
           )}
           {sticky && ctaHref && (
             <a href={ctaHref} className="lp-btn !px-3.5 min-[420px]:!px-5 !py-2.5 !text-sm min-w-0 max-w-full">
