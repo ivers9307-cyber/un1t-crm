@@ -38,6 +38,19 @@ describe('mig 792 landing_pages', () => {
     expect(SQL).toMatch(/redirect_to[\s\S]{0,200}'\/trial\?studio=stillorgan'/)
     expect(SQL).toMatch(/comment on table public\.landing_page_settings is 'DEPRECATED \(mig 792\)/i)
   })
+  it('creates /50plus and /corp whether or not the source block exists (no IS NOT NULL gate; type defaults)', () => {
+    // sqlCode drops comments, so the two sections are cut on their titles.
+    const fifty = SQL.slice(SQL.indexOf("'The 50+ Club'"), SQL.indexOf("'Corporate promo'"))
+    const corp = SQL.slice(SQL.indexOf("'Corporate promo'"), SQL.indexOf("'Start (retired)'"))
+    expect(fifty).not.toBe('')
+    expect(corp).not.toBe('')
+    expect(fifty).not.toMatch(/cf\.b is not null/i)
+    expect(corp).not.toMatch(/cp\.b is not null/i)
+    expect(fifty).toMatch(/coalesce\(\s*private\.landing_page_block_page_half\(cf\.b\),\s*'\{"id": "campaign-50plus", "type": "campaign_funnel"\}'::jsonb/i)
+    expect(fifty).toMatch(/when cf\.b is null then '\{"class_keywords": "50\+"\}'::jsonb/i)
+    expect(corp).toMatch(/coalesce\(\s*private\.landing_page_block_page_half\(cp\.b\),\s*'\{"id": "corp-promo", "type": "corp_promo"\}'::jsonb/i)
+    expect(corp).toMatch(/'hatch-3-free'/)
+  })
   it('copies every un1t.online terms key off the class_funnel block into the studio page chrome (un1t_terms)', () => {
     const terms = SQL.match(/jsonb_build_object\('un1t_terms',[\s\S]*?\)\)\) END/)?.[0] || ''
     expect(terms).not.toBe('')

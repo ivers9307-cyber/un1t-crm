@@ -66,6 +66,45 @@ const studioRows = async (db, slug) => (await db.query(
   'SELECT s.* FROM public.landing_page_studios s JOIN public.landing_pages p ON p.id = s.page_id WHERE p.slug = $1 ORDER BY s.sort_order', [slug])).rows
 
 describe('mig 792 backfill (PGlite replay)', () => {
+  it('prod shape (no campaign_funnel, no corp_promo): /50plus and /corp still exist, from the type defaults', async () => {
+    const db = await boot({
+      stillBlocks: [
+        { id: 'h', type: 'hero', heading: 'Hi' },
+        PAID('s'), FUNNEL,
+        { id: 'r1', type: 'reviews', min_rating: 4 },
+        { id: 's1', type: 'stats', items: [1] },
+        { id: 'faq', type: 'faq' },
+        { id: 'v1', type: 'video_testimonials' },
+        { id: 's2', type: 'stats', items: [2] },
+      ],
+      hatchBlocks: [PAID('h'), FUNNEL, { id: 'g', type: 'gallery' }],
+    })
+
+    const fifty = await page(db, '50plus')
+    expect(fifty).toBeTruthy()
+    expect(fifty.publish_state).toBe('live')
+    expect(fifty.offer_type).toBe('one_class')
+    expect(fifty.primary_location_id).toBe(STILL)
+    // Default page half, then the FIRST stats / video_testimonials / reviews, in that order.
+    expect(fifty.blocks.map((b) => b.id)).toEqual(['campaign-50plus', 's1', 'v1', 'r1'])
+    expect(fifty.blocks[0]).toEqual({ id: 'campaign-50plus', type: 'campaign_funnel' })
+    const [fs] = await studioRows(db, '50plus')
+    expect(fs).toMatchObject({ location_id: STILL, enabled: true, offer: { class_keywords: '50+' } })
+    expect(fs.attribution).toEqual({ tag: 'stillorgan-50plus', lead_source: 'meta_50plus' })
+
+    const corp = await page(db, 'corp')
+    expect(corp).toBeTruthy()
+    expect(corp.publish_state).toBe('live')
+    expect(corp.offer_type).toBe('promo_credits')
+    expect(corp.primary_location_id).toBe(HATCH)
+    expect(corp.blocks.map((b) => b.id)).toEqual(['corp-promo', 'g'])
+    const [cs] = await studioRows(db, 'corp')
+    expect(cs).toMatchObject({ location_id: HATCH, enabled: true, offer: { promo_key: 'hatch-3-free' }, attribution: {} })
+
+    for (const slug of ['stillorgan', 'hatch-street', 'trial', 'start', 'free-class']) expect(await page(db, slug), slug).toBeTruthy()
+    await db.close()
+  })
+
   it('uses the source blocks when they exist: show_sections order, first of each type, the block offer', async () => {
     const db = await boot({
       stillBlocks: [
@@ -88,4 +127,10 @@ describe('mig 792 backfill (PGlite replay)', () => {
     await db.close()
   })
 
+  it('runs twice cleanly', async () => {
+    const db = await boot({ stillBlocks: [PAID('s')], hatchBlocks: [PAID('h')] })
+    await runSql(db, MIG_792)
+    expect((await db.query("SELECT count(*)::int AS n FROM public.landing_pages WHERE slug IN ('50plus', 'corp')")).rows[0].n).toBe(2)
+    await db.close()
+  })
 })

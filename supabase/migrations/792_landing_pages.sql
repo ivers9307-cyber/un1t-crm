@@ -35,9 +35,11 @@
 -- CREATE OR REPLACE, triggers DROP then CREATE, every backfill row ON CONFLICT
 -- DO NOTHING. A missing backfill source inserts nothing and never fails the
 -- migration: no `stillorgan` row means no studio, trial, 50plus or retired
--- pages from it; no `paid_trial` block on Stillorgan means no /trial; no
--- `campaign_funnel` block with campaign '50plus' means no /50plus; no Hatch
--- `corp_promo` block means no /corp. UN1T Group's organisation is never named:
+-- pages from it; no `paid_trial` block on Stillorgan means no /trial. /50plus
+-- and /corp are created from their type defaults when the source block is
+-- absent (prod held neither block on 31 Oct 2026, and both URLs were live on
+-- their code defaults), so neither 404s after deploy; they need only the
+-- Stillorgan / Hatch Street row. UN1T Group's organisation is never named:
 -- it is the organisation of the location behind public_path = 'stillorgan'.
 -- landing_page_settings has no created_at, so a backfilled studio page takes
 -- its updated_at for both. A NULL (or non-array) blocks column backfills as [].
@@ -440,6 +442,12 @@ ON CONFLICT (page_id, location_id) DO NOTHING;
 -- ---------------------------------------------------------------------------
 -- 8. Backfill 3: /50plus (Stillorgan only, one free class)
 -- ---------------------------------------------------------------------------
+-- Created whether or not Stillorgan's row holds a campaign_funnel block (prod
+-- held none on 31 Oct 2026: the live /50plus rendered its code defaults). With
+-- no block the page half is the bare default block (the renderer fills every
+-- word from CAMPAIGN_FUNNEL_COPY_DEFAULTS), the studio offer is the default
+-- class keyword with no trial pair (the card says booking is not open, as the
+-- route did), and the sections are the default show_sections.
 INSERT INTO public.landing_pages
   (organization_id, slug, title, kind, scope, primary_location_id, offer_type, blocks, chrome, publish_state)
 SELECT
@@ -450,7 +458,10 @@ SELECT
   'one',
   s.location_id,
   'one_class',
-  jsonb_build_array(private.landing_page_block_page_half(cf.b)) || private.landing_page_content_blocks(
+  jsonb_build_array(COALESCE(
+    private.landing_page_block_page_half(cf.b),
+    '{"id": "campaign-50plus", "type": "campaign_funnel"}'::jsonb
+  )) || private.landing_page_content_blocks(
     s.blocks,
     CASE WHEN jsonb_typeof(cf.b->'show_sections') = 'array'
       THEN ARRAY(SELECT jsonb_array_elements_text(cf.b->'show_sections'))
@@ -464,17 +475,18 @@ JOIN public.locations AS l ON l.id = s.location_id
 CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'campaign_funnel', '50plus') AS b) AS cf
 WHERE s.public_path = 'stillorgan'
   AND l.organization_id IS NOT NULL
-  AND cf.b IS NOT NULL
 ON CONFLICT (organization_id, slug) DO NOTHING;
 
--- Attribution falls back to the values /50plus has always used when the block's are blank.
+-- The studio half of the block when there is one, else the defaults. The
+-- attribution falls back to the values /50plus has always used when the
+-- block's are blank.
 INSERT INTO public.landing_page_studios (page_id, location_id, enabled, offer, attribution, sort_order)
 SELECT
   p.id,
   s.location_id,
   true,
-  sh.h->'offer',
-  jsonb_build_object('tag', 'stillorgan-50plus', 'lead_source', 'meta_50plus') || (sh.h->'attribution'),
+  CASE WHEN cf.b IS NULL THEN '{"class_keywords": "50+"}'::jsonb ELSE sh.h->'offer' END,
+  jsonb_build_object('tag', 'stillorgan-50plus', 'lead_source', 'meta_50plus') || COALESCE(sh.h->'attribution', '{}'::jsonb),
   0
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id
@@ -483,12 +495,15 @@ JOIN public.landing_pages AS p
 CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'campaign_funnel', '50plus') AS b) AS cf
 CROSS JOIN LATERAL (SELECT private.landing_page_block_studio_half(cf.b) AS h) AS sh
 WHERE s.public_path = 'stillorgan'
-  AND cf.b IS NOT NULL
 ON CONFLICT (page_id, location_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 9. Backfill 4: /corp (Hatch Street, promo credits)
 -- ---------------------------------------------------------------------------
+-- Created whether or not Hatch Street's row holds a corp_promo block (prod
+-- held none on 31 Oct 2026: the live /corp rendered its code defaults). With
+-- no block the page half is the bare default block (the renderer fills the
+-- words from the corp promo defaults) and the promo is hatch-3-free.
 INSERT INTO public.landing_pages
   (organization_id, slug, title, kind, scope, primary_location_id, offer_type, blocks, chrome, publish_state)
 SELECT
@@ -499,7 +514,10 @@ SELECT
   'one',
   s.location_id,
   'promo_credits',
-  jsonb_build_array(private.landing_page_block_page_half(cp.b)) || private.landing_page_content_blocks(s.blocks),
+  jsonb_build_array(COALESCE(
+    private.landing_page_block_page_half(cp.b),
+    '{"id": "corp-promo", "type": "corp_promo"}'::jsonb
+  )) || private.landing_page_content_blocks(s.blocks),
   private.landing_page_backfill_chrome(s.logo_url, s.logo_alt, s.logo_width_px, s.show_instagram_feed,
     s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'dark'),
   'live'
@@ -508,7 +526,6 @@ JOIN public.locations AS l ON l.id = s.location_id
 CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'corp_promo') AS b) AS cp
 WHERE s.public_path = 'hatch-street'
   AND l.organization_id IS NOT NULL
-  AND cp.b IS NOT NULL
 ON CONFLICT (organization_id, slug) DO NOTHING;
 
 INSERT INTO public.landing_page_studios (page_id, location_id, enabled, offer, attribution, sort_order)
@@ -517,7 +534,7 @@ SELECT
   s.location_id,
   true,
   jsonb_build_object('promo_key', COALESCE(NULLIF(cp.b->>'promo_key', ''), 'hatch-3-free')),
-  (private.landing_page_block_studio_half(cp.b))->'attribution',
+  COALESCE((private.landing_page_block_studio_half(cp.b))->'attribution', '{}'::jsonb),
   0
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id
@@ -525,7 +542,6 @@ JOIN public.landing_pages AS p
   ON p.organization_id = l.organization_id AND p.slug = 'corp' AND p.kind = 'campaign'
 CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'corp_promo') AS b) AS cp
 WHERE s.public_path = 'hatch-street'
-  AND cp.b IS NOT NULL
 ON CONFLICT (page_id, location_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
