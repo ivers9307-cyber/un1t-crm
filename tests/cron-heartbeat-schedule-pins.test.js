@@ -52,6 +52,7 @@ const PINNED = [
   { route: 'event-waitlist-offers', schedule: '*/10 * * * *', interval: 600, grace: 900, migration: '713_event_waitlist.sql' },
   { route: 'mia-purchase-intents', schedule: '*/5 * * * *', interval: 300, grace: 600, migration: '755_mia_purchase_intents_heartbeat.sql' },
   { route: 'revolut-reconcile', schedule: '*/15 * * * *', interval: 900, grace: 1200, migration: '773_revolut_reconcile_heartbeat.sql' },
+  { route: 'glofox-attendance-history', schedule: '*/10 * * * *', interval: 600, grace: 900, migration: '794_glofox_attendance_history_heartbeat.sql' },
 ]
 
 describe('cronPeriodSeconds', () => {
