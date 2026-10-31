@@ -14,7 +14,8 @@
 // row's, else the page's URL. `public_path` is ignored and the body can never
 // set a tag or source. Without `page`, `public_path` names a STUDIO PAGE by its
 // slug (/stillorgan's own lead form): the studio page's lead_form block carries
-// the tag and lead source (leadConfigFromBlocks). The paid-traffic campaign key
+// the tag and lead source (leadConfigFromBlocks). A lead form is a content block,
+// so a switched-off offer row never refuses it (requireEnabled: false). The paid-traffic campaign key
 // and its WhatsApp welcome are gone: a campaign is a page of its own now.
 
 import { NextResponse } from 'next/server'
@@ -72,7 +73,7 @@ export async function POST(request) {
   if (body.page) {
     // Resolved first, then limited on the RESOLVED studio path (the legacy
     // key for that studio); nothing resolved shares an 'unresolved' bucket.
-    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: body.page, studio: body.studio })
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: body.page, studio: body.studio, requireEnabled: false })
     const limit = await checkRateLimit(db, `lead:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
     if (!limit.allowed) {
       return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
@@ -99,7 +100,7 @@ export async function POST(request) {
     // public_path names. The client never sends a location_id or the
     // tag/source, so a caller can't target an arbitrary location or inject
     // arbitrary tags. A failed read is 503, never "not accepting sign-ups".
-    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: publicPath })
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: publicPath, requireEnabled: false })
     if (!r.ok && r.reason === 'unreadable') {
       const refusal = pageRequestRefusal('unreadable')
       return NextResponse.json(refusal.body, { status: refusal.status })

@@ -197,6 +197,21 @@ describe('resolvePublicPageRequest', () => {
     expect(await resolvePublicPageRequest(noRow, { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
   })
 
+  it('requireEnabled: false lets a content-block route past a switched-off row (all three branches), only when a row exists', async () => {
+    const off = (row) => ({ ...row, enabled: false })
+    const one = makeDb({ pages: { '50plus': ONE }, studios: { 'p-50': [off(ROW_S)] } })
+    expect(await resolvePublicPageRequest(one, { page: '50plus' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(one, { page: '50plus', requireEnabled: false })).toMatchObject({ ok: true, locationId: 'loc-s' })
+    const all = makeDb({ pages: { trial: ALL }, studios: { 'p-trial': [TRIAL_S, TRIAL_H] } })
+    expect(await resolvePublicPageRequest(all, { page: 'trial', studio: 'hatch-street' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(all, { page: 'trial', studio: 'hatch-street', requireEnabled: false })).toMatchObject({ ok: true, locationId: 'loc-h' })
+    // No row for the studio at all is still not_found.
+    expect(await resolvePublicPageRequest(makeDb({ pages: { trial: ALL }, studios: { 'p-trial': [TRIAL_S] } }), { page: 'trial', studio: 'hatch-street', requireEnabled: false })).toEqual({ ok: false, reason: 'not_found' })
+    const studio = makeDb({ pages: { stillorgan: STUDIO_S }, studios: { 'p-s': [off(STUDIO_ROW_S)] } })
+    expect(await resolvePublicPageRequest(studio, { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'not_found' })
+    expect(await resolvePublicPageRequest(studio, { legacyPath: 'stillorgan', requireEnabled: false })).toMatchObject({ ok: true, locationId: 'loc-s' })
+  })
+
   it('no page: a failed read is unreadable, never a refusal', async () => {
     expect(await resolvePublicPageRequest(makeDb({ failPages: true }), { legacyPath: 'stillorgan' })).toEqual({ ok: false, reason: 'unreadable' })
     expect(await resolvePublicPageRequest(makeDb({ pages: { stillorgan: STUDIO_S }, failStudios: true }), { legacyPath: 'stillorgan' }))

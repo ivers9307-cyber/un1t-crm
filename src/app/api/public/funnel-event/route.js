@@ -37,7 +37,7 @@ export async function POST(request) {
     if (!fields.success) return ignored()
     // Resolved first, then limited on the RESOLVED studio path (the legacy
     // key for that studio); nothing resolved shares an 'unresolved' bucket.
-    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: fields.data.page, studio: fields.data.studio })
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: fields.data.page, studio: fields.data.studio, requireEnabled: false })
     const limit = await checkRateLimit(db, `funnelevt:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 60, windowMs: 10 * 60_000 })
     if (!limit.allowed) return rateLimitResponse(limit, 'Too many events.')
     const event = parseFunnelEvent(body)
@@ -60,7 +60,7 @@ export async function POST(request) {
   if (!event) return ignored()
   // The studio page the path names. Telemetry never errors the client: a
   // miss or a failed read is ignored (the resolver logs the failure).
-  const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: publicPath })
+  const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), legacyPath: publicPath, requireEnabled: false })
   if (!r.ok) return ignored()
   return insertEvent(db, { locationId: r.locationId, pageId: r.pageId }, event)
 }

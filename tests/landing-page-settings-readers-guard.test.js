@@ -37,16 +37,17 @@ describe('landing_page_settings readers (PAGES.1 R10)', () => {
   it('no file under src/, shared/ or scripts/ names the deprecated table', () => {
     const files = ['src', 'shared', 'scripts'].flatMap((d) => walk(path.join(ROOT, d)))
     expect(files.length).toBeGreaterThan(500)
-    const offenders = files
+    const named = files
       .map((f) => path.relative(ROOT, f))
-      .filter((rel) => !ALLOWED.has(rel))
       .filter((rel) => readFileSync(path.join(ROOT, rel), 'utf8').includes(OLD_TABLE))
-    expect(offenders).toEqual([])
+    expect(named.filter((rel) => !ALLOWED.has(rel))).toEqual([])
   })
 
-  it('the guard reads real files: the migration that made the table still names it', () => {
-    const sql = readFileSync(path.join(ROOT, 'supabase/migrations/792_landing_pages.sql'), 'utf8')
-    expect(sql).toContain(OLD_TABLE)
-    expect(readFileSync(path.join(ROOT, 'scripts/check-location-scoping.mjs'), 'utf8')).toContain(OLD_TABLE)
+  it('positive control: the walk reads the allowed script, which names the table (so it would be an offender without ALLOWED)', () => {
+    const script = 'scripts/check-location-scoping.mjs'
+    const walked = ['src', 'shared', 'scripts'].flatMap((d) => walk(path.join(ROOT, d))).map((f) => path.relative(ROOT, f))
+    expect(walked).toContain(script)
+    expect(readFileSync(path.join(ROOT, script), 'utf8')).toContain(OLD_TABLE)
+    expect(ALLOWED.has(script)).toBe(true)
   })
 })

@@ -89,6 +89,15 @@ describe('POST /api/public/leads — page (PAGES.1)', () => {
     expect(m.rateLimit).toHaveBeenCalledWith(expect.anything(), 'lead:unresolved:1.2.3.4', expect.anything())
   })
 
+  it('content-block route: a switched-off offer row never refuses a lead, on either branch (requireEnabled: false)', async () => {
+    m.resolve.mockResolvedValueOnce(pageOk())
+    await POST(req({ ...BODY, page: 'founders', studio: 'hatch-street' }))
+    expect(resolvePublicPageRequest).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ page: 'founders', requireEnabled: false }))
+    m.resolve.mockResolvedValueOnce(pageOk([], { locationId: 'loc-s', publicPath: 'stillorgan' }))
+    await POST(req({ ...BODY, public_path: 'stillorgan' }))
+    expect(resolvePublicPageRequest).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan', requireEnabled: false }))
+  })
+
   it('no page: public_path names a studio page by slug; its lead_form block carries the tag and lead source', async () => {
     m.resolve.mockResolvedValueOnce(pageOk([{ type: 'lead_form', tag: 'still-tag', lead_source: 'still-src' }], { locationId: 'loc-s', publicPath: 'stillorgan' }))
     const r = await POST(req({ ...BODY, public_path: 'stillorgan' }))

@@ -244,11 +244,6 @@ const CALLERS = {
     decision: 'refuse-quiet',
     why: 'booking + event confirmations (class, consult, EVENTCONFIRM-WA): never throws → send_failed, logged; needs a location-owned APPROVED template first. booking-whatsapp-confirm.test.js.',
   },
-  'src/lib/automations/meta-ad-whatsapp-welcome.js': {
-    calls: { sendTemplateMessage: 1 },
-    decision: 'refuse-quiet',
-    why: 'paid-ad lead welcome: never throws → send_failed, logged; needs a location-owned template first.',
-  },
   'src/lib/cancellation-form/confirm.js': {
     calls: { sendTemplateMessage: 1 },
     decision: 'refuse-quiet',

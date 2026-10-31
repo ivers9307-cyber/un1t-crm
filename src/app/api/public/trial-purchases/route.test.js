@@ -549,6 +549,25 @@ describe('POST /api/public/trial-purchases — page (PAGES.1)', () => {
     expect(mocks.payment).toHaveBeenCalled()
   })
 
+  it("a studio page's purchase is priced from the studio page's row, even with the /trial page unpublished", async () => {
+    // The card on /stillorgan posts { page: 'stillorgan', studio: 'stillorgan' }; the resolver answers the studio page.
+    const row = { page_id: 'page-studio', location_id: 'loc1', enabled: true, sort_order: 0, offer: { membership_id: 'm9', plan_code: 'p9', price_cents: 5900, product_name: 'Studio Page Trial' }, attribution: {}, locations: { id: 'loc1', name: 'Stillorgan', membership_source: 'glofox', settings: {} } }
+    mocks.state.noTrialPage = true
+    resolvePublicPageRequest.mockResolvedValueOnce({
+      ok: true, pageId: 'page-studio', page: { id: 'page-studio', slug: 'stillorgan', kind: 'studio', offer_type: 'paid_trial' }, studioRow: row,
+      locationId: 'loc1', publicPath: 'stillorgan', blocks: [{ id: 'pt', type: 'paid_trial', duration_days: 14, ...row.offer }],
+      attribution: { tag: 'stillorgan-stillorgan', lead_source: 'meta_stillorgan' }, terms: {},
+    })
+    const r = await POST(req({ ...BODY, page: 'stillorgan', studio: 'stillorgan', price_cents: 1 }))
+    expect(r.status).toBe(200)
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: 'stillorgan', studio: 'stillorgan' }))
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ page_id: 'page-studio', location_id: 'loc1', amount_cents: 5900, membership_id: 'm9', plan_code: 'p9', landing_path: 'stillorgan' })
+    // Nothing read the trial page: the studio page's own row priced it.
+    expect(mocks.read.mock.calls.some(([t, f]) => t === 'landing_pages' && f.some((x) => x[1] === 'slug' && x[2] === 'trial'))).toBe(false)
+    expect(mocks.read.mock.calls.some(([t]) => t === 'landing_page_studios')).toBe(false)
+    expect(mocks.payment).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 5900 }))
+  })
+
   it('the terms tick on a page uses the studio terms wording', async () => {
     resolvePublicPageRequest.mockResolvedValueOnce(pageOk(hatchRow(), [{ id: 'pt', type: 'paid_trial', duration_days: 14, product_name: 'The UN1T Trial', un1t_product_id: HATCH_PRODUCT_ID }]))
     const r = await POST(req({ ...HATCH_BODY, terms_accepted: undefined, page: 'trial', studio: 'hatch-street' }))

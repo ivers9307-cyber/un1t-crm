@@ -82,6 +82,7 @@ vi.mock('@/fonts/poppins', () => ({ poppinsBody: { variable: 'font-var' } }))
 vi.mock('@/components/landing-page/PaidTrialFunnel', () => ({ default: (props) => <div data-testid="paid">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/CampaignFunnel', () => ({ default: (props) => <div data-testid="campaign">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/CorpPromoFunnel', () => ({ default: (props) => <div data-testid="corp">{JSON.stringify(props)}</div> }))
+vi.mock('@/components/WaitlistWidget', () => ({ default: (props) => <div data-testid="waitlist">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/ClassFunnel', () => ({ default: (props) => <div data-testid="classfunnel">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/EditModeOverlay', () => ({ default: (props) => <div data-testid="overlay">{JSON.stringify(props)}</div> }))
 vi.mock('@/components/landing-page/RevealManager', () => ({ default: () => null }))
@@ -549,9 +550,10 @@ describe('studio pages on the [slug] route', () => {
     expect(paid).toMatchObject({ initialStudio: 'stillorgan', returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: false })
     expect(paid.studios).toHaveLength(1)
     expect(paid.studios[0]).toMatchObject({ key: 'stillorgan', publicPath: 'stillorgan', sellable: true, priceCents: 3900, label: 'UN1T Stillorgan' })
-    // Posts as /welcome/[location] did, by studio key (no page) until the
-    // public routes take studio pages.
-    expect(paid.page ?? null).toBeNull()
+    // The card posts the studio page's own slug, so the purchase is priced from
+    // the studio page's row (not the /trial page's), and so do its content forms.
+    expect(paid.page).toBe('stillorgan')
+    expect(propsOf(html, 'waitlist')).toMatchObject({ publicPath: 'stillorgan', page: 'stillorgan' })
     // pageCtas: the trial owns the primary CTA (header, footer).
     expect(html.match(/href="#trial"/g).length).toBeGreaterThanOrEqual(2)
     expect(html).toContain('Start my 14 Day Reset')
@@ -724,7 +726,7 @@ describe('studio pages on the [slug] route', () => {
     expect(overlay.initialBlocks[3]).toMatchObject({ type: 'paid_trial', cta_label: 'Start my 14 Day Reset' })
     // The offer block (last on the page) is named, so the overlay gives it no toolbar.
     expect(overlay.offerLayout).toMatchObject({ kind: 'blocks', tone: 'dark', offerBlockId: 'pt', cta: { href: '#trial', label: 'Start my 14 Day Reset' } })
-    expect(overlay.trialPreview).toMatchObject({ returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: true })
+    expect(overlay.trialPreview).toMatchObject({ returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: true, page: 'stillorgan' })
     expect(overlay.trialPreview.studio).toMatchObject({ key: 'stillorgan', sellable: true })
     expect(overlay).toMatchObject({ initialLogoUrl: 'https://x/still-logo.png', initialLogoAlt: 'UN1T Stillorgan', initialLogoWidthPx: 200, wordmark: 'UN1T', locationName: 'Stillorgan' })
     expectClientSafe(html)

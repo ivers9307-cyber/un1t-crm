@@ -173,7 +173,11 @@ export async function studioPublicPath(db, locationId) {
   return data?.slug || null
 }
 
-/** What a studio page's `chrome.un1t_terms` holds, as a plain object (never null). */
+/**
+ * A studio page's `chrome.un1t_terms` as a plain object (never null): the
+ * UNRESOLVED stored value, blank or missing keys and all. Pass it through
+ * un1tFunnelCopyFromTerms (or un1tTermsPayload({ terms })) to get the words.
+ */
 const termsOf = (page) => (page?.chrome && typeof page.chrome === 'object' && page.chrome.un1t_terms
   && typeof page.chrome.un1t_terms === 'object' ? page.chrome.un1t_terms : {})
 
@@ -239,9 +243,11 @@ export async function copySourceForRequest(db, { pageId, locationId }) {
   }
 }
 
-// The studio's terms wording as seen from a resolved page: a studio page of
-// that studio carries it itself; any other page (a campaign) reads the
-// studio's page (studioTermsCopy never throws, a blip is the defaults).
+// The studio's terms wording as seen from a resolved page, to pass through
+// un1tFunnelCopyFromTerms: a studio page of that studio carries it itself
+// (the unresolved chrome.un1t_terms); any other page (a campaign) reads the
+// studio's page (studioTermsCopy never throws, a blip is the resolved
+// defaults). Either shape is accepted by un1tFunnelCopyFromTerms.
 async function studioTermsOf(db, page, locationId) {
   if (page?.kind === 'studio' && page.primary_location_id === locationId) return termsOf(page)
   return studioTermsCopy(db, locationId)
@@ -334,7 +340,7 @@ export function studioAttribution({ page, studioRow, publicPath }) {
 // studio page's primary row. Only a live studio page takes a request (a draft
 // is a miss: stricter than the retired settings row, which had no state).
 // A failed read is unreadable, never a refusal.
-async function resolveLegacyRequest(db, legacyPath, hostname) {
+async function resolveLegacyRequest(db, legacyPath, hostname, requireEnabled) {
   const slug = resolveLandingPath(legacyPath)
   try {
     const orgId = await publicOrgIdForHost(hostname)
@@ -343,7 +349,7 @@ async function resolveLegacyRequest(db, legacyPath, hostname) {
     const { page, studios } = loaded
     if (page.kind !== 'studio' || !isPageVisible(page.publish_state)) return NOT_FOUND
     const studioRow = resolvePageStudio({ page, studios }).studio
-    if (!studioRow?.enabled || !page.primary_location_id) return NOT_FOUND
+    if (!studioRow || (requireEnabled && !studioRow.enabled) || !page.primary_location_id) return NOT_FOUND
     return {
       ok: true,
       pageId: page.id,
@@ -384,6 +390,12 @@ async function resolveLegacyRequest(db, legacyPath, hostname) {
  * `terms` is the studio's terms-tick wording (its studio page's
  * `chrome.un1t_terms`); hand it to un1tTermsPayload / un1tFunnelCopyFromTerms.
  *
+ * `requireEnabled` (default true): a studio row switched off refuses the
+ * request, as an OFFER route (classes, class-booking, trial-purchases,
+ * corp-claims) needs. A content-block route (leads, funnel-event) passes false:
+ * a live page with a row for the studio takes the request even when that row's
+ * offer is switched off.
+ *
  * `not_configured` is never answered here: each route judges its offer's
  * readiness with its own config function.
  *
@@ -391,8 +403,8 @@ async function resolveLegacyRequest(db, legacyPath, hostname) {
  *   locationId: string, publicPath: string, blocks: Array, attribution: object, terms: object }
  *   | { ok: false, reason: 'not_found' | 'not_configured' | 'studio_required' | 'unreadable' }>}
  */
-export async function resolvePublicPageRequest(db, { hostname = null, page = null, studio = null, legacyPath = null } = {}) {
-  if (!given(page)) return resolveLegacyRequest(db, legacyPath, hostname)
+export async function resolvePublicPageRequest(db, { hostname = null, page = null, studio = null, legacyPath = null, requireEnabled = true } = {}) {
+  if (!given(page)) return resolveLegacyRequest(db, legacyPath, hostname, requireEnabled)
   const slug = normaliseSlug(page)
   if (!slug) return NOT_FOUND
   try {
@@ -412,12 +424,16 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
         if (!locationId || locationId !== row.primary_location_id) return NOT_FOUND
       }
       studioRow = resolvePageStudio({ page: row, studios }).studio
-      if (!studioRow?.enabled) return NOT_FOUND
+      if (!studioRow || (requireEnabled && !studioRow.enabled)) return NOT_FOUND
     } else if (row.scope === 'all') {
       if (!requested) return { ok: false, reason: 'studio_required' }
       const locationId = await locationIdForPublicPath(db, orgId, requested)
       if (!locationId) return NOT_FOUND
-      studioRow = resolvePageStudio({ page: row, studios, studioLocationId: locationId }).studio
+      // An offer route needs the page switched on at the studio (the picker's enabled rows);
+      // a content-block route (requireEnabled false) takes any row the page holds for it.
+      studioRow = requireEnabled
+        ? resolvePageStudio({ page: row, studios, studioLocationId: locationId }).studio
+        : studios.find((r) => r.location_id === locationId) || null
       if (!studioRow) return NOT_FOUND
     } else {
       return NOT_FOUND

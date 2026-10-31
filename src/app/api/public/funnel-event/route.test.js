@@ -70,6 +70,15 @@ describe('POST /api/public/funnel-event — page (PAGES.1)', () => {
     expect(m.inserted).toHaveBeenCalledWith('funnel_events', expect.objectContaining({ location_id: 'loc-studio', page_id: 'page-studio' }))
   })
 
+  it('content-block route: a switched-off offer row never drops an event, on either branch (requireEnabled: false)', async () => {
+    m.resolve.mockResolvedValueOnce(pageOk())
+    await POST(req({ ...EVENT, page: '50plus' }))
+    expect(m.resolve).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ page: '50plus', requireEnabled: false }))
+    m.resolve.mockResolvedValueOnce(pageOk())
+    await POST(req({ ...EVENT, location_path: 'stillorgan' }))
+    expect(m.resolve).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ legacyPath: 'stillorgan', requireEnabled: false }))
+  })
+
   it('no page: an unknown studio page or a failed read is ignored, never an error', async () => {
     for (const reason of ['not_found', 'unreadable']) {
       m.resolve.mockResolvedValueOnce({ ok: false, reason })

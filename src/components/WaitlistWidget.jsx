@@ -52,7 +52,7 @@ const TONES = {
   },
 }
 
-export default function WaitlistWidget({ publicPath, campaign, page = null, buttonLabel, successMessage, consentLabel, brandName = '', tone = 'dark' }) {
+export default function WaitlistWidget({ publicPath, page = null, buttonLabel, successMessage, consentLabel, brandName = '', tone = 'dark' }) {
   const t = TONES[tone] || TONES.dark
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
@@ -71,7 +71,7 @@ export default function WaitlistWidget({ publicPath, campaign, page = null, butt
         // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
         body: JSON.stringify({
           ...form,
-          ...(page ? { page, studio: publicPath || undefined } : { public_path: publicPath, ...(campaign ? { campaign } : {}) }),
+          ...(page ? { page, studio: publicPath || undefined } : { public_path: publicPath }),
           visit: readVisitOrigin() || undefined,
         }),
       })

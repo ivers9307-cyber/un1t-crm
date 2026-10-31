@@ -470,7 +470,7 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
   const hatchTerms = trialItem?.hatchTerms || null
 
   if (editMode) {
-    const trialPreview = view ? { studio: view, returnPath, resumePurchaseId: null, cancelled: false, hatchTerms, preview: true } : null
+    const trialPreview = view ? { studio: view, returnPath, resumePurchaseId: null, cancelled: false, hatchTerms, preview: true, page: page.slug } : null
     const { primary } = pageCtas(merged, { trialShown: Boolean(trialPreview) })
     return (
       <StudioShell>
@@ -496,7 +496,8 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
   }
 
   const trialShown = Boolean(view && (view.sellable || resumePurchaseId))
-  const trial = trialShown ? { studio: view, returnPath, resumePurchaseId, cancelled, hatchTerms, preview: false } : null
+  // `page`: the card posts the studio page's slug, so the purchase is priced from this page's own row.
+  const trial = trialShown ? { studio: view, returnPath, resumePurchaseId, cancelled, hatchTerms, preview: false, page: page.slug } : null
   const { primary: cta, secondary: cta2 } = pageCtas(merged, { trialShown })
   const reviewsData = await loadReviews(db, locationId, content.find((b) => b.type === 'reviews'))
   const hero = content.find((b) => b.type === 'hero')
@@ -520,8 +521,8 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
         cta2={cta2 || null}
         footer={footer}
         blocks={content}
-        // No `page`: the forms post by public path as /welcome's did.
-        blockProps={{ publicPath: page.slug, page: null, wordmark: brand.shortName, locationName: brand.locationName, reviewsData }}
+        // `page`: the content forms (lead form) post the studio page's slug and go through the page branch.
+        blockProps={{ publicPath: page.slug, page: page.slug, wordmark: brand.shortName, locationName: brand.locationName, reviewsData }}
         eventsHref={`/${page.slug}/events`}
         trial={trial}
         trialShown={trialShown}
