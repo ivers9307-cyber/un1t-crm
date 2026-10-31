@@ -9,10 +9,13 @@
 // credentials: it is read on the server and must NEVER be passed to a client
 // (a client gets `redactLocationSecrets` output or named columns, never this
 // embed). Every read here is tenant-scoped by the caller's org id or by a page
-// id the caller already resolved; the request resolver registers with
-// check:location-scoping in Task 7.
+// id the caller already resolved; the request resolver
+// (resolvePublicPageRequest) and studioTermsCopy are registered with
+// check:location-scoping (scripts/check-location-scoping.mjs SCOPING_HELPERS).
 
-import { mergeOfferBlock, OFFER_BLOCK_TYPE, offerConfigured } from '@/lib/landing-page-offers'
+import { mergeOfferBlock, OFFER_BLOCK_TYPE, offerConfigured, defaultAttribution, ATTRIBUTION_KEYS } from '@/lib/landing-page-offers'
+import { resolveLandingPath } from '@/lib/public-landing'
+import { publicOrgIdForHost } from '@/lib/public-pages-edge'
 import { normaliseSlug } from '@/lib/page-slug'
 import { TRIAL_STUDIOS } from '@/lib/trial-studios'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -219,4 +222,115 @@ export function canEditPage(user, page) {
   if (!user) return false
   if (page.scope === 'one') return hasPermissionForLocation(user, page.primary_location_id, 'landing_page')
   return isOrgAdmin(user, page.organization_id)
+}
+
+const NOT_FOUND = Object.freeze({ ok: false, reason: 'not_found' })
+const UNREADABLE = Object.freeze({ ok: false, reason: 'unreadable' })
+const given = (v) => typeof v === 'string' && v.trim() !== ''
+
+// The row's attribution values that hold one (a blank string is no value),
+// only the three attribution keys.
+function rowAttribution(studioRow) {
+  const raw = studioRow?.attribution && typeof studioRow.attribution === 'object' ? studioRow.attribution : {}
+  const out = {}
+  for (const key of ATTRIBUTION_KEYS) {
+    if (given(raw[key])) out[key] = raw[key].trim()
+  }
+  return out
+}
+
+// PR1 legacy, deleted in PR3: a request with no page names a studio by its
+// landing_page_settings.public_path, read exactly as the public routes read it
+// today. A throw propagates, as it did from each route's own read (a route
+// that caught one keeps catching it).
+async function resolveLegacyRequest(db, legacyPath) {
+  const publicPath = resolveLandingPath(legacyPath)
+  const { data, error } = await db.from('landing_page_settings')
+    .select('location_id, public_path, blocks').eq('public_path', publicPath).maybeSingle()
+  if (error) return UNREADABLE
+  if (!data?.location_id) return NOT_FOUND
+  return {
+    ok: true, pageId: null, page: null, studioRow: null,
+    locationId: data.location_id, publicPath, blocks: data.blocks, attribution: null,
+  }
+}
+
+/**
+ * Which page, studio and attribution a public API request is about.
+ *
+ * With `page` (a slug): the live page of that slug in the host's organisation
+ * (draft, coming_soon and retired answer not_found: only a live page takes a
+ * customer). scope 'one' answers for its primary studio only: a `studio` that
+ * names any other studio (or nothing) is not_found, so a one-studio page can
+ * never be booked at another studio. scope 'all' needs `studio` (a public
+ * path, or the old `hatch` spelling): missing is studio_required, a studio the
+ * page is not switched on at is not_found. Platform ids, price and
+ * attribution come from the page's studio row, never the request:
+ * `attribution` is the default for the studio path and slug with the row's
+ * non-blank values over it. Every read is scoped by the organisation and slug,
+ * then the page id; a failed read is unreadable, never a refusal.
+ *
+ * Without `page`: PR1 legacy (deleted in PR3), `legacyPath` through
+ * resolveLandingPath and its landing_page_settings row; pageId, page,
+ * studioRow and attribution are null (the route derives attribution from the
+ * blocks as it always has).
+ *
+ * `not_configured` is never answered here: each route judges its offer's
+ * readiness with its own config function.
+ *
+ * @returns {Promise<{ ok: true, pageId: string|null, page: object|null, studioRow: object|null,
+ *   locationId: string, publicPath: string, blocks: Array, attribution: object|null }
+ *   | { ok: false, reason: 'not_found' | 'not_configured' | 'studio_required' | 'unreadable' }>}
+ */
+export async function resolvePublicPageRequest(db, { hostname = null, page = null, studio = null, legacyPath = null } = {}) {
+  if (!given(page)) return resolveLegacyRequest(db, legacyPath)
+  const slug = normaliseSlug(page)
+  if (!slug) return NOT_FOUND
+  try {
+    const orgId = await publicOrgIdForHost(hostname)
+    const loaded = await loadPageBySlug(db, { orgId, slug })
+    if (!loaded) return NOT_FOUND
+    const { page: row, studios } = loaded
+    if (!isPageVisible(row.publish_state)) return NOT_FOUND
+    if (row.kind !== 'campaign' && row.kind !== 'studio') return NOT_FOUND
+
+    const named = given(studio)
+    const requested = named ? studioParamToPublicPath(studio) : null
+    if (named && !requested) return NOT_FOUND
+    let studioRow = null
+    if (row.scope === 'one') {
+      if (requested) {
+        const locationId = await locationIdForPublicPath(db, orgId, requested)
+        if (!locationId || locationId !== row.primary_location_id) return NOT_FOUND
+      }
+      studioRow = resolvePageStudio({ page: row, studios }).studio
+      if (!studioRow?.enabled) return NOT_FOUND
+    } else if (row.scope === 'all') {
+      if (!requested) return { ok: false, reason: 'studio_required' }
+      const locationId = await locationIdForPublicPath(db, orgId, requested)
+      if (!locationId) return NOT_FOUND
+      studioRow = resolvePageStudio({ page: row, studios, studioLocationId: locationId }).studio
+      if (!studioRow) return NOT_FOUND
+    } else {
+      return NOT_FOUND
+    }
+
+    // The studio's public path keys the rate limits, the terms page and the
+    // stored landing_path: a studio with none cannot take a request.
+    const publicPath = await studioPublicPath(db, studioRow.location_id)
+    if (!publicPath) return NOT_FOUND
+    return {
+      ok: true,
+      pageId: row.id,
+      page: row,
+      studioRow,
+      locationId: studioRow.location_id,
+      publicPath,
+      blocks: mergedBlocksFor({ page: row, studio: studioRow }),
+      attribution: { ...defaultAttribution({ publicPath, slug: row.slug }), ...rowAttribution(studioRow) },
+    }
+  } catch (e) {
+    logWarn('landing-pages', 'public page request unreadable', { slug, code: e?.cause?.code ?? e?.code ?? null })
+    return UNREADABLE
+  }
 }
