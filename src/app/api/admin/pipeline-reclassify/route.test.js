@@ -68,3 +68,14 @@ describe('POST /api/admin/pipeline-reclassify — restamp_dates routing', () => 
     expect(restampUn1tDealDates).not.toHaveBeenCalled()
   })
 })
+
+
+// PIPE3 — the two Stillorgan claim boards can be previewed while disabled.
+describe('POST /api/admin/pipeline-reclassify — PIPE3 include_disabled keys', () => {
+  it('accepts paid_trial and programmes', async () => {
+    const res = await POST(req({ location_id: LOC, dry_run: true, include_disabled: ['paid_trial', 'programmes'] }))
+    expect(res.status).toBe(200)
+    const args = vi.mocked(reclassifyAllContacts).mock.calls.at(-1)[1]
+    expect(args.includeDisabled).toEqual(['paid_trial', 'programmes'])
+  })
+})

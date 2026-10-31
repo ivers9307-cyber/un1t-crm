@@ -27,13 +27,23 @@ import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
 import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
 import { loadActiveElsewhere, leavesBoard, ELSEWHERE_MEMBER, ELSEWHERE_TRAINING } from './pipeline-other-studio-members.js'
 import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
+// PIPE3 — one router places a contact on one of several contacts-input boards
+// (acquisition / paid_trial / programmes at Stillorgan); the claims it needs
+// are read once per run.
+import { routeContact, CLAIM_BOARD_MODULES } from '../../shared/pipelines/router.js'
+import {
+  loadClaimsForLocation, loadProgrammeRules, pendingProgrammeClaims, upsertProgrammeClaims,
+} from './pipeline-claims.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
 // un1t_* rows at THIS studio), never from contacts columns. Every other board
 // reads contacts exactly as before.
 const UN1T_INPUT = 'un1t_online'
-// The module a disabled row is dry-run as (includeDisabled, below).
+// The module a disabled row is dry-run as (includeDisabled, below): Hatch's
+// pre-740 acquisition row still named the Glofox module and was previewed as
+// un1t. PIPE3 — a disabled row on one of the CLAIM board modules (paid_trial,
+// programmes; Stillorgan before mig 798) is dry-run as itself.
 const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
@@ -161,7 +171,7 @@ export async function reclassifyAllContacts(db, args) {
       return { ok: false, error: `pipeline load: ${disabledErr.message}`, run_id: runId }
     }
     for (const p of disabledRows || []) {
-      boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED, module: DRY_RUN_DISABLED_MODULE })
+      boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED, module: CLAIM_BOARD_MODULES.includes(p.module) ? p.module : DRY_RUN_DISABLED_MODULE })
     }
   }
 
@@ -241,6 +251,10 @@ export async function reclassifyAllContacts(db, args) {
 
   const activePipelineIds = activePipelines.map((p) => p.id)
   const selectCols = selectColsFor(activePipelines.map((p) => p.mod))
+  // PIPE3 — the board modules running here, for the router; and whether any
+  // of them needs claims (trial_purchases, pipeline_board_claims) loaded.
+  const activeModules = new Set(activePipelines.map((p) => p.module))
+  const needsClaims = inputSource !== UN1T_INPUT && activePipelines.some((p) => CLAIM_BOARD_MODULES.includes(p.module))
 
   // 2. Build the slug → stage_id lookup ONCE for this location.
   // PIPELINES.5 — pipeline_id comes back with the stage because the create
@@ -316,6 +330,47 @@ export async function reclassifyAllContacts(db, args) {
     return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [], pipelines_skipped: pipelinesSkipped, ...un1tCounts(inputSource, un1tInputs) }
   }
 
+  // 3b. PIPE3 — the claims the router needs: the paid-trial rows and the
+  //     recorded programme claims for this run's contacts, plus the studio's
+  //     programme rules. An unreadable claim is "cannot tell", never "no
+  //     claims": the run stops here (audit row failed, retried next tick)
+  //     rather than moving every €39 buyer back to the acquisition board.
+  //     New programme matches are recorded BEFORE routing on a real run and
+  //     applied in memory on a dry run (claims_pending).
+  let paidByContact = new Map()
+  let programmeByContact = new Map()
+  let claimsPending = 0
+  if (needsClaims) {
+    const rules = await loadProgrammeRules(db, locationId)
+    if (!rules.ok) {
+      const errorMessage = `claims unavailable: ${rules.reason}`
+      await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
+      return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
+    }
+    const claims = await loadClaimsForLocation(db, { locationId, contactIds: new Set(contacts.map((c) => c.id)), now: nowMs })
+    if (!claims.ok) {
+      const errorMessage = `claims unavailable: ${claims.reason}`
+      await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
+      return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
+    }
+    paidByContact = claims.paidByContact
+    programmeByContact = claims.programmeByContact
+    const pending = pendingProgrammeClaims(contacts, programmeByContact, rules.rules, nowMs)
+    claimsPending = pending.length
+    if (pending.length > 0) {
+      if (!dryRun) {
+        const wrote = await upsertProgrammeClaims(db, locationId, pending, nowMs)
+        // A lost claim write is never grounds to stop: the lead-source match is
+        // re-derived next run (a plan match re-dates to that run). Logged by
+        // the helper; the placement below still uses the in-memory claim.
+        if (!wrote.ok) logWarn('pipeline-reclassify', 'programme claims not recorded', { locationId, pending: pending.length })
+      }
+      for (const row of pending) {
+        programmeByContact.set(row.contact_id, { claimedAt: Date.parse(row.claimed_at), source: row.source })
+      }
+    }
+  }
+
   // 4. Pull every open deal at the location in one query.
   //
   //    PIPELINE5.8 fix: original implementation did
@@ -342,7 +397,8 @@ export async function reclassifyAllContacts(db, args) {
     const dealEnd = Math.min(dealStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('deals')
-      .select('id, contact_id, stage_id')
+      // PIPE3 — pipeline_id too: a move across boards must know the board it leaves.
+      .select('id, contact_id, stage_id, pipeline_id')
       .eq('location_id', locationId)
       .eq('status', 'open')
       .in('pipeline_id', activePipelineIds)
@@ -419,6 +475,7 @@ export async function reclassifyAllContacts(db, args) {
   let dealsUnchanged = 0
   let dealsCreated = 0
   let dealsLeftBoard = 0
+  let boardsMoved = 0 // PIPE3 — deals that changed board (pipeline_id) this run
   let errors = 0
   const movementMatrix = {} // { from_slug: { to_slug: count } }
   const samples = []
@@ -429,6 +486,7 @@ export async function reclassifyAllContacts(db, args) {
   let createsWithheld = 0
   let createsHeld = 0
   const stageHistogram = {} // dry runs only: { target_slug: count }
+  const boardHistogram = {} // dry runs only, PIPE3: { board key: count }
 
   // HATCHPIPE.2 — the un1t path classifies the contact's snapshot (built from
   // this studio's un1t rows). No snapshot → null → counted as an error below.
@@ -437,28 +495,20 @@ export async function reclassifyAllContacts(db, args) {
     return snapshot ? un1tClassify(snapshot, nowMs) : null
   }
 
+  // PIPE3 — the contacts path places through the router. The row carries
+  // every column the active boards declared (selectColsFor), which is what the
+  // old inline field list guaranteed for classifyContact; with the acquisition
+  // board alone the router IS classifyContact.
+  const routeFromRow = (c) => routeContact(
+    c,
+    { paid: paidByContact.get(c.id) ?? null, programme: programmeByContact.get(c.id) ?? null },
+    nowMs,
+    activeModules,
+  )
+
   for (const c of contacts) {
-    const targetSlug = un1tInputs ? classifyFromSnapshot(c.id) : classifyContact({
-      glofox_membership_status: c.glofox_membership_status,
-      glofox_membership_state: c.glofox_membership_state,
-      glofox_membership_expiry: c.glofox_membership_expiry,
-      last_attended_at: c.last_attended_at,
-      total_attended_7d: c.total_attended_7d,
-      total_attended_30d: c.total_attended_30d,
-      last_payment_at: c.last_payment_at,
-      joined_at: c.joined_at,
-      created_at: c.created_at,
-      trial_credits_remaining: c.trial_credits_remaining,
-      // FUNNEL.1 — must reach the classifier or nightly runs see
-      // attended=0 / never-converted and flap webhook-placed deals.
-      recent_bookings: c.recent_bookings,
-      converted_at: c.converted_at,
-      pack_customer_at: c.pack_customer_at,
-      pipeline_dismissed_at: c.pipeline_dismissed_at,
-      last_lead_source_at: c.last_lead_source_at,
-      // GYMPASS.2 — parks Gympass users in the off-funnel gympass pile.
-      gympass_member_id: c.gympass_member_id,
-    })
+    const route = un1tInputs ? null : routeFromRow(c)
+    const targetSlug = un1tInputs ? classifyFromSnapshot(c.id) : route.slug
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {
       // Migration set should guarantee every slug exists; if not,
@@ -484,7 +534,10 @@ export async function reclassifyAllContacts(db, args) {
       continue
     }
 
-    if (dryRun) stageHistogram[targetSlug] = (stageHistogram[targetSlug] || 0) + 1
+    if (dryRun) {
+      stageHistogram[targetSlug] = (stageHistogram[targetSlug] || 0) + 1
+      if (route) boardHistogram[route.boardKey] = (boardHistogram[route.boardKey] || 0) + 1
+    }
 
     if (!existing) {
       // PIPEEXCL.1 — the other-studio read failed: hold every create this run.
@@ -510,12 +563,19 @@ export async function reclassifyAllContacts(db, args) {
       dealsUnchanged++
       continue
     }
+    // PIPE3 — a deal follows the person across boards: the same row gets the
+    // new pipeline_id with its new stage_id, in one update (never close and
+    // recreate: history stays, lost counts stay honest).
+    const targetPipelineId = stagePipelineById.get(targetStageId) || null
+    const crossBoard = Boolean(existing.pipeline_id && targetPipelineId && existing.pipeline_id !== targetPipelineId)
     movesToApply.push({
       deal_id: existing.id,
       contact_id: c.id,
       from_slug: fromSlug,
       to_slug: targetSlug,
       target_stage_id: targetStageId,
+      target_pipeline_id: targetPipelineId,
+      cross_board: crossBoard,
       contact_name: c.name || c.email || null,
     })
   }
@@ -540,6 +600,11 @@ export async function reclassifyAllContacts(db, args) {
     for (const [stageId, moves] of movesByStage) {
       let stageMoved = 0
       let stageErrored = 0
+      // PIPE3 — a stage belongs to one board, so the group shares one target
+      // pipeline_id; it is written only when a deal in the group changes board
+      // (a same-board move keeps today's stage-only payload).
+      const groupCrossBoard = moves.some((m) => m.cross_board)
+      const movePatch = groupCrossBoard ? { stage_id: stageId, pipeline_id: moves[0].target_pipeline_id } : { stage_id: stageId }
       for (let i = 0; i < moves.length; i += BULK_UPDATE_CHUNK) {
         const chunk = moves.slice(i, i + BULK_UPDATE_CHUNK)
         const dealIds = chunk.map((m) => m.deal_id)
@@ -549,7 +614,7 @@ export async function reclassifyAllContacts(db, args) {
         // (Glofox) path's write is unchanged.
         const moveQuery = db
           .from('deals')
-          .update({ stage_id: stageId })
+          .update(movePatch)
           .in('id', dealIds)
         const { data: movedRows, error: moveErr } = inputSource === UN1T_INPUT
           ? await moveQuery.eq('status', 'open').select('id')
@@ -564,6 +629,7 @@ export async function reclassifyAllContacts(db, args) {
           continue
         }
         stageMoved += chunk.length
+        boardsMoved += chunk.filter((m) => m.cross_board).length
         if (inputSource === UN1T_INPUT) {
           const changed = new Set((movedRows || []).map((r) => r.id))
           movesLanded.push(...chunk.filter((m) => changed.has(m.deal_id)))
@@ -675,6 +741,7 @@ export async function reclassifyAllContacts(db, args) {
     }
     dealsMoved = movesToApply.length
     dealsCreated = createsToApply.length
+    boardsMoved = movesToApply.filter((m) => m.cross_board).length
     for (const m of leavesToApply) {
       movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
       movementMatrix[m.from_slug][LEFT_BOARD] = (movementMatrix[m.from_slug][LEFT_BOARD] || 0) + 1
@@ -735,6 +802,10 @@ export async function reclassifyAllContacts(db, args) {
     } : {}),
     ...un1tCounts(inputSource, un1tInputs),
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
+    // PIPE3
+    boards_moved: boardsMoved,
+    ...(needsClaims ? { claims_pending: claimsPending } : {}),
+    ...(dryRun && needsClaims ? { board_histogram: boardHistogram } : {}),
   }
 }
 
@@ -949,7 +1020,9 @@ export async function restampUn1tDealDates(db, { locationId, dryRun = false, now
 const LEFT_BOARD = '(left board)'
 // PIPEEXCL.2 — every derived acquisition board, Glofox (Stillorgan) and
 // un1t.online (Hatch Street). PIPEEXCL.1 ran on acquisition_un1t only.
-const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t'])
+// PIPE3 — the two claim boards are acquisition boards too: a Hatch member is
+// not a Stillorgan €39 prospect either.
+const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t', 'paid_trial', 'programmes'])
 // The contact's timeline says why the deal closed, per reason.
 const LEFT_BOARD_ACTIVITY = Object.freeze({
   [ELSEWHERE_MEMBER]: {
