@@ -55,22 +55,28 @@ export function videoOutputCap(autoplay) {
  * re-encoded client-side first. Returns { success, url?, error? } and
  * never throws on an oversized / non-JSON response.
  *
- * @param {{ file: File, locationId: string, kind?: 'image'|'video', onProgress?: Function, autoplay?: boolean }} args
+ * PAGES.1: an upload is attributed to a landing PAGE (`pageId`, sent as
+ * page_id; a scope='all' page has no location) or to a studio (`locationId`,
+ * sent as location_id; the legacy /welcome editor). pageId wins when both are
+ * given and only one of the two ids is ever sent.
+ *
+ * @param {{ file: File, locationId?: string|null, pageId?: string|null, kind?: 'image'|'video', onProgress?: Function, autoplay?: boolean }} args
  * @returns {Promise<{success: boolean, url?: string, error?: string}>}
  */
-export async function uploadLandingMedia({ file, locationId, kind = 'image', onProgress, autoplay = true }) {
-  if (!file || !locationId) return { success: false, error: 'Missing file or location.' }
+export async function uploadLandingMedia({ file, locationId, pageId, kind = 'image', onProgress, autoplay = true }) {
+  if (!file || !(pageId || locationId)) return { success: false, error: 'Missing file, page or location.' }
 
   // Video → compress (if needed) then upload straight to Supabase Storage.
   // `autoplay` defaults true (the conservative, small-cap tier); callers that
   // render the clip as tap-to-play (testimonials) pass `autoplay: false`.
-  if (kind === 'video') return uploadVideoDirect({ file, locationId, onProgress, autoplay })
+  if (kind === 'video') return uploadVideoDirect({ file, locationId, pageId, onProgress, autoplay })
 
   const toSend = kind !== 'video' ? await compressImageForUpload(file) : file
 
   const fd = new FormData()
   fd.append('file', toSend, toSend.name || file.name || 'upload')
-  fd.append('location_id', locationId)
+  if (pageId) fd.append('page_id', pageId)
+  else fd.append('location_id', locationId)
   fd.append('kind', kind)
 
   let res
@@ -111,9 +117,9 @@ export async function uploadEventVideo({ file, eventId, onProgress }) {
 }
 
 async function uploadVideoDirect({
-  file, locationId, onProgress, autoplay = true,
+  file, locationId, pageId, onProgress, autoplay = true,
   signEndpoint = LANDING_SIGN_ENDPOINT,
-  signBody = (contentType) => ({ location_id: locationId, kind: 'video', content_type: contentType }),
+  signBody = (contentType) => ({ ...(pageId ? { page_id: pageId } : { location_id: locationId }), kind: 'video', content_type: contentType }),
 }) {
   if (!(file.type || '').startsWith('video/')) {
     return { success: false, error: 'Unsupported file. Please choose a video (MP4, WebM, or MOV).' }

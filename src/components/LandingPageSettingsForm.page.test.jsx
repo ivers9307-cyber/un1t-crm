@@ -10,6 +10,11 @@ import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }))
 vi.mock('@/lib/supabase', () => ({ createBrowserClient: () => ({}) }))
+const media = vi.hoisted(() => ({ upload: vi.fn(async () => ({ success: true, url: 'https://cdn/new.png' })) }))
+vi.mock('@/lib/landing-media-upload', () => ({
+  uploadLandingMedia: media.upload,
+  captureVideoPoster: async () => null,
+}))
 
 import LandingPageSettingsForm from './LandingPageSettingsForm'
 import { newBlockOfType, BLOCK_TYPES } from '@/lib/landing-page-blocks'
@@ -122,6 +127,20 @@ describe('LandingPageSettingsForm (page mode)', () => {
     const state = post.mock.calls.map(([m]) => m).find((m) => m?.type === 'state')
     expect(state).toMatchObject({ pageId: 'p-1', locationId: HATCH })
     expect(state.blocks.map((b) => b.id)).toEqual(['b-hero', 'b-pillars'])
+  })
+
+  it('page-mode uploads send page_id, never location_id', async () => {
+    media.upload.mockClear()
+    // scope='all': no primary location at all, so pageId alone must be enough.
+    const { container } = renderForm({ page: basePage({ scope: 'all', primary_location_id: null }) })
+    const input = container.querySelector('input[type=file][accept="image/png,image/jpeg,image/webp"]')
+    expect(input).toBeTruthy()
+    await act(async () => { fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } }) })
+    expect(media.upload).toHaveBeenCalledTimes(1)
+    const arg = media.upload.mock.calls[0][0]
+    expect(arg.pageId).toBe('p-1')
+    expect(arg.locationId).toBeUndefined()
+    expect(arg.kind).toBe('image')
   })
 
   it('the preview select lists enabled studios and sets &studio= on the iframe', () => {

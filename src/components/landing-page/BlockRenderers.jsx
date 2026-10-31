@@ -65,7 +65,7 @@ function Eyebrow({ children, dark = true }) {
 // FIFTYPLUS.1 — `tone` ('dark' | 'light'): a light page (/50plus) passes
 // 'light' so the one still-dark section it reuses (video testimonials)
 // renders on the pale surface. Never read from block data.
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, page = null, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false, tone = 'dark' }) {
+export default function BlockRenderer({ block, onEdit, locationId, pageId = null, publicPath, campaign, page = null, reviewsData, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', locationName = '', trial = null, trialShown = false, tone = 'dark' }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -73,9 +73,9 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     ? (path, value) => onEdit(block.id, path, value)
     : null
   // Common props bundled so we don't repeat ourselves on every
-  // block case. locationId is needed by EditableImage to attribute
-  // the upload to the right tenant.
-  const editProps = { onEdit: localOnEdit, locationId }
+  // block case. locationId (legacy) or pageId (a landing page, PAGES.1) is
+  // needed by EditableImage to attribute the upload.
+  const editProps = { onEdit: localOnEdit, locationId, pageId }
   switch (block.type) {
     case 'hero':        return <HeroBlock        block={block} {...editProps} wordmark={wordmark} ctaHref={ctaHref} ctaLabel={ctaLabel} ctaSecondaryHref={ctaSecondaryHref} ctaSecondaryLabel={ctaSecondaryLabel} trial={trial} />
     case 'booking':     return <BookingBlock     block={block} />
@@ -212,13 +212,13 @@ function HeroBackdrop({ block, wordmark = '', scrim = HERO_SCRIM }) {
 // Hero media tools — only when in edit mode. Sit top-right inside the
 // hero so they're visible without overlapping the headline. Uses the
 // same /media upload route as everything else.
-function HeroEditTools({ block, onEdit, locationId }) {
+function HeroEditTools({ block, onEdit, locationId, pageId }) {
   if (!onEdit) return null
   return (
     <HeroMediaTools
       imageUrl={block.image_url}
       videoUrl={block.video_url}
-      locationId={locationId}
+      locationId={locationId} pageId={pageId}
       onChangeImage={(url) => onEdit(['image_url'], url)}
       onChangeVideo={(url) => onEdit(['video_url'], url)}
     />
@@ -231,11 +231,11 @@ function HeroEditTools({ block, onEdit, locationId }) {
 // scroll cue or marquee: the card is the call to action. The headline is
 // mixed case so it reads as a sentence beside the card; the subtext steps
 // aside on phones so the card comes up sooner.
-function HeroTrialFirst({ block, onEdit, locationId, wordmark, trial }) {
+function HeroTrialFirst({ block, onEdit, locationId, pageId, wordmark, trial }) {
   return (
     <section id="trial" className="scroll-mt-20 relative min-h-[92svh] flex flex-col overflow-hidden bg-black text-white lp-grain">
       <HeroBackdrop block={block} wordmark={wordmark} scrim={HERO_TRIAL_SCRIM} />
-      <HeroEditTools block={block} onEdit={onEdit} locationId={locationId} />
+      <HeroEditTools block={block} onEdit={onEdit} locationId={locationId} pageId={pageId} />
 
       <div className="relative z-10 flex-1 flex items-center px-6 pt-28 pb-16 md:pt-32">
         <div className="w-full max-w-6xl mx-auto grid md:grid-cols-[1.05fr_1fr] gap-10 items-center">
@@ -284,9 +284,9 @@ function HeroTrialFirst({ block, onEdit, locationId, wordmark, trial }) {
 // the page (computed from the page's own funnel blocks) — the hero
 // never invents a target. With a `trial` (TRIALFIRST.1) it renders
 // HeroTrialFirst instead; without one this markup is unchanged.
-export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', trial = null }) {
+export function HeroBlock({ block, onEdit, locationId, pageId, ctaHref, ctaLabel, ctaSecondaryHref, ctaSecondaryLabel, wordmark = '', trial = null }) {
   if (trial) {
-    return <HeroTrialFirst block={block} onEdit={onEdit} locationId={locationId} wordmark={wordmark} trial={trial} />
+    return <HeroTrialFirst block={block} onEdit={onEdit} locationId={locationId} pageId={pageId} wordmark={wordmark} trial={trial} />
   }
   const href = ctaHref || (onEdit ? '#book' : null)
   const label = ctaLabel || 'Book a free consult'
@@ -298,7 +298,7 @@ export function HeroBlock({ block, onEdit, locationId, ctaHref, ctaLabel, ctaSec
     <section className="relative min-h-[92svh] flex flex-col overflow-hidden bg-black lp-grain">
       <HeroBackdrop block={block} wordmark={wordmark} scrim={HERO_SCRIM} />
 
-      <HeroEditTools block={block} onEdit={onEdit} locationId={locationId} />
+      <HeroEditTools block={block} onEdit={onEdit} locationId={locationId} pageId={pageId} />
 
       <div className="relative z-10 flex-1 flex items-center justify-center px-6 pt-28 pb-16 md:pt-32">
         <div className="lp-hero-stagger max-w-6xl mx-auto text-center">
@@ -624,7 +624,7 @@ export function CorpPromoStubBlock({ block }) {
   )
 }
 
-export function PillarsBlock({ block, onEdit, locationId, wordmark = '' }) {
+export function PillarsBlock({ block, onEdit, locationId, pageId, wordmark = '' }) {
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
@@ -640,7 +640,7 @@ export function PillarsBlock({ block, onEdit, locationId, wordmark = '' }) {
               body={p.body || ''}
               photoUrl={p.photo_url || null}
               onEdit={onEdit}
-              locationId={locationId}
+              locationId={locationId} pageId={pageId}
               itemIndex={i}
               delayClass={i === 1 ? 'lp-d1' : i === 2 ? 'lp-d2' : ''}
             />
@@ -651,7 +651,7 @@ export function PillarsBlock({ block, onEdit, locationId, wordmark = '' }) {
   )
 }
 
-export function GalleryBlock({ block, onEdit, locationId }) {
+export function GalleryBlock({ block, onEdit, locationId, pageId }) {
   const items = Array.isArray(block.items) ? block.items : []
   if (items.length === 0 && !onEdit) return null
   return (
@@ -673,7 +673,7 @@ export function GalleryBlock({ block, onEdit, locationId }) {
                   src={g.url}
                   alt={g.alt || ''}
                   kind="image"
-                  locationId={locationId}
+                  locationId={locationId} pageId={pageId}
                   className="absolute inset-0"
                   onChange={(url) => {
                     // null = remove this item; otherwise swap.
@@ -711,7 +711,7 @@ export function GalleryBlock({ block, onEdit, locationId }) {
               <EditableImage
                 src=""
                 kind="image"
-                locationId={locationId}
+                locationId={locationId} pageId={pageId}
                 className="absolute inset-0"
                 emptyLabel="+ Add photo"
                 onChange={(url) => {
@@ -952,7 +952,7 @@ function ReviewCard({ review }) {
   )
 }
 
-function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, delayClass = '' }) {
+function Pillar({ number, title, body, photoUrl, onEdit, locationId, pageId, itemIndex, delayClass = '' }) {
   // Show the photo region if there IS a photo OR we're in edit mode
   // (so the operator has somewhere to drop one).
   const showPhotoRegion = !!photoUrl || !!onEdit
@@ -964,7 +964,7 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, itemIndex, 
             <EditableImage
               src={photoUrl || ''}
               kind="image"
-              locationId={locationId}
+              locationId={locationId} pageId={pageId}
               onChange={(url) => onEdit(['items', itemIndex, 'photo_url'], url)}
               emptyLabel="Add pillar photo"
               className="absolute inset-0"
@@ -1030,6 +1030,7 @@ export function SiteHeader({
   logoWidthPx = 200,
   onChangeLogo = null,
   locationId = null,
+  pageId = null,
   sticky = false,
   ctaHref = null,
   ctaLabel = 'Book a free consult',
@@ -1056,7 +1057,7 @@ export function SiteHeader({
             logoUrl={logoUrl}
             logoAlt={logoAlt}
             logoWidthPx={logoWidthPx}
-            locationId={locationId}
+            locationId={locationId} pageId={pageId}
             onChange={onChangeLogo}
           />
         ) : logoUrl ? (
@@ -1105,13 +1106,13 @@ export function SiteHeader({
 // it's intimately tied to the logo's specific layout — width-driven
 // sizing with auto height, object-contain (NOT object-cover so the
 // logo isn't cropped).
-function EditableLogo({ logoUrl, logoAlt, logoWidthPx, locationId, onChange }) {
+function EditableLogo({ logoUrl, logoAlt, logoWidthPx, locationId, pageId, onChange }) {
   return (
     <LogoSwapper
       src={logoUrl}
       alt={logoAlt}
       widthPx={logoWidthPx}
-      locationId={locationId}
+      locationId={locationId} pageId={pageId}
       onChange={onChange}
     />
   )

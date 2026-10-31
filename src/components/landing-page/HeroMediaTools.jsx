@@ -17,7 +17,7 @@ import { useRef, useState } from 'react'
 import { uploadLandingMedia } from '@/lib/landing-media-upload'
 
 export default function HeroMediaTools({
-  imageUrl, videoUrl, locationId,
+  imageUrl, videoUrl, locationId, pageId = null,
   onChangeImage, onChangeVideo,
 }) {
   const imgInput = useRef(null)
@@ -67,14 +67,14 @@ export default function HeroMediaTools({
         type="file"
         accept="image/png,image/jpeg,image/webp"
         className="hidden"
-        onChange={(e) => uploadAndApply(e, 'image', locationId, onChangeImage)}
+        onChange={(e) => uploadAndApply(e, 'image', { locationId, pageId }, onChangeImage)}
       />
       <input
         ref={vidInput}
         type="file"
         accept="video/*"
         className="hidden"
-        onChange={(e) => uploadAndApply(e, 'video', locationId, onChangeVideo, setStatus)}
+        onChange={(e) => uploadAndApply(e, 'video', { locationId, pageId }, onChangeVideo, setStatus)}
       />
     </div>
   )
@@ -93,15 +93,15 @@ function ToolButton({ label, title, onClick }) {
   )
 }
 
-async function uploadAndApply(e, kind, locationId, onChange, setStatus) {
+async function uploadAndApply(e, kind, { locationId, pageId }, onChange, setStatus) {
   const file = e.target.files?.[0]
   e.target.value = ''
-  if (!file || !locationId) return
+  if (!file || !(pageId || locationId)) return
   const isVideo = kind === 'video'
   if (isVideo) setStatus?.({ phase: 'compress', percent: 0 })
   const res = await uploadLandingMedia({
     file,
-    locationId,
+    ...(pageId ? { pageId } : { locationId }),
     kind,
     onProgress: isVideo ? (p) => setStatus?.(p) : undefined,
   })

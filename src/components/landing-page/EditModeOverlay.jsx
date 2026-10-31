@@ -9,7 +9,7 @@
 // PostMessage contract (parent ↔ iframe):
 //   parent → iframe:
 //     { type: 'state', blocks, logoUrl, logoAlt, logoWidthPx,
-//       locationId, selectedBlockId }
+//       locationId, pageId?, selectedBlockId }
 //   iframe → parent:
 //     { type: 'ready' }                          — iframe mounted
 //     { type: 'block-clicked',  blockId }        — operator clicked a block
@@ -84,6 +84,9 @@ export default function EditModeOverlay({
   // it down so EditableImage / HeroMediaTools can attribute uploads
   // to the right tenant). Null until the first state message lands.
   const [locationId, setLocationId] = useState(null)
+  // PAGES.1: a landing page's id, from the same message: a page's uploads
+  // attribute to the page (a scope='all' page has no locationId at all).
+  const [pageId, setPageId] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   // Index of the gap where the "+ Insert section" picker is open
   // (number) or null if no picker is open. Tracked here so only
@@ -121,6 +124,7 @@ export default function EditModeOverlay({
         if (msg.logoAlt !== undefined)     setLogoAlt(msg.logoAlt || fallbackLogoAlt)
         if (msg.logoWidthPx !== undefined) setLogoWidthPx(msg.logoWidthPx || 200)
         if (msg.locationId !== undefined)  setLocationId(msg.locationId || null)
+        if (msg.pageId !== undefined)      setPageId(msg.pageId || null)
         if (msg.selectedBlockId !== undefined) {
           setSelectedId(msg.selectedBlockId || null)
           // Scroll the selected block into view so clicking it on the
@@ -204,6 +208,7 @@ export default function EditModeOverlay({
         logoWidthPx={logoWidthPx}
         wordmark={wordmark}
         locationId={locationId}
+        pageId={pageId}
         onChangeLogo={(url) => emitChromeEdit('logoUrl', url)}
       />
       {/* Insert-section gap before the very first block. The
@@ -255,7 +260,7 @@ export default function EditModeOverlay({
                   : 'hover:outline hover:outline-2 hover:outline-blue-300/60 hover:outline-offset-[-2px]'
               }`}
             >
-              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} wordmark={wordmark} locationName={locationName} trial={trialHere} trialShown={Boolean(trialPreview)} {...cta} />
+              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} pageId={pageId} wordmark={wordmark} locationName={locationName} trial={trialHere} trialShown={Boolean(trialPreview)} {...cta} />
               {/* Type badge — top-left, hover-revealed. */}
               <div
                 className={`absolute top-2 left-2 z-30 px-2 py-1 rounded text-[10px] uppercase tracking-wider font-semibold pointer-events-none transition-opacity ${

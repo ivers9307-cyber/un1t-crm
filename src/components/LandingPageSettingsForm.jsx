@@ -377,7 +377,9 @@ export default function LandingPageSettingsForm({
     setProgress((prev) => ({ ...prev, [key]: null }))
     const res = await uploadLandingMedia({
       file,
-      locationId,
+      // PAGES.1: a page's uploads attribute to the page (a scope='all' page has
+      // no studio); the legacy editor keeps its studio.
+      ...(pageId ? { pageId } : { locationId }),
       kind,
       autoplay,
       onProgress: (p) => setProgress((prev) => ({ ...prev, [key]: p })),

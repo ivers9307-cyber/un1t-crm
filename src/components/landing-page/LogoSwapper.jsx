@@ -22,15 +22,15 @@
 import { useRef, useState } from 'react'
 import { uploadLandingMedia } from '@/lib/landing-media-upload'
 
-export default function LogoSwapper({ src, alt, widthPx = 200, locationId, onChange }) {
+export default function LogoSwapper({ src, alt, widthPx = 200, locationId, pageId = null, onChange }) {
   const inputRef = useRef(null)
   const [hover, setHover] = useState(false)
   const [uploading, setUploading] = useState(false)
 
   async function handleFile(file) {
-    if (!file || !locationId) return
+    if (!file || !(pageId || locationId)) return
     setUploading(true)
-    const res = await uploadLandingMedia({ file, locationId, kind: 'image' })
+    const res = await uploadLandingMedia({ file, ...(pageId ? { pageId } : { locationId }), kind: 'image' })
     if (res.success && res.url) onChange?.(res.url)
     setUploading(false)
   }
