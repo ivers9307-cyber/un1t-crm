@@ -1,6 +1,6 @@
 // UN1TWRITE.18 — the class_funnel block's un1t.online copy.
 import { describe, it, expect } from 'vitest'
-import { DEFAULT_FUNNEL_TERMS_COPY, un1tFunnelCopyFromBlocks, termsLabelSegments, termsLabelText, fillCopy } from './un1t-online-funnel-copy'
+import { DEFAULT_FUNNEL_TERMS_COPY, un1tFunnelCopyFromBlocks, un1tFunnelCopyFromTerms, un1tTermsPayload, termsLabelSegments, termsLabelText, fillCopy } from './un1t-online-funnel-copy'
 
 const CAPACITY = /spot|capacity|space|place|seat|full|left|remaining/i
 
@@ -20,6 +20,27 @@ describe('un1tFunnelCopyFromBlocks', () => {
     const out = un1tFunnelCopyFromBlocks([{ type: 'hero' }, { type: 'class_funnel', terms_label: '  ', terms_required_message: ' Tick it. ' }])
     expect(out.terms_label).toBe(DEFAULT_FUNNEL_TERMS_COPY.terms_label)
     expect(out.terms_required_message).toBe('Tick it.')
+  })
+})
+
+// PAGES.1 — a studio page keeps the five words on chrome.un1t_terms, a plain
+// object rather than a class_funnel block: the same blank-is-default rule.
+describe('un1tFunnelCopyFromTerms', () => {
+  it('blank or absent keys fall back to defaults; set keys win; junk is all defaults', () => {
+    expect(un1tFunnelCopyFromTerms({})).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(un1tFunnelCopyFromTerms(null)).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(un1tFunnelCopyFromTerms('nope')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    const out = un1tFunnelCopyFromTerms({ terms_label: ' Mine {terms} ', waiver_link_label: '   ', terms_required_message: 7 })
+    expect(out).toEqual({ ...DEFAULT_FUNNEL_TERMS_COPY, terms_label: 'Mine {terms}' })
+  })
+
+  it('un1tTermsPayload takes the terms object beside the blocks form, with the same output', () => {
+    const terms = { terms_label: 'CUSTOM {studio_name} {terms}', terms_link_label: 'the rules' }
+    const fromTerms = un1tTermsPayload({ terms, studioName: 'Hatch Street', publicPath: 'hatch-street' })
+    const fromBlocks = un1tTermsPayload({ blocks: [{ type: 'class_funnel', ...terms }], studioName: 'Hatch Street', publicPath: 'hatch-street' })
+    expect(fromTerms).toEqual(fromBlocks)
+    expect(fromTerms).toMatchObject({ required: true, label: 'CUSTOM Hatch Street {terms}', terms_link_label: 'the rules', terms_url: '/legal/un1t/hatch-street/terms', waiver_url: '/legal/un1t/hatch-street/waiver' })
+    expect(un1tTermsPayload({ terms: {}, studioName: '', publicPath: 'x' }).label).toBe("I accept the studio's {terms} and {waiver}")
   })
 })
 

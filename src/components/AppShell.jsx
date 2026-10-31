@@ -14,6 +14,7 @@ import { hasPermission } from '@/lib/permissions'
 import { isAccountTierPath } from '@/lib/account-nav'
 import { isPlatformTierPath } from '@/lib/platform-nav'
 import { PLATFORM_NAME } from '@/lib/brand-name'
+import { publicPageSegmentMatches } from '@/lib/page-slug'
 // PERF.3 — Vercel SpeedInsights + Analytics mount in the authenticated
 // branch below (NOT the root layout) so /login and the public booking/
 // payment surfaces don't pay for the two analytics bundles pre-auth.
@@ -81,7 +82,16 @@ import UsageTracker from './UsageTracker'
 // reschedule); covered by '/book', listed so the flow survives a narrowing.
 const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done', '/fee-appeal', '/pay-link']
 
-export default function AppShell({ user, children, isLinkedHost = false, isPublicPage = false }) {
+// PAGES.1 — `isPublicPage` is the proxy's x-public-page header, read ONCE by
+// the root layout, so it is stale after a soft navigation (a <Link> from an
+// in-code public page to a database page). `publicPageSlugs` (the host
+// organisation's page slugs, from AppShellServer) lets this gate admit a
+// database page on its own: the first segment against the list, by the same
+// pure rule the proxy uses (publicPageSegmentMatches; never a reserved
+// segment). The root layout is not re-rendered on a soft navigation, so the
+// header describes the visit's first page; the list is the same for every
+// path, so it still answers after a client hop.
+export default function AppShell({ user, children, isLinkedHost = false, isPublicPage = false, publicPageSlugs = [] }) {
   const pathname = usePathname()
   const router = useRouter()
   // Hooks must run before any early return — keep them at the top so the
@@ -96,7 +106,7 @@ export default function AppShell({ user, children, isLinkedHost = false, isPubli
   // d184209; surfaced during the 2026-06 redesign verification). The
   // CRM host is unaffected: src/app/page.js already server-redirects
   // '/' to /login or the dashboard before this client gate ever runs.
-  const isPublic = pathname === '/' || isPublicPage || PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
+  const isPublic = pathname === '/' || isPublicPage || publicPageSegmentMatches(pathname, publicPageSlugs) || PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
 
   // Protected route but no resolved user (expired/unresolved session, or
   // a transient profile-fetch miss in getCurrentUser). Previously the

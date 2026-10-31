@@ -13,30 +13,29 @@
 //
 // Fail-safe contract (the proxy runs on EVERY request): a slow, down or
 // erroring DB answers the in-code fallback for the organisation (UN1T Group:
-// the five campaign slugs that were code routes before this module existed;
-// any other org: none) and CACHES that answer for the TTL, so an outage costs
-// one attempt a minute, never one per request, and /trial stays public
-// through it.
+// the five campaign slugs that were code routes before this module existed,
+// and its two studio pages; any other org: none) and CACHES that answer for
+// the TTL, so an outage costs one attempt a minute, never one per request,
+// and /trial and /stillorgan stay public through it.
 //
-// PR1 scope: only CAMPAIGN pages are admitted here. The studio pages
-// (/stillorgan, /hatch-street) are still served by the next.config rewrites
-// to /welcome and listed in PUBLIC_PATHS / publicPaths, so on the CRM host
-// they behave exactly as before (the login redirect). PR3 lifts this with the
-// studio pages.
+// Every page kind is admitted (PR3): a studio page (/stillorgan,
+// /hatch-street, and /<slug>/events, /<slug>/status under it) is served by the
+// one [slug] route like a campaign page. AppShellServer also hands this list
+// to AppShell, whose client gate needs it on a soft navigation, when the
+// proxy's x-public-page header (read once by the root layout) is stale.
 //
 // The design is docs/superpowers/specs/2026-10-30-landing-pages-editor-design.md.
 
 import { resolveBrand, UN1T_GROUP_ORG_ID, isFrameworkAsset } from '@/lib/brands'
 import { resolveTenantOrgId, makeEdgeClient } from '@/lib/tenant-domains-edge'
-import { RESERVED_PAGE_SLUGS } from '@/lib/page-slug'
+import { publicPageSegmentMatches } from '@/lib/page-slug'
 
 export const PUBLIC_PAGES_CACHE_TTL_MS = 60_000
 
-// The campaign slugs UN1T Group served from code routes before they were
-// database rows. PR3 lifts this with the studio pages (stillorgan,
-// hatch-street join the list when the studio pages move to landing_pages).
+// The slugs UN1T Group serves as pages: the campaign slugs that were code
+// routes before they were database rows, and its two studio pages.
 export const PUBLIC_PAGE_SLUGS_FALLBACK = Object.freeze({
-  [UN1T_GROUP_ORG_ID]: Object.freeze(['trial', '50plus', 'corp', 'start', 'free-class']),
+  [UN1T_GROUP_ORG_ID]: Object.freeze(['trial', '50plus', 'corp', 'start', 'free-class', 'stillorgan', 'hatch-street']),
 })
 
 // A page is public once it is live, announced as coming soon, or retired (a
@@ -73,8 +72,6 @@ export async function listPublicPageSlugs(orgId, { db = null, nowMs = Date.now()
       .from('landing_pages')
       .select('slug')
       .eq('organization_id', orgId)
-      // PR1: campaign pages only; PR3 lifts this with the studio pages.
-      .eq('kind', 'campaign')
       .in('publish_state', PUBLIC_PUBLISH_STATES)
     if (error || !Array.isArray(data)) throw new Error('landing_pages read failed')
     slugs = data.map((r) => r.slug).filter((s) => typeof s === 'string' && s)
@@ -87,20 +84,14 @@ export async function listPublicPageSlugs(orgId, { db = null, nowMs = Date.now()
 }
 
 /**
- * True when the path's FIRST segment is one of the slugs. Exact on the
- * segment (`/trialx` is not `/trial`); `/`, an empty segment and framework
- * assets are never pages, and neither is a reserved app segment
- * (RESERVED_PAGE_SLUGS): a row slugged `settings` or `cars` (a hand-made row,
- * or one written before the name was reserved) must never open /settings or
- * /cars/<id> to the public.
+ * True when the path's FIRST segment is one of the slugs (and not a framework
+ * asset): the segment rule is publicPageSegmentMatches (page-slug.js), shared
+ * with AppShell, so `/trialx` is not `/trial` and a reserved app segment
+ * (RESERVED_PAGE_SLUGS) is never a page even when the DB list names it.
  */
 export function isPublicPagePath(pathname, slugs) {
-  if (typeof pathname !== 'string' || !pathname.startsWith('/') || !Array.isArray(slugs) || !slugs.length) return false
-  if (isFrameworkAsset(pathname)) return false
-  const segment = pathname.slice(1).split('/')[0]
-  if (!segment || segment.startsWith('_')) return false
-  if (RESERVED_PAGE_SLUGS.has(segment)) return false
-  return slugs.includes(segment)
+  if (typeof pathname !== 'string' || isFrameworkAsset(pathname)) return false
+  return publicPageSegmentMatches(pathname, slugs)
 }
 
 // The request header AppShell reads (via AppShellServer) so its client-side

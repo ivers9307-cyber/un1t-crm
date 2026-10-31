@@ -27,7 +27,7 @@ import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin, adminOrganizationIds } from '@/lib/org-admin'
 import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/landing-page-schemas'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
-import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
+import { un1tFunnelCopyFromTerms } from '@/lib/un1t-online-funnel-copy'
 import { logWarn, logError } from '@/lib/log'
 
 // The edge-safe half lives in its own module so the proxy can import it.
@@ -42,7 +42,7 @@ export const isPageVisible = (state) => state === 'live'
 export const isPageReachable = (state) => ['live', 'coming_soon', 'retired'].includes(state)
 
 export const PAGE_COLUMNS = 'id, organization_id, slug, title, kind, scope, primary_location_id, offer_type, blocks, chrome, publish_state, redirect_to, updated_at'
-export const STUDIO_ROW_COLUMNS = 'page_id, location_id, enabled, offer, attribution, sort_order, locations:location_id ( id, name, membership_source, settings )'
+export const STUDIO_ROW_COLUMNS = 'page_id, location_id, enabled, offer, attribution, sort_order, locations:location_id ( id, name, membership_source, settings, timezone )'
 
 export class PageReadError extends Error {
   constructor(message, cause) {
@@ -145,27 +145,28 @@ async function legacyPathForLocation(db, locationId) {
 }
 
 /**
- * PR1 legacy, deleted in PR3 with the two helpers above: the un1t.online
- * terms-tick wording of a studio (UN1T_FUNNEL_COPY_KEYS), read where /trial
- * and /corp read it today, the class_funnel block on the studio's
- * landing_page_settings row. mig 792 also copies it to the studio page's
- * `chrome.un1t_terms`, which PR3 switches to. Never throws: a miss or a failed
- * read answers the defaults (logged with the id only).
+ * The un1t.online terms-tick wording of a studio (UN1T_FUNNEL_COPY_KEYS): the
+ * studio page's `chrome.un1t_terms` (the kind='studio' row whose primary is
+ * the location; mig 792 copied the legacy class_funnel wording there). Never
+ * throws: a miss or a failed read answers the defaults (logged with the id
+ * only), and each blank key is its default (un1tFunnelCopyFromTerms).
  * @returns {Promise<object>} every UN1T_FUNNEL_COPY_KEYS key, resolved
  */
 export async function studioTermsCopy(db, locationId) {
-  if (!locationId) return un1tFunnelCopyFromBlocks(null)
+  if (!locationId) return un1tFunnelCopyFromTerms(null)
   try {
     const { data, error } = await db
-      .from('landing_page_settings')
-      .select('blocks')
-      .eq('location_id', locationId)
+      .from('landing_pages')
+      .select('chrome')
+      .eq('kind', 'studio')
+      .eq('primary_location_id', locationId)
       .maybeSingle()
-    if (error) throw Object.assign(new Error('landing row unreadable'), { code: error.code ?? null })
-    return un1tFunnelCopyFromBlocks(Array.isArray(data?.blocks) ? data.blocks : null)
+    if (error) throw Object.assign(new Error('studio page unreadable'), { code: error.code ?? null })
+    const chrome = data?.chrome && typeof data.chrome === 'object' ? data.chrome : null
+    return un1tFunnelCopyFromTerms(chrome?.un1t_terms)
   } catch (err) {
     logWarn('landing-pages', 'studio terms copy unreadable; defaults used', { locationId, code: err?.code ?? null })
-    return un1tFunnelCopyFromBlocks(null)
+    return un1tFunnelCopyFromTerms(null)
   }
 }
 

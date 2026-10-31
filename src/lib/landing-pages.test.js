@@ -250,13 +250,17 @@ describe('landing-pages', () => {
     expect(await publicOrgIdForHost('')).toBe('org-un1t')
   })
 
-  it('studioTermsCopy reads the class_funnel terms wording off the legacy row by location; defaults on a miss, an error or a throw', async () => {
-    const db = makeDb({ landing_page_settings: { single: { data: { blocks: [{ type: 'hero' }, { type: 'class_funnel', terms_label: 'CUSTOM {studio_name}' }] }, error: null } } })
+  it('studioTermsCopy reads the studio page\'s chrome.un1t_terms by location (never landing_page_settings); defaults on a miss, an error or a throw', async () => {
+    const db = makeDb({ landing_pages: { single: { data: { chrome: { logo_url: 'x', un1t_terms: { terms_label: 'CUSTOM {studio_name}', waiver_link_label: '  ' } } }, error: null } } })
     const got = await studioTermsCopy(db, 'loc-h')
     expect(got).toEqual({ ...DEFAULT_FUNNEL_TERMS_COPY, terms_label: 'CUSTOM {studio_name}' })
-    expect(db.calls[0]).toMatchObject({ table: 'landing_page_settings', select: 'blocks', eq: [['location_id', 'loc-h']] })
+    expect(db.calls).toHaveLength(1)
+    expect(db.calls[0]).toMatchObject({ table: 'landing_pages', select: 'chrome', eq: [['kind', 'studio'], ['primary_location_id', 'loc-h']] })
+    // An empty un1t_terms (today's rows) and a page with no chrome are the defaults.
+    expect(await studioTermsCopy(makeDb({ landing_pages: { single: { data: { chrome: { un1t_terms: {} } }, error: null } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy(makeDb({ landing_pages: { single: { data: { chrome: null }, error: null } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy(makeDb({}), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
-    expect(await studioTermsCopy(makeDb({ landing_page_settings: { single: { data: null, error: { code: 'XX', message: 'secret' } } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+    expect(await studioTermsCopy(makeDb({ landing_pages: { single: { data: null, error: { code: 'XX', message: 'secret' } } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy({ from: () => { throw new Error('net') } }, 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy(makeDb({}), null)).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
   })

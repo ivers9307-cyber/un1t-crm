@@ -1,6 +1,7 @@
 import { headers } from 'next/headers'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { listPublicPageSlugs, publicOrgIdForHost } from '@/lib/public-pages-edge'
 import AppShell from './AppShell'
 
 export default async function AppShellServer({ children }) {
@@ -18,6 +19,17 @@ export default async function AppShellServer({ children }) {
   // PAGES.1 — the proxy stamps x-public-page: 1 on a request it admitted as a
   // landing_pages row (and deletes any copy a client sent), so the client shell
   // renders that page bare instead of bouncing the visitor to /login.
-  const isPublicPage = (await headers()).get('x-public-page') === '1'
-  return <AppShell user={user} isLinkedHost={isLinkedHost} isPublicPage={isPublicPage}>{children}</AppShell>
+  const requestHeaders = await headers()
+  const isPublicPage = requestHeaders.get('x-public-page') === '1'
+  // The header is read once per document; a soft navigation keeps the old
+  // one. The host organisation's page slugs (cached 60 s per org, the
+  // in-code fallback on a failed read) let AppShell admit a page by its
+  // first segment after a client hop too. Never blocks the shell.
+  let publicPageSlugs = []
+  try {
+    publicPageSlugs = await listPublicPageSlugs(await publicOrgIdForHost(requestHeaders.get('host')))
+  } catch {
+    publicPageSlugs = []
+  }
+  return <AppShell user={user} isLinkedHost={isLinkedHost} isPublicPage={isPublicPage} publicPageSlugs={publicPageSlugs}>{children}</AppShell>
 }

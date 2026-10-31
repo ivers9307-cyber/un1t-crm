@@ -2,7 +2,7 @@
 // an offer type takes, where a retired page sends its visitors, and what a
 // sub-path under a page slug means.
 import { describe, it, expect } from 'vitest'
-import { layoutFor, redirectTarget, pageSubpath } from './landing-page-render.js'
+import { layoutFor, redirectTarget, pageSubpath, legacyStudioRedirect } from './landing-page-render.js'
 
 const page = (over = {}) => ({ slug: 'x', kind: 'campaign', offer_type: 'none', redirect_to: null, ...over })
 
@@ -13,6 +13,12 @@ describe('layoutFor', () => {
     expect(layoutFor('promo_credits')).toBe('frosted')
     expect(layoutFor('one_class')).toBe('one_class')
     expect(layoutFor('none')).toBe('blocks')
+  })
+  it('a studio page is always the blocks layout, whatever its offer type (TRIALFIRST puts the card in its hero)', () => {
+    expect(layoutFor('paid_trial', 'studio')).toBe('blocks')
+    expect(layoutFor('one_class', 'studio')).toBe('blocks')
+    expect(layoutFor('none', 'studio')).toBe('blocks')
+    expect(layoutFor('paid_trial', 'campaign')).toBe('frosted')
   })
   it('an unknown or missing type is the plain blocks layout', () => {
     expect(layoutFor('lead_form')).toBe('blocks')
@@ -62,16 +68,39 @@ describe('redirectTarget', () => {
 })
 
 describe('pageSubpath', () => {
-  it('pageSubpath: /corp/hatch-3-free is a promo; /50plus/x is unknown; /stillorgan/events is unknown in PR1', () => {
+  it('pageSubpath: /corp/hatch-3-free is a promo; /50plus/x is unknown; a studio page serves events and status, nothing else', () => {
     expect(pageSubpath(page({ slug: 'corp', offer_type: 'promo_credits' }), ['hatch-3-free'])).toEqual({ kind: 'promo', key: 'hatch-3-free' })
     expect(pageSubpath(page({ slug: '50plus', offer_type: 'one_class' }), ['x'])).toEqual({ kind: 'unknown' })
-    expect(pageSubpath(page({ slug: 'stillorgan', kind: 'studio', offer_type: 'paid_trial' }), ['events'])).toEqual({ kind: 'unknown' })
-    expect(pageSubpath(page({ slug: 'stillorgan', kind: 'studio', offer_type: 'paid_trial' }), ['status'])).toEqual({ kind: 'unknown' })
+    const studio = page({ slug: 'stillorgan', kind: 'studio', offer_type: 'paid_trial' })
+    expect(pageSubpath(studio, ['events'])).toEqual({ kind: 'events' })
+    expect(pageSubpath(studio, ['status'])).toEqual({ kind: 'status' })
+    expect(pageSubpath(studio, ['x'])).toEqual({ kind: 'unknown' })
+    expect(pageSubpath(studio, ['events', 'x'])).toEqual({ kind: 'unknown' })
+    expect(pageSubpath(studio, ['Events'])).toEqual({ kind: 'unknown' })
+    // events / status are a studio page's: a campaign page does not serve them.
+    expect(pageSubpath(page({ slug: 'january' }), ['events'])).toEqual({ kind: 'unknown' })
+    expect(pageSubpath(page({ slug: 'corp', offer_type: 'promo_credits' }), ['status'])).toEqual({ kind: 'promo', key: 'status' })
   })
   it('no sub-path is the root; two segments under a promo page are unknown', () => {
     expect(pageSubpath(page(), undefined)).toEqual({ kind: 'root' })
     expect(pageSubpath(page(), [])).toEqual({ kind: 'root' })
     expect(pageSubpath(page({ offer_type: 'promo_credits' }), ['a', 'b'])).toEqual({ kind: 'unknown' })
     expect(pageSubpath(page({ offer_type: 'promo_credits' }), [''])).toEqual({ kind: 'unknown' })
+  })
+})
+
+describe('legacyStudioRedirect', () => {
+  it('/welcome/<path>[/events|/status] goes to /<path>[/sub] with the query kept verbatim', () => {
+    expect(legacyStudioRedirect('stillorgan', null, { utm_source: 'ig', purchase: 'abc' })).toBe('/stillorgan?utm_source=ig&purchase=abc')
+    expect(legacyStudioRedirect('hatch-street', 'events', {})).toBe('/hatch-street/events')
+    expect(legacyStudioRedirect('hatch-street', 'status', { a: ['1', '2'] })).toBe('/hatch-street/status?a=1&a=2')
+    expect(legacyStudioRedirect('stillorgan', null, new URLSearchParams('edit=1&x=%20y'))).toBe('/stillorgan?edit=1&x=+y')
+  })
+  it('anything that is not a slug is null (the route answers 404, never an off-site redirect)', () => {
+    expect(legacyStudioRedirect('//evil.com', null, {})).toBeNull()
+    expect(legacyStudioRedirect('/evil', null, {})).toBeNull()
+    expect(legacyStudioRedirect('Bad Path', null, {})).toBeNull()
+    expect(legacyStudioRedirect(undefined, null, {})).toBeNull()
+    expect(legacyStudioRedirect('stillorgan', 'other', {})).toBeNull()
   })
 })

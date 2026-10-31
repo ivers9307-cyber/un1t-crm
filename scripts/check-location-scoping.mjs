@@ -239,7 +239,7 @@ const SCOPING_HELPERS = [
   // active studio's organisation (orgLocationIdsFor → siblingLocationIds); a
   // lookup error narrows to the active studio alone. Verified in
   // src/app/(members)/events/page.js, src/app/api/events/route.js and
-  // src/app/welcome/[location]/events/page.js.
+  // src/components/landing-page/StudioEventsPage.jsx.
   'sharedEventsOrFilterFor(',
   // src/lib/permissions.js — permission check evaluated AT a specific
   // location (the fetch-row-then-check-its-location approvals pattern).
@@ -472,10 +472,6 @@ export const EXEMPT = {
   'src/app/welcome/page.js': {
     landing_page_settings:
       'Public split-chooser: renders every location\'s published chooser tiles by design; the ?edit=1 seed reads the most-recently-edited row but only previews the same published marketing content.',
-  },
-  'src/app/welcome/[location]/status/page.js': {
-    landing_page_settings:
-      'Public status page: public_path → location resolution (the path IS the published tenant selector); renders only the coy member view from buildStatusView(), never internal detail.',
   },
 
   // The first page scan's four real findings needed NO exemption in the end:
