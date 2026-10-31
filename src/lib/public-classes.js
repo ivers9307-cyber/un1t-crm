@@ -84,9 +84,24 @@ export function isClassHidden(name, keywords) {
   return keywords.some((k) => n.includes(k))
 }
 
+// FIFTYPLUS.1 — the campaign ALLOW-list (a campaign_funnel block's
+// class_keywords): null means "no allow-list, every class"; an array keeps
+// only a class whose name contains ANY keyword (case-insensitive), and an
+// EMPTY array keeps nothing, so a page whose operator blanked the list offers
+// nothing rather than the whole timetable. Applied after isClassHidden on
+// every branch of readPublicClasses, and by the booking route on the same
+// read, so a class outside the list can be neither seen nor booked.
+export function isClassAllowed(name, allowKeywords) {
+  if (allowKeywords == null) return true
+  if (!Array.isArray(allowKeywords) || allowKeywords.length === 0) return false
+  const n = String(name || '').toLowerCase()
+  return allowKeywords.some((k) => n.includes(String(k).toLowerCase()))
+}
+
 /**
  * Resolve a location's live, bookable classes for the next `days` days.
- * Never throws.
+ * Never throws. `opts.allowKeywords` (FIFTYPLUS.1): null lists every class;
+ * an array keeps only the classes isClassAllowed admits, after the deny-list.
  * @returns {Promise<{ classes: object[], error: (string|null) }>}
  *   error 'glofox_settings_unreadable' — the studio's Glofox settings could
  *     not be READ (a DB blip): not "no classes", not "not configured".
@@ -106,10 +121,10 @@ export function isClassHidden(name, keywords) {
  *   class_funnel block (MANUALFUNNEL.1), or { classes: [], error: null } when
  *   it has none.
  */
-export async function readPublicClasses(db, locationId, days = 7) {
+export async function readPublicClasses(db, locationId, days = 7, { allowKeywords = null } = {}) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   if (creds.readError) return { classes: [], error: creds.readError }
-  if (missingGlofoxCredentialsForLocation(creds).length) return readNoGlofoxClasses(db, locationId, days)
+  if (missingGlofoxCredentialsForLocation(creds).length) return readNoGlofoxClasses(db, locationId, days, { allowKeywords })
   // REGISTRYREAD.1a: the deny-list rides on the SAME read as the credentials.
   // A second read used to fail OPEN — a blip answered {} and listed (and let
   // the funnel book) every hidden class.
@@ -128,6 +143,7 @@ export async function readPublicClasses(db, locationId, days = 7) {
     .filter((e) => !isEventFull(e))
     .map((e) => shapePublicClass(e, zone))
     .filter((c) => !isClassHidden(c.name, hidden))
+    .filter((c) => isClassAllowed(c.name, allowKeywords))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   return { classes, error: null }
 }
@@ -143,19 +159,20 @@ export async function readPublicClasses(db, locationId, days = 7) {
 // Street) lists its REAL timetable instead: the classes the un1t.online sync
 // mirrored into un1t_events. The hand-written text is not read for it at all,
 // because it drifts from what the studio actually runs.
-async function readNoGlofoxClasses(db, locationId, days) {
+async function readNoGlofoxClasses(db, locationId, days, { allowKeywords = null } = {}) {
   const { data, error } = await db.from('landing_page_settings')
     .select('blocks').eq('location_id', locationId).maybeSingle()
   if (error) return { classes: [], error: 'manual_timetable_unreadable' }
   const source = await readUn1tListingSource(db, locationId)
   if (source.error) return { classes: [], error: source.error }
-  if (source.un1t) return readUn1tClasses(db, locationId, days, { blocks: data?.blocks, hidden: source.hidden })
+  if (source.un1t) return readUn1tClasses(db, locationId, days, { blocks: data?.blocks, hidden: source.hidden, allowKeywords })
   const cfg = manualTimetableConfigFromBlocks(data?.blocks)
   if (!cfg) return { classes: [], error: null }
   const zone = await readListingZone(db, locationId)
   if (!zone) return { classes: [], error: 'location_zone_unreadable' }
   const { slots } = parseManualTimetable(cfg.text)
   const classes = manualClassOccurrences({ slots, startDate: cfg.startDate, minNoticeHours: cfg.minNoticeHours, days, zone })
+    .filter((c) => isClassAllowed(c.name, allowKeywords))
   return { classes, error: null }
 }
 
@@ -199,7 +216,7 @@ async function readUn1tListingSource(db, locationId) {
 // The window matches the Glofox read (at most 14 days); un1t.online runs ~60
 // classes a fortnight, so 200 rows is never the binding limit.
 const UN1T_LISTING_LIMIT = 200
-async function readUn1tClasses(db, locationId, days, { blocks, hidden }) {
+async function readUn1tClasses(db, locationId, days, { blocks, hidden, allowKeywords = null }) {
   const nowMs = Date.now()
   const fromMs = nowMs + classFunnelMinNoticeHours(blocks) * 3_600_000
   const toMs = nowMs + Math.min(14, Math.max(1, days)) * 86_400_000
@@ -230,6 +247,7 @@ async function readUn1tClasses(db, locationId, days, { blocks, hidden }) {
     .filter((e) => !isUn1tEventFull(e))
     .map((e) => shapeUn1tPublicClass(e, zone))
     .filter((c) => !isClassHidden(c.name, hidden))
+    .filter((c) => isClassAllowed(c.name, allowKeywords))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   return { classes, error: null }
 }

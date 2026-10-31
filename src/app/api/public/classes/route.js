@@ -3,10 +3,17 @@
 // (display-safe data only); rate-limited. Location is resolved ONLY from an
 // existing landing_page_settings.public_path (defaults to 'stillorgan'), so no
 // arbitrary location can be queried. Unknown/absent path → empty list.
+//
+// FIFTYPLUS.1 — `&campaign=<key>` lists through the row's campaign_funnel
+// block for that key instead: its allow-list over 14 days (the Glofox read's
+// ceiling), and `data.campaign.configured` says whether the block has its
+// trial pair, so the page can say booking is not open before anyone types.
+// An unknown key answers nothing, never the whole timetable.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
-import { listPublicClasses } from '@/lib/public-classes'
+import { listPublicClasses, readPublicClasses } from '@/lib/public-classes'
+import { resolveCampaignKey, campaignFunnelBlock, campaignFunnelConfig } from '@/lib/campaign-funnel'
 import { resolveLandingPath } from '@/lib/public-landing'
 import { logWarn } from '@/lib/log'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
@@ -31,24 +38,46 @@ async function termsFor(db, page) {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const CAMPAIGN_DAYS = 14
+
+// The campaign list: the block's allow-list over the full window. A timetable
+// the studio could not READ (a Glofox or settings blip) is flagged, so the
+// card says "try again in a minute" rather than "no classes": a paid click
+// told there is nothing to book leaves.
+async function listCampaignClasses(db, page, path, key) {
+  const block = campaignFunnelBlock(page.blocks, key)
+  if (!block) return { classes: [], campaign: { configured: false, timetable_unavailable: false } }
+  const cfg = campaignFunnelConfig(block, { landingPath: path })
+  const { classes, error } = await readPublicClasses(db, page.location_id, CAMPAIGN_DAYS, { allowKeywords: cfg.allowKeywords })
+  return { classes, campaign: { configured: cfg.configured, timetable_unavailable: Boolean(error) } }
+}
+
 export async function GET(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
   // SAAS-6: tenant-keyed by the RESOLVED landing path (defaults to 'stillorgan'
   // when absent) so one location's polling can't exhaust another's window for
   // the same IP. resolveLandingPath never throws, so it's safe above the try.
-  const path = resolveLandingPath(new URL(request.url).searchParams.get('path'))
+  const params = new URL(request.url).searchParams
+  const path = resolveLandingPath(params.get('path'))
+  const campaignKey = resolveCampaignKey(params.get('campaign'))
   const limit = await checkRateLimit(db, `pubclasses:${path}:${ip}`, { max: 30, windowMs: 5 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
 
   try {
     const { data: page } = await db.from('landing_page_settings')
       .select('location_id, public_path, blocks').eq('public_path', path).maybeSingle()
-    if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [] } })
+    // A campaign page with no row to read is "not open", not "no classes".
+    if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false, timetable_unavailable: false } } : {}) } })
+    if (campaignKey) {
+      const [listed, terms] = await Promise.all([listCampaignClasses(db, page, path, campaignKey), termsFor(db, page)])
+      return NextResponse.json({ success: true, data: { classes: listed.classes, terms, campaign: listed.campaign } })
+    }
     const [classes, terms] = await Promise.all([listPublicClasses(db, page.location_id, 7), termsFor(db, page)])
     return NextResponse.json({ success: true, data: { classes, terms } })
   } catch (e) {
     logWarn('public-classes', 'list failed', { err: e })
-    return NextResponse.json({ success: true, data: { classes: [] } })
+    // A list that threw: the page cannot tell, so say the timetable could not be read.
+    return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: true, timetable_unavailable: true } } : {}) } })
   }
 }

@@ -13,7 +13,7 @@ vi.mock('@/lib/location-time', async (importOriginal) => ({
   ...(await importOriginal()),
   getLocationZone: vi.fn(async () => 'Europe/Dublin'),
 }))
-import { shapePublicClass, listPublicClasses, readPublicClasses, parseHiddenKeywords, isClassHidden, isEventFull, PUBLIC_CLASS_KEYS } from './public-classes'
+import { shapePublicClass, listPublicClasses, readPublicClasses, parseHiddenKeywords, isClassHidden, isClassAllowed, isEventFull, PUBLIC_CLASS_KEYS } from './public-classes'
 import { fetchUpcomingEvents, glofoxCredentialsForLocation } from '@/lib/glofox'
 
 // db stub for listPublicClasses' settings read (db.from('locations')...maybeSingle()).
@@ -356,5 +356,46 @@ describe('readPublicClasses — un1t.online timetable (no Glofox)', () => {
     const out = await readPublicClasses(db, 'L', 7)
     expect(out.classes.map((c) => c.event_id)).toEqual(['e1'])
     expect(reads).toEqual([])
+  })
+})
+
+describe('FIFTYPLUS.1 — allowKeywords', () => {
+  const events = [
+    { _id: 'a', name: 'THE 50+ CLUB', time_start: 4102444800, active: true, private: false },
+    { _id: 'b', name: 'S&C', time_start: 4102448400, active: true, private: false },
+    { _id: 'c', name: 'ELITES 50+ open gym', time_start: 4102452000, active: true, private: false },
+  ]
+  it('keeps only classes matching any keyword, case-insensitively', async () => {
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events })
+    const r = await readPublicClasses(makeDb({}), 'loc-1', 14, { allowKeywords: ['50+'] })
+    expect(r.error).toBe(null)
+    expect(r.classes.map((c) => c.event_id)).toEqual(['a', 'c'])
+  })
+  it('deny-list applies before the allow-list', async () => {
+    glofoxCredentialsForLocation.mockResolvedValueOnce({ branchId: 'b', apiKey: 'k', apiToken: 't', hiddenClassKeywords: 'open gym' })
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events })
+    const r = await readPublicClasses(makeDb({}), 'loc-1', 14, { allowKeywords: ['50+'] })
+    expect(r.classes.map((c) => c.event_id)).toEqual(['a'])
+  })
+  it('an empty allow-list offers nothing', async () => {
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events })
+    const r = await readPublicClasses(makeDb({}), 'loc-1', 14, { allowKeywords: [] })
+    expect(r).toEqual({ classes: [], error: null })
+  })
+  it('an unreadable timetable still reports the error under an allow-list', async () => {
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: false })
+    const r = await readPublicClasses(makeDb({}), 'loc-1', 14, { allowKeywords: ['50+'] })
+    expect(r.error).toBe('glofox_unreachable')
+  })
+  it("null keeps every class (today's behaviour)", async () => {
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events })
+    const r = await readPublicClasses(makeDb({}), 'loc-1', 14)
+    expect(r.classes).toHaveLength(3)
+  })
+  it('isClassAllowed', () => {
+    expect(isClassAllowed('THE 50+ CLUB', ['50+'])).toBe(true)
+    expect(isClassAllowed('S&C', ['50+'])).toBe(false)
+    expect(isClassAllowed('S&C', null)).toBe(true)
+    expect(isClassAllowed('S&C', [])).toBe(false)
   })
 })

@@ -49,6 +49,7 @@ import { parseManualTimetable, DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-tim
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
+import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -72,6 +73,9 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
   const [expanded, setExpanded] = useState(() => new Set(blocks.map((b) => b.id)))
   const [activeDragId, setActiveDragId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  // FIFTYPLUS.1 — why the last "+ Add section" was refused (a second
+  // campaign_funnel with the same key), shown under the picker.
+  const [addNotice, setAddNotice] = useState(null)
 
   // Site chrome (mig 129) — logo lives outside the blocks array
   // because it always renders regardless of section ordering.
@@ -248,6 +252,9 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
   }
   function addBlock(type) {
     const block = newBlockOfType(type, { brand: brandName })
+    const refusal = campaignFunnelAddRefusal(blocks, block)
+    if (refusal) { setAddNotice(refusal); return }
+    setAddNotice(null)
     setBlocks((prev) => [...prev, block])
     setExpanded((prev) => new Set(prev).add(block.id))
     setPickerOpen(false)
@@ -496,6 +503,7 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
         >
           <Plus size={14} /> Add section
         </button>
+        {addNotice && <p className="mt-2 text-xs text-red-700" role="alert">{addNotice}</p>}
         {pickerOpen && (
           <div className="absolute z-30 left-0 right-0 mt-2 bg-un1t-surface border border-un1t-border rounded-lg shadow-xl p-2 grid grid-cols-1 md:grid-cols-2 gap-1">
             {BLOCK_TYPES.map((t) => (
@@ -680,8 +688,18 @@ function summaryFor(block) {
       const n = (block.items || []).filter((it) => it && it.video_url).length
       return `${n} video${n === 1 ? '' : 's'}`
     }
+    case 'campaign_funnel': return `/${block.campaign || '?'} · ${block.trial_membership_id && block.trial_plan_code ? 'trial set' : 'NO TRIAL SET'}`
     default:            return ''
   }
+}
+
+// FIFTYPLUS.1 — one campaign_funnel per campaign key on a row: its page reads
+// the FIRST block for the key, so a second would be edited and never shown.
+// Exported for its test (CampaignFunnelEdit.test.jsx).
+export function campaignFunnelAddRefusal(blocks, block) {
+  if (!block || block.type !== 'campaign_funnel') return null
+  const dup = (Array.isArray(blocks) ? blocks : []).some((b) => b && b.type === 'campaign_funnel' && b.campaign === block.campaign)
+  return dup ? `This page already has a campaign funnel for /${block.campaign}. Edit that one instead.` : null
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -696,6 +714,7 @@ function BlockEditPanel(props) {
     case 'lead_form':   return <LeadFormEdit    {...props} />
     case 'class_funnel': return <ClassFunnelEdit {...props} />
     case 'paid_trial':  return <PaidTrialEdit   {...props} />
+    case 'campaign_funnel': return <CampaignFunnelEdit {...props} />
     case 'corp_promo':  return <CorpPromoEdit   {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
@@ -1467,6 +1486,144 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
           </Field>
         </>
       )}
+    </>
+  )
+}
+
+// FIFTYPLUS.1 — the campaign_funnel block editor (its page: /<campaign>).
+// The trial plan is REQUIRED: the page takes no booking until both ids are
+// set, and never falls back to the studio's default trial (the generic one).
+// Exported for its test (CampaignFunnelEdit.test.jsx).
+const SECTION_LABELS = { stats: 'Numbers (stats)', video_testimonials: 'Member videos', reviews: 'Google reviews' }
+export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, uploading, uploadErr, progress }) {
+  const k = (suffix) => `${block.id}-${suffix}`
+  const [memberships, setMemberships] = useState([])
+  useEffect(() => {
+    if (!locationId) return
+    let alive = true
+    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [locationId])
+  const planKey = (block.trial_membership_id && block.trial_plan_code) ? `${block.trial_membership_id}:${block.trial_plan_code}` : ''
+  const setPlan = (value) => {
+    const [mid, pc] = value ? value.split(':') : ['', '']
+    onUpdate({ trial_membership_id: mid || '', trial_plan_code: pc || '' })
+  }
+  const planOptions = buildTrialOptions(memberships, planKey)
+  const cards = Array.isArray(block.expect_cards) ? block.expect_cards : []
+  const setCard = (i, patch) => {
+    const next = [0, 1, 2].map((j) => ({ title: '', body: '', ...(cards[j] || {}) }))
+    next[i] = { ...next[i], ...patch }
+    onUpdate({ expect_cards: next })
+  }
+  const sections = Array.isArray(block.show_sections) ? block.show_sections : [...CAMPAIGN_FUNNEL_SECTIONS]
+  const toggleSection = (name) => {
+    const next = sections.includes(name)
+      ? sections.filter((s) => s !== name)
+      : CAMPAIGN_FUNNEL_SECTIONS.filter((s) => s === name || sections.includes(s))
+    onUpdate({ show_sections: next })
+  }
+  const D = CAMPAIGN_FUNNEL_COPY_DEFAULTS
+  // The video's poster: captured from the clip when none was uploaded.
+  const onUploadVideo = async (file) => {
+    let poster_url = block.poster_url || ''
+    if (!poster_url) {
+      try {
+        const posterFile = await captureVideoPoster(file)
+        poster_url = (await uploadMedia({ file: posterFile, kind: 'image', key: k('poster') })) || ''
+      } catch { /* a clip the browser cannot decode: no poster */ }
+    }
+    const video_url = await uploadMedia({ file, kind: 'video', key: k('video'), autoplay: true })
+    if (video_url) onUpdate({ video_url, poster_url: poster_url || null })
+  }
+  const selectCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  return (
+    <>
+      <Field label="Page" hint="The page this block drives. Fixed per campaign.">
+        <input value={block.campaign || ''} readOnly aria-label="Campaign key" className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-muted" />
+      </Field>
+      <Field label="Glofox trial plan" hint="REQUIRED. The plan put on a new person's account before their booking. Until it is set the page takes no bookings, and it never falls back to the studio's default trial.">
+        <select aria-label="Glofox trial plan" value={planKey} onChange={(e) => setPlan(e.target.value)} className={selectCls}>
+          <option value="">— Not set (page takes no bookings) —</option>
+          {planOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </Field>
+      <Field label="Classes offered (keywords)" hint="One per line. A class is offered only when its name contains any of them (case does not matter). Empty offers nothing.">
+        <Textarea value={block.class_keywords || ''} onChange={(v) => onUpdate({ class_keywords: v })} maxLength={400} rows={2} placeholder="50+" />
+      </Field>
+      <Field label="Coach video" hint="MP4 / WebM, up to 50MB. Starts muted on loop with a Tap for sound button, so burn the captions in. Tip: 720p, 20 to 40 seconds.">
+        <MediaSlot
+          url={block.video_url || ''}
+          onClear={() => onUpdate({ video_url: null })}
+          onUpload={onUploadVideo}
+          uploading={!!uploading[k('video')] || !!uploading[k('poster')]}
+          error={uploadErr[k('video')] || uploadErr[k('poster')]}
+          accept="video/mp4,video/webm"
+          label="Add video"
+          kind="video"
+          progress={progress[k('video')]}
+        />
+      </Field>
+      <Field label="Poster image" hint="The still before the video plays. Captured from the clip when you upload one; replace it here.">
+        <MediaSlot
+          url={block.poster_url || ''}
+          onClear={() => onUpdate({ poster_url: null })}
+          onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'image', key: k('poster') }); if (url) onUpdate({ poster_url: url }) }}
+          uploading={!!uploading[k('poster')]}
+          error={uploadErr[k('poster')]}
+          accept="image/png,image/jpeg,image/webp"
+          label="Add image"
+          kind="image"
+        />
+      </Field>
+      <Field label="Eyebrow"><Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={80} placeholder={D.eyebrow} /></Field>
+      <Field label="Heading"><Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder={D.heading} /></Field>
+      <Field label="Sub-copy"><Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} placeholder={D.subhead} /></Field>
+      <Field label="Sound button label"><Input value={block.sound_label || ''} onChange={(v) => onUpdate({ sound_label: v })} maxLength={40} placeholder={D.sound_label} /></Field>
+      <Field label="Pick step — title"><Input value={block.pick_title || ''} onChange={(v) => onUpdate({ pick_title: v })} maxLength={120} placeholder={D.pick_title} /></Field>
+      <Field label="Pick step — message"><Input value={block.pick_body || ''} onChange={(v) => onUpdate({ pick_body: v })} maxLength={200} placeholder={D.pick_body} /></Field>
+      <Field label="Button label" hint="{day} is the weekday, {time} the class time."><Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={60} placeholder={D.cta_label} /></Field>
+      <Field label="Reassurance line" hint="Under the button."><Input value={block.reassurance || ''} onChange={(v) => onUpdate({ reassurance: v })} maxLength={120} placeholder={D.reassurance} /></Field>
+      <Field label="Details step — title"><Input value={block.details_title || ''} onChange={(v) => onUpdate({ details_title: v })} maxLength={120} placeholder={D.details_title} /></Field>
+      <Field label="Details step — message"><Input value={block.details_body || ''} onChange={(v) => onUpdate({ details_body: v })} maxLength={200} placeholder={D.details_body} /></Field>
+      <Field label="Consent checkbox text"><Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={2} /></Field>
+      <Field label="Booked — title"><Input value={block.done_title || ''} onChange={(v) => onUpdate({ done_title: v })} maxLength={120} placeholder={D.done_title} /></Field>
+      <Field label="Booked — message"><Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} placeholder={D.done_body} /></Field>
+      <Field label="No classes — message" hint="Shown when no class is open to book in the next two weeks."><Textarea value={block.no_classes_text || ''} onChange={(v) => onUpdate({ no_classes_text: v })} maxLength={400} rows={2} placeholder={D.no_classes_text} /></Field>
+      <Field label="Not configured — message" hint="Shown while no trial plan is set above."><Textarea value={block.not_configured_text || ''} onChange={(v) => onUpdate({ not_configured_text: v })} maxLength={400} rows={2} placeholder={D.not_configured_text} /></Field>
+      <Field label="Timetable unavailable — message"><Textarea value={block.timetable_unavailable_text || ''} onChange={(v) => onUpdate({ timetable_unavailable_text: v })} maxLength={400} rows={2} placeholder={D.timetable_unavailable_text} /></Field>
+      <Field label="What to expect — eyebrow"><Input value={block.expect_eyebrow || ''} onChange={(v) => onUpdate({ expect_eyebrow: v })} maxLength={80} placeholder={D.expect_eyebrow} /></Field>
+      <Field label="What to expect — heading"><Input value={block.expect_heading || ''} onChange={(v) => onUpdate({ expect_heading: v })} maxLength={200} placeholder={D.expect_heading} /></Field>
+      <Field label="What to expect — three cards">
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-2">
+              <Input value={cards[i]?.title || ''} onChange={(v) => setCard(i, { title: v })} maxLength={80} placeholder={`Card ${i + 1} title`} />
+              <Input value={cards[i]?.body || ''} onChange={(v) => setCard(i, { body: v })} maxLength={240} placeholder={`Card ${i + 1} text`} />
+            </div>
+          ))}
+        </div>
+      </Field>
+      <Field label="Sections under the hero" hint="This page's own sections, shown in the light look.">
+        <div className="space-y-1.5">
+          {CAMPAIGN_FUNNEL_SECTIONS.map((name) => (
+            <label key={name} className="flex items-center gap-2 text-sm text-un1t-text">
+              <input type="checkbox" checked={sections.includes(name)} onChange={() => toggleSection(name)} className="w-4 h-4" />
+              {SECTION_LABELS[name]}
+            </label>
+          ))}
+        </div>
+      </Field>
+      <Field label="Tracking (advanced)" hint="Blank uses the defaults shown. The tag goes on every lead; the lead source and the Meta page URL are what the reports and the server Lead carry.">
+        <div className="space-y-2">
+          <Input value={block.tag || ''} onChange={(v) => onUpdate({ tag: v })} maxLength={80} placeholder={`stillorgan-${block.campaign || ''}`} />
+          <Input value={block.lead_source || ''} onChange={(v) => onUpdate({ lead_source: v })} maxLength={80} placeholder={`meta_${block.campaign || ''}`} />
+          <Input value={block.event_source_url || ''} onChange={(v) => onUpdate({ event_source_url: v })} maxLength={300} placeholder={`https://www.un1tdublin.com/${block.campaign || ''}`} />
+        </div>
+      </Field>
     </>
   )
 }

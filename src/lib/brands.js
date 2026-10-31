@@ -97,6 +97,7 @@ export const BRANDS = [
       '/free-class',    // Stillorgan paid-traffic campaign landing page (src/app/free-class)
       '/start',         // Meta-ad booking wizard (src/app/start)
       '/trial',         // PAIDTRIAL.1 — Meta-ad paid trial product page (src/app/trial)
+      '/50plus',        // FIFTYPLUS.1 — Meta-ad 50+ Club trial page (src/app/50plus)
       '/corp',          // CORPPROMO.1 — corporate promos (src/app/corp)
       '/offers',        // OFFERS.7: weekend "lock in" sale pages (src/app/offers)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
