@@ -595,7 +595,7 @@ export function ClassFunnelBlock({ block, onEdit, publicPath, locationName = '' 
 }
 
 // PAIDTRIAL.1 — editor stub for the paid trial block. The live card is
-// PaidTrialFunnel, rendered by src/app/trial/page.js.
+// PaidTrialFunnel, rendered by the (public)/[slug] route (offer type paid_trial).
 export function PaidTrialBlock({ block }) {
   const price = Number(block.price_cents) > 0 ? `€${(Number(block.price_cents) / 100).toFixed(Number(block.price_cents) % 100 ? 2 : 0)}` : 'no price'
   const ready = Boolean(block.membership_id && block.plan_code)

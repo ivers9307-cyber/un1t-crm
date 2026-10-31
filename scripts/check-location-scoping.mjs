@@ -457,18 +457,6 @@ export const EXEMPT = {
     landing_page_settings:
       'UN1TWRITE.17 — public legal page resolved by public_path (the path IS the tenant selector); 404s unless the studio is un1t.online, and renders only that studio\'s published terms or waiver text.',
   },
-  'src/app/start/[path]/page.js': {
-    landing_page_settings:
-      "Public per-studio class-booking page (proxy publicPaths via '/start'): resolves ONE row by its sanitised public_path and renders only its published blocks + logo — public marketing content; the public_path IS the tenant selector (same rationale as /start and /welcome/[location]). MANUALFUNNEL.1.",
-  },
-  'src/app/trial/page.js': {
-    landing_page_settings:
-      "PAIDTRIAL.1 public Meta-ads product page (proxy publicPaths via '/trial'): reads the fixed stillorgan row's published paid_trial block + content blocks (and hatch-street's content blocks as the /start fallback); public marketing content, the public_path IS the tenant selector (same rationale as /start).",
-  },
-  'src/app/start/page.js': {
-    landing_page_settings:
-      "Public Meta-ads landing (proxy publicPaths): reads the fixed hatch-street row's published blocks + the landing logo — public marketing content; the public_path IS the tenant selector (same rationale as /api/public/classes).",
-  },
   'src/app/welcome/page.js': {
     landing_page_settings:
       'Public split-chooser: renders every location\'s published chooser tiles by design; the ?edit=1 seed reads the most-recently-edited row but only previews the same published marketing content.',

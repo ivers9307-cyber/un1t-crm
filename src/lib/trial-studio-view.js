@@ -1,6 +1,6 @@
 // TRIALFIRST.1 — the client-safe view of one studio's paid trial, shared by
 // /trial and the two studio pages so the card they render is the same card.
-// Moved out of src/app/trial/page.js unchanged.
+// Moved out of the retired /trial route unchanged (PAGES.1).
 
 import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
 

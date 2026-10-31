@@ -23,18 +23,18 @@ const FIXED_NAMES = [
 ]
 
 const ROUTE_SEGMENTS = [
-  '50plus', 'account', 'account-deletion', 'accounting', 'achievements',
+  'account', 'account-deletion', 'accounting', 'achievements',
   'activities', 'admin', 'api', 'api-docs', 'approvals', 'auth', 'automations',
   'bca', 'book', 'bookings', 'cancel', 'card-receipts', 'cars', 'challenges',
   'checklists', 'class-fees', 'class-pay', 'communications', 'contacts',
-  'contracts', 'corp', 'dashboard', 'deposit', 'embed', 'event', 'event-pay',
-  'events', 'fee-appeal', 'free-class', 'givers', 'h', 'host', 'host-connect',
+  'contracts', 'dashboard', 'deposit', 'embed', 'event', 'event-pay',
+  'events', 'fee-appeal', 'givers', 'h', 'host', 'host-connect',
   'hyrox', 'invoices', 'issues', 'legal', 'live', 'login', 'maintenance',
   'marketing', 'members', 'money', 'offer-sales', 'offers', 'operations',
   'orders', 'pay-done', 'pay-link', 'pipeline', 'policies', 'portfolio',
   'preferences', 'present', 'presentations', 'privacy', 'pulse',
-  'reset-password', 'sales', 'schedule', 'settings', 'start', 'studio-login',
-  'studio-management', 'team', 'technical', 'terms', 'trial', 'tv',
+  'reset-password', 'sales', 'schedule', 'settings', 'studio-login',
+  'studio-management', 'team', 'technical', 'terms', 'tv',
   'tv-displays', 'unsubscribe', 'use-the-app', 'view-email', 'welcome',
 ]
 

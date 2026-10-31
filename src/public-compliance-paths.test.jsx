@@ -86,6 +86,7 @@ vi.mock('next/navigation', () => ({
 import { proxy } from './proxy.js'
 import { BRANDS, UN1T_GROUP_ORG_ID } from './lib/brands.js'
 import { DB_BRAND_DEFAULTS } from './lib/tenant-domains-edge.js'
+import { PUBLIC_PAGE_SLUGS_FALLBACK } from './lib/public-pages-edge.js'
 import AppShell from './components/AppShell.jsx'
 
 // The paths this file defends, with why they must never regress.
@@ -109,14 +110,6 @@ const COMPLIANCE_PATHS = [
   {
     path: '/pay-done/dG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4tdG9rZW4',
     why: 'MIAHATCH.6: the return page un1t.online checkout sends a member to after paying; the member has no session and lands on the customer (marketing) host, so a login wall or a rewrite to /welcome strands them',
-  },
-  {
-    path: '/corp',
-    why: 'CORPPROMO.1: the corporate promo link partner companies send their staff; a signed-out visitor on the CRM or marketing host claims it there',
-  },
-  {
-    path: '/corp/hatch-3-free',
-    why: 'CORPPROMO.1: one promo by its key, the same page',
   },
 ]
 
@@ -694,9 +687,8 @@ describe('UN1TDUN.1 — /pay-link is public on every host', () => {
 // the widened default exposes nothing new — it only stops the tenant host
 // from swallowing a flow the CRM host already serves anonymously.
 //
-// Deliberately NOT served by default: /start, /free-class, /offers,
-// /technical. They are Stillorgan literals (src/app/start, src/app/free-class,
-// W0.4's pinned /offers) or UN1T's own company story (src/app/technical, the
+// Deliberately NOT served by default: /offers, /technical. They are
+// Stillorgan literals (W0.4's pinned /offers) or UN1T's own company story (src/app/technical, the
 // Meta Tech Provider page) and would show UN1T on another gym's host. UN1T
 // Group's own platform row may list them in brand.allowedPaths.
 
@@ -706,7 +698,7 @@ const TENANT_FLOW_PATHS = [
   '/class-pay/abc', '/h/pride', '/h/pride/join', '/host', '/host/login', '/host-connect/abc',
   '/api/host/x', '/embed/event/x', '/terms',
 ]
-const TENANT_PINNED_OFF = ['/start', '/trial', '/corp', '/free-class', '/offers', '/technical']
+const TENANT_PINNED_OFF = ['/offers', '/technical']
 const PLATFORM_TENANT_HOST = 'gym-a.repset.ie'
 
 // The entries the two rewrite-fallback tiers (un1t-marketing + the tenant
@@ -768,35 +760,6 @@ describe('W1.L2 — the customer flow is complete on a tenant domain', () => {
   })
 })
 
-// ── FIFTYPLUS.1 — /50plus, the 50+ Club trial page ─────────────────────
-//
-// A UN1T-only Meta-ad page like /start and /trial: public on the CRM and
-// marketing hosts, rendered bare by AppShell, and deliberately NOT in the
-// tenant defaults (TENANT_PINNED_OFF above pins that side).
-describe('FIFTYPLUS.1 — /50plus is public on UN1T hosts', () => {
-  it('CRM host admits /50plus anonymously', async () => {
-    const res = await proxy(makeReq({ host: CRM_HOST, path: '/50plus' }))
-    expect(admitted(res), '/50plus is missing from proxy.js publicPaths').toBe(true)
-  })
-
-  it('marketing host does not rewrite /50plus to /welcome', async () => {
-    const res = await proxy(makeReq({ host: MARKETING_HOST, path: '/50plus' }))
-    expect(rewrittenTo(res), '/50plus is missing from the un1t-marketing allowlist').toBe(null)
-    expect(admitted(res)).toBe(true)
-  })
-
-  it('AppShell renders /50plus with no session', () => {
-    pathnameImpl = '/50plus'
-    const html = renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)
-    expect(html, '/50plus is missing from AppShell PUBLIC_PATHS').toContain('page-body')
-  })
-
-  it('the marketing allowlist names it explicitly', () => {
-    expect(marketingBrand().allowedPaths).toContain('/50plus')
-  })
-})
-
-
 // ── PAGES.1 — page slugs are public from the database ──────────────────
 //
 // A landing_pages row makes `/<slug>` public with no deploy: the proxy asks
@@ -855,6 +818,25 @@ describe('page slugs are public from the database', () => {
     expect(rewrittenTo(res)).toMatch(/\/welcome$/)
   })
 
+  it('the former code routes (trial, 50plus, corp, start, free-class) are public on the UN1T hosts from the page list alone, with no in-code path naming them', async () => {
+    // PAGES.1 Task 8: their route directories and in-code allowlist entries are
+    // gone; a landing_pages row (or, in an outage, the fallback list) is what
+    // makes them public. The list is the real one, fed in as the slug read.
+    pageSlugsImpl = async (orgId) => [...(PUBLIC_PAGE_SLUGS_FALLBACK[orgId] || [])]
+    for (const slug of ['trial', '50plus', 'corp', 'start', 'free-class']) {
+      for (const path of [`/${slug}`, `/${slug}/sub`]) {
+        const crm = await proxy(makeReq({ host: CRM_HOST, path }))
+        expect(admitted(crm), `${path} is auth-gated on the CRM host`).toBe(true)
+        expect(forwarded(crm, 'x-public-page')).toBe('1')
+        const marketing = await proxy(makeReq({ host: MARKETING_HOST, path }))
+        expect(rewrittenTo(marketing), `${path} fell through to /welcome on the marketing host`).toBe(null)
+        expect(admitted(marketing)).toBe(true)
+      }
+    }
+    expect(marketingBrand().allowedPaths).not.toContain('/corp')
+    expect(DB_BRAND_DEFAULTS.allowedPaths).not.toContain('/corp')
+  })
+
   it('a tenant host whose organisation has no pages still rewrites /january', async () => {
     tenantBrandImpl = async () => ({
       id: 'tenant:x', hostnames: [TENANT_HOST],
@@ -899,7 +881,7 @@ describe('page slugs are public from the database', () => {
     // /login is public by the in-code list
     stripped(await proxy(makeReq({ host: CRM_HOST, path: '/login', headers: { 'x-public-page': '1' } })))
     // an allowlisted path on a brand host
-    stripped(await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/trial', headers: { 'x-public-page': '1' } })))
+    stripped(await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/offers', headers: { 'x-public-page': '1' } })))
     // a signed-in session on a private path
     ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
     stripped(await proxy(makeReq({ host: CRM_HOST, path: '/dashboard', headers: { 'x-public-page': '1' } })))

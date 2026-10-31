@@ -181,6 +181,56 @@ describe('the [slug] page route', () => {
     expect(funnel.copy.class_keywords).toBeUndefined()
   })
 
+  it('the backfilled /50plus row renders the same hero copy, video and tiles the old route did', async () => {
+    // The row shape mig 792 produces for 50plus: the page half of the
+    // campaign_funnel block first, then the studio's content blocks; one
+    // Stillorgan studio row holding the offer and the attribution.
+    h.loaded = {
+      page: {
+        ...FIFTY,
+        chrome: { tone: 'light', noindex: true },
+        blocks: [
+          { id: 'cf', type: 'campaign_funnel', campaign: '50plus', heading: 'A free trial of The 50+ Club', video_url: 'https://x/v.mp4', poster_url: 'https://x/p.jpg' },
+          { id: 's1', type: 'stats', items: [{ number: '4.9', label: 'Rating' }] },
+          { id: 'v1', type: 'video_testimonials', items: [{ video_url: 'https://x/a.mp4', poster_url: 'https://x/a.jpg' }] },
+          { id: 'r1', type: 'reviews', min_rating: 4 },
+        ],
+      },
+      studios: FIFTY_STUDIOS,
+    }
+    const html = await render({ slug: '50plus' })
+    expect(html).toContain('A free trial of The 50+ Club')
+    expect(html).toContain('https://x/v.mp4')
+    expect(html).toContain('Built for where you are now')
+    expect(html).toContain('4.9') // stats tile
+    expect(html).toContain('https://x/a.jpg') // video testimonial poster
+    expect(html).toMatch(/^(<link [^>]*>)?<div class="min-h-screen bg-white text-black/)
+    expectClientSafe(html)
+    const funnel = propsOf(html, 'campaign')
+    expect(funnel).toMatchObject({ publicPath: 'stillorgan', campaign: '50plus', page: '50plus' })
+    expect(funnel.copy.heading).toBe('A free trial of The 50+ Club')
+    expect(funnel.copy.trial_membership_id).toBeUndefined()
+    expect(funnel.copy.class_keywords).toBeUndefined()
+    const meta = await generateMetadata({ params: Promise.resolve({ slug: '50plus' }), searchParams: Promise.resolve({}) })
+    expect(meta.robots).toEqual({ index: false, follow: false })
+  })
+
+  it('the backfilled /corp row renders the promo copy with {credits} filled from the registry, and /corp/hatch-3-free selects that promo', async () => {
+    h.loaded = {
+      page: { ...CORP, blocks: [{ id: 'cp', type: 'corp_promo', heading: '{credits} free classes at {studio_name}', ticks: ['{credits} coach-led classes, free'] }] },
+      studios: CORP_STUDIOS,
+    }
+    const root = propsOf(await render({ slug: 'corp' }), 'corp')
+    expect(root.promoKey).toBe('hatch-3-free')
+    expect(root.copy.heading).toBe('3 free classes at Hatch Street')
+    expect(root.copy.ticks).toEqual(['3 coach-led classes, free'])
+    expect(root.copy.title).toBe('Exclusive Corporate Trial') // untouched fields keep the registry default
+    const sub = await render({ slug: 'corp', rest: ['hatch-3-free'] })
+    expect(propsOf(sub, 'corp')).toMatchObject({ promoKey: 'hatch-3-free', page: 'corp', studio: 'hatch-street' })
+    expect(propsOf(sub, 'corp').copy.heading).toBe('3 free classes at Hatch Street')
+    expectClientSafe(sub)
+  })
+
   it('a live paid_trial all-studios page with no ?studio renders the picker over enabled rows only; ?studio=hatch preselects Hatch; ?studio=<disabled> falls back to the picker', async () => {
     h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
     const html = await render({ slug: 'trial' })

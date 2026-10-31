@@ -105,14 +105,13 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // directions, and '/api/calendar-feed' stays OUT on purpose
   // (src/calendar-feed-path.test.js: the feed URL is minted on the CRM host).
   //
-  // Deliberately ABSENT: '/start', '/free-class', '/offers'. They are
-  // Stillorgan literals (src/app/start/page.js, src/app/free-class/page.js,
-  // W0.4's pinned /offers) — serving them on another tenant's host would
-  // show UN1T's funnel under that gym's name. UN1T Group's own platform row
-  // (un1t-group.repset.ie) may list them in brand.allowedPaths, which
-  // replaces (not extends) this default — see resolveTenantDomainBrand —
-  // so that row needs the full list: [...defaults, '/start', '/free-class',
-  // '/offers']. Operator SQL on the row, not code.
+  // Deliberately ABSENT: '/offers' (W0.4's pinned Stillorgan sale page).
+  // UN1T Group's own platform row (un1t-group.repset.ie) may list it in
+  // brand.allowedPaths, which replaces (not extends) this default — see
+  // resolveTenantDomainBrand — so that row needs the full list:
+  // [...defaults, '/offers']. Operator SQL on the row, not code. The former
+  // /start, /free-class, /trial, /50plus and /corp are landing_pages rows
+  // now (PAGES.1), public through the per-organisation slug list.
   //
   // mig 415's COMMENT ON COLUMN tenant_domains.brand still quotes the
   // original five-entry default; THIS array is the truth (an applied

@@ -18,10 +18,9 @@ const ROOT = path.resolve(__dirname, '..')
 const WEB_NOT_STAFF = new Set([
   'api', 'auth', 'login', 'reset-password', 'book', 'event', 'event-pay', 'race', 'race-pay',
   'class-pay', 'tv', 'present', 'unsubscribe', 'preferences', 'view-email', 'deposit', 'welcome',
-  'free-class', 'start', 'trial', 'corp', 'offers', 'privacy', 'terms', 'legal', 'technical',
+  'offers', 'privacy', 'terms', 'legal', 'technical',
   'account-deletion', 'givers', 'studio-login', 'embed', 'bca', 'host-connect', 'host', 'h',
   'use-the-app', 'cancel', 'pay-done', 'fee-appeal', 'pay-link',
-  '50plus', // FIFTYPLUS.1 — the 50+ Club trial page, public like /trial
 ])
 
 // Staff routes deliberately filed under `other`, with the reason.
