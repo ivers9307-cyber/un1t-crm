@@ -875,6 +875,28 @@ describe('page slugs are public from the database', () => {
     expect(forwarded(res, 'x-public-page')).toBe('1')
   })
 
+  it('a tenant brand that allowlists a path which is also a page still forwards x-public-page (else AppShell blanks it)', async () => {
+    // un1t-group.repset.ie's tenant_domains brand lists /trial, /start and
+    // /free-class, which left PUBLIC_PATHS when they became pages.
+    pageSlugsImpl = async (orgId) => (orgId === 'org-tenant' ? ['trial'] : [])
+    tenantBrandImpl = async () => ({
+      id: 'tenant:x', hostnames: [TENANT_HOST],
+      allowedPaths: [...DB_BRAND_DEFAULTS.allowedPaths, '/trial', '/privacy'],
+      rootHandler: 'rewrite', rootRewriteTo: '/welcome',
+      fallbackHandler: 'rewrite', fallbackRewriteTo: '/welcome',
+      organizationId: 'org-tenant',
+    })
+    const page = await proxy(makeReq({ host: TENANT_HOST, path: '/trial' }))
+    expect(admitted(page)).toBe(true)
+    expect(rewrittenTo(page)).toBe(null)
+    expect(forwarded(page, 'x-public-page')).toBe('1')
+    // An allowlisted path that is not a page: admitted, unchanged, no header.
+    const privacy = await proxy(makeReq({ host: TENANT_HOST, path: '/privacy' }))
+    expect(admitted(privacy)).toBe(true)
+    expect(rewrittenTo(privacy)).toBe(null)
+    expect(forwarded(privacy, 'x-public-page')).toBe(null)
+  })
+
   it('a forged x-public-page on a private path is stripped and still redirected to /login', async () => {
     const res = await proxy(makeReq({ host: CRM_HOST, path: '/dashboard', headers: { 'x-public-page': '1' } }))
     expect(res.headers.get('location')).toMatch(/\/login/)

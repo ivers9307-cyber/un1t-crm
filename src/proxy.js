@@ -120,17 +120,22 @@ export async function proxy(request) {
     // PAGES.1 — a landing_pages row is a public page on this host too. The
     // brand carries its organisation (in-code UN1T brands and tenant_domains
     // rows both do; the car-business hosts have none and so no pages), and the
-    // organisation's page slugs are consulted only AFTER the brand's own list
-    // misses, so a listed path never pays for the lookup and a DB outage
-    // leaves the in-code behaviour exactly as it was. Only a 'rewrite' brand
+    // organisation's page slugs decide whether a path the brand's own list
+    // misses is a page, and a DB outage answers the fallback list, so the
+    // in-code admit/reject behaviour is exactly as it was. A path the brand
+    // list DOES allow is checked too (one cached read, rewrite brands only):
+    // when it is also a page it must carry the x-public-page header, or
+    // AppShell renders it and then blanks it to /login (a tenant_domains
+    // brand can list /trial, /start or /free-class, which have left
+    // PUBLIC_PATHS since they became pages). Only a 'rewrite' brand
     // (the marketing-site shape, whose strays go to a landing) serves pages: a
     // 'reject' brand is an isolated surface (host.un1tdublin.com serves the
     // host portal and 404s everything else, pay.* serves payments), and it can
     // carry an organizationId too, so the slug tier must not open it.
     let isDbPage = false
-    if (!allowed && brand.organizationId && brand.fallbackHandler === 'rewrite' && !path.startsWith('/api/')) {
+    if (brand.organizationId && brand.fallbackHandler === 'rewrite' && !path.startsWith('/api/')) {
       isDbPage = isPublicPagePath(path, await listPublicPageSlugs(brand.organizationId))
-      allowed = isDbPage
+      allowed = allowed || isDbPage
     }
     if (isDbPage) {
       return NextResponse.next({ request: { headers: withPublicPageHeader(request.headers) } })
