@@ -98,3 +98,120 @@ describe('matchCatalogToPlan', () => {
     expect(matchCatalogToPlan(catalog, {})).toBeNull()
   })
 })
+
+// ── GLOFOXPRIVATE.1 (mig 796) — the catalogue learns the memberships the list hides ──
+import { vi } from 'vitest'
+import { learnMembershipById, learnedPrivateMemberships, LEARN_FRESH_MS } from './glofox-catalog'
+
+// The REAL by-id body for a private membership (Stillorgan, 2026-10-31).
+const ELITES = {
+  _id: '68b17bbd4e9e83430f0ddcdc', branch_id: 'b1', active: true, name: '1) The Elites Trial',
+  description: 'The Elites program is a coach led small group strength class.', buy_just_once: true, private: true, trial: true,
+  plans: [{ code: 1756461990251, price: 0, type: 'num_classes', name: 'The Elites Trial' }], type: 'membership',
+}
+
+// A tiny chainable supabase mock: one table, select → maybeSingle / order, upsert recorded.
+function mockDb({ existing = null, selectError = null, rows = [], listError = null, upsertError = null } = {}) {
+  const calls = { upserts: [] }
+  const chain = {
+    select: vi.fn(() => chain), eq: vi.fn(() => chain),
+    maybeSingle: vi.fn(async () => ({ data: existing, error: selectError })),
+    order: vi.fn(async () => ({ data: rows, error: listError })),
+  }
+  const db = {
+    from: vi.fn(() => ({
+      ...chain,
+      upsert: vi.fn(async (row, opts) => { calls.upserts.push({ row, opts }); return { error: upsertError } }),
+    })),
+  }
+  return { db, calls, chain }
+}
+
+describe('parseMembershipCatalog — private flag', () => {
+  it('keeps the by-id body\'s private flag and nulls it when the body does not say', () => {
+    const [row] = parseMembershipCatalog([ELITES], LOC)
+    expect(row.private).toBe(true)
+    expect(row.plan_names).toEqual(['The Elites Trial'])
+    expect(parseMembershipCatalog(REAL_BODY, LOC)[0].private).toBeNull()
+  })
+})
+
+describe('learnMembershipById', () => {
+  const creds = { branchId: 'b1', apiKey: 'k', apiToken: 't' }
+
+  it('reads an unknown membership by id and writes it as member_detail with its private flag', async () => {
+    const { db, calls } = mockDb({ existing: null })
+    const cache = new Map([[ELITES._id, ELITES]]) // the run already holds the object: no Glofox call
+    const r = await learnMembershipById(db, LOC, creds, ELITES._id, cache)
+    expect(r).toEqual({ ok: true, action: 'learned', private: true })
+    expect(calls.upserts).toHaveLength(1)
+    const { row, opts } = calls.upserts[0]
+    expect(opts).toEqual({ onConflict: 'glofox_membership_id' })
+    expect(row).toMatchObject({ glofox_membership_id: ELITES._id, location_id: LOC, private: true, discovered_via: 'member_detail', name: '1) The Elites Trial' })
+    expect(typeof row.synced_at).toBe('string')
+    expect(cache.get(`learned:${ELITES._id}`)).toBe(true)
+  })
+
+  it('does not ask Glofox again for a row refreshed this week', async () => {
+    const { db, calls } = mockDb({ existing: { glofox_membership_id: ELITES._id, private: true, synced_at: new Date(Date.now() - LEARN_FRESH_MS / 2).toISOString() } })
+    const cache = new Map()
+    const r = await learnMembershipById(db, LOC, creds, ELITES._id, cache)
+    expect(r).toEqual({ ok: true, action: 'fresh', private: true })
+    expect(calls.upserts).toHaveLength(0)
+    expect(cache.get(`learned:${ELITES._id}`)).toBe(true)
+  })
+
+  it('re-reads a stale row, and a pre-796 row whose private flag is unknown', async () => {
+    const stale = { glofox_membership_id: ELITES._id, private: true, synced_at: new Date(Date.now() - LEARN_FRESH_MS - 1000).toISOString() }
+    const a = mockDb({ existing: stale })
+    expect((await learnMembershipById(a.db, LOC, creds, ELITES._id, new Map([[ELITES._id, ELITES]]))).action).toBe('learned')
+    const unknown = { glofox_membership_id: ELITES._id, private: null, synced_at: new Date().toISOString() }
+    const b = mockDb({ existing: unknown })
+    expect((await learnMembershipById(b.db, LOC, creds, ELITES._id, new Map([[ELITES._id, ELITES]]))).action).toBe('learned')
+  })
+
+  it('settles an id once per run through the cache and skips bad input', async () => {
+    const { db, chain } = mockDb()
+    const cache = new Map([[`learned:${ELITES._id}`, true]])
+    expect(await learnMembershipById(db, LOC, creds, ELITES._id, cache)).toEqual({ ok: true, action: 'cached' })
+    expect(chain.maybeSingle).not.toHaveBeenCalled()
+    expect(await learnMembershipById(db, LOC, creds, '', cache)).toEqual({ ok: false, action: 'skipped' })
+    expect(await learnMembershipById(db, LOC, null, ELITES._id, cache)).toEqual({ ok: false, action: 'skipped' })
+  })
+
+  it('a 404 is an answer (cached, nothing written); a failed read or write is reported, never thrown', async () => {
+    const notFound = mockDb()
+    const cache = new Map([[ELITES._id, null]]) // fetchMembershipResult's cached "no such membership"
+    expect(await learnMembershipById(notFound.db, LOC, creds, ELITES._id, cache)).toEqual({ ok: true, action: 'not_found' })
+    expect(notFound.calls.upserts).toHaveLength(0)
+    const readFail = mockDb({ selectError: { message: 'boom' } })
+    expect(await learnMembershipById(readFail.db, LOC, creds, ELITES._id, new Map())).toEqual({ ok: false, action: 'read_failed', error: 'boom' })
+    const writeFail = mockDb({ upsertError: { message: 'nope' } })
+    expect(await learnMembershipById(writeFail.db, LOC, creds, ELITES._id, new Map([[ELITES._id, ELITES]]))).toEqual({ ok: false, action: 'write_failed', error: 'nope' })
+    const throwing = { from: () => { throw new Error('db down') } }
+    expect(await learnMembershipById(throwing, LOC, creds, ELITES._id, new Map())).toEqual({ ok: false, action: 'threw', error: 'db down' })
+  })
+})
+
+describe('learnedPrivateMemberships', () => {
+  const stored = { glofox_membership_id: ELITES._id, name: ELITES.name, active: true, private: true, plans: ELITES.plans }
+
+  it('returns learned private rows in the live-list shape, minus ids the live list returned', async () => {
+    const { db, chain } = mockDb({ rows: [stored, { ...stored, glofox_membership_id: 'now-public' }] })
+    const { rows, error } = await learnedPrivateMemberships(db, LOC, new Set(['now-public']))
+    expect(error).toBeNull()
+    expect(rows).toEqual([{
+      _id: ELITES._id, name: '1) The Elites Trial', active: true, private: true,
+      plans: [{ code: '1756461990251', type: 'num_classes', price: 0, name: 'The Elites Trial' }],
+    }])
+    expect(chain.eq).toHaveBeenCalledWith('location_id', LOC)
+    expect(chain.eq).toHaveBeenCalledWith('private', true)
+  })
+
+  it('a failed read answers no rows and the error, never throws', async () => {
+    const { db } = mockDb({ listError: { message: 'down' } })
+    expect(await learnedPrivateMemberships(db, LOC)).toEqual({ rows: [], error: 'down' })
+    expect(await learnedPrivateMemberships({}, LOC)).toMatchObject({ rows: [] })
+    expect((await learnedPrivateMemberships({}, LOC)).error).toBeTruthy()
+  })
+})

@@ -48,6 +48,10 @@ export function parseMembershipCatalog(body, locationId) {
       description,
       membership_type: typeof m.type === 'string' ? m.type : null,
       active: typeof m.active === 'boolean' ? m.active : null,
+      // GLOFOXPRIVATE.1 — the dashboard's "Private" toggle (mig 796). The list
+      // body may omit it (everything the list returns is public); the by-id
+      // body carries it. null = the body did not say.
+      private: typeof m.private === 'boolean' ? m.private : null,
       plan_names: planNames,
       price_cents: priceCents,
       plans,
@@ -103,9 +107,109 @@ export async function syncMembershipCatalog(db, locationId, creds) {
   } catch (e) {
     return { ok: false, count: 0, error: e?.message || 'network error' }
   }
-  const rows = parseMembershipCatalog(body, locationId).map(r => ({ ...r, synced_at: new Date().toISOString() }))
+  // GLOFOXPRIVATE.1 — everything the list returns is public (a body that does
+  // not say so is still a list row), and a learned private row is never in
+  // the list, so this upsert can never flip one back.
+  const rows = parseMembershipCatalog(body, locationId).map(r => ({
+    ...r, private: r.private ?? false, discovered_via: 'list', synced_at: new Date().toISOString(),
+  }))
   if (rows.length === 0) return { ok: true, count: 0, error: null }
   const { error } = await db.from('glofox_memberships').upsert(rows, { onConflict: 'glofox_membership_id' })
   if (error) return { ok: false, count: 0, error: error.message }
   return { ok: true, count: rows.length, error: null }
+}
+
+// ── GLOFOXPRIVATE.1 — learning the memberships the list hides ──────────────
+//
+// Glofox's GET /2.0/memberships returns only PUBLIC memberships; one with the
+// dashboard's "Private" toggle on is readable by id (GET /2.0/memberships/{id},
+// verified 2026-10-31 on "1) The Elites Trial") but never listed. So the sync
+// records every membership id it meets on a member record (member.membership
+// ._id, present on the single-member GET) by reading it by id, and the pickers
+// list the live public set plus these learned rows (mig 796).
+
+/** A row refreshed this recently is not read again from Glofox. */
+export const LEARN_FRESH_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Record the membership a member holds in glofox_memberships when the
+ * catalogue does not hold a fresh row for it. One cheap DB read guards the
+ * Glofox call; `cache` is the sync run's membership Map (fetchMembershipResult
+ * memoises by id in it, and `learned:<id>` marks an id this run has settled).
+ * Never throws; the caller's sync already wrote the contact.
+ *
+ * @returns {Promise<{ok:boolean, action:string, private?:boolean, error?:string}>}
+ */
+export async function learnMembershipById(db, locationId, creds, membershipId, cache = null) {
+  const id = String(membershipId || '').trim()
+  if (!db || !locationId || !creds || !id) return { ok: false, action: 'skipped' }
+  const key = `learned:${id}`
+  if (cache && cache.has(key)) return { ok: true, action: 'cached' }
+  try {
+    const { data: row, error: readErr } = await db.from('glofox_memberships')
+      .select('glofox_membership_id, synced_at, private')
+      .eq('glofox_membership_id', id)
+      .maybeSingle()
+    if (readErr) return { ok: false, action: 'read_failed', error: readErr.message }
+    const syncedAt = row?.synced_at ? Date.parse(row.synced_at) : NaN
+    if (row && typeof row.private === 'boolean' && Number.isFinite(syncedAt) && syncedAt > Date.now() - LEARN_FRESH_MS) {
+      if (cache) cache.set(key, true)
+      return { ok: true, action: 'fresh', private: row.private }
+    }
+    const { fetchMembershipResult } = await import('./glofox')
+    const r = await fetchMembershipResult(creds, id, cache)
+    if (!r.ok) return { ok: false, action: 'fetch_failed' }
+    if (!r.membership) {
+      // A 404 is an answer: nothing to learn, and nothing to ask again this run.
+      if (cache) cache.set(key, true)
+      return { ok: true, action: 'not_found' }
+    }
+    const [parsed] = parseMembershipCatalog([r.membership], locationId)
+    if (!parsed) return { ok: false, action: 'unparsable' }
+    const { error } = await db.from('glofox_memberships').upsert(
+      { ...parsed, discovered_via: 'member_detail', synced_at: new Date().toISOString() },
+      { onConflict: 'glofox_membership_id' },
+    )
+    if (error) return { ok: false, action: 'write_failed', error: error.message }
+    if (cache) cache.set(key, true)
+    return { ok: true, action: 'learned', private: parsed.private === true }
+  } catch (e) {
+    return { ok: false, action: 'threw', error: e?.message || 'threw' }
+  }
+}
+
+/**
+ * The learned PRIVATE memberships at a studio, in the shape
+ * listGlofoxMemberships() returns ({ _id, name, private, plans[] }), minus the
+ * ids in `excludeIds` (the live list, so a membership made public later is
+ * not shown twice). A failed read answers `{ rows: [], error }`: the picker
+ * still shows the live list and says the private ones could not be read.
+ */
+export async function learnedPrivateMemberships(db, locationId, excludeIds = new Set()) {
+  if (!db || !locationId) return { rows: [], error: 'missing args' }
+  try {
+    const { data, error } = await db.from('glofox_memberships')
+      .select('glofox_membership_id, name, active, plans, private')
+      .eq('location_id', locationId)
+      .eq('private', true)
+      .order('name')
+    if (error) return { rows: [], error: error.message }
+    const rows = (Array.isArray(data) ? data : [])
+      .filter(r => r?.glofox_membership_id && !excludeIds.has(r.glofox_membership_id))
+      .map(r => ({
+        _id: String(r.glofox_membership_id),
+        name: String(r.name || ''),
+        active: r.active === true,
+        private: true,
+        plans: (Array.isArray(r.plans) ? r.plans : []).map(p => ({
+          code: String(p?.code || ''),
+          type: String(p?.type || ''),
+          price: Number(p?.price) || 0,
+          name: String(p?.name || ''),
+        })).filter(p => p.code),
+      }))
+    return { rows, error: null }
+  } catch (e) {
+    return { rows: [], error: e?.message || 'threw' }
+  }
 }

@@ -30,9 +30,13 @@ export function buildTrialOptions(memberships, trialKey) {
       const planCode = p?.code
       if (!planCode) continue
       const pName = p?.name
+      // GLOFOXPRIVATE.1 — a membership the sync learned by id because Glofox's
+      // list hides it (mig 796) is marked so the operator knows members
+      // cannot find it in the app's shop; it is bought by plan code all the same.
+      const suffix = m?.private === true ? ' (private)' : ''
       opts.push({
         value: `${membershipId}:${planCode}`,
-        label: pName && pName !== mName ? `${mName} — ${pName}` : mName,
+        label: (pName && pName !== mName ? `${mName} — ${pName}` : mName) + suffix,
       })
     }
   }

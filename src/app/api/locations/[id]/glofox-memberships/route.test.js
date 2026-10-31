@@ -6,6 +6,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn(() => ({})) }))
+// GLOFOXPRIVATE.1 — the learned private rows are read through the catalogue module.
+vi.mock('@/lib/glofox-catalog', () => ({ learnedPrivateMemberships: vi.fn(async () => ({ rows: [], error: null })) }))
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
@@ -18,10 +20,12 @@ vi.mock('@/lib/glofox', () => ({
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { glofoxCredentialsForLocation, listGlofoxMemberships } from '@/lib/glofox'
+import { learnedPrivateMemberships } from '@/lib/glofox-catalog'
 import { ROLE_GATE_CASES, LOC_B, MASTER } from '../_role-gate-cases.js'
 import { GLOFOX_SETTINGS_UNREADABLE, GLOFOX_SETTINGS_UNREADABLE_MESSAGE } from '@/lib/glofox-settings-read'
 
 const MEMBERSHIPS = [{ _id: 'm-1', name: 'Trial', plans: [{ code: 'p-1' }] }]
+const PUBLIC = MEMBERSHIPS.map(m => ({ ...m, private: false }))
 const call = (id) => GET({}, { params: Promise.resolve({ id }) })
 
 describe('GET glofox-memberships — role judged at the path location', () => {
@@ -29,6 +33,7 @@ describe('GET glofox-memberships — role judged at the path location', () => {
     vi.clearAllMocks()
     glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'branch-1', apiKey: 'key-1', apiToken: 'token-1' })
     listGlofoxMemberships.mockResolvedValue({ ok: true, memberships: MEMBERSHIPS })
+    learnedPrivateMemberships.mockResolvedValue({ rows: [], error: null })
   })
 
   it.each(ROLE_GATE_CASES)('%s', async (_label, caller, target, status, error) => {
@@ -36,7 +41,7 @@ describe('GET glofox-memberships — role judged at the path location', () => {
     const res = await call(target)
     expect(res.status).toBe(status)
     if (status === 200) {
-      expect(await res.json()).toEqual({ success: true, memberships: MEMBERSHIPS, count: 1 })
+      expect(await res.json()).toEqual({ success: true, memberships: PUBLIC, count: 1 })
       expect(glofoxCredentialsForLocation).toHaveBeenCalledWith(expect.anything(), target)
     } else {
       expect(await res.json()).toEqual({ success: false, error })
@@ -70,5 +75,35 @@ describe('GET glofox-memberships — REGISTRYREAD.1b unreadable settings', () =>
     const res = await call(LOC_B)
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('glofox_not_configured')
+  })
+})
+
+// GLOFOXPRIVATE.1 (mig 796) — Glofox's list hides private memberships; the ones
+// the sync learned by id are appended, and a failed read of them is said.
+describe('GET glofox-memberships — learned private memberships', () => {
+  const ELITES = { _id: '68b17bbd4e9e83430f0ddcdc', name: '1) The Elites Trial', active: true, private: true, plans: [{ code: '1756461990251', type: 'num_classes', price: 0, name: 'The Elites Trial' }] }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getCurrentUser.mockResolvedValue(MASTER)
+    glofoxCredentialsForLocation.mockResolvedValue({ branchId: 'branch-1', apiKey: 'key-1', apiToken: 'token-1' })
+    listGlofoxMemberships.mockResolvedValue({ ok: true, memberships: MEMBERSHIPS })
+  })
+
+  it('appends the learned private rows after the live public ones, excluding ids the list returned', async () => {
+    learnedPrivateMemberships.mockResolvedValue({ rows: [ELITES], error: null })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, memberships: [...PUBLIC, ELITES], count: 2 })
+    const [, loc, exclude] = learnedPrivateMemberships.mock.calls[0]
+    expect(loc).toBe(LOC_B)
+    expect([...exclude]).toEqual(['m-1'])
+  })
+
+  it('a failed read of the learned rows still answers the live list and says private_unread', async () => {
+    learnedPrivateMemberships.mockResolvedValue({ rows: [], error: 'down' })
+    const res = await call(LOC_B)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, memberships: PUBLIC, count: 1, private_unread: true })
   })
 })

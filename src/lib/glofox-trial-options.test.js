@@ -56,6 +56,19 @@ describe('buildTrialOptions', () => {
     expect(buildTrialOptions(CATALOGUE, '')).toHaveLength(2)
   })
 
+  // GLOFOXPRIVATE.1 — a membership learned by id because Glofox's list hides it.
+  it('marks a private membership in its label and leaves public ones alone', () => {
+    const withPrivate = [
+      ...CATALOGUE,
+      { _id: '68b17bbd4e9e83430f0ddcdc', name: '1) The Elites Trial', private: true, plans: [{ code: '1756461990251', name: 'The Elites Trial' }] },
+    ]
+    const opts = buildTrialOptions(withPrivate, '')
+    expect(opts[0].label).toBe('UN1T Trial — 3 classes')
+    expect(opts[2]).toEqual({ value: '68b17bbd4e9e83430f0ddcdc:1756461990251', label: '1) The Elites Trial — The Elites Trial (private)' })
+    // private:false and an absent flag read the same: public.
+    expect(buildTrialOptions([{ ...CATALOGUE[1], private: false }], '')[0].label).toBe('Intro Pack')
+  })
+
   it('handles a null / non-array catalogue without throwing', () => {
     expect(buildTrialOptions(null, '')).toEqual([])
     expect(buildTrialOptions(undefined, 'x:y')).toEqual([

@@ -16,6 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, listGlofoxMemberships } from '@/lib/glofox'
+import { learnedPrivateMemberships } from '@/lib/glofox-catalog'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,9 +55,18 @@ export async function GET(_request, { params }) {
       message: result.error,
     }, { status: 502 })
   }
+  // GLOFOXPRIVATE.1 — Glofox's list returns only public memberships; the ones
+  // the sync learned by id (mig 796, private) are appended, minus any the list
+  // now returns. A failed read of the learned rows still answers the live list
+  // and says so (private_unread), so the picker never looks complete when it
+  // is not.
+  const live = result.memberships.map(m => ({ ...m, private: false }))
+  const learned = await learnedPrivateMemberships(db, locationId, new Set(live.map(m => m._id)))
+  const memberships = [...live, ...learned.rows]
   return NextResponse.json({
     success: true,
-    memberships: result.memberships,
-    count: result.memberships.length,
+    memberships,
+    count: memberships.length,
+    ...(learned.error ? { private_unread: true } : {}),
   })
 }
