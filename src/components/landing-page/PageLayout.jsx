@@ -59,11 +59,11 @@ const shellClass = (tone) => (tone === 'light'
   ? 'min-h-screen bg-white text-black antialiased'
   : 'min-h-screen bg-black text-white antialiased')
 
-// HEROHEADER.1 — `tone` colours the fixed bar for the page; `showCta` false
-// drops the header button (OneClassLayout: the booking card IS the page's
-// call to action and sits in the hero beside the video, so a second "Book a
-// free class" in the corner only competed with it).
-function Header({ logo = {}, cta = {}, eventsHref = null, tone = 'dark', showCta = true }) {
+// HEROHEADER.1 — `showCta` false drops the header button (OneClassLayout:
+// the booking card IS the page's call to action and sits in the hero beside
+// the video, so a second "Book a free class" in the corner only competed
+// with it). The bar is the same black glass on every page tone (HEROHEADER.2).
+function Header({ logo = {}, cta = {}, eventsHref = null, showCta = true }) {
   return (
     <SiteHeader
       logoUrl={logo.url || null}
@@ -71,7 +71,6 @@ function Header({ logo = {}, cta = {}, eventsHref = null, tone = 'dark', showCta
       logoWidthPx={logo.widthPx || 150}
       wordmark={logo.wordmark || ''}
       sticky
-      tone={tone}
       ctaHref={showCta ? (cta.href || null) : null}
       ctaLabel={cta.label}
       ctaLabelShort={cta.labelShort || ''}
@@ -116,7 +115,7 @@ export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />
-      <Header logo={logo} cta={cta} tone={tone} />
+      <Header logo={logo} cta={cta} />
 
       <FrostedHero anchor={anchor} heroImageUrl={heroImageUrl} offer={offer} scrollCueLabel={scrollCueLabel} />
 
@@ -135,7 +134,7 @@ export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [],
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />
-      <Header logo={logo} cta={cta} tone={tone} showCta={false} />
+      <Header logo={logo} cta={cta} showCta={false} />
 
       <CampaignHero
         videoUrl={hero.videoUrl}
@@ -173,7 +172,7 @@ export function BlocksLayout({ tone = 'dark', logo, cta, footer, blocks = [], bl
       <VisitOriginCapture />
       <RevealManager />
       {jsonLd ? <JsonLd data={jsonLd} /> : null}
-      <Header logo={logo} cta={cta} eventsHref={eventsHref} tone={tone} />
+      <Header logo={logo} cta={cta} eventsHref={eventsHref} />
       <Blocks blocks={rendered} blockProps={blockProps} cta={cta} cta2={cta2} tone={tone} trial={trial} trialShown={shownTrial} trialHero={trialHero} />
       <Footer footer={footer} cta={cta} fallbackHref={shownTrial ? '#trial' : '#book'} />
     </div>
