@@ -270,18 +270,32 @@ AS $$
 $$;
 
 -- A campaign page's content blocks: a studio's blocks without the hero, the
--- lead form and the offer blocks, order kept; only_types narrows to a list.
+-- lead form and the offer blocks. With no only_types, every such block in
+-- array order. With only_types (the /50plus show_sections list), the FIRST
+-- block of each named type, emitted in only_types order: what the /50plus
+-- route did (copy.show_sections.map(type => blocks.find(b => b.type === type))).
 CREATE OR REPLACE FUNCTION private.landing_page_content_blocks(blocks jsonb, only_types text[] DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
 SET search_path = ''
 AS $$
-  SELECT COALESCE(jsonb_agg(e.b ORDER BY e.ord), '[]'::jsonb)
-  FROM jsonb_array_elements(CASE WHEN jsonb_typeof(blocks) = 'array' THEN blocks ELSE '[]'::jsonb END) WITH ORDINALITY AS e(b, ord)
-  WHERE e.b->>'type' IS NOT NULL
-    AND e.b->>'type' <> ALL (ARRAY['hero', 'lead_form', 'class_funnel', 'paid_trial', 'campaign_funnel', 'corp_promo'])
-    AND (only_types IS NULL OR e.b->>'type' = ANY (only_types))
+  WITH src AS (
+    SELECT e.b, e.ord
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(blocks) = 'array' THEN blocks ELSE '[]'::jsonb END) WITH ORDINALITY AS e(b, ord)
+    WHERE e.b->>'type' IS NOT NULL
+      AND e.b->>'type' <> ALL (ARRAY['hero', 'lead_form', 'class_funnel', 'paid_trial', 'campaign_funnel', 'corp_promo'])
+  ),
+  firsts AS (
+    SELECT DISTINCT ON (src.b->>'type') src.b
+    FROM src
+    WHERE src.b->>'type' = ANY (only_types)
+    ORDER BY src.b->>'type', src.ord
+  )
+  SELECT CASE
+    WHEN only_types IS NULL THEN (SELECT COALESCE(jsonb_agg(src.b ORDER BY src.ord), '[]'::jsonb) FROM src)
+    ELSE (SELECT COALESCE(jsonb_agg(firsts.b ORDER BY array_position(only_types, firsts.b->>'type')), '[]'::jsonb) FROM firsts)
+  END
 $$;
 
 -- The chrome object. Nulls are left out (a missing logo is no key).

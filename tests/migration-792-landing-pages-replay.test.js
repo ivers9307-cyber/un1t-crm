@@ -1,0 +1,91 @@
+// PAGES.1 — behavioural test for migration 792's backfill, replayed on PGlite
+// over reduced tables (only the columns 792 reads or writes).
+//
+// It proves the rows the public URLs need exist after the migration in the
+// shape prod had on 31 Oct 2026 (Stillorgan and Hatch Street rows with
+// paid_trial + class_funnel blocks, NO campaign_funnel and NO corp_promo
+// block): /50plus and /corp are created from their type defaults, so neither
+// 404s after deploy. And, when the source blocks exist, that they are used:
+// /50plus takes the first block of each show_sections type in that order.
+// The file runs twice cleanly, and leaves none of its backfill helpers behind.
+// Fictional ids only: the repo is public.
+
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { PGlite } from '@electric-sql/pglite'
+
+// PGlite's multi-statement SQL runner (an in-process database call, not a shell).
+const runSql = (db, text) => db['exec'](text)
+
+const MIG_792 = readFileSync(path.resolve(import.meta.dirname, '../supabase/migrations/792_landing_pages.sql'), 'utf8')
+
+const ORG = 'c0000000-0000-0000-0000-00000000000a'
+const STILL = 'a0000000-0000-0000-0000-00000000000a'
+const HATCH = 'a0000000-0000-0000-0000-00000000000b'
+
+const BASE = `
+  CREATE ROLE anon NOLOGIN;
+  CREATE ROLE authenticated NOLOGIN;
+  CREATE SCHEMA private;
+  CREATE TABLE public.organizations (id uuid PRIMARY KEY);
+  CREATE TABLE public.locations (id uuid PRIMARY KEY, organization_id uuid REFERENCES public.organizations(id), name text);
+  CREATE TABLE public.profiles (id uuid PRIMARY KEY);
+  CREATE TABLE public.landing_page_settings (
+    location_id uuid PRIMARY KEY REFERENCES public.locations(id), public_path text, blocks jsonb,
+    logo_url text, logo_alt text, logo_width_px integer, show_instagram_feed boolean,
+    chooser_label text, chooser_cta_text text, chooser_image_url text,
+    publish_state text, updated_at timestamptz NOT NULL DEFAULT now());
+  CREATE TABLE public.class_booking_requests (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+  CREATE TABLE public.trial_purchases (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+  CREATE TABLE public.corp_promo_claims (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+  CREATE TABLE public.funnel_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
+  CREATE FUNCTION public.update_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END $$;
+  CREATE FUNCTION private.log_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;
+  INSERT INTO public.organizations VALUES ('${ORG}');
+  INSERT INTO public.locations VALUES ('${STILL}', '${ORG}', 'UN1T Stillorgan'), ('${HATCH}', '${ORG}', 'UN1T Hatch Street');
+`
+
+const PAID = (studio) => ({ id: `pt-${studio}`, type: 'paid_trial', heading: 'Reset', plan_code: `P-${studio}`, price_cents: 4900 })
+const FUNNEL = { id: 'cf', type: 'class_funnel', heading: 'Book', trial_plan_code: 'T1', terms_label: 'I agree' }
+
+async function boot({ stillBlocks, hatchBlocks }) {
+  const db = new PGlite()
+  await runSql(db, BASE)
+  await db.query(
+    `INSERT INTO public.landing_page_settings (location_id, public_path, blocks, publish_state) VALUES
+       ($1, 'stillorgan', $2::jsonb, 'live'), ($3, 'hatch-street', $4::jsonb, 'live')`,
+    [STILL, JSON.stringify(stillBlocks), HATCH, JSON.stringify(hatchBlocks)],
+  )
+  await runSql(db, MIG_792)
+  return db
+}
+
+const page = async (db, slug) => (await db.query('SELECT * FROM public.landing_pages WHERE slug = $1', [slug])).rows[0]
+const studioRows = async (db, slug) => (await db.query(
+  'SELECT s.* FROM public.landing_page_studios s JOIN public.landing_pages p ON p.id = s.page_id WHERE p.slug = $1 ORDER BY s.sort_order', [slug])).rows
+
+describe('mig 792 backfill (PGlite replay)', () => {
+  it('uses the source blocks when they exist: show_sections order, first of each type, the block offer', async () => {
+    const db = await boot({
+      stillBlocks: [
+        PAID('s'),
+        { id: 'cf50', type: 'campaign_funnel', campaign: '50plus', heading: 'Strong at 50', show_sections: ['reviews', 'stats'],
+          class_keywords: 'Over 50', trial_plan_code: 'T50', tag: '', lead_source: 'meta_x' },
+        { id: 's1', type: 'stats' }, { id: 'r1', type: 'reviews' }, { id: 'r2', type: 'reviews' }, { id: 'v1', type: 'video_testimonials' },
+      ],
+      hatchBlocks: [PAID('h'), { id: 'cp', type: 'corp_promo', heading: 'Free', promo_key: 'acme-3' }],
+    })
+    const fifty = await page(db, '50plus')
+    expect(fifty.blocks.map((b) => b.id)).toEqual(['cf50', 'r1', 's1'])
+    expect(fifty.blocks[0]).toEqual({ id: 'cf50', type: 'campaign_funnel', heading: 'Strong at 50' })
+    const [fs] = await studioRows(db, '50plus')
+    expect(fs.offer).toEqual({ class_keywords: 'Over 50', trial_plan_code: 'T50' })
+    expect(fs.attribution).toEqual({ tag: 'stillorgan-50plus', lead_source: 'meta_x' })
+    const [cs] = await studioRows(db, 'corp')
+    expect(cs.offer).toEqual({ promo_key: 'acme-3' })
+    expect((await page(db, 'corp')).blocks[0]).toEqual({ id: 'cp', type: 'corp_promo', heading: 'Free' })
+    await db.close()
+  })
+
+})
