@@ -14,7 +14,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { landingPageStudioSchema } from '@/lib/schemas'
+import { landingPageStudioSchema } from '@/lib/landing-page-schemas'
 import { OFFER_BLOCK_TYPE, studioOfferSchema } from '@/lib/landing-page-offers'
 import {
   loadViewablePage, canEditPage, studioRowReadiness, studioRowView, saveStudioRow, PageReadError,

@@ -14,7 +14,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { landingPageUpdateSchema } from '@/lib/schemas'
+import { landingPageUpdateSchema } from '@/lib/landing-page-schemas'
 import { normaliseSlug, slugProblem } from '@/lib/page-slug'
 import {
   loadViewablePage, canEditPage, studioRowReadiness, studioRowView, pageBlocksToStore,
@@ -36,11 +36,20 @@ export async function GET(_request, { params }) {
     const loaded = await loadViewablePage(db, user, id)
     if (!loaded) return fail(404, 'not_found')
     const { page, studios } = loaded
-    const rows = await Promise.all(studios.map(async (row) => ({
-      ...studioRowView(row),
-      readiness: await studioRowReadiness(db, { page, row }),
-    })))
-    return NextResponse.json({ success: true, data: { page, studios: rows, can_edit: canEditPage(user, page) } })
+    const canEdit = canEditPage(user, page)
+    // The studio half (plan ids, product ids, prices, promo keys, tags) goes
+    // to an editor only: a read-only viewer gets the switch and the readiness
+    // (EDITGATE.1 parity: the ?edit=1 preview withholds the same keys).
+    const ordered = studios.slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    const rows = await Promise.all(ordered.map(async (row) => {
+      const { offer, attribution, ...view } = studioRowView(row)
+      return {
+        ...view,
+        ...(canEdit ? { offer, attribution } : {}),
+        readiness: await studioRowReadiness(db, { page, row }),
+      }
+    }))
+    return NextResponse.json({ success: true, data: { page, studios: rows, can_edit: canEdit } })
   } catch (err) {
     if (!(err instanceof PageReadError)) throw err
     logError('landing-pages', 'page unreadable', { pageId: id, code: err.cause?.code ?? null })
@@ -59,6 +68,7 @@ export async function PUT(request, { params }) {
     loaded = await loadViewablePage(db, user, id)
   } catch (err) {
     if (!(err instanceof PageReadError)) throw err
+    logError('landing-pages', 'page unreadable on save', { pageId: id, code: err.cause?.code ?? null })
     return fail(503, 'unavailable')
   }
   if (!loaded) return fail(404, 'not_found')

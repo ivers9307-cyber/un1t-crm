@@ -25,7 +25,7 @@ import { TRIAL_STUDIOS, trialEntryFromRow } from '@/lib/trial-studios'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin, adminOrganizationIds } from '@/lib/org-admin'
-import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/schemas'
+import { LANDING_PAGE_PUBLISH_STATES } from '@/lib/landing-page-schemas'
 import { UUID_SHAPE } from '@/lib/uuid-shape'
 import { getUserLocationIds } from '@/lib/auth'
 import { un1tFunnelCopyFromBlocks } from '@/lib/un1t-online-funnel-copy'
@@ -731,7 +731,8 @@ export async function renameSlug(db, { page, slug, patch, userId }) {
       kind: 'campaign',
       scope: page.scope,
       primary_location_id: page.primary_location_id,
-      offer_type: page.offer_type,
+      // A redirect sells nothing and has no studio rows.
+      offer_type: 'none',
       blocks: [],
       chrome: { noindex: true },
       publish_state: 'retired',

@@ -38,6 +38,22 @@ describe('GET /api/landing-pages/[id]', () => {
     expect(JSON.stringify(data)).not.toContain('settings')
   })
 
+  it('a read-only viewer gets no studio half; an editor does', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const viewer = (await (await get(PAGE.trial)).json()).data
+    expect(viewer.studios).toHaveLength(2)
+    for (const row of viewer.studios) {
+      expect(row).not.toHaveProperty('offer')
+      expect(row).not.toHaveProperty('attribution')
+      expect(row).toMatchObject({ enabled: true, readiness: { ready: true } })
+    }
+    expect(JSON.stringify(viewer)).not.toContain('plan_code')
+
+    getCurrentUser.mockResolvedValue(ORG_ADMIN)
+    const editor = (await (await get(PAGE.trial)).json()).data
+    expect(editor.studios[0].offer).toMatchObject({ plan_code: 'p' })
+  })
+
   it('404 for a page outside the caller\'s view, an unknown id and a non-uuid', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     for (const id of [PAGE.corp, PAGE.other, 'd0000000-0000-0000-0000-00000000ffff', 'nope']) {
@@ -99,7 +115,7 @@ describe('PUT /api/landing-pages/[id]', () => {
     expect((await res.json()).data.slug).toBe('fifty-plus')
     const retired = db.state.landing_pages.find((p) => p.slug === '50plus')
     expect(retired).toMatchObject({
-      kind: 'campaign', scope: 'one', primary_location_id: STILL, offer_type: 'one_class', publish_state: 'retired',
+      kind: 'campaign', scope: 'one', primary_location_id: STILL, offer_type: 'none', publish_state: 'retired',
       redirect_to: '/fifty-plus', blocks: [], chrome: { noindex: true }, title: 'The 50+ Club (moved)',
     })
   })

@@ -13,7 +13,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { landingPagePublishSchema } from '@/lib/schemas'
+import { landingPagePublishSchema } from '@/lib/landing-page-schemas'
 import { OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
 import {
   loadViewablePage, canEditPage, studioRowReadiness, studioRowView, updatePageRow, PageReadError,

@@ -17,7 +17,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { isOrgAdmin } from '@/lib/org-admin'
 import { validateBody } from '@/lib/validate'
-import { landingPageCreateSchema } from '@/lib/schemas'
+import { landingPageCreateSchema } from '@/lib/landing-page-schemas'
 import { slugProblem } from '@/lib/page-slug'
 import { resolveLocationBrand, resolveOrgChrome } from '@/lib/host-brand'
 import { listPagesForUser, createPage, loadViewablePage, PageReadError } from '@/lib/landing-pages'
@@ -59,8 +59,10 @@ export async function POST(request) {
       .from('locations')
       .select('id, organization_id')
       .eq('id', input.primary_location_id)
+      .eq('active', true)
       .maybeSingle()
     if (error) return unavailable()
+    // An inactive studio gets no studio row (createPage), so its page could never go live.
     if (!loc?.organization_id) return fail(404, 'not_found')
     orgId = loc.organization_id
   } else {

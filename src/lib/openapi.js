@@ -30,8 +30,10 @@ import {
   studioConsentCopySchema,
   studioBlastSignoffSchema,
   usageEventsSchema,
-  landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
 } from './schemas.js'
+import {
+  landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
+} from './landing-page-schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'

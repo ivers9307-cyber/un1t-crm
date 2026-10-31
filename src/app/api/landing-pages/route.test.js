@@ -143,6 +143,14 @@ describe('POST /api/landing-pages', () => {
     expect(Object.fromEntries(rows.map((r) => [r.location_id, r.enabled]))).toEqual({ [STILL]: true, [HATCH]: false })
   })
 
+  it('a one-studio page at an inactive studio is a 404', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const res = await POST(create({ ...NEW_ONE, primary_location_id: CLOSED }))
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'not_found' })
+    expect(db.writes('landing_pages')).toEqual([])
+  })
+
   it('no offer starts with a hero; a start page the caller cannot view is a 404', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     const res = await POST(create({ ...NEW_ONE, offer_type: 'none' }))
