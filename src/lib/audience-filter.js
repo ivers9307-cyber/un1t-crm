@@ -35,7 +35,7 @@
 //   - OR logic: each negative becomes a nested `or(f.neq.v,f.is.null)`
 //     disjunct inside the single top-level .or().
 
-import { selectAll } from '@/lib/select-all'
+import { selectAll, selectAllByKeys } from '@/lib/select-all'
 
 /**
  * Field → { type, ops }. `type` is informational; `ops` is the set of
@@ -259,17 +259,8 @@ const DAYS_SINCE_OPS = new Set(['days_since_gt', 'days_since_lt'])
 // date field these carry an ISO date string (Number('2026-07-01') is
 // NaN), so coercing by op alone wrongly rejects date before/after.
 const NUMERIC_COMPARE_OPS = new Set(['gt', 'lt', 'gte', 'lte'])
-// Upper bound on a tag/event exclusion (NOT IN) id-set. The list rides in
-// the GET URL, so an unbounded exclusion blows the URL-length limit and 500s.
-// Above this we throw a clear error instead of emitting a broken query.
-const MAX_EXCLUSION_IDS = 2000
-
-export class InvalidAudienceFilterError extends Error {
-  constructor(message) {
-    super(message)
-    this.name = 'InvalidAudienceFilterError'
-  }
-}
+// InvalidAudienceFilterError and the id-list URL budget live below, next to
+// the virtual-field resolvers that raise them (AUDIENCEIDS.1).
 
 // FILTER-P1.1 — an UNSET builder row: the operator clicked "Add filter" but
 // has not chosen a field yet ({ field: '', op: '', value: '' }).
@@ -644,14 +635,334 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
 }
 
 /**
+ * AUDIENCEIDS.1 — how a resolved contact-id set reaches the database.
+ *
+ * The three virtual fields below (`tag`, `event_registration`,
+ * `location_list`) are resolved in JS into contact-id sets. Until 31 Oct 2026
+ * every set was placed on the PostgREST GET URL as `id=in.(…)` or
+ * `id=not.in.(…)`, bounded by a COUNT (MAX_EXCLUSION_IDS = 2000). The limit
+ * is URL bytes, not rows: a uuid costs 39 URL characters (36 + the encoded
+ * comma), so 1,902 excluded ids was a ~74 KB URL that failed before PostgREST
+ * answered — supabase-js resolved `{ error }` with an EMPTY message, the
+ * campaign-sender wrote "audience load failed: " and the run-campaigns cron
+ * marked the Stillorgan Lock-In Sale campaign failed, every tick.
+ *
+ * Now:
+ *  - the sets of every virtual field are merged FIRST (positives intersect
+ *    across fields, negatives union; a known inclusion has its exclusions
+ *    subtracted in JS, so at most ONE id predicate is ever emitted);
+ *  - the predicate's encoded URL length is measured against
+ *    AUDIENCE_ID_URL_BUDGET. Under budget → the GET path, unchanged;
+ *  - over budget → the caller's `rebase({ include, exclude })` rebuilds the
+ *    same base query on the relation's `*_scoped` rpc twin (mig 795), which
+ *    takes the ids in the POST body and returns the relation's rows, so
+ *    .eq()/.order()/.range()/count all still apply and the `{ query }`
+ *    contract holds. See scopedAudienceSource;
+ *  - over budget with no `rebase` → a loud InvalidAudienceFilterError that
+ *    says how long the URL would be, never an empty-message failure.
+ */
+
+// Characters of encoded `id=in.(…)` / `id=not.in.(…)` an audience query may
+// carry on its GET URL. 8,000 is supabase-js's own default `urlLengthLimit`
+// (the length at which it starts warning about `.in()` lists). A uuid costs
+// 39 of them, so this is ~205 uuids; the live failure was 1,902.
+export const AUDIENCE_ID_URL_BUDGET = 8_000
+
+// How many uuids an `id=in.(…)` predicate holds inside that budget: 9 chars of
+// `id=in.%28` + `%29`, then 36 for each uuid and 3 for each encoded comma.
+// For a caller that chunks a known uuid list itself (the resend populate's
+// non-opener ids), never a bare 1,000.
+export const MAX_UUIDS_PER_URL = Math.floor((AUDIENCE_ID_URL_BUDGET - 12) / 39)
+
+// Unsatisfiable predicate: an inclusion that resolved to nobody must return 0
+// rows (and count 0), never "everyone".
+const NOBODY_ID = '00000000-0000-0000-0000-000000000000'
+
+export class InvalidAudienceFilterError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'InvalidAudienceFilterError'
+  }
+}
+
+/**
+ * The exact number of URL characters postgrest-js would add for an id
+ * predicate over `ids` (`.in('id', ids)` or `.not('id', 'in', '(…)')`):
+ * URLSearchParams encodes `(`, `)` and `,` as three characters each.
+ */
+export function idPredicateUrlLength(ids, { negate = false } = {}) {
+  const list = Array.isArray(ids) ? ids : Array.from(ids)
+  const value = `${negate ? 'not.' : ''}in.(${list.join(',')})`
+  return new URLSearchParams([['id', value]]).toString().length
+}
+
+// Fast-path: does the filter name any virtual field at all? Lets every caller
+// skip the merge (and the rebase closure) when there is nothing to resolve.
+function virtualClauses(filter) {
+  if (!filter?.filters?.length) return []
+  return filter.filters.filter(f => {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    return cfg && (cfg.type === 'tag' || cfg.type === 'event' || cfg.type === 'location_list')
+  })
+}
+
+function partitionClauses(filter, type, { onEmpty }) {
+  const positives = []
+  const negatives = []
+  for (const f of filter?.filters || []) {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    if (!cfg || cfg.type !== type) continue
+    if (typeof f.value !== 'string' || !f.value.trim()) {
+      throw new InvalidAudienceFilterError(onEmpty)
+    }
+    const value = f.value.trim()
+    if (f.op === 'eq') positives.push(value)
+    else if (f.op === 'neq') negatives.push(value)
+  }
+  return { positives, negatives }
+}
+
+// Intersect `acc` (null = unconstrained so far) with `ids`.
+function intersect(acc, ids) {
+  if (acc === null) return new Set(ids)
+  const idSet = ids instanceof Set ? ids : new Set(ids)
+  return new Set([...acc].filter(x => idSet.has(x)))
+}
+
+/**
+ * Resolve ONE field's clauses into `{ include: Set|null, exclude: Set }`,
+ * given a loader from the field's value to the matching contact ids.
+ */
+async function idSetsFor({ filter, type, onEmpty, load }) {
+  const { positives, negatives } = partitionClauses(filter, type, { onEmpty })
+  let include = null
+  for (const value of positives) {
+    include = intersect(include, await load(value))
+    if (include.size === 0) break   // nothing can widen an empty intersection
+  }
+  const exclude = new Set()
+  if (include === null || include.size > 0) {
+    for (const value of negatives) {
+      for (const id of await load(value)) exclude.add(id)
+    }
+  }
+  return { include, exclude }
+}
+
+// Helper: list of contact_ids currently tagged with `tag` at the given
+// location (or all locations if locationId is null).
+// AUDIT P1-2 — paginated: a popular tag can match >1000 contacts, and a
+// truncated set silently narrows the audience. selectAll throws a plain
+// Error on a DB failure; re-wrap as InvalidAudienceFilterError so the
+// caller's existing 400 path is preserved.
+async function contactIdsForTag(db, tag, locationId) {
+  let data
+  try {
+    data = await selectAll((from, to) => {
+      let q = db.from('contact_tags').select('contact_id').eq('tag', tag).is('removed_at', null)
+      if (locationId) q = q.eq('location_id', locationId)
+      return q.order('contact_id', { ascending: true }).range(from, to)
+    })
+  } catch (err) {
+    throw new InvalidAudienceFilterError(`tag lookup failed: ${err.message}`)
+  }
+  return Array.from(new Set(data.map(r => r.contact_id).filter(Boolean)))
+}
+
+// contact_ids registered (live) for one event: registrants + teammates.
+// AUDIT P1-2 — both selects paginated: a large event's registration list
+// (+ the teammate fan-out across many teams) can exceed the 1000-row cap,
+// which would silently drop registrants past row 1000 from the audience.
+// The team-id list is chunked too (selectAllByKeys, 300 a query): it rides
+// the GET URL exactly like the contact-id lists this file exists to bound.
+// selectAll throws a plain Error; re-wrap as InvalidAudienceFilterError.
+async function contactIdsForEvent(db, eventId) {
+  let regs
+  try {
+    regs = await selectAll((from, to) => db
+      .from('race_registrations')
+      .select('contact_id, team_id')
+      .eq('race_event_id', eventId)
+      .in('status', LIVE_REGISTRATION_STATUSES)
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch (err) {
+    throw new InvalidAudienceFilterError(`event lookup failed: ${err.message}`)
+  }
+
+  const teamIds = Array.from(new Set(regs.map(r => r.team_id).filter(Boolean)))
+  let members = []
+  if (teamIds.length) {
+    try {
+      members = await selectAllByKeys(teamIds, (keys, from, to) => db
+        .from('team_members')
+        .select('contact_id')
+        .in('team_id', keys)
+        .not('contact_id', 'is', null)
+        .order('contact_id', { ascending: true })
+        .range(from, to))
+    } catch (err) {
+      throw new InvalidAudienceFilterError(`event teammate lookup failed: ${err.message}`)
+    }
+  }
+  return mergeRegistrationContactIds(regs, members)
+}
+
+// LISTFILTER.1 — everyone holding a contact_location_preferences row at the
+// studio. Paginated for the same reason the tag + event loaders are: a
+// studio's preference-row set runs to thousands (Stillorgan alone is 7k+),
+// and the 1,000-row select cap applies regardless of .limit(). A truncated
+// set here does not error — it silently narrows the audience, which on a send
+// path means people quietly not receiving something.
+async function contactIdsOnList(db, locationId) {
+  let rows
+  try {
+    rows = await selectAll((from, to) => db
+      .from('contact_location_preferences')
+      .select('contact_id')
+      .eq('location_id', locationId)
+      .order('contact_id', { ascending: true })
+      .range(from, to))
+  } catch (err) {
+    throw new InvalidAudienceFilterError(`studio-list lookup failed: ${err.message}`)
+  }
+  return [...new Set(rows.map(r => r?.contact_id).filter(Boolean))]
+}
+
+const TAG_EMPTY = 'tag filter requires a non-empty string value'
+const EVENT_EMPTY = 'event filter requires a non-empty event id'
+const LIST_EMPTY = 'studio-list filter requires a non-empty location id'
+
+/** `tag eq X` / `tag neq X` → id sets (mig 085 retargeting tags). */
+export async function tagIdSets({ db, filter, locationId }) {
+  return idSetsFor({ filter, type: 'tag', onEmpty: TAG_EMPTY, load: (tag) => contactIdsForTag(db, tag, locationId) })
+}
+
+/**
+ * `event_registration eq X` / `neq X` → id sets. "Registered for event X" =
+ * race_registrations rows for X whose status is a LIVE_REGISTRATION_STATUS
+ * (pending_payment or confirmed), taking the registrant UNION the linked
+ * teammates on those registrations' teams. cancelled + no_show are excluded.
+ */
+export async function eventIdSets({ db, filter }) {
+  return idSetsFor({ filter, type: 'event', onEmpty: EVENT_EMPTY, load: (eventId) => contactIdsForEvent(db, eventId) })
+}
+
+/**
+ * LISTFILTER.1 — `location_list eq X` / `neq X` → id sets. Answers "who is on
+ * <studio>'s list" by ROW PRESENCE in contact_location_preferences, which the
+ * deal-keyed crossover machinery cannot: a person who registered interest at a
+ * pre-opening studio holds no deal there, only a preferences row.
+ *
+ * MEMBERSHIP, NOT MAILABILITY — deliberately NOT `email_marketing = true`. The
+ * send path applies consent itself (the audience view is already gated on the
+ * consent column for the sending location); folding it in here would
+ * double-gate the sender and quietly answer a different question than the one
+ * the operator asked: "who is on the Hatch list" is a roll-call, not a send
+ * estimate.
+ */
+export async function locationListIdSets({ db, filter }) {
+  return idSetsFor({ filter, type: 'location_list', onEmpty: LIST_EMPTY, load: (locId) => contactIdsOnList(db, locId) })
+}
+
+/**
+ * Resolve EVERY virtual field in the filter into one `{ include, exclude }`:
+ *   include — Set of ids the audience is restricted to, or null (unrestricted)
+ *   exclude — Set of ids removed from it (empty when include is a Set: the
+ *             subtraction is done here, so only one predicate is needed)
+ * Clauses combine exactly as the old per-field injection did: every positive
+ * clause intersects (AND), every negative clause subtracts.
+ */
+export async function resolveVirtualIdSets({ db, filter, locationId }) {
+  if (virtualClauses(filter).length === 0) return { include: null, exclude: new Set(), present: false }
+  let include = null
+  const exclude = new Set()
+  for (const sets of [
+    await tagIdSets({ db, filter, locationId }),
+    await eventIdSets({ db, filter }),
+    await locationListIdSets({ db, filter }),
+  ]) {
+    if (sets.include !== null) include = intersect(include, sets.include)
+    for (const id of sets.exclude) exclude.add(id)
+  }
+  if (include !== null) {
+    for (const id of exclude) include.delete(id)
+    exclude.clear()
+  }
+  return { include, exclude, present: true }
+}
+
+/**
+ * The base query for `relation` at `locationId`, already scoped server-side
+ * to `include` / `exclude` (mig 795, AUDIENCEIDS.1). An rpc POST, so the id
+ * lists travel in the body; PostgREST applies the caller's filters, select,
+ * order and range to the function's rows as it does to the relation.
+ *
+ * A COUNT (`selectOpts.head`) cannot ride a HEAD request here: postgrest-js
+ * puts rpc args on the URL for HEAD/GET, which is the exact failure this
+ * path exists to avoid. It is translated to POST + `Prefer: count=<n>` and a
+ * one-row limit, so `const { count } = await query` reads the same as before
+ * (`data` is one row instead of null; no count caller reads data).
+ */
+export function scopedAudienceSource(db, relation, { locationId, include, exclude, columns = '*', selectOpts } = {}) {
+  if (!locationId) {
+    throw new InvalidAudienceFilterError('a server-side scoped audience source needs a studio (locationId)')
+  }
+  const args = {
+    p_location_id: locationId,
+    p_include: include ? Array.from(include) : null,
+    p_exclude: exclude && exclude.size > 0 ? Array.from(exclude) : null,
+  }
+  const count = selectOpts?.count
+  let q
+  // Literal function names on purpose: check:rpc-names resolves each one
+  // against the migrations and refuses a name held in a variable.
+  if (relation === 'contact_location_audience') {
+    q = db.rpc('contact_location_audience_scoped', args, count ? { count } : undefined)
+  } else if (relation === 'studio_contacts') {
+    q = db.rpc('studio_contacts_scoped', args, count ? { count } : undefined)
+  } else {
+    throw new InvalidAudienceFilterError(`no server-side scoped source for ${relation}`)
+  }
+  q = q.select(columns)
+  if (selectOpts?.head) q = q.limit(1)
+  return q
+}
+
+/**
+ * Put `{ include, exclude }` on `query` within the URL budget, or rebuild the
+ * query through `rebase` when they do not fit. Returns the query to continue
+ * chaining on. Exported for the per-field wrappers below and for tests.
+ */
+export function applyIdSets(query, { include, exclude }, { rebase } = {}) {
+  if (include !== null && include !== undefined) {
+    // A known inclusion has its exclusions subtracted here, so one predicate
+    // (never IN + NOT IN) reaches the database, whichever path it takes.
+    if (exclude && exclude.size > 0) {
+      include = new Set([...include].filter(id => !exclude.has(id)))
+    }
+    if (include.size === 0) return query.eq('id', NOBODY_ID)
+    const length = idPredicateUrlLength(include)
+    if (length <= AUDIENCE_ID_URL_BUDGET) return query.in('id', Array.from(include))
+    if (rebase) return rebase({ include, exclude: new Set() })
+    throw new InvalidAudienceFilterError(
+      `This audience matches too many contacts (${include.size}) to filter on in one request: the id list alone is ${length} URL characters against a ${AUDIENCE_ID_URL_BUDGET}-character budget, and this path has no server-side scoped source. Add another filter (a stage, a date) to narrow the audience first.`
+    )
+  }
+  if (exclude && exclude.size > 0) {
+    const length = idPredicateUrlLength(exclude, { negate: true })
+    if (length <= AUDIENCE_ID_URL_BUDGET) return query.not('id', 'in', `(${Array.from(exclude).join(',')})`)
+    if (rebase) return rebase({ include: null, exclude })
+    throw new InvalidAudienceFilterError(
+      `This exclusion matches too many contacts (${exclude.size}) to apply in one request: the id list alone is ${length} URL characters against a ${AUDIENCE_ID_URL_BUDGET}-character budget, and this path has no server-side scoped source. Add a positive filter to narrow the audience first.`
+    )
+  }
+  return query
+}
+
+/**
  * Resolve any `tag` filters in the audience filter into a contacts.id
  * constraint (Phase 3 — mig 085 retargeting).
- *
- * Tags live on contact_tags (one row per active tag, soft-deleted via
- * removed_at). The audience filter UI exposes `tag eq X` and
- * `tag neq X` — translated here into `contacts.id IN (…)` and
- * `contacts.id NOT IN (…)` respectively. Multiple tag clauses combine
- * with AND inside a single audience filter.
  *
  * IMPORTANT — return shape is { query } (wrapped), NOT a bare query.
  * Supabase JS v2 query builders are THENABLE: they have a .then() that
@@ -663,283 +974,36 @@ export function applyAudienceFilter(query, filter, { fields = AUDIENCE_FIELDS } 
  * object has no filter methods. Wrapping in a plain object defeats the
  * auto-unwrap.
  *
- * @param {object} args
- * @param {SupabaseClient} args.db
- * @param {object} args.query     contacts query already scoped by location
- * @param {object|null} args.filter
- * @param {string|null} args.locationId   tightens the contact_tags lookup
+ * Per-field wrapper over tagIdSets + applyIdSets. applyAudienceFilterAsync
+ * (below) is the path every caller uses: it merges the three fields into one
+ * predicate and can rebase. Kept for callers and tests that resolve one
+ * field; over the URL budget it throws (it has no rebase).
+ *
  * @returns {Promise<{ query: object }>}  wrapped to avoid thenable unwrap
  */
-export async function resolveTagFilters({ db, query, filter, locationId }) {
-  if (!filter?.filters?.length) return { query }
-
-  // Collect the AND-combined positive (eq) and negative (neq) tags.
-  const positives = []
-  const negatives = []
-  for (const f of filter.filters) {
-    const cfg = AUDIENCE_FIELDS[f?.field]
-    if (!cfg || cfg.type !== 'tag') continue
-    if (typeof f.value !== 'string' || !f.value.trim()) {
-      throw new InvalidAudienceFilterError('tag filter requires a non-empty string value')
-    }
-    const tag = f.value.trim()
-    if (f.op === 'eq') positives.push(tag)
-    else if (f.op === 'neq') negatives.push(tag)
-  }
-  if (positives.length === 0 && negatives.length === 0) return { query }
-
-  // Helper: list of contact_ids currently tagged with `tag` at the
-  // given location (or all locations if locationId is null).
-  // AUDIT P1-2 — paginated: a popular tag can match >1000 contacts, and a
-  // truncated set silently narrows the audience. selectAll throws a plain
-  // Error on a DB failure; re-wrap as InvalidAudienceFilterError so the
-  // caller's existing 400 path is preserved.
-  async function contactIdsForTag(tag) {
-    let data
-    try {
-      data = await selectAll((from, to) => {
-        let q = db.from('contact_tags').select('contact_id').eq('tag', tag).is('removed_at', null)
-        if (locationId) q = q.eq('location_id', locationId)
-        return q.order('contact_id', { ascending: true }).range(from, to)
-      })
-    } catch (err) {
-      throw new InvalidAudienceFilterError(`tag lookup failed: ${err.message}`)
-    }
-    return Array.from(new Set(data.map(r => r.contact_id).filter(Boolean)))
-  }
-
-  // Positives: intersect across all (AND combine). The first list
-  // seeds; subsequent tags filter down. Empty intersection = no rows.
-  let allowed = null
-  for (const tag of positives) {
-    const ids = await contactIdsForTag(tag)
-    allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
-    if (allowed.size === 0) {
-      // Force an unsatisfiable predicate so the count comes back 0.
-      return { query: query.eq('id', '00000000-0000-0000-0000-000000000000') }
-    }
-  }
-  if (allowed && allowed.size > 0) {
-    query = query.in('id', [...allowed])
-  }
-
-  // Negatives: subtract via a single deduped NOT IN. The exclusion list
-  // rides in the GET URL (`id=not.in.(…)`), so combining all negative tags
-  // into one set keeps the URL minimal, and the size bound stops an
-  // unbounded exclusion (a popular tag with thousands of members) from
-  // blowing the URL-length limit — above the bound we fail loudly rather
-  // than emit a broken/truncated query that silently widens the audience.
-  const negIds = new Set()
-  for (const tag of negatives) {
-    for (const id of await contactIdsForTag(tag)) negIds.add(id)
-  }
-  if (negIds.size > MAX_EXCLUSION_IDS) {
-    throw new InvalidAudienceFilterError(
-      `Tag exclusion matches too many contacts (${negIds.size}) to apply in one query — add a positive filter to narrow the audience first.`
-    )
-  }
-  if (negIds.size > 0) {
-    query = query.not('id', 'in', `(${[...negIds].join(',')})`)
-  }
-
-  return { query }
+export async function resolveTagFilters({ db, query, filter, locationId, rebase }) {
+  if (virtualClauses(filter).every(f => AUDIENCE_FIELDS[f.field].type !== 'tag')) return { query }
+  return { query: applyIdSets(query, await tagIdSets({ db, filter, locationId }), { rebase }) }
 }
 
 /**
  * Resolve any `event_registration` filters into a contacts.id constraint.
- *
- * "Registered for event X" = race_registrations rows for X whose status
- * is a LIVE_REGISTRATION_STATUS (pending_payment or confirmed), taking the
- * registrant (contact_id) UNION the linked teammates (team_members.contact_id)
- * on those registrations' teams. cancelled + no_show are excluded.
- *
- * eq clauses (registered for) intersect (AND). neq clauses (not registered
- * for) subtract via NOT IN. Empty positive set → unsatisfiable sentinel.
- *
- * Same wrapped { query } return as resolveTagFilters — defeats the
- * thenable auto-unwrap (see that function's JSDoc). The chosen event id is
+ * Same wrapped { query } return as resolveTagFilters. The chosen event id is
  * itself location-bound and the base contacts query is location-scoped, so
  * no extra location filter is needed here.
- *
- * @param {object} args
- * @param {SupabaseClient} args.db
- * @param {object} args.query      contacts query already scoped by location
- * @param {object|null} args.filter
- * @returns {Promise<{ query: object }>}
  */
-export async function resolveEventFilters({ db, query, filter }) {
-  if (!filter?.filters?.length) return { query }
-
-  const positives = []
-  const negatives = []
-  for (const f of filter.filters) {
-    const cfg = AUDIENCE_FIELDS[f?.field]
-    if (!cfg || cfg.type !== 'event') continue
-    if (typeof f.value !== 'string' || !f.value.trim()) {
-      throw new InvalidAudienceFilterError('event filter requires a non-empty event id')
-    }
-    const eventId = f.value.trim()
-    if (f.op === 'eq') positives.push(eventId)
-    else if (f.op === 'neq') negatives.push(eventId)
-  }
-  if (positives.length === 0 && negatives.length === 0) return { query }
-
-  // contact_ids registered (live) for one event: registrants + teammates.
-  // AUDIT P1-2 — both selects paginated: a large event's registration list
-  // (+ the teammate fan-out across many teams) can exceed the 1000-row cap,
-  // which would silently drop registrants past row 1000 from the audience.
-  // selectAll throws a plain Error; re-wrap as InvalidAudienceFilterError.
-  async function contactIdsForEvent(eventId) {
-    let regs
-    try {
-      regs = await selectAll((from, to) => db
-        .from('race_registrations')
-        .select('contact_id, team_id')
-        .eq('race_event_id', eventId)
-        .in('status', LIVE_REGISTRATION_STATUSES)
-        .order('id', { ascending: true })
-        .range(from, to))
-    } catch (err) {
-      throw new InvalidAudienceFilterError(`event lookup failed: ${err.message}`)
-    }
-
-    const teamIds = Array.from(new Set(regs.map(r => r.team_id).filter(Boolean)))
-    let members = []
-    if (teamIds.length) {
-      try {
-        members = await selectAll((from, to) => db
-          .from('team_members')
-          .select('contact_id')
-          .in('team_id', teamIds)
-          .not('contact_id', 'is', null)
-          .order('contact_id', { ascending: true })
-          .range(from, to))
-      } catch (err) {
-        throw new InvalidAudienceFilterError(`event teammate lookup failed: ${err.message}`)
-      }
-    }
-    return mergeRegistrationContactIds(regs, members)
-  }
-
-  // Positives: intersect across all "registered for X" clauses (AND).
-  let allowed = null
-  for (const eventId of positives) {
-    const ids = await contactIdsForEvent(eventId)
-    allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
-    if (allowed.size === 0) {
-      return { query: query.eq('id', '00000000-0000-0000-0000-000000000000') }
-    }
-  }
-  if (allowed && allowed.size > 0) {
-    query = query.in('id', [...allowed])
-  }
-
-  // Negatives: subtract via a single deduped, size-bounded NOT IN — see
-  // resolveTagFilters for why (the exclusion list rides in the GET URL).
-  const negIds = new Set()
-  for (const eventId of negatives) {
-    for (const id of await contactIdsForEvent(eventId)) negIds.add(id)
-  }
-  if (negIds.size > MAX_EXCLUSION_IDS) {
-    throw new InvalidAudienceFilterError(
-      `Event exclusion matches too many contacts (${negIds.size}) to apply in one query — add a positive filter to narrow the audience first.`
-    )
-  }
-  if (negIds.size > 0) {
-    query = query.not('id', 'in', `(${[...negIds].join(',')})`)
-  }
-
-  return { query }
+export async function resolveEventFilters({ db, query, filter, rebase }) {
+  if (virtualClauses(filter).every(f => AUDIENCE_FIELDS[f.field].type !== 'event')) return { query }
+  return { query: applyIdSets(query, await eventIdSets({ db, filter }), { rebase }) }
 }
 
 /**
  * LISTFILTER.1 — resolve `location_list` rows into a contacts.id constraint.
- *
- * Answers "who is on <studio>'s list", which the deal-keyed crossover
- * machinery cannot: a person who registered interest at a pre-opening studio
- * holds no deal there, only a contact_location_preferences row.
- *
- * Same wrapped { query } return as resolveTagFilters — defeats the
- * thenable-protocol auto-unwrap. See that function's header.
+ * Same wrapped { query } return as resolveTagFilters.
  */
-export async function resolveLocationListFilters({ db, query, filter }) {
-  if (!filter?.filters?.length) return { query }
-
-  const positives = []
-  const negatives = []
-  for (const f of filter.filters) {
-    const cfg = AUDIENCE_FIELDS[f?.field]
-    if (!cfg || cfg.type !== 'location_list') continue
-    if (typeof f.value !== 'string' || !f.value.trim()) {
-      throw new InvalidAudienceFilterError('studio-list filter requires a non-empty location id')
-    }
-    const locId = f.value.trim()
-    if (f.op === 'eq') positives.push(locId)
-    else if (f.op === 'neq') negatives.push(locId)
-  }
-  if (positives.length === 0 && negatives.length === 0) return { query }
-
-  // Paginated for the same reason the tag + event resolvers are: a studio's
-  // preference-row set runs to thousands (Stillorgan alone is 7k+), and the
-  // 1,000-row select cap applies regardless of .limit(). A truncated set here
-  // does not error — it silently narrows the audience, which on a send path
-  // means people quietly not receiving something.
-  async function contactIdsOnList(locationId) {
-    let rows
-    try {
-      rows = await selectAll((from, to) => db
-        .from('contact_location_preferences')
-        .select('contact_id')
-        .eq('location_id', locationId)
-        .order('contact_id', { ascending: true })
-        .range(from, to))
-    } catch (err) {
-      throw new InvalidAudienceFilterError(`studio-list lookup failed: ${err.message}`)
-    }
-    return [...new Set(rows.map(r => r?.contact_id).filter(Boolean))]
-  }
-
-  // Positives: intersect across all "on X's list" clauses (AND).
-  let allowed = null
-  for (const locId of positives) {
-    const ids = await contactIdsOnList(locId)
-    allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
-    if (allowed.size === 0) {
-      return { query: query.eq('id', '00000000-0000-0000-0000-000000000000') }
-    }
-  }
-  if (allowed && allowed.size > 0) {
-    // The INCLUSION list rides in the GET URL exactly like the exclusion one
-    // below, and for this field a positive clause is the likely way to blow
-    // it: "on the list for <an established studio>" is a whole studio's
-    // roll-call — Stillorgan alone holds 7,444 preference rows, ~275KB of
-    // uuids, comfortably past Cloudflare's URI limit. Fail with something an
-    // operator can act on rather than a bare 414, or worse a truncation that
-    // quietly drops people from a send.
-    if (allowed.size > MAX_EXCLUSION_IDS) {
-      throw new InvalidAudienceFilterError(
-        `That studio's list has too many contacts (${allowed.size}) to filter on in one query — add another filter (a stage, a date) to narrow the audience first.`
-      )
-    }
-    query = query.in('id', [...allowed])
-  }
-
-  // Negatives: one deduped, size-bounded NOT IN — the exclusion list rides in
-  // the GET URL, so an unbounded one is a 414. See resolveTagFilters.
-  const negIds = new Set()
-  for (const locId of negatives) {
-    for (const id of await contactIdsOnList(locId)) negIds.add(id)
-  }
-  if (negIds.size > MAX_EXCLUSION_IDS) {
-    throw new InvalidAudienceFilterError(
-      `Studio-list exclusion matches too many contacts (${negIds.size}) to apply in one query — add a positive filter to narrow the audience first.`
-    )
-  }
-  if (negIds.size > 0) {
-    query = query.not('id', 'in', `(${[...negIds].join(',')})`)
-  }
-
-  return { query }
+export async function resolveLocationListFilters({ db, query, filter, rebase }) {
+  if (virtualClauses(filter).every(f => AUDIENCE_FIELDS[f.field].type !== 'location_list')) return { query }
+  return { query: applyIdSets(query, await locationListIdSets({ db, filter }), { rebase }) }
 }
 
 /**
@@ -967,32 +1031,77 @@ export function validateAudienceFilter(filter) {
     const cfg = AUDIENCE_FIELDS[f?.field]
     if (!cfg) continue // applyAudienceFilter already threw on unknown fields
     if (cfg.type === 'tag' && (typeof f.value !== 'string' || !f.value.trim())) {
-      throw new InvalidAudienceFilterError('tag filter requires a non-empty string value')
+      throw new InvalidAudienceFilterError(TAG_EMPTY)
     }
     if (cfg.type === 'event' && (typeof f.value !== 'string' || !f.value.trim())) {
-      throw new InvalidAudienceFilterError('event filter requires a non-empty event id')
+      throw new InvalidAudienceFilterError(EVENT_EMPTY)
     }
     if (cfg.type === 'location_list' && (typeof f.value !== 'string' || !f.value.trim())) {
-      throw new InvalidAudienceFilterError('studio-list filter requires a non-empty location id')
+      throw new InvalidAudienceFilterError(LIST_EMPTY)
     }
   }
 }
 
 /**
- * Convenience wrapper: resolve tag + event + location_list virtual fields AND apply scalar
- * filters in one call. Use this in async contexts (most route handlers
- * already are). Existing sync callers continue using applyAudienceFilter
- * directly until they need virtual-field support.
+ * Resolve tag + event + location_list virtual fields AND apply scalar filters
+ * in one call. Use this in async contexts (most route handlers already are).
+ * Existing sync callers continue using applyAudienceFilter directly until
+ * they need virtual-field support.
  *
- * Returns { query } — see resolveTagFilters above for the thenable-
- * unwrap reason. Callers must destructure:
+ * Returns { query } — see resolveTagFilters above for the thenable-unwrap
+ * reason. Callers must destructure:
  *   const { query: filtered } = await applyAudienceFilterAsync(...)
  *
+ * @param {object} args
+ * @param {SupabaseClient} args.db
+ * @param {object} args.query        base query, already scoped to the studio
+ * @param {object|null} args.filter
+ * @param {string|null} args.locationId  the studio: scopes the tag lookup and
+ *                                       the scoped source
+ * @param {(sets: { include: Set|null, exclude: Set }) => object} [args.rebase]
+ *   Rebuilds the SAME base query on the relation's scoped rpc twin
+ *   (scopedAudienceSource) when the resolved id list does not fit the URL
+ *   budget. Without it, an over-budget list throws InvalidAudienceFilterError.
+ * @param {string} [args.pinnedId]   when the base query is already pinned to
+ *   ONE contact (`.eq('id', contactId)` — the sequence evaluator), membership
+ *   is decided here in JS and no id predicate is emitted at all: the
+ *   per-contact check never carries a cohort of ids to the database.
  * @returns {Promise<{ query: object }>}
  */
-export async function applyAudienceFilterAsync({ db, query, filter, locationId }) {
-  const tagResult = await resolveTagFilters({ db, query, filter, locationId })
-  const eventResult = await resolveEventFilters({ db, query: tagResult.query, filter })
-  const listResult = await resolveLocationListFilters({ db, query: eventResult.query, filter })
-  return { query: applyAudienceFilter(listResult.query, filter) }
+export async function applyAudienceFilterAsync({ db, query, filter, locationId, rebase, pinnedId }) {
+  const sets = await resolveVirtualIdSets({ db, filter, locationId })
+  if (sets.present) {
+    if (pinnedId) {
+      const out = (sets.include !== null && !sets.include.has(pinnedId)) || sets.exclude.has(pinnedId)
+      if (out) query = query.eq('id', NOBODY_ID)
+    } else {
+      query = applyIdSets(query, sets, { rebase })
+    }
+  }
+  return { query: applyAudienceFilter(query, filter) }
+}
+
+/**
+ * One line a populate or count path can log when an audience query resolves
+ * to `{ error }`: the message (or a stated empty one), with the status, the
+ * PostgREST code and the request URL length a bare `error.message` hides. The
+ * 31 Oct 2026 failure left "audience load failed: " in campaigns.last_error
+ * and nothing else to go on.
+ *
+ * @param {string} prefix          e.g. 'audience load failed'
+ * @param {object} res             { error, status, statusText } as resolved by supabase-js
+ * @param {object} [query]         the builder that was awaited (its URL length is read)
+ */
+export function describeAudienceQueryError(prefix, { error, status, statusText } = {}, query) {
+  const message = typeof error?.message === 'string' && error.message.trim() ? error.message : '(empty message)'
+  const parts = []
+  if (status !== undefined && status !== null) parts.push(`status=${status}${statusText ? ` ${statusText}` : ''}`)
+  if (error?.code) parts.push(`code=${error.code}`)
+  if (error?.details) parts.push(`details=${String(error.details).slice(0, 200)}`)
+  if (error?.hint) parts.push(`hint=${String(error.hint).slice(0, 200)}`)
+  const url = query?.url
+  const urlLength = typeof url === 'string' ? url.length : (url && typeof url.toString === 'function' ? url.toString().length : null)
+  if (urlLength) parts.push(`url_length=${urlLength}`)
+  if (query?.method) parts.push(`method=${query.method}`)
+  return `${prefix}: ${message}${parts.length ? ` [${parts.join(', ')}]` : ''}`
 }

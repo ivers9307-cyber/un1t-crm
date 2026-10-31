@@ -81,11 +81,16 @@ async function evaluateAudience(db, contactId, filter, { locationId = null } = {
     try {
       // Destructure the wrapped { query } return — see resolveTagFilters
       // header in audience-filter.js for the thenable-unwrap reason.
+      // AUDIENCEIDS.1 — the query is pinned to ONE contact, so a tag / event /
+      // studio-list cohort is judged in JS (is this contact in it?) and never
+      // carried to the database as an id list: a 3,000-member tag used to
+      // blow the GET URL here too and read as 'unknown' every tick.
       ;({ query } = await applyAudienceFilterAsync({
         db,
         query,
         filter,
         locationId: studioId,
+        pinnedId: contactId,
       }))
     } catch (e) {
       if (e instanceof InvalidAudienceFilterError) {

@@ -1,5 +1,5 @@
 import { createServerClient } from './supabase'
-import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
+import { applyAudienceFilter, applyAudienceFilterAsync, scopedAudienceSource } from './audience-filter'
 import { getWhatsAppConfig, getLocationWhatsAppNumberConfig, getLocationNumberForWaba, getConversationReplyConfig, META_API_URL } from './whatsapp-config'
 import { isWhatsAppNumberMissing, WhatsAppNumberMissingError } from './whatsapp-number-missing'
 import { agentOptionId } from './whatsapp-inbound-tap'
@@ -766,8 +766,13 @@ export async function computeWhatsAppReachabilitySummary(db, filter, locationId)
   const countOf = async (extra) => {
     // LOCCOMMS.3 — per-location audience via the view (mig 491). Still a
     // single-table head:true count, which is what mig 422 made safe.
-    const base = db.from('contact_location_audience').select('id', { count: 'exact', head: true }).eq('audience_location_id', locationId)
-    const { query } = await applyAudienceFilterAsync({ db, query: base, filter, locationId })
+    const selectOpts = { count: 'exact', head: true }
+    const base = db.from('contact_location_audience').select('id', selectOpts).eq('audience_location_id', locationId)
+    // AUDIENCEIDS.1 — the same base on the view's scoped rpc twin (mig 795)
+    // when the filter's id list does not fit the GET URL.
+    const rebase = (sets) => scopedAudienceSource(db, 'contact_location_audience', { locationId, ...sets, columns: 'id', selectOpts })
+      .eq('audience_location_id', locationId)
+    const { query } = await applyAudienceFilterAsync({ db, query: base, filter, locationId, rebase })
     const { count } = await (extra ? extra(query) : query)
     return count || 0
   }
@@ -937,7 +942,15 @@ export function buildWhatsAppAudience(db, filter, locationId) {
 // wrapped { query } so the caller can chain .order()/.range() (paged path)
 // or await it directly (single-shot).
 export async function buildWhatsAppAudienceAsync(db, filter, locationId, opts) {
-  return applyAudienceFilterAsync({ db, query: whatsAppAudienceBase(db, locationId, opts), filter, locationId })
+  // AUDIENCEIDS.1 — rebase onto the view's scoped rpc twin (mig 795) when the
+  // filter's id list does not fit the GET URL; the reachability gates are the
+  // same function either way.
+  const { columns = '*', selectOpts } = opts || {}
+  const rebase = (sets) => applyWhatsAppReachability(
+    scopedAudienceSource(db, 'contact_location_audience', { locationId, ...sets, columns, selectOpts })
+      .eq('audience_location_id', locationId)
+  )
+  return applyAudienceFilterAsync({ db, query: whatsAppAudienceBase(db, locationId, opts), filter, locationId, rebase })
 }
 
 // Paginate the full WhatsApp-eligible audience (consent + opt-out + wa_phone + the

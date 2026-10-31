@@ -2021,3 +2021,30 @@ describe('tickCampaignSend — links on the tenant host (W1.L3a)', () => {
     expect(sendBatch.mock.calls[0][0]).toHaveLength(2)
   })
 })
+
+// ── AUDIENCEIDS.1 — a failed audience load is diagnosable from last_error ──
+describe('tickCampaignSend — populate surfaces WHY an audience load failed', () => {
+  it('an empty supabase error message is recorded with the status and the URL length', async () => {
+    const url = `https://x.supabase.co/rest/v1/contact_location_audience?id=not.in.(${'a'.repeat(70_000)})`
+    const page = Promise.resolve({ data: null, error: { message: '' }, status: 414, statusText: 'URI Too Long' })
+    page.url = new URL(url)
+    const query = { order: vi.fn(() => query), range: vi.fn(() => page) }
+    buildAudienceQueryAsync.mockResolvedValue({ query })
+    const { db } = makeDb(abRouteFor({ count: 0 }))
+
+    const result = await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    expect(result.phase).toBe('populate')
+    expect(result.error).toMatch(/^audience load failed: \(empty message\) \[status=414 URI Too Long, url_length=7\d{4}\]$/)
+  })
+
+  it('a filter the resolver refuses (InvalidAudienceFilterError) is a named populate error, not a thrown tick', async () => {
+    buildAudienceQueryAsync.mockRejectedValueOnce(new Error('This exclusion matches too many contacts (1902) to apply in one request'))
+    const { db } = makeDb(abRouteFor({ count: 0 }))
+
+    const result = await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    expect(result.phase).toBe('populate')
+    expect(result.error).toBe('audience filter could not be resolved: This exclusion matches too many contacts (1902) to apply in one request')
+  })
+})
