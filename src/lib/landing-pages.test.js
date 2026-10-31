@@ -20,6 +20,7 @@ import {
   loadPageBySlug, loadPageById, PageReadError, publicOrgIdForHost, studioParamToPublicPath,
   resolvePageStudio, locationIdForPublicPath, studioPublicPath, mergedBlocksFor, offerReady,
   canViewPage, canEditPage, studioTermsCopy,
+  studioRowReadiness, pageBlocksToStore, mergedChrome, offerSummary, copiedContentBlocks, starterBlocks, pageWasLive,
 } from './landing-pages.js'
 import { DEFAULT_FUNNEL_TERMS_COPY } from '@/lib/un1t-online-funnel-copy'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -180,13 +181,15 @@ describe('landing-pages', () => {
     expect(offerReady({ page, studio: { offer: {}, attribution: {} }, landingPath: 'stillorgan' })).toBe(false)
   })
 
-  it('canViewPage: master, an org admin, or a member of the one studio', () => {
+  it('canViewPage: master, an org admin, a member of the one studio, or (all studios) anyone holding a studio of the org', () => {
     const one = { ...page, scope: 'one', primary_location_id: 'loc-s' }
     expect(canViewPage({ role: 'master' }, page)).toBe(true)
     expect(canViewPage({ orgAdminOrgIds: ['org-un1t'] }, page)).toBe(true)
     expect(canViewPage({ locations: [{ id: 'loc-s' }] }, one)).toBe(true)
     expect(canViewPage({ locations: [{ id: 'loc-s' }] }, page)).toBe(false)
-    expect(canViewPage({ locations: [{ id: 'loc-other' }] }, one)).toBe(false)
+    expect(canViewPage({ locations: [{ id: 'loc-s', organization_id: 'org-un1t' }] }, page)).toBe(true)
+    expect(canViewPage({ locations: [{ id: 'loc-x', organization_id: 'org-other' }] }, page)).toBe(false)
+    expect(canViewPage({ locations: [{ id: 'loc-other', organization_id: 'org-un1t' }] }, one)).toBe(false)
     expect(canViewPage(null, one)).toBe(false)
   })
 
@@ -235,5 +238,81 @@ describe('landing-pages', () => {
     expect(await studioTermsCopy(makeDb({ landing_page_settings: { single: { data: null, error: { code: 'XX', message: 'secret' } } } }), 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy({ from: () => { throw new Error('net') } }, 'loc-h')).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
     expect(await studioTermsCopy(makeDb({}), null)).toEqual(DEFAULT_FUNNEL_TERMS_COPY)
+  })
+})
+
+describe('landing-pages: the pages API helpers', () => {
+  // A studio row with the STUDIO_ROW_COLUMNS embed.
+  const row = (over = {}, loc = {}) => ({
+    location_id: 'loc-s', enabled: true, sort_order: 0, attribution: {},
+    offer: { membership_id: 'm', plan_code: 'p', price_cents: 3900 },
+    locations: { id: 'loc-s', name: 'Stillorgan', membership_source: 'glofox', settings: {}, ...loc },
+    ...over,
+  })
+  const studioPage = (slug) => ({ landing_pages: { single: { data: { slug }, error: null } } })
+
+  it('studioRowReadiness: ready, needs_plan, no_platform; a page with no offer is ready', async () => {
+    const db = makeDb(studioPage('stillorgan'))
+    expect(await studioRowReadiness(db, { page, row: row() })).toEqual({ ready: true, reason: 'ready' })
+    expect(await studioRowReadiness(db, { page, row: row({ offer: {} }) })).toEqual({ ready: false, reason: 'needs_plan' })
+    expect(await studioRowReadiness(db, { page, row: row({}, { membership_source: 'none' }) })).toEqual({ ready: false, reason: 'no_platform' })
+    expect(await studioRowReadiness(makeDb({}), { page, row: row() })).toEqual({ ready: false, reason: 'no_platform' }) // no public path
+    expect(await studioRowReadiness(makeDb({}), { page: { ...page, offer_type: 'none' }, row: row() })).toEqual({ ready: true, reason: 'ready' })
+    // A caller that already read the path passes it and no read happens.
+    const quiet = makeDb({})
+    expect(await studioRowReadiness(quiet, { page, row: row(), publicPath: 'stillorgan' })).toEqual({ ready: true, reason: 'ready' })
+    expect(quiet.calls).toEqual([])
+  })
+
+  it('studioRowReadiness: a un1t.online paid trial reads the product; writes off is no_platform; a failed read throws', async () => {
+    const hatch = (offer, settings = { un1t_online: { writes_enabled: true } }) =>
+      row({ location_id: 'loc-h', offer }, { id: 'loc-h', membership_source: 'un1t_online', settings })
+    const product = { un1t_id: 'u1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'T' }
+    const tables = (p) => ({ landing_pages: { single: { data: { slug: 'hatch-street' }, error: null } }, un1t_products: { single: p } })
+    expect(await studioRowReadiness(makeDb(tables({ data: product, error: null })), { page, row: hatch({ un1t_product_id: 'u1' }) }))
+      .toEqual({ ready: true, reason: 'ready' })
+    expect(await studioRowReadiness(makeDb(tables({ data: null, error: null })), { page, row: hatch({ un1t_product_id: 'u1' }) }))
+      .toEqual({ ready: false, reason: 'needs_plan' })
+    expect(await studioRowReadiness(makeDb(tables({ data: product, error: null })), { page, row: hatch({ un1t_product_id: 'u1' }, {}) }))
+      .toEqual({ ready: false, reason: 'no_platform' })
+    await expect(studioRowReadiness(makeDb(tables({ data: null, error: { message: 'boom' } })), { page, row: hatch({ un1t_product_id: 'u1' }) }))
+      .rejects.toBeInstanceOf(PageReadError)
+    const badPath = makeDb({ landing_pages: { single: { data: null, error: { message: 'boom' } } } })
+    await expect(studioRowReadiness(badPath, { page, row: row() })).rejects.toBeInstanceOf(PageReadError)
+  })
+
+  it('pageBlocksToStore: the offer block first on a campaign page, anywhere on a studio page; never a studio half', () => {
+    const offer = { id: 'o', type: 'paid_trial', heading: 'H', plan_code: 'p', tag: 't' }
+    expect(pageBlocksToStore(page, [offer, { id: 'h', type: 'hero' }])).toEqual({ ok: true, blocks: [{ id: 'o', type: 'paid_trial', heading: 'H' }, { id: 'h', type: 'hero' }] })
+    expect(pageBlocksToStore(page, [{ id: 'h', type: 'hero' }, offer])).toEqual({ ok: false, error: 'offer_block_required' })
+    expect(pageBlocksToStore({ ...page, kind: 'studio' }, [{ id: 'h', type: 'hero' }, offer]).ok).toBe(true)
+    expect(pageBlocksToStore({ ...page, offer_type: 'none' }, [{ id: 'h', type: 'hero' }]).ok).toBe(true)
+  })
+
+  it('mergedChrome keeps the stored was_live and merges un1t_terms key by key', () => {
+    expect(mergedChrome({ was_live: true, tone: 'dark', un1t_terms: { terms_label: 'a', terms_link_label: 'b' } }, { tone: 'light', was_live: false, un1t_terms: { terms_label: 'c' } }))
+      .toEqual({ was_live: true, tone: 'light', un1t_terms: { terms_label: 'c', terms_link_label: 'b' } })
+    expect(mergedChrome({}, { was_live: true })).toEqual({})
+    expect(pageWasLive({ chrome: { was_live: true }, publish_state: 'draft' })).toBe(true)
+    expect(pageWasLive({ chrome: {}, publish_state: 'live' })).toBe(true)
+    expect(pageWasLive({ chrome: {}, publish_state: 'draft' })).toBe(false)
+  })
+
+  it('offerSummary, starterBlocks, copiedContentBlocks', () => {
+    expect(offerSummary(page, [])).toBe('Paid trial, per studio')
+    const one = { ...page, scope: 'one', primary_location_id: 'loc-s' }
+    expect(offerSummary(one, [{ location_id: 'loc-s', offer: { product_name: '14 Day Reset' } }])).toBe('Paid trial: 14 Day Reset')
+    expect(offerSummary(one, [])).toBe('Paid trial')
+    expect(offerSummary({ ...page, offer_type: 'none' }, [])).toBe('No offer')
+
+    expect(starterBlocks('none', 'UN1T').map((b) => b.type)).toEqual(['hero'])
+    const [corp] = starterBlocks('promo_credits', 'UN1T')
+    expect(corp.type).toBe('corp_promo')
+    expect(corp).not.toHaveProperty('promo_key')
+
+    const copied = copiedContentBlocks([{ id: 'o', type: 'paid_trial' }, { id: 'g', type: 'gallery', items: [{ url: 'https://x/a.jpg' }] }])
+    expect(copied).toHaveLength(1)
+    expect(copied[0]).toMatchObject({ type: 'gallery', items: [{ url: 'https://x/a.jpg' }] })
+    expect(copied[0].id).not.toBe('g')
   })
 })

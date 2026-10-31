@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitOfferBlock, mergeOfferBlock, offerConfigured, STUDIO_OFFER_KEYS, defaultAttribution, offerTypeOfBlock, studioOfferSchema } from './landing-page-offers.js'
+import { splitOfferBlock, mergeOfferBlock, offerConfigured, STUDIO_OFFER_KEYS, defaultAttribution, offerTypeOfBlock, studioOfferSchema, attributionSchema } from './landing-page-offers.js'
 
 const CAMPAIGN = { id: 'b1', type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+', trial_membership_id: 'm', trial_plan_code: 'p', tag: 'stillorgan-50plus', lead_source: 'meta_50plus', event_source_url: '', heading: 'A free trial', show_sections: ['stats'], video_url: 'https://x/v.mp4' }
 
@@ -36,5 +36,9 @@ describe('landing-page-offers', () => {
     expect(studioOfferSchema('paid_trial').safeParse({ membership_id: 'm', plan_code: 'p', price_cents: 3900, extra: 1 }).success).toBe(false)
     expect(studioOfferSchema('paid_trial').safeParse({ price_cents: 60_000 }).success).toBe(false)
     expect(studioOfferSchema('corp_promo').safeParse({ promo_key: 'hatch-3-free' }).success).toBe(true)
+  })
+  it('refuses an unknown attribution key rather than storing it', () => {
+    expect(attributionSchema.safeParse({ tag: 't', lead_source: 'l' }).success).toBe(true)
+    expect(attributionSchema.safeParse({ tag: 't', campaign: 'x' }).success).toBe(false)
   })
 })

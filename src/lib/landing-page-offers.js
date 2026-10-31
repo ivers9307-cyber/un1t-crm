@@ -127,7 +127,7 @@ export const attributionSchema = z.object({
   tag: z.string().max(80).optional(),
   lead_source: z.string().max(80).optional(),
   event_source_url: z.string().url().max(500).optional(),
-})
+}).strict()
 
 /** What a new page starts with: a tag and lead source named for the studio path and the page slug. */
 export function defaultAttribution({ publicPath, slug }) {
