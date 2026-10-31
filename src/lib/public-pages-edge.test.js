@@ -24,11 +24,13 @@ vi.mock('@supabase/ssr', () => ({ createServerClient: () => edgeDb }))
 
 const ORG = 'org-acme'
 const rows = [
-  { organization_id: ORG, slug: 'january', publish_state: 'live' },
-  { organization_id: ORG, slug: 'soon', publish_state: 'coming_soon' },
-  { organization_id: ORG, slug: 'old', publish_state: 'retired' },
-  { organization_id: ORG, slug: 'draft', publish_state: 'draft' },
-  { organization_id: 'org-other', slug: 'elsewhere', publish_state: 'live' },
+  { organization_id: ORG, slug: 'january', kind: 'campaign', publish_state: 'live' },
+  { organization_id: ORG, slug: 'soon', kind: 'campaign', publish_state: 'coming_soon' },
+  { organization_id: ORG, slug: 'old', kind: 'campaign', publish_state: 'retired' },
+  { organization_id: ORG, slug: 'draft', kind: 'campaign', publish_state: 'draft' },
+  // PR1: a studio page is not admitted by the edge tier (still /welcome + PUBLIC_PATHS).
+  { organization_id: ORG, slug: 'downtown', kind: 'studio', publish_state: 'live' },
+  { organization_id: 'org-other', slug: 'elsewhere', kind: 'campaign', publish_state: 'live' },
 ]
 
 function counted(db) {
@@ -65,17 +67,24 @@ describe('listPublicPageSlugs', () => {
     expect(db.spy).toHaveBeenCalledTimes(2)
   })
 
-  it('fallback when the read throws: UN1T Group answers the seven known slugs, an unknown org answers []', async () => {
+  it('fallback when the read throws: UN1T Group answers the five campaign slugs (no studio page in PR1), an unknown org answers []', async () => {
     expect(await listPublicPageSlugs(UN1T_GROUP_ORG_ID, { db: throwingDb, nowMs: 1 }))
-      .toEqual(['stillorgan', 'hatch-street', 'trial', '50plus', 'corp', 'start', 'free-class'])
+      .toEqual(['trial', '50plus', 'corp', 'start', 'free-class'])
     expect(await listPublicPageSlugs('org-unknown', { db: throwingDb, nowMs: 1 })).toEqual([])
-    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).toHaveLength(7)
+    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).toHaveLength(5)
+    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).not.toContain('stillorgan')
+    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).not.toContain('hatch-street')
+  })
+
+  it('reads campaign pages only (PR1): a live studio page is not listed', async () => {
+    const db = makeFakeDb({ landing_pages: rows })
+    expect(await listPublicPageSlugs(ORG, { db, nowMs: 1 })).not.toContain('downtown')
   })
 
   it('an errored read answers the fallback too, and the failure is cached for the window', async () => {
     const failing = {
       from: vi.fn(() => ({
-        select: () => ({ eq: () => ({ in: async () => ({ data: null, error: { message: 'boom' } }) }) }),
+        select: () => ({ eq: () => ({ eq: () => ({ in: async () => ({ data: null, error: { message: 'boom' } }) }) }) }),
       })),
     }
     expect(await listPublicPageSlugs(UN1T_GROUP_ORG_ID, { db: failing, nowMs: 1 })).toContain('trial')

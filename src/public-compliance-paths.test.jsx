@@ -837,6 +837,18 @@ describe('page slugs are public from the database', () => {
     expect(DB_BRAND_DEFAULTS.allowedPaths).not.toContain('/corp')
   })
 
+  it('PR1: the studio paths are not admitted by the page tier, so /stillorgan on the CRM host still goes to /login', async () => {
+    // The edge reads campaign pages only and the fallback names no studio
+    // page; /stillorgan and /hatch-street stay on the next.config rewrites to
+    // /welcome. PR3 lifts this with the studio pages.
+    pageSlugsImpl = async (orgId) => [...(PUBLIC_PAGE_SLUGS_FALLBACK[orgId] || [])]
+    for (const path of ['/stillorgan', '/hatch-street']) {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(res.headers.get('location'), path).toMatch(/\/login/)
+      expect(forwarded(res, 'x-public-page')).toBe(null)
+    }
+  })
+
   it('a tenant host whose organisation has no pages still rewrites /january', async () => {
     tenantBrandImpl = async () => ({
       id: 'tenant:x', hostnames: [TENANT_HOST],
