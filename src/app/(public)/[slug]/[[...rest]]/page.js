@@ -338,9 +338,12 @@ export default async function PublicPage(props) {
 
   if (page.offer_type === 'promo_credits') {
     // The promo is the registry's (credits, expiry, studio); the page names
-    // which one, and only a live promo at this page's studio is offered.
+    // which one, and only a live promo at this page's studio is offered. The
+    // page offers ONLY its row's promo: a sub-path naming another key (even a
+    // live one) is "not available right now", as the claim route refuses it.
     const rowKey = str(mergedOffer?.promo_key)
-    const resolved = resolveCorpPromo(sub.kind === 'promo' ? sub.key : rowKey)
+    const wantedKey = sub.kind === 'promo' ? sub.key : rowKey
+    const resolved = rowKey && wantedKey === rowKey ? resolveCorpPromo(rowKey) : null
     const promo = resolved && resolved.live && resolved.publicPath === contextPath ? resolved : null
     const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
     const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey)

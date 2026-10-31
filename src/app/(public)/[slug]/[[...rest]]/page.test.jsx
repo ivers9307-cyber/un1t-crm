@@ -361,6 +361,12 @@ describe('the [slug] page route', () => {
     const unknown = propsOf(await render({ slug: 'corp', rest: ['nope'] }), 'corp')
     expect(unknown.promoKey).toBeNull()
     expect(unknown.copy.unavailable_text).toBe('This offer is not available right now.')
+    // The page offers only its row's promo: a sub-path naming another key,
+    // even a live one in the registry, is not available (the claim refuses it).
+    h.loaded = { page: CORP, studios: [row('loc-h', { offer: { promo_key: 'acme-5-free' }, locations: loc('loc-h', 'un1t_online') })] }
+    const other = propsOf(await render({ slug: 'corp', rest: ['hatch-3-free'] }), 'corp')
+    expect(other.promoKey).toBeNull()
+    expect(other.copy.unavailable_text).toBe('This offer is not available right now.')
   })
 
   it('reads reviews for the resolved studio when the page has a reviews block', async () => {
