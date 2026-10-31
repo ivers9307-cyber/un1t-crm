@@ -154,7 +154,7 @@ function isCrmHostname(hostKey) {
   return getCrmHostnames().includes(hostKey)
 }
 
-function makeEdgeClient() {
+export function makeEdgeClient() {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,

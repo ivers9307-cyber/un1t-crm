@@ -30,6 +30,16 @@ vi.mock('@/lib/brands', () => ({
 vi.mock('@/lib/tenant-domains-edge', () => ({
   resolveTenantDomainBrand: vi.fn(async (...a) => tenantBrandImpl(...a)),
 }))
+// PAGES.1 — the page-slug tier is mocked to "no pages": this file pins other
+// behaviour; the tier itself is covered in public-pages-edge.test.js and
+// public-compliance-paths.test.jsx.
+vi.mock('@/lib/public-pages-edge', () => ({
+  PUBLIC_PAGE_HEADER: 'x-public-page',
+  publicOrgIdForHost: async () => null,
+  listPublicPageSlugs: async () => [],
+  isPublicPagePath: () => false,
+  withPublicPageHeader: (h) => new Headers(h),
+}))
 
 import { proxy } from './proxy.js'
 import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'

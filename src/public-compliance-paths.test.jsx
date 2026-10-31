@@ -63,6 +63,15 @@ vi.mock('@/lib/tenant-domains-edge', async (importOriginal) => ({
   resolveTenantDomainBrand: (...args) => tenantBrandImpl(...args),
 }))
 
+// PAGES.1 — the database-driven page slugs. Faked only at the slug LIST (what
+// the landing_pages read would return); the matcher, the header helper and the
+// proxy wiring are the real ones.
+let pageSlugsImpl = async () => []
+vi.mock('@/lib/public-pages-edge', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listPublicPageSlugs: (...args) => pageSlugsImpl(...args),
+}))
+
 // ── AppShell scaffolding ─────────────────────────────────────────────
 // AppShell is a client component whose public/protected decision reads
 // usePathname(). Rendered via react-dom/server (this repo runs vitest
@@ -75,7 +84,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 import { proxy } from './proxy.js'
-import { BRANDS } from './lib/brands.js'
+import { BRANDS, UN1T_GROUP_ORG_ID } from './lib/brands.js'
 import { DB_BRAND_DEFAULTS } from './lib/tenant-domains-edge.js'
 import AppShell from './components/AppShell.jsx'
 
@@ -122,10 +131,10 @@ const MARKETING_HOST = 'un1tdublin.com'
 const CRM_HOST = 'crm.un1tdublin.com'
 const TENANT_HOST = 'fitness.example.com'
 
-function makeReq({ host = CRM_HOST, path = '/', method = 'GET', cookies = {} } = {}) {
+function makeReq({ host = CRM_HOST, path = '/', method = 'GET', cookies = {}, headers = {} } = {}) {
   return {
     method,
-    headers: new Headers({ host }),
+    headers: new Headers({ host, ...headers }),
     url: `https://${host}${path}`,
     nextUrl: {
       pathname: path,
@@ -152,6 +161,7 @@ beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'anon-key')
   pathnameImpl = '/'
   tenantBrandImpl = async () => null
+  pageSlugsImpl = async () => []
 })
 
 afterEach(() => {
@@ -783,5 +793,109 @@ describe('FIFTYPLUS.1 — /50plus is public on UN1T hosts', () => {
 
   it('the marketing allowlist names it explicitly', () => {
     expect(marketingBrand().allowedPaths).toContain('/50plus')
+  })
+})
+
+
+// ── PAGES.1 — page slugs are public from the database ──────────────────
+//
+// A landing_pages row makes `/<slug>` public with no deploy: the proxy asks
+// listPublicPageSlugs for the host's organisation and admits the first segment
+// (and tells AppShell through x-public-page, so the client shell does not
+// blank the page). The four in-code lists stay as the fallback.
+describe('page slugs are public from the database', () => {
+  const forwarded = (res, name) => res.headers.get(`x-middleware-request-${name}`)
+
+  beforeEach(() => {
+    // 'january' is a page of UN1T Group only; the tenant org below has none.
+    pageSlugsImpl = async (orgId) => (orgId === UN1T_GROUP_ORG_ID ? ['january'] : [])
+  })
+
+  it('the CRM host admits /january and /january/anything anonymously, stamped x-public-page: 1', async () => {
+    for (const path of ['/january', '/january/anything']) {
+      const res = await proxy(makeReq({ host: CRM_HOST, path }))
+      expect(admitted(res), `${path} redirected to login`).toBe(true)
+      expect(forwarded(res, 'x-public-page')).toBe('1')
+    }
+  })
+
+  it('the CRM host still gates a path that is not a page slug', async () => {
+    const res = await proxy(makeReq({ host: CRM_HOST, path: '/januaryx' }))
+    expect(res.headers.get('location')).toMatch(/\/login/)
+    const root = await proxy(makeReq({ host: CRM_HOST, path: '/dashboard' }))
+    expect(root.headers.get('location')).toMatch(/\/login/)
+  })
+
+  it('the marketing host does not rewrite /january to /welcome, and stamps the header', async () => {
+    const res = await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/january' }))
+    expect(rewrittenTo(res)).toBe(null)
+    expect(admitted(res)).toBe(true)
+    expect(forwarded(res, 'x-public-page')).toBe('1')
+  })
+
+  it('the marketing host still rewrites an unknown path to /welcome', async () => {
+    const res = await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/nope' }))
+    expect(rewrittenTo(res)).toMatch(/\/welcome$/)
+  })
+
+  it('a tenant host whose organisation has no pages still rewrites /january', async () => {
+    tenantBrandImpl = async () => ({
+      id: 'tenant:x', hostnames: [TENANT_HOST],
+      allowedPaths: [...DB_BRAND_DEFAULTS.allowedPaths],
+      rootHandler: 'rewrite', rootRewriteTo: '/welcome',
+      fallbackHandler: 'rewrite', fallbackRewriteTo: '/welcome',
+      organizationId: 'org-tenant',
+    })
+    const res = await proxy(makeReq({ host: TENANT_HOST, path: '/january' }))
+    expect(rewrittenTo(res)).toMatch(/\/welcome$/)
+  })
+
+  it('a tenant host admits a slug listed for its own organisation', async () => {
+    pageSlugsImpl = async (orgId) => (orgId === 'org-tenant' ? ['january'] : [])
+    tenantBrandImpl = async () => ({
+      id: 'tenant:x', hostnames: [TENANT_HOST],
+      allowedPaths: [...DB_BRAND_DEFAULTS.allowedPaths],
+      rootHandler: 'rewrite', rootRewriteTo: '/welcome',
+      fallbackHandler: 'rewrite', fallbackRewriteTo: '/welcome',
+      organizationId: 'org-tenant',
+    })
+    const res = await proxy(makeReq({ host: TENANT_HOST, path: '/january' }))
+    expect(rewrittenTo(res)).toBe(null)
+    expect(forwarded(res, 'x-public-page')).toBe('1')
+  })
+
+  it('a forged x-public-page on a private path is stripped and still redirected to /login', async () => {
+    const res = await proxy(makeReq({ host: CRM_HOST, path: '/dashboard', headers: { 'x-public-page': '1' } }))
+    expect(res.headers.get('location')).toMatch(/\/login/)
+  })
+
+  it('a forged x-public-page never reaches the app on a path the proxy lets through unchanged', async () => {
+    // A bare NextResponse.next() forwards the ORIGINAL request headers, so a
+    // forged copy has to be removed by re-stating the headers without it: the
+    // response must carry an override list, and the list must not name it.
+    const stripped = (res) => {
+      const override = res.headers.get('x-middleware-override-headers')
+      expect(override, 'forged header was not stripped from the forwarded request').not.toBe(null)
+      expect(override).not.toContain('x-public-page')
+      expect(forwarded(res, 'x-public-page')).toBe(null)
+    }
+    // /login is public by the in-code list
+    stripped(await proxy(makeReq({ host: CRM_HOST, path: '/login', headers: { 'x-public-page': '1' } })))
+    // an allowlisted path on a brand host
+    stripped(await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/trial', headers: { 'x-public-page': '1' } })))
+    // a signed-in session on a private path
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    stripped(await proxy(makeReq({ host: CRM_HOST, path: '/dashboard', headers: { 'x-public-page': '1' } })))
+  })
+
+  it('AppShell with isPublicPage renders its children with no user', () => {
+    pathnameImpl = '/january'
+    const html = renderToStaticMarkup(<AppShell user={null} isPublicPage><p>page-body</p></AppShell>)
+    expect(html).toContain('page-body')
+  })
+
+  it('control — AppShell without isPublicPage blanks the same path', () => {
+    pathnameImpl = '/january'
+    expect(renderToStaticMarkup(<AppShell user={null}><p>page-body</p></AppShell>)).toBe('')
   })
 })

@@ -81,7 +81,7 @@ import UsageTracker from './UsageTracker'
 // reschedule); covered by '/book', listed so the flow survives a narrowing.
 const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/trial', '/50plus', '/corp', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done', '/fee-appeal', '/pay-link']
 
-export default function AppShell({ user, children, isLinkedHost = false }) {
+export default function AppShell({ user, children, isLinkedHost = false, isPublicPage = false }) {
   const pathname = usePathname()
   const router = useRouter()
   // Hooks must run before any early return — keep them at the top so the
@@ -96,7 +96,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
   // d184209; surfaced during the 2026-06 redesign verification). The
   // CRM host is unaffected: src/app/page.js already server-redirects
   // '/' to /login or the dashboard before this client gate ever runs.
-  const isPublic = pathname === '/' || PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
+  const isPublic = pathname === '/' || isPublicPage || PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
 
   // Protected route but no resolved user (expired/unresolved session, or
   // a transient profile-fetch miss in getCurrentUser). Previously the

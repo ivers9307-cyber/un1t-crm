@@ -15,6 +15,16 @@ const createServerClient = vi.fn(() => ssrClient)
 vi.mock('@supabase/ssr', () => ({ createServerClient: (...a) => createServerClient(...a) }))
 vi.mock('@/lib/brands', () => ({ resolveBrand: () => null, isFrameworkAsset: () => false }))
 vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantDomainBrand: async () => null }))
+// PAGES.1 — the page-slug tier is mocked to "no pages": this file pins other
+// behaviour; the tier itself is covered in public-pages-edge.test.js and
+// public-compliance-paths.test.jsx.
+vi.mock('@/lib/public-pages-edge', () => ({
+  PUBLIC_PAGE_HEADER: 'x-public-page',
+  publicOrgIdForHost: async () => null,
+  listPublicPageSlugs: async () => [],
+  isPublicPagePath: () => false,
+  withPublicPageHeader: (h) => new Headers(h),
+}))
 
 import { proxy } from './proxy.js'
 import { signSupportPayload, SUPPORT_COOKIE } from './lib/support-session-edge.js'

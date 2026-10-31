@@ -1,3 +1,4 @@
+import { headers } from 'next/headers'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import AppShell from './AppShell'
@@ -14,5 +15,9 @@ export default async function AppShellServer({ children }) {
     const { data } = await db.from('host_users').select('auth_user_id').eq('auth_user_id', user.id).maybeSingle()
     isLinkedHost = !!data
   }
-  return <AppShell user={user} isLinkedHost={isLinkedHost}>{children}</AppShell>
+  // PAGES.1 — the proxy stamps x-public-page: 1 on a request it admitted as a
+  // landing_pages row (and deletes any copy a client sent), so the client shell
+  // renders that page bare instead of bouncing the visitor to /login.
+  const isPublicPage = (await headers()).get('x-public-page') === '1'
+  return <AppShell user={user} isLinkedHost={isLinkedHost} isPublicPage={isPublicPage}>{children}</AppShell>
 }
