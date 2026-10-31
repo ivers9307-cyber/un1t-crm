@@ -17,6 +17,7 @@ import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
+import { learnMembershipById } from './glofox-catalog.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -2155,6 +2156,24 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     const { error } = await db.from('contacts').update(updates).eq('id', preview.existing_id)
     if (error) return { ...preview, error: error.message }
     contactId = preview.existing_id
+  }
+
+  // GLOFOXPRIVATE.1 — the catalogue learns the membership this member holds
+  // when Glofox's list never returns it (a private one, mig 796). Only the
+  // single-member GET carries member.membership; the nightly LIST payload has
+  // none, so the bulk sync costs nothing here. Best-effort, own catch: the
+  // contact write above already happened and the result never carries this.
+  if (opts.creds && member?.membership && typeof member.membership === 'object' && member.membership._id) {
+    try {
+      const learned = await learnMembershipById(db, locationId, opts.creds, member.membership._id, opts.membershipCache)
+      if (!learned.ok && learned.action !== 'skipped') {
+        logWarn('glofox-sync', 'catalogue did not learn the member\'s membership', {
+          locationId, membershipId: String(member.membership._id), action: learned.action, error: learned.error || null,
+        })
+      }
+    } catch (e) {
+      logWarn('glofox-sync', 'catalogue learn threw', { locationId, membershipId: String(member.membership._id), error: e?.message })
+    }
   }
 
   // ORGCONTACTS.1 — the relationship row at this studio (contact_studios, mig
