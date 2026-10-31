@@ -1,0 +1,192 @@
+// PAGES.1 — server readers for landing pages as records: a page is a
+// landing_pages row plus its landing_page_studios rows (the studio half of the
+// offer, and whether the page is switched on there). This file loads them,
+// resolves which studio a visitor means, merges the offer block with that
+// studio's half, and answers who may see and edit a page. The design is
+// docs/superpowers/specs/2026-10-30-landing-pages-editor-design.md.
+//
+// SERVER ONLY. STUDIO_ROW_COLUMNS embeds `locations.settings`, which holds
+// credentials: it is read on the server and must NEVER be passed to a client
+// (a client gets `redactLocationSecrets` output or named columns, never this
+// embed). Every read here is tenant-scoped by the caller's org id or by a page
+// id the caller already resolved; the request resolver registers with
+// check:location-scoping in Task 7.
+
+import { mergeOfferBlock, OFFER_BLOCK_TYPE, offerConfigured } from '@/lib/landing-page-offers'
+import { normaliseSlug } from '@/lib/page-slug'
+import { TRIAL_STUDIOS } from '@/lib/trial-studios'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { isOrgAdmin } from '@/lib/org-admin'
+import { getUserLocationIds } from '@/lib/auth'
+
+// The edge-safe half lives in its own module so the proxy can import it.
+export { publicOrgIdForHost } from '@/lib/public-pages-edge'
+
+export const PAGE_PUBLISH_STATES = Object.freeze(['draft', 'live', 'coming_soon', 'retired'])
+
+/** Only a live page renders its content. */
+export const isPageVisible = (state) => state === 'live'
+
+/** A page the public route answers for at all (draft is a 404). */
+export const isPageReachable = (state) => ['live', 'coming_soon', 'retired'].includes(state)
+
+export const PAGE_COLUMNS = 'id, organization_id, slug, title, kind, scope, primary_location_id, offer_type, blocks, chrome, publish_state, redirect_to, updated_at'
+export const STUDIO_ROW_COLUMNS = 'page_id, location_id, enabled, offer, attribution, sort_order, locations:location_id ( id, name, membership_source, settings )'
+
+export class PageReadError extends Error {
+  constructor(message, cause) {
+    super(message)
+    this.name = 'PageReadError'
+    if (cause) this.cause = cause
+  }
+}
+
+async function loadStudios(db, page) {
+  const { data, error } = await db
+    .from('landing_page_studios')
+    .select(STUDIO_ROW_COLUMNS)
+    .eq('page_id', page.id)
+    .order('sort_order')
+  if (error) throw new PageReadError('Could not read the page\'s studios', error)
+  return { page, studios: data || [] }
+}
+
+/** The page at <slug> in an organisation with its studio rows, null when there is none; a failed read throws. */
+export async function loadPageBySlug(db, { orgId, slug }) {
+  const { data: page, error } = await db
+    .from('landing_pages')
+    .select(PAGE_COLUMNS)
+    .eq('organization_id', orgId)
+    .eq('slug', slug)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the page', error)
+  if (!page) return null
+  return loadStudios(db, page)
+}
+
+export async function loadPageById(db, id) {
+  const { data: page, error } = await db
+    .from('landing_pages')
+    .select(PAGE_COLUMNS)
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the page', error)
+  if (!page) return null
+  return loadStudios(db, page)
+}
+
+/** `?studio=hatch` is the old spelling of the public path `hatch-street`; anything else is a slug or junk (null). */
+export function studioParamToPublicPath(raw) {
+  if (typeof raw !== 'string') return null
+  const alias = TRIAL_STUDIOS.find((s) => s.key === raw.trim().toLowerCase())
+  if (alias) return alias.publicPath
+  return normaliseSlug(raw)
+}
+
+/**
+ * Which studio a visitor is looking at. scope='one' is the primary's row;
+ * scope='all' offers the enabled rows and picks the one whose location_id the
+ * caller resolved from `?studio=` (a disabled or unknown id is no studio).
+ */
+export function resolvePageStudio({ page, studios, studioLocationId }) {
+  const rows = studios || []
+  if (page.scope === 'one') {
+    return { studio: rows.find((r) => r.location_id === page.primary_location_id) || null, picker: [] }
+  }
+  const picker = rows.filter((r) => r.enabled).sort((a, b) => a.sort_order - b.sort_order)
+  const studio = studioLocationId ? picker.find((r) => r.location_id === studioLocationId) || null : null
+  return { studio, picker }
+}
+
+// PR1 fallbacks: until the studio pages are the only source, a path with no
+// kind='studio' page row falls back to landing_page_settings. PR3 deletes
+// these two helpers and their call sites.
+async function legacyLocationIdForPath(db, publicPath) {
+  const { data, error } = await db
+    .from('landing_page_settings')
+    .select('location_id')
+    .eq('public_path', publicPath)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the studio path', error)
+  return data?.location_id || null
+}
+
+async function legacyPathForLocation(db, locationId) {
+  const { data, error } = await db
+    .from('landing_page_settings')
+    .select('public_path')
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the studio path', error)
+  return data?.public_path || null
+}
+
+/** A studio's public path (/stillorgan) to its location id, null when no studio has that path. */
+export async function locationIdForPublicPath(db, orgId, publicPath) {
+  const { data, error } = await db
+    .from('landing_pages')
+    .select('primary_location_id')
+    .eq('organization_id', orgId)
+    .eq('kind', 'studio')
+    .eq('slug', publicPath)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the studio page', error)
+  if (data?.primary_location_id) return data.primary_location_id
+  return legacyLocationIdForPath(db, publicPath)
+}
+
+/** A studio's public path: its studio page's slug, null when it has none. */
+export async function studioPublicPath(db, locationId) {
+  const { data, error } = await db
+    .from('landing_pages')
+    .select('slug')
+    .eq('kind', 'studio')
+    .eq('primary_location_id', locationId)
+    .maybeSingle()
+  if (error) throw new PageReadError('Could not read the studio page', error)
+  if (data?.slug) return data.slug
+  return legacyPathForLocation(db, locationId)
+}
+
+/**
+ * The page's blocks with the offer block (first of the offer type's block type)
+ * merged with the studio's half. A campaign_funnel block gets the page slug
+ * back as `campaign`: the split drops that key and campaignFunnelConfig falls
+ * back on it for the tag, lead source and event source URL.
+ */
+export function mergedBlocksFor({ page, studio }) {
+  const blocks = Array.isArray(page.blocks) ? page.blocks : []
+  const offerType = OFFER_BLOCK_TYPE[page.offer_type]
+  if (!offerType) return blocks.slice()
+  const idx = blocks.findIndex((b) => b?.type === offerType)
+  if (idx === -1) return blocks.slice()
+  const merged = mergeOfferBlock(blocks[idx], studio)
+  if (offerType === 'campaign_funnel') merged.campaign = page.slug
+  return blocks.map((b, i) => (i === idx ? merged : b))
+}
+
+/** Is the offer ready to take a customer at this studio? */
+export function offerReady({ page, studio, landingPath, product = null }) {
+  const blockType = OFFER_BLOCK_TYPE[page.offer_type]
+  if (!blockType) return false
+  const merged = mergedBlocksFor({ page, studio }).find((b) => b?.type === blockType)
+  if (!merged) return false
+  return offerConfigured(blockType, merged, { landingPath, product })
+}
+
+const isMaster = (user) => Boolean(user && (user.isMaster || user.role === 'master'))
+
+/** Master, an org admin of the page's org, or (scope one) someone assigned to its studio. */
+export function canViewPage(user, page) {
+  if (!user) return false
+  if (isMaster(user) || isOrgAdmin(user, page.organization_id)) return true
+  return page.scope === 'one' && getUserLocationIds(user).includes(page.primary_location_id)
+}
+
+/** scope one: the landing_page permission at its studio; scope all: an org admin. Master passes both. */
+export function canEditPage(user, page) {
+  if (!user) return false
+  if (isMaster(user)) return true
+  if (page.scope === 'one') return hasPermissionForLocation(user, page.primary_location_id, 'landing_page')
+  return isOrgAdmin(user, page.organization_id)
+}
