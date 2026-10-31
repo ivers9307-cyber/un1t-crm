@@ -372,7 +372,7 @@ export default function ClassFunnel(props) {
           setError('That class filled up while you were typing. Pick another one — your details are saved.')
           return
         }
-        setError(customerErrorText(j.error, 'Something went wrong — please try again.')); return
+        setError(customerErrorText(j.error, 'Something went wrong. Please try again.')); return
       }
       // BROWSERLEAD.1 — the server has sent its Lead; send the browser twin
       // (no-op without consent). Before any payment step: the lead exists
