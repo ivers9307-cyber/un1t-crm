@@ -51,6 +51,10 @@ describe('mig 792 landing_pages', () => {
       expect(SQL).toMatch(new RegExp(`alter table public\\.${t} add column if not exists page_id uuid references public\\.landing_pages\\(id\\) on delete set null`, 'i'))
     }
   })
+  it('sets a lock_timeout right after BEGIN and builds no page_id index in the transaction', () => {
+    expect(SQL).toMatch(/begin;\s*set local lock_timeout = '5s';/i)
+    expect(SQL).not.toMatch(/create index[^;]*\(page_id\)/i)
+  })
   it('refuses a studio row outside the page organisation', () => {
     expect(SQL).toMatch(/create trigger landing_page_studios_same_org\s+before insert or update on public\.landing_page_studios/i)
     expect(SQL).toMatch(/revoke execute on function public\.landing_page_studios_same_org\(\) from public, anon, authenticated/i)

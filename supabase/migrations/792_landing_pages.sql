@@ -44,10 +44,15 @@
 --
 -- All four request tables exist (class_booking_requests mig 335,
 -- trial_purchases mig 762, corp_promo_claims mig 787, funnel_events mig 376).
+-- page_id gets no index in this file (nothing reads it yet; a later migration
+-- adds the four CONCURRENTLY). lock_timeout 5s (mig 733 pattern): the ALTERs
+-- on the request tables give up rather than queue behind a long writer.
 -- The offer block's JSON nulls are dropped from the studio half (a null plan
 -- code is not a value); the page half keeps every other key as it was.
 
 BEGIN;
+
+SET LOCAL lock_timeout = '5s';
 
 -- ---------------------------------------------------------------------------
 -- 1. landing_pages
@@ -163,10 +168,9 @@ ALTER TABLE public.trial_purchases ADD COLUMN IF NOT EXISTS page_id uuid REFEREN
 ALTER TABLE public.corp_promo_claims ADD COLUMN IF NOT EXISTS page_id uuid REFERENCES public.landing_pages(id) ON DELETE SET NULL;
 ALTER TABLE public.funnel_events ADD COLUMN IF NOT EXISTS page_id uuid REFERENCES public.landing_pages(id) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS idx_class_booking_requests_page ON public.class_booking_requests (page_id) WHERE page_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_trial_purchases_page ON public.trial_purchases (page_id) WHERE page_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_corp_promo_claims_page ON public.corp_promo_claims (page_id) WHERE page_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_funnel_events_page ON public.funnel_events (page_id) WHERE page_id IS NOT NULL;
+-- No index on page_id here: nothing reads it yet, and an index build inside
+-- this transaction would hold the four tables' write lock. A later migration
+-- adds them CONCURRENTLY when a reader lands.
 
 -- ---------------------------------------------------------------------------
 -- 5. Backfill helpers (pure; the same lists as src/lib/landing-page-offers.js)
