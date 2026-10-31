@@ -353,6 +353,10 @@ const config = [
       // a stamp that silently fails re-reads the same contacts every tick
       // (the ~288k-calls-a-day loop this PR removed). Armed clean.
       'src/app/api/cron/glofox-detail-backfill/route.js',
+      // ATTHISTORY.1 — the history read's cursor stamp is the same shape:
+      // a silently failed stamp re-reads the contact every tick. Born clean.
+      'src/app/api/cron/glofox-attendance-history/route.js',
+      'src/lib/glofox-attendance-history.js',
       // CRONREADERR.1 — the crons whose failed reads used to pass for a quiet
       // run, plus the class-sync lib and the push-reminder cron (clean on main).
       // Measured: 5 findings in the first three on main (ad-insights ×2,

@@ -1986,6 +1986,9 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
   if (!branchId) return { ok: false, bookings: [] }
   const windowDays = Number.isFinite(opts.windowDays) ? opts.windowDays : 30
   const limit = Math.min(opts.limit || 100, 100)
+  // ATTHISTORY.1 — the history pager (fetchUserBookingHistoryResult) walks
+  // page 2, 3, … of the same query; every other caller reads page 1.
+  const page = Number.isInteger(opts.page) && opts.page > 1 ? opts.page : 1
   const cutoffSec = Math.floor((Date.now() - windowDays * 24 * 60 * 60 * 1000) / 1000)
   // sort_by=-created → newest first; time_start filters by class
   // start time (not booking creation), but the cutoff still bounds
@@ -1995,7 +1998,7 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
     branchId,
     user_id: userId,
     limit: String(limit),
-    page: '1',
+    page: String(page),
     sort_by: '-created',
     time_start: String(cutoffSec),
     exclude_cancelled: 'false',
@@ -2011,6 +2014,45 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
   } catch {
     return { ok: false, bookings: [] }
   }
+}
+
+// ATTHISTORY.1 — the full history is a ten-year window, read in pages of 100.
+export const BOOKING_HISTORY_WINDOW_DAYS = 3650
+export const BOOKING_HISTORY_PAGE_SIZE = 100
+// 40 pages = 4,000 bookings: more than any member has (five years at
+// five classes a week is 1,300). A member past it is reported `truncated`
+// and still read as ok (the newest 4,000 bookings answer "ever attended").
+export const BOOKING_HISTORY_MAX_PAGES = 40
+
+/**
+ * ATTHISTORY.1 — a Glofox member's WHOLE booking history: every page of
+ * /2.0/bookings back BOOKING_HISTORY_WINDOW_DAYS, newest first.
+ *
+ *   { ok: true,  bookings, pages, truncated }  every page answered
+ *   { ok: false, bookings: [], pages }         a page failed; nothing is
+ *                                              reported, because a partial
+ *                                              history (newest first) that
+ *                                              shows no attended class would
+ *                                              be read as "never attended"
+ *                                              and never re-checked.
+ *
+ * Stops after a page shorter than the page size (the last one), or at the
+ * page cap. Reads only: GET, retried by glofoxFetch like any other read.
+ */
+export async function fetchUserBookingHistoryResult(creds, userId, opts = {}) {
+  const limit = BOOKING_HISTORY_PAGE_SIZE
+  const maxPages = Number.isInteger(opts.maxPages) && opts.maxPages > 0 ? opts.maxPages : BOOKING_HISTORY_MAX_PAGES
+  const windowDays = Number.isFinite(opts.windowDays) ? opts.windowDays : BOOKING_HISTORY_WINDOW_DAYS
+  const bookings = []
+  let pages = 0
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await fetchUserBookingsResult(creds, userId, { ...opts, windowDays, limit, page })
+    pages = page
+    if (!r.ok) return { ok: false, bookings: [], pages }
+    bookings.push(...r.bookings)
+    if (r.bookings.length < limit) return { ok: true, bookings, pages, truncated: false }
+  }
+  return { ok: true, bookings, pages, truncated: true }
 }
 
 /** Glofox spells a cancelled booking both ways. */
