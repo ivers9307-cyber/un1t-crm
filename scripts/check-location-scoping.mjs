@@ -114,17 +114,10 @@ const SCOPING_HELPERS = [
   // studio rows by page_id, and answers only a location_id that is one of
   // that page's own studio rows (a one-studio page only its primary); its PR1
   // legacy branch reads landing_page_settings by public_path, the public
-  // site's tenant selector the routes used before. studioTermsCopy reads
-  // landing_page_settings by the location_id the caller resolved from the
-  // page's own rows.
-  // copySourceForRequest reads landing_pages by pk (the page_id stamped on the
-  // caller's own queue row), landing_page_studios by that page_id and keeps only
-  // the row whose location_id is the caller's own row's location, then
-  // studioPublicPath by that location; without a page it reads
-  // landing_page_settings by the same location_id.
+  // site's tenant selector the routes used before. (studioTermsCopy and
+  // copySourceForRequest are NOT listed: each reads by a location_id or page
+  // id its caller already resolved, so they scope nothing themselves.)
   'resolvePublicPageRequest(',
-  'studioTermsCopy(',
-  'copySourceForRequest(',
   // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
   // through contactsAtStudio filters on the studio it is asked for.
   'contactsAtStudio(',
