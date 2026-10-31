@@ -59,7 +59,11 @@ const shellClass = (tone) => (tone === 'light'
   ? 'min-h-screen bg-white text-black antialiased'
   : 'min-h-screen bg-black text-white antialiased')
 
-function Header({ logo = {}, cta = {}, eventsHref = null }) {
+// HEROHEADER.1 — `tone` colours the fixed bar for the page; `showCta` false
+// drops the header button (OneClassLayout: the booking card IS the page's
+// call to action and sits in the hero beside the video, so a second "Book a
+// free class" in the corner only competed with it).
+function Header({ logo = {}, cta = {}, eventsHref = null, tone = 'dark', showCta = true }) {
   return (
     <SiteHeader
       logoUrl={logo.url || null}
@@ -67,7 +71,8 @@ function Header({ logo = {}, cta = {}, eventsHref = null }) {
       logoWidthPx={logo.widthPx || 150}
       wordmark={logo.wordmark || ''}
       sticky
-      ctaHref={cta.href || null}
+      tone={tone}
+      ctaHref={showCta ? (cta.href || null) : null}
       ctaLabel={cta.label}
       ctaLabelShort={cta.labelShort || ''}
       eventsHref={eventsHref}
@@ -111,7 +116,7 @@ export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />
-      <Header logo={logo} cta={cta} />
+      <Header logo={logo} cta={cta} tone={tone} />
 
       <FrostedHero anchor={anchor} heroImageUrl={heroImageUrl} offer={offer} scrollCueLabel={scrollCueLabel} />
 
@@ -130,7 +135,7 @@ export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [],
       <RevealArmScript />
       <VisitOriginCapture />
       <RevealManager />
-      <Header logo={logo} cta={cta} />
+      <Header logo={logo} cta={cta} tone={tone} showCta={false} />
 
       <CampaignHero
         videoUrl={hero.videoUrl}
@@ -168,7 +173,7 @@ export function BlocksLayout({ tone = 'dark', logo, cta, footer, blocks = [], bl
       <VisitOriginCapture />
       <RevealManager />
       {jsonLd ? <JsonLd data={jsonLd} /> : null}
-      <Header logo={logo} cta={cta} eventsHref={eventsHref} />
+      <Header logo={logo} cta={cta} eventsHref={eventsHref} tone={tone} />
       <Blocks blocks={rendered} blockProps={blockProps} cta={cta} cta2={cta2} tone={tone} trial={trial} trialShown={shownTrial} trialHero={trialHero} />
       <Footer footer={footer} cta={cta} fallbackHref={shownTrial ? '#trial' : '#book'} />
     </div>

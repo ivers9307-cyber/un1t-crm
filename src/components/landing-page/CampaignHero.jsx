@@ -14,11 +14,17 @@
 //                Every browser refuses sound before a gesture on the page
 //                (iOS always; Chrome unless the site has engagement), and the
 //                `autoplay` attribute fails silently, so with 'on' the hero
-//                calls play() itself after mount: if the browser refuses, the
-//                clip falls back to muted autoplay with the Tap for sound
-//                button, exactly the old behaviour. So "sound on" means "with
-//                sound wherever the browser allows it, muted otherwise", and
-//                the clip should still carry burned-in captions.
+//                calls play() itself after mount. HEROHEADER.1: a browser can
+//                ANSWER play() and still not advance (seen live: paused false,
+//                currentTime pinned near 0, the button saying Sound on over a
+//                silent frame), so the promise is not the proof; the clip is
+//                judged on its currentTime moving within PLAYBACK_CHECK_MS. A
+//                refusal or a stall falls back to muted autoplay with the Tap
+//                for sound button, and the first gesture anywhere on the page
+//                (a tap, a key) then unmutes it, unless the visitor muted it
+//                themselves with the button. So "sound on" means "with sound
+//                as soon as the browser lets us", and the clip should still
+//                carry burned-in captions.
 // No video: the poster alone; neither: the words on black.
 //
 // PAGES.1 — `renderText(path, value)` (optional) renders the eyebrow,
@@ -30,6 +36,10 @@
 // the element whose text is white, which is the rule no-low-contrast-accent-
 // text asks for.
 import { useEffect, useRef, useState } from 'react'
+
+/** How long an unmuted start gets to prove it is advancing before the muted fallback. */
+export const PLAYBACK_CHECK_MS = 1200
+const GESTURE_EVENTS = ['pointerdown', 'keydown', 'touchend']
 
 // Literal class names so Tailwind sees them.
 const FOCUS_CLASS = Object.freeze({ top: 'object-top', center: 'object-center', bottom: 'object-bottom' })
@@ -46,34 +56,63 @@ export default function CampaignHero({
   const videoRef = useRef(null)
   const wantSound = soundDefault === 'on'
   const [muted, setMuted] = useState(!wantSound)
+  // The visitor pressed the button to mute: no gesture unmutes it again.
+  const userMutedRef = useRef(false)
   const focusClass = heroFocusClass(videoFocus)
 
-  // Sound on: ask to play with sound; a refusal (the autoplay policy) falls
-  // back to muted autoplay, never to a frozen poster.
+  const safePlay = (v) => { try { const p = v.play(); if (p && p.catch) p.catch(() => {}) } catch { /* no autoplay at all: the poster stays */ } }
+
+  // Sound on: ask to play with sound, and believe it only when the clip is
+  // seen to advance. A refusal or a stall falls back to muted autoplay.
   useEffect(() => {
     const v = videoRef.current
     if (!v || !videoUrl || !wantSound) return
-    let cancelled = false
+    let settled = false
     const fallBack = () => {
-      if (cancelled) return
+      if (settled) return
+      settled = true
       v.muted = true
       setMuted(true)
-      try { const q = v.play(); if (q && q.catch) q.catch(() => {}) } catch { /* no autoplay at all: the poster stays */ }
+      safePlay(v)
     }
+    const startedAt = Number(v.currentTime) || 0
     v.muted = false
     try {
       const p = v.play()
       if (p && p.catch) p.catch(fallBack)
     } catch { fallBack() }
-    return () => { cancelled = true }
+    const timer = setTimeout(() => {
+      if (settled) return
+      if (v.paused || (Number(v.currentTime) || 0) - startedAt < 0.05) fallBack()
+      else settled = true
+    }, PLAYBACK_CHECK_MS)
+    return () => { settled = true; clearTimeout(timer) }
   }, [videoUrl, wantSound])
+
+  // Muted only because the browser made us: the first gesture anywhere on
+  // the page is the permission we were waiting for.
+  useEffect(() => {
+    if (!wantSound || !muted || !videoUrl || userMutedRef.current) return
+    const onGesture = (e) => {
+      if (e.target && e.target.closest && e.target.closest('[data-sound-toggle]')) return // the button toggles itself
+      const v = videoRef.current
+      if (!v || userMutedRef.current) return
+      v.muted = false
+      setMuted(false)
+      safePlay(v)
+      for (const name of GESTURE_EVENTS) document.removeEventListener(name, onGesture, true)
+    }
+    for (const name of GESTURE_EVENTS) document.addEventListener(name, onGesture, true)
+    return () => { for (const name of GESTURE_EVENTS) document.removeEventListener(name, onGesture, true) }
+  }, [muted, wantSound, videoUrl])
 
   function toggleSound() {
     const v = videoRef.current
     if (!v) return
     const nextMuted = !muted
+    userMutedRef.current = nextMuted
     v.muted = nextMuted
-    if (!nextMuted) { try { const p = v.play(); if (p && p.catch) p.catch(() => {}) } catch { /* autoplay policy */ } }
+    if (!nextMuted) safePlay(v)
     setMuted(nextMuted)
   }
 
@@ -103,6 +142,7 @@ export default function CampaignHero({
             <button
               type="button"
               onClick={toggleSound}
+              data-sound-toggle=""
               aria-pressed={!muted}
               className="absolute top-4 right-4 z-10 rounded-full bg-black/65 backdrop-blur px-4 py-2.5 text-sm font-semibold text-white border border-white/25"
             >
