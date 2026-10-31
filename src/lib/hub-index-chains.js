@@ -178,10 +178,11 @@ export const HUB_INDEX_CHAINS = Object.freeze({
   // Step 1's OR matches /automations' own gate exactly (canCurated ||
   // canFlows || canDevices in (marketing)/automations/page.js).
   //
-  // Step 2 routes to /settings/landing-page, NOT /welcome: /welcome is the
-  // PUBLIC marketing site (no auth), never an in-app pathname to redirect a
-  // signed-in operator into. /settings/landing-page gates on `landing_page`
-  // directly, so a landing-page-only editor lands and stays.
+  // Step 2 routes to /settings/landing-page (the Pages list: the studio page
+  // and every campaign page), NOT /welcome: /welcome is the PUBLIC marketing
+  // site (no auth), never an in-app pathname to redirect a signed-in operator
+  // into. /settings/landing-page gates on `landing_page` directly, so a
+  // landing-page-only editor lands and stays.
   //
   // TWILIO-RETIRE.1 removed step 3 with the SMS channel (and `sms` from the
   // Marketing union, so the invariant still holds). Its history:
