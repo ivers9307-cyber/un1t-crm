@@ -53,10 +53,20 @@ export const CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT = Object.freeze([
   { title: 'Your own crowd', body: 'The same faces every Monday, Wednesday and Friday. Coffee after, usually.' },
 ])
 
+// HEROVIDEO.1 — how the hero shows the coach video. `video_focus` is the edge
+// the box keeps when it crops the clip (a talking coach has their face at the
+// top, so top is the default; center cut it off). `sound_default` is whether
+// the clip asks to start with sound: browsers refuse sound before a gesture,
+// so 'on' falls back to muted where it is refused (CampaignHero).
+export const CAMPAIGN_FUNNEL_VIDEO_FOCUS = Object.freeze(['top', 'center', 'bottom'])
+export const CAMPAIGN_FUNNEL_SOUND_DEFAULTS = Object.freeze(['on', 'muted'])
+export const CAMPAIGN_FUNNEL_VIDEO_DEFAULTS = Object.freeze({ video_focus: 'top', sound_default: 'on' })
+
 // What the page hands the browser. Words and media only.
 export const CAMPAIGN_FUNNEL_CLIENT_FIELDS = Object.freeze([
   ...Object.keys(CAMPAIGN_FUNNEL_COPY_DEFAULTS),
   'consent_label', 'expect_cards', 'show_sections', 'video_url', 'poster_url',
+  'video_focus', 'sound_default',
 ])
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
@@ -119,6 +129,10 @@ export function campaignFunnelCopy(block, { brand = '' } = {}) {
     : [...CAMPAIGN_FUNNEL_SECTIONS]
   out.video_url = str(b.video_url)
   out.poster_url = str(b.poster_url)
+  // HEROVIDEO.1 — an unknown value (a hand-edited row, an older block) reads
+  // as the default, never as a class name the renderer does not know.
+  out.video_focus = CAMPAIGN_FUNNEL_VIDEO_FOCUS.includes(b.video_focus) ? b.video_focus : CAMPAIGN_FUNNEL_VIDEO_DEFAULTS.video_focus
+  out.sound_default = CAMPAIGN_FUNNEL_SOUND_DEFAULTS.includes(b.sound_default) ? b.sound_default : CAMPAIGN_FUNNEL_VIDEO_DEFAULTS.sound_default
   return out
 }
 

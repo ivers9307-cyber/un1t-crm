@@ -332,6 +332,10 @@ const CAMPAIGN_FUNNEL_DEFAULT = ({ brand = '' } = {}) => ({
   event_source_url:    '',
   video_url:           null,
   poster_url:          null,
+  // HEROVIDEO.1 — the same literals as CAMPAIGN_FUNNEL_VIDEO_DEFAULTS
+  // (campaign-funnel.js imports this module, so they are spelled here).
+  video_focus:         'top',
+  sound_default:       'on',
   ...CAMPAIGN_FUNNEL_COPY_DEFAULTS,
   consent_label:       classFunnelConsentDefault(brand),
   expect_cards:        CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT.map((c) => ({ ...c })),

@@ -1399,7 +1399,7 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
   const onPickVideo = (item) => onUpdate({ video_url: item.url, poster_url: block.poster_url || item.poster_url || null })
   return (
     <>
-      <Field label="Coach video" hint="MP4 / WebM, up to 50MB. Starts muted on loop with a Tap for sound button, so burn the captions in. Tip: 720p, 20 to 40 seconds.">
+      <Field label="Coach video" hint="MP4 / WebM, up to 50MB. Loops on the page; browsers only allow sound after a tap, so burn the captions in. Tip: 720p, 20 to 40 seconds.">
         <MediaSlot
           url={block.video_url || ''}
           onClear={() => onUpdate({ video_url: null })}
@@ -1413,6 +1413,24 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
           progress={progress[k('video')]}
         />
       </Field>
+      {/* HEROVIDEO.1 — how the hero frames and starts the clip. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Video framing" hint="Which part of the clip stays in view when the box crops it. Top keeps the coach's face.">
+          <select aria-label="Video framing" value={block.video_focus || 'top'} onChange={(e) => onUpdate({ video_focus: e.target.value })}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text">
+            <option value="top">Top of the clip</option>
+            <option value="center">Centre of the clip</option>
+            <option value="bottom">Bottom of the clip</option>
+          </select>
+        </Field>
+        <Field label="Sound" hint="Sound on starts with sound wherever the browser allows it and falls back to muted with the Tap for sound button.">
+          <select aria-label="Sound" value={block.sound_default || 'on'} onChange={(e) => onUpdate({ sound_default: e.target.value })}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text">
+            <option value="on">Sound on</option>
+            <option value="muted">Start muted</option>
+          </select>
+        </Field>
+      </div>
       <Field label="Poster image" hint="The still before the video plays. Captured from the clip when you upload one; replace it here.">
         <MediaSlot
           url={block.poster_url || ''}

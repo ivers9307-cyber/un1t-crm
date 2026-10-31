@@ -136,6 +136,8 @@ export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [],
         videoUrl={hero.videoUrl}
         posterUrl={hero.posterUrl}
         soundLabel={hero.soundLabel}
+        videoFocus={hero.videoFocus}
+        soundDefault={hero.soundDefault}
         eyebrow={hero.eyebrow}
         heading={hero.heading}
         subhead={hero.subhead}

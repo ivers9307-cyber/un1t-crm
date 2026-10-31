@@ -103,3 +103,30 @@ describe('campaignFunnelCopy', () => {
     }
   })
 })
+
+// HEROVIDEO.1 — the hero's framing and sound default travel with the copy.
+import { CAMPAIGN_FUNNEL_VIDEO_DEFAULTS, campaignFunnelClientCopy } from './campaign-funnel'
+
+describe('campaignFunnelCopy — video framing and sound', () => {
+  it('defaults to top framing with sound on, and the factory seeds the same', () => {
+    const copy = campaignFunnelCopy({})
+    expect(copy.video_focus).toBe('top')
+    expect(copy.sound_default).toBe('on')
+    expect(CAMPAIGN_FUNNEL_VIDEO_DEFAULTS).toEqual({ video_focus: 'top', sound_default: 'on' })
+    const block = newBlockOfType('campaign_funnel')
+    expect(block.video_focus).toBe('top')
+    expect(block.sound_default).toBe('on')
+  })
+
+  it('keeps a known value and reads an unknown one as the default', () => {
+    expect(campaignFunnelCopy({ video_focus: 'center', sound_default: 'muted' })).toMatchObject({ video_focus: 'center', sound_default: 'muted' })
+    expect(campaignFunnelCopy({ video_focus: 'left', sound_default: 'loud' })).toMatchObject({ video_focus: 'top', sound_default: 'on' })
+  })
+
+  it('both reach the browser (presentation, not configuration)', () => {
+    expect(CAMPAIGN_FUNNEL_CLIENT_FIELDS).toEqual(expect.arrayContaining(['video_focus', 'sound_default']))
+    const client = campaignFunnelClientCopy(campaignFunnelCopy({ video_focus: 'bottom' }))
+    expect(client.video_focus).toBe('bottom')
+    expect(client.sound_default).toBe('on')
+  })
+})

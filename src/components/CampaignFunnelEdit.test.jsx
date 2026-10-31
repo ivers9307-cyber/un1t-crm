@@ -32,6 +32,20 @@ describe('CampaignFunnelEdit', () => {
     expect(screen.getByText('Shown at a studio with no trial plan set on its row.')).toBeTruthy()
   })
 
+  // HEROVIDEO.1 — the two video choices beside the upload.
+  it('offers the framing and sound selects with their defaults and writes a change', () => {
+    const onUpdate = vi.fn()
+    mount(newBlockOfType('campaign_funnel'), onUpdate)
+    const framing = screen.getByRole('combobox', { name: 'Video framing' })
+    const sound = screen.getByRole('combobox', { name: 'Sound' })
+    expect(framing.value).toBe('top')
+    expect(sound.value).toBe('on')
+    fireEvent.change(framing, { target: { value: 'center' } })
+    expect(onUpdate).toHaveBeenCalledWith({ video_focus: 'center' })
+    fireEvent.change(sound, { target: { value: 'muted' } })
+    expect(onUpdate).toHaveBeenCalledWith({ sound_default: 'muted' })
+  })
+
   it('no Page, Sections, trial plan, keywords or tracking, and no catalogue load', () => {
     mount(newBlockOfType('campaign_funnel'))
     expect(screen.queryByText('Page')).toBeNull()
