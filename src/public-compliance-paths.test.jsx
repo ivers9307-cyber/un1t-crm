@@ -833,6 +833,23 @@ describe('page slugs are public from the database', () => {
     expect(forwarded(res, 'x-public-page')).toBe('1')
   })
 
+  it('the host portal (a reject brand with an organisation) still 404s a page slug', async () => {
+    const hostBrand = BRANDS.find((b) => b.id === 'un1t-hosts')
+    expect(hostBrand.fallbackHandler).toBe('reject')
+    expect(hostBrand.organizationId).toBe(UN1T_GROUP_ORG_ID)
+    for (const path of ['/january', '/january/anything']) {
+      const res = await proxy(makeReq({ host: hostBrand.hostnames[0], path }))
+      expect(res.status, `${path} was served on the host portal`).toBe(404)
+      expect(forwarded(res, 'x-public-page')).toBe(null)
+    }
+  })
+
+  it('the marketing host is still admitted for the same slug', async () => {
+    const res = await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/january' }))
+    expect(admitted(res)).toBe(true)
+    expect(rewrittenTo(res)).toBe(null)
+  })
+
   it('the marketing host still rewrites an unknown path to /welcome', async () => {
     const res = await proxy(makeReq({ host: 'www.un1tdublin.com', path: '/nope' }))
     expect(rewrittenTo(res)).toMatch(/\/welcome$/)

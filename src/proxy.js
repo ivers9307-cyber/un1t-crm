@@ -122,9 +122,13 @@ export async function proxy(request) {
     // rows both do; the car-business hosts have none and so no pages), and the
     // organisation's page slugs are consulted only AFTER the brand's own list
     // misses, so a listed path never pays for the lookup and a DB outage
-    // leaves the in-code behaviour exactly as it was.
+    // leaves the in-code behaviour exactly as it was. Only a 'rewrite' brand
+    // (the marketing-site shape, whose strays go to a landing) serves pages: a
+    // 'reject' brand is an isolated surface (host.un1tdublin.com serves the
+    // host portal and 404s everything else, pay.* serves payments), and it can
+    // carry an organizationId too, so the slug tier must not open it.
     let isDbPage = false
-    if (!allowed && brand.organizationId && !path.startsWith('/api/')) {
+    if (!allowed && brand.organizationId && brand.fallbackHandler === 'rewrite' && !path.startsWith('/api/')) {
       isDbPage = isPublicPagePath(path, await listPublicPageSlugs(brand.organizationId))
       allowed = isDbPage
     }
