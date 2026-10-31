@@ -1123,6 +1123,33 @@ const CORP_PROMO_TEXTS = [
   ['email_body', 'Confirmation email — body ({first_name}, {credits}, {expires_on}, {studio_name})', 1200, 4],
 ]
 
+// PAGES.1 — the paid_trial, campaign_funnel and corp_promo blocks no longer
+// drive the campaign pages (/trial, /50plus, /corp): those are landing_pages
+// rows now (mig 792), edited by the team until the Pages editor ships. Shown
+// at the top of the three editors so an operator does not edit the wrong copy.
+export function offerBlockNoticeText(block) {
+  switch (block?.type) {
+    case 'paid_trial':
+      return 'This block drives the trial card on this studio page only. The /trial page is now its own page and, until the Pages editor ships, is edited by the team.'
+    case 'campaign_funnel': {
+      const where = block.campaign ? `/${block.campaign}` : 'its campaign page'
+      return `This block no longer drives ${where}. That page is now its own page and, until the Pages editor ships, is edited by the team.`
+    }
+    case 'corp_promo':
+      return 'This block no longer drives /corp. That page is now its own page and, until the Pages editor ships, is edited by the team.'
+    default:
+      return null
+  }
+}
+
+export function OfferBlockNotice({ block }) {
+  const text = offerBlockNoticeText(block)
+  if (!text) return null
+  return (
+    <p role="note" className="mb-3 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700">{text}</p>
+  )
+}
+
 export function CorpPromoEdit({ block, onUpdate }) {
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
@@ -1132,6 +1159,7 @@ export function CorpPromoEdit({ block, onUpdate }) {
   }
   return (
     <>
+      <OfferBlockNotice block={block} />
       <Field label="Promo" hint="Blank applies these words to every /corp promo at this studio. The credits and their expiry are fixed per promo.">
         <Input value={block.promo_key || ''} onChange={(v) => onUpdate({ promo_key: v.trim() })} maxLength={60} placeholder="hatch-3-free" />
       </Field>
@@ -1206,6 +1234,7 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
   }
   return (
     <>
+      <OfferBlockNotice block={block} />
       <Field label="Studio label on /trial" hint="The name on this studio's choice card. Blank shows the studio's own name.">
         <Input value={block.studio_label || ''} onChange={(v) => onUpdate({ studio_label: v })} maxLength={60} />
       </Field>
@@ -1542,6 +1571,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
   const selectCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   return (
     <>
+      <OfferBlockNotice block={block} />
       <Field label="Page" hint="The page this block drives. Fixed per campaign.">
         <input value={block.campaign || ''} readOnly aria-label="Campaign key" className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-muted" />
       </Field>

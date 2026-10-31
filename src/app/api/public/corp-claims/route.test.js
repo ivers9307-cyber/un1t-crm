@@ -42,7 +42,13 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 
+vi.mock('@/lib/landing-pages', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, resolvePublicPageRequest: vi.fn(actual.resolvePublicPageRequest), studioTermsCopy: vi.fn(async () => ({ terms_required_message: 'Tick the studio terms.' })) }
+})
+
 import { POST } from './route'
+import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const LOC = 'loc-hatch'
 const BODY = { promo: 'hatch-3-free', first_name: 'Ann', last_name: 'Byrne', email: 'Ann@Work.ie', phone: '0871234567', consent: true, terms_accepted: true }
@@ -149,5 +155,73 @@ describe('POST /api/public/corp-claims', () => {
     m.inserted.mockResolvedValue({ data: null, error: { code: '42P01' } })
     expect((await call()).status).toBe(503)
     expect(m.fulfil).not.toHaveBeenCalled()
+  })
+})
+
+// PAGES.1 — `page`: the promo is the one the page's studio row names (the
+// registry still decides credits and expiry); a body `promo` that names
+// another is not_found, and the claim records the page.
+describe('POST /api/public/corp-claims — page (PAGES.1)', () => {
+  const pageOk = (extra = {}) => ({
+    ok: true, pageId: 'page-corp', page: { id: 'page-corp', slug: 'corp', offer_type: 'promo_credits' },
+    studioRow: { location_id: LOC, enabled: true, offer: { promo_key: 'hatch-3-free' }, attribution: {} },
+    locationId: LOC, publicPath: 'hatch-street', blocks: [{ type: 'corp_promo', promo_key: 'hatch-3-free', heading: 'Corp' }],
+    attribution: { tag: 'hatch-street-corp', lead_source: 'meta_corp' }, ...extra,
+  })
+
+  it('page=corp claims the row\'s promo_key; a body promo_key is ignored', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    const { promo: _omit, ...noPromo } = BODY
+    const { status, json } = await call({ ...noPromo, page: 'corp', studio: 'hatch-street', promo_key: 'other', credits: 99 })
+    expect(status).toBe(200)
+    expect(json.data.credits).toBe(3)
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: 'corp', studio: 'hatch-street' }))
+    expect(m.rateLimit).toHaveBeenCalledWith(expect.anything(), 'corpclaim:hatch-3-free:1.2.3.4', expect.anything())
+    expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ page_id: 'page-corp', location_id: LOC, promo_key: 'hatch-3-free' }))
+    expect(m.fulfil).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promo: expect.objectContaining({ key: 'hatch-3-free', credits: 3, expiresInDays: 7 }) }))
+    // No row attribution: the registry's tag and lead source, as /corp has always written.
+    expect(m.tag).toHaveBeenCalledWith(expect.anything(), { contactId: 'c-1', locationId: LOC, tag: 'hatch-corp-promo' })
+    expect(m.updates).toContainEqual({ table: 'contacts', payload: { lead_source: 'corp_promo' } })
+
+    // The same promo named in the body is fine; another one is not_found.
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    expect((await call({ ...BODY, page: 'corp' })).status).toBe(200)
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    const other = await call({ ...BODY, promo: 'hatch-10-free', page: 'corp' })
+    expect(other).toEqual({ status: 404, json: { success: false, error: 'not_found' } })
+  })
+
+  it("the row's own tag and lead source win over the registry's", async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ studioRow: { location_id: LOC, offer: { promo_key: 'hatch-3-free' }, attribution: { tag: 'row-tag', lead_source: 'row-src' } } }))
+    const { promo: _omit, ...noPromo } = BODY
+    expect((await call({ ...noPromo, page: 'corp' })).status).toBe(200)
+    expect(m.tag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'row-tag' }))
+    expect(m.updates).toContainEqual({ table: 'contacts', payload: { lead_source: 'row-src' } })
+  })
+
+  it('the terms tick on a page uses the studio terms wording', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk())
+    const { status, json } = await call({ ...BODY, terms_accepted: false, page: 'corp' })
+    expect([status, json.code, json.error]).toEqual([400, 'terms_required', 'Tick the studio terms.'])
+  })
+
+  it('refusals: not_found 404, unreadable 503, a non-promo page 404, a row naming no live promo not_available', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    expect((await call({ ...BODY, page: 'corp' })).status).toBe(404)
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'unreadable' })
+    expect((await call({ ...BODY, page: 'corp' })).status).toBe(503)
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ page: { id: 'p', slug: 'trial', offer_type: 'paid_trial' } }))
+    expect((await call({ ...BODY, page: 'trial' })).status).toBe(404)
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ blocks: [{ type: 'corp_promo', promo_key: 'nope' }] }))
+    const { promo: _omit, ...noPromo } = BODY
+    const bad = await call({ ...noPromo, page: 'corp' })
+    expect([bad.status, bad.json.code]).toEqual([400, 'not_available'])
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+  })
+
+  it('without page a body with no promo is a 400', async () => {
+    const { promo: _omit, ...noPromo } = BODY
+    expect((await call(noPromo)).status).toBe(400)
   })
 })

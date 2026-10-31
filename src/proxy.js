@@ -2,6 +2,13 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
 import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'
+import {
+  publicOrgIdForHost,
+  listPublicPageSlugs,
+  isPublicPagePath,
+  withPublicPageHeader,
+  PUBLIC_PAGE_HEADER,
+} from '@/lib/public-pages-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
 import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
@@ -18,6 +25,19 @@ import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
 // hash so Next re-emits the middleware on the next build.
 export async function proxy(request) {
   const hostname = request.headers.get('host') || ''
+
+  // ── x-public-page is OURS (PAGES.1) ──────────────────────────────
+  // The proxy stamps it on a request it admitted as a database-driven public
+  // page, and AppShellServer trusts it to render that page bare. A client must
+  // never be able to send it, so a copy arriving on the wire is deleted before
+  // any gate runs, and every pass-through below re-states the request headers
+  // (without it) so the downstream request really loses it: a bare
+  // NextResponse.next() forwards the original headers untouched.
+  const hadForgedPageHeader = request.headers.has(PUBLIC_PAGE_HEADER)
+  if (hadForgedPageHeader) request.headers.delete(PUBLIC_PAGE_HEADER)
+  const pass = () => (hadForgedPageHeader
+    ? NextResponse.next({ request: { headers: request.headers } })
+    : NextResponse.next())
 
   // ── Legacy CRM host → canonical repset host (REPSET-P6.S2) ───────
   // Env-gated safety valve, default OFF. When REDIRECT_LEGACY_CRM_HOST=1,
@@ -80,7 +100,7 @@ export async function proxy(request) {
     const path = request.nextUrl.pathname
     // Framework assets pass through unconditionally — the brand
     // landing page itself can't render without them.
-    if (isFrameworkAsset(path)) return NextResponse.next()
+    if (isFrameworkAsset(path)) return pass()
 
     // Root path handling. 'rewrite' brands map "/" to a landing
     // (e.g. /welcome) so the URL bar stays clean; 'reject' brands
@@ -96,7 +116,30 @@ export async function proxy(request) {
 
     // Per-brand allowlist. Anything outside it gets the fallback
     // treatment for the brand (404 or rewrite home).
-    const allowed = brand.allowedPaths.some((p) => path.startsWith(p))
+    let allowed = brand.allowedPaths.some((p) => path.startsWith(p))
+    // PAGES.1 — a landing_pages row is a public page on this host too. The
+    // brand carries its organisation (in-code UN1T brands and tenant_domains
+    // rows both do; the car-business hosts have none and so no pages), and the
+    // organisation's page slugs decide whether a path the brand's own list
+    // misses is a page, and a DB outage answers the fallback list, so the
+    // in-code admit/reject behaviour is exactly as it was. A path the brand
+    // list DOES allow is checked too (one cached read, rewrite brands only):
+    // when it is also a page it must carry the x-public-page header, or
+    // AppShell renders it and then blanks it to /login (a tenant_domains
+    // brand can list /trial, /start or /free-class, which have left
+    // PUBLIC_PATHS since they became pages). Only a 'rewrite' brand
+    // (the marketing-site shape, whose strays go to a landing) serves pages: a
+    // 'reject' brand is an isolated surface (host.un1tdublin.com serves the
+    // host portal and 404s everything else, pay.* serves payments), and it can
+    // carry an organizationId too, so the slug tier must not open it.
+    let isDbPage = false
+    if (brand.organizationId && brand.fallbackHandler === 'rewrite' && !path.startsWith('/api/')) {
+      isDbPage = isPublicPagePath(path, await listPublicPageSlugs(brand.organizationId))
+      allowed = allowed || isDbPage
+    }
+    if (isDbPage) {
+      return NextResponse.next({ request: { headers: withPublicPageHeader(request.headers) } })
+    }
     if (!allowed) {
       if (brand.fallbackHandler === 'reject') {
         return new NextResponse('Not found', { status: 404 })
@@ -106,7 +149,7 @@ export async function proxy(request) {
       }
     }
     // Allowlisted brand path — let it through, no CRM auth gate.
-    return NextResponse.next()
+    return pass()
   }
 
   // ── CRM hostname (default) — existing behaviour ──────────────────
@@ -219,7 +262,7 @@ export async function proxy(request) {
   // reschedule) from the {{manage_url}} link in booking confirmation and
   // reminder emails; the signed token in the path is its only credential.
   // Already under '/book/', listed on its own for the same reason.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/trial', '/50plus', '/corp', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/']
 
   // Public paths matched EXACTLY (or as a parent segment), not as a bare
   // prefix — for entries where a same-stem sibling route must NOT inherit the
@@ -260,7 +303,18 @@ export async function proxy(request) {
   const isPublic =
     publicPaths.some(p => pathname.startsWith(p)) ||
     publicExactPaths.some(p => pathname === p || pathname.startsWith(p + '/'))
-  if (isPublic) return NextResponse.next()
+  if (isPublic) return pass()
+
+  // PAGES.1 — a landing_pages row makes /<slug> public with no deploy. Asked
+  // only after the in-code list misses (a listed page never pays for it), never
+  // for /api/ (a page is not an API route), and a DB outage answers the
+  // in-code fallback slugs, so /trial and friends stay public through one.
+  if (!pathname.startsWith('/api/')) {
+    const slugs = await listPublicPageSlugs(await publicOrgIdForHost(hostname))
+    if (isPublicPagePath(pathname, slugs)) {
+      return NextResponse.next({ request: { headers: withPublicPageHeader(request.headers) } })
+    }
+  }
 
   // Allow API requests authenticated with a valid Bearer token. Two paths
   // (APIKEYS.4 removed the legacy shared-key path; any other Bearer value
@@ -306,7 +360,7 @@ export async function proxy(request) {
               .eq('key_hash', await sha256HexEdge(token))
               .is('revoked_at', null)
               .maybeSingle()
-            if (keyRow) return NextResponse.next()
+            if (keyRow) return pass()
           } catch {
             // Lookup failure — fail closed, fall through to the cookie gate.
           }
@@ -326,7 +380,7 @@ export async function proxy(request) {
             { cookies: { getAll: () => [], setAll: () => {} } }
           )
           const { data: { user: jwtUser } } = await supabaseJwt.auth.getUser(token)
-          if (jwtUser) return NextResponse.next()
+          if (jwtUser) return pass()
         } catch {
           // Network blip or malformed token — fall through.
         }

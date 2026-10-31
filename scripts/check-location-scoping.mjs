@@ -109,6 +109,15 @@ export const TABLE_EXCLUDE = {
 // counts as file-level evidence.
 // ---------------------------------------------------------------------------
 const SCOPING_HELPERS = [
+  // src/lib/landing-pages.js (PAGES.1) — resolvePublicPageRequest reads the
+  // page by organization_id (the host's, publicOrgIdForHost) + slug, then its
+  // studio rows by page_id, and answers only a location_id that is one of
+  // that page's own studio rows (a one-studio page only its primary); its PR1
+  // legacy branch reads landing_page_settings by public_path, the public
+  // site's tenant selector the routes used before. (studioTermsCopy and
+  // copySourceForRequest are NOT listed: each reads by a location_id or page
+  // id its caller already resolved, so they scope nothing themselves.)
+  'resolvePublicPageRequest(',
   // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
   // through contactsAtStudio filters on the studio it is asked for.
   'contactsAtStudio(',
@@ -375,9 +384,6 @@ export const EXEMPT = {
   'src/app/api/public/events/[slug]/donate/route.js': {
     race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
   },
-  'src/app/api/public/classes/route.js': {
-    landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',
-  },
   'src/app/api/public/funnel-event/route.js': {
     landing_page_settings: 'Public funnel beacon: resolves public_path → location_id and only INSERTS a funnel event for that location; unknown paths are ignored.',
   },
@@ -449,18 +455,6 @@ export const EXEMPT = {
   'src/app/legal/un1t/[slug]/[doc]/page.js': {
     landing_page_settings:
       'UN1TWRITE.17 — public legal page resolved by public_path (the path IS the tenant selector); 404s unless the studio is un1t.online, and renders only that studio\'s published terms or waiver text.',
-  },
-  'src/app/start/[path]/page.js': {
-    landing_page_settings:
-      "Public per-studio class-booking page (proxy publicPaths via '/start'): resolves ONE row by its sanitised public_path and renders only its published blocks + logo — public marketing content; the public_path IS the tenant selector (same rationale as /start and /welcome/[location]). MANUALFUNNEL.1.",
-  },
-  'src/app/trial/page.js': {
-    landing_page_settings:
-      "PAIDTRIAL.1 public Meta-ads product page (proxy publicPaths via '/trial'): reads the fixed stillorgan row's published paid_trial block + content blocks (and hatch-street's content blocks as the /start fallback); public marketing content, the public_path IS the tenant selector (same rationale as /start).",
-  },
-  'src/app/start/page.js': {
-    landing_page_settings:
-      "Public Meta-ads landing (proxy publicPaths): reads the fixed hatch-street row's published blocks + the landing logo — public marketing content; the public_path IS the tenant selector (same rationale as /api/public/classes).",
   },
   'src/app/welcome/page.js': {
     landing_page_settings:

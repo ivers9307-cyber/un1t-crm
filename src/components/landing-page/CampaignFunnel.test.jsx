@@ -64,6 +64,22 @@ async function fillDetails() {
 }
 
 describe('CampaignFunnel', () => {
+  it('PAGES.1: with a page it asks for the page and its studio, books and reports by page, never path or campaign', async () => {
+    render(<CampaignFunnel publicPath="stillorgan" campaign="50plus" page="50plus" copy={COPY} locationName="UN1T Stillorgan" />)
+    await screen.findByText('Mon, 5 Jan')
+    const listCall = fetch.mock.calls.map((c) => String(c[0])).find((u) => u.startsWith('/api/public/classes'))
+    expect(listCall).toBe('/api/public/classes?page=50plus&studio=stillorgan')
+    expect(steps[0]).toMatchObject({ page: '50plus', studio: 'stillorgan', step: 'view' })
+    expect(steps[0]).not.toHaveProperty('location_path')
+    fireEvent.click(screen.getByRole('button', { name: 'Book Mon 11:00' }))
+    await fillDetails()
+    fireEvent.click(screen.getByRole('button', { name: 'Book Mon 11:00' }))
+    expect(await screen.findByText('Booked')).toBeTruthy()
+    expect(posts[0]).toMatchObject({ page: '50plus', studio: 'stillorgan', event_id: 'a' })
+    expect(posts[0]).not.toHaveProperty('path')
+    expect(posts[0]).not.toHaveProperty('campaign')
+  })
+
   it('asks the classes route for the campaign', async () => {
     mount()
     await screen.findByText('Mon, 5 Jan')

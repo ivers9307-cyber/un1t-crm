@@ -12,6 +12,11 @@
 // phone. Every word is the block's (`copy`, resolved server-side); the
 // server's refusals come back in the operator's words and are shown as they
 // are. Telemetry (funnel steps, the browser Lead) never blocks the booking.
+//
+// PAGES.1 — with a `page` prop (the [slug] route passes the page's slug) the
+// list, the booking and the funnel events name `{ page, studio: publicPath }`
+// and the server reads everything else from the page's studio row; without
+// it the card sends `path` + `campaign` as before.
 import { useEffect, useRef, useState } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
@@ -20,6 +25,7 @@ import { newLeadEventId, pixelUserData, fireBrowserLead } from '@/lib/meta-pixel
 import { metaPixelIdsForPath } from '@/lib/meta-pixel-paths'
 import { stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { readAttributionFromUrl, buildAttribution, readFbpCookie, funnelSessionId } from '@/lib/campaign-funnel-attribution'
+import { customerErrorText } from '@/lib/page-request-errors'
 
 const VISIBLE_TILES = 3
 const FUNNEL = '50plus'
@@ -73,7 +79,21 @@ function Tile({ cls, selected, onPick, beyondFirstRow }) {
   )
 }
 
-export default function CampaignFunnel({ publicPath, campaign, copy, locationName = '' }) {
+// Where a request is about: the page and its studio, or (no page) the legacy path and campaign.
+export function campaignFunnelTarget({ page, publicPath, campaign }) {
+  return page ? { page, studio: publicPath || undefined } : { path: publicPath, campaign }
+}
+
+export function campaignFunnelClassesUrl({ page, publicPath, campaign }) {
+  if (page) {
+    const q = new URLSearchParams({ page })
+    if (publicPath) q.set('studio', publicPath)
+    return `/api/public/classes?${q.toString()}`
+  }
+  return `/api/public/classes?path=${encodeURIComponent(publicPath)}&campaign=${encodeURIComponent(campaign)}`
+}
+
+export default function CampaignFunnel({ publicPath, campaign, page = null, copy, locationName = '' }) {
   const c = copy && typeof copy === 'object' ? copy : {}
   const [step, setStep] = useState('pick') // pick | details | done
   const [classes, setClasses] = useState([])
@@ -101,7 +121,8 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
         headers: { 'Content-Type': 'application/json' },
         keepalive: true,
         body: JSON.stringify({
-          location_path: publicPath, funnel: FUNNEL, step: crmStep,
+          ...(page ? { page, studio: publicPath || undefined } : { location_path: publicPath }),
+          funnel: FUNNEL, step: crmStep,
           session_id: sessionRef.current,
           ad_provider: a.meta_ad_id ? 'meta' : undefined,
           ad_external_id: a.meta_ad_id,
@@ -117,7 +138,7 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
   const aliveRef = useRef(true)
   function loadClasses({ preselect }) {
     setLoading(true)
-    return fetch(`/api/public/classes?path=${encodeURIComponent(publicPath)}&campaign=${encodeURIComponent(campaign)}`)
+    return fetch(campaignFunnelClassesUrl({ page, publicPath, campaign }))
       .then((r) => r.json())
       .then((j) => {
         if (!aliveRef.current) return
@@ -177,7 +198,7 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
       const r = await fetch('/api/public/class-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: publicPath, campaign,
+          ...campaignFunnelTarget({ page, publicPath, campaign }),
           event_id: chosen.event_id, class_name: chosen.name, starts_at: chosen.starts_at,
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
@@ -197,7 +218,7 @@ export default function CampaignFunnel({ publicPath, campaign, copy, locationNam
           loadClasses({ preselect: false })
           return
         }
-        setError(stripDashes(j.error || 'Something went wrong. Please try again.'))
+        setError(stripDashes(customerErrorText(j.error, 'Something went wrong. Please try again.')))
         return
       }
       fireBrowserLead({

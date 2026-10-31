@@ -129,6 +129,8 @@ export const CLOSED_FUNCTIONS = [
     why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
   { fn: 'public.class_fees_touch', args: '()', closedBy: 781,
     why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
+  { fn: 'public.landing_page_studios_same_org', args: '()', closedBy: 792,
+    why: 'a trigger function refusing a landing_page_studios row outside the page organisation; a trigger fires without EXECUTE (PAGES.1). The six private backfill helpers 792 also closes are dropped at its end' },
 ]
 
 /** The client roles a closed function is closed to. */

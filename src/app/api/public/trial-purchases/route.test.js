@@ -65,7 +65,13 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 
+vi.mock('@/lib/landing-pages', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, resolvePublicPageRequest: vi.fn(actual.resolvePublicPageRequest), studioTermsCopy: vi.fn(async () => ({ terms_required_message: 'Tick the Hatch page terms.' })) }
+})
+
 import { POST } from './route'
+import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
 const SELLABLE = [{ id: 'b1', type: 'paid_trial', price_cents: 3900, currency: 'EUR', duration_days: 14, product_name: '2 Week Trial', membership_id: 'm1', plan_code: 'p1', trial_used_text: 'You have had a trial.', help_cta_label: 'Help me' }]
 const HATCH_PRODUCT_ID = '674d62bf-4d4b-4231-b1ba-d53543657bea'
@@ -452,5 +458,72 @@ describe('POST /api/public/trial-purchases', () => {
     const r = await POST(req(HATCH_BODY))
     expect(r.status).toBe(200)
     expect(mocks.payment).not.toHaveBeenCalled()
+  })
+})
+
+// PAGES.1 — `page` + `studio`: the studio's entry is built from the page's
+// studio row (its merged paid_trial block, its location embed), the price is
+// the row's (Hatch: the mirrored product's), the attribution the row's, and
+// the row records the page. The body's studio key and any price are ignored.
+describe('POST /api/public/trial-purchases — page (PAGES.1)', () => {
+  const hatchRow = (settings = { un1t_online: { writes_enabled: true } }) => ({
+    page_id: 'page-trial', location_id: 'loc2', enabled: true, sort_order: 1,
+    offer: { un1t_product_id: HATCH_PRODUCT_ID }, attribution: { lead_source: 'meta_trial_hatch' },
+    locations: { id: 'loc2', name: 'UN1T Hatch Street', membership_source: 'un1t_online', settings },
+  })
+  const pageOk = (studioRow, blocks, extra = {}) => ({
+    ok: true, pageId: 'page-trial', page: { id: 'page-trial', slug: 'trial', offer_type: 'paid_trial' }, studioRow,
+    locationId: studioRow.location_id, publicPath: studioRow.location_id === 'loc2' ? 'hatch-street' : 'stillorgan', blocks,
+    attribution: { tag: studioRow.location_id === 'loc2' ? 'hatch-street-trial' : 'stillorgan-trial', lead_source: studioRow.attribution.lead_source || 'meta_trial' },
+    ...extra,
+  })
+
+  it("?page=trial&studio=hatch-street buys Hatch's product and stamps page_id", async () => {
+    const row = hatchRow()
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk(row, [{ id: 'pt', type: 'paid_trial', heading: 'H', duration_days: 14, product_name: 'The UN1T Trial', un1t_product_id: HATCH_PRODUCT_ID }]))
+    const r = await POST(req({ ...HATCH_BODY, studio: 'hatch-street', page: 'trial', price_cents: 1, amount_cents: 1, tag: 'evil' }))
+    expect(r.status).toBe(200)
+    expect(resolvePublicPageRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: 'trial', studio: 'hatch-street' }))
+    expect(mocks.rateLimit).toHaveBeenCalledWith(expect.anything(), 'trialbuy:hatch-street:1.2.3.4', { max: 8, windowMs: 15 * 60_000 })
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({
+      page_id: 'page-trial', location_id: 'loc2', landing_path: 'hatch-street', payment_provider: 'un1t_online',
+      un1t_product_id: HATCH_PRODUCT_ID, amount_cents: 3900,
+    })
+    expect(mocks.tag).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'hatch-street-trial' }))
+    expect(mocks.updated).toHaveBeenCalledWith('contacts', { lead_source: 'meta_trial_hatch' }, expect.anything())
+    expect(mocks.payment).not.toHaveBeenCalled()
+  })
+
+  it('a Glofox studio on the page buys at the row price through Revolut', async () => {
+    const row = { page_id: 'page-trial', location_id: 'loc1', enabled: true, sort_order: 0, offer: {}, attribution: {}, locations: { id: 'loc1', name: 'Stillorgan', membership_source: 'glofox', settings: {} } }
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk(row, [{ ...SELLABLE[0], price_cents: 4900 }]))
+    const r = await POST(req({ ...BODY, page: 'trial', studio: 'stillorgan' }))
+    expect(r.status).toBe(200)
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ page_id: 'page-trial', location_id: 'loc1', amount_cents: 4900, membership_id: 'm1', landing_path: 'stillorgan' })
+    expect(mocks.payment).toHaveBeenCalled()
+  })
+
+  it('the terms tick on a page uses the studio terms wording', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk(hatchRow(), [{ id: 'pt', type: 'paid_trial', duration_days: 14, product_name: 'The UN1T Trial', un1t_product_id: HATCH_PRODUCT_ID }]))
+    const r = await POST(req({ ...HATCH_BODY, terms_accepted: undefined, page: 'trial', studio: 'hatch-street' }))
+    expect(r.status).toBe(400)
+    expect(await r.json()).toMatchObject({ code: 'terms_required', error: 'Tick the Hatch page terms.' })
+  })
+
+  it('refusals: not_found 404, studio_required 400, unreadable 503, a non-trial page 404, a page with nothing for sale not_configured', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    expect((await POST(req({ ...BODY, page: 'trial', studio: 'galway' }))).status).toBe(404)
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'studio_required' })
+    expect((await POST(req({ ...BODY, studio: undefined, page: 'trial' }))).status).toBe(400)
+    resolvePublicPageRequest.mockResolvedValueOnce({ ok: false, reason: 'unreadable' })
+    expect((await POST(req({ ...BODY, page: 'trial' }))).status).toBe(503)
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk(hatchRow(), [{ type: 'corp_promo' }], { page: { id: 'p', slug: 'corp', offer_type: 'promo_credits' } }))
+    expect((await POST(req({ ...BODY, page: 'corp' }))).status).toBe(404)
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk(hatchRow({ un1t_online: { writes_enabled: false } }), [{ id: 'pt', type: 'paid_trial', un1t_product_id: HATCH_PRODUCT_ID }]))
+    const off = await POST(req({ ...HATCH_BODY, page: 'trial', studio: 'hatch-street' }))
+    expect(off.status).toBe(400)
+    expect((await off.json()).code).toBe('not_configured')
+    expect(mocks.contact).not.toHaveBeenCalled()
+    expect(mocks.inserted).not.toHaveBeenCalled()
   })
 })

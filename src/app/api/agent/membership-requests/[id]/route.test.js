@@ -941,19 +941,21 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
 
   // A double that answers each table: the card, the contact's email + phone,
   // the studio's landing row, and the queue row the sync returns.
-  function manualDb(row, log, { contact = { email: 'sam@example.com', phone: '0871234567' }, page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }] }, queueRows = [{ id: 'cbr-9' }] } = {}) {
+  function manualDb(row, log, { contact = { email: 'sam@example.com', phone: '0871234567' }, page = { public_path: 'hatch-street', blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/start/hatch-street' }] }, queueRows = [{ id: 'cbr-9' }], linkedPageId = null, pageTables = {} } = {}) {
     return {
       from(table) {
         let patch = null
         const b = {
-          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b,
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b, order: () => b,
           update(p) { patch = p; log.push({ table, patch: p }); return b },
           then(resolve, reject) {
-            const data = table === 'class_booking_requests' ? queueRows : []
+            const data = table === 'class_booking_requests' ? queueRows : (pageTables[table] || [])
             return Promise.resolve({ data, error: null }).then(resolve, reject)
           },
           async maybeSingle() {
             if (patch) return { data: { id: row.id }, error: null }
+            if (table === 'class_booking_requests') return { data: { page_id: linkedPageId }, error: null }
+            if (table === 'landing_pages') return { data: (pageTables.landing_pages || [])[0] ?? null, error: null }
             if (table === 'contacts') return { data: contact, error: null }
             if (table === 'landing_page_settings') return { data: page, error: null }
             if (table === 'locations') return { data: { name: 'UN1T Hatch Street', address: 'Vault 8, Hatch Street Upper, Dublin 2' }, error: null }
@@ -981,6 +983,17 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
       contentName: 'Strength',
     })
     expect(updates.at(-1).patch.status).toBe('actioned')
+  })
+
+  // PAGES.1
+  it('a queue row carrying a page_id: the Schedule URL and the confirmation copy come from that page, not the studio row', async () => {
+    const pageTables = {
+      landing_pages: [{ id: 'p-1', organization_id: 'o1', slug: 'hatch-street', kind: 'studio', primary_location_id: 'L1', scope: 'one', offer_type: null, blocks: [{ type: 'class_funnel', event_source_url: 'https://www.un1tdublin.com/from-the-page' }] }],
+      landing_page_studios: [{ page_id: 'p-1', location_id: 'L1', enabled: true, sort_order: 0, offer: {}, attribution: {} }],
+    }
+    db = manualDb(manualRow(), updates, { linkedPageId: 'p-1', pageTables })
+    await approve()
+    expect(sendWebsiteConversion.mock.calls[0][1].eventSourceUrl).toBe('https://www.un1tdublin.com/from-the-page')
   })
 
   // MATCHQUALITY.1

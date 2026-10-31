@@ -16,6 +16,14 @@
 //     finds or creates the un1t.online account and returns un1t.online's own
 //     hosted checkout URL. The CRM never charges a Hatch buyer.
 // No auth; rate-limited per landing path and IP.
+//
+// PAGES.1 — `page` + `studio` (a public path; `hatch` still reads as
+// hatch-street): the studio's entry is built from the live page's studio row
+// (trialEntryFromRow on the page's paid_trial block merged with the row's
+// offer and attribution), so the plan or product, the price and the tag and
+// lead source are the row's; the purchase row records `page_id`. Which
+// provider sells is the studio's membership_source. Without `page` the legacy
+// studio key path (PR1; PR3 deletes it) is unchanged.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -26,7 +34,8 @@ import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
-import { studioByKey, loadTrialStudios } from '@/lib/trial-studios'
+import { studioByKey, loadTrialStudios, trialEntryFromRow } from '@/lib/trial-studios'
+import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy } from '@/lib/landing-pages'
 import { stillorganTrialHistory, hatchActiveMembership } from '@/lib/trial-eligibility'
 import { createTrialPurchasePayment } from '@/lib/trial-purchase-payments'
 import { startUn1tTrialCheckout } from '@/lib/trial-purchase-un1t-checkout'
@@ -42,7 +51,10 @@ export const runtime = 'nodejs'
 const Schema = z.object({
   // A page loaded before the studio choice shipped posts no studio: it was
   // the Stillorgan page, so that is the default (never a 400 for paid traffic).
-  studio: z.enum(['stillorgan', 'hatch']).default('stillorgan'),
+  // Without `page`, a TRIAL_STUDIOS key (studioByKey judges it); with `page`
+  // (PAGES.1), the studio's public path.
+  studio: z.string().trim().max(40).optional(),
+  page: z.string().trim().max(40).optional(),
   // TRIALFIRST.1: the page the buyer started on, so a redirect-based payment
   // returns there. Allowlisted by normalizeTrialReturnPath; unknown → /trial.
   return_path: z.string().max(64).optional(),
@@ -84,22 +96,59 @@ export async function POST(request) {
   const b = validation.data
   const returnPath = normalizeTrialReturnPath(b.return_path)
 
-  const studio = studioByKey(b.studio)
-  if (!studio) return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })
-  const isHatch = studio.key === 'hatch'
-  const landingPath = studio.publicPath
-  const limit = await checkRateLimit(db, `trialbuy:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
-  if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+  let entry
+  let isHatch
+  let landingPath
+  let studioKey
+  let pageId = null
+  if (b.page) {
+    // Resolved first, then limited on the RESOLVED studio path (the legacy
+    // key for that studio); a request that resolves to nothing shares one
+    // 'unresolved' bucket per IP.
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: b.page, studio: b.studio })
+    const limit = await checkRateLimit(db, `trialbuy:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+    const block = r.ok && r.page.offer_type === 'paid_trial'
+      ? r.blocks.find((x) => x && typeof x === 'object' && x.type === 'paid_trial') || null
+      : null
+    if (!r.ok || !block) {
+      const refusal = pageRequestRefusal(r.ok ? 'not_found' : r.reason)
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    // The row's attribution (defaults filled) is the tag and lead source;
+    // the block's event_source_url default stands unless the row sets one.
+    try {
+      entry = await trialEntryFromRow(db, { row: r.studioRow, publicPath: r.publicPath, mergedBlock: { ...block, ...r.attribution } })
+    } catch (e) {
+      logError('trialbuy', 'page studio entry unreadable', { pageId: r.pageId, locationId: r.locationId, errClass: e?.name })
+      return unavailable()
+    }
+    isHatch = entry.membershipSource === 'un1t_online'
+    landingPath = r.publicPath
+    studioKey = entry.key
+    pageId = r.pageId
+  } else {
+    // PR1 legacy (PR3 deletes it). A page loaded before the studio choice
+    // shipped posts no studio: it was the Stillorgan page, so that is the
+    // default (never a 400 for paid traffic).
+    const studio = studioByKey(b.studio ?? 'stillorgan')
+    if (!studio) return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })
+    isHatch = studio.key === 'hatch'
+    landingPath = studio.publicPath
+    studioKey = studio.key
+    const limit = await checkRateLimit(db, `trialbuy:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+    entry = (await loadTrialStudios(db)).find((s) => s.key === studio.key)
+  }
 
-  const entry = (await loadTrialStudios(db)).find((s) => s.key === studio.key)
   if (!entry || entry.unreadable) {
-    logError('trialbuy', 'studio config unreadable', { studio: studio.key })
+    logError('trialbuy', 'studio config unreadable', { studio: studioKey })
     return unavailable()
   }
   const product = entry.locationId ? entry.config : null
   // Each studio sells through its own provider; a block of the other shape is not for sale here.
   if (!product || product.provider !== (isHatch ? 'un1t_online' : 'glofox')) {
-    if (product) logError('trialbuy', 'paid_trial block provider does not match the studio', { studio: studio.key, provider: product.provider })
+    if (product) logError('trialbuy', 'paid_trial block provider does not match the studio', { studio: studioKey, provider: product.provider })
     return NextResponse.json({ success: false, code: 'not_configured', error: 'The trial is not available right now.' }, { status: 400 })
   }
   const locationId = entry.locationId
@@ -125,13 +174,20 @@ export async function POST(request) {
   // gated on writes_enabled (this is not the funnel). The tick's wording rides
   // on the refusal so the page can show it and try again.
   if (un1tWrites && b.terms_accepted !== true) {
-    const { data: page, error: pageErr } = await db.from('landing_page_settings')
-      .select('blocks').eq('public_path', landingPath).eq('location_id', locationId).maybeSingle()
-    if (pageErr) {
-      logError('trialbuy', 'landing row unreadable', { err: pageErr, locationId })
-      return unavailable()
+    let termsBlocks
+    if (pageId) {
+      // A page request: the studio's own terms wording, as the page renders it.
+      termsBlocks = [{ type: 'class_funnel', ...(await studioTermsCopy(db, locationId)) }]
+    } else {
+      const { data: page, error: pageErr } = await db.from('landing_page_settings')
+        .select('blocks').eq('public_path', landingPath).eq('location_id', locationId).maybeSingle()
+      if (pageErr) {
+        logError('trialbuy', 'landing row unreadable', { err: pageErr, locationId })
+        return unavailable()
+      }
+      termsBlocks = page?.blocks
     }
-    const terms = un1tTermsPayload({ blocks: page?.blocks, studioName: location.name, publicPath: landingPath })
+    const terms = un1tTermsPayload({ blocks: termsBlocks, studioName: location.name, publicPath: landingPath })
     return NextResponse.json({
       success: false, code: 'terms_required', error: terms.required_message,
       issues: { terms_accepted: terms.required_message }, terms,
@@ -261,6 +317,7 @@ export async function POST(request) {
   }
   delete attribution.fbclid
   const { data: row, error: insErr } = await db.from('trial_purchases').insert({
+    ...(pageId ? { page_id: pageId } : {}),
     location_id: locationId,
     contact_id: contactId,
     landing_path: landingPath,

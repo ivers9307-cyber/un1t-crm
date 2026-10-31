@@ -8,6 +8,12 @@
 // settled by uniq_trial_purchases_open_help (mig 764): the second insert fails
 // 23505 and is answered with the open row, also without an alert. No auth;
 // rate-limited per studio and IP.
+//
+// PAGES.1 — `page` + `studio` (a public path): the studio's entry comes from
+// the live page's studio row (trialEntryFromRow on the page's merged
+// paid_trial block) and the help row records `page_id`; which eligibility
+// read runs is the studio's membership_source. Without `page` the legacy
+// studio key path (PR1; PR3 deletes it) is unchanged.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -15,7 +21,8 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { isValidMobileNumber } from '@/lib/phone-validate'
-import { studioByKey, loadTrialStudios } from '@/lib/trial-studios'
+import { studioByKey, loadTrialStudios, trialEntryFromRow } from '@/lib/trial-studios'
+import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 import { stillorganTrialHistory, hatchActiveMembership, reasonsText } from '@/lib/trial-eligibility'
 import { alertTrialPurchaseStaff } from '@/lib/trial-purchase-processor'
 import { logWarn, logError } from '@/lib/log'
@@ -23,11 +30,15 @@ import { logWarn, logError } from '@/lib/log'
 export const runtime = 'nodejs'
 
 const Schema = z.object({
-  studio: z.string().trim().max(32),
+  // Without `page`, a TRIAL_STUDIOS key (required); with `page`, the studio's public path.
+  studio: z.string().trim().max(40).optional(),
+  page: z.string().trim().max(40).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
   phone: z.string().trim().min(1).max(50).refine(isValidMobileNumber, 'Enter a valid mobile number'),
+}).superRefine((v, ctx) => {
+  if (!v.page && v.studio === undefined) ctx.addIssue({ code: 'custom', path: ['studio'], message: 'Required' })
 })
 
 const unavailable = () => NextResponse.json({ success: false, code: 'unavailable', error: 'We could not take your request right now. Please try again in a moment.' }, { status: 503 })
@@ -40,17 +51,50 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const b = validation.data
 
-  const studio = studioByKey(b.studio)
-  if (!studio) {
-    return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })
+  let entry
+  let studioKey
+  let isUn1t
+  let pageId = null
+  if (b.page) {
+    // Resolved first, then limited on the resolved studio's key (the legacy
+    // bucket for that studio); nothing resolved shares an 'unresolved' bucket.
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: b.page, studio: b.studio })
+    const block = r.ok && r.page.offer_type === 'paid_trial'
+      ? r.blocks.find((x) => x && typeof x === 'object' && x.type === 'paid_trial') || null
+      : null
+    if (r.ok && block) {
+      try {
+        entry = await trialEntryFromRow(db, { row: r.studioRow, publicPath: r.publicPath, mergedBlock: { ...block, ...r.attribution } })
+      } catch (e) {
+        logError('trialhelp', 'page studio entry unreadable', { pageId: r.pageId, locationId: r.locationId, errClass: e?.name })
+        entry = { unreadable: true }
+      }
+    }
+    studioKey = entry?.key || null
+    const limit = await checkRateLimit(db, `trialhelp:${studioKey || 'unresolved'}:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a few minutes.')
+    if (!r.ok || !block) {
+      const refusal = pageRequestRefusal(r.ok ? 'not_found' : r.reason)
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    isUn1t = entry.membershipSource === 'un1t_online'
+    pageId = r.pageId
+  } else {
+    // PR1 legacy (PR3 deletes it).
+    const studio = studioByKey(b.studio)
+    if (!studio) {
+      return NextResponse.json({ success: false, code: 'unknown_studio', error: 'Unknown studio.' }, { status: 400 })
+    }
+    studioKey = studio.key
+    isUn1t = studio.key !== 'stillorgan'
+
+    const limit = await checkRateLimit(db, `trialhelp:${studio.key}:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a few minutes.')
+
+    entry = (await loadTrialStudios(db)).find((s) => s.key === studio.key)
   }
-
-  const limit = await checkRateLimit(db, `trialhelp:${studio.key}:${ip}`, { max: 5, windowMs: 15 * 60_000 })
-  if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a few minutes.')
-
-  const entry = (await loadTrialStudios(db)).find((s) => s.key === studio.key)
   if (!entry || entry.unreadable) {
-    logError('trialhelp', 'studio config unreadable', { studio: studio.key })
+    logError('trialhelp', 'studio config unreadable', { studio: studioKey })
     return unavailable()
   }
   const config = entry.config
@@ -72,7 +116,7 @@ export async function POST(request) {
   // Re-run the studio's eligibility read for the reasons the card will show.
   let reasons
   let reason
-  if (studio.key === 'stillorgan') {
+  if (!isUn1t) {
     reason = 'trial_used'
     const { data: contact, error: contactErr } = await db.from('contacts')
       .select('id, glofox_member_id, glofox_membership_status, glofox_membership_plan').eq('id', contactId).maybeSingle()
@@ -104,6 +148,7 @@ export async function POST(request) {
   if (open?.[0]?.id) return sent(open[0].id)
 
   const { data: row, error: insErr } = await db.from('trial_purchases').insert({
+    ...(pageId ? { page_id: pageId } : {}),
     location_id: locationId,
     contact_id: contactId,
     landing_path: entry.publicPath,

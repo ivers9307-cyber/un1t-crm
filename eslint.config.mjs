@@ -87,6 +87,17 @@ const config = [
       }],
       'react/no-unescaped-entities': 'off',
       '@next/next/no-img-element': 'off',
+      // PAGES.1 — OFF since the one public page route,
+      // src/app/(public)/[slug]/[[...rest]]/page.js. The rule turns every app
+      // route into a regex with `\[.*\]` replaced greedily by `.*?`, so a
+      // TOP-LEVEL dynamic segment becomes `^/(.*?)$` and matches every
+      // same-host extensionless href: it flagged 23 existing anchors in 16
+      // files, among them `/api/...` links that must stay a full navigation
+      // (a CSV export, the Sonos OAuth connect, a QR download). With no way to
+      // exclude a route from its app-dir scan, it no longer separates a page
+      // link from anything else. The convention stands: use <Link> for links
+      // to pages, <a> for /api and downloads.
+      '@next/next/no-html-link-for-pages': 'off',
       // ─── react-hooks plugin: post-Next-16 rule tuning ─────────────
       //
       // The react-hooks plugin shipped with eslint-config-next@16

@@ -50,6 +50,7 @@ import ClassFunnelCheckout from './ClassFunnelCheckout'
 import TrialStudioPicker from './TrialStudioPicker'
 import TrialTermsTick from './TrialTermsTick'
 import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK } from './trial-card'
+import { customerErrorText } from '@/lib/page-request-errors'
 
 const STATUS_PATH = '/api/public/trial-purchases'
 const HELP_PATH = '/api/public/trial-purchases/help'
@@ -74,9 +75,14 @@ function fireBrowserPurchase({ purchaseId, amountCents, currency, contentName })
  * @param {{ studios: Array<{ key: 'stillorgan'|'hatch', label: string, sellable: boolean, block: object,
  *   priceCents: number|null, currency: string, durationDays: number, productName: string }>,
  *   initialStudio?: string|null, resumePurchaseId?: string|null, cancelled?: boolean, hatchTerms?: object|null,
- *   returnPath?: string, preview?: boolean }} props
+ *   returnPath?: string, preview?: boolean, page?: string|null }} props
+ *
+ * PAGES.1 — with `page` (the [slug] route passes the page's slug) the purchase
+ * and the help request name `{ page, studio: <the chosen studio's public path> }`
+ * and the server reads the product, price and attribution from that page's
+ * studio row; without it they send the studio key as before.
  */
-export default function PaidTrialFunnel({ studios = [], initialStudio = null, resumePurchaseId = null, cancelled = false, hatchTerms = null, returnPath = '/trial', preview = false }) {
+export default function PaidTrialFunnel({ studios = [], initialStudio = null, resumePurchaseId = null, cancelled = false, hatchTerms = null, returnPath = '/trial', preview = false, page = null }) {
   const list = Array.isArray(studios) ? studios : []
   const byKey = (k) => list.find((s) => s.key === k) || null
   const resuming = Boolean(resumePurchaseId) && !cancelled
@@ -99,6 +105,8 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
 
   const studio = byKey(studioKey)
   const block = studio?.block || {}
+  // Who the server is asked about: the page and the studio's public path, or (no page) the studio key.
+  const target = () => (page ? { page, studio: studio?.publicPath || studioKey } : { studio: studioKey })
   const isHatch = studioKey === 'hatch'
   // un1t.online's terms tick: Hatch only; the page's copy, or the server's when it asked for it.
   const terms = isHatch ? (termsOverride || (hatchTerms?.required === true ? hatchTerms : null)) : null
@@ -177,7 +185,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
       const r = await fetch(STATUS_PATH, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studio: studioKey,
+          ...target(),
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
           ...(terms ? { terms_accepted: termsAccepted } : {}),
@@ -209,7 +217,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         setStep('refused'); return
       }
       if (!r.ok || j.success === false || !j.data) {
-        setError(j.error || 'Something went wrong. Please try again.'); return
+        setError(customerErrorText(j.error, 'Something went wrong. Please try again.')); return
       }
       fireLead(j.data.product_name)
       fireBrowserInitiateCheckout({
@@ -243,13 +251,13 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
       const r = await fetch(HELP_PATH, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studio: studioKey,
+          ...target(),
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(),
         }),
       })
       const j = await r.json().catch(() => ({}))
-      if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong. Please try again.'); return }
+      if (!r.ok || j.success === false) { setError(customerErrorText(j.error, 'Something went wrong. Please try again.')); return }
       trackFunnelStep('trial_help_sent', { studio: studioKey })
       setHelpMessage(j.data?.message || block.help_sent_text)
       setStep('help_sent')

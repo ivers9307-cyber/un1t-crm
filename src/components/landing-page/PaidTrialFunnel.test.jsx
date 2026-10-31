@@ -345,3 +345,30 @@ describe('single studio (TRIALFIRST.1)', () => {
     expect(trackFunnelStep).not.toHaveBeenCalled()
   })
 })
+
+describe('PAGES.1 — page prop', () => {
+  it('names the page and the chosen studio\'s public path on the purchase and the help request, never the studio key', async () => {
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'trial_used', error: 'Had one.', help: { cta_label: 'I need help' } } }
+    answers['/api/public/trial-purchases/help'] = { status: 200, body: { success: true, data: { message: 'We will call.', purchaseId: 'p-help' } } }
+    render(<PaidTrialFunnel studios={[{ ...STILLORGAN, publicPath: 'stillorgan' }, { ...HATCH, publicPath: 'hatch-street' }]} initialStudio="stillorgan" page="trial" returnPath="/trial" />)
+    fillDetails()
+    fireEvent.click(submitButton())
+    expect(await screen.findByText('Had one.')).toBeTruthy()
+    expect(posts[0].body).toMatchObject({ page: 'trial', studio: 'stillorgan', first_name: 'Sam' })
+    fireEvent.click(screen.getByRole('button', { name: 'I need help' }))
+    expect(await screen.findByText('We will call.')).toBeTruthy()
+    expect(posts[1].body).toEqual({ page: 'trial', studio: 'stillorgan', first_name: 'Sam', last_name: 'Byrne', email: 'sam@example.com', phone: '0871234567' })
+  })
+
+  it('a Hatch studio is named by its public path', async () => {
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, search: '', pathname: '/trial', assign })
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: true, data: { purchaseId: 'p-1', redirect_url: 'https://checkout.un1t.online/c/abc', amount_cents: 3900, currency: 'EUR', product_name: 'The UN1T Trial' } } }
+    render(<PaidTrialFunnel studios={[{ ...HATCH, publicPath: 'hatch-street' }]} initialStudio="hatch" hatchTerms={HATCH_TERMS} page="trial" />)
+    fillDetails()
+    fireEvent.click(screen.getByRole('checkbox', { name: /I accept Hatch Street's/ }))
+    fireEvent.click(submitButton())
+    await waitFor(() => expect(assign).toHaveBeenCalled())
+    expect(posts[0].body).toMatchObject({ page: 'trial', studio: 'hatch-street', terms_accepted: true })
+  })
+})

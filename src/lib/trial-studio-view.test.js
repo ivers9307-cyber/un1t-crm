@@ -12,10 +12,10 @@ describe('clientTrialBlock', () => {
   })
 })
 describe('trialStudioView', () => {
-  const entry = { key: 'hatch', locationId: 'loc', sellable: true, block, config: { provider: 'un1t_online', priceCents: 3900, currency: 'EUR', durationDays: 14, productName: 'Reset' } }
+  const entry = { key: 'hatch', publicPath: 'hatch-street', locationId: 'loc', sellable: true, block, config: { provider: 'un1t_online', priceCents: 3900, currency: 'EUR', durationDays: 14, productName: 'Reset' } }
   it('labels from the brand when studio_label is blank and marks the right provider sellable', () => {
     expect(trialStudioView(entry, { companyName: 'UN1T Hatch Street' })).toEqual({
-      key: 'hatch', label: 'UN1T Hatch Street', sellable: true, block: clientTrialBlock(block),
+      key: 'hatch', publicPath: 'hatch-street', label: 'UN1T Hatch Street', sellable: true, block: clientTrialBlock(block),
       priceCents: 3900, currency: 'EUR', durationDays: 14, productName: 'Reset',
     })
   })

@@ -52,37 +52,53 @@ export async function loadTrialStudios(db) {
   return Promise.all(TRIAL_STUDIOS.map(async (studio) => {
     const page = byPath.get(studio.publicPath)
     if (!page) return empty(studio)
-    const locationId = page.location_id || null
-    const loc = embedded(page.locations)
-    const membershipSource = loc?.membership_source || null
-    // Only the switch leaves this function, never the settings object.
-    const writesEnabled = un1tWriteSettingsFrom(loc?.settings).writesEnabled
     const blocks = Array.isArray(page.blocks) ? page.blocks : []
     const block = blocks.find((x) => x && typeof x === 'object' && x.type === 'paid_trial') || null
-    const base = { key: studio.key, publicPath: studio.publicPath, locationId, membershipSource, block, product: null }
-    if (!block) return { ...base, sellable: false, config: null }
-    // A un1t.online studio with its writes off has no account or checkout to
-    // make: nothing is for sale (the POST answers not_configured), not unreadable.
-    if (membershipSource === 'un1t_online' && !writesEnabled) return { ...base, sellable: false, config: null }
-
-    const un1tId = typeof block.un1t_product_id === 'string' ? block.un1t_product_id.trim() : ''
-    let product = null
-    if (un1tId && locationId) {
-      const { data, error: productErr } = await db
-        .from('un1t_products')
-        .select('un1t_id, status, type, price_cents, currency, title')
-        .eq('location_id', locationId)
-        .eq('un1t_id', un1tId)
-        .maybeSingle()
-      if (productErr) {
-        logWarn('trial-studios', 'un1t product unreadable', { locationId, un1tId })
-        return { ...base, sellable: false, config: null, unreadable: true }
-      }
-      product = data || null
-    }
-    const config = paidTrialConfigFromBlocks(blocks, studio.publicPath, { product })
-    return { ...base, product, sellable: config !== null, config }
+    return trialEntryFromRow(db, { row: page, publicPath: studio.publicPath, mergedBlock: block })
   }))
+}
+
+/**
+ * PAGES.1 — one studio's `loadTrialStudios` entry from a row that carries
+ * `location_id` and the `locations:location_id ( membership_source, settings )`
+ * embed (a landing_page_settings row, or a landing_page_studios row) and the
+ * studio's paid_trial block (for a page row: the page half merged with the
+ * studio's offer, `mergedBlocksFor`). The key is the TRIAL_STUDIOS key for a
+ * known public path, else the path itself. Same rules and same never-throw
+ * contract as loadTrialStudios: a un1t.online studio with its writes off is
+ * not sellable; a failed product read is not sellable and `unreadable`.
+ */
+export async function trialEntryFromRow(db, { row, publicPath, mergedBlock }) {
+  const key = TRIAL_STUDIOS.find((s) => s.publicPath === publicPath)?.key || publicPath || null
+  const locationId = row?.location_id || null
+  const loc = embedded(row?.locations)
+  const membershipSource = loc?.membership_source || null
+  // Only the switch leaves this function, never the settings object.
+  const writesEnabled = un1tWriteSettingsFrom(loc?.settings).writesEnabled
+  const block = mergedBlock && typeof mergedBlock === 'object' && mergedBlock.type === 'paid_trial' ? mergedBlock : null
+  const base = { key, publicPath, locationId, membershipSource, block, product: null }
+  if (!block) return { ...base, sellable: false, config: null }
+  // A un1t.online studio with its writes off has no account or checkout to
+  // make: nothing is for sale (the POST answers not_configured), not unreadable.
+  if (membershipSource === 'un1t_online' && !writesEnabled) return { ...base, sellable: false, config: null }
+
+  const un1tId = typeof block.un1t_product_id === 'string' ? block.un1t_product_id.trim() : ''
+  let product = null
+  if (un1tId && locationId) {
+    const { data, error: productErr } = await db
+      .from('un1t_products')
+      .select('un1t_id, status, type, price_cents, currency, title')
+      .eq('location_id', locationId)
+      .eq('un1t_id', un1tId)
+      .maybeSingle()
+    if (productErr) {
+      logWarn('trial-studios', 'un1t product unreadable', { locationId, un1tId })
+      return { ...base, sellable: false, config: null, unreadable: true }
+    }
+    product = data || null
+  }
+  const config = paidTrialConfigFromBlocks([block], publicPath, { product })
+  return { ...base, product, sellable: config !== null, config }
 }
 
 /**

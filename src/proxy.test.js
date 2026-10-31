@@ -24,6 +24,15 @@ vi.mock('@/lib/brands', () => ({ resolveBrand: () => null, isFrameworkAsset: () 
 // the CRM-hostname flow identical. The DB tier's own behaviour is
 // covered in proxy.tenant-domains.test.js + tenant-domains-edge.test.js.
 vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantDomainBrand: async () => null }))
+// PAGES.1 — the page-slug tier is mocked to "no pages" for the same reason; its
+// behaviour is pinned in public-pages-edge.test.js + public-compliance-paths.
+vi.mock('@/lib/public-pages-edge', () => ({
+  PUBLIC_PAGE_HEADER: 'x-public-page',
+  publicOrgIdForHost: async () => null,
+  listPublicPageSlugs: async () => [],
+  isPublicPagePath: () => false,
+  withPublicPageHeader: (h) => new Headers(h),
+}))
 
 import { proxy } from './proxy.js'
 

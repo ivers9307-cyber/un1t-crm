@@ -80,6 +80,14 @@ const REDIRECT_ONLY = {
   team: '/team -> first visible Team tab',
 }
 
+// Public through the database, not PUBLIC_PATHS (PAGES.1): the proxy admits a
+// slug from the organisation's landing_pages rows and sets x-public-page,
+// which AppShell reads, so these segments never get the staff shell. They are
+// guarded like any public segment below (no staff tab helper).
+const PUBLIC_BY_PAGE_ROWS = {
+  '(public)': 'the one public page route, /<slug> rendered from a landing_pages row',
+}
+
 // ── derive the public set from the allowlist that already decides it ──
 function appShellPublicPaths() {
   const src = readFileSync(path.join(process.cwd(), 'src/components/AppShell.jsx'), 'utf8')
@@ -148,6 +156,7 @@ function classify(segment, appDir = APP) {
   if (segment in CUSTOMER) return 'customer'
   if (segment in REDIRECT_ONLY) return 'redirect'
   if (PUBLIC_TOP_LEVEL.has(segment)) return 'public'
+  if (segment in PUBLIC_BY_PAGE_ROWS) return 'public'
   if (pagesUnder(path.join(appDir, segment)).length === 0) return 'no-pages'
   return null
 }
@@ -194,8 +203,8 @@ describe('every top-level segment of src/app is classified (TABTITLE.1)', () => 
   })
 
   it('the hand-written lists name real segments, once', () => {
-    const listed = [...Object.keys(STAFF), ...Object.keys(CUSTOMER), ...Object.keys(REDIRECT_ONLY)]
-    expect(new Set(listed).size, 'a segment is in two of STAFF / CUSTOMER / REDIRECT_ONLY').toBe(listed.length)
+    const listed = [...Object.keys(STAFF), ...Object.keys(CUSTOMER), ...Object.keys(REDIRECT_ONLY), ...Object.keys(PUBLIC_BY_PAGE_ROWS)]
+    expect(new Set(listed).size, 'a segment is in two of STAFF / CUSTOMER / REDIRECT_ONLY / PUBLIC_BY_PAGE_ROWS').toBe(listed.length)
     for (const segment of listed) {
       expect(SEGMENTS, `${segment} is listed here but is not a directory of src/app`).toContain(segment)
     }

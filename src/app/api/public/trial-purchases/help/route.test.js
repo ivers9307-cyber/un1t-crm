@@ -6,11 +6,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), studios: vi.fn(), history: vi.fn(), hatch: vi.fn(), alert: vi.fn(),
-  contactRow: vi.fn(), openRow: vi.fn(), inserted: vi.fn(), logError: vi.fn(),
+  contactRow: vi.fn(), openRow: vi.fn(), inserted: vi.fn(), logError: vi.fn(), entry: vi.fn(), resolve: vi.fn(),
 }))
+vi.mock('@/lib/landing-pages', async (orig) => ({ ...(await orig()), resolvePublicPageRequest: mocks.resolve }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: mocks.contact }))
-vi.mock('@/lib/trial-studios', async (orig) => ({ ...(await orig()), loadTrialStudios: mocks.studios }))
+vi.mock('@/lib/trial-studios', async (orig) => ({ ...(await orig()), loadTrialStudios: mocks.studios, trialEntryFromRow: mocks.entry }))
 vi.mock('@/lib/trial-eligibility', async (orig) => ({ ...(await orig()), stillorganTrialHistory: mocks.history, hatchActiveMembership: mocks.hatch }))
 vi.mock('@/lib/trial-purchase-processor', () => ({ alertTrialPurchaseStaff: mocks.alert }))
 vi.mock('@/lib/log', () => ({ logError: mocks.logError, logWarn: vi.fn() }))
@@ -180,5 +181,34 @@ describe('POST /api/public/trial-purchases/help', () => {
     mocks.rateLimit.mockResolvedValue({ allowed: false })
     expect((await POST(req(BODY))).status).toBe(429)
     expect((await POST(req({ ...BODY, phone: 'nope' }))).status).toBe(400)
+  })
+})
+
+// PAGES.1 — `page` + `studio`: the studio's entry comes from the page's studio
+// row (trialEntryFromRow on the merged block); the row records the page.
+describe('POST /api/public/trial-purchases/help — page (PAGES.1)', () => {
+  const ROW = { page_id: 'page-trial', location_id: 'loc2', enabled: true, offer: {}, attribution: {}, locations: { membership_source: 'un1t_online', settings: {} } }
+  const BLOCK = { id: 'pt', type: 'paid_trial', un1t_product_id: 'u1' }
+  const ok = () => ({ ok: true, pageId: 'page-trial', page: { id: 'page-trial', slug: 'trial', offer_type: 'paid_trial' }, studioRow: ROW, locationId: 'loc2', publicPath: 'hatch-street', blocks: [BLOCK], attribution: { tag: 't', lead_source: 'l' } })
+
+  it('files the card at the page studio with the row entry and page_id', async () => {
+    mocks.resolve.mockResolvedValueOnce(ok())
+    mocks.entry.mockResolvedValueOnce({ key: 'hatch', publicPath: 'hatch-street', locationId: 'loc2', membershipSource: 'un1t_online', config: UN1T, sellable: true })
+    const r = await POST(req({ ...BODY, studio: 'hatch-street', page: 'trial' }))
+    expect(r.status).toBe(200)
+    expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ page: 'trial', studio: 'hatch-street' }))
+    expect(mocks.entry).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ row: ROW, publicPath: 'hatch-street', mergedBlock: expect.objectContaining({ type: 'paid_trial', un1t_product_id: 'u1' }) }))
+    expect(mocks.studios).not.toHaveBeenCalled()
+    expect(mocks.rateLimit).toHaveBeenCalledWith(expect.anything(), 'trialhelp:hatch:1.2.3.4', { max: 5, windowMs: 15 * 60_000 })
+    expect(mocks.hatch).toHaveBeenCalledWith(expect.anything(), { locationId: 'loc2', contactId: 'c1' })
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ page_id: 'page-trial', location_id: 'loc2', landing_path: 'hatch-street', payment_provider: 'un1t_online', last_error: 'active_member: contact_membership_active' })
+  })
+
+  it('refuses a page request the resolver refuses, before any capture', async () => {
+    mocks.resolve.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    expect((await POST(req({ ...BODY, studio: 'galway', page: 'trial' }))).status).toBe(404)
+    mocks.resolve.mockResolvedValueOnce({ ok: false, reason: 'unreadable' })
+    expect((await POST(req({ ...BODY, page: 'trial' }))).status).toBe(503)
+    expect(mocks.contact).not.toHaveBeenCalled()
   })
 })

@@ -12,6 +12,15 @@
 //     or creates the account and grants the credits (200 granted with the
 //     credits and their expiry, 200 help_filed, or 503 try again).
 // Nothing is charged, ever. No auth; rate-limited per promo and IP.
+//
+// PAGES.1 — `page` (+ `studio`): the promo is the one the live page's studio
+// row names (its merged corp_promo block's promo_key); a body `promo` is
+// accepted only when it names that same promo (anything else is not_found).
+// Credits and expiry still come from the registry, never a row an editor
+// writes. The tag and lead source are the row's attribution when it sets
+// them, else the registry's (what /corp has always written); the words and
+// the studio are the page's; the claim records `page_id`. Without `page` the
+// legacy promo path (PR1; PR3 deletes it) is unchanged.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -32,11 +41,15 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { zoneOfLocation } from '@/lib/location-time'
 import { logWarn, logError } from '@/lib/log'
+import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy } from '@/lib/landing-pages'
 
 export const runtime = 'nodejs'
 
 const Schema = z.object({
-  promo: z.string().trim().min(1).max(60),
+  // Required without `page`; with `page` only a check against the row's promo.
+  promo: z.string().trim().min(1).max(60).optional(),
+  page: z.string().trim().max(40).optional(),
+  studio: z.string().trim().max(40).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -56,7 +69,11 @@ const Schema = z.object({
     referrer: z.string().max(2000).optional(),
     landing_path: z.string().max(500).optional(),
   }).optional(),
+}).superRefine((v, ctx) => {
+  if (!v.page && !v.promo) ctx.addIssue({ code: 'custom', path: ['promo'], message: 'Required' })
 })
+
+const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
 const TRY_AGAIN = 'Something went wrong on our side. Please try again in a moment.'
 const unavailable = () => NextResponse.json({ success: false, code: 'unavailable', error: TRY_AGAIN }, { status: 503 })
@@ -82,21 +99,57 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const b = validation.data
 
-  const promo = resolveCorpPromo(b.promo)
-  if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
-  const limit = await checkRateLimit(db, `corpclaim:${promo.key}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
-  if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+  let promo
+  let copy
+  let locationId
+  let termsBlocks
+  let tag
+  let leadSource
+  let pageId = null
+  if (b.page) {
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: b.page, studio: b.studio })
+    const block = r.ok && r.page.offer_type === 'promo_credits'
+      ? r.blocks.find((x) => x && typeof x === 'object' && x.type === 'corp_promo') || null
+      : null
+    const rowKey = str(block?.promo_key)
+    // Limited on the promo the row names (the legacy key for that promo);
+    // nothing resolved shares an 'unresolved' bucket per IP.
+    const limit = await checkRateLimit(db, `corpclaim:${rowKey || 'unresolved'}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+    if (!r.ok || !block || (b.promo && b.promo !== rowKey)) {
+      const refusal = pageRequestRefusal(r.ok ? 'not_found' : r.reason)
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    promo = resolveCorpPromo(rowKey)
+    // Only a live promo at this page's studio is for sale (the page shows the same rule).
+    if (!promo || !promo.live || promo.publicPath !== r.publicPath) return notAvailable('This offer is not available right now.')
+    copy = corpPromoCopyFromBlocks([block], promo.key)
+    locationId = r.locationId
+    pageId = r.pageId
+    termsBlocks = null // the studio's terms wording, read below only when needed
+    const rowAttr = r.studioRow?.attribution || {}
+    tag = str(rowAttr.tag) || promo.tag
+    leadSource = str(rowAttr.lead_source) || promo.leadSource
+  } else {
+    promo = resolveCorpPromo(b.promo)
+    if (!promo || !promo.live) return notAvailable('This offer is not available right now.')
+    const limit = await checkRateLimit(db, `corpclaim:${promo.key}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
-  // The promo's studio and its words, from its landing row.
-  const { data: page, error: pageErr } = await db.from('landing_page_settings')
-    .select('location_id, blocks').eq('public_path', promo.publicPath).maybeSingle()
-  if (pageErr) {
-    logError('corp-promo', 'landing row unreadable', { promo: promo.key, code: pageErr.code ?? null })
-    return unavailable()
+    // PR1 legacy (PR3 deletes it): the promo's studio and its words, from its landing row.
+    const { data: page, error: pageErr } = await db.from('landing_page_settings')
+      .select('location_id, blocks').eq('public_path', promo.publicPath).maybeSingle()
+    if (pageErr) {
+      logError('corp-promo', 'landing row unreadable', { promo: promo.key, code: pageErr.code ?? null })
+      return unavailable()
+    }
+    if (!page?.location_id) return notAvailable('This offer is not available right now.')
+    copy = corpPromoCopyFromBlocks(page.blocks, promo.key)
+    locationId = page.location_id
+    termsBlocks = page.blocks
+    tag = promo.tag
+    leadSource = promo.leadSource
   }
-  if (!page?.location_id) return notAvailable('This offer is not available right now.')
-  const copy = corpPromoCopyFromBlocks(page.blocks, promo.key)
-  const locationId = page.location_id
   const { data: location, error: locErr } = await db.from('locations')
     .select('id, name, organization_id, settings, timezone').eq('id', locationId).maybeSingle()
   if (locErr || !location) {
@@ -110,7 +163,8 @@ export async function POST(request) {
 
   // A new un1t.online account needs the studio's terms and liability waiver.
   if (b.terms_accepted !== true) {
-    const terms = un1tTermsPayload({ blocks: page.blocks, studioName: location.name, publicPath: promo.publicPath })
+    const blocks = pageId ? [{ type: 'class_funnel', ...(await studioTermsCopy(db, locationId)) }] : termsBlocks
+    const terms = un1tTermsPayload({ blocks, studioName: location.name, publicPath: promo.publicPath })
     return NextResponse.json({
       success: false, code: 'terms_required', error: terms.required_message,
       issues: { terms_accepted: terms.required_message }, terms,
@@ -128,8 +182,8 @@ export async function POST(request) {
 
   const nowIso = new Date().toISOString()
   await bestEffort('first/last stamp', () => db.from('contacts').update({ first_name: b.first_name, last_name: b.last_name }).eq('id', contactId).is('first_name', null))
-  await bestEffort('lead_source stamp', () => db.from('contacts').update({ lead_source: promo.leadSource }).eq('id', contactId).is('lead_source', null))
-  await bestEffort('last_lead_source stamp', () => db.from('contacts').update({ last_lead_source: promo.leadSource, last_lead_source_at: nowIso }).eq('id', contactId))
+  await bestEffort('lead_source stamp', () => db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null))
+  await bestEffort('last_lead_source stamp', () => db.from('contacts').update({ last_lead_source: leadSource, last_lead_source_at: nowIso }).eq('id', contactId))
   const a = b.attribution || {}
   const utm = {}
   for (const k of ['utm_campaign', 'utm_content', 'utm_term']) if (a[k]) utm[k] = String(a[k])
@@ -142,7 +196,7 @@ export async function POST(request) {
       .update({ visit_referrer: v.referrer, visit_landing_path: v.landing_path, visit_captured_at: nowIso })
       .eq('id', contactId).is('visit_captured_at', null))
   }
-  await bestEffort('tag', () => writeContactTag(db, { contactId, locationId, tag: promo.tag }))
+  await bestEffort('tag', () => writeContactTag(db, { contactId, locationId, tag }))
   await bestEffort('consent', async () => {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
     return applyFormMarketingConsent(db, { contactId, consent: true, source: 'corp_promo', ipAddress: ip, locationId })
@@ -180,6 +234,7 @@ export async function POST(request) {
   let version = null
   try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('corp-promo', 'legal documents version unread', { locationId, errClass: e?.name }) }
   const { data: claim, error: insErr } = await db.from('corp_promo_claims').insert({
+    ...(pageId ? { page_id: pageId } : {}),
     location_id: locationId,
     contact_id: contactId,
     promo_key: promo.key,

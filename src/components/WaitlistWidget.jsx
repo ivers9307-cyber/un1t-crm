@@ -5,6 +5,10 @@
 // the booking/event widgets' role: an interactive client island the
 // (server-rendered) LeadFormBlock embeds.
 //
+// PAGES.1 — on a page (`page`, the page's slug, passed down from the [slug]
+// route) it posts `{ page, studio: publicPath }` instead, and the endpoint
+// takes the studio, tag and source from the page's studio row.
+//
 // Conversion notes (WEBSITE-REDESIGN 2026-06): 3 fields + consent,
 // nothing else — friction stays minimal. Inputs are 16px so iOS never
 // zoom-jumps the viewport mid-form; the submit button is the page's
@@ -15,6 +19,7 @@ import { useState } from 'react'
 import { readVisitOrigin } from '@/lib/visit-origin'
 import { leadFormConsentDefault } from '@/lib/landing-page-blocks'
 import { TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_LINK } from '@/components/landing-page/trial-card'
+import { customerErrorText } from '@/lib/page-request-errors'
 
 // TRIALFIRST.1 — `tone`: 'dark' (the default, the form on the black lead
 // section, unchanged) or 'light' (the compact "not ready yet" strip on the
@@ -47,7 +52,7 @@ const TONES = {
   },
 }
 
-export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel, brandName = '', tone = 'dark' }) {
+export default function WaitlistWidget({ publicPath, campaign, page = null, buttonLabel, successMessage, consentLabel, brandName = '', tone = 'dark' }) {
   const t = TONES[tone] || TONES.dark
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
@@ -64,11 +69,15 @@ export default function WaitlistWidget({ publicPath, campaign, buttonLabel, succ
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // VISIT-ORIGIN.1 — first page of the visit + referrer, if remembered.
-        body: JSON.stringify({ ...form, public_path: publicPath, ...(campaign ? { campaign } : {}), visit: readVisitOrigin() || undefined }),
+        body: JSON.stringify({
+          ...form,
+          ...(page ? { page, studio: publicPath || undefined } : { public_path: publicPath, ...(campaign ? { campaign } : {}) }),
+          visit: readVisitOrigin() || undefined,
+        }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
-        setError(j.error || 'Something went wrong. Please try again.')
+        setError(customerErrorText(j.error, 'Something went wrong. Please try again.'))
         setStatus('error')
         return
       }
