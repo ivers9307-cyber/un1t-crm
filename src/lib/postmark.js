@@ -1,6 +1,6 @@
 import { createServerClient } from './supabase'
 import { resolvePostmarkToken } from './postmark-token'
-import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
+import { applyAudienceFilter, applyAudienceFilterAsync, scopedAudienceSource } from './audience-filter'
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
 import { withSendMarker } from './postmark-send-marker'
@@ -790,22 +790,29 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
 export async function buildAudienceQueryAsync(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
   // LOCCOMMS.3 — same per-location cutover as buildAudienceQuery above. This is
   // the builder the LIVE send path (campaign-sender.js) actually calls.
-  let query = db
-    .from('contact_location_audience')
-    .select(columns, selectOpts)
-    .eq('audience_location_id', locationId)
-    .eq(consentColumnFor(assertConsentField(consentField)), true)
-    .not('email_status', 'in', '("bounced","complained")')
-  // EMAIL-HYGIENE.1 — same marketing-only inactivity-suppression gate as
-  // buildAudienceQuery above (email_suppressed_at, mig 395).
-  if (consentField === 'email_marketing') {
-    query = query.is('email_suppressed_at', null)
+  // AUDIENCEIDS.1 — the gates are a function of the SOURCE so the same four
+  // can be rebuilt on the view's scoped rpc twin (mig 795) when a tag / event /
+  // studio-list filter resolves to more ids than fit the GET URL.
+  const consentColumn = consentColumnFor(assertConsentField(consentField))
+  const gate = (source) => {
+    let q = source
+      .eq('audience_location_id', locationId)
+      .eq(consentColumn, true)
+      .not('email_status', 'in', '("bounced","complained")')
+    // EMAIL-HYGIENE.1 — same marketing-only inactivity-suppression gate as
+    // buildAudienceQuery above (email_suppressed_at, mig 395).
+    if (consentField === 'email_marketing') {
+      q = q.is('email_suppressed_at', null)
+    }
+    return q
   }
+  const query = gate(db.from('contact_location_audience').select(columns, selectOpts))
+  const rebase = (sets) => gate(scopedAudienceSource(db, 'contact_location_audience', { locationId, ...sets, columns, selectOpts }))
   // Returns { query } so the caller can destructure without the
   // thenable-protocol auto-unwrap firing the underlying HTTP call
   // before the caller intends. See audience-filter.js resolveTagFilters
   // header for the full reasoning.
-  return applyAudienceFilterAsync({ db, query, filter, locationId })
+  return applyAudienceFilterAsync({ db, query, filter, locationId, rebase })
 }
 
 

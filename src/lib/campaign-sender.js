@@ -74,6 +74,7 @@
 // before any phase work, so mid-test cancels behave exactly like
 // mid-send cancels.
 
+import { describeAudienceQueryError, MAX_UUIDS_PER_URL } from './audience-filter.js'
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
 import { withRequestedFrom } from './from-address.js'
@@ -274,9 +275,12 @@ export async function tickCampaignSend(db, campaign) {
       } catch (err) {
         return { phase: 'populate', error: err?.message || String(err) }
       }
-      for (let i = 0; i < nonOpenerIds.length; i += AUDIENCE_PAGE_SIZE) {
-        const chunk = nonOpenerIds.slice(i, i + AUDIENCE_PAGE_SIZE)
-        const { data, error } = await db
+      // AUDIENCEIDS.1 — the id chunk rides the GET URL, so it is sized by the
+      // URL budget (≈200 uuids), not by the 1,000-row page: a 1,000-uuid
+      // `id=in.(…)` is a ~39 KB URL, the same wall the virtual fields hit.
+      for (let i = 0; i < nonOpenerIds.length; i += MAX_UUIDS_PER_URL) {
+        const chunk = nonOpenerIds.slice(i, i + MAX_UUIDS_PER_URL)
+        const page = db
           .from('contact_location_audience')
           .select('id')
           .eq('audience_location_id', campaign.location_id)
@@ -284,7 +288,8 @@ export async function tickCampaignSend(db, campaign) {
           .not('email_status', 'in', '("bounced","complained")')
           .is('email_suppressed_at', null)
           .in('id', chunk)
-        if (error) return { phase: 'populate', error: `resend audience load failed: ${error.message}` }
+        const { data, error, status, statusText } = await page
+        if (error) return { phase: 'populate', error: describeAudienceQueryError('resend audience load failed', { error, status, statusText }, page) }
         contacts.push(...(data || []))
       }
     } else {
@@ -297,11 +302,22 @@ export async function tickCampaignSend(db, campaign) {
       // Set is belt-and-braces for rows that shift pages mid-pagination.
       const seenContactIds = new Set()
       for (let from = 0; ; from += AUDIENCE_PAGE_SIZE) {
-        const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id, { consentField })
-        const { data, error } = await query
+        let query
+        try {
+          ;({ query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id, { consentField }))
+        } catch (err) {
+          // An InvalidAudienceFilterError (a filter that cannot be run) or a
+          // failed virtual-field lookup. Named, so last_error says what to fix.
+          return { phase: 'populate', error: `audience filter could not be resolved: ${err?.message || String(err)}` }
+        }
+        const page = query
           .order('id', { ascending: true })
           .range(from, from + AUDIENCE_PAGE_SIZE - 1)
-        if (error) return { phase: 'populate', error: `audience load failed: ${error.message}` }
+        const { data, error, status, statusText } = await page
+        // AUDIENCEIDS.1 — a failed request can resolve with an EMPTY message
+        // (the 31 Oct 2026 over-long URL did); record the status, code and URL
+        // length with it so the next one is diagnosable from last_error.
+        if (error) return { phase: 'populate', error: describeAudienceQueryError('audience load failed', { error, status, statusText }, page) }
         if (!data || data.length === 0) break
         for (const contact of data) {
           if (seenContactIds.has(contact.id)) continue
