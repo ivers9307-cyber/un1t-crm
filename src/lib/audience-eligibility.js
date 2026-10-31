@@ -30,7 +30,7 @@
 
 import { buildAudienceQueryAsync } from '@/lib/postmark'
 import { buildWhatsAppAudienceAsync } from '@/lib/whatsapp'
-import { applyAudienceFilterAsync } from '@/lib/audience-filter'
+import { applyAudienceFilterAsync, scopedAudienceSource } from '@/lib/audience-filter'
 
 // 'sms' left with the SMS channel (TWILIO-RETIRE.1) — it is now an unknown channel.
 export const ELIGIBILITY_CHANNELS = ['email', 'whatsapp']
@@ -63,5 +63,9 @@ export async function buildEligibleAudienceQuery({
   // the sequence count cannot drift apart. The stage field lands on
   // studio_stage_slug, which the raw contacts table does not have.
   const query = db.from('studio_contacts').select(columns, selectOpts).eq('studio_location_id', locationId)
-  return applyAudienceFilterAsync({ db, query, filter, locationId })
+  // AUDIENCEIDS.1 — the same rows from studio_contacts' scoped rpc twin (mig
+  // 795) when a virtual field resolves to more ids than fit the GET URL.
+  const rebase = (sets) => scopedAudienceSource(db, 'studio_contacts', { locationId, ...sets, columns, selectOpts })
+    .eq('studio_location_id', locationId)
+  return applyAudienceFilterAsync({ db, query, filter, locationId, rebase })
 }

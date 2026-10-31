@@ -131,6 +131,10 @@ export const CLOSED_FUNCTIONS = [
     why: 'a trigger function; a trigger fires without EXECUTE (FEES.1)' },
   { fn: 'public.landing_page_studios_same_org', args: '()', closedBy: 792,
     why: 'a trigger function refusing a landing_page_studios row outside the page organisation; a trigger fires without EXECUTE (PAGES.1). The six private backfill helpers 792 also closes are dropped at its end' },
+  { fn: 'public.contact_location_audience_scoped', args: '(uuid, uuid[], uuid[])', closedBy: 795,
+    why: 'the send-path audience view scoped to an include/exclude contact-id set carried in the rpc body; called only by service-role audience code (AUDIENCEIDS.1)' },
+  { fn: 'public.studio_contacts_scoped', args: '(uuid, uuid[], uuid[])', closedBy: 795,
+    why: 'studio_contacts scoped to an include/exclude contact-id set carried in the rpc body; called only by service-role audience code (AUDIENCEIDS.1)' },
 ]
 
 /** The client roles a closed function is closed to. */

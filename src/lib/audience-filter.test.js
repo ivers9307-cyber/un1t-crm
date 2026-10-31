@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, resolveLocationListFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows } from './audience-filter.js'
+import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, resolveLocationListFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows, AUDIENCE_ID_URL_BUDGET, MAX_UUIDS_PER_URL, idPredicateUrlLength, resolveVirtualIdSets, applyIdSets, scopedAudienceSource, describeAudienceQueryError } from './audience-filter.js'
+
+// A deterministic fake uuid (36 chars, so it costs what a real one costs on the URL).
+const fakeUuid = (i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
 
 // Mock Supabase query builder — every method returns `this` and records the call.
 function makeMockQuery() {
@@ -852,12 +855,18 @@ describe('resolveLocationListFilters — LISTFILTER.1', () => {
     })).rejects.toThrow(/too many contacts/)
   })
 
-  it('allows an inclusion right at the cap', async () => {
-    const atCap = Array.from({ length: 2000 }, (_, i) => ({ contact_id: `c${i}` }))
+  it('allows an inclusion that fits the URL budget, and refuses one uuid more', async () => {
+    // AUDIENCEIDS.1 — the bound is URL characters, not a row count.
+    const fits = Array.from({ length: MAX_UUIDS_PER_URL }, (_, i) => ({ contact_id: fakeUuid(i) }))
     const { query, calls } = captureQuery()
-    const db = listDb({ ok: atCap })
-    await resolveLocationListFilters({ db, query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'ok' }] } })
-    expect(calls.find(c => c[0] === 'in')[2]).toHaveLength(2000)
+    await resolveLocationListFilters({ db: listDb({ ok: fits }), query, filter: { filters: [{ field: 'location_list', op: 'eq', value: 'ok' }] } })
+    expect(calls.find(c => c[0] === 'in')[2]).toHaveLength(MAX_UUIDS_PER_URL)
+
+    const oneMore = [...fits, { contact_id: fakeUuid(MAX_UUIDS_PER_URL) }]
+    await expect(resolveLocationListFilters({
+      db: listDb({ big: oneMore }), query: captureQuery().query,
+      filter: { filters: [{ field: 'location_list', op: 'eq', value: 'big' }] },
+    })).rejects.toThrow(/too many contacts .* URL characters against a 8000-character budget/)
   })
 
   it('rejects an empty / whitespace location id without hitting the DB', async () => {
@@ -1139,24 +1148,31 @@ describe('resolveTagFilters / resolveEventFilters — paginate past the 1000-row
     return { query, calls }
   }
 
-  it('contactIdsForTag pages through a >1000-row tag cohort (eq → query.in gets ALL ids)', async () => {
-    const ids = Array.from({ length: 2500 }, (_, i) => `c-${i}`)
+  it('contactIdsForTag pages through a >1000-row tag cohort (eq → the rebase gets ALL ids)', async () => {
+    const ids = Array.from({ length: 2500 }, (_, i) => fakeUuid(i))
     const rows = ids.map((id) => ({ contact_id: id }))
     const pages = []
     const db = { from: () => pagedTable(rows, pages) }
     const { query, calls } = captureQuery()
+    // 2,500 uuids do not fit the GET URL, so the resolver hands the full set to
+    // the caller's rebase (AUDIENCEIDS.1) instead of a truncated .in().
+    const rebased = { rebased: true }
+    const rebase = vi.fn(() => rebased)
 
-    await resolveTagFilters({
-      db, query, locationId: 'loc-1',
+    const out = await resolveTagFilters({
+      db, query, locationId: 'loc-1', rebase,
       filter: { filters: [{ field: 'tag', op: 'eq', value: 'vip' }] },
     })
 
     // Three pages (1000 + 1000 + 500) — proves it didn't stop at the cap.
     expect(pages.length).toBe(3)
-    const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
-    expect(inCall).toBeTruthy()
-    expect(inCall[2]).toHaveLength(2500)
-    expect(new Set(inCall[2])).toEqual(new Set(ids))
+    expect(calls.find(c => c[0] === 'in')).toBeUndefined()
+    expect(rebase).toHaveBeenCalledTimes(1)
+    const { include, exclude } = rebase.mock.calls[0][0]
+    expect(include.size).toBe(2500)
+    expect(include).toEqual(new Set(ids))
+    expect(exclude.size).toBe(0)
+    expect(out.query).toBe(rebased)
   })
 
   it('contactIdsForEvent pages through a >1000-row registration list', async () => {
@@ -1169,17 +1185,17 @@ describe('resolveTagFilters / resolveEventFilters — paginate past the 1000-row
         throw new Error(`unexpected table ${table}`)
       },
     }
-    const { query, calls } = captureQuery()
+    const { query } = captureQuery()
+    const rebase = vi.fn(() => ({}))
 
     await resolveEventFilters({
-      db, query,
+      db, query, rebase,
       filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] },
     })
 
     expect(pages.length).toBe(2)   // 1000 + 800
-    const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
-    expect(inCall).toBeTruthy()
-    expect(inCall[2]).toHaveLength(1800)
+    expect(rebase).toHaveBeenCalledTimes(1)
+    expect(rebase.mock.calls[0][0].include.size).toBe(1800)
   })
 })
 
@@ -1523,5 +1539,267 @@ describe('applyAudienceFilter — pipeline_stage_slug filters query studio_stage
     const { query, calls } = makeMockQuery()
     applyAudienceFilter(query, { logic: 'and', filters: [{ field: 'email_status', op: 'eq', value: 'active' }] })
     expect(calls).toEqual([['eq', 'email_status', 'active']])
+  })
+})
+
+// ── AUDIENCEIDS.1 — id lists beyond the URL budget ───────────────────
+//
+// 31 Oct 2026: a Stillorgan campaign with two `tag neq` filters resolving to
+// 148 + 1,754 contact ids failed every tick. The ids rode the GET URL as
+// `id=not.in.(…)` (~74 KB), the request failed before PostgREST answered, and
+// supabase-js resolved `{ error }` with an EMPTY message, so last_error read
+// "audience load failed: " and the cron marked the campaign failed. The old
+// MAX_EXCLUSION_IDS = 2000 was a row count; the limit is URL bytes.
+describe('AUDIENCEIDS.1 — virtual-field id sets beyond the URL budget', () => {
+  // contact_tags rows per tag, paged like PostgREST (≤1000 a page).
+  function tagDb(idsByTag) {
+    return {
+      from(table) {
+        if (table !== 'contact_tags') throw new Error(`unexpected table ${table}`)
+        let tag = null, from = 0, to = 0
+        const chain = {
+          select: () => chain, is: () => chain,
+          eq: (col, val) => { if (col === 'tag') tag = val; return chain },
+          order: () => chain,
+          range: (f, t) => { from = f; to = t; return chain },
+          then: (resolve) => {
+            const all = (idsByTag[tag] || []).map(id => ({ contact_id: id }))
+            return Promise.resolve({ data: all.slice(from, Math.min(to + 1, from + 1000)), error: null }).then(resolve)
+          },
+        }
+        return chain
+      },
+    }
+  }
+  function captureQuery() {
+    const calls = []
+    const query = {
+      in: (...a) => { calls.push(['in', ...a]); return query },
+      eq: (...a) => { calls.push(['eq', ...a]); return query },
+      not: (...a) => { calls.push(['not', ...a]); return query },
+    }
+    return { query, calls }
+  }
+  const uuids = (n, offset = 0) => Array.from({ length: n }, (_, i) => fakeUuid(i + offset))
+
+  it('measures the id predicate exactly as postgrest-js encodes it', () => {
+    expect(new URLSearchParams([['id', 'in.(a,b)']]).toString()).toBe('id=in.%28a%2Cb%29')
+    expect(idPredicateUrlLength(['a', 'b'])).toBe('id=in.%28a%2Cb%29'.length)
+    expect(idPredicateUrlLength(['a'], { negate: true })).toBe('id=not.in.%28a%29'.length)
+    // A uuid costs 39 characters; the budget is 8,000 of them.
+    expect(idPredicateUrlLength(uuids(100))).toBe(9 + 100 * 36 + 99 * 3 + 3)
+    expect(idPredicateUrlLength(uuids(MAX_UUIDS_PER_URL))).toBeLessThanOrEqual(AUDIENCE_ID_URL_BUDGET)
+    expect(idPredicateUrlLength(uuids(MAX_UUIDS_PER_URL + 1))).toBeGreaterThan(AUDIENCE_ID_URL_BUDGET)
+  })
+
+  it('a 3,000-member tag INCLUDE goes to the rebase with every id, and the scalar filters still apply after it', async () => {
+    const members = uuids(3000)
+    const { query, calls } = captureQuery()
+    const rebased = captureQuery()
+    const rebase = vi.fn(() => rebased.query)
+
+    const out = await applyAudienceFilterAsync({
+      db: tagDb({ 'reset-b1-sent': members }), query, locationId: 'loc-1', rebase,
+      filter: { filters: [
+        { field: 'tag', op: 'eq', value: 'reset-b1-sent' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'lead' },
+      ] },
+    })
+
+    expect(calls).toEqual([])                       // nothing on the GET URL
+    expect(rebase).toHaveBeenCalledTimes(1)
+    const sets = rebase.mock.calls[0][0]
+    expect(sets.include).toEqual(new Set(members))
+    expect(sets.exclude.size).toBe(0)
+    expect(out.query).toBe(rebased.query)
+    expect(rebased.calls).toEqual([['eq', 'studio_stage_slug', 'lead']])
+  })
+
+  it('a 3,000-member tag EXCLUDE goes to the rebase as the exclusion set', async () => {
+    const members = uuids(3000)
+    const { query, calls } = captureQuery()
+    const rebase = vi.fn(() => ({}))
+
+    await applyAudienceFilterAsync({
+      db: tagDb({ big: members }), query, locationId: 'loc-1', rebase,
+      filter: { filters: [{ field: 'tag', op: 'neq', value: 'big' }] },
+    })
+
+    expect(calls).toEqual([])
+    expect(rebase).toHaveBeenCalledTimes(1)
+    const sets = rebase.mock.calls[0][0]
+    expect(sets.include).toBeNull()
+    expect(sets.exclude).toEqual(new Set(members))
+  })
+
+  it('the live case: two neq tags (148 + 1,754 ids) resolve to ONE 1,902-id exclusion on the rebase', async () => {
+    const a = uuids(148), b = uuids(1754, 148)
+    const rebase = vi.fn(() => ({}))
+    await applyAudienceFilterAsync({
+      db: tagDb({ 'reset-a-sent': a, 'reset-b1-sent': b }), query: captureQuery().query, locationId: 'loc-1', rebase,
+      filter: { filters: [
+        { field: 'tag', op: 'neq', value: 'reset-a-sent' },
+        { field: 'tag', op: 'neq', value: 'reset-b1-sent' },
+      ] },
+    })
+    expect(rebase).toHaveBeenCalledTimes(1)
+    expect(rebase.mock.calls[0][0].exclude.size).toBe(1902)
+  })
+
+  it('a small list keeps the GET path and never calls the rebase', async () => {
+    const { query, calls } = captureQuery()
+    const rebase = vi.fn()
+    await applyAudienceFilterAsync({
+      db: tagDb({ vip: uuids(50), lapsed: uuids(10, 25) }), query, locationId: 'loc-1', rebase,
+      filter: { filters: [{ field: 'tag', op: 'eq', value: 'vip' }, { field: 'tag', op: 'neq', value: 'lapsed' }] },
+    })
+    expect(rebase).not.toHaveBeenCalled()
+    // The exclusion is subtracted in JS: one IN of 40, no NOT IN.
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('in')
+    expect(calls[0][2]).toHaveLength(40)
+  })
+
+  it('an exclusion that empties the inclusion is the unsatisfiable sentinel, not "everyone"', async () => {
+    const same = uuids(3000)
+    const { query, calls } = captureQuery()
+    const rebase = vi.fn()
+    await applyAudienceFilterAsync({
+      db: tagDb({ a: same, b: same }), query, locationId: 'loc-1', rebase,
+      filter: { filters: [{ field: 'tag', op: 'eq', value: 'a' }, { field: 'tag', op: 'neq', value: 'b' }] },
+    })
+    expect(rebase).not.toHaveBeenCalled()
+    expect(calls).toEqual([['eq', 'id', '00000000-0000-0000-0000-000000000000']])
+  })
+
+  it('with no rebase an over-budget list is a loud InvalidAudienceFilterError naming the URL length, never an empty-message failure', async () => {
+    const members = uuids(3000)
+    const err = await applyAudienceFilterAsync({
+      db: tagDb({ big: members }), query: captureQuery().query, locationId: 'loc-1',
+      filter: { filters: [{ field: 'tag', op: 'neq', value: 'big' }] },
+    }).catch(e => e)
+    expect(err).toBeInstanceOf(InvalidAudienceFilterError)
+    expect(err.message).toMatch(/too many contacts \(3000\)/)
+    expect(err.message).toMatch(new RegExp(`${idPredicateUrlLength(members, { negate: true })} URL characters against a 8000-character budget`))
+  })
+
+  it('resolveVirtualIdSets merges the three fields: positives intersect, negatives union, exclusion subtracted from a known inclusion', async () => {
+    const db = {
+      from(table) {
+        const data = {
+          contact_tags: [{ contact_id: 'a' }, { contact_id: 'b' }, { contact_id: 'c' }],
+          race_registrations: [{ contact_id: 'b', team_id: null }, { contact_id: 'c', team_id: null }, { contact_id: 'd', team_id: null }],
+          contact_location_preferences: [{ contact_id: 'c' }],
+        }[table]
+        if (!data) throw new Error(`unexpected table ${table}`)
+        const chain = {
+          select: () => chain, eq: () => chain, is: () => chain, in: () => chain, not: () => chain, order: () => chain, range: () => chain,
+          then: (r) => Promise.resolve({ data, error: null }).then(r),
+        }
+        return chain
+      },
+    }
+    const sets = await resolveVirtualIdSets({ db, locationId: 'loc-1', filter: { filters: [
+      { field: 'tag', op: 'eq', value: 'vip' },                 // {a,b,c}
+      { field: 'event_registration', op: 'eq', value: 'evt' }, // ∩ {b,c,d} = {b,c}
+      { field: 'location_list', op: 'neq', value: 'hatch' },   // − {c}
+    ] } })
+    expect(sets.present).toBe(true)
+    expect(sets.include).toEqual(new Set(['b']))
+    expect(sets.exclude.size).toBe(0)
+    expect(await resolveVirtualIdSets({ db, filter: { filters: [{ field: 'email', op: 'contains', value: 'x' }] } }))
+      .toEqual({ include: null, exclude: new Set(), present: false })
+  })
+
+  it('applyIdSets: a null include and empty exclude leave the query untouched', () => {
+    const { query, calls } = captureQuery()
+    expect(applyIdSets(query, { include: null, exclude: new Set() })).toBe(query)
+    expect(calls).toEqual([])
+  })
+
+  describe('pinnedId — a query already pinned to one contact never carries the cohort', () => {
+    it('member of the include → no id predicate at all', async () => {
+      const { query, calls } = captureQuery()
+      const rebase = vi.fn()
+      const members = uuids(3000)
+      await applyAudienceFilterAsync({
+        db: tagDb({ big: members }), query, locationId: 'loc-1', rebase, pinnedId: members[1234],
+        filter: { filters: [{ field: 'tag', op: 'eq', value: 'big' }] },
+      })
+      expect(calls).toEqual([])
+      expect(rebase).not.toHaveBeenCalled()
+    })
+    it('outside the include, or inside the exclude → the unsatisfiable sentinel', async () => {
+      const members = uuids(3000)
+      const outside = captureQuery()
+      await applyAudienceFilterAsync({
+        db: tagDb({ big: members }), query: outside.query, locationId: 'loc-1', pinnedId: fakeUuid(999_999),
+        filter: { filters: [{ field: 'tag', op: 'eq', value: 'big' }] },
+      })
+      expect(outside.calls).toEqual([['eq', 'id', '00000000-0000-0000-0000-000000000000']])
+      const excluded = captureQuery()
+      await applyAudienceFilterAsync({
+        db: tagDb({ big: members }), query: excluded.query, locationId: 'loc-1', pinnedId: members[7],
+        filter: { filters: [{ field: 'tag', op: 'neq', value: 'big' }] },
+      })
+      expect(excluded.calls).toEqual([['eq', 'id', '00000000-0000-0000-0000-000000000000']])
+    })
+  })
+
+  describe('scopedAudienceSource — the rpc twin of the base relation (mig 795)', () => {
+    function rpcDb() {
+      const rpcCalls = []
+      const chainCalls = []
+      const chain = {
+        select: (...a) => { chainCalls.push(['select', ...a]); return chain },
+        limit: (...a) => { chainCalls.push(['limit', ...a]); return chain },
+      }
+      return { db: { rpc: (...a) => { rpcCalls.push(a); return chain } }, rpcCalls, chainCalls, chain }
+    }
+
+    it('contact_location_audience → contact_location_audience_scoped with the ids in the ARGS (the POST body), null for an absent side', () => {
+      const { db, rpcCalls, chainCalls, chain } = rpcDb()
+      const include = new Set(uuids(3))
+      const q = scopedAudienceSource(db, 'contact_location_audience', { locationId: 'loc-1', include, exclude: new Set(), columns: '*' })
+      expect(q).toBe(chain)
+      expect(rpcCalls).toEqual([['contact_location_audience_scoped', { p_location_id: 'loc-1', p_include: uuids(3), p_exclude: null }, undefined]])
+      expect(chainCalls).toEqual([['select', '*']])
+    })
+
+    it('studio_contacts → studio_contacts_scoped; an exclusion-only set sends p_include null', () => {
+      const { db, rpcCalls } = rpcDb()
+      scopedAudienceSource(db, 'studio_contacts', { locationId: 'loc-1', include: null, exclude: new Set(['x']), columns: 'id' })
+      expect(rpcCalls[0][0]).toBe('studio_contacts_scoped')
+      expect(rpcCalls[0][1]).toEqual({ p_location_id: 'loc-1', p_include: null, p_exclude: ['x'] })
+    })
+
+    it('a head:true count becomes POST + count + limit(1): postgrest-js would put rpc args on a HEAD URL', () => {
+      const { db, rpcCalls, chainCalls } = rpcDb()
+      scopedAudienceSource(db, 'contact_location_audience', {
+        locationId: 'loc-1', include: new Set(['a']), exclude: new Set(), columns: 'id', selectOpts: { count: 'exact', head: true },
+      })
+      expect(rpcCalls[0][2]).toEqual({ count: 'exact' })
+      expect(chainCalls).toEqual([['select', 'id'], ['limit', 1]])
+    })
+
+    it('refuses an unknown relation and a missing studio', () => {
+      const { db } = rpcDb()
+      expect(() => scopedAudienceSource(db, 'contacts', { locationId: 'loc-1', include: new Set(['a']) })).toThrow(InvalidAudienceFilterError)
+      expect(() => scopedAudienceSource(db, 'contact_location_audience', { include: new Set(['a']) })).toThrow(/locationId/)
+    })
+  })
+
+  describe('describeAudienceQueryError — the message a failed audience query leaves behind', () => {
+    it('states an empty message and adds the status, code and URL length', () => {
+      const query = { url: new URL(`https://x.supabase.co/rest/v1/contact_location_audience?id=not.in.(${uuids(1902).join(',')})`), method: 'GET' }
+      const msg = describeAudienceQueryError('audience load failed', { error: { message: '' }, status: 414, statusText: 'URI Too Long' }, query)
+      expect(msg).toMatch(/^audience load failed: \(empty message\) \[status=414 URI Too Long, url_length=\d+, method=GET\]$/)
+      expect(Number(msg.match(/url_length=(\d+)/)[1])).toBeGreaterThan(70_000)
+    })
+    it('is exactly "<prefix>: <message>" when there is nothing more to say', () => {
+      expect(describeAudienceQueryError('audience load failed', { error: { message: 'connection reset' } })).toBe('audience load failed: connection reset')
+      expect(describeAudienceQueryError('audience load failed', { error: { message: 'x', code: 'PGRST100' }, status: 400 }, {}))
+        .toBe('audience load failed: x [status=400, code=PGRST100]')
+    })
   })
 })

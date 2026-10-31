@@ -17,7 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { applyAudienceFilterAsync } from '@/lib/audience-filter'
+import { applyAudienceFilterAsync, scopedAudienceSource } from '@/lib/audience-filter'
 import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
 // FILTER-B.8 — the will-receive number for EVERY channel comes from the
 // shared per-channel eligibility builder, which delegates to that channel's
@@ -71,12 +71,16 @@ export async function POST(request) {
     // Filter-scoped count over the per-location audience view, optionally
     // refined with extra gates. Single-table (mig 491 view), head:true safe.
     const viewCount = async (refine) => {
-      let base = db
-        .from('contact_location_audience')
-        .select('id', { count: 'exact', head: true })
-        .eq('audience_location_id', location_id)
-      if (refine) base = refine(base)
-      const { query: q } = await applyAudienceFilterAsync({ db, query: base, filter, locationId: location_id })
+      const selectOpts = { count: 'exact', head: true }
+      const gate = (source) => {
+        const q = source.eq('audience_location_id', location_id)
+        return refine ? refine(q) : q
+      }
+      const base = gate(db.from('contact_location_audience').select('id', selectOpts))
+      // AUDIENCEIDS.1 — the same count on the view's scoped rpc twin (mig 795)
+      // when the filter's id list does not fit the GET URL.
+      const rebase = (sets) => gate(scopedAudienceSource(db, 'contact_location_audience', { locationId: location_id, ...sets, columns: 'id', selectOpts }))
+      const { query: q } = await applyAudienceFilterAsync({ db, query: base, filter, locationId: location_id, rebase })
       const { count: c, error: e } = await q
       if (e) throw new Error(e.message)
       return c || 0
@@ -121,14 +125,19 @@ export async function POST(request) {
     // builds for the sequence preview and enrolment. ORGCONTACTS.4: the stage
     // field lands on studio_stage_slug, which the raw contacts table lacks.
     // Count on the FIRST .select() (postgrest-js only reads head/count there).
-    const baseQuery = db.from('studio_contacts').select('id', { count: 'exact', head: true }).eq('studio_location_id', location_id)
+    const matchOpts = { count: 'exact', head: true }
+    const baseQuery = db.from('studio_contacts').select('id', matchOpts).eq('studio_location_id', location_id)
     // Async path resolves virtual fields (event_registration + tag) into the
     // contacts.id constraint before counting — the sync filter silently skips them.
+    // AUDIENCEIDS.1 — on studio_contacts' scoped rpc twin (mig 795) when the id
+    // list does not fit the GET URL.
     const { query } = await applyAudienceFilterAsync({
       db,
       query: baseQuery,
       filter,
       locationId: location_id,
+      rebase: (sets) => scopedAudienceSource(db, 'studio_contacts', { locationId: location_id, ...sets, columns: 'id', selectOpts: matchOpts })
+        .eq('studio_location_id', location_id),
     })
     const { count, error } = await query
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
