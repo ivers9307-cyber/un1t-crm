@@ -12,7 +12,8 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 vi.mock('@/lib/supabase', () => ({ createBrowserClient: () => ({}) }))
 
 import LandingPageSettingsForm from './LandingPageSettingsForm'
-import { newBlockOfType } from '@/lib/landing-page-blocks'
+import { newBlockOfType, BLOCK_TYPES } from '@/lib/landing-page-blocks'
+import { splitOfferBlock } from '@/lib/landing-page-offers'
 
 const HATCH = '11111111-1111-1111-1111-111111111111'
 const STUDIOS = [{ location_id: HATCH, name: 'UN1T Hatch Street', membership_source: 'un1t_online', enabled: true, sort_order: 0 }]
@@ -150,5 +151,60 @@ describe('LandingPageSettingsForm (page mode)', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
     expect(puts).toHaveLength(0)
     expect(screen.getByText('Give the page a title.')).toBeTruthy()
+  })
+})
+
+describe('LandingPageSettingsForm (page mode): the pinned offer block', () => {
+  const OFFER = { ...splitOfferBlock(newBlockOfType('campaign_funnel')).page, id: 'b-offer' }
+  const offerPage = (over = {}) => basePage({ offer_type: 'one_class', blocks: [OFFER, HERO, PILLARS], ...over })
+  const OFFER_STUDIOS = [{ ...STUDIOS[0], offer: {}, attribution: {} }]
+  const send = async (data) => {
+    await act(async () => { window.dispatchEvent(new MessageEvent('message', { origin: window.location.origin, data: { namespace: 'lp-editor', ...data } })) })
+  }
+
+  it('the offer block is pinned: no drag handle, no delete, the library hides offer types', async () => {
+    renderForm({ page: offerPage(), studios: OFFER_STUDIOS })
+    expect(screen.getByText('Pinned')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Drag Campaign funnel (own page)' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Drag Hero' })).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Delete section' })).toHaveLength(2)
+    // Its studio rows render under the page half.
+    expect(screen.getByRole('checkbox', { name: 'Switched on at UN1T Hatch Street' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add section' }))
+    const offerTypes = BLOCK_TYPES.filter((t) => t.offer)
+    expect(offerTypes.map((t) => t.type).sort()).toEqual(['campaign_funnel', 'class_funnel', 'corp_promo', 'paid_trial'])
+    for (const t of offerTypes) expect(screen.queryByText(t.description), t.type).toBeNull()
+    expect(screen.getByText(BLOCK_TYPES.find((t) => t.type === 'pillars').description)).toBeTruthy()
+
+    // The preview cannot move, copy or delete it, nor put a section above it.
+    await send({ type: 'delete-block', blockId: 'b-offer' })
+    await send({ type: 'duplicate-block', blockId: 'b-offer' })
+    await send({ type: 'move-block', blockId: 'b-offer', direction: 'down' })
+    await send({ type: 'move-block', blockId: 'b-hero', direction: 'up' })
+    await send({ type: 'add-block', blockType: 'stats', atIndex: 0 })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    const types = puts[0].body.blocks.map((b) => b.type)
+    expect(types).toEqual(['campaign_funnel', 'stats', 'hero', 'pillars'])
+  })
+
+  it('page-half edits on the pinned block count as unsaved and go out with the page save', async () => {
+    renderForm({ page: offerPage(), studios: OFFER_STUDIOS })
+    fireEvent.change(screen.getByDisplayValue('A free trial of The 50+ Club'), { target: { value: 'Try it' } })
+    expect(screen.getByText('Save your changes first.')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts[0].body.blocks[0]).toMatchObject({ id: 'b-offer', heading: 'Try it' })
+  })
+
+  it('a page with an offer whose first block is not one says so, with no pinned card', () => {
+    renderForm({ page: offerPage({ blocks: [HERO, PILLARS] }), studios: OFFER_STUDIOS })
+    expect(screen.getByText("This page's offer block is missing. Ask the team.")).toBeTruthy()
+    expect(screen.queryByText('Pinned')).toBeNull()
+  })
+
+  it('a page with no offer has no pinned card', () => {
+    renderForm()
+    expect(screen.queryByText('Pinned')).toBeNull()
+    expect(screen.queryByText("This page's offer block is missing. Ask the team.")).toBeNull()
   })
 })

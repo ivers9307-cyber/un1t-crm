@@ -64,6 +64,9 @@ import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
+import OfferBlockEditor from '@/components/landing-pages/OfferBlockEditor'
+import { offerTypeOfBlock } from '@/lib/landing-page-offers'
+import { Field, Input, Textarea } from '@/components/landing-pages/fields'
 import { storedChrome, termsForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
 
 // PostMessage namespace shared with src/components/landing-page/
@@ -106,6 +109,18 @@ export default function LandingPageSettingsForm({
   // Seed from saved blocks; if none, blocksOrDefault returns the
   // starter set so the form is never blank on first open.
   const [blocks, setBlocks] = useState(() => blocksOrDefault(pageMode ? page.blocks : initialSettings?.blocks))
+  // PAGES.1 — page mode: blocks[0] is the page's offer block, pinned (no
+  // drag, move, copy or delete; edited through OfferBlockEditor). A page with
+  // an offer whose first block is not one gets a notice instead.
+  const pinnedOffer = pageMode && offerTypeOfBlock(blocks[0]?.type) !== null ? blocks[0] : null
+  const offerMissing = pageMode && !pinnedOffer && Boolean(page.offer_type) && page.offer_type !== 'none'
+  const sortableBlocks = pinnedOffer ? blocks.slice(1) : blocks
+  // The studio rows, kept current by each row's own save (Task 17's preview
+  // select reads `enabled` from them).
+  const [studioRows, setStudioRows] = useState(studios)
+  const onSaveStudio = useCallback((locId, { row }) => {
+    setStudioRows((prev) => prev.map((s) => (s.location_id === locId ? { ...s, ...row } : s)))
+  }, [])
   const [expanded, setExpanded] = useState(() => new Set(blocks.map((b) => b.id)))
   const [activeDragId, setActiveDragId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -150,7 +165,7 @@ export default function LandingPageSettingsForm({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
+  const blockIds = useMemo(() => sortableBlocks.map((b) => b.id), [sortableBlocks])
   const activeBlock = blocks.find((b) => b.id === activeDragId)
 
   // ── Live preview iframe (Phase 3c) ────────────────────────
@@ -204,6 +219,9 @@ export default function LandingPageSettingsForm({
       if (!msg || typeof msg !== 'object' || msg.namespace !== MESSAGE_NAMESPACE) return
       // PAGES.1 — read-only: the preview may be clicked, never edited.
       if (readOnly && msg.type !== 'ready' && msg.type !== 'block-clicked') return
+      // PAGES.1 — the pinned offer block (page mode's blocks[0]) is never
+      // moved, copied or deleted from the preview, and nothing goes above it.
+      const pinnedIn = (list) => (pageMode && offerTypeOfBlock(list[0]?.type) !== null ? list[0].id : null)
       if (msg.type === 'ready') {
         // Send initial state right away.
         const win = iframeRef.current?.contentWindow
@@ -234,6 +252,8 @@ export default function LandingPageSettingsForm({
           if (i < 0) return prev
           const j = msg.direction === 'up' ? i - 1 : i + 1
           if (j < 0 || j >= prev.length) return prev
+          const pinned = pinnedIn(prev)
+          if (pinned && (i === 0 || j === 0)) return prev
           const next = prev.slice()
           ;[next[i], next[j]] = [next[j], next[i]]
           return next
@@ -244,7 +264,7 @@ export default function LandingPageSettingsForm({
         // collide; copy everything else verbatim.
         setBlocks((prev) => {
           const i = prev.findIndex((b) => b.id === msg.blockId)
-          if (i < 0) return prev
+          if (i < 0 || msg.blockId === pinnedIn(prev)) return prev
           const copy = JSON.parse(JSON.stringify(prev[i]))
           copy.id = newBlockId()
           const next = prev.slice()
@@ -254,7 +274,7 @@ export default function LandingPageSettingsForm({
       } else if (msg.type === 'delete-block' && msg.blockId) {
         // LP3c.4 — toolbar trash on a block in the iframe.
         // Confirmation already happened in the iframe.
-        setBlocks((prev) => prev.filter((b) => b.id !== msg.blockId))
+        setBlocks((prev) => (msg.blockId === pinnedIn(prev) ? prev : prev.filter((b) => b.id !== msg.blockId)))
         setExpanded((prev) => {
           const next = new Set(prev)
           next.delete(msg.blockId)
@@ -267,8 +287,9 @@ export default function LandingPageSettingsForm({
         // existing[n-1] and existing[n]).
         let added = null
         try { added = newBlockOfType(msg.blockType, { brand: brandName }) } catch { return }
+        if (pageMode && offerTypeOfBlock(added.type) !== null) return
         setBlocks((prev) => {
-          const idx = Math.max(0, Math.min(prev.length, msg.atIndex))
+          const idx = Math.max(pinnedIn(prev) ? 1 : 0, Math.min(prev.length, msg.atIndex))
           const next = prev.slice()
           next.splice(idx, 0, added)
           return next
@@ -289,7 +310,7 @@ export default function LandingPageSettingsForm({
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [buildState, brandName, readOnly])
+  }, [buildState, brandName, readOnly, pageMode])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -517,6 +538,35 @@ export default function LandingPageSettingsForm({
         </label>
       </section>
 
+      {/* PAGES.1 — page mode: the pinned offer block, above the sortable list. */}
+      {offerMissing && (
+        <p role="note" className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700">This page&apos;s offer block is missing. Ask the team.</p>
+      )}
+      {pinnedOffer && (
+        <div ref={(el) => { if (el) cardRefs.current[pinnedOffer.id] = el }}>
+          <PinnedOfferCard
+            block={pinnedOffer}
+            expanded={expanded.has(pinnedOffer.id)}
+            onToggleExpand={() => toggleExpanded(pinnedOffer.id)}
+          >
+            <OfferBlockEditor
+              page={currentPage}
+              block={pinnedOffer}
+              studios={studioRows}
+              onUpdateBlock={(patch) => updateBlock(pinnedOffer.id, patch)}
+              onSaveStudio={onSaveStudio}
+              canEdit={canEdit}
+              locationId={locationId}
+              membershipSource={membershipSource}
+              uploadMedia={uploadMedia}
+              uploading={uploading}
+              uploadErr={uploadErr}
+              progress={progress}
+            />
+          </PinnedOfferCard>
+        </div>
+      )}
+
       {/* Sortable block list */}
       <DndContext
         sensors={sensors}
@@ -527,7 +577,7 @@ export default function LandingPageSettingsForm({
       >
         <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
           <div className="space-y-2">
-            {blocks.map((block) => (
+            {sortableBlocks.map((block) => (
               // The wrapper div carries the cardRef target so the
               // iframe-click → scroll-to-card behaviour can find it.
               // SortableBlockCard's own outer div is the @dnd-kit
@@ -581,7 +631,7 @@ export default function LandingPageSettingsForm({
         {addNotice && <p className="mt-2 text-xs text-red-700" role="alert">{addNotice}</p>}
         {pickerOpen && (
           <div className="absolute z-30 left-0 right-0 mt-2 bg-un1t-surface border border-un1t-border rounded-lg shadow-xl p-2 grid grid-cols-1 md:grid-cols-2 gap-1">
-            {BLOCK_TYPES.map((t) => (
+            {BLOCK_TYPES.filter((t) => !pageMode || !t.offer).map((t) => (
               <button
                 key={t.type}
                 type="button"
@@ -673,7 +723,7 @@ export default function LandingPageSettingsForm({
   return (
     <div className="space-y-4">
       <PageHeaderCard
-        page={currentPage} studios={studios} canEdit={canEdit}
+        page={currentPage} studios={studioRows} canEdit={canEdit}
         title={title} onTitleChange={setTitle} onPageChange={setCurrentPage}
         terms={terms} onTermsChange={setTerms} dirty={dirty}
       />
@@ -756,6 +806,23 @@ function SortableBlockCard({
           />
         </div>
       )}
+    </div>
+  )
+}
+
+// PAGES.1 — the page's offer block in page mode: no drag handle, no delete,
+// a "Pinned" label beside the type's label; its body is OfferBlockEditor.
+function PinnedOfferCard({ block, expanded, onToggleExpand, children }) {
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
+      <div className="flex items-center gap-2 p-3">
+        <button type="button" onClick={onToggleExpand} className="flex-1 flex items-center gap-2 text-left min-w-0">
+          {expanded ? <ChevronDown size={14} className="text-un1t-muted" /> : <ChevronRight size={14} className="text-un1t-muted" />}
+          <span className="text-sm font-semibold text-un1t-text">{labelFor(block.type)}</span>
+          <span className="text-[11px] font-medium rounded-full px-2 py-0.5 bg-gray-500/10 text-gray-700">Pinned</span>
+        </button>
+      </div>
+      {expanded && <div className="border-t border-un1t-border p-4 space-y-3">{children}</div>}
     </div>
   )
 }
@@ -1061,13 +1128,19 @@ function LeadFormEdit({ block, onUpdate }) {
 // (HATCHSTART.1) but keeps the notice and the confirmation email.
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-function ManualTimetableFields({ block, onUpdate, publicPath }) {
+// PAGES.1 — `pageOnly` (page mode): the timetable, first date and notice are
+// the studio rows' (StudioOfferRow); the confirmation email stays here.
+function ManualTimetableFields({ block, onUpdate, publicPath, pageOnly = false }) {
   const text = typeof block.timetable === 'string' ? block.timetable : ''
   const { slots, rejected } = useMemo(() => parseManualTimetable(text), [text])
   const byDay = DAY_NAMES.map((name, i) => ({ name, times: slots.filter((s) => s.dow === i + 1) }))
     .filter((d) => d.times.length > 0)
   return (
     <div className="pt-4 mt-2 border-t border-un1t-border space-y-4">
+      {pageOnly && (
+        <p className="text-[11px] text-un1t-muted">Each studio&apos;s typed-in timetable, first bookable date and minimum notice are on its row below. The confirmation email is the same for every studio.</p>
+      )}
+      {!pageOnly && (<>
       <div>
         <p className="text-sm font-medium text-un1t-text">Typed-in timetable (studio without Glofox)</p>
         <p className="text-[11px] text-un1t-muted mt-1">
@@ -1132,6 +1205,7 @@ function ManualTimetableFields({ block, onUpdate, publicPath }) {
           placeholder={String(DEFAULT_MIN_NOTICE_HOURS)}
         />
       </Field>
+      </>)}
       {/* MANUALCONFIRM.1 — the email the customer gets when staff approve. */}
       <Field label="Confirmation email subject" hint="Sent when staff approve a request. You can use {first_name}, {class_name}, {class_time}, {studio_name} and {address}. Blank keeps the default.">
         <Input value={block.confirm_email_subject || ''} onChange={(v) => onUpdate({ confirm_email_subject: v })} maxLength={150} placeholder={DEFAULT_MANUAL_CONFIRM_EMAIL.subject} />
@@ -1248,7 +1322,9 @@ export function OfferBlockNotice({ block }) {
   )
 }
 
-export function CorpPromoEdit({ block, onUpdate }) {
+// PAGES.1 — `pageOnly` (page mode): the page half only; the promo key is the
+// studio row's (StudioOfferRow), and there is no legacy notice.
+export function CorpPromoEdit({ block, onUpdate, pageOnly = false }) {
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
     const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
@@ -1257,10 +1333,12 @@ export function CorpPromoEdit({ block, onUpdate }) {
   }
   return (
     <>
-      <OfferBlockNotice block={block} />
+      {!pageOnly && <OfferBlockNotice block={block} />}
+      {!pageOnly && (
       <Field label="Promo" hint="Blank applies these words to every /corp promo at this studio. The credits and their expiry are fixed per promo.">
         <Input value={block.promo_key || ''} onChange={(v) => onUpdate({ promo_key: v.trim() })} maxLength={60} placeholder="hatch-3-free" />
       </Field>
+      )}
       {CORP_PROMO_TEXTS.slice(0, 4).map(([key, label, max, rows]) => (
         <Field key={key} label={label}>
           {rows > 1
@@ -1284,14 +1362,18 @@ export function CorpPromoEdit({ block, onUpdate }) {
   )
 }
 
-export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource }) {
+// PAGES.1 — `pageOnly` (page mode): the page half only. The plan or product,
+// price, length, product name and picker label are the studio rows'
+// (StudioOfferRow); `membershipSource` then only says whether to show the
+// un1t.online copy fields.
+export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource, pageOnly = false }) {
   const isUn1tOnline = membershipSource === 'un1t_online'
   const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
   useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [memberships, setMemberships] = useState([])
   const [membershipsLoading, setMembershipsLoading] = useState(false)
   useEffect(() => {
-    if (!locationId || isUn1tOnline) return
+    if (!locationId || isUn1tOnline || pageOnly) return
     let alive = true
     setMembershipsLoading(true)
     fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
@@ -1300,13 +1382,13 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
       .catch(() => {})
       .finally(() => { if (alive) setMembershipsLoading(false) })
     return () => { alive = false }
-  }, [locationId, isUn1tOnline])
+  }, [locationId, isUn1tOnline, pageOnly])
   // A un1t.online studio sells one of its mirrored paid products (the GET
   // answers `paid_products`; the text input stays until it arrives).
   const [paidProducts, setPaidProducts] = useState([])
   const [paidProductsLoading, setPaidProductsLoading] = useState(false)
   useEffect(() => {
-    if (!locationId || !isUn1tOnline) return
+    if (!locationId || !isUn1tOnline || pageOnly) return
     let alive = true
     setPaidProductsLoading(true)
     fetch(`/api/locations/${locationId}/un1t-online`, { cache: 'no-store' })
@@ -1315,7 +1397,7 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
       .catch(() => {})
       .finally(() => { if (alive) setPaidProductsLoading(false) })
     return () => { alive = false }
-  }, [locationId, isUn1tOnline])
+  }, [locationId, isUn1tOnline, pageOnly])
   const productId = block.un1t_product_id || ''
   const productKnown = paidProducts.some((p) => p.un1t_id === productId)
   const planKey = (block.membership_id && block.plan_code) ? `${block.membership_id}:${block.plan_code}` : ''
@@ -1332,10 +1414,12 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
   }
   return (
     <>
-      <OfferBlockNotice block={block} />
+      {!pageOnly && <OfferBlockNotice block={block} />}
+      {!pageOnly && (
       <Field label="Studio label on /trial" hint="The name on this studio's choice card. Blank shows the studio's own name.">
         <Input value={block.studio_label || ''} onChange={(v) => onUpdate({ studio_label: v })} maxLength={60} />
       </Field>
+      )}
       <Field label="Eyebrow" hint="Small line above the heading on the price panel.">
         <Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={60} placeholder="14 day reset" />
       </Field>
@@ -1350,10 +1434,12 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
       <Field label="Sub-copy">
         <Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} />
       </Field>
+      {!pageOnly && (
       <Field label="Product name" hint="On the checkout line, the receipt and the confirmation email.">
         <Input value={block.product_name || ''} onChange={(v) => onUpdate({ product_name: v })} maxLength={80} placeholder="The 14 Day Reset" />
       </Field>
-      {!isUn1tOnline && (
+      )}
+      {!isUn1tOnline && !pageOnly && (
         <Field label="Price (€)" hint="What the buyer pays, taken by the studio's payment rail. Glofox never charges for this product.">
           <Input
             value={priceDraft}
@@ -1363,9 +1449,11 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
           />
         </Field>
       )}
+      {!pageOnly && (
       <Field label="Trial length (days)">
         <Input value={String(block.duration_days ?? 14)} onChange={(v) => { const n = parseInt(v, 10); if (Number.isFinite(n)) onUpdate({ duration_days: n }) }} maxLength={3} placeholder="14" />
       </Field>
+      )}
       <Field label="What's included" hint="Three ticks on the price panel. Blank lines are skipped.">
         <div className="space-y-2">
           <Input value={ticks[0] || ''} onChange={(v) => setTick(0, v)} maxLength={120} placeholder="Unlimited classes for 14 days" />
@@ -1390,7 +1478,7 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
           <Textarea value={block.pending_body || ''} onChange={(v) => onUpdate({ pending_body: v })} maxLength={400} rows={2} />
         </Field>
       )}
-      {!isUn1tOnline && (
+      {!isUn1tOnline && !pageOnly && (
         <Field
           label="Glofox product granted after payment"
           hint="REQUIRED. A €0 plan in Glofox for this trial (the money is taken here, not by Glofox). Until both ids are set the page sells nothing."
@@ -1416,7 +1504,7 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
           )}
         </Field>
       )}
-      {isUn1tOnline && (
+      {isUn1tOnline && !pageOnly && (
         <Field
           label="un1t.online product"
           hint="The product in un1t.online. The price shown on /trial is the product's live price."
@@ -1485,7 +1573,9 @@ export function PaidTrialEdit({ block, onUpdate, locationId, membershipSource })
   )
 }
 
-function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath }) {
+// PAGES.1 — `pageOnly` (page mode): the page half only. The trial plan, price,
+// consult and typed timetable are the studio rows' (StudioOfferRow).
+export function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, publicPath, pageOnly = false }) {
   const bts = availableBookingTypes || []
   // Price is edited as a raw euros string (draft) and only coerced to integer
   // cents on write — a fully-controlled input re-derived from cents each
@@ -1496,7 +1586,7 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
   const [memberships, setMemberships] = useState([])
   const [membershipsLoading, setMembershipsLoading] = useState(false)
   useEffect(() => {
-    if (!locationId) return
+    if (!locationId || pageOnly) return
     let alive = true
     setMembershipsLoading(true)
     fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
@@ -1505,7 +1595,7 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
       .catch(() => {})
       .finally(() => { if (alive) setMembershipsLoading(false) })
     return () => { alive = false }
-  }, [locationId])
+  }, [locationId, pageOnly])
   const trialKey = (block.trial_membership_id && block.trial_plan_code)
     ? `${block.trial_membership_id}:${block.trial_plan_code}` : ''
   const setTrial = (value) => {
@@ -1540,7 +1630,8 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
         <Input value={block.cta_label || ''} onChange={(v) => onUpdate({ cta_label: v })} maxLength={40} placeholder={DEFAULT_CLASS_FUNNEL_CTA_LABEL} />
       </Field>
       <Un1tFunnelCopyFields block={block} onUpdate={onUpdate} />
-      <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} />
+      <ManualTimetableFields block={block} onUpdate={onUpdate} publicPath={publicPath} pageOnly={pageOnly} />
+      {!pageOnly && (<>
       <Field
         label="Trial product granted on booking"
         hint="Which Glofox membership/plan a NEW member gets on booking. Leave on the location default unless this funnel should grant a different intro offer."
@@ -1603,7 +1694,8 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
           <Input value={block.consult_slug || ''} onChange={(v) => onUpdate({ consult_slug: v })} maxLength={200} placeholder="free-un1t-consultation" />
         )}
       </Field>
-      {block.consult_slug && (
+      </>)}
+      {(block.consult_slug || pageOnly) && (
         <>
           <Field label="Consult booked — title">
             <Input value={block.consult_done_title || ''} onChange={(v) => onUpdate({ consult_done_title: v })} maxLength={120} placeholder="You're booked 🎉" />
@@ -1622,18 +1714,21 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId, p
 // set, and never falls back to the studio's default trial (the generic one).
 // Exported for its test (CampaignFunnelEdit.test.jsx).
 const SECTION_LABELS = { stats: 'Numbers (stats)', video_testimonials: 'Member videos', reviews: 'Google reviews' }
-export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, uploading, uploadErr, progress }) {
+// PAGES.1 — `pageOnly` (page mode): the page half only. No campaign key (the
+// page's slug replaces it), no section ticks (the page's own blocks are its
+// sections), and the trial plan, keywords and tracking are the studio rows'.
+export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, uploading, uploadErr, progress, pageOnly = false }) {
   const k = (suffix) => `${block.id}-${suffix}`
   const [memberships, setMemberships] = useState([])
   useEffect(() => {
-    if (!locationId) return
+    if (!locationId || pageOnly) return
     let alive = true
     fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
       .then((r) => r.ok ? r.json() : null)
       .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
       .catch(() => {})
     return () => { alive = false }
-  }, [locationId])
+  }, [locationId, pageOnly])
   const planKey = (block.trial_membership_id && block.trial_plan_code) ? `${block.trial_membership_id}:${block.trial_plan_code}` : ''
   const setPlan = (value) => {
     const [mid, pc] = value ? value.split(':') : ['', '']
@@ -1669,6 +1764,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
   const selectCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   return (
     <>
+      {!pageOnly && (<>
       <OfferBlockNotice block={block} />
       <Field label="Page" hint="The page this block drives. Fixed per campaign.">
         <input value={block.campaign || ''} readOnly aria-label="Campaign key" className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-muted" />
@@ -1682,6 +1778,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
       <Field label="Classes offered (keywords)" hint="One per line. A class is offered only when its name contains any of them (case does not matter). Empty offers nothing.">
         <Textarea value={block.class_keywords || ''} onChange={(v) => onUpdate({ class_keywords: v })} maxLength={400} rows={2} placeholder="50+" />
       </Field>
+      </>)}
       <Field label="Coach video" hint="MP4 / WebM, up to 50MB. Starts muted on loop with a Tap for sound button, so burn the captions in. Tip: 720p, 20 to 40 seconds.">
         <MediaSlot
           url={block.video_url || ''}
@@ -1721,7 +1818,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
       <Field label="Booked — title"><Input value={block.done_title || ''} onChange={(v) => onUpdate({ done_title: v })} maxLength={120} placeholder={D.done_title} /></Field>
       <Field label="Booked — message"><Textarea value={block.done_body || ''} onChange={(v) => onUpdate({ done_body: v })} maxLength={400} rows={2} placeholder={D.done_body} /></Field>
       <Field label="No classes — message" hint="Shown when no class is open to book in the next two weeks."><Textarea value={block.no_classes_text || ''} onChange={(v) => onUpdate({ no_classes_text: v })} maxLength={400} rows={2} placeholder={D.no_classes_text} /></Field>
-      <Field label="Not configured — message" hint="Shown while no trial plan is set above."><Textarea value={block.not_configured_text || ''} onChange={(v) => onUpdate({ not_configured_text: v })} maxLength={400} rows={2} placeholder={D.not_configured_text} /></Field>
+      <Field label="Not configured — message" hint={pageOnly ? 'Shown at a studio with no trial plan set on its row.' : 'Shown while no trial plan is set above.'}><Textarea value={block.not_configured_text || ''} onChange={(v) => onUpdate({ not_configured_text: v })} maxLength={400} rows={2} placeholder={D.not_configured_text} /></Field>
       <Field label="Timetable unavailable — message"><Textarea value={block.timetable_unavailable_text || ''} onChange={(v) => onUpdate({ timetable_unavailable_text: v })} maxLength={400} rows={2} placeholder={D.timetable_unavailable_text} /></Field>
       <Field label="What to expect — eyebrow"><Input value={block.expect_eyebrow || ''} onChange={(v) => onUpdate({ expect_eyebrow: v })} maxLength={80} placeholder={D.expect_eyebrow} /></Field>
       <Field label="What to expect — heading"><Input value={block.expect_heading || ''} onChange={(v) => onUpdate({ expect_heading: v })} maxLength={200} placeholder={D.expect_heading} /></Field>
@@ -1735,6 +1832,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
           ))}
         </div>
       </Field>
+      {!pageOnly && (<>
       <Field label="Sections under the hero" hint="This page's own sections, shown in the light look.">
         <div className="space-y-1.5">
           {CAMPAIGN_FUNNEL_SECTIONS.map((name) => (
@@ -1752,6 +1850,7 @@ export function CampaignFunnelEdit({ block, onUpdate, locationId, uploadMedia, u
           <Input value={block.event_source_url || ''} onChange={(v) => onUpdate({ event_source_url: v })} maxLength={300} placeholder={`https://www.un1tdublin.com/${block.campaign || ''}`} />
         </div>
       </Field>
+      </>)}
     </>
   )
 }
@@ -2059,42 +2158,6 @@ function ReviewsEdit({ block, onUpdate }) {
 // ─────────────────────────────────────────────────────────────
 // Helpers — input primitives + uniform media-upload tile
 // ─────────────────────────────────────────────────────────────
-
-function Field({ label, hint, children }) {
-  return (
-    <div>
-      <label className="block text-sm text-un1t-subtle mb-1">{label}</label>
-      {children}
-      {hint && <p className="text-[11px] text-un1t-muted mt-1">{hint}</p>}
-    </div>
-  )
-}
-
-function Input({ value, onChange, maxLength, placeholder }) {
-  return (
-    <input
-      type="text"
-      value={value || ''}
-      onChange={(e) => onChange(e.target.value)}
-      maxLength={maxLength}
-      placeholder={placeholder}
-      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-    />
-  )
-}
-
-function Textarea({ value, onChange, maxLength, rows, placeholder }) {
-  return (
-    <textarea
-      value={value || ''}
-      onChange={(e) => onChange(e.target.value)}
-      maxLength={maxLength}
-      rows={rows || 2}
-      placeholder={placeholder}
-      className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text resize-y"
-    />
-  )
-}
 
 function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, kind, progress }) {
   return (

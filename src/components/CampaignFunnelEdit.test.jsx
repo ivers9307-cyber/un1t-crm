@@ -60,6 +60,26 @@ describe('CampaignFunnelEdit', () => {
   })
 })
 
+describe('CampaignFunnelEdit pageOnly (PAGES.1 page mode)', () => {
+  it('no longer shows Page, Sections shown or the duplicate warning', () => {
+    render(<CampaignFunnelEdit pageOnly block={newBlockOfType('campaign_funnel')} onUpdate={vi.fn()} locationId="loc-s" uploadMedia={vi.fn()} uploading={{}} uploadErr={{}} progress={{}} />)
+    expect(screen.queryByText('Page')).toBeNull()
+    expect(screen.queryByLabelText('Campaign key')).toBeNull()
+    expect(screen.queryByText('Sections under the hero')).toBeNull()
+    expect(screen.queryByLabelText('Numbers (stats)')).toBeNull()
+    expect(screen.queryByText(/already has a campaign funnel/)).toBeNull()
+    expect(screen.queryByRole('note')).toBeNull()
+    // The studio half lives on the studio rows.
+    expect(screen.queryByRole('combobox', { name: 'Glofox trial plan' })).toBeNull()
+    expect(screen.queryByDisplayValue('50+')).toBeNull()
+    expect(screen.queryByText('Tracking (advanced)')).toBeNull()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+    // The words and the media stay.
+    expect(screen.getByText('Heading')).toBeTruthy()
+    expect(screen.getByText('Add video')).toBeTruthy()
+  })
+})
+
 describe('campaignFunnelAddRefusal', () => {
   it('refuses a second campaign_funnel with the same key, allows anything else', () => {
     const existing = [{ type: 'campaign_funnel', campaign: '50plus' }, { type: 'stats' }]
