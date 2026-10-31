@@ -244,11 +244,13 @@ describe('resolveTagFilters — integration with real Supabase client', () => {
     })
     await out.query
     const url = lastContactsUrl()
-    // Positive narrows to {c1,c2,c3}, then NOT IN excludes c2.
-    // The IN clause is applied first.
+    // AUDIENCEIDS.1 — positive narrows to {c1,c2,c3} and the exclusion is
+    // subtracted BEFORE the predicate is built, so ONE `id=in.(c1,c3)` reaches
+    // the URL and no NOT IN: the same rows, half the URL.
     expect(url).toMatch(/id=in\.\(/)
-    expect(url).toMatch(/id=not\.in\.\(/)
-    expect(url).toMatch(/c2/) // appears in both clauses; PostgREST's
-                              // not.in.(c2) is the actual exclusion.
+    expect(url).not.toMatch(/id=not\.in\.\(/)
+    expect(url).toMatch(/c1/)
+    expect(url).toMatch(/c3/)
+    expect(url).not.toMatch(/c2/)
   })
 })
