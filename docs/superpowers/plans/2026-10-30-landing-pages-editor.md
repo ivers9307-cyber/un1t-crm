@@ -562,7 +562,7 @@ git commit -am "PAGES.1 — confirmation copy reads the page a request came from
 **Interfaces:**
 - `node scripts/diff-public-pages.mjs --before https://crm.un1tdublin.com --after http://localhost:3000 /trial /50plus /corp "/trial?studio=hatch" "/start?utm_campaign=x" /free-class` prints, per URL, the final status and location, and a diff of visible text (tags stripped, whitespace folded) and of every `src`, `poster`, `href` attribute. Exit 1 on any difference other than the `?edit`-only attributes.
 
-- [ ] **Step 1: Write the script** (no test; it is the verification). 
+- [x] **Step 1: Write the script** (pure helpers unit-tested in `tests/diff-public-pages.test.js`, 9 tests; CLI smoke-run against local stub servers only). Step 2 is the controller's Task 11 run.
 - [ ] **Step 2: Run it** with `npm run dev` on the branch against prod (read-only GETs).
 Expected: zero text and media differences on `/trial`, `/50plus`, `/corp`; `/start` and `/free-class` 307 to the same target with the query kept. Paste the summary into the PR description.
 - [ ] **Step 3: Commit**
