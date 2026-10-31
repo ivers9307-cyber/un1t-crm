@@ -22,6 +22,19 @@
 // Adding a new block type: register in src/lib/landing-page-blocks.js,
 // add a case to BlockEditPanel below, and add a renderer to
 // src/app/welcome/page.js. Three-file change.
+//
+// PAGES.1 — two modes, chosen by the `page` prop (pageMode):
+//   - legacy (no `page`): a studio's landing_page_settings row, props
+//     locationId / initialSettings / publicPath / membershipSource; Save =
+//     PUT /api/landing-page-settings; preview /welcome/<path>?edit=1. The
+//     studio pages still render from that table until PR3.
+//   - page (`page`, `studios`, `canEdit`): a landing_pages row edited at
+//     /settings/landing-page/<id>. Blocks and the logo / Instagram fields seed
+//     from page.blocks and page.chrome; Save = PUT /api/landing-pages/<id>
+//     { title, blocks, chrome } (the stored chrome with the form's fields over
+//     it, never was_live); preview /<slug>?edit=1; PageHeaderCard above the
+//     form holds the title, path, status and (studio page) terms copy. With
+//     canEdit false every control is disabled and there is no Save.
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { uploadLandingMedia, captureVideoPoster } from '@/lib/landing-media-upload'
@@ -50,6 +63,7 @@ import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
+import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -59,17 +73,38 @@ const MESSAGE_NAMESPACE = 'lp-editor'
 // W1.S1b — `brand` is the studio's resolved brand ({ companyName, shortName },
 // getLocationBranding on the server page): new blocks' consent defaults, the
 // logo hints and the embed snippet's title name it, never a literal gym.
-export default function LandingPageSettingsForm({ locationId, membershipSource = null, initialSettings, availableBookingTypes, publicPath = null, availableEvents = [], brand = null }) {
+export default function LandingPageSettingsForm({
+  locationId: legacyLocationId, membershipSource: legacyMembershipSource = null, initialSettings,
+  availableBookingTypes, publicPath: legacyPublicPath = null, availableEvents = [], brand = null,
+  page = null, studios = [], canEdit = true,
+}) {
+  // PAGES.1 — page mode (see the header). currentPage follows every answer
+  // the API returns (save, rename, publish) so the slug and chrome stay fresh.
+  const pageMode = Boolean(page)
+  const [currentPage, setCurrentPage] = useState(page)
+  const [title, setTitle] = useState(page?.title || '')
+  const [terms, setTerms] = useState(() => ({ ...(page?.chrome?.un1t_terms || {}) }))
+  const readOnly = pageMode && !canEdit
+  const showPreview = !pageMode || page.kind !== 'studio'
+  const locationId = pageMode ? page.primary_location_id || null : legacyLocationId
+  const membershipSource = pageMode
+    ? studios.find((s) => s.location_id === page.primary_location_id)?.membership_source || null
+    : legacyMembershipSource
+  const publicPath = pageMode ? null : legacyPublicPath
+  const pageId = pageMode ? currentPage.id : null
+  const seed = pageMode ? (page.chrome || {}) : initialSettings
+
   const brandName = (brand?.companyName || '').trim()
   const wordmarkText = (brand?.shortName || '').trim() || brandName
   // LP multi-page: the preview iframe + "View live" links point at the
   // SELECTED studio's public page when known (public_path from mig 227),
   // falling back to the generic /welcome for a single-studio install.
-  const previewSrc = publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
-  const liveUrl = publicPath ? `/${publicPath}` : '/welcome'
+  // A page row previews at its own slug (Task 17 adds &studio=<path>).
+  const previewSrc = pageMode ? `/${currentPage.slug}?edit=1` : publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
+  const liveUrl = pageMode ? `/${currentPage.slug}` : publicPath ? `/${publicPath}` : '/welcome'
   // Seed from saved blocks; if none, blocksOrDefault returns the
   // starter set so the form is never blank on first open.
-  const [blocks, setBlocks] = useState(() => blocksOrDefault(initialSettings?.blocks))
+  const [blocks, setBlocks] = useState(() => blocksOrDefault(pageMode ? page.blocks : initialSettings?.blocks))
   const [expanded, setExpanded] = useState(() => new Set(blocks.map((b) => b.id)))
   const [activeDragId, setActiveDragId] = useState(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -82,13 +117,13 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
   // Width stored as string so the operator can clear/edit the
   // input mid-typing without it snapping to a default; coerced
   // on save (same pattern Staff required + Booking type forms use).
-  const [logoUrl,     setLogoUrl]     = useState(initialSettings?.logo_url || '')
-  const [logoAlt,     setLogoAlt]     = useState(initialSettings?.logo_alt || '')
-  const [logoWidthPx, setLogoWidthPx] = useState(String(initialSettings?.logo_width_px || ''))
+  const [logoUrl,     setLogoUrl]     = useState(seed?.logo_url || '')
+  const [logoAlt,     setLogoAlt]     = useState(seed?.logo_alt || '')
+  const [logoWidthPx, setLogoWidthPx] = useState(String(seed?.logo_width_px || ''))
 
   // EVENTS-IG.1 (mig 382) — flat column outside the blocks list, like the logo.
   // Absent → default ON; only an explicit false hides the events-page IG strip.
-  const [showInstagramFeed, setShowInstagramFeed] = useState(initialSettings?.show_instagram_feed !== false)
+  const [showInstagramFeed, setShowInstagramFeed] = useState(seed?.show_instagram_feed !== false)
 
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
@@ -136,8 +171,10 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
       // (EditableImage / HeroMediaTools call /api/landing-page-
       // settings/media which validates location ownership).
       locationId,
+      // PAGES.1 — a page row's id, for its uploads (Task 18).
+      ...(pageId ? { pageId } : {}),
     }
-  }, [blocks, logoUrl, logoAlt, logoWidthPx, locationId])
+  }, [blocks, logoUrl, logoAlt, logoWidthPx, locationId, pageId])
 
   // Push state to the iframe whenever it changes. The iframe also
   // sends a 'ready' message on mount which we respond to immediately
@@ -155,6 +192,8 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
       if (event.origin !== window.location.origin) return
       const msg = event.data
       if (!msg || typeof msg !== 'object' || msg.namespace !== MESSAGE_NAMESPACE) return
+      // PAGES.1 — read-only: the preview may be clicked, never edited.
+      if (readOnly && msg.type !== 'ready' && msg.type !== 'block-clicked') return
       if (msg.type === 'ready') {
         // Send initial state right away.
         const win = iframeRef.current?.contentWindow
@@ -240,7 +279,7 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [buildState, brandName])
+  }, [buildState, brandName, readOnly])
 
   // ── Block ops ─────────────────────────────────────────────
   function updateBlock(id, patch) {
@@ -311,6 +350,7 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
   // ── Save ──────────────────────────────────────────────────
   async function handleSave(e) {
     e?.preventDefault?.()
+    if (readOnly) return
     setError(null)
     setSaving(true)
     try {
@@ -322,21 +362,14 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
       if (Number.isFinite(parsed)) {
         widthPxOrNull = Math.min(600, Math.max(40, parsed))
       }
-      const payload = {
-        location_id: locationId,
-        blocks,
+      const chromeFields = {
         logo_url:      logoUrl.trim() || null,
         logo_alt:      logoAlt.trim() || null,
         logo_width_px: widthPxOrNull,
         show_instagram_feed: showInstagramFeed,
       }
-      const r = await fetch('/api/landing-page-settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const j = await r.json()
-      if (!r.ok || j.success === false) throw new Error(j.error || `Save failed (${r.status})`)
+      if (pageMode) await savePage(chromeFields)
+      else await saveLegacy(chromeFields)
       setSavedAt(new Date())
     } catch (err) {
       setError(err.message || 'Save failed')
@@ -345,12 +378,41 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
     }
   }
 
-  return (
+  // Legacy mode: the studio's landing_page_settings row.
+  async function saveLegacy(chromeFields) {
+    const r = await fetch('/api/landing-page-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: locationId, blocks, ...chromeFields }),
+    })
+    const j = await r.json()
+    if (!r.ok || j.success === false) throw new Error(j.error || `Save failed (${r.status})`)
+  }
+
+  // PAGES.1 page mode: the landing_pages row. The stored chrome goes back
+  // with the form's fields over it (was_live is the server's, never sent).
+  async function savePage(chromeFields) {
+    const trimmedTitle = title.trim()
+    if (!trimmedTitle) throw new Error('Give the page a title.')
+    const chrome = { ...storedChrome(currentPage.chrome), ...chromeFields }
+    if (currentPage.kind === 'studio') chrome.un1t_terms = termsForSave(terms)
+    const r = await fetch(`/api/landing-pages/${currentPage.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: trimmedTitle, blocks, chrome }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok || j.success === false) throw new Error(PAGE_SAVE_MESSAGES[j.error] || j.error || `Save failed (${r.status})`)
+    if (j.data) setCurrentPage(j.data)
+  }
+
+  const formEl = (
     <form onSubmit={handleSave} className="xl:grid xl:grid-cols-[minmax(0,520px)_minmax(0,1fr)] xl:gap-6 xl:items-start">
       {/* Left pane — block editor (the original form). On <xl
           screens this is the entire form; on xl+ it sits beside
           the live preview iframe. */}
-      <div className="space-y-4 xl:max-h-[calc(100vh-160px)] xl:overflow-y-auto xl:pr-2">
+      {/* PAGES.1 — a fieldset so read-only disables every control at once. */}
+      <fieldset disabled={readOnly} className="min-w-0 space-y-4 xl:max-h-[calc(100vh-160px)] xl:overflow-y-auto xl:pr-2">
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 inline-flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {error}
@@ -539,6 +601,7 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
         >
           <ExternalLink size={12} /> Preview
         </a>
+        {!readOnly && (
         <button
           type="submit"
           disabled={saving}
@@ -547,14 +610,23 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
           {saving ? 'Saving…' : 'Save changes'}
         </button>
+        )}
       </div>
-      </div>
+      </fieldset>
       {/* ── Right pane — live preview iframe (xl+ screens only) ─
           Loads /welcome?edit=1, which mounts EditModeOverlay and
           re-renders from the postMessage state we push from
           buildState() above. Click any block in the iframe →
           its edit panel auto-expands + scrolls into view in the
           left pane. */}
+      {/* PAGES.1 — a studio page row renders from the legacy table until
+          PR3, so its preview would show other content: a note instead. */}
+      {!showPreview && (
+        <aside className="hidden xl:block xl:sticky xl:top-4 border border-un1t-border rounded-lg bg-un1t-surface p-4 text-sm text-un1t-subtle">
+          The preview shows here once studio pages move to this editor.
+        </aside>
+      )}
+      {showPreview && (
       <aside className="hidden xl:block xl:sticky xl:top-4">
         <div className="border border-un1t-border rounded-lg overflow-hidden bg-un1t-bg">
           <div className="flex items-center justify-between px-3 py-2 bg-un1t-surface border-b border-un1t-border text-[11px] text-un1t-subtle">
@@ -580,9 +652,53 @@ export default function LandingPageSettingsForm({ locationId, membershipSource =
           />
         </div>
       </aside>
+      )}
     </form>
   )
+
+  if (!pageMode) return formEl
+  return (
+    <div className="space-y-4">
+      <PageHeaderCard
+        page={currentPage} studios={studios} canEdit={canEdit}
+        title={title} onTitleChange={setTitle} onPageChange={setCurrentPage}
+        terms={terms} onTermsChange={setTerms}
+      />
+      {formEl}
+    </div>
+  )
 }
+
+// PAGES.1 — the chrome keys a page's PUT accepts (landingPageChromeSchema),
+// less was_live: the stored chrome is sent back through this so a key the
+// schema does not know never fails the save.
+const PAGE_CHROME_KEYS = [
+  'logo_url', 'logo_alt', 'logo_width_px', 'tone', 'noindex', 'meta_title', 'meta_description',
+  'show_instagram_feed', 'chooser_label', 'chooser_cta_text', 'chooser_image_url', 'un1t_terms',
+]
+function storedChrome(chrome) {
+  const out = {}
+  for (const key of PAGE_CHROME_KEYS) if (chrome && chrome[key] !== undefined) out[key] = chrome[key]
+  return out
+}
+// A studio page's un1t.online terms copy: each field trimmed, blank = null
+// (the funnel then uses DEFAULT_FUNNEL_TERMS_COPY).
+function termsForSave(terms) {
+  const out = {}
+  for (const key of Object.keys(DEFAULT_FUNNEL_TERMS_COPY)) {
+    const v = typeof terms?.[key] === 'string' ? terms[key].trim() : ''
+    out[key] = v || null
+  }
+  return out
+}
+const PAGE_SAVE_MESSAGES = Object.freeze({
+  offer_block_required: 'The offer section must stay first on this page.',
+  studio_page: 'A studio page keeps its studio\'s address.',
+  reserved: 'That path is reserved.',
+  taken: 'That path is already taken.',
+  invalid: 'Use letters, numbers and dashes only, 2 to 40 characters.',
+  unavailable: 'The page could not be reached. Try again in a minute.',
+})
 
 // ─────────────────────────────────────────────────────────────
 // SortableBlockCard — wraps each block with drag handle, header
