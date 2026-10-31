@@ -21,6 +21,7 @@ import { bodyVariableSlots, renderSentTemplateBody } from '@shared/wa-template-s
 import { sendPushToRolesAtLocation } from './push'
 import { MANAGER_ROLES } from './schemas'
 import { splitMessageText, WHATSAPP_TEXT_LIMIT } from './message-split.js'
+import { DISPATCHED_STATUSES, countBroadcastSendCounters, broadcastCountersPatch, countOpenClaims } from './whatsapp-broadcast-counters.js'
 
 // WA-MULTI.1 — config is per-location. The resolution helper lives in
 // whatsapp-config.js; the META_API_URL + version constants are
@@ -786,10 +787,10 @@ export async function computeWhatsAppReachabilitySummary(db, filter, locationId)
 }
 
 // Recipient statuses that mean the message successfully left our system and was
-// accepted by Meta. A message moves sent -> delivered -> read via status
-// webhooks, so the cumulative "sent" tally must count all three — counting only
-// 'sent' makes the number SHRINK as delivery receipts arrive.
-export const DISPATCHED_STATUSES = ['sent', 'delivered', 'read']
+// accepted by Meta. Defined with the counter rule in whatsapp-broadcast-counters.js
+// (WABLASTCOUNTERS.1) and re-exported here for the readers that import it from
+// this module.
+export { DISPATCHED_STATUSES }
 
 // True when a send failure means the recipient is not a reachable WhatsApp
 // account (permanent) — vs a transient/policy failure (rate limit, 24h
@@ -1145,6 +1146,58 @@ function isUniqueViolation(error) {
   return /duplicate key value|already exists/i.test(error.message || '')
 }
 
+/**
+ * CLAIM one BLAST recipient before the template goes out — the blast's half of
+ * the lease claimDripRecipient describes (WABLASTCOUNTERS.1).
+ *
+ * The blast claimed with a bare INSERT: the unique (broadcast_id, contact_id)
+ * key (mig 331) is the per-recipient mutex, and a conflict meant "someone
+ * holds it, skip". That is right for every status but one. A pass killed
+ * between the claim and the send (the 2026-10-31 Vercel 504, 308 sends in)
+ * leaves a 'pending' row with nothing sent; fetchDripDoneContactIds re-opens
+ * it after STUCK_CLAIM_MINUTES, so the resume re-selected the contact, and
+ * then the INSERT hit the key and skipped it — for ever, silently, on every
+ * resume. The drip has re-claimed such a row since BAREWRITE.5; the blast now
+ * shares the rule, and the trade is the same one: a bounded duplicate (the
+ * send reached Meta but the promote write did not) over a certain silent loss.
+ *
+ * What a blast does NOT re-claim, deliberately: a 'capped' row (Meta 131049).
+ * WA-QUALITY.4 says a blast attempts a frequency-capped recipient at most once
+ * — the park is the record, there is no blast retry machinery — so a capped
+ * row that fetchDripDoneContactIds re-opens after CAPPED_RETRY_HOURS still
+ * answers already_claimed here. Only the drip retries capped.
+ *
+ * @returns {Promise<{claimed: boolean, reason?: 'already_claimed'|string, reclaimed?: boolean}>}
+ */
+export async function claimBlastRecipient(db, broadcastId, contactId, now = Date.now()) {
+  const nowIso = new Date(now).toISOString()
+  const { error: insertErr } = await db.from('whatsapp_broadcast_recipients').insert({
+    broadcast_id: broadcastId,
+    contact_id: contactId,
+    status: 'pending',
+    // The lease stamp — written, not defaulted, so the lease is measured from
+    // the value this claim wrote (as the drip's claim does).
+    created_at: nowIso,
+  })
+  if (!insertErr) return { claimed: true }
+  if (!isUniqueViolation(insertErr)) return { claimed: false, reason: insertErr.message }
+
+  // An abandoned claim whose lease has run out. The CAS on status + created_at
+  // is exclusive: a second pass arriving after this one re-stamped no longer
+  // matches `created_at < cutoff`.
+  const staleBefore = new Date(now - STUCK_CLAIM_MINUTES * 60 * 1000).toISOString()
+  const { data: reclaimed, error: reclaimErr } = await db.from('whatsapp_broadcast_recipients')
+    .update({ status: 'pending', error_message: null, failed_at: null, created_at: nowIso })
+    .eq('broadcast_id', broadcastId)
+    .eq('contact_id', contactId)
+    .eq('status', 'pending')
+    .lt('created_at', staleBefore)
+    .select('id')
+  if (reclaimErr) return { claimed: false, reason: reclaimErr.message }
+  if (!Array.isArray(reclaimed) || reclaimed.length === 0) return { claimed: false, reason: 'already_claimed' }
+  return { claimed: true, reclaimed: true }
+}
+
 // AGENT-TAKEOVER — should Mia be paused on each recipient's thread for this
 // send? True when the operator is personally managing the replies: an
 // INDIVIDUAL targeted send (audience of 1 — a 1:1 message that just happens to
@@ -1402,17 +1455,23 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   const pauseAgent = shouldPauseAgentForBroadcast(broadcast, contacts.length)
 
   for (const contact of batch) {
-    // Claim-first: insert the recipient row (status 'pending') BEFORE the
+    // Claim-first: the recipient row (status 'pending') goes in BEFORE the
     // Meta send. The unique (broadcast_id, contact_id) constraint (mig 331)
     // makes this the per-recipient mutex — a concurrent pass that already
     // claimed this contact fails the insert and we skip, so the template
     // goes out exactly once even though doneIds was read before the race.
-    const { error: claimErr } = await db.from('whatsapp_broadcast_recipients').insert({
-      broadcast_id: broadcastId,
-      contact_id: contact.id,
-      status: 'pending',
-    })
-    if (claimErr) continue
+    // Since WABLASTCOUNTERS.1 the claim is a lease: a 'pending' row a killed
+    // pass abandoned more than STUCK_CLAIM_MINUTES ago is re-claimed and sent
+    // (see claimBlastRecipient for the trade; it used to be skipped for ever).
+    const claim = await claimBlastRecipient(db, broadcastId, contact.id)
+    if (!claim.claimed) {
+      // A DB error on the claim used to be swallowed with the conflicts: the
+      // contact was neither attempted nor recorded, and nothing said so.
+      if (claim.reason !== 'already_claimed') {
+        console.error(`[broadcast ${broadcastId}] could not claim recipient ${contact.id} — skipped rather than sent unrecorded:`, claim.reason)
+      }
+      continue
+    }
 
     try {
       // Build template components with variable substitution
@@ -1455,6 +1514,16 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
       sentCount++
       sentContactIds.push(contact.id)
       consecutiveFailures = 0
+
+      // Rate limiting — Meta allows ~80 messages/second for verified
+      // businesses; be conservative with a small pause every 50 sends. It
+      // ran at the bottom of the loop until WABLASTCOUNTERS.1, so while
+      // sentCount sat at 0 (or on exactly 50, 100, …) EVERY failure paid the
+      // second too: a run of refusals cost a second each toward the route's
+      // time limit without a single send to pace.
+      if (sentCount % 50 === 0) {
+        await new Promise(r => setTimeout(r, 1000))
+      }
     } catch (err) {
       console.error(`Failed to send to ${contact.wa_phone}:`, err.message)
 
@@ -1488,12 +1557,6 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
         break
       }
     }
-
-    // Rate limiting — Meta allows ~80 messages/second for verified businesses
-    // Be conservative with a small delay
-    if (sentCount % 50 === 0) {
-      await new Promise(r => setTimeout(r, 1000))
-    }
   }
 
   // FREQ-CAP.1 — stamp the marketing touch for everyone this pass reached
@@ -1504,15 +1567,21 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
 
   // Recompute cumulative metrics from the recipients table — a resumed
   // pass only sent the remainder, so sentCount/failedCount under-count.
-  // Count everything dispatched (sent/delivered/read) as sent.
-  const { count: cumulativeSent } = await db.from('whatsapp_broadcast_recipients')
-    .select('id', { count: 'exact', head: true })
-    .eq('broadcast_id', broadcastId)
-    .in('status', DISPATCHED_STATUSES)
-  const { count: cumulativeFailed } = await db.from('whatsapp_broadcast_recipients')
-    .select('id', { count: 'exact', head: true })
-    .eq('broadcast_id', broadcastId)
-    .eq('status', 'failed')
+  // Count everything dispatched (sent/delivered/read) as sent. The two
+  // counters are ALWAYS row counts (WABLASTCOUNTERS.1): the status webhook
+  // recounts them the same way when Meta fails a send it had accepted, so
+  // the two writers can never disagree about what the column means.
+  // A count that could not be read writes NOTHING: `counts.patch` is empty
+  // and the stored figures stand (they used to be overwritten with 0 / 0).
+  // The answer then falls back to this pass's own tallies, flagged.
+  const counts = await countBroadcastSendCounters(db, broadcastId)
+  if (!counts.ok) {
+    console.error(`[broadcast ${broadcastId}] recipient counters unread — stored total_sent/total_failed left as they were; answering with this pass's tallies:`, counts.error?.message || counts.error)
+  }
+  const counterPatch = broadcastCountersPatch(counts)
+  const cumulativeSent = counts.ok ? counts.total_sent : sentCount
+  const cumulativeFailed = counts.ok ? counts.total_failed : failedCount
+  const countersFlag = counts.ok ? {} : { counters_unread: true }
 
   // Update template send count (atomic; best-effort). Only THIS pass's
   // sends — a resume must not double-count rows a prior pass already added.
@@ -1531,8 +1600,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     await db.from('whatsapp_broadcasts').update({
       ...abortPatch,
       total_recipients: contacts.length,
-      total_sent: cumulativeSent || 0,
-      total_failed: cumulativeFailed || 0,
+      ...counterPatch,
     }).eq('id', broadcastId)
 
     // Manager push — best-effort, never fails the abort handling.
@@ -1550,9 +1618,10 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
 
     return {
       status: 'draft',
-      sent: cumulativeSent || 0,
-      failed: cumulativeFailed || 0,
+      sent: cumulativeSent,
+      failed: cumulativeFailed,
       total: contacts.length,
+      ...countersFlag,
       aborted: true,
       abort_reason: `stopped after ${abortedAfterFailures} consecutive send failures`,
       delivery_summary: abortPatch.delivery_summary,
@@ -1567,16 +1636,52 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     await db.from('whatsapp_broadcasts').update({
       status: 'sending',
       total_recipients: contacts.length,
-      total_sent: cumulativeSent || 0,
-      total_failed: cumulativeFailed || 0,
+      ...counterPatch,
       delivery_summary: deliverySummary,
     }).eq('id', broadcastId)
     return {
       status: 'sending',
-      sent: cumulativeSent || 0,
-      failed: cumulativeFailed || 0,
+      sent: cumulativeSent,
+      failed: cumulativeFailed,
       total: contacts.length,
       remaining: deferred,
+      ...countersFlag,
+      delivery_summary: deliverySummary,
+    }
+  }
+
+  // WABLASTCOUNTERS.1 — a claim still open is a message still owed. Every
+  // row this pass claimed has been promoted or parked by now, so a 'pending'
+  // row left here belongs to a pass that died between its claim and its send
+  // (or to one running alongside). Marking the broadcast 'sent' over it would
+  // strand that contact for good: the send route admits draft/sending only,
+  // so nothing would ever run the re-claim. Park at 'sending' instead, with
+  // the open claim counted as the remainder: the cron resumes a scheduled
+  // blast each tick and sends it once the lease has run out; an operator's
+  // blast is finished by pressing Send again after STUCK_CLAIM_MINUTES. That
+  // held 'sending' is honest — the drip has held itself open over the same
+  // row since OWED_RETRY_STATUSES. An unreadable count is logged and the
+  // pass completes: a hold on a figure it could not read would be a hold
+  // nothing is owed on.
+  const openClaims = await countOpenClaims(db, broadcastId)
+  if (!openClaims.ok) {
+    console.error(`[broadcast ${broadcastId}] open-claim count unread — completing the pass without the lease check:`, openClaims.error?.message || openClaims.error)
+  }
+  if (openClaims.ok && openClaims.count > 0) {
+    await db.from('whatsapp_broadcasts').update({
+      status: 'sending',
+      total_recipients: contacts.length,
+      ...counterPatch,
+      delivery_summary: deliverySummary,
+    }).eq('id', broadcastId)
+    return {
+      status: 'sending',
+      sent: cumulativeSent,
+      failed: cumulativeFailed,
+      total: contacts.length,
+      remaining: openClaims.count,
+      awaiting: 'claim_lease',
+      ...countersFlag,
       delivery_summary: deliverySummary,
     }
   }
@@ -1588,12 +1693,11 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
     sent_at: new Date().toISOString(),
     paused_at: null,
     total_recipients: contacts.length,
-    total_sent: cumulativeSent || 0,
-    total_failed: cumulativeFailed || 0,
+    ...counterPatch,
     delivery_summary: deliverySummary,
   }).eq('id', broadcastId)
 
-  return { status: 'sent', sent: cumulativeSent || 0, failed: cumulativeFailed || 0, total: contacts.length, delivery_summary: deliverySummary }
+  return { status: 'sent', sent: cumulativeSent, failed: cumulativeFailed, total: contacts.length, ...countersFlag, delivery_summary: deliverySummary }
 }
 
 /**
@@ -1881,10 +1985,12 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // Cumulative totals from the recipients table. "Sent" = successfully dispatched,
   // which includes rows the status webhook has since moved to delivered/read —
   // counting only status='sent' makes the tally SHRINK as receipts arrive.
-  const { count: totalSent } = await db.from('whatsapp_broadcast_recipients')
-    .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).in('status', DISPATCHED_STATUSES)
-  const { count: totalFailed } = await db.from('whatsapp_broadcast_recipients')
-    .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'failed')
+  // WABLASTCOUNTERS.1 — the same recount the blast and the webhook use; an
+  // unreadable count writes no counter (the stored figures stand) instead of 0.
+  const dripCounts = await countBroadcastSendCounters(db, broadcastId)
+  if (!dripCounts.ok) {
+    console.error(`[drip ${broadcastId}] recipient counters unread — stored total_sent/total_failed left as they were:`, dripCounts.error?.message || dripCounts.error)
+  }
 
   // We truly exhausted the audience only if we sent the last batch WITHOUT auto-
   // pausing partway (a pause leaves unsent contacts for the resume), and nothing
@@ -1903,8 +2009,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   await db.from('whatsapp_broadcasts').update({
     ...outcome,
     total_recipients: audience.length,
-    total_sent: totalSent || 0,
-    total_failed: totalFailed || 0,
+    ...broadcastCountersPatch(dripCounts),
   }).eq('id', broadcastId)
 
   return { status: outcome.status, paused: !!outcome.paused_at, sent, failed, recipients: audience.length }
