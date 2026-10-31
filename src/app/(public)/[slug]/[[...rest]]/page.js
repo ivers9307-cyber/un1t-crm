@@ -49,7 +49,7 @@ import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
 import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
 import { classFunnelCtaLabel } from '@/lib/public-landing'
-import { pageCtas } from '@/lib/landing-page-blocks'
+import { pageCtas, clientSafeBlocks } from '@/lib/landing-page-blocks'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 import { resolveOrgChrome, resolveLocationBrand } from '@/lib/host-brand'
 import { logWarn } from '@/lib/log'
@@ -260,7 +260,8 @@ export default async function PublicPage(props) {
     const previewItem = trialItems.find((i) => i.row === context) || trialItems[0] || null
     return (
       <EditModeOverlay
-        initialBlocks={merged}
+        // EDITGATE.1 parity: the studio half (trial ids, plan codes, keywords) never rides the RSC payload; the overlay edits words and media only.
+        initialBlocks={clientSafeBlocks(merged)}
         initialLogoUrl={logoUrl}
         initialLogoAlt={logoAlt}
         initialLogoWidthPx={logoWidthPx}

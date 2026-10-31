@@ -382,7 +382,10 @@ describe('the [slug] page route', () => {
     expect(h.calls.load[0]).toEqual({ orgId: 'org-other', slug: '50plus' })
     const overlay = propsOf(html, 'overlay')
     expect(overlay.initialBlocks.map((b) => b.id)).toEqual(['cf', 's1', 'v1'])
-    expect(overlay.initialBlocks[0]).toMatchObject({ type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+' })
+    expect(overlay.initialBlocks[0]).toMatchObject({ type: 'campaign_funnel', campaign: '50plus' })
+    // EDITGATE.1 parity: the studio half (ids, plan codes, keywords, attribution) is withheld.
+    expect(overlay.initialBlocks[0]).not.toHaveProperty('class_keywords')
+    expectClientSafe(html)
     expect(overlay.initialLogoUrl).toBe('https://x/logo.png')
     expect(overlay.footer).toMatchObject({ brand: 'UN1T', legalName: 'Champ Fitness Ltd' })
   })
