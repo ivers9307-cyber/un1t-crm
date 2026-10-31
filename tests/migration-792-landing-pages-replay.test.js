@@ -29,7 +29,10 @@ const BASE = `
   CREATE ROLE authenticated NOLOGIN;
   CREATE SCHEMA private;
   CREATE TABLE public.organizations (id uuid PRIMARY KEY);
-  CREATE TABLE public.locations (id uuid PRIMARY KEY, organization_id uuid REFERENCES public.organizations(id), name text);
+  CREATE TABLE public.locations (id uuid PRIMARY KEY, organization_id uuid REFERENCES public.organizations(id), name text,
+    active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now());
+  CREATE TABLE public.org_settings (organization_id uuid PRIMARY KEY, company_name text);
+  CREATE TABLE public.company_settings (location_id uuid PRIMARY KEY, company_name text);
   CREATE TABLE public.profiles (id uuid PRIMARY KEY);
   CREATE TABLE public.landing_page_settings (
     location_id uuid PRIMARY KEY REFERENCES public.locations(id), public_path text, blocks jsonb,
@@ -49,9 +52,11 @@ const BASE = `
 const PAID = (studio) => ({ id: `pt-${studio}`, type: 'paid_trial', heading: 'Reset', plan_code: `P-${studio}`, price_cents: 4900 })
 const FUNNEL = { id: 'cf', type: 'class_funnel', heading: 'Book', trial_plan_code: 'T1', terms_label: 'I agree' }
 
-async function boot({ stillBlocks, hatchBlocks }) {
+async function boot({ stillBlocks, hatchBlocks, orgName = null, studioName = null }) {
   const db = new PGlite()
   await runSql(db, BASE)
+  if (orgName !== null) await db.query('INSERT INTO public.org_settings VALUES ($1, $2)', [ORG, orgName])
+  if (studioName !== null) await db.query('INSERT INTO public.company_settings VALUES ($1, $2)', [HATCH, studioName])
   await db.query(
     `INSERT INTO public.landing_page_settings (location_id, public_path, blocks, publish_state) VALUES
        ($1, 'stillorgan', $2::jsonb, 'live'), ($3, 'hatch-street', $4::jsonb, 'live')`,
@@ -103,6 +108,35 @@ describe('mig 792 backfill (PGlite replay)', () => {
 
     for (const slug of ['stillorgan', 'hatch-street', 'trial', 'start', 'free-class']) expect(await page(db, slug), slug).toBeTruthy()
     await db.close()
+  })
+
+  it("seeds today's tab title and description on the three live campaign pages (titles without the brand suffix)", async () => {
+    const db = await boot({ stillBlocks: [PAID('s')], hatchBlocks: [PAID('h')], orgName: '  UN1T Dublin ' })
+    expect((await page(db, 'trial')).chrome).toMatchObject({
+      noindex: true,
+      meta_title: 'The UN1T Trial',
+      meta_description: 'The UN1T Trial at UN1T Dublin. Choose your studio, pay once, start this week.',
+    })
+    expect((await page(db, '50plus')).chrome).toMatchObject({
+      noindex: true,
+      meta_title: 'The 50+ Club Trial',
+      meta_description: 'A free trial of The 50+ Club at UN1T Stillorgan. Coach-led strength for the over-50s, three mornings a week. Pick your first class.',
+    })
+    expect((await page(db, 'corp')).chrome).toMatchObject({
+      noindex: true,
+      meta_title: 'Exclusive Corporate Trial',
+      meta_description: 'A free offer for our partner companies. Claim it in under a minute.',
+    })
+    await db.close()
+  })
+
+  it('names the organisation from a studio company_settings row when org_settings has none, and drops " at" when neither does', async () => {
+    const named = await boot({ stillBlocks: [PAID('s')], hatchBlocks: [PAID('h')], orgName: '', studioName: 'UN1T Hatch' })
+    expect((await page(named, 'trial')).chrome.meta_description).toBe('The UN1T Trial at UN1T Hatch. Choose your studio, pay once, start this week.')
+    await named.close()
+    const bare = await boot({ stillBlocks: [PAID('s')], hatchBlocks: [PAID('h')] })
+    expect((await page(bare, 'trial')).chrome.meta_description).toBe('The UN1T Trial. Choose your studio, pay once, start this week.')
+    await bare.close()
   })
 
   it('uses the source blocks when they exist: show_sections order, first of each type, the block offer', async () => {

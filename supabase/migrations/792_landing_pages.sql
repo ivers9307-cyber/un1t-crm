@@ -41,6 +41,11 @@
 -- their code defaults), so neither 404s after deploy; they need only the
 -- Stillorgan / Hatch Street row. UN1T Group's organisation is never named:
 -- it is the organisation of the location behind public_path = 'stillorgan'.
+-- The three live campaign pages carry today's tab title and description in
+-- chrome.meta_title / meta_description, copied from the deleted routes'
+-- metadata (src/app/trial/page.js, src/app/50plus/page.js,
+-- src/app/corp/corp-page.jsx at b1778d4b) without the company-name suffix: the
+-- route adds ' | <company>' (the old ' — ' separator is a banned em-dash).
 -- landing_page_settings has no created_at, so a backfilled studio page takes
 -- its updated_at for both. A NULL (or non-array) blocks column backfills as [].
 --
@@ -410,11 +415,28 @@ SELECT
   'paid_trial',
   jsonb_build_array(private.landing_page_block_page_half(pt.b)) || private.landing_page_content_blocks(s.blocks),
   private.landing_page_backfill_chrome(s.logo_url, s.logo_alt, s.logo_width_px, s.show_instagram_feed,
-    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'dark'),
+    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'dark')
+  || jsonb_build_object(
+       'meta_title', 'The UN1T Trial',
+       'meta_description', 'The UN1T Trial' || COALESCE(' at ' || org.company_name, '') || '. Choose your studio, pay once, start this week.'),
   'live'
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id
 CROSS JOIN LATERAL (SELECT private.landing_page_first_block(s.blocks, 'paid_trial') AS b) AS pt
+-- The organisation's customer-facing name, as getOrgCustomerBranding reads it:
+-- org_settings.company_name, else the first named studio's company_settings
+-- (oldest active studio first). The route's last tier (the master location's
+-- name) is not repeated here; UN1T Group has an org_settings name.
+CROSS JOIN LATERAL (
+  SELECT COALESCE(
+    (SELECT NULLIF(btrim(os.company_name), '') FROM public.org_settings AS os
+      WHERE os.organization_id = l.organization_id LIMIT 1),
+    (SELECT NULLIF(btrim(cs.company_name), '') FROM public.company_settings AS cs
+      JOIN public.locations AS l2 ON l2.id = cs.location_id
+      WHERE l2.organization_id = l.organization_id AND l2.active AND NULLIF(btrim(cs.company_name), '') IS NOT NULL
+      ORDER BY l2.created_at LIMIT 1)
+  ) AS company_name
+) AS org
 WHERE s.public_path = 'stillorgan'
   AND l.organization_id IS NOT NULL
   AND pt.b IS NOT NULL
@@ -468,7 +490,10 @@ SELECT
       ELSE ARRAY['stats', 'video_testimonials', 'reviews']
     END),
   private.landing_page_backfill_chrome(s.logo_url, s.logo_alt, s.logo_width_px, s.show_instagram_feed,
-    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'light'),
+    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'light')
+  || jsonb_build_object(
+       'meta_title', 'The 50+ Club Trial',
+       'meta_description', 'A free trial of The 50+ Club at UN1T Stillorgan. Coach-led strength for the over-50s, three mornings a week. Pick your first class.'),
   'live'
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id
@@ -519,7 +544,10 @@ SELECT
     '{"id": "corp-promo", "type": "corp_promo"}'::jsonb
   )) || private.landing_page_content_blocks(s.blocks),
   private.landing_page_backfill_chrome(s.logo_url, s.logo_alt, s.logo_width_px, s.show_instagram_feed,
-    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'dark'),
+    s.chooser_label, s.chooser_cta_text, s.chooser_image_url, true, 'dark')
+  || jsonb_build_object(
+       'meta_title', 'Exclusive Corporate Trial',
+       'meta_description', 'A free offer for our partner companies. Claim it in under a minute.'),
   'live'
 FROM public.landing_page_settings AS s
 JOIN public.locations AS l ON l.id = s.location_id

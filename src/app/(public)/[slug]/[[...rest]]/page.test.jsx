@@ -106,7 +106,7 @@ const row = (location_id, over = {}) => ({ page_id: 'p', location_id, enabled: t
 const FIFTY = {
   id: 'p50', organization_id: 'org-un1t', slug: '50plus', title: 'The 50+ Club', kind: 'campaign', scope: 'one',
   primary_location_id: 'loc-s', offer_type: 'one_class', publish_state: 'live', redirect_to: null,
-  chrome: { tone: 'light', noindex: true, meta_title: 'The 50+ Club Trial at UN1T' },
+  chrome: { tone: 'light', noindex: true, meta_title: 'The 50+ Club Trial' },
   blocks: [
     { id: 'cf', type: 'campaign_funnel', heading: 'A free trial of The 50+ Club', video_url: 'https://x/v.mp4', poster_url: 'https://x/p.jpg' },
     { id: 's1', type: 'stats', items: [{ number: '4.9', label: 'Rating' }] },
@@ -395,10 +395,10 @@ describe('the [slug] page route', () => {
     expect(h.calls.load[0]).toEqual({ orgId: 'org-un1t', slug: '50plus' })
   })
 
-  it('metadata: the meta title, else the page title with the brand; noindex follows the chrome', async () => {
+  it('metadata: the meta title, else the page title, then the brand; noindex follows the chrome', async () => {
     h.loaded = { page: FIFTY, studios: FIFTY_STUDIOS }
     const meta = await generateMetadata({ params: Promise.resolve({ slug: '50plus' }), searchParams: Promise.resolve({}) })
-    expect(meta).toMatchObject({ title: 'The 50+ Club Trial at UN1T', robots: { index: false, follow: false } })
+    expect(meta).toMatchObject({ title: 'The 50+ Club Trial | UN1T', robots: { index: false, follow: false } })
     h.loaded = { page: { ...TRIAL, chrome: { meta_description: 'Pay once.' } }, studios: TRIAL_STUDIOS_ROWS }
     const indexed = await generateMetadata({ params: Promise.resolve({ slug: 'trial' }), searchParams: Promise.resolve({}) })
     expect(indexed).toMatchObject({ title: '14 Day Reset | UN1T', description: 'Pay once.', robots: { index: true, follow: true } })

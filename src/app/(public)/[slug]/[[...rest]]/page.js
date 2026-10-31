@@ -111,12 +111,13 @@ export async function generateMetadata(props) {
     if (!loaded || !shown(loaded.page, editMode)) return {}
     const { page } = loaded
     const c = isObj(page.chrome) ? page.chrome : {}
-    let title = str(c.meta_title)
-    if (!title) {
-      const chrome = await resolveOrgChrome({ orgId: page.organization_id })
-      // Customer-visible (the tab, a share): no em-dash (CLAUDE.md).
-      title = chrome.companyName ? `${page.title} | ${chrome.companyName}` : page.title
-    }
+    // The meta title (else the page title), then the brand: the meta title is
+    // the words before ' | <company>', as the page title is (mig 792 seeds the
+    // campaign pages' meta titles that way).
+    // Customer-visible (the tab, a share): no em-dash (CLAUDE.md).
+    const base = str(c.meta_title) || page.title
+    const chrome = await resolveOrgChrome({ orgId: page.organization_id })
+    const title = chrome.companyName ? `${base} | ${chrome.companyName}` : base
     return {
       title,
       description: str(c.meta_description) || '',
