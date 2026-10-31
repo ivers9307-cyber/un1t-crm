@@ -727,7 +727,8 @@ describe('studio pages on the [slug] route', () => {
     const overlay = propsOf(html, 'overlay')
     expect(overlay.initialBlocks.map((b) => b.id)).toEqual(['h', 'lf', 's1', 'pt'])
     expect(overlay.initialBlocks[3]).toMatchObject({ type: 'paid_trial', cta_label: 'Start my 14 Day Reset' })
-    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks', tone: 'dark', offerBlockId: null, cta: { href: '#trial', label: 'Start my 14 Day Reset' } })
+    // The offer block (last on the page) is named, so the overlay gives it no toolbar.
+    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks', tone: 'dark', offerBlockId: 'pt', cta: { href: '#trial', label: 'Start my 14 Day Reset' } })
     expect(overlay.trialPreview).toMatchObject({ returnPath: '/stillorgan', resumePurchaseId: null, cancelled: false, hatchTerms: null, preview: true })
     expect(overlay.trialPreview.studio).toMatchObject({ key: 'stillorgan', sellable: true })
     expect(overlay).toMatchObject({ initialLogoUrl: 'https://x/still-logo.png', initialLogoAlt: 'UN1T Stillorgan', initialLogoWidthPx: 200, wordmark: 'UN1T', locationName: 'Stillorgan' })
@@ -807,6 +808,6 @@ describe('studio pages: other offer types and empty rows', () => {
     h.loaded = { page: { ...STILL, offer_type: 'none', blocks: STILL.blocks.filter((b) => b.type !== 'paid_trial') }, studios: [stillRow({ offer: {} })] }
     const overlay = propsOf(await render({ slug: 'stillorgan', sp: { edit: '1' } }), 'overlay')
     expect(overlay.trialPreview).toBeNull()
-    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks' })
+    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks', offerBlockId: null })
   })
 })

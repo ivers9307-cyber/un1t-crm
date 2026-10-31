@@ -390,6 +390,14 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
   return { kind, cta: { href: primary?.href || null, label: primary?.label } }
 }
 
+// A studio page's offer block id (the first block of its offer type, wherever
+// it sits), null when the page sells nothing or has no such block.
+function studioOfferBlockId(page, blocks) {
+  const type = OFFER_BLOCK_TYPE[page.offer_type]
+  if (!type) return null
+  return blocks.find((b) => isObj(b) && b.type === type)?.id || null
+}
+
 // Step 5: a studio page (/stillorgan) and its two sub-pages, as
 // /welcome/[location] rendered them. Reads the page row and its one studio row
 // (and, for a page with no logo of its own, the existing logo fallback);
@@ -477,8 +485,10 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
           locationName={brand.locationName}
           footer={footer}
           // The blocks layout: no pinned offer region; the card rides in the
-          // first hero as on the public page, disabled (preview: true).
-          offerLayout={{ kind: 'blocks', tone, cta: { href: primary?.href || null, label: primary?.label }, offerBlockId: null }}
+          // first hero as on the public page, disabled (preview: true). The
+          // offer block, wherever it sits, is named so the overlay gives it no
+          // toolbar (the editor never moves, copies or deletes it).
+          offerLayout={{ kind: 'blocks', tone, cta: { href: primary?.href || null, label: primary?.label }, offerBlockId: studioOfferBlockId(page, merged) }}
           trialPreview={trialPreview}
         />
       </StudioShell>

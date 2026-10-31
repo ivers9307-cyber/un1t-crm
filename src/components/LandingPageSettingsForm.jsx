@@ -53,7 +53,7 @@ import {
 import { centsToEuros } from '@/lib/price-format'
 import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL } from '@/lib/public-landing'
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
-import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
+import { DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
@@ -1145,25 +1145,13 @@ function ManualTimetableFields({ block, onUpdate, publicPath }) {
   )
 }
 
-// UN1TWRITE.18 — the terms and waiver tick a un1t.online studio's funnel
-// shows while its funnel switch is on. Blank keeps each default.
+// UN1TWRITE.21 — the un1t.online funnel's two customer emails. The terms and
+// waiver tick's wording is the studio page's (chrome.un1t_terms, edited in
+// PageHeaderCard), which every reader takes; a block's own terms keys, if
+// stored, are kept but no longer edited here. Blank keeps each default.
 function Un1tFunnelCopyFields({ block, onUpdate }) {
-  const D = DEFAULT_FUNNEL_TERMS_COPY
   return (
     <>
-      <Field label="Terms tick (un1t.online studios)" hint="Shown when this studio books through un1t.online. {studio_name} is the studio; {terms} and {waiver} become the two document links. Leave blank for the default.">
-        <Input value={block.terms_label || ''} onChange={(v) => onUpdate({ terms_label: v })} maxLength={200} placeholder={D.terms_label} />
-      </Field>
-      <Field label="Terms link text (un1t.online studios)">
-        <Input value={block.terms_link_label || ''} onChange={(v) => onUpdate({ terms_link_label: v })} maxLength={60} placeholder={D.terms_link_label} />
-      </Field>
-      <Field label="Waiver link text (un1t.online studios)">
-        <Input value={block.waiver_link_label || ''} onChange={(v) => onUpdate({ waiver_link_label: v })} maxLength={60} placeholder={D.waiver_link_label} />
-      </Field>
-      <Field label="Terms not ticked: message (un1t.online studios)">
-        <Input value={block.terms_required_message || ''} onChange={(v) => onUpdate({ terms_required_message: v })} maxLength={200} placeholder={D.terms_required_message} />
-      </Field>
-      {/* UN1TWRITE.21 — the un1t.online funnel's two customer emails. */}
       <Field label="New account email: subject (un1t.online studios)" hint="Sent when a booking made a new un1t.online account. {first_name} {class_name} {class_time} {studio_name} {address}. Leave blank for the default.">
         <Input value={block.account_email_subject || ''} onChange={(v) => onUpdate({ account_email_subject: v })} maxLength={150} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.account_email_subject} />
       </Field>
@@ -1175,9 +1163,6 @@ function Un1tFunnelCopyFields({ block, onUpdate }) {
       </Field>
       <Field label="Trial already used email: message (un1t.online studios)">
         <Textarea value={block.trial_used_email_body || ''} onChange={(v) => onUpdate({ trial_used_email_body: v })} maxLength={2000} rows={6} placeholder={DEFAULT_FUNNEL_EMAIL_COPY.trial_used_email_body} />
-      </Field>
-      <Field label="Terms page could not load: message (un1t.online studios)">
-        <Textarea value={block.legal_unavailable_message || ''} onChange={(v) => onUpdate({ legal_unavailable_message: v })} maxLength={300} rows={2} placeholder={D.legal_unavailable_message} />
       </Field>
     </>
   )

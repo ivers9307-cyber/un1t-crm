@@ -113,4 +113,16 @@ describe('PUT /api/landing-pages/[id]/studios/[locationId]', () => {
     still.blocks = [{ id: 'cf2', type: 'class_funnel' }]
     expect((await save(PAGE.stillorgan, STILL, { enabled: true, offer: { trial_membership_id: 'tm', trial_plan_code: 'tp', price_cents: 1500 }, attribution: {} })).status).toBe(200)
   })
+
+  it('UN1TWRITE.18 fails closed: a row without its studio embed is 503 for a priced funnel, nothing written', async () => {
+    const hatch = db.state.landing_pages.find((p) => p.id === PAGE.hatch)
+    hatch.offer_type = 'class_funnel'
+    hatch.blocks = [{ id: 'cf', type: 'class_funnel' }]
+    // The studio's locations row is gone, so the embed comes back null.
+    db.state.locations = db.state.locations.filter((l) => l.id !== HATCH)
+    const res = await save(PAGE.hatch, HATCH, { enabled: true, offer: { price_cents: 1500 }, attribution: {} })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ error: 'unavailable' })
+    expect(db.writes('landing_page_studios')).toEqual([])
+  })
 })

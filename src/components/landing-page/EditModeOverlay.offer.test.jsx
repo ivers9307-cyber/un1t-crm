@@ -200,6 +200,19 @@ describe('EditModeOverlay on an offer layout (PAGES.1)', () => {
     expect(region.querySelectorAll('[contenteditable]')).toHaveLength(0)
   })
 
+  it('a blocks layout naming its offer block (a studio page) lists it without a toolbar; its studio keys are never posted', () => {
+    const PT = { id: 'pt', type: 'paid_trial', heading: 'Try us' }
+    render(<EditModeOverlay initialBlocks={[HERO, STATS, PT]} offerLayout={{ kind: 'blocks', cta: { href: null }, offerBlockId: 'pt' }} />)
+    expect(screen.getByTestId('block-pt')).toBeTruthy()
+    expect(screen.queryByTitle('Delete Paid trial product')).toBeNull()
+    expect(screen.queryByTitle(/Move Paid trial product/)).toBeNull()
+    expect(screen.queryByTitle('Duplicate Paid trial product')).toBeNull()
+    expect(screen.getByTitle('Delete Stats')).toBeTruthy()
+    expect(screen.getByTitle('Delete Hero')).toBeTruthy()
+    // Nothing else changes: an insert gap before and after every block.
+    expect(screen.getAllByRole('button', { name: /Add section here/ })).toHaveLength(4)
+  })
+
   it('a blocks layout adds nothing: every block renders with its toolbar', () => {
     render(<EditModeOverlay initialBlocks={[HERO, STATS]} offerLayout={{ kind: 'blocks', cta: { href: null } }} />)
     expect(screen.getByTestId('block-h1')).toBeTruthy()

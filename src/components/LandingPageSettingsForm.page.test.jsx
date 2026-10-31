@@ -209,6 +209,23 @@ describe('LandingPageSettingsForm (page mode)', () => {
     expect(screen.queryByText('Save your changes first.')).toBeNull()
   })
 
+  it('a class_funnel offer block edits the funnel emails only: the terms wording is the header card\'s alone', () => {
+    const CF = { ...splitOfferBlock(newBlockOfType('class_funnel', { brand: 'UN1T' })).page, id: 'b-cf', terms_label: 'old block words' }
+    renderForm({
+      page: basePage({ kind: 'studio', slug: 'hatch-street', offer_type: 'class_funnel', blocks: [HERO, CF] }),
+      studios: [{ ...STUDIOS[0], offer: {}, attribution: {} }],
+    })
+    expect(screen.getByText('New account email: subject (un1t.online studios)')).toBeTruthy()
+    expect(screen.getByText('Trial already used email: message (un1t.online studios)')).toBeTruthy()
+    for (const label of ['Terms tick (un1t.online studios)', 'Terms link text (un1t.online studios)', 'Waiver link text (un1t.online studios)',
+      'Terms not ticked: message (un1t.online studios)', 'Terms page could not load: message (un1t.online studios)']) {
+      expect(screen.queryByText(label), label).toBeNull()
+    }
+    expect(screen.queryByDisplayValue('old block words')).toBeNull()
+    // One set of terms fields on the page: the header card's.
+    expect(screen.getAllByLabelText('Terms tick label')).toHaveLength(1)
+  })
+
   it('a campaign page shows no terms fields and sends none it did not hold', async () => {
     renderForm()
     expect(screen.queryByLabelText('Terms tick label')).toBeNull()

@@ -11,7 +11,8 @@
 // with no offer has no studio half (400 no_offer). UN1TWRITE.18: a priced
 // class_funnel at a un1t.online studio is refused (400): anything paid there
 // goes through un1t.online checkout (the row's locations embed carries the
-// studio's membership_source, so no extra read). Answers the saved row and its
+// studio's membership_source, so no extra read; a row without the embed is a
+// 503, never a priced save). Answers the saved row and its
 // readiness (studioRowReadiness, the list's and the publish gate's rule).
 
 import { NextResponse } from 'next/server'
@@ -59,9 +60,15 @@ export async function PUT(request, { params }) {
       const issues = offer.error.issues.map((i) => ({ path: ['offer', ...i.path].join('.'), message: i.message }))
       return fail(400, 'Invalid request body', { issues })
     }
-    if (blockType === 'class_funnel' && Number(offer.data.price_cents) > 0
-      && embeddedOne(row.locations)?.membership_source === 'un1t_online') {
-      return fail(400, UN1T_PAID_INTRO_REFUSAL)
+    if (blockType === 'class_funnel' && Number(offer.data.price_cents) > 0) {
+      // Fail closed: a studio whose row came back without its locations
+      // embed cannot be judged, so a priced save waits (503, nothing written).
+      const loc = embeddedOne(row.locations)
+      if (!loc) {
+        logError('landing-pages', 'studio unreadable for the paid intro check', { pageId: id, locationId })
+        return fail(503, 'unavailable')
+      }
+      if (loc.membership_source === 'un1t_online') return fail(400, UN1T_PAID_INTRO_REFUSAL)
     }
 
     const patch = { enabled: body.enabled, offer: offer.data, attribution: body.attribution, updated_by: user.id }

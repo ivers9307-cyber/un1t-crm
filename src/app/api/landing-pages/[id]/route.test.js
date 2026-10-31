@@ -157,6 +157,14 @@ describe('PUT /api/landing-pages/[id]', () => {
     expect(stored(db, PAGE.stillorgan)).toMatchObject({ slug: 'stillorgan', title: 'UN1T Stillorgan' })
   })
 
+  it('a case or whitespace variant of a studio page\'s own slug is not a rename', async () => {
+    getCurrentUser.mockResolvedValue(STILL_MANAGER)
+    const res = await put(PAGE.stillorgan, { slug: ' Stillorgan ', title: 'Stillorgan studio' })
+    expect(res.status).toBe(200)
+    expect(stored(db, PAGE.stillorgan)).toMatchObject({ slug: 'stillorgan', title: 'Stillorgan studio' })
+    expect(db.state.landing_pages.filter((p) => p.slug === 'stillorgan')).toHaveLength(1)
+  })
+
   it('a studio page reports can_edit to its studio\'s editor, with its row\'s offer', async () => {
     getCurrentUser.mockResolvedValue(STILL_MANAGER)
     const { data } = await (await get(PAGE.stillorgan)).json()
