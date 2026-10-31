@@ -9,7 +9,16 @@
 // ceiling), and `data.campaign.configured` says whether the block has its
 // trial pair, so the page can say booking is not open before anyone types.
 // An unknown key answers nothing, never the whole timetable.
+//
+// PAGES.1 — `?page=<slug>&studio=<public path>` (studio optional on a
+// one-studio page): the live page's offer block merged with its studio row
+// decides the list (resolvePublicPageRequest), and `path`/`campaign` are
+// ignored. A campaign_funnel page lists its allow-list and reports
+// `campaign.configured` by offerConfigured; a class_funnel page lists the
+// studio's timetable. Without `page` the legacy path below is unchanged
+// (PR1; PR3 deletes it).
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { listPublicClasses, readPublicClasses } from '@/lib/public-classes'
@@ -18,12 +27,16 @@ import { resolveLandingPath } from '@/lib/public-landing'
 import { logWarn } from '@/lib/log'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
+import { resolvePublicPageRequest, studioTermsCopy } from '@/lib/landing-pages'
+import { offerConfigured } from '@/lib/landing-page-offers'
 
 // UN1TWRITE.18 — does this studio's funnel need the terms and waiver tick
 // (un1t.online with the funnel on), and in the operator's words. An
 // unreadable settings row is "not required": the processor still refuses to
 // create an account for a request with no recorded acceptance.
-async function termsFor(db, page) {
+// A page request (PAGES.1) takes the wording from the studio's own terms copy
+// (studioTermsCopy), as the page itself renders it.
+async function termsFor(db, page, { fromStudio = false } = {}) {
   let s
   try {
     s = await readUn1tWriteSettings(db, page.location_id)
@@ -32,7 +45,8 @@ async function termsFor(db, page) {
     return { required: false }
   }
   if (s.membershipSource !== 'un1t_online' || !s.settings.funnelEnabled) return { required: false }
-  return un1tTermsPayload({ blocks: page.blocks, studioName: s.studioName, publicPath: page.public_path })
+  const blocks = fromStudio ? [{ type: 'class_funnel', ...(await studioTermsCopy(db, page.location_id)) }] : page.blocks
+  return un1tTermsPayload({ blocks, studioName: s.studioName, publicPath: page.public_path })
 }
 
 export const runtime = 'nodejs'
@@ -52,9 +66,60 @@ async function listCampaignClasses(db, page, path, key) {
   return { classes, campaign: { configured: cfg.configured, timetable_unavailable: Boolean(error) } }
 }
 
+// PAGES.1 — the page form. Rate-limited after the page is resolved, keyed on
+// the RESOLVED studio public path (the same bucket the legacy path uses for
+// that studio); a request that resolves to nothing shares one 'unresolved'
+// bucket per IP, so probing slugs is limited too.
+const NOT_OPEN = { configured: false, timetable_unavailable: false }
+const PageQuery = z.object({
+  page: z.string().trim().max(40).optional(),
+  studio: z.string().trim().max(40).optional(),
+})
+async function pageGET(db, request, ip, params) {
+  const q = PageQuery.safeParse({ page: params.get('page') ?? undefined, studio: params.get('studio') ?? undefined })
+  if (!q.success) return NextResponse.json({ success: false, error: 'Invalid request' }, { status: 400 })
+  const r = await resolvePublicPageRequest(db, {
+    hostname: request.headers.get('host'), page: q.data.page, studio: q.data.studio,
+  })
+  const limit = await checkRateLimit(db, `pubclasses:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
+  if (!r.ok) {
+    if (r.reason === 'studio_required') return NextResponse.json({ success: false, error: 'studio_required' }, { status: 400 })
+    // A read that failed is the timetable blip, never "no classes".
+    const campaign = r.reason === 'unreadable' ? { configured: true, timetable_unavailable: true } : NOT_OPEN
+    return NextResponse.json({ success: true, data: { classes: [], campaign } })
+  }
+  const studio = { location_id: r.locationId, public_path: r.publicPath }
+  try {
+    const offerType = r.page.offer_type
+    if (offerType === 'one_class') {
+      const block = r.blocks.find((b) => b && typeof b === 'object' && b.type === 'campaign_funnel') || null
+      if (!block) return NextResponse.json({ success: true, data: { classes: [], campaign: NOT_OPEN } })
+      const cfg = campaignFunnelConfig(block, { landingPath: r.publicPath })
+      const configured = offerConfigured('campaign_funnel', block, { landingPath: r.publicPath })
+      const [read, terms] = await Promise.all([
+        readPublicClasses(db, r.locationId, CAMPAIGN_DAYS, { allowKeywords: cfg.allowKeywords }),
+        termsFor(db, studio, { fromStudio: true }),
+      ])
+      return NextResponse.json({ success: true, data: { classes: read.classes, terms, campaign: { configured, timetable_unavailable: Boolean(read.error) } } })
+    }
+    if (offerType === 'class_funnel') {
+      const [classes, terms] = await Promise.all([listPublicClasses(db, r.locationId, 7), termsFor(db, studio, { fromStudio: true })])
+      return NextResponse.json({ success: true, data: { classes, terms } })
+    }
+    // A page whose offer is not a class: nothing to list here.
+    return NextResponse.json({ success: true, data: { classes: [], campaign: NOT_OPEN } })
+  } catch (e) {
+    logWarn('public-classes', 'page list failed', { err: e, pageId: r.pageId })
+    return NextResponse.json({ success: true, data: { classes: [], campaign: { configured: true, timetable_unavailable: true } } })
+  }
+}
+
 export async function GET(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
+  const pageParams = new URL(request.url).searchParams
+  if (pageParams.get('page')?.trim()) return pageGET(db, request, ip, pageParams)
   // SAAS-6: tenant-keyed by the RESOLVED landing path (defaults to 'stillorgan'
   // when absent) so one location's polling can't exhaust another's window for
   // the same IP. resolveLandingPath never throws, so it's safe above the try.
@@ -65,8 +130,10 @@ export async function GET(request) {
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
 
   try {
-    const { data: page } = await db.from('landing_page_settings')
-      .select('location_id, public_path, blocks').eq('public_path', path).maybeSingle()
+    // PR1 legacy (PR3 deletes it): the studio's landing_page_settings row by
+    // path. A miss or a failed read is "no row", as it always was.
+    const legacy = await resolvePublicPageRequest(db, { legacyPath: path })
+    const page = legacy.ok ? { location_id: legacy.locationId, public_path: legacy.publicPath, blocks: legacy.blocks } : null
     // A campaign page with no row to read is "not open", not "no classes".
     if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [], ...(campaignKey ? { campaign: { configured: false, timetable_unavailable: false } } : {}) } })
     if (campaignKey) {

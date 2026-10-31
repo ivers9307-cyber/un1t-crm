@@ -152,3 +152,14 @@ describe('resolvePublicPageRequest', () => {
       .toEqual({ ok: false, reason: 'unreadable' })
   })
 })
+
+describe('pageRequestRefusal', () => {
+  it('studio_required 400, unreadable 503, everything else 404 not_found', async () => {
+    const { pageRequestRefusal } = await import('./landing-pages.js')
+    expect(pageRequestRefusal('studio_required')).toEqual({ status: 400, body: { success: false, error: 'studio_required' } })
+    expect(pageRequestRefusal('unreadable').status).toBe(503)
+    expect(pageRequestRefusal('unreadable').body).toMatchObject({ success: false, code: 'unavailable' })
+    expect(pageRequestRefusal('not_found')).toEqual({ status: 404, body: { success: false, error: 'not_found' } })
+    expect(pageRequestRefusal('not_configured').status).toBe(404)
+  })
+})

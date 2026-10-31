@@ -6,8 +6,17 @@
 // stamp the nurture tag, and open a new_lead deal so it shows in the
 // pipeline. No auth; rate-limited (honeypot removed — browser autofill of
 // the hidden field was silently dropping real signups; rate-limit suffices).
+//
+// PAGES.1 — `page` + `studio` (studio optional on a one-studio page): the
+// studio is the live page's resolved studio row, and the tag and lead source
+// are the page's lead_form block's own when it sets them (a lead form is a
+// content block), else the row's attribution; the CAPI eventSourceUrl is the
+// row's, else the page's URL. `public_path` and `campaign` are ignored and the
+// body can never set a tag or source. LEAD_CAMPAIGNS (and its WhatsApp
+// welcome) stays on the legacy public_path path (PR1; PR3 deletes it).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
@@ -18,51 +27,101 @@ import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
+import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
 
 export const runtime = 'nodejs'
+
+// LeadSchema with the page form: `public_path` is required only without `page`.
+const RouteLeadSchema = LeadSchema.extend({
+  public_path: z.string().trim().min(1).max(120).optional(),
+  page: z.string().trim().max(40).optional(),
+  studio: z.string().trim().max(40).optional(),
+}).superRefine((v, ctx) => {
+  if (!v.page && !v.public_path) ctx.addIssue({ code: 'custom', path: ['public_path'], message: 'Required' })
+})
+
+const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+
+// PAGES.1 — the studio and attribution of a resolved page request.
+function pageLeadConfig(r) {
+  const lf = (Array.isArray(r.blocks) ? r.blocks : []).find((b) => b && typeof b === 'object' && b.type === 'lead_form')
+  return {
+    locationId: r.locationId,
+    tag: str(lf?.tag) || r.attribution.tag,
+    leadSource: str(lf?.lead_source) || r.attribution.lead_source,
+    eventSourceUrl: str(r.attribution.event_source_url) || `https://www.un1tdublin.com/${r.page.slug}`,
+  }
+}
 
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
 
-  const validation = await validateBody(request, LeadSchema)
+  const validation = await validateBody(request, RouteLeadSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const { firstName, email, phone, publicPath, campaign, visit } = normaliseLead(body)
+  const normalised = normaliseLead({ ...body, public_path: body.public_path ?? '' })
+  const { firstName, email, phone, visit } = normalised
+  let campaign = normalised.campaign
+  let locationId
+  let tag
+  let leadSource
+  let eventSourceUrl
+  if (body.page) {
+    // Resolved first, then limited on the RESOLVED studio path (the legacy
+    // key for that studio); nothing resolved shares an 'unresolved' bucket.
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: body.page, studio: body.studio })
+    const limit = await checkRateLimit(db, `lead:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) {
+      return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
+    }
+    if (!r.ok) {
+      const refusal = pageRequestRefusal(r.reason)
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    ;({ locationId, tag, leadSource, eventSourceUrl } = pageLeadConfig(r))
+    campaign = null // LEAD_CAMPAIGNS is the legacy path only
+  } else {
+    const { publicPath } = normalised
 
-  // SAAS-6: tenant-keyed (the landing public_path, resolved to a studio
-  // just below) — one tenant's lead traffic can never consume another
-  // tenant's window for the same IP. Runs after body validation (pure,
-  // no DB) so the path is known; malformed bodies 400 without touching
-  // the limiter.
-  const limit = await checkRateLimit(db, `lead:${publicPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
-  if (!limit.allowed) {
-    return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
-  }
+    // SAAS-6: tenant-keyed (the landing public_path, resolved to a studio
+    // just below) — one tenant's lead traffic can never consume another
+    // tenant's window for the same IP. Runs after body validation (pure,
+    // no DB) so the path is known; malformed bodies 400 without touching
+    // the limiter.
+    const limit = await checkRateLimit(db, `lead:${publicPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) {
+      return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
+    }
 
-  // Resolve the studio + its lead-form config from public_path. The
-  // client never sends a location_id or the tag/source, so a caller
-  // can't target an arbitrary location or inject arbitrary tags.
-  const { data: page } = await db
-    .from('landing_page_settings')
-    .select('location_id, blocks')
-    .eq('public_path', publicPath)
-    .maybeSingle()
-  if (!page || !page.location_id) {
-    return NextResponse.json({ success: false, error: 'This studio is not accepting sign-ups right now.' }, { status: 400 })
-  }
-  const locationId = page.location_id
-  let { tag, leadSource } = leadConfigFromBlocks(page.blocks)
+    // PR1 legacy (PR3 deletes it). Resolve the studio + its lead-form config
+    // from public_path. The client never sends a location_id or the
+    // tag/source, so a caller can't target an arbitrary location or inject
+    // arbitrary tags.
+    const { data: page } = await db
+      .from('landing_page_settings')
+      .select('location_id, blocks')
+      .eq('public_path', publicPath)
+      .maybeSingle()
+    if (!page || !page.location_id) {
+      return NextResponse.json({ success: false, error: 'This studio is not accepting sign-ups right now.' }, { status: 400 })
+    }
+    locationId = page.location_id
+    ;({ tag, leadSource } = leadConfigFromBlocks(page.blocks))
 
-  // Paid-traffic campaign override. Only applies when the slug is in
-  // the server-side allowlist AND its studio matches the resolved
-  // public_path — so a campaign can't be replayed against another
-  // studio or used to inject an arbitrary tag/source.
-  const camp = resolveCampaign(campaign)
-  if (camp && camp.locationPublicPath === publicPath) {
-    tag = camp.tag
-    leadSource = camp.leadSource
+    // Paid-traffic campaign override. Only applies when the slug is in
+    // the server-side allowlist AND its studio matches the resolved
+    // public_path — so a campaign can't be replayed against another
+    // studio or used to inject an arbitrary tag/source.
+    const camp = resolveCampaign(campaign)
+    if (camp && camp.locationPublicPath === publicPath) {
+      tag = camp.tag
+      leadSource = camp.leadSource
+    }
+    eventSourceUrl = camp && camp.locationPublicPath === publicPath
+      ? 'https://www.un1tdublin.com/free-class'
+      : `https://www.un1tdublin.com/${publicPath}`
   }
 
   // Find-or-create the contact at this studio (shared public-form helper).
@@ -104,9 +163,7 @@ export async function POST(request) {
     const { sendWebsiteConversion } = await import('@/lib/meta-capi')
     await sendWebsiteConversion(db, {
       locationId, eventName: 'Lead', email, phone,
-      eventSourceUrl: camp && camp.locationPublicPath === publicPath
-        ? 'https://www.un1tdublin.com/free-class'
-        : `https://www.un1tdublin.com/${publicPath}`,
+      eventSourceUrl,
       eventId: `weblead-${contactId}`,
       contentName: leadSource || 'website_lead',
     })

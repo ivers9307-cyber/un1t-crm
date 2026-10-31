@@ -334,3 +334,18 @@ export async function resolvePublicPageRequest(db, { hostname = null, page = nul
     return UNREADABLE
   }
 }
+
+/**
+ * The public routes' answer to a refused page request (POST shape):
+ * studio_required 400, unreadable 503 (a failed read is never a refusal),
+ * anything else 404 not_found, so a page or studio id cannot be told apart
+ * from no page at all.
+ * @returns {{ status: number, body: object }}
+ */
+export function pageRequestRefusal(reason) {
+  if (reason === 'studio_required') return { status: 400, body: { success: false, error: 'studio_required' } }
+  if (reason === 'unreadable') {
+    return { status: 503, body: { success: false, code: 'unavailable', error: 'Something went wrong on our side. Please try again in a moment.' } }
+  }
+  return { status: 404, body: { success: false, error: 'not_found' } }
+}

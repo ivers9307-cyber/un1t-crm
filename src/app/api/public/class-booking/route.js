@@ -6,6 +6,13 @@
 // tag = "reclassify as a fresh lead") then enqueues a class_booking_requests
 // row for the process-class-bookings cron. Returns instantly; the booking +
 // WhatsApp confirmation happen async. No auth; rate-limited.
+//
+// PAGES.1 — `page` (+ `studio`, optional on a one-studio page): the live
+// page's offer block merged with its studio row decides the trial pair, the
+// allow-listed validation read and (from the row's `attribution`) the tag,
+// lead source and CAPI eventSourceUrl; `path` and `campaign` are ignored and
+// the body can never set any of them. The queued row records `page_id`.
+// Without `page` the legacy path (PR1; PR3 deletes it) is unchanged.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
@@ -25,6 +32,8 @@ import { locationCanTakePayments } from '@/lib/location-payments'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
+import { resolvePublicPageRequest, pageRequestRefusal, studioTermsCopy } from '@/lib/landing-pages'
+import { offerConfigured } from '@/lib/landing-page-offers'
 
 export const runtime = 'nodejs'
 
@@ -35,6 +44,9 @@ const Schema = z.object({
   // for this key decides the tag, lead source, trial pair and the allow-listed
   // validation read. Judged below, after the row is read.
   campaign: z.string().trim().max(64).optional(),
+  // PAGES.1 — the page (slug) and studio (public path) the form is on.
+  page: z.string().trim().max(40).optional(),
+  studio: z.string().trim().max(40).optional(),
   class_name: z.string().trim().max(200).optional(),
   starts_at: z.string().trim().max(40).optional(),
   first_name: z.string().trim().min(1).max(120),
@@ -97,6 +109,39 @@ function resolveFunnel(blocks, landingPath, campaignKey) {
   }
 }
 
+// PAGES.1 — the same shape from a resolved page: its merged offer block, its
+// studio row's attribution. Only a class offer books a class here.
+const isObj = (x) => Boolean(x) && typeof x === 'object'
+function resolvePageFunnel(r) {
+  const landingPath = r.publicPath
+  const a = r.attribution
+  if (r.page.offer_type === 'one_class') {
+    const block = r.blocks.find((x) => isObj(x) && x.type === 'campaign_funnel') || null
+    const cfg = campaignFunnelConfig(block, { landingPath })
+    const copy = campaignFunnelCopy(block || {})
+    return {
+      tag: a.tag, leadSource: a.lead_source, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
+      trialMembershipId: cfg.trialMembershipId, trialPlanCode: cfg.trialPlanCode,
+      priceCents: 0, currency: 'EUR',
+      allowKeywords: cfg.allowKeywords,
+      timetableUnavailableText: copy.timetable_unavailable_text,
+      notConfigured: !block || !offerConfigured('campaign_funnel', block, { landingPath }),
+      notConfiguredText: copy.not_configured_text,
+    }
+  }
+  if (r.page.offer_type === 'class_funnel') {
+    const cfg = classFunnelConfigFromBlocks(r.blocks, landingPath)
+    return {
+      ...cfg,
+      tag: a.tag, leadSource: a.lead_source, eventSourceUrl: a.event_source_url || cfg.eventSourceUrl,
+      allowKeywords: null,
+      timetableUnavailableText: classFunnelTimetableUnavailableMessage(r.blocks),
+      notConfigured: false,
+    }
+  }
+  return null
+}
+
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
@@ -107,18 +152,48 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const b = validation.data
 
-  const landingPath = resolveLandingPath(b.path)
-  // SAAS-6: tenant-keyed by the RESOLVED landing path so one location's booking
-  // traffic can't exhaust another's window for the same IP.
-  const limit = await checkRateLimit(db, `classbook:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
-  if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+  let landingPath
+  let locationId
+  let pageId = null
+  let termsBlocks
+  let funnel
+  if (b.page) {
+    // PAGES.1 — resolved first, then limited on the RESOLVED studio path (the
+    // legacy key for that studio); a request that resolves to nothing shares
+    // one 'unresolved' bucket per IP.
+    const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: b.page, studio: b.studio })
+    const limit = await checkRateLimit(db, `classbook:${r.ok ? r.publicPath : 'unresolved'}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+    if (!r.ok) {
+      const refusal = pageRequestRefusal(r.reason)
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    funnel = resolvePageFunnel(r)
+    if (!funnel) {
+      const refusal = pageRequestRefusal('not_found')
+      return NextResponse.json(refusal.body, { status: refusal.status })
+    }
+    landingPath = r.publicPath
+    locationId = r.locationId
+    pageId = r.pageId
+    termsBlocks = null // read below, only when the tick is needed
+  } else {
+    landingPath = resolveLandingPath(b.path)
+    // SAAS-6: tenant-keyed by the RESOLVED landing path so one location's booking
+    // traffic can't exhaust another's window for the same IP.
+    const limit = await checkRateLimit(db, `classbook:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+    if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
-  const { data: page } = await db.from('landing_page_settings')
-    .select('location_id, blocks').eq('public_path', landingPath).maybeSingle()
-  if (!page?.location_id) {
-    return NextResponse.json({ success: false, error: 'Class booking is not available right now.' }, { status: 400 })
+    // PR1 legacy (PR3 deletes it): the studio's landing_page_settings row. A
+    // miss or a failed read is "not available", as it always was.
+    const legacy = await resolvePublicPageRequest(db, { legacyPath: landingPath })
+    if (!legacy.ok) {
+      return NextResponse.json({ success: false, error: 'Class booking is not available right now.' }, { status: 400 })
+    }
+    locationId = legacy.locationId
+    termsBlocks = legacy.blocks
+    funnel = resolveFunnel(legacy.blocks, landingPath, resolveCampaignKey(b.campaign))
   }
-  const locationId = page.location_id
   const name = `${b.first_name} ${b.last_name}`.trim()
   // Nurture tag / lead_source / CAPI eventSourceUrl are DERIVED from this
   // location's class_funnel block (defaults reproduce today's Stillorgan
@@ -131,7 +206,6 @@ export async function POST(request) {
   // capture, never a fallback to the class_funnel trial (the generic one).
   // A campaign booking is always free and validates against the block's
   // allow-list, so a real class outside it is class_unavailable.
-  const funnel = resolveFunnel(page.blocks, landingPath, resolveCampaignKey(b.campaign))
   if (funnel.notConfigured) {
     return NextResponse.json({ success: false, code: 'not_configured', error: funnel.notConfiguredText }, { status: 409 })
   }
@@ -156,7 +230,9 @@ export async function POST(request) {
     // The tick's wording rides on the refusal, so a page that loaded before
     // the funnel switched on (or whose class list read missed it) can show
     // the tick and try again instead of being refused with nothing to tick.
-    const terms = un1tTermsPayload({ blocks: page.blocks, studioName: un1tStudioName, publicPath: landingPath })
+    // A page request takes the studio's own terms wording (studioTermsCopy).
+    const blocks = pageId ? [{ type: 'class_funnel', ...(await studioTermsCopy(db, locationId)) }] : termsBlocks
+    const terms = un1tTermsPayload({ blocks, studioName: un1tStudioName, publicPath: landingPath })
     return NextResponse.json({
       success: false, code: 'terms_required', error: terms.required_message,
       issues: { terms_accepted: terms.required_message }, terms,
@@ -327,6 +403,7 @@ export async function POST(request) {
   // class_name + starts_at come from the SERVER-validated class, not the client.
   const { data: queuedRow, error: insErr } = await db.from('class_booking_requests').insert({
     ...termsRecord,
+    ...(pageId ? { page_id: pageId } : {}),
     location_id: locationId, contact_id: contactId,
     glofox_event_id: b.event_id, class_name: chosen.name,
     starts_at: chosen.starts_at,

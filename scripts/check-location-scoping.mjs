@@ -109,6 +109,16 @@ export const TABLE_EXCLUDE = {
 // counts as file-level evidence.
 // ---------------------------------------------------------------------------
 const SCOPING_HELPERS = [
+  // src/lib/landing-pages.js (PAGES.1) — resolvePublicPageRequest reads the
+  // page by organization_id (the host's, publicOrgIdForHost) + slug, then its
+  // studio rows by page_id, and answers only a location_id that is one of
+  // that page's own studio rows (a one-studio page only its primary); its PR1
+  // legacy branch reads landing_page_settings by public_path, the public
+  // site's tenant selector the routes used before. studioTermsCopy reads
+  // landing_page_settings by the location_id the caller resolved from the
+  // page's own rows.
+  'resolvePublicPageRequest(',
+  'studioTermsCopy(',
   // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
   // through contactsAtStudio filters on the studio it is asked for.
   'contactsAtStudio(',
@@ -374,9 +384,6 @@ export const EXEMPT = {
   },
   'src/app/api/public/events/[slug]/donate/route.js': {
     race_events: 'CHARITY.5 public donation start: race_events row resolved by published slug + active/published flags (the same row the public event page serves); the donations row is inserted under that event\'s own race_event_id/location_id and no other tenant\'s rows are read. Rate-limited per slug and IP.',
-  },
-  'src/app/api/public/classes/route.js': {
-    landing_page_settings: 'Public landing-page class list: landing_page_settings row resolved by its public_path — the path IS the tenant selector for the public site.',
   },
   'src/app/api/public/funnel-event/route.js': {
     landing_page_settings: 'Public funnel beacon: resolves public_path → location_id and only INSERTS a funnel event for that location; unknown paths are ignored.',
