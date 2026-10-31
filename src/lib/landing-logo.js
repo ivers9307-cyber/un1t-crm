@@ -2,11 +2,12 @@
 // landing pages (/start, /free-class).
 //
 // Both pages hardcoded Stillorgan's landing-page logo URL. The
-// operator-editable source for a landing page's logo is
-// landing_page_settings.logo_url — the SAME field /stillorgan and
-// /hatch-street render through (see src/app/welcome/[location]/page.js),
-// and whose live value is byte-identical to the URL these pages
-// hardcoded, so resolution changes nothing visually for UN1T today.
+// operator-editable source for a landing page's logo is the studio page's
+// chrome.logo_url (PAGES.1; it was landing_page_settings.logo_url, which
+// mig 792 copied over) — the SAME field /stillorgan and /hatch-street render
+// through (src/app/(public)/[slug]), and whose live value is byte-identical
+// to the URL these pages hardcoded, so resolution changes nothing visually
+// for UN1T today.
 //
 // Deliberately NOT getLocationBranding: company_settings.logo_url is the
 // CRM/email brand logo, a DIFFERENT image from the landing-page wordmark
@@ -37,10 +38,12 @@ export function resolveLandingLogo(row, fallback) {
 }
 
 /**
- * Load the logo for a landing page by its public_path. Fail-soft: any
- * miss/error returns the fallback.
+ * Load the logo for a landing page by the studio page's slug (the old
+ * public_path). Fail-soft: any miss/error returns the fallback. A slug two
+ * organisations both hold matches more than one page, which maybeSingle
+ * refuses: the fallback renders, never another tenant's logo.
  *
- * @param {string} publicPath  landing_page_settings.public_path (e.g. 'stillorgan')
+ * @param {string} publicPath  the studio page slug (e.g. 'stillorgan')
  * @param {string} fallback    URL to render when unconfigured/unreachable
  * @param {object} [db]        Injectable for tests.
  * @returns {Promise<string>}
@@ -49,12 +52,13 @@ export async function getLandingLogo(publicPath, fallback, db = null) {
   try {
     const client = db || createServerClient()
     const { data, error } = await client
-      .from('landing_page_settings')
-      .select('logo_url')
-      .eq('public_path', publicPath)
+      .from('landing_pages')
+      .select('chrome')
+      .eq('kind', 'studio')
+      .eq('slug', publicPath)
       .maybeSingle()
     if (error) return fallback
-    return resolveLandingLogo(data, fallback)
+    return resolveLandingLogo({ logo_url: data?.chrome?.logo_url }, fallback)
   } catch {
     return fallback
   }

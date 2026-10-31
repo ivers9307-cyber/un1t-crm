@@ -17,10 +17,11 @@ import {
   mergeOfferBlock, OFFER_BLOCK_TYPE, offerConfigured, defaultAttribution, ATTRIBUTION_KEYS,
   splitOfferBlock, offerTypeOfBlock, OFFER_TYPE_LABELS,
 } from '@/lib/landing-page-offers'
-import { newBlockOfType, newBlockId } from '@/lib/landing-page-blocks'
+import { newBlockOfType, newBlockId, defaultBlocks } from '@/lib/landing-page-blocks'
 import { resolveLandingPath } from '@/lib/public-landing'
 import { publicOrgIdForHost } from '@/lib/public-pages-edge'
-import { normaliseSlug } from '@/lib/page-slug'
+import { normaliseSlug, slugProblem } from '@/lib/page-slug'
+import { toSlug } from '@/lib/slug'
 import { TRIAL_STUDIOS, trialEntryFromRow } from '@/lib/trial-studios'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { hasPermissionForLocation } from '@/lib/permissions'
@@ -822,4 +823,159 @@ export async function saveStudioRow(db, { pageId, locationId, patch }) {
   if (error) return { ok: false, reason: 'failed', error }
   if (!data) return { ok: false, reason: 'gone' }
   return { ok: true, row: data }
+}
+
+/**
+ * The kind='studio' pages of an organisation for a set of locations, as a Map
+ * of location id to { id, chrome, publish_state } (a location with no studio
+ * page is absent). Scoped by the organisation, so another tenant's studio can
+ * never come back. The chooser's tile routes read through it. A failed read
+ * throws PageReadError.
+ */
+export async function loadStudioPagesByLocation(db, { orgId, locationIds }) {
+  const ids = [...new Set((locationIds || []).filter(Boolean))]
+  if (!ids.length) return new Map()
+  const { data, error } = await db
+    .from('landing_pages')
+    .select('id, primary_location_id, chrome, publish_state')
+    .eq('kind', 'studio')
+    .eq('organization_id', orgId)
+    .in('primary_location_id', ids)
+  if (error) throw new PageReadError('Could not read the studio pages', error)
+  return new Map((data || []).map((r) => [r.primary_location_id, r]))
+}
+
+/**
+ * Write columns onto one page row (by id, inside the organisation).
+ * @returns {Promise<{ ok: true } | { ok: false, reason: 'failed' | 'gone', error?: object }>}
+ */
+export async function savePageFields(db, { orgId, pageId, patch }) {
+  const { data, error } = await db
+    .from('landing_pages')
+    .update(patch)
+    .eq('id', pageId)
+    .eq('organization_id', orgId)
+    .select('id')
+    .maybeSingle()
+  if (error) return { ok: false, reason: 'failed', error }
+  if (!data) return { ok: false, reason: 'gone' }
+  return { ok: true }
+}
+
+// The slug a new studio's page starts at: the location name's slug, trimmed so
+// that the numeric suffix still fits the 40-character limit.
+function studioSlugCandidate(base, n) {
+  if (n === 1) return base
+  const suffix = `-${n}`
+  return `${base.slice(0, 40 - suffix.length).replace(/-+$/, '')}${suffix}`
+}
+
+const STUDIO_SLUG_ATTEMPTS = 50
+
+/**
+ * A new location's studio page (R7): a draft kind='studio' page, slug the
+ * location name's slug made unique in the organisation (-2, -3, ... when the
+ * slug is taken or reserved), the default blocks, no offer, and its one studio
+ * row switched on. Every read happens before the first write; a studio-row
+ * insert that fails removes the page again (the studio page never exists
+ * without its row).
+ *
+ * `skipped` answers are not failures: 'no_organization' (nothing to scope the
+ * slug by) and 'no_slug' (the name yields no valid slug: a slug of fewer than
+ * two characters, or none free within 50 tries). The caller logs and warns.
+ * A failed read throws PageReadError.
+ * @returns {Promise<{ ok: true, page: object } | { ok: false, reason: 'no_organization' | 'no_slug' | 'failed', error?: object }>}
+ */
+export async function createStudioPageForLocation(db, { location, userId }) {
+  const orgId = location?.organization_id
+  if (!orgId || !location?.id) return { ok: false, reason: 'no_organization' }
+  const base = normaliseSlug(toSlug(location.name || ''))
+  if (!base) return { ok: false, reason: 'no_slug' }
+
+  let slug = null
+  for (let n = 1; n <= STUDIO_SLUG_ATTEMPTS; n += 1) {
+    const candidate = studioSlugCandidate(base, n)
+    if (slugProblem(candidate)) continue
+    if (!(await slugTakenInOrg(db, { orgId, slug: candidate }))) { slug = candidate; break }
+  }
+  if (!slug) return { ok: false, reason: 'no_slug' }
+
+  const { data: page, error: pageErr } = await db
+    .from('landing_pages')
+    .insert({
+      organization_id: orgId,
+      slug,
+      title: location.name,
+      kind: 'studio',
+      scope: 'one',
+      primary_location_id: location.id,
+      offer_type: 'none',
+      blocks: defaultBlocks(),
+      chrome: { tone: 'dark', noindex: false, show_instagram_feed: true },
+      publish_state: 'draft',
+      created_by: userId ?? null,
+      updated_by: userId ?? null,
+    })
+    .select(PAGE_COLUMNS)
+    .single()
+  if (pageErr || !page) return { ok: false, reason: 'failed', error: pageErr }
+
+  const { error: rowErr } = await db.from('landing_page_studios').insert({
+    page_id: page.id,
+    location_id: location.id,
+    enabled: true,
+    offer: {},
+    attribution: {},
+    sort_order: 0,
+    updated_by: userId ?? null,
+  })
+  if (rowErr) {
+    const { error: undoErr } = await db.from('landing_pages').delete().eq('id', page.id)
+    if (undoErr) logError('landing-pages', 'new studio page without its studio row could not be removed', { pageId: page.id, code: undoErr.code ?? null })
+    return { ok: false, reason: 'failed', error: rowErr }
+  }
+  return { ok: true, page }
+}
+
+/**
+ * A studio added to an organisation gets a switched-off row on every
+ * scope='all' page of that organisation that has none for it yet (spec §1:
+ * the editor shows it as "not yet set up"), sort_order after the page's last.
+ * Reads before writing; a failed read throws PageReadError.
+ * @returns {Promise<{ ok: true, added: number } | { ok: false, error: object }>}
+ */
+export async function addStudioToOrgPages(db, { orgId, locationId, userId = null }) {
+  const { data: pages, error: pagesErr } = await db
+    .from('landing_pages')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('scope', 'all')
+  if (pagesErr) throw new PageReadError('Could not read the organisation\'s pages', pagesErr)
+  const ids = (pages || []).map((p) => p.id)
+  if (!ids.length) return { ok: true, added: 0 }
+
+  const { data: existing, error: rowsErr } = await db
+    .from('landing_page_studios')
+    .select('page_id, location_id, sort_order')
+    .in('page_id', ids)
+  if (rowsErr) throw new PageReadError('Could not read the pages\' studios', rowsErr)
+  const max = new Map(ids.map((id) => [id, -1]))
+  const has = new Set()
+  for (const r of existing || []) {
+    max.set(r.page_id, Math.max(max.get(r.page_id) ?? -1, Number(r.sort_order) || 0))
+    if (r.location_id === locationId) has.add(r.page_id)
+  }
+  const rows = ids.filter((id) => !has.has(id)).map((id) => ({
+    page_id: id,
+    location_id: locationId,
+    enabled: false,
+    offer: {},
+    attribution: {},
+    sort_order: max.get(id) + 1,
+    updated_by: userId,
+  }))
+  if (!rows.length) return { ok: true, added: 0 }
+  const { error } = await db.from('landing_page_studios').insert(rows)
+  if (error) return { ok: false, error }
+  return { ok: true, added: rows.length }
 }

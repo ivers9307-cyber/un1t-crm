@@ -34,6 +34,25 @@ describe('GET', () => {
   })
 })
 
+describe('GET publicPath (PAGES.1)', () => {
+  const ok = { data: { name: 'Studio', settings: {} }, error: null }
+
+  it('is the studio page\'s slug, read from landing_pages', async () => {
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: ok, tables: { landing_pages: { data: { slug: 'hatch-street' }, error: null } } }))
+    const body = await (await GET()).json()
+    expect(body.publicPath).toBe('hatch-street')
+  })
+
+  it('is null when the studio has no page, and a failed page read only drops the link', async () => {
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: ok }))
+    expect((await (await GET()).json()).publicPath).toBeNull()
+    createServerClient.mockReturnValue(fakeLocationsDb({ reads: ok, tables: { landing_pages: { data: null, error: BOOM } } }))
+    const res = await GET()
+    expect(res.status).toBe(200)
+    expect((await res.json()).publicPath).toBeNull()
+  })
+})
+
 describe('PUT', () => {
   it('a failed read → 500, NOTHING written', async () => {
     const db = fakeLocationsDb({ reads: { data: null, error: BOOM } })

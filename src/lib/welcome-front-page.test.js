@@ -16,43 +16,48 @@ import { loadFrontPage, publicWelcomePathForLocation, FRONT_PAGE_ORG_SLUG, TILE_
 const ORG_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 const ORG_B = 'bbbbbbbb-0000-0000-0000-000000000001'
 
-function tile(publicPath, orgId, name) {
+// PAGES.1 — a tile is a kind='studio' landing_pages row: the slug is the path,
+// chrome carries the chooser fields, locations is the primary studio's embed.
+function tile(slug, orgId, name, over = {}) {
   return {
-    public_path: publicPath,
-    chooser_label: null,
-    chooser_cta_text: null,
-    chooser_image_url: null,
+    slug,
+    kind: 'studio',
+    organization_id: orgId,
+    chrome: {},
     blocks: null,
     publish_state: 'live',
-    locations: { name, organization_id: orgId },
+    locations: { name },
+    ...over,
   }
 }
 
-// Query-recording db stub covering the loader's three tables.
+// Filter-aware db stub covering the loader's three tables: .eq() really
+// filters landing_pages, so a loader that forgets the org filter fails.
 function makeDb({ org, chooserByOrg, legacyChooser = null, tiles = [] } = {}) {
   const calls = []
   return {
     calls,
     from(table) {
-      return {
-        select: () => ({
-          eq: (col, val) => {
-            calls.push([table, col, val])
-            return {
-              maybeSingle: async () => {
-                if (table === 'organizations') return { data: org ?? null, error: null }
-                if (table === 'chooser_settings' && col === 'organization_id') return { data: chooserByOrg ?? null, error: null }
-                if (table === 'chooser_settings' && col === 'id') return { data: legacyChooser, error: null }
-                return { data: null, error: null }
-              },
-            }
-          },
-          not: (...args) => {
-            calls.push([table, 'not', args[0]])
-            return Promise.resolve({ data: tiles, error: null })
-          },
-        }),
+      const filters = []
+      const b = {
+        select: () => b,
+        eq: (col, val) => {
+          calls.push([table, col, val])
+          filters.push([col, val])
+          return b
+        },
+        maybeSingle: async () => {
+          if (table === 'organizations') return { data: org ?? null, error: null }
+          if (table === 'chooser_settings' && filters[0]?.[0] === 'organization_id') return { data: chooserByOrg ?? null, error: null }
+          if (table === 'chooser_settings' && filters[0]?.[0] === 'id') return { data: legacyChooser, error: null }
+          return { data: null, error: null }
+        },
+        then: (ok, bad) => Promise.resolve({
+          data: table === 'landing_pages' ? tiles.filter((r) => filters.every(([c, v]) => r[c] === v)) : [],
+          error: null,
+        }).then(ok, bad),
       }
+      return b
     },
   }
 }
@@ -153,36 +158,89 @@ describe('loadFrontPage — /welcome still resolves the UN1T chooser (SAAS-6)', 
 // public welcome page instead of the org chooser. This resolves that
 // studio's path from its location_id; null means "render the chooser as
 // today" (whole-org, unmapped, or no public landing).
+describe('loadFrontPage — tiles read landing_pages (PAGES.1)', () => {
+  const base = (tiles, extra = {}) => makeDb({
+    org: { id: ORG_A },
+    chooserByOrg: { headline: null, intro: null, tile_order: ['stillorgan', 'hatch-street'] },
+    tiles,
+    ...extra,
+  })
+
+  it('reads kind=studio pages of the org only, never landing_page_settings', async () => {
+    const db = base([tile('stillorgan', ORG_A, 'Stillorgan')])
+    await loadFrontPage(db)
+    expect(db.calls).toContainEqual(['landing_pages', 'kind', 'studio'])
+    expect(db.calls).toContainEqual(['landing_pages', 'organization_id', ORG_A])
+    expect(db.calls.some(([t]) => t === 'landing_page_settings')).toBe(false)
+  })
+
+  it('a tile\'s name, CTA and cover come from the page chrome, then the location name and the hero', async () => {
+    const db = base([
+      tile('stillorgan', ORG_A, 'Stillorgan', {
+        chrome: { chooser_label: ' STILLORGAN ', chooser_cta_text: 'Come in', chooser_image_url: 'https://cdn/cover.jpg' },
+        blocks: [{ id: 'h', type: 'hero', image_url: 'https://cdn/hero.jpg' }],
+      }),
+      tile('hatch-street', ORG_A, 'Hatch Street', { blocks: [{ id: 'h', type: 'hero', image_url: 'https://cdn/hatch-hero.jpg' }] }),
+    ])
+    const page = await loadFrontPage(db)
+    expect(page.tiles).toEqual([
+      { path: 'stillorgan', name: 'STILLORGAN', cta: 'Come in', cover: 'https://cdn/cover.jpg', mode: 'active', disabled: false },
+      { path: 'hatch-street', name: 'Hatch Street', cta: 'Enter', cover: 'https://cdn/hatch-hero.jpg', mode: 'active', disabled: false },
+    ])
+  })
+
+  it('a page with no chrome and no location embed names the tile by its slug', async () => {
+    const db = base([tile('stillorgan', ORG_A, 'x', { chrome: null, locations: null })])
+    const page = await loadFrontPage(db)
+    expect(page.tiles[0]).toMatchObject({ path: 'stillorgan', name: 'stillorgan', cta: 'Enter' })
+  })
+
+  it('publish_state goes through tileModeFor: live active, coming_soon dimmed, draft and retired removed', async () => {
+    const db = base([
+      tile('stillorgan', ORG_A, 'Stillorgan', { publish_state: 'coming_soon' }),
+      tile('hatch-street', ORG_A, 'Hatch Street', { publish_state: 'draft' }),
+      tile('third', ORG_A, 'Third', { publish_state: 'retired' }),
+      tile('fourth', ORG_A, 'Fourth', { publish_state: 'live' }),
+    ], { chooserByOrg: { headline: null, intro: null, tile_order: ['stillorgan', 'hatch-street', 'third', 'fourth'] } })
+    const page = await loadFrontPage(db)
+    expect(page.tiles.map((t) => [t.path, t.mode, t.disabled])).toEqual([
+      ['stillorgan', 'coming_soon', true],
+      ['fourth', 'active', false],
+    ])
+  })
+})
+
 describe('publicWelcomePathForLocation — per-location domain landing (mig 432)', () => {
-  // Chain stub matching .select().eq().not().order().limit().maybeSingle()
+  // PAGES.1: the studio page's canonical link is /<slug> (R6).
   function landingDb(row) {
-    let touched = false
+    const reads = []
     const chain = {
       select: () => chain,
-      eq: () => chain,
-      not: () => chain,
-      order: () => chain,
-      limit: () => chain,
+      eq: (col, val) => { reads.push([col, val]); return chain },
       maybeSingle: async () => ({ data: row, error: null }),
     }
     return {
-      touched: () => touched,
-      from: (t) => { if (t === 'landing_page_settings') touched = true; return chain },
+      reads,
+      tables: [],
+      from(t) { this.tables.push(t); return chain },
     }
   }
 
   it('null locationId → null (whole-org / unmapped → chooser), no DB touch', async () => {
     const db = landingDb(null)
     expect(await publicWelcomePathForLocation(db, null)).toBe(null)
-    expect(db.touched()).toBe(false)
+    expect(db.tables).toEqual([])
   })
 
-  it('location with a public landing row → /welcome/<public_path>', async () => {
-    const db = landingDb({ public_path: 'stillorgan' })
-    expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe('/welcome/stillorgan')
+  it('location with a studio page → /<slug>, read from landing_pages by primary_location_id', async () => {
+    const db = landingDb({ slug: 'stillorgan' })
+    expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe('/stillorgan')
+    expect(db.tables).toEqual(['landing_pages'])
+    expect(db.reads).toContainEqual(['kind', 'studio'])
+    expect(db.reads).toContainEqual(['primary_location_id', 'loc-1'])
   })
 
-  it('location with no public landing → null (fall back to chooser)', async () => {
+  it('location with no studio page → null (fall back to chooser)', async () => {
     const db = landingDb(null)
     expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe(null)
   })

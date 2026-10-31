@@ -465,14 +465,13 @@ export const EXEMPT = {
     sale_offers:
       'Public sale product page: row resolved by its globally-unique slug, then fenced to the Stillorgan home location by offerBelongsToHome (W0.4, src/lib/offers-home.js) — any other location\'s offer 404s until Wave 2 gives tenants their own offers route. Price is rendered server-side from the row so the client can never supply an amount.',
   },
-  'src/app/legal/un1t/[slug]/[doc]/page.js': {
-    landing_page_settings:
-      'UN1TWRITE.17 — public legal page resolved by public_path (the path IS the tenant selector); 404s unless the studio is un1t.online, and renders only that studio\'s published terms or waiver text.',
-  },
-  'src/app/welcome/page.js': {
-    landing_page_settings:
-      'Public split-chooser: renders every location\'s published chooser tiles by design; the ?edit=1 seed reads the most-recently-edited row but only previews the same published marketing content.',
-  },
+  // PAGES.1 (Task 22): src/app/legal/un1t/[slug]/[doc]/page.js and
+  // src/app/welcome/page.js carried landing_page_settings exemptions here
+  // (public path as the tenant selector; the chooser's published tiles). Both
+  // now read landing_pages only through loadPageBySlug (scoped by the host's
+  // organisation id and the slug) and loadFrontPage / publicWelcomePathForLocation
+  // (kind='studio' and the organisation, or the location), so neither file
+  // queries a tenant table itself and neither needs an entry.
 
   // The first page scan's four real findings needed NO exemption in the end:
   // both fixes landed before this check did, so the pages carry their own

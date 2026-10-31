@@ -190,11 +190,14 @@ describe('resolveOrgChrome (W1.S1b) — the marketing footer\'s organisation', (
     t.locations.push({ id: 'aaaaaaaa-0000-4000-8000-000000000003', name: 'Gym A Soon', organization_id: ORG_A, active: true, created_at: '2026-03-01' })
     t.org_settings[0].short_name = 'GA'
     t.org_settings[0].legal_trading_name = 'Gym A Trading Ltd'
-    t.landing_page_settings = [
-      { location_id: LOC_A1, public_path: 'north', publish_state: 'live' },
-      { location_id: 'aaaaaaaa-0000-4000-8000-000000000002', public_path: 'south', publish_state: 'live' },
-      { location_id: 'aaaaaaaa-0000-4000-8000-000000000003', public_path: 'soon', publish_state: 'coming_soon' },
-      { location_id: LOC_B1, public_path: 'gym-b', publish_state: 'live' },
+    // PAGES.1: the footer's studios are the org's LIVE kind='studio' pages.
+    t.landing_pages = [
+      { organization_id: ORG_A, kind: 'studio', primary_location_id: LOC_A1, slug: 'north', publish_state: 'live' },
+      { organization_id: ORG_A, kind: 'studio', primary_location_id: 'aaaaaaaa-0000-4000-8000-000000000002', slug: 'south', publish_state: 'live' },
+      { organization_id: ORG_A, kind: 'studio', primary_location_id: 'aaaaaaaa-0000-4000-8000-000000000003', slug: 'soon', publish_state: 'coming_soon' },
+      // A campaign page and a studio page of another org never make the footer.
+      { organization_id: ORG_A, kind: 'campaign', primary_location_id: null, slug: 'summer', publish_state: 'live' },
+      { organization_id: ORG_B, kind: 'studio', primary_location_id: LOC_B1, slug: 'gym-b', publish_state: 'live' },
     ]
     return t
   }
@@ -206,10 +209,18 @@ describe('resolveOrgChrome (W1.S1b) — the marketing footer\'s organisation', (
       shortName: 'GA',
       legalName: 'Gym A Trading Ltd',
       studios: [
-        { name: 'Gym A North', href: '/welcome/north' },
-        { name: 'Gym A South', href: '/welcome/south' },
+        { name: 'Gym A North', href: '/north' },
+        { name: 'Gym A South', href: '/south' },
       ],
     })
+  })
+
+  it('a retired or draft studio page is not in the footer, and a studio with no page is not either', async () => {
+    const t = chromeTables()
+    t.landing_pages.find((p) => p.slug === 'south').publish_state = 'retired'
+    t.landing_pages = t.landing_pages.filter((p) => p.slug !== 'north')
+    const chrome = await resolveOrgChrome({ orgId: ORG_A, db: makeFakeDb(t), nowMs: T0 })
+    expect(chrome.studios).toEqual([])
   })
 
   it('an org with no settings row floors the wordmark and legal holder on its brand', async () => {
@@ -217,7 +228,7 @@ describe('resolveOrgChrome (W1.S1b) — the marketing footer\'s organisation', (
     expect(chrome.companyName).toBe('Gym B')
     expect(chrome.shortName).toBe('Gym B')
     expect(chrome.legalName).toBe('Gym B')
-    expect(chrome.studios).toEqual([{ name: 'Gym B', href: '/welcome/gym-b' }])
+    expect(chrome.studios).toEqual([{ name: 'Gym B', href: '/gym-b' }])
   })
 
   it('cached per org per TTL; no org → the empty chrome with no read', async () => {
@@ -241,7 +252,7 @@ describe('resolveOrgChrome (W1.S1b) — the marketing footer\'s organisation', (
     return b
   }
 
-  it.each(['org_settings', 'locations', 'landing_page_settings'])(
+  it.each(['org_settings', 'locations', 'landing_pages'])(
     'a failed %s read → the partial chrome, NOT cached: the next call reads again',
     async (failing) => {
       const inner = makeFakeDb(chromeTables())

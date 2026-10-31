@@ -1,7 +1,8 @@
 // /api/chooser-settings/tile-image — upload a chooser tile cover image
 // for one studio. Mirrors the landing-page hero-image route: multipart
-// form, stores in the 'branding' bucket, writes chooser_image_url on the
-// studio's landing_page_settings row, returns the public URL.
+// form, stores in the 'branding' bucket, writes chrome.chooser_image_url on
+// the studio's page (PAGES.1: its kind='studio' landing_pages row, merged into
+// the chrome), returns the public URL.
 //
 // Auth (SAAS-6): the front-page edit tier — master, org_admin of the
 // tile's org, or an owner WITHIN that org (assertChooserEdit, shared
@@ -14,6 +15,8 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { assertChooserEdit } from '@/lib/chooser-access'
 import { uuidLike } from '@/lib/schemas'
+import { loadStudioPagesByLocation, savePageFields, PageReadError } from '@/lib/landing-pages'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,6 +60,18 @@ export async function POST(request) {
   const guard = assertChooserEdit(user, loc.organization_id)
   if (guard) return guard
 
+  // The tile's studio page, read before anything is uploaded: a studio with
+  // no page in its org has no tile to put a cover on.
+  let page
+  try {
+    page = (await loadStudioPagesByLocation(db, { orgId: loc.organization_id, locationIds: [locationId] })).get(locationId)
+  } catch (err) {
+    if (!(err instanceof PageReadError)) throw err
+    logError('chooser-tile-image', 'studio page unreadable', { locationId, code: err.cause?.code ?? null })
+    return NextResponse.json({ success: false, error: 'Could not read the studio page. Try again.' }, { status: 500 })
+  }
+  if (!page) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+
   const ext = EXT_BY_TYPE[file.type]
   const path = `landing-page/${locationId}/chooser.${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())
@@ -78,10 +93,20 @@ export async function POST(request) {
   // Cache-bust so the new cover shows immediately.
   const publicUrl = `${urlData.publicUrl}?v=${Date.now()}`
 
-  const { error: rowErr } = await db.from('landing_page_settings')
-    .update({ chooser_image_url: publicUrl })
-    .eq('location_id', locationId)
-  if (rowErr) return NextResponse.json({ success: false, error: rowErr.message }, { status: 400 })
+  const saved = await savePageFields(db, {
+    orgId: loc.organization_id,
+    pageId: page.id,
+    patch: {
+      chrome: { ...(page.chrome && typeof page.chrome === 'object' ? page.chrome : {}), chooser_image_url: publicUrl },
+      updated_by: user.id || null,
+    },
+  })
+  if (!saved.ok) {
+    return NextResponse.json(
+      { success: false, error: saved.error?.message || 'Not found' },
+      { status: saved.reason === 'gone' ? 404 : 400 },
+    )
+  }
 
   return NextResponse.json({ success: true, data: { url: publicUrl } })
 }

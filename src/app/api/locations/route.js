@@ -7,6 +7,8 @@ import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { toSlug } from '@/lib/slug'
 import { seedLocationDefaults } from '@/lib/location-seed'
+import { createStudioPageForLocation, addStudioToOrgPages } from '@/lib/landing-pages'
+import { logError, logWarn } from '@/lib/log'
 import { canonicalZone, PLATFORM_TZ } from '@/lib/location-time'
 
 // GET /api/locations — List all active locations
@@ -131,5 +133,37 @@ export async function POST(request) {
     }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true, data: created })
+  // PAGES.1 (R7): the new studio's public page and its place on the
+  // organisation's all-studios pages. The location exists and is seeded by
+  // now, so a failure here is logged (ids only) and handed back as a warning,
+  // never a failed create: the editor shows the studio's page as missing.
+  const warnings = []
+  try {
+    const page = await createStudioPageForLocation(db, { location: created, userId: user.id })
+    if (!page.ok) {
+      warnings.push('studio_page_not_created')
+      const log = page.reason === 'failed' ? logError : logWarn
+      log('locations', 'new studio page not created', { locationId: created.id, reason: page.reason, code: page.error?.code ?? null })
+    }
+  } catch (err) {
+    warnings.push('studio_page_not_created')
+    logError('locations', 'new studio page not created', { locationId: created.id, reason: 'unreadable', code: err?.cause?.code ?? err?.code ?? null })
+  }
+  // A studio that is switched on gets its (switched-off) row on every
+  // all-studios page; an inactive one gets it when it is activated and the page
+  // is next saved (spec section 1).
+  if (created.active !== false) {
+    try {
+      const added = await addStudioToOrgPages(db, { orgId: created.organization_id, locationId: created.id, userId: user.id })
+      if (!added.ok) logError('locations', 'new studio not added to the organisation pages', { locationId: created.id, code: added.error?.code ?? null })
+    } catch (err) {
+      logError('locations', 'new studio not added to the organisation pages', { locationId: created.id, code: err?.cause?.code ?? err?.code ?? null })
+    }
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: created,
+    ...(warnings.length ? { warnings } : {}),
+  })
 }
