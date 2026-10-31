@@ -38,17 +38,38 @@ const isLocalPath = (s) => typeof s === 'string' && s.startsWith('/') && !s.star
 
 /**
  * Where a retired page sends its visitor: its `redirect_to` with the
- * original query string appended (an ad's utm_* and fbclid survive), the
- * sub-path dropped (/start/hatch-street goes where /start goes). null when the
- * page has no same-host target, which the route answers with a 404.
+ * original query string appended (an ad's utm_* and fbclid survive). A
+ * one-segment sub-path that names a studio picks that studio
+ * (/start/hatch-street goes to /trial?studio=hatch-street, as the old
+ * /start/<studio> route did); any other sub-path is dropped. An incoming key
+ * the target already sets (or the studio the path chose) is dropped from the
+ * visitor's query: a second `studio` reads as an array and shows the picker.
+ * null when the page has no same-host target, which the route answers with a
+ * 404.
+ *
+ * `studioFromSegment` maps a segment to a studio's public path, or null (the
+ * route passes studioParamToPublicPath); this module stays pure.
  */
-export function redirectTarget(page, _rest, searchParams) {
-  const base = typeof page?.redirect_to === 'string' ? page.redirect_to.trim() : ''
-  if (!isLocalPath(base)) return null
-  const qs = queryOf(searchParams).toString()
-  if (!qs) return base
-  const joiner = base.includes('?') ? (base.endsWith('?') || base.endsWith('&') ? '' : '&') : '?'
-  return `${base}${joiner}${qs}`
+export function redirectTarget(page, rest, searchParams, { studioFromSegment = null } = {}) {
+  const raw = typeof page?.redirect_to === 'string' ? page.redirect_to.trim() : ''
+  if (!isLocalPath(raw)) return null
+  const hashAt = raw.indexOf('#')
+  const hash = hashAt >= 0 ? raw.slice(hashAt) : ''
+  const beforeHash = hashAt >= 0 ? raw.slice(0, hashAt) : raw
+  const qAt = beforeHash.indexOf('?')
+  const path = qAt >= 0 ? beforeHash.slice(0, qAt) : beforeHash
+  const out = new URLSearchParams(qAt >= 0 ? beforeHash.slice(qAt + 1) : '')
+
+  const segments = Array.isArray(rest) ? rest : []
+  const pathStudio = segments.length === 1 && typeof studioFromSegment === 'function' ? studioFromSegment(segments[0]) : null
+  if (pathStudio) out.set('studio', pathStudio)
+
+  const taken = new Set(out.keys())
+  const incoming = queryOf(searchParams)
+  for (const [k, v] of incoming) if (!taken.has(k)) out.append(k, v)
+
+  const qs = out.toString()
+  return `${path}${qs ? `?${qs}` : ''}${hash}`
 }
 
 /**

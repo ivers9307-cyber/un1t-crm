@@ -23,7 +23,7 @@ describe('layoutFor', () => {
 
 describe('redirectTarget', () => {
   const retired = page({ slug: 'start', redirect_to: '/trial?studio=stillorgan' })
-  it('redirectTarget keeps the query and drops the sub-path: /start/hatch-street?utm_campaign=x → /trial?studio=stillorgan&utm_campaign=x', () => {
+  it('redirectTarget keeps the query and, with no studio mapper, drops the sub-path: /start/hatch-street?utm_campaign=x → /trial?studio=stillorgan&utm_campaign=x', () => {
     expect(redirectTarget(retired, ['hatch-street'], { utm_campaign: 'x' })).toBe('/trial?studio=stillorgan&utm_campaign=x')
   })
   it('no query is the target as written; a target with no query takes "?"', () => {
@@ -33,6 +33,24 @@ describe('redirectTarget', () => {
   it('keeps every value of a repeated key, in order, and accepts URLSearchParams', () => {
     expect(redirectTarget(page({ redirect_to: '/trial' }), null, { a: ['1', '2'], b: 'x' })).toBe('/trial?a=1&a=2&b=x')
     expect(redirectTarget(page({ redirect_to: '/trial' }), null, new URLSearchParams('a=1&b=two words'))).toBe('/trial?a=1&b=two+words')
+  })
+  it('/start/<studio> picks that studio, as the old route did: /start/hatch-street → /trial?studio=hatch-street', () => {
+    const toPath = (seg) => ({ 'hatch-street': 'hatch-street', hatch: 'hatch-street', stillorgan: 'stillorgan' }[seg] || null)
+    expect(redirectTarget(retired, ['hatch-street'], { utm_campaign: 'x' }, { studioFromSegment: toPath }))
+      .toBe('/trial?studio=hatch-street&utm_campaign=x')
+    expect(redirectTarget(retired, ['hatch'], {}, { studioFromSegment: toPath })).toBe('/trial?studio=hatch-street')
+    // A segment that is no studio, or more than one segment, keeps the target's own studio.
+    expect(redirectTarget(retired, ['nowhere'], {}, { studioFromSegment: toPath })).toBe('/trial?studio=stillorgan')
+    expect(redirectTarget(retired, ['hatch-street', 'x'], {}, { studioFromSegment: toPath })).toBe('/trial?studio=stillorgan')
+  })
+  it('drops an incoming key the target already sets (a second studio would read as an array)', () => {
+    expect(redirectTarget(retired, [], { studio: 'hatch', utm_source: 'fb' })).toBe('/trial?studio=stillorgan&utm_source=fb')
+    expect(redirectTarget(retired, [], new URLSearchParams('studio=a&studio=b&fbclid=z'))).toBe('/trial?studio=stillorgan&fbclid=z')
+    const toPath = (seg) => (seg === 'hatch-street' ? 'hatch-street' : null)
+    expect(redirectTarget(retired, ['hatch-street'], { studio: 'stillorgan' }, { studioFromSegment: toPath })).toBe('/trial?studio=hatch-street')
+  })
+  it('keeps a fragment on the target after the query', () => {
+    expect(redirectTarget(page({ redirect_to: '/trial#trial' }), [], { a: '1' })).toBe('/trial?a=1#trial')
   })
   it('a missing, off-site or protocol-relative target is no target (null)', () => {
     expect(redirectTarget(page({ redirect_to: null }), [], {})).toBeNull()

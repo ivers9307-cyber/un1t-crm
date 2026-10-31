@@ -202,7 +202,7 @@ export default async function PublicPage(props) {
   const { page, studios } = req.loaded
   if (page.kind !== 'campaign') notFound()
   if (page.publish_state === 'retired') {
-    const target = redirectTarget(page, req.rest, sp)
+    const target = redirectTarget(page, req.rest, sp, { studioFromSegment: studioParamToPublicPath })
     if (target) redirect(target)
     notFound()
   }

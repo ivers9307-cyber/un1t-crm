@@ -281,8 +281,11 @@ describe('the [slug] page route', () => {
     h.loaded = { page: { ...FIFTY, publish_state: 'coming_soon' }, studios: FIFTY_STUDIOS }
     expect(await outcome({ slug: '50plus' })).toBe('NEXT_NOT_FOUND')
     h.loaded = { page: { ...FIFTY, slug: 'start', offer_type: 'none', blocks: [], publish_state: 'retired', redirect_to: '/trial?studio=stillorgan' }, studios: [] }
-    expect(await outcome({ slug: 'start', rest: ['hatch-street'], sp: { utm_campaign: 'x' } })).toBe('redirect /trial?studio=stillorgan&utm_campaign=x')
-    expect(redirect).toHaveBeenCalledWith('/trial?studio=stillorgan&utm_campaign=x')
+    expect(await outcome({ slug: 'start', rest: ['hatch-street'], sp: { utm_campaign: 'x' } })).toBe('redirect /trial?studio=hatch-street&utm_campaign=x')
+    expect(redirect).toHaveBeenCalledWith('/trial?studio=hatch-street&utm_campaign=x')
+    // /start/hatch (the old alias) and an incoming ?studio= the target sets: one studio, the path's.
+    expect(await outcome({ slug: 'start', rest: ['hatch'], sp: { studio: 'stillorgan', fbclid: 'f' } })).toBe('redirect /trial?studio=hatch-street&fbclid=f')
+    expect(await outcome({ slug: 'start', rest: [], sp: { studio: 'hatch' } })).toBe('redirect /trial?studio=stillorgan')
     // A retired page with nowhere to go is a 404, never a 500.
     h.loaded = { page: { ...FIFTY, publish_state: 'retired', redirect_to: null }, studios: [] }
     expect(await outcome({ slug: '50plus' })).toBe('NEXT_NOT_FOUND')
