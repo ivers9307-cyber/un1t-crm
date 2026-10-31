@@ -12,8 +12,14 @@ import { logWarn, logError } from './log.js'
 import { resolveStudioDismissal } from './studio-pipeline-dismissal.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
-import { findOpenDealForPipeline, findPrimaryPipeline } from './deal-lookup.js'
+import { findOpenDealForPipeline, findOpenDealAtLocation, findPrimaryPipeline } from './deal-lookup.js'
 import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
+// PIPE3.7 — the router and its claims: at a studio running a claim board
+// (Stillorgan's €39 Trial / Programmes) a contact is placed on ONE of several
+// boards, and the trial's own credits are never a Class Pack.
+import { routeContact, CLAIM_BOARD_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
+import { claimLive as paidClaimLive } from '../../shared/pipelines/paid-trial.js'
+import { loadPlacementClaims, loadBoardsForLocation } from './pipeline-claims.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
@@ -529,11 +535,6 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   if (!db || !locationId || !contactId) {
     return { action: 'error', error: 'missing arguments' }
   }
-  // PIPELINE5.4 — classifier is the source of truth for stage.
-  // Single rule set runs from applyMemberSync (per-event) AND from
-  // the nightly /api/cron/pipeline-classify, so the two converge.
-  const targetSlug = classifyContact(contactSnapshot || {})
-
   // PIPELINES.5 — placement from this path is only ever about the location's
   // PRIMARY board, and only when that board is derived. A manual board's deals
   // move by hand and nothing else (mig 594): writing one from a webhook is the
@@ -544,9 +545,54 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   if (!primary || primary.mode !== PIPELINE_MODES.DERIVED) {
     return { action: 'leave', deal_id: null, stage_slug: null }
   }
-  const pipelineId = primary.id
 
-  const existing = await getOpenDealWithStage(db, contactId, pipelineId)
+  // PIPE3.7 — at a studio running a claim board, the ROUTER places the contact
+  // (shared/pipelines/router.js: Cold and Gympass, then a live €39 claim, then a
+  // live programme claim, else the acquisition classifier). The claims come
+  // pre-loaded from applyMemberSync (opts.claims / opts.claimsError) or are read
+  // here; an unreadable claim places nobody. Elsewhere this IS classifyContact
+  // on the primary board, exactly as before.
+  const now = Number.isFinite(opts?.now) ? opts.now : Date.now()
+  let boards = null
+  let claims = null
+  if (opts?.claimsError) {
+    return { action: 'error', error: `claims unavailable: ${opts.claimsError}` }
+  }
+  if (opts?.claims !== undefined) {
+    const boardsRes = await loadBoardsForLocation(db, locationId)
+    if (!boardsRes.ok) return { action: 'error', error: `claims unavailable: ${boardsRes.reason}` }
+    boards = boardsRes.boards
+    claims = opts.claims
+  } else {
+    const placement = await loadPlacementClaims(db, { locationId, contactId, contact: { ...(contactSnapshot || {}), id: contactId }, now, write: true })
+    if (!placement.ok) return { action: 'error', error: `claims unavailable: ${placement.reason}` }
+    boards = placement.boards
+    claims = placement.claims
+  }
+  const derivedBoards = (boards || []).filter((b) => b.mode === PIPELINE_MODES.DERIVED)
+  const claimBoards = derivedBoards.filter((b) => CLAIM_BOARD_MODULES.includes(b.module))
+
+  // PIPELINE5.4 — classifier is the source of truth for stage.
+  // Single rule set runs from applyMemberSync (per-event) AND from
+  // the nightly /api/cron/pipeline-classify, so the two converge.
+  let targetSlug
+  let targetBoard = primary
+  if (claimBoards.length > 0) {
+    const route = routeContact(contactSnapshot || {}, claims, now, new Set(derivedBoards.map((b) => b.module)))
+    targetSlug = route.slug
+    targetBoard = route.boardKey === BOARD_KEYS.ACQUISITION
+      ? primary
+      : (derivedBoards.find((b) => b.module === route.boardKey) || primary)
+  } else {
+    targetSlug = classifyContact(contactSnapshot || {})
+  }
+  const pipelineId = targetBoard.id
+
+  // With claim boards the open deal may sit on ANY board here (it follows the
+  // person); without them, on the primary as before.
+  const existing = claimBoards.length > 0
+    ? await getOpenDealAtLocationWithStage(db, contactId, locationId)
+    : await getOpenDealWithStage(db, contactId, pipelineId)
 
   if (!existing && opts?.noCreate) {
     // CROSSOVERDEAL.1 — a sibling-studio contact with nothing done at this
@@ -578,7 +624,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
-    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug }
+    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId }
   }
 
   // EXISTING deal — move iff the classifier says we should be in a
@@ -591,14 +637,19 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   if (!targetStageId) {
     return { action: 'error', deal_id: existing.id, error: `Target stage '${targetSlug}' not found at location` }
   }
+  // PIPE3.7 — a deal follows the person across boards: the same row takes the
+  // new pipeline_id with its new stage_id, in one update (never close and
+  // recreate). A same-board move keeps the stage-only payload.
+  const crossBoard = Boolean(existing.pipeline_id && existing.pipeline_id !== pipelineId)
   const { error: moveErr } = await db
     .from('deals')
-    .update({ stage_id: targetStageId })
+    .update(crossBoard ? { stage_id: targetStageId, pipeline_id: pipelineId } : { stage_id: targetStageId })
     .eq('id', existing.id)
   if (moveErr) return { action: 'error', deal_id: existing.id, error: moveErr.message }
   // HATCHPIPE.1 — name the board the move happened on. The sequence fence
   // (triggerSequencesForDealPlacement) refuses a move whose board it cannot
   // place at the contact's own studio.
+  const fromBoard = crossBoard ? (derivedBoards.find((b) => b.id === existing.pipeline_id)?.key ?? null) : null
   return {
     action: 'move',
     deal_id: existing.id,
@@ -606,7 +657,21 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     to_slug: targetSlug,
     pipeline_id: pipelineId,
     location_id: locationId,
+    ...(crossBoard ? { from_board: fromBoard, to_board: targetBoard.key } : {}),
   }
+}
+
+// PIPE3.7 — the contact's newest open deal at the studio, whichever board it
+// sits on, with its stage slug (getOpenDealWithStage, location-wide).
+export async function getOpenDealAtLocationWithStage(db, contactId, locationId) {
+  const deal = await findOpenDealAtLocation(db, contactId, locationId)
+  if (!deal) return null
+  const { data: stages } = await db
+    .from('pipeline_stages')
+    .select('slug')
+    .eq('id', deal.stage_id)
+    .limit(1)
+  return { id: deal.id, stage_id: deal.stage_id, pipeline_id: deal.pipeline_id, stage_slug: stages?.[0]?.slug || null }
 }
 
 const ID_PATHS = [['_id'], ['id'], ['member_id']]
@@ -1091,8 +1156,12 @@ const PACK_CUSTOMER_MIN_CREDITS = 4 // trials are ≤3; mig-001 default of 3 sta
  *
  * Pure function — caller writes the timestamp.
  */
-export function shouldStampPackCustomer({ newStatus, credits, existingPackCustomerAt }) {
+export function shouldStampPackCustomer({ newStatus, credits, existingPackCustomerAt, liveTrialClaim = false }) {
   if (existingPackCustomerAt) return false
+  // PIPE3.7 — a live €39 trial claim: the credits ARE the trial (the 14 Day
+  // Reset lands as 10), so no stamp while it is live. A pack bought after the
+  // trial lapses stamps as before on a later sync.
+  if (liveTrialClaim === true) return false
   if (PACK_EXCLUDED_STATUSES.has(newStatus)) return false
   return Number.isFinite(credits) && credits >= PACK_CUSTOMER_MIN_CREDITS
 }
@@ -1253,7 +1322,7 @@ export async function findExistingContact(db, locationId, mapped) {
   // set: the funnel classifier counts attended classes from recent_bookings
   // and gates the Converted column on converted_at, and a LIST/skipBookings
   // sync doesn't recompute either.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, last_lead_source_at, location_id'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, last_lead_source_at, last_lead_source, glofox_membership_plan, location_id'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -2244,6 +2313,28 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
+  // PIPE3.7 — this contact's board claims, read ONCE here for both the pack
+  // stamp (a live €39 claim means the credits are the trial's) and the
+  // placement below. Only a studio running a claim board reads anything past
+  // its boards. A failed read is "cannot tell": no stamp this sync (write-once
+  // stamps must not be guessed; the next sync re-judges) and the placement
+  // reports the error instead of placing.
+  const syncNow = Date.now()
+  const claimsRow = { ...(preview.existing || {}), ...(preview.mapped || {}), id: contactId }
+  let placementOpts = {}
+  let liveTrialClaim = false
+  if (!opts.skipReclassify && !opts.skipBookings) {
+    const placement = await loadPlacementClaims(db, { locationId, contactId, contact: claimsRow, now: syncNow, write: true })
+    if (!placement.ok) {
+      placementOpts = { claimsError: placement.reason }
+      liveTrialClaim = true
+      logWarn('glofox-sync', 'board claims unreadable; no pack stamp, no placement this sync', { locationId, contactId, reason: placement.reason })
+    } else if (placement.claimBoards) {
+      placementOpts = { claims: placement.claims }
+      liveTrialClaim = paidClaimLive(placement.claims?.paid ?? null, claimsRow, syncNow)
+    }
+  }
+
   // FUNNEL.3 — stamp the Class Pack moment. Same write-once/best-effort
   // discipline as converted_at above. Unlike conversion this is NOT a
   // transition edge — any sync observing 4+ active credits on a
@@ -2254,6 +2345,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     newStatus,
     credits: preview.mapped?.trial_credits_remaining ?? preview.existing?.trial_credits_remaining ?? null,
     existingPackCustomerAt: packCustomerAt,
+    liveTrialClaim,
   })) {
     try {
       const { error: packErr } = await db.from('contacts')
@@ -2357,6 +2449,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // `m`, so fall back to the persisted row (matches the nightly
         // pipeline-reclassify input, so the two writers converge).
         gympass_member_id: m.gympass_member_id ?? ex.gympass_member_id ?? null,
+        // PIPE3.7 — what the router's programme match and the €39 rules read.
+        lead_source: m.lead_source ?? ex.lead_source ?? null,
+        last_lead_source: ex.last_lead_source ?? null,
+        glofox_membership_plan: m.glofox_membership_plan ?? ex.glofox_membership_plan ?? null,
+        location_id: ex.location_id ?? null,
       }
       // CROSSOVERDEAL.1 — the contact lives at a sibling studio: a deal on
       // THIS studio's board only when the snapshot (this studio's Glofox
@@ -2366,7 +2463,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,
         m.name || null,
-        { noCreate: siblingIdle },
+        { noCreate: siblingIdle, now: syncNow, ...placementOpts },
       )
     } catch (e) {
       dealResult = { action: 'error', error: e?.message || 'deal write threw' }

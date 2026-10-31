@@ -91,3 +91,28 @@ export async function findEntryStageForPipeline(db, pipelineId) {
   if (error || !Array.isArray(data) || data.length === 0) return null
   return data[0]
 }
+
+/**
+ * PIPE3.7 — the contact's newest OPEN deal on ANY board at a location. A deal
+ * follows the person across boards (the router moves pipeline_id with the
+ * stage), so a placement path has to find it wherever it sits, not only on
+ * the primary board.
+ *
+ * @param {object} db
+ * @param {string} contactId
+ * @param {string} locationId
+ * @returns {Promise<{id:string, stage_id:string, pipeline_id:string}|null>}
+ */
+export async function findOpenDealAtLocation(db, contactId, locationId) {
+  if (!db || !contactId || !locationId) return null
+  const { data, error } = await db
+    .from('deals')
+    .select('id, stage_id, pipeline_id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .eq('status', 'open')
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (error || !Array.isArray(data) || data.length === 0) return null
+  return data[0]
+}

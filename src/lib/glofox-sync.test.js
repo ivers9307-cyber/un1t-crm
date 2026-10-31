@@ -2675,3 +2675,139 @@ describe('CROSSOVERDEAL.1 — a sibling-studio contact is placed on this board o
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// PIPE3.7 — the webhook path places through the router when the studio runs
+// claim boards, and the trial's own credits are never a Class Pack.
+// ---------------------------------------------------------------------------
+describe('shouldStampPackCustomer — a live €39 claim (PIPE3.7)', () => {
+  it('never stamps while a paid-trial claim is live, whatever the credits', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'trial', credits: 10, existingPackCustomerAt: null, liveTrialClaim: true })).toBe(false)
+  })
+  it('stamps as before once no claim is live', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'trial', credits: 10, existingPackCustomerAt: null, liveTrialClaim: false })).toBe(true)
+    expect(shouldStampPackCustomer({ newStatus: 'trial', credits: 10, existingPackCustomerAt: null })).toBe(true)
+  })
+})
+
+describe('ensureDealForContact — three boards (PIPE3.7)', () => {
+  const LOC = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const THREE = [
+    { id: 'p-acq', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+    { id: 'p-prog', location_id: LOC, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES = [
+    ...['new_lead', 'pack_member', 'dormant', 'member'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq' })),
+    ...['paid_trial_new_lead', 'paid_trial_day_7'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid' })),
+    ...['programme_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog' })),
+  ]
+  const RULES = { pipelines: { programmes: { lead_sources: ['meta_50plus'], glofox_plan_patterns: ['elites trial'] } } }
+
+  // A fluent fake over named tables; writes are recorded with their filters.
+  function threeBoardDb({ pipelines = THREE, deals = [], purchases = [], claims = [], errors = {} } = {}) {
+    const tables = { pipelines, pipeline_stages: STAGES, deals, trial_purchases: purchases, pipeline_board_claims: claims, locations: [{ id: LOC, settings: RULES }] }
+    const writes = []
+    const reads = []
+    function chain(table) {
+      reads.push(table)
+      const filters = []
+      let op = 'select'
+      let payload = null
+      const c = {}
+      c.select = () => c
+      c.order = () => c
+      c.limit = () => c
+      c.single = () => { if (op === 'select') op = 'single'; return c }
+      c.maybeSingle = () => { if (op === 'select') op = 'single'; return c }
+      c.eq = (col, val) => { filters.push({ col, val }); return c }
+      c.in = () => c
+      c.update = (f) => { op = 'update'; payload = f; return c }
+      c.insert = (f) => { op = 'insert'; payload = f; return c }
+      c.upsert = (f, o) => { op = 'upsert'; payload = { rows: f, opts: o }; return c }
+      const apply = (rows) => (rows || []).filter((r) => filters.every((f) => !Object.prototype.hasOwnProperty.call(r, f.col) || r[f.col] === f.val))
+      c.then = (resolve) => {
+        if (errors[table] && op !== 'update' && op !== 'insert' && op !== 'upsert') return resolve({ data: null, error: { message: errors[table] } })
+        if (op === 'update' || op === 'insert' || op === 'upsert') {
+          writes.push({ table, op, payload, filters })
+          return resolve({ data: op === 'insert' ? { id: 'd-new' } : null, error: null })
+        }
+        const rows = apply(tables[table])
+        return resolve({ data: op === 'single' ? (rows[0] ?? null) : rows, error: null })
+      }
+      return c
+    }
+    return { db: { from: chain }, writes, reads }
+  }
+  const trialer = { glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: ago(2), joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+  const purchase = { id: 'tp1', location_id: LOC, contact_id: 'c1', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14 }
+
+  it('a €39 buyer with an acquisition deal at pack_member moves to the €39 board: stage AND pipeline in one update', async () => {
+    const { db, writes } = threeBoardDb({
+      deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-acq', stage_id: 's-pack_member', status: 'open' }],
+      purchases: [purchase],
+    })
+    const out = await ensureDealForContact(db, LOC, 'c1', trialer, 'Buyer')
+    expect(out).toEqual({
+      action: 'move', deal_id: 'd1', from_slug: 'pack_member', to_slug: 'paid_trial_new_lead',
+      pipeline_id: 'p-paid', location_id: LOC, from_board: 'acquisition', to_board: 'paid_trial',
+    })
+    const updates = writes.filter((w) => w.table === 'deals' && w.op === 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].payload).toEqual({ stage_id: 's-paid_trial_new_lead', pipeline_id: 'p-paid' })
+    expect(updates[0].filters).toEqual([{ col: 'id', val: 'd1' }])
+  })
+
+  it('a /50plus lead with no deal gets a recorded programme claim, then a deal on the Programmes board', async () => {
+    const lead = { glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [], last_lead_source: 'meta_50plus', last_lead_source_at: ago(1) }
+    const { db, writes } = threeBoardDb()
+    const out = await ensureDealForContact(db, LOC, 'c2', lead, 'Fifty')
+    expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'programme_lead', pipeline_id: 'p-prog' })
+    const claim = writes.find((w) => w.table === 'pipeline_board_claims')
+    expect(claim.op).toBe('upsert')
+    expect(claim.payload.rows[0]).toMatchObject({ contact_id: 'c2', location_id: LOC, board_key: 'programmes', source: 'lead_source' })
+    const insert = writes.find((w) => w.table === 'deals' && w.op === 'insert')
+    expect(insert.payload).toMatchObject({ contact_id: 'c2', stage_id: 's-programme_lead', pipeline_id: 'p-prog', location_id: LOC, status: 'open' })
+    expect(writes.indexOf(claim)).toBeLessThan(writes.indexOf(insert))
+  })
+
+  it('pre-loaded claims (opts.claims) are used as given: no purchases, claims or settings read', async () => {
+    const { db, reads, writes } = threeBoardDb({
+      deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-acq', stage_id: 's-pack_member', status: 'open' }],
+    })
+    const claims = { paid: { start: NOW - 2 * 86_400_000, end: NOW + 12 * 86_400_000, paidAt: NOW - 2 * 86_400_000, grantedAt: NOW - 2 * 86_400_000, durationDays: 14 }, programme: null }
+    const out = await ensureDealForContact(db, LOC, 'c1', trialer, 'Buyer', { claims })
+    expect(out.to_slug).toBe('paid_trial_new_lead')
+    expect(reads).not.toContain('trial_purchases')
+    expect(reads).not.toContain('pipeline_board_claims')
+    expect(reads).not.toContain('locations')
+    expect(writes.filter((w) => w.table === 'deals')).toHaveLength(1)
+  })
+
+  it('a same-board move keeps today\'s stage-only payload and result shape', async () => {
+    const { db, writes } = threeBoardDb({
+      deals: [{ id: 'd1', contact_id: 'c3', location_id: LOC, pipeline_id: 'p-acq', stage_id: 's-member', status: 'open' }],
+    })
+    const out = await ensureDealForContact(db, LOC, 'c3', { glofox_membership_status: 'ex_member' }, 'Ex')
+    expect(out).toEqual({ action: 'move', deal_id: 'd1', from_slug: 'member', to_slug: 'dormant', pipeline_id: 'p-acq', location_id: LOC })
+    expect(writes.find((w) => w.table === 'deals').payload).toEqual({ stage_id: 's-dormant' })
+  })
+
+  it('an unreadable trial_purchases read is an error, and nothing is written', async () => {
+    const { db, writes } = threeBoardDb({ purchases: [purchase], errors: { trial_purchases: 'down' } })
+    const out = await ensureDealForContact(db, LOC, 'c1', trialer, 'Buyer')
+    expect(out).toEqual({ action: 'error', error: 'claims unavailable: purchases_unreadable' })
+    expect(writes).toHaveLength(0)
+  })
+
+  it('a studio with the acquisition board alone reads neither purchases nor claims nor settings', async () => {
+    const { db, reads } = threeBoardDb({ pipelines: [THREE[0]], purchases: [purchase] })
+    const out = await ensureDealForContact(db, LOC, 'c1', trialer, 'Buyer')
+    expect(out.action).toBe('create')
+    expect(reads).not.toContain('trial_purchases')
+    expect(reads).not.toContain('pipeline_board_claims')
+    expect(reads).not.toContain('locations')
+  })
+})

@@ -20,7 +20,7 @@ import { logWarn } from './log.js'
 import { selectAll } from './select-all.js'
 import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
 import { matchProgrammeSignal } from '../../shared/pipelines/programmes.js'
-import { BOARD_KEYS } from '../../shared/pipelines/router.js'
+import { BOARD_KEYS, CLAIM_BOARD_MODULES } from '../../shared/pipelines/router.js'
 
 export const PROGRAMME_RULES_PATH = Object.freeze(['pipelines', 'programmes'])
 const PROGRAMME_BOARD = BOARD_KEYS.PROGRAMMES
@@ -234,4 +234,27 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
     if (write) await upsertProgrammeClaims(db, locationId, pending, now)
   }
   return { ok: true, claims: { paid, programme } }
+}
+
+/**
+ * PIPE3.7 — everything a single placement (webhook, Cold, place-now) needs in
+ * one call: the studio's enabled boards, and, when one of them is a claim
+ * board, this contact's claims (recording a new programme match). A studio
+ * with no claim board answers { claimBoards: false, claims: null } after the
+ * one boards read and nothing else.
+ *
+ * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme }|null }
+ *   | { ok: false, reason: string, boards?: object[] }>}
+ */
+export async function loadPlacementClaims(db, { locationId, contactId, contact, now = Date.now(), write = true }) {
+  const boardsRes = await loadBoardsForLocation(db, locationId)
+  if (!boardsRes.ok) return { ok: false, reason: boardsRes.reason }
+  const boards = boardsRes.boards
+  const claimBoards = boards.some((b) => b.mode === 'derived' && CLAIM_BOARD_MODULES.includes(b.module))
+  if (!claimBoards) return { ok: true, boards, claimBoards: false, claims: null }
+  const rulesRes = await loadProgrammeRules(db, locationId)
+  if (!rulesRes.ok) return { ok: false, reason: rulesRes.reason, boards }
+  const claimsRes = await loadClaimsForContact(db, { locationId, contactId, contact, now, rules: rulesRes.rules, write })
+  if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
+  return { ok: true, boards, claimBoards: true, claims: claimsRes.claims }
 }

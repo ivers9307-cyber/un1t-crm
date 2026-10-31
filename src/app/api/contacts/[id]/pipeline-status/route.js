@@ -25,6 +25,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { ensureDealForContact } from '@/lib/glofox-sync'
+import { getBoardModule } from '@shared/pipelines/index.js'
 import { reclassifyUn1tBoardNow } from '@/lib/un1t-pipeline-cadence'
 import { writeStudioDismissal } from '@/lib/studio-pipeline-dismissal'
 import { logPipelineDismissal } from '@/lib/activity-events'
@@ -41,12 +42,11 @@ const PipelineStatusSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
-// Classifier input columns — must include everything classifyContact reads so
-// the immediate re-placement matches what the nightly cron would compute.
-const SNAPSHOT_COLS =
-  'id, name, location_id, glofox_membership_status, joined_at, created_at, ' +
-  'last_attended_at, trial_credits_remaining, recent_bookings, converted_at, ' +
-  'pack_customer_at, pipeline_dismissed_at'
+// Classifier input columns — everything the router reads (PIPE3.7: the
+// Programmes module declares the widest contacts-input set, the acquisition
+// classifier's columns included) plus the studio the row lives at, so the
+// immediate re-placement matches what the nightly cron would compute.
+const SNAPSHOT_COLS = [...new Set([...getBoardModule('programmes').requiredFields, 'location_id'])].join(', ')
 
 export async function POST(request, props) {
   const params = await props.params

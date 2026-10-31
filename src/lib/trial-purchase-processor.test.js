@@ -19,8 +19,11 @@ vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi }))
 vi.mock('@/lib/ops-alerts', () => ({ sendOpsAlert: mocks.ops }))
 vi.mock('@/lib/trial-purchase-emails', () => ({ sendTrialPurchaseEmail: mocks.email }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
+// PIPE3.7 — the board placement after a grant.
+vi.mock('@/lib/pipeline-place-now', () => ({ placeContactNow: vi.fn(async () => ({ ok: true })) }))
 
 import { processTrialPurchase, alertTrialPurchaseStaff, REVIEW_REASONS } from './trial-purchase-processor'
+import { placeContactNow } from '@/lib/pipeline-place-now'
 
 const ROW = {
   id: 'tp1', location_id: 'loc1', contact_id: 'c1', status: 'processing', payment_status: 'paid',
@@ -286,5 +289,28 @@ describe('alertTrialPurchaseStaff', () => {
       expect(REVIEW_REASONS[k]).toBeTruthy()
     }
     expect(REVIEW_REASONS.trial_used).toBe('The buyer already had a trial here and asked for help.')
+  })
+})
+
+
+// PIPE3.7 — a granted €39 trial puts the buyer on the €39 board at once.
+describe('processTrialPurchase — board placement (PIPE3.7)', () => {
+  it('places the contact at the purchase\'s studio after a successful grant', async () => {
+    const { db } = makeDb({ contact: { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', glofox_member_id: 'g-existing' } })
+    const r = await processTrialPurchase(db, ROW, { now: () => 'T' })
+    expect(r).toEqual({ outcome: 'granted' })
+    expect(placeContactNow).toHaveBeenCalledTimes(1)
+    expect(placeContactNow.mock.calls[0][1]).toEqual({ locationId: ROW.location_id, contactId: 'c1' })
+  })
+  it('a throwing placement never changes the outcome', async () => {
+    vi.mocked(placeContactNow).mockRejectedValueOnce(new Error('boom'))
+    const { db } = makeDb({ contact: { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', glofox_member_id: 'g-existing' } })
+    expect(await processTrialPurchase(db, ROW, { now: () => 'T' })).toEqual({ outcome: 'granted' })
+  })
+  it('a refused grant places nobody', async () => {
+    mocks.purchase.mockResolvedValueOnce({ ok: false, message_code: 'NOPE' })
+    const { db } = makeDb({ contact: { id: 'c1', email: 'ava@example.com', first_name: 'Ava', last_name: 'Byrne', glofox_member_id: 'g-existing' } })
+    await processTrialPurchase(db, ROW, { now: () => 'T' })
+    expect(placeContactNow).not.toHaveBeenCalled()
   })
 })

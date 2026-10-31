@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   programmeRulesFromSettings, loadBoardsForLocation, loadClaimsForLocation, pendingProgrammeClaims,
-  upsertProgrammeClaims, loadClaimsForContact, loadProgrammeRules,
+  upsertProgrammeClaims, loadClaimsForContact, loadProgrammeRules, loadPlacementClaims,
 } from './pipeline-claims.js'
 
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
@@ -203,5 +203,32 @@ describe('loadClaimsForContact', () => {
     const { db } = fakeDb({ trial_purchases: [] }, { errors: { pipeline_board_claims: 'cl' } })
     expect(await loadClaimsForContact(db, { locationId: LOC, contactId: 'c1', contact, now: T0, rules: RULES }))
       .toMatchObject({ ok: false, reason: 'claims_unreadable' })
+  })
+})
+
+describe('loadPlacementClaims', () => {
+  const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true }
+  const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false }
+  const contact = { id: 'c1', location_id: LOC }
+  it('acquisition alone: boards only, no claims, no further reads', async () => {
+    const { db } = fakeDb({ pipelines: [ACQ] }, { errors: { trial_purchases: 'must not be read', locations: 'must not be read' } })
+    expect(await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toEqual({ ok: true, boards: [ACQ], claimBoards: false, claims: null })
+  })
+  it('a claim board present: rules and claims are read', async () => {
+    const { db } = fakeDb({
+      pipelines: [ACQ, PAID], locations: [{ id: LOC, settings: {} }],
+      trial_purchases: [{ id: 'tp1', location_id: LOC, contact_id: 'c1', status: 'granted', payment_status: 'paid', paid_at: iso(T0), granted_at: iso(T0), duration_days: 14 }],
+      pipeline_board_claims: [],
+    })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out.ok).toBe(true)
+    expect(out.claimBoards).toBe(true)
+    expect(out.claims.paid).toMatchObject({ start: T0 })
+    expect(out.claims.programme).toBeNull()
+  })
+  it('a failed boards, settings or purchases read is reported with its reason', async () => {
+    expect(await loadPlacementClaims(fakeDb({}, { errors: { pipelines: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toEqual({ ok: false, reason: 'boards_unreadable' })
+    expect(await loadPlacementClaims(fakeDb({ pipelines: [ACQ, PAID] }, { errors: { locations: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toMatchObject({ ok: false, reason: 'settings_unreadable' })
+    expect(await loadPlacementClaims(fakeDb({ pipelines: [ACQ, PAID], locations: [] }, { errors: { trial_purchases: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toMatchObject({ ok: false, reason: 'purchases_unreadable' })
   })
 })

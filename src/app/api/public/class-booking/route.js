@@ -26,6 +26,7 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
 import { placeWaitlistEntry } from '@/lib/waitlist-entry'
+import { placeContactNow } from '@/lib/pipeline-place-now'
 import { resolveLandingPath, classFunnelConfigFromBlocks, classFunnelTimetableUnavailableMessage } from '@/lib/public-landing'
 import { resolveCampaignKey, campaignFunnelBlock, campaignFunnelConfig, campaignFunnelCopy } from '@/lib/campaign-funnel'
 import { createClassBookingPayment } from '@/lib/class-booking-payments'
@@ -377,6 +378,13 @@ export async function POST(request) {
       title: b.first_name || 'Class lead',
     })
   } catch (e) { logWarn('classbook', 'deal placement failed', { err: e }) }
+  // PIPE3.7 — a programme lead (the /50plus page) belongs on the Programmes
+  // board from the moment they land, not after tonight's run: route them now.
+  // Best-effort; the nightly pass converges either way.
+  try {
+    const placed = await placeContactNow(db, { locationId, contactId })
+    if (!placed.ok) logWarn('classbook', 'board placement skipped', { reason: placed.reason })
+  } catch (e) { logWarn('classbook', 'board placement failed', { err: e }) }
 
   // UN1TWRITE.18 — the acceptance, with the documents' version at the time of
   // the tick (null when they could not be read; the tick still stands).
