@@ -5,11 +5,21 @@
 // booking card as `children`: stacked on a phone (video, then card), two
 // columns from `lg` (video left, card right; brainstorm direction C1).
 //
-// The video autoplays MUTED (every browser refuses sound before a gesture on
-// the page; iOS always) and loops, with the poster as its still. One large
-// button unmutes in a tap; the clip should carry burned-in captions so the
-// message lands before the tap. No video: the poster alone; neither: the
-// words on black.
+// HEROVIDEO.1 — two operator choices off the block (campaignFunnelCopy):
+//   videoFocus   'top' | 'center' | 'bottom': which edge of the clip the box
+//                keeps when it crops (object-position). A talking coach has
+//                their face at the top, so 'top' is the default; 'center' was
+//                the old behaviour and cut the top of the frame off.
+//   soundDefault 'on' | 'muted': whether the clip ASKS to start with sound.
+//                Every browser refuses sound before a gesture on the page
+//                (iOS always; Chrome unless the site has engagement), and the
+//                `autoplay` attribute fails silently, so with 'on' the hero
+//                calls play() itself after mount: if the browser refuses, the
+//                clip falls back to muted autoplay with the Tap for sound
+//                button, exactly the old behaviour. So "sound on" means "with
+//                sound wherever the browser allows it, muted otherwise", and
+//                the clip should still carry burned-in captions.
+// No video: the poster alone; neither: the words on black.
 //
 // PAGES.1 — `renderText(path, value)` (optional) renders the eyebrow,
 // heading and sub-copy instead of the plain words: the editor's preview
@@ -19,12 +29,44 @@
 // The video box is the one dark island on a light page: `bg-black` sits on
 // the element whose text is white, which is the rule no-low-contrast-accent-
 // text asks for.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-export default function CampaignHero({ videoUrl, posterUrl, soundLabel = 'Tap for sound', eyebrow, heading, subhead, children, renderText = null }) {
+// Literal class names so Tailwind sees them.
+const FOCUS_CLASS = Object.freeze({ top: 'object-top', center: 'object-center', bottom: 'object-bottom' })
+
+export function heroFocusClass(videoFocus) {
+  return FOCUS_CLASS[videoFocus] || FOCUS_CLASS.top
+}
+
+export default function CampaignHero({
+  videoUrl, posterUrl, soundLabel = 'Tap for sound', videoFocus = 'top', soundDefault = 'on',
+  eyebrow, heading, subhead, children, renderText = null,
+}) {
   const text = (key, value) => (renderText ? renderText([key], value) : value)
   const videoRef = useRef(null)
-  const [muted, setMuted] = useState(true)
+  const wantSound = soundDefault === 'on'
+  const [muted, setMuted] = useState(!wantSound)
+  const focusClass = heroFocusClass(videoFocus)
+
+  // Sound on: ask to play with sound; a refusal (the autoplay policy) falls
+  // back to muted autoplay, never to a frozen poster.
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || !videoUrl || !wantSound) return
+    let cancelled = false
+    const fallBack = () => {
+      if (cancelled) return
+      v.muted = true
+      setMuted(true)
+      try { const q = v.play(); if (q && q.catch) q.catch(() => {}) } catch { /* no autoplay at all: the poster stays */ }
+    }
+    v.muted = false
+    try {
+      const p = v.play()
+      if (p && p.catch) p.catch(fallBack)
+    } catch { fallBack() }
+    return () => { cancelled = true }
+  }, [videoUrl, wantSound])
 
   function toggleSound() {
     const v = videoRef.current
@@ -42,18 +84,19 @@ export default function CampaignHero({ videoUrl, posterUrl, soundLabel = 'Tap fo
           {videoUrl ? (
             <video
               ref={videoRef}
-              className="absolute inset-0 w-full h-full object-cover"
+              className={`absolute inset-0 w-full h-full object-cover ${focusClass}`}
               src={videoUrl}
               poster={posterUrl || undefined}
               autoPlay
-              muted
+              muted={muted}
               loop
               playsInline
               preload="metadata"
+              data-sound-default={soundDefault}
             />
           ) : posterUrl ? (
 
-            <img src={posterUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+            <img src={posterUrl} alt="" className={`absolute inset-0 w-full h-full object-cover ${focusClass}`} />
           ) : null}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" aria-hidden="true" />
           {videoUrl && (

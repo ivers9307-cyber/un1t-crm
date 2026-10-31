@@ -344,7 +344,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     return {
       kind,
       cta: { href: '#book', label: 'Book a free class' },
-      hero: { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead },
+      hero: { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, videoFocus: copy.video_focus, soundDefault: copy.sound_default, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead },
       expect: { eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards },
       offer: <CampaignFunnel publicPath={contextPath} campaign={page.slug} page={page.slug} copy={campaignFunnelClientCopy(copy)} locationName={studioName} />,
     }

@@ -41,7 +41,7 @@ const ownCardsAlign = (block) => Array.isArray(block?.expect_cards)
 function OneClassRegion({ layout, pinned, onEditField }) {
   const copy = pinned ? campaignFunnelCopy(pinned) : null
   const hero = copy
-    ? { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }
+    ? { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, videoFocus: copy.video_focus, soundDefault: copy.sound_default, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }
     : (layout.hero || {})
   const strip = copy
     ? { eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards }
