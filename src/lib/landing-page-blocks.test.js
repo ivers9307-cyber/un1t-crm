@@ -11,6 +11,8 @@ import {
   pageCtas,
   offerOf,
   OFFER_DEFAULT,
+  clientSafeBlocks,
+  CLIENT_WITHHELD_KEYS,
 } from './landing-page-blocks.js'
 
 describe('newBlockId', () => {
@@ -608,3 +610,42 @@ describe('pageCtas with a shown paid trial (TRIALFIRST.1)', () => {
   })
 })
 
+
+// EDITGATE.1 — what the editor preview iframe is seeded with: every block
+// minus the operator configuration the public page never shows (Glofox and
+// un1t.online product ids, lead attribution). The editor pushes the full
+// blocks over postMessage itself, so nothing is lost there.
+describe('clientSafeBlocks (EDITGATE.1)', () => {
+  it('withholds the product ids and attribution per type and keeps the rest', () => {
+    const blocks = [
+      { id: 'h', type: 'hero', headline: 'Hi', image_url: 'x' },
+      { id: 'cf', type: 'class_funnel', heading: 'Free', consult_slug: 'c', trial_membership_id: 'tm', trial_plan_code: 'tp', price_cents: 0 },
+      { id: 'pt', type: 'paid_trial', cta_label: 'Go', price_cents: 3900, membership_id: 'm', plan_code: 'p', un1t_product_id: 'u', tag: 't', lead_source: 's', event_source_url: 'e' },
+      { id: 'lf', type: 'lead_form', heading: 'Keep', tag: 't', lead_source: 's', offer: { enabled: true } },
+      { id: 'cmp', type: 'campaign_funnel', heading: '50+', class_keywords: 'k', tag: 't', lead_source: 's', event_source_url: 'e', trial_membership_id: 'tm', trial_plan_code: 'tp' },
+    ]
+    const safe = clientSafeBlocks(blocks)
+    expect(safe).toEqual([
+      { id: 'h', type: 'hero', headline: 'Hi', image_url: 'x' },
+      { id: 'cf', type: 'class_funnel', heading: 'Free', consult_slug: 'c', price_cents: 0 },
+      { id: 'pt', type: 'paid_trial', cta_label: 'Go', price_cents: 3900 },
+      { id: 'lf', type: 'lead_form', heading: 'Keep', offer: { enabled: true } },
+      { id: 'cmp', type: 'campaign_funnel', heading: '50+' },
+    ])
+    // Never mutates the input.
+    expect(blocks[1].trial_membership_id).toBe('tm')
+  })
+
+  it('every withheld key is one that type\'s factory writes', () => {
+    for (const [type, keys] of Object.entries(CLIENT_WITHHELD_KEYS)) {
+      const written = new Set(Object.keys(newBlockOfType(type)))
+      expect(Array.isArray(keys) && keys.length > 0, type).toBe(true)
+      for (const k of keys) expect(written.has(k), `${type}.${k}`).toBe(true)
+    }
+  })
+
+  it('passes a non-array through as an empty list', () => {
+    expect(clientSafeBlocks(null)).toEqual([])
+    expect(clientSafeBlocks(undefined)).toEqual([])
+  })
+})
