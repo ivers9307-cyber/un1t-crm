@@ -345,6 +345,8 @@ describe('the [slug] page route', () => {
     const html = await render({ slug: '50plus', sp: { edit: '1' } })
     expect(html).toContain('data-testid="overlay"')
     expect(html).not.toContain('data-testid="campaign"')
+    // No live card that would book at a fallback studio: a notice instead.
+    expect(propsOf(html, 'overlay').offerLayout.offer.props.children).toContain('no public path yet')
   })
 
   it('anything under a slug that the page does not serve 404s', async () => {
@@ -391,6 +393,43 @@ describe('the [slug] page route', () => {
     expectClientSafe(html)
     expect(overlay.initialLogoUrl).toBe('https://x/logo.png')
     expect(overlay.footer).toMatchObject({ brand: 'UN1T', legalName: 'Champ Fitness Ltd' })
+  })
+
+  it('edit mode on a one_class page passes offerLayout with the hero copy and the offer block id', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    const overlay = propsOf(html, 'overlay')
+    expect(overlay.offerLayout).toMatchObject({
+      kind: 'one_class',
+      offerBlockId: 'cf',
+      cta: { href: '#book', label: 'Book a free class' },
+      hero: { videoUrl: 'https://x/v.mp4', posterUrl: 'https://x/p.jpg', soundLabel: 'Tap for sound', heading: 'A free trial of The 50+ Club', eyebrow: 'The 50+ Club · Stillorgan' },
+      expect: { eyebrow: 'What to expect', heading: 'Built for where you are now' },
+    })
+    expect(overlay.offerLayout.expect.cards).toHaveLength(3)
+    // The live booking card, built exactly as the public page builds it.
+    expect(overlay.offerLayout.offer.props).toMatchObject({ publicPath: 'stillorgan', campaign: '50plus', page: '50plus', locationName: 'UN1T Stillorgan' })
+    expect(overlay.offerLayout.offer.props.copy.heading).toBe('A free trial of The 50+ Club')
+    expect(overlay.offerLayout.offer.props.copy).not.toHaveProperty('class_keywords')
+    // The trial card hand-off is the legacy overlay's; a page passes its layout instead.
+    expect(overlay.trialPreview ?? null).toBeNull()
+    expectClientSafe(html)
+  })
+
+  it('edit mode on a paid_trial page renders the trial card as preview', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
+    // Choose on page: no ?studio=, the picker over every enabled studio.
+    const picker = propsOf(await render({ slug: 'trial', sp: { edit: '1' } }), 'overlay')
+    expect(picker.offerLayout).toMatchObject({ kind: 'frosted', anchor: 'trial', offerBlockId: 'pt1', cta: { href: '#trial', label: 'Start my trial' } })
+    expect(picker.offerLayout.offer.props).toMatchObject({ preview: true, initialStudio: null, resumePurchaseId: null, cancelled: false, returnPath: '/trial', page: 'trial' })
+    expect(picker.offerLayout.offer.props.studios.map((s) => s.publicPath)).toEqual(['stillorgan', 'hatch-street'])
+    // A previewed studio: its card, still disabled.
+    const html = await render({ slug: 'trial', sp: { edit: '1', studio: 'hatch-street', purchase: 'abc' } })
+    const one = propsOf(html, 'overlay')
+    expect(one.offerLayout.offer.props).toMatchObject({ preview: true, initialStudio: 'hatch', resumePurchaseId: null })
+    expectClientSafe(html)
   })
 
   it('a signed-in user who may not view the page gets no overlay: a draft 404s, a live page is the public render with nothing secret', async () => {

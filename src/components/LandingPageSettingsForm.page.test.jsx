@@ -124,6 +124,39 @@ describe('LandingPageSettingsForm (page mode)', () => {
     expect(state.blocks.map((b) => b.id)).toEqual(['b-hero', 'b-pillars'])
   })
 
+  it('the preview select lists enabled studios and sets &studio= on the iframe', () => {
+    const STILL = '22222222-2222-2222-2222-222222222222'
+    const OFF = '33333333-3333-3333-3333-333333333333'
+    const rows = [
+      { ...STUDIOS[0], public_path: 'hatch-street' },
+      { location_id: STILL, name: 'UN1T Stillorgan', membership_source: 'glofox', enabled: true, sort_order: 1, public_path: null },
+      { location_id: OFF, name: 'UN1T Xtown', membership_source: 'glofox', enabled: false, sort_order: 2, public_path: 'xtown' },
+    ]
+    const { container } = renderForm({ page: basePage({ scope: 'all', primary_location_id: null }), studios: rows })
+    const select = screen.getByRole('combobox', { name: 'Preview studio' })
+    const options = [...select.querySelectorAll('option')].map((o) => ({ label: o.textContent, value: o.value, disabled: o.disabled }))
+    expect(options).toEqual([
+      { label: 'Choose on page', value: '', disabled: false },
+      { label: 'UN1T Hatch Street', value: 'hatch-street', disabled: false },
+      { label: 'UN1T Stillorgan (no public path)', value: '', disabled: true },
+    ])
+    const iframe = () => container.querySelector('iframe').getAttribute('src')
+    expect(iframe()).toBe('/summer?edit=1')
+    fireEvent.change(select, { target: { value: 'hatch-street' } })
+    expect(iframe()).toBe('/summer?edit=1&studio=hatch-street')
+    // Not page content: choosing a studio leaves nothing unsaved.
+    expect(screen.queryByText('Save your changes first.')).toBeNull()
+    fireEvent.change(select, { target: { value: '' } })
+    expect(iframe()).toBe('/summer?edit=1')
+  })
+
+  it('a one-studio page previews its studio with no select', () => {
+    const { container } = renderForm()
+    expect(screen.queryByRole('combobox', { name: 'Preview studio' })).toBeNull()
+    expect(screen.getByText('Previewing:').parentElement.textContent).toContain('UN1T Hatch Street')
+    expect(container.querySelector('iframe').getAttribute('src')).toBe('/summer?edit=1')
+  })
+
   it('read-only when canEdit is false (no Save, inputs disabled)', () => {
     const { container } = renderForm({ canEdit: false })
     expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull()
@@ -196,6 +229,22 @@ describe('LandingPageSettingsForm (page mode): the pinned offer block', () => {
     const saved = puts[0].body.blocks[0]
     expect(saved).toMatchObject({ id: 'b-offer', heading: 'Try it' })
     // The page save never carries the studio half of the offer.
+    for (const key of [...STUDIO_OFFER_KEYS.campaign_funnel, ...ATTRIBUTION_KEYS, ...DROPPED_BLOCK_KEYS.campaign_funnel]) {
+      expect(saved, key).not.toHaveProperty(key)
+    }
+  })
+
+  it('an inline edit from the preview never writes the pinned block\'s studio half', async () => {
+    renderForm({ page: offerPage(), studios: OFFER_STUDIOS })
+    for (const key of [...STUDIO_OFFER_KEYS.campaign_funnel, ...ATTRIBUTION_KEYS, ...DROPPED_BLOCK_KEYS.campaign_funnel]) {
+      await send({ type: 'edit-field', blockId: 'b-offer', path: [key], value: 'x' })
+    }
+    await send({ type: 'edit-field', blockId: 'b-offer', path: ['heading'], value: 'Strong at 60' })
+    await send({ type: 'edit-field', blockId: 'b-offer', path: ['expect_cards', 0, 'title'], value: 'Your coach' })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    const saved = puts[0].body.blocks[0]
+    expect(saved).toMatchObject({ id: 'b-offer', heading: 'Strong at 60' })
+    expect(saved.expect_cards[0].title).toBe('Your coach')
     for (const key of [...STUDIO_OFFER_KEYS.campaign_funnel, ...ATTRIBUTION_KEYS, ...DROPPED_BLOCK_KEYS.campaign_funnel]) {
       expect(saved, key).not.toHaveProperty(key)
     }

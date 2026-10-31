@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitOfferBlock, mergeOfferBlock, offerConfigured, STUDIO_OFFER_KEYS, defaultAttribution, offerTypeOfBlock, studioOfferSchema, attributionSchema } from './landing-page-offers.js'
+import { splitOfferBlock, mergeOfferBlock, offerConfigured, STUDIO_OFFER_KEYS, defaultAttribution, offerTypeOfBlock, studioOfferSchema, attributionSchema, isStudioOwnedPath } from './landing-page-offers.js'
 
 const CAMPAIGN = { id: 'b1', type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+', trial_membership_id: 'm', trial_plan_code: 'p', tag: 'stillorgan-50plus', lead_source: 'meta_50plus', event_source_url: '', heading: 'A free trial', show_sections: ['stats'], video_url: 'https://x/v.mp4' }
 
@@ -40,5 +40,17 @@ describe('landing-page-offers', () => {
   it('refuses an unknown attribution key rather than storing it', () => {
     expect(attributionSchema.safeParse({ tag: 't', lead_source: 'l' }).success).toBe(true)
     expect(attributionSchema.safeParse({ tag: 't', campaign: 'x' }).success).toBe(false)
+  })
+
+  it('isStudioOwnedPath: a studio offer key, an attribution key or a dropped key at the head of a path', () => {
+    expect(isStudioOwnedPath('campaign_funnel', ['class_keywords'])).toBe(true)
+    expect(isStudioOwnedPath('campaign_funnel', ['tag'])).toBe(true)
+    expect(isStudioOwnedPath('campaign_funnel', ['campaign'])).toBe(true)
+    expect(isStudioOwnedPath('paid_trial', ['price_cents', 'x'])).toBe(true)
+    expect(isStudioOwnedPath('campaign_funnel', ['heading'])).toBe(false)
+    expect(isStudioOwnedPath('campaign_funnel', ['expect_cards', 0, 'title'])).toBe(false)
+    expect(isStudioOwnedPath('stats', ['items', 0])).toBe(false)
+    expect(isStudioOwnedPath('campaign_funnel', [])).toBe(false)
+    expect(isStudioOwnedPath('campaign_funnel', null)).toBe(false)
   })
 })

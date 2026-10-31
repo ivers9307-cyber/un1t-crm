@@ -65,7 +65,7 @@ import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
 import OfferBlockEditor from '@/components/landing-pages/OfferBlockEditor'
-import { OFFER_BLOCK_TYPE } from '@/lib/landing-page-offers'
+import { OFFER_BLOCK_TYPE, isStudioOwnedPath } from '@/lib/landing-page-offers'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
 import { TimetableReadBack } from '@/components/landing-pages/timetable-read-back'
 import { storedChrome, termsForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
@@ -104,8 +104,13 @@ export default function LandingPageSettingsForm({
   // LP multi-page: the preview iframe + "View live" links point at the
   // SELECTED studio's public page when known (public_path from mig 227),
   // falling back to the generic /welcome for a single-studio install.
-  // A page row previews at its own slug (Task 17 adds &studio=<path>).
-  const previewSrc = pageMode ? `/${currentPage.slug}?edit=1` : publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
+  // A page row previews at its own slug (&studio=<path> for a chosen studio).
+  // PAGES.1 — the studio an all-studios page previews as (its public path,
+  // '' = the page's own picker). Not page content: never saved, never dirty.
+  const [previewStudio, setPreviewStudio] = useState('')
+  const previewSrc = pageMode
+    ? `/${currentPage.slug}?edit=1${previewStudio ? `&studio=${encodeURIComponent(previewStudio)}` : ''}`
+    : publicPath ? `/welcome/${publicPath}?edit=1` : '/welcome?edit=1'
   const liveUrl = pageMode ? `/${currentPage.slug}` : publicPath ? `/${publicPath}` : '/welcome'
   // Seed from saved blocks; if none, blocksOrDefault returns the
   // starter set so the form is never blank on first open.
@@ -247,9 +252,12 @@ export default function LandingPageSettingsForm({
         // to the corresponding block via setByPath. Each keystroke
         // arrives here; React's batched updates + EditableText's
         // focus-aware DOM write keep the cursor stable.
-        setBlocks((prev) => prev.map((b) => (
-          b.id === msg.blockId ? setByPath(b, msg.path, msg.value) : b
-        )))
+        // PAGES.1 — never the pinned offer block's studio half (the iframe is a message boundary).
+        setBlocks((prev) => {
+          const pinned = pinnedIn(prev)
+          if (pinned && msg.blockId === pinned && isStudioOwnedPath(prev[0].type, msg.path)) return prev
+          return prev.map((b) => (b.id === msg.blockId ? setByPath(b, msg.path, msg.value) : b))
+        })
       } else if (msg.type === 'move-block' && msg.blockId && (msg.direction === 'up' || msg.direction === 'down')) {
         // LP3c.4 — toolbar move arrow on a block in the iframe.
         setBlocks((prev) => {
@@ -711,6 +719,7 @@ export default function LandingPageSettingsForm({
               ⟳
             </button>
           </div>
+          {pageMode && <PreviewStudioBar page={currentPage} studios={studioRows} value={previewStudio} onChange={setPreviewStudio} />}
           <iframe
             ref={iframeRef}
             src={previewSrc}
@@ -733,6 +742,40 @@ export default function LandingPageSettingsForm({
         terms={terms} onTermsChange={setTerms} dirty={dirty}
       />
       {formEl}
+    </div>
+  )
+}
+
+// PAGES.1 — which studio the preview shows. An all-studios page lists its
+// switched-on studios (one with no public path cannot be previewed: listed,
+// disabled) after "Choose on page" (the page's own picker); a one-studio page
+// names its studio.
+function PreviewStudioBar({ page, studios, value, onChange }) {
+  const rows = Array.isArray(studios) ? studios : []
+  if (page.scope !== 'all') {
+    const one = rows.find((s) => s.location_id === page.primary_location_id)
+    return (
+      <div className="px-3 py-2 bg-un1t-surface border-b border-un1t-border text-[11px] text-un1t-subtle">
+        <span>Previewing:</span> <span className="text-un1t-text">{one?.name || 'this studio'}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 bg-un1t-surface border-b border-un1t-border text-[11px] text-un1t-subtle">
+      <span>Previewing:</span>
+      <select
+        aria-label="Preview studio"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+      >
+        <option value="">Choose on page</option>
+        {rows.filter((s) => s.enabled).map((s) => (
+          s.public_path
+            ? <option key={s.location_id} value={s.public_path}>{s.name || s.public_path}</option>
+            : <option key={s.location_id} value="" disabled>{`${s.name || 'Studio'} (no public path)`}</option>
+        ))}
+      </select>
     </div>
   )
 }

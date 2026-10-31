@@ -25,6 +25,18 @@
 // Origin check: same-origin only — settings page lives on the same
 // Vercel project as /welcome. Anything cross-origin is dropped.
 //
+// PAGES.1 (Task 17) — `offerLayout` (the [slug] route's, page mode only):
+//   { kind: 'frosted' | 'one_class' | 'blocks', tone, cta: { href, label },
+//     offerBlockId (blocks[0].id when the page's offer block is pinned there,
+//     else null), offer (the live card element), anchor, heroImageUrl,
+//     scrollCueLabel (frosted), hero + expect (one_class) }
+// renders the page's own layout (EditOfferLayout) above the blocks; the
+// pinned offer block is that region, never a block of the list (no toolbar,
+// nothing inserts above it), and the hero blocks a frosted or one_class page
+// uses only as its photo are not listed, as on the public page. Without it
+// (/welcome/[location]) the overlay is unchanged. An inline edit of the
+// pinned block's studio keys or attribution is never posted.
+//
 // The booking widget click is the one place we DON'T intercept —
 // it'd be hostile to operators trying to test their booking form
 // from inside the editor. The widget renders normally; clicking
@@ -34,7 +46,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { ArrowUp, ArrowDown, Copy, Trash2, Plus } from 'lucide-react'
 import BlockRenderer, { SiteHeader, SiteFooter } from './BlockRenderers'
+import EditOfferLayout, { INTERACTIVE } from './EditOfferLayout'
+import { learnMoreIdFor } from './FrostedHero'
 import { BLOCK_TYPES } from '@/lib/landing-page-blocks'
+import { isStudioOwnedPath } from '@/lib/landing-page-offers'
 
 const MESSAGE_NAMESPACE = 'lp-editor'
 
@@ -57,6 +72,8 @@ export default function EditModeOverlay({
   // goes to the first hero, as on the public page, and its presence shrinks
   // the lead form to the compact strip.
   trialPreview = null,
+  // PAGES.1 — the page's layout (see the header), or null on /welcome.
+  offerLayout = null,
 }) {
   const [blocks, setBlocks] = useState(initialBlocks)
   const [logoUrl, setLogoUrl] = useState(initialLogoUrl)
@@ -73,6 +90,16 @@ export default function EditModeOverlay({
   // ONE picker is open at a time across all gaps.
   const [pickerAtIndex, setPickerAtIndex] = useState(null)
   const blockRefs = useRef({})
+  // PAGES.1 — the pinned offer region and the blocks it stands for.
+  const region = offerLayout && (offerLayout.kind === 'frosted' || offerLayout.kind === 'one_class') ? offerLayout : null
+  const pinnedId = region?.offerBlockId || null
+  const pinned = pinnedId ? blocks.find((b) => b?.id === pinnedId) || null : null
+  const heroBlock = region ? blocks.find((b) => b?.type === 'hero') || null : null
+  const listed = (block) => !region || (block.id !== pinnedId && block.type !== 'hero')
+  const firstGap = pinned && blocks[0]?.id === pinnedId ? 1 : 0
+  // A frosted page's cue under the card scrolls to the blocks, as on the public page.
+  const wrapList = (list) => (region?.kind === 'frosted' ? <div id={learnMoreIdFor(region.anchor)} className="scroll-mt-20">{list}</div> : list)
+  const cta = offerLayout ? { ctaHref: offerLayout.cta?.href || null, ctaLabel: offerLayout.cta?.label, tone: offerLayout.tone === 'light' ? 'light' : 'dark' } : {}
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -140,6 +167,8 @@ export default function EditModeOverlay({
   // we tack on the blockId here and post to the parent. The parent's
   // setByPath walker applies it to the blocks array.
   function emitFieldEdit(blockId, path, value) {
+    // PAGES.1 — the pinned offer block's studio half is never written from here.
+    if (pinnedId && blockId === pinnedId && isStudioOwnedPath(pinned?.type, path)) return
     emit({ type: 'edit-field', blockId, path, value })
   }
 
@@ -168,7 +197,7 @@ export default function EditModeOverlay({
   }
 
   return (
-    <div className="min-h-screen bg-black text-white antialiased">
+    <div className={cta.tone === 'light' ? 'min-h-screen bg-white text-black antialiased' : 'min-h-screen bg-black text-white antialiased'}>
       <SiteHeader
         logoUrl={logoUrl}
         logoAlt={logoAlt}
@@ -180,15 +209,29 @@ export default function EditModeOverlay({
       {/* Insert-section gap before the very first block. The
           gaps render even on the public path? No — EditModeOverlay
           is the ONLY caller, so they're always edit-mode. */}
+      {region && (
+        <EditOfferLayout
+          layout={region}
+          pinned={pinned}
+          heroBlock={heroBlock}
+          label={pinned ? BLOCK_TYPES.find((t) => t.type === pinned.type)?.label || pinned.type : ''}
+          selected={Boolean(pinnedId) && selectedId === pinnedId}
+          onSelect={() => selectBlock(pinnedId)}
+          onEditField={(path, value) => emitFieldEdit(pinnedId, path, value)}
+          regionRef={(el) => { if (el && pinnedId) blockRefs.current[pinnedId] = el }}
+        />
+      )}
       <InsertGap
-        index={0}
-        open={pickerAtIndex === 0}
-        onToggle={() => setPickerAtIndex(pickerAtIndex === 0 ? null : 0)}
-        onPick={(t) => addBlockAt(t, 0)}
+        index={firstGap}
+        open={pickerAtIndex === firstGap}
+        onToggle={() => setPickerAtIndex(pickerAtIndex === firstGap ? null : firstGap)}
+        onPick={(t) => addBlockAt(t, firstGap)}
       />
-      {blocks.map((block, i) => {
+      {wrapList(blocks.map((block, i) => {
+        if (!listed(block)) return null
         const isSelected = selectedId === block.id
-        const isFirst = i === 0
+        // Nothing moves above the pinned offer block.
+        const isFirst = i === firstGap
         const isLast = i === blocks.length - 1
         const blockLabel = BLOCK_TYPES.find((t) => t.type === block.type)?.label || block.type
         const trialHere = trialPreview && block === blocks.find((b) => b.type === 'hero') ? trialPreview : null
@@ -202,7 +245,7 @@ export default function EditModeOverlay({
                 // text). The block can still be selected by clicking
                 // its margin / non-editable surface.
                 const t = e.target
-                if (t.closest('button, a, input, select, textarea, iframe, [contenteditable="true"]')) return
+                if (t.closest(INTERACTIVE)) return
                 e.stopPropagation()
                 selectBlock(block.id)
               }}
@@ -212,7 +255,7 @@ export default function EditModeOverlay({
                   : 'hover:outline hover:outline-2 hover:outline-blue-300/60 hover:outline-offset-[-2px]'
               }`}
             >
-              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} wordmark={wordmark} locationName={locationName} trial={trialHere} trialShown={Boolean(trialPreview)} />
+              <BlockRenderer block={block} onEdit={emitFieldEdit} locationId={locationId} wordmark={wordmark} locationName={locationName} trial={trialHere} trialShown={Boolean(trialPreview)} {...cta} />
               {/* Type badge — top-left, hover-revealed. */}
               <div
                 className={`absolute top-2 left-2 z-30 px-2 py-1 rounded text-[10px] uppercase tracking-wider font-semibold pointer-events-none transition-opacity ${
@@ -245,7 +288,7 @@ export default function EditModeOverlay({
             />
           </div>
         )
-      })}
+      }))}
       <SiteFooter brand={footer.brand || ''} studios={footer.studios || []} legalName={footer.legalName || ''} />
     </div>
   )

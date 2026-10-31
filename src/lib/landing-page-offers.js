@@ -52,6 +52,20 @@ export const DROPPED_BLOCK_KEYS = Object.freeze({
 })
 
 /**
+ * Does an inline edit at `path` on a block of `blockType` write the studio's
+ * half (its offer keys, attribution) or a key the page owns itself? The
+ * preview iframe is a message boundary, so the overlay and the editor both
+ * refuse such a path on the pinned offer block.
+ */
+export function isStudioOwnedPath(blockType, path) {
+  const head = Array.isArray(path) ? path[0] : undefined
+  if (typeof head !== 'string') return false
+  return ATTRIBUTION_KEYS.includes(head)
+    || (STUDIO_OFFER_KEYS[blockType] || []).includes(head)
+    || (DROPPED_BLOCK_KEYS[blockType] || []).includes(head)
+}
+
+/**
  * Cut an offer block in two. `page` keeps `id`, `type` and every key not named
  * in the three lists; `studio.offer` takes the block type's studio keys that
  * are present; `studio.attribution` takes the attribution keys that hold a
