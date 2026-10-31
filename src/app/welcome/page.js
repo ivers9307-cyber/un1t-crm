@@ -14,10 +14,15 @@
 //     (landing_page_settings.chooser_* + chooser_settings.tile_order)
 // This render reads ALL of those so the editor round-trips end-to-end.
 //
-// Edit mode (?edit=1) is UNCHANGED: it still mounts EditModeOverlay
-// for the live-preview iframe inside /settings/landing-page, which
-// drives the overlay via postMessage. The editor branch runs BEFORE
-// the chooser render, so the editor keeps working exactly as before.
+// Edit mode (?edit=1) still mounts EditModeOverlay for the live-preview
+// iframe inside /settings/landing-page, which drives the overlay via
+// postMessage. The editor branch runs BEFORE the chooser render.
+// EDITGATE.1 — it is honoured only for a signed-in staff session (the
+// iframe is same-origin with the editor, so it carries the CRM cookies),
+// seeded from one of THAT session's studios and with client-safe blocks;
+// everyone else gets the chooser. It used to hand the estate's most
+// recently edited page, product ids and attribution included, to any
+// visitor who appended ?edit=1.
 //
 // WEBSITE-REDESIGN 2026-06: display typography (font-display, set by
 // the /welcome layout), staggered entrance, film grain, ENTER pill
@@ -28,7 +33,8 @@ import Link from 'next/link'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
-import { blocksOrDefault } from '@/lib/landing-page-blocks'
+import { blocksOrDefault, clientSafeBlocks } from '@/lib/landing-page-blocks'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
 import { loadFrontPage, publicWelcomePathForLocation } from '@/lib/welcome-front-page'
 import { resolveTenantLocationId, resolveTenantOrgId } from '@/lib/tenant-domains-edge'
@@ -46,15 +52,30 @@ const loadFrontPageForHost = cache(async (host) => {
   return loadFrontPage(null, { orgId })
 })
 
-// Edit-mode seed (unchanged behaviour): most-recently-edited row.
-// The overlay is postMessage-driven so the seed is just the initial
-// paint; which row seeds it doesn't affect the editing experience.
-async function loadEditSeed() {
+// EDITGATE.1 — the studios of the signed-in staff session (master: every
+// active studio), or null for no session, a session with no studio, and a
+// failed read: ?edit=1 is then an ordinary public request.
+async function editorStudioIds() {
+  try {
+    const user = await getCurrentUser()
+    const ids = user ? getUserLocationIds(user) : []
+    return ids.length > 0 ? ids : null
+  } catch {
+    return null
+  }
+}
+
+// Edit-mode seed: the most-recently-edited row among the session's own
+// studios (EDITGATE.1; it used to be any row in the estate). The overlay
+// is postMessage-driven so the seed is just the initial paint; which row
+// seeds it doesn't affect the editing experience.
+async function loadEditSeed(locationIds) {
   try {
     const db = createServerClient()
     const { data } = await db
       .from('landing_page_settings')
       .select('*, locations:location_id ( organization_id )')
+      .in('location_id', locationIds)
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -128,10 +149,11 @@ function TileBody({ s, brand }) {
 export default async function WelcomePage(props) {
   const searchParams = await props.searchParams
 
-  // Edit-mode preview iframe (unchanged).
-  if (searchParams?.edit === '1') {
-    const row = await loadEditSeed()
-    const blocks = blocksOrDefault(row?.blocks)
+  // Edit-mode preview iframe, for a staff session only (EDITGATE.1).
+  const editorStudios = searchParams?.edit === '1' ? await editorStudioIds() : null
+  if (editorStudios) {
+    const row = await loadEditSeed(editorStudios)
+    const blocks = clientSafeBlocks(blocksOrDefault(row?.blocks))
     // W1.S1b — the seed row's own studio brand and its organisation's
     // footer chrome (both cached), the same footer /welcome/[location]
     // renders live, so the preview matches the page; never a literal.
