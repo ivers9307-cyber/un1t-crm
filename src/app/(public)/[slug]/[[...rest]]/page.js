@@ -438,9 +438,14 @@ async function renderStudioPage({ db, page, studios, sp, sub, editMode }) {
     )
   }
 
-  const merged = mergedBlocksFor({ page, studio })
-  const offerBlockType = OFFER_BLOCK_TYPE[page.offer_type]
-  const offerIdx = offerBlockType ? merged.findIndex((b) => isObj(b) && b.type === offerBlockType) : -1
+  // An empty row renders the default blocks, as /welcome/[location] did.
+  const merged = blocksOrDefault(mergedBlocksFor({ page, studio }))
+  // Only a paid trial leaves the blocks: its card goes in the hero (and its
+  // block renders nothing on a public page). Every other offer block keeps its
+  // place and BlockRenderer draws it as the legacy page did (a class_funnel
+  // shown on the landing posts against the studio's public path; the
+  // renderer hands the funnel named words only, never the studio row's ids).
+  const offerIdx = page.offer_type === 'paid_trial' ? merged.findIndex((b) => isObj(b) && b.type === 'paid_trial') : -1
   const content = merged.filter((b, i) => i !== offerIdx && isObj(b))
   const tone = c.tone === 'light' ? 'light' : 'dark'
   const returnPath = `/${page.slug}`
@@ -528,6 +533,8 @@ export default async function PublicPage(props) {
   if (page.publish_state === 'retired') {
     const target = redirectTarget(page, req.rest, sp, { studioFromSegment: studioParamToPublicPath })
     if (target) redirect(target)
+    // A retired studio page with nowhere to go still sends a returning buyer on.
+    if (page.kind === 'studio') resumeElsewhere(page.slug, req.rest, sp)
     notFound()
   }
   if (!shown(page, editMode)) {

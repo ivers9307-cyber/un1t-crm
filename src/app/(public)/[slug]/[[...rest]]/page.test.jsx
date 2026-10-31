@@ -617,9 +617,13 @@ describe('studio pages on the [slug] route', () => {
     expect(h.calls.tables).not.toContain('landing_pages')
 
     h.productError = { code: 'XX', message: 'boom secret' }
+    vi.mocked(logWarn).mockClear()
     const degraded = await render({ slug: 'hatch-street' })
     expect(degraded).not.toContain('id="trial"')
     expect(degraded).toContain('lp-marquee-track')
+    // Logged with ids only: the error text never reaches the log.
+    expect(logWarn).toHaveBeenCalled()
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain('boom secret')
     const returning = propsOf(await render({ slug: 'hatch-street', sp: { purchase: PURCHASE } }), 'paid')
     expect(returning).toMatchObject({ resumePurchaseId: PURCHASE })
     expect(returning.studios[0]).toMatchObject({ key: 'hatch', sellable: false })
@@ -638,6 +642,14 @@ describe('studio pages on the [slug] route', () => {
     expect(await outcome({ slug: 'nowhere', sp: { purchase: PURCHASE } })).toBe('NEXT_NOT_FOUND')
     h.loadThrows = new Error('network')
     expect(await outcome({ slug: 'stillorgan', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=stillorgan`)
+    h.loadThrows = null
+    // A retired studio page with nowhere to send people still sends a returning buyer on.
+    h.loaded = { page: { ...HATCH, publish_state: 'retired', redirect_to: null }, studios: [hatchRow()] }
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE, cancelled: '1' } })).toBe(`redirect /trial?purchase=${PURCHASE}&studio=hatch&cancelled=1`)
+    expect(await outcome({ slug: 'hatch-street' })).toBe('NEXT_NOT_FOUND')
+    // With a target, the page's own redirect wins (the query kept).
+    h.loaded = { page: { ...HATCH, publish_state: 'retired', redirect_to: '/trial' }, studios: [hatchRow()] }
+    expect(await outcome({ slug: 'hatch-street', sp: { purchase: PURCHASE } })).toBe(`redirect /trial?purchase=${PURCHASE}`)
   })
 
   it('/stillorgan/events renders the events page for that studio; /stillorgan/status the status page; /stillorgan/x 404s', async () => {
@@ -746,5 +758,55 @@ describe('studio pages on the [slug] route', () => {
     const failed = await render({ slug: 'stillorgan', sp: { edit: '1' } })
     expect(failed).not.toContain('data-testid="overlay"')
     expect(propsOf(failed, 'paid')).toMatchObject({ preview: false })
+  })
+})
+
+describe('studio pages: other offer types and empty rows', () => {
+  // mig 792 makes a studio page offer_type class_funnel when its legacy row had
+  // a class_funnel block and no paid_trial block: the block keeps its place.
+  const CF_PAGE = (show) => ({
+    ...STILL, offer_type: 'class_funnel',
+    blocks: [
+      { id: 'h', type: 'hero', headline: 'Hi' },
+      { id: 'cf', type: 'class_funnel', heading: 'Book your first class', subhead: 'Pick a time', ...(show === undefined ? {} : { show_on_landing: show }) },
+      { id: 's1', type: 'stats', items: [{ number: '4.9', label: 'Rating' }] },
+    ],
+  })
+  const cfRow = () => stillRow({ offer: { trial_membership_id: 'elite-m', trial_plan_code: 'elite-p', class_keywords: '50+' } })
+
+  it('a class_funnel studio page shown on the landing renders the funnel in its place, posting against the studio path, ids withheld', async () => {
+    for (const show of [true, undefined]) {
+      h.loaded = { page: CF_PAGE(show), studios: [cfRow()] }
+      const html = await render({ slug: 'stillorgan' })
+      const funnel = propsOf(html, 'classfunnel')
+      expect(funnel, String(show)).toMatchObject({ publicPath: 'stillorgan', heading: 'Book your first class', subhead: 'Pick a time', locationName: 'Stillorgan' })
+      // In blocks order: after the hero, before the stats.
+      expect(html.indexOf('data-testid="classfunnel"')).toBeLessThan(html.indexOf('4.9'))
+      expect(html).not.toContain('data-testid="paid"')
+      expectClientSafe(html)
+    }
+  })
+
+  it('a class_funnel studio page with show_on_landing false does not render the funnel', async () => {
+    h.loaded = { page: CF_PAGE(false), studios: [cfRow()] }
+    const html = await render({ slug: 'stillorgan' })
+    expect(html).not.toContain('data-testid="classfunnel"')
+    expect(html).toContain('4.9')
+    expectClientSafe(html)
+  })
+
+  it('a studio page with no blocks renders the default blocks, as /welcome/[location] did', async () => {
+    h.loaded = { page: { ...STILL, offer_type: 'none', blocks: [] }, studios: [stillRow({ offer: {} })] }
+    const html = await render({ slug: 'stillorgan' })
+    expect(html).toContain('lp-marquee-track') // the default hero
+    expect(html).toContain('id="book"') // the default booking block
+  })
+
+  it('a page with no paid trial studio gets no editor preview card', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...STILL, offer_type: 'none', blocks: STILL.blocks.filter((b) => b.type !== 'paid_trial') }, studios: [stillRow({ offer: {} })] }
+    const overlay = propsOf(await render({ slug: 'stillorgan', sp: { edit: '1' } }), 'overlay')
+    expect(overlay.trialPreview).toBeNull()
+    expect(overlay.offerLayout).toMatchObject({ kind: 'blocks' })
   })
 })
