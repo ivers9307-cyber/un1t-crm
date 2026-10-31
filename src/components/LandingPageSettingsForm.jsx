@@ -33,6 +33,7 @@
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { uploadLandingMedia, captureVideoPoster } from '@/lib/landing-media-upload'
+import MediaPicker from '@/components/landing-page/MediaPicker'
 import {
   DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors,
   closestCenter, DragOverlay,
@@ -454,6 +455,7 @@ export default function LandingPageSettingsForm({
             url={logoUrl}
             onClear={() => setLogoUrl('')}
             onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'image', key: 'site-logo' }); if (url) setLogoUrl(url) }}
+            onPickExisting={(item) => setLogoUrl(item.url)}
             uploading={!!uploading['site-logo']}
             error={uploadErr['site-logo']}
             accept="image/png,image/jpeg,image/webp"
@@ -901,6 +903,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress
           url={block.image_url || ''}
           onClear={() => onUpdate({ image_url: null })}
           onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'image', key: k('image') }); if (url) onUpdate({ image_url: url }) }}
+          onPickExisting={(item) => onUpdate({ image_url: item.url })}
           uploading={!!uploading[k('image')]}
           error={uploadErr[k('image')]}
           accept="image/png,image/jpeg,image/webp"
@@ -913,6 +916,7 @@ function HeroEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress
           url={block.video_url || ''}
           onClear={() => onUpdate({ video_url: null })}
           onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'video', key: k('video') }); if (url) onUpdate({ video_url: url }) }}
+          onPickExisting={(item) => onUpdate({ video_url: item.url })}
           uploading={!!uploading[k('video')]}
           error={uploadErr[k('video')]}
           accept="video/mp4,video/webm"
@@ -1390,6 +1394,9 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
     const video_url = await uploadMedia({ file, kind: 'video', key: k('video'), autoplay: true })
     if (video_url) onUpdate({ video_url, poster_url: poster_url || null })
   }
+  // MEDIALIB.1 — an existing clip: the poster stays if there is one, else the
+  // poster stored next to the chosen clip (the same shape an upload leaves).
+  const onPickVideo = (item) => onUpdate({ video_url: item.url, poster_url: block.poster_url || item.poster_url || null })
   return (
     <>
       <Field label="Coach video" hint="MP4 / WebM, up to 50MB. Starts muted on loop with a Tap for sound button, so burn the captions in. Tip: 720p, 20 to 40 seconds.">
@@ -1397,6 +1404,7 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
           url={block.video_url || ''}
           onClear={() => onUpdate({ video_url: null })}
           onUpload={onUploadVideo}
+          onPickExisting={onPickVideo}
           uploading={!!uploading[k('video')] || !!uploading[k('poster')]}
           error={uploadErr[k('video')] || uploadErr[k('poster')]}
           accept="video/mp4,video/webm"
@@ -1410,6 +1418,7 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
           url={block.poster_url || ''}
           onClear={() => onUpdate({ poster_url: null })}
           onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'image', key: k('poster') }); if (url) onUpdate({ poster_url: url }) }}
+          onPickExisting={(item) => onUpdate({ poster_url: item.url })}
           uploading={!!uploading[k('poster')]}
           error={uploadErr[k('poster')]}
           accept="image/png,image/jpeg,image/webp"
@@ -1488,6 +1497,7 @@ function PillarsEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
                 url={p.photo_url || ''}
                 onClear={() => setItem(i, { photo_url: null })}
                 onUpload={async (file) => { const url = await uploadMedia({ file, kind: 'image', key: k('photo') }); if (url) setItem(i, { photo_url: url }) }}
+                onPickExisting={(item) => setItem(i, { photo_url: item.url })}
                 uploading={!!uploading[k('photo')]}
                 error={uploadErr[k('photo')]}
                 accept="image/png,image/jpeg,image/webp"
@@ -1558,6 +1568,7 @@ function VideoTestimonialsEdit({ block, onUpdate, uploadMedia, uploading, upload
               url={it.video_url || ''}
               onClear={() => setItem(i, { video_url: '', poster_url: '' })}
               onUpload={(file) => onUploadClip(i, file, posterKey, videoKey)}
+              onPickExisting={(item) => setItem(i, { video_url: item.url, poster_url: item.poster_url || '' })}
               uploading={!!uploading[videoKey] || !!uploading[posterKey]}
               error={uploadErr[videoKey] || uploadErr[posterKey]}
               accept="video/mp4,video/webm"
@@ -1594,13 +1605,15 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
     const url = await uploadMedia({ file, kind: 'image', key: `${block.id}-gallery` })
     if (url) onUpdate({ items: [...items, { url, alt: '', caption: '' }] })
   }
+  const addExisting = (item) => onUpdate({ items: [...items, { url: item.url, alt: '', caption: '' }] })
+  const [picking, setPicking] = useState(false)
   const k = `${block.id}-gallery`
   return (
     <>
       <Field label="Section heading">
         <Input value={block.title || ''} onChange={(v) => onUpdate({ title: v })} maxLength={200} placeholder="Inside the studio" />
       </Field>
-      <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP — auto-optimized on upload.">
+      <Field label={`Photos (${items.length}/24)`} hint="PNG/JPEG/WebP — auto-optimized on upload. Choose existing reuses a photo already uploaded for your pages.">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {items.map((g, i) => (
             <div key={i} className="relative group border border-un1t-border rounded-md overflow-hidden bg-un1t-bg">
@@ -1643,7 +1656,18 @@ function GalleryEdit({ block, onUpdate, uploadMedia, uploading, uploadErr }) {
               />
             </label>
           )}
+          {items.length < 24 && (
+            <button
+              type="button"
+              onClick={() => setPicking(true)}
+              className="bg-un1t-bg border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-md aspect-square flex flex-col items-center justify-center text-un1t-subtle"
+            >
+              <ImagePlus size={20} />
+              <span className="text-[10px] mt-2">Choose existing</span>
+            </button>
+          )}
         </div>
+        <MediaPicker open={picking} kind="image" onClose={() => setPicking(false)} onPick={addExisting} />
         {uploadErr[k] && <p className="text-[11px] text-red-700 mt-2">{uploadErr[k]}</p>}
       </Field>
     </>
@@ -1753,7 +1777,11 @@ function ReviewsEdit({ block, onUpdate }) {
 // Helpers — input primitives + uniform media-upload tile
 // ─────────────────────────────────────────────────────────────
 
-function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, kind, progress }) {
+// MEDIALIB.1 — `onPickExisting(item)` adds a "Choose existing" action under the
+// slot: the picker's item ({ url, poster_url, … }) goes through the caller's
+// own setter, the same one its upload path ends in.
+function MediaSlot({ url, onClear, onUpload, onPickExisting, uploading, error, accept, label, kind, progress }) {
+  const [picking, setPicking] = useState(false)
   return (
     <div className="flex flex-col gap-1">
       {url ? (
@@ -1792,6 +1820,24 @@ function MediaSlot({ url, onClear, onUpload, uploading, error, accept, label, ki
             onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = '' }}
           />
         </label>
+      )}
+      {onPickExisting && (
+        <>
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            disabled={uploading}
+            className="self-start text-[11px] text-un1t-subtle hover:text-un1t-text underline-offset-2 hover:underline disabled:opacity-50"
+          >
+            {url ? `Choose a different ${kind === 'video' ? 'video' : 'image'}` : 'Choose existing'}
+          </button>
+          <MediaPicker
+            open={picking}
+            kind={kind === 'video' ? 'video' : 'image'}
+            onClose={() => setPicking(false)}
+            onPick={onPickExisting}
+          />
+        </>
       )}
       {error && <p className="text-[11px] text-red-700">{error}</p>}
     </div>

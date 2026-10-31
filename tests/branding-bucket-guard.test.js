@@ -27,7 +27,11 @@
 //     MIME type a writer names is in BRANDING_BUCKET_MIME_TYPES and every
 //     `N * 1024 * 1024` cap is at most BRANDING_BUCKET_MAX_BYTES (Storage
 //     would refuse what the route accepted); the browser uploader holds
-//     video to BRANDING_BUCKET_MAX_BYTES.
+//     video to BRANDING_BUCKET_MAX_BYTES. Or it is one of the known READERS
+//     (MEDIALIB.1: the page editor's media library), where every
+//     `.from('branding')` is IMMEDIATELY followed by .list( or
+//     .getPublicUrl( (so a handle in a variable cannot hide a write) and the
+//     file scopes what it lists with the helper named for it.
 //  3. After replaying every migration (scripts/check-rls-restrictive.mjs
 //     netPolicyState), no PERMISSIVE storage.objects policy of any command
 //     that reaches anon, authenticated or PUBLIC admits the bucket: it names
@@ -99,6 +103,16 @@ const WRITERS = {
   'src/app/api/me/signature-photo/route.js': 'getCurrentUser',
   'src/app/api/staff/[id]/permanent/route.js': 'getCurrentUser',
 }
+// Server files that only READ the bucket (list + public URL), with the scope
+// helper each must call: the media library lists `pages/<id>/` and the legacy
+// studio folder only for pages canViewPage admits (its route,
+// /api/landing-pages/media, is session-gated and has its own scoping test).
+// A reader never writes: every `.from('branding')` in it must be followed at
+// once by .list( or .getPublicUrl(.
+const READERS = {
+  'src/lib/landing-media-library.js': 'canViewPage',
+}
+const READER_FOLLOW_OK = /^\s*\??\.\s*(?:list|getPublicUrl)\s*\(/
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
 // ── client code ──────────────────────────────────────────────────────────
@@ -465,7 +479,21 @@ describe('every server writer is known, service-role, gated and inside the bucke
     const found = walk(path.join(ROOT, 'src'))
       .filter((f) => !client.has(f) && NAMES_BUCKET.test(codeOfFile(f)))
       .map(rel).sort()
-    expect(found, 'a new server file writes the branding bucket: check it gates on the studio or event the file belongs to, then add it to WRITERS').toEqual(Object.keys(WRITERS).sort())
+    expect(found, 'a new server file names the branding bucket: a writer gates on the studio or event the file belongs to and goes in WRITERS; a reader lists and resolves URLs only, scopes what it lists, and goes in READERS').toEqual([...Object.keys(WRITERS), ...Object.keys(READERS)].sort())
+  })
+
+  it('each reader only lists and resolves public URLs on the bucket, and scopes what it lists', () => {
+    for (const [f, scope] of Object.entries(READERS)) {
+      const code = codeOfFile(path.join(ROOT, f))
+      const froms = [...code.matchAll(FROM_BUCKET)]
+      expect(froms.length, `${f} names the bucket`).toBeGreaterThan(0)
+      for (const m of froms) {
+        expect(READER_FOLLOW_OK.test(code.slice(m.index + m[0].length)), `${f}: .from('branding') must be followed by .list( or .getPublicUrl(`).toBe(true)
+      }
+      expect(bucketCallsIn(code).filter((c) => c !== 'list' && c !== 'getPublicUrl'), `${f} writes the bucket`).toEqual([])
+      expect(code, `${f} must scope with ${scope}(`).toMatch(new RegExp(String.raw`\b${scope}\s*\(`))
+      expect(code, `${f} must not mint upload tokens`).not.toMatch(/createSignedUploadUrl|createSignedUrl/)
+    }
   })
 
   it('each writer uses the service role behind its session gate', () => {
