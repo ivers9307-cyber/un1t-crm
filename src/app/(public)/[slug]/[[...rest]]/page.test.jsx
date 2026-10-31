@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   user: null,
   loaded: null,
   loadThrows: null,
+  loadedByOrg: null,
   product: { un1t_id: 'UN1T-PROD-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'Trial' },
   reviews: [],
   legacyBlocks: null,
@@ -37,6 +38,7 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => {
     loadPageBySlug: vi.fn(async (db, args) => {
       h.calls.load.push(args)
       if (h.loadThrows) throw h.loadThrows
+      if (h.loadedByOrg && args.orgId in h.loadedByOrg) return h.loadedByOrg[args.orgId]
       return h.loaded
     }),
     studioPublicPath: vi.fn(async (db, locationId) => PATHS[locationId] || null),
@@ -157,6 +159,7 @@ beforeEach(() => {
   h.user = null
   h.loaded = null
   h.loadThrows = null
+  h.loadedByOrg = null
   h.reviews = []
   h.legacyBlocks = null
   h.calls = { load: [], reviews: [], legacy: [] }
@@ -401,10 +404,46 @@ describe('the [slug] page route', () => {
     expectClientSafe(html)
   })
 
+  it('a signed-in user of another org with ?edit=1 sees the host\'s live page as a visitor (no overlay)', async () => {
+    h.user = { id: 'u3', isMaster: false, role: 'staff', activeOrganization: { id: 'org-other' }, locationIds: [] }
+    h.loadedByOrg = { 'org-other': null, 'org-un1t': { page: FIFTY, studios: FIFTY_STUDIOS } }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    expect(h.calls.load).toEqual([
+      { orgId: 'org-other', slug: '50plus' },
+      { orgId: 'org-un1t', slug: '50plus' },
+    ])
+    expect(html).not.toContain('data-testid="overlay"')
+    expect(html).toContain('data-testid="campaign"')
+    expectClientSafe(html)
+  })
+
+  it('a signed-in user of another org whose own org has no such page and the host has none either still gets a 404', async () => {
+    h.user = { id: 'u3', isMaster: false, role: 'staff', activeOrganization: { id: 'org-other' }, locationIds: [] }
+    h.loadedByOrg = { 'org-other': null, 'org-un1t': null }
+    expect(await outcome({ slug: '50plus', sp: { edit: '1' } })).toBe('NEXT_NOT_FOUND')
+  })
+
+  it('a signed-in editor of the page\'s org still gets the overlay (one read, no fallback)', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    expect(html).toContain('data-testid="overlay"')
+    expect(h.calls.load).toEqual([{ orgId: 'org-un1t', slug: '50plus' }])
+  })
+
   it('an anonymous ?edit=1 is an ordinary visit: the host\'s organisation, and a draft 404s', async () => {
     h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
     expect(await outcome({ slug: '50plus', sp: { edit: '1' } })).toBe('NEXT_NOT_FOUND')
     expect(h.calls.load[0]).toEqual({ orgId: 'org-un1t', slug: '50plus' })
+  })
+
+  it('a meta_title that already carries the brand is not suffixed twice', async () => {
+    h.loaded = { page: { ...FIFTY, chrome: { meta_title: 'The 50+ Club | UN1T' } }, studios: FIFTY_STUDIOS }
+    const meta = await generateMetadata({ params: Promise.resolve({ slug: '50plus' }), searchParams: Promise.resolve({}) })
+    expect(meta.title).toBe('The 50+ Club | UN1T')
+    h.loaded = { page: { ...FIFTY, chrome: { meta_title: '  The 50+ Club | un1t  ' } }, studios: FIFTY_STUDIOS }
+    const loose = await generateMetadata({ params: Promise.resolve({ slug: '50plus' }), searchParams: Promise.resolve({}) })
+    expect(loose.title).toBe('The 50+ Club | un1t')
   })
 
   it('metadata: the meta title, else the page title, then the brand; noindex follows the chrome', async () => {

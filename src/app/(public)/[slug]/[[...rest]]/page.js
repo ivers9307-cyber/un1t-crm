@@ -93,8 +93,18 @@ async function readPage(props) {
   let orgId = null
   try {
     orgId = editor ? editor.activeOrganization.id : await publicOrgIdForHost((await headers()).get('host'))
-    const loaded = slug ? await loadPageBySlug(db, { orgId, slug }) : null
-    const editMode = Boolean(editor && loaded && canViewPage(editor, loaded.page))
+    let loaded = slug ? await loadPageBySlug(db, { orgId, slug }) : null
+    let editMode = Boolean(editor && loaded && canViewPage(editor, loaded.page))
+    // A signed-in `?edit=1` visitor who has no such page in their own
+    // organisation, or may not view it, is an ordinary visit on the HOST's
+    // organisation, exactly as an anonymous request would be (no overlay).
+    if (editor && slug && !editMode) {
+      const hostOrgId = await publicOrgIdForHost((await headers()).get('host'))
+      if (hostOrgId !== orgId) {
+        orgId = hostOrgId
+        loaded = await loadPageBySlug(db, { orgId, slug })
+      }
+    }
     return { db, slug, rest, sp, orgId, loaded, editMode, failed: false }
   } catch (e) {
     logWarn('public-page', 'page unreadable; answering 404', { slug, orgId, code: e?.cause?.code ?? e?.code ?? null })
@@ -117,7 +127,9 @@ export async function generateMetadata(props) {
     // Customer-visible (the tab, a share): no em-dash (CLAUDE.md).
     const base = str(c.meta_title) || page.title
     const chrome = await resolveOrgChrome({ orgId: page.organization_id })
-    const title = chrome.companyName ? `${base} | ${chrome.companyName}` : base
+    // An operator who already typed the brand into the meta title is not suffixed twice.
+    const suffix = chrome.companyName ? ` | ${chrome.companyName}` : ''
+    const title = suffix && !base.trim().toLowerCase().endsWith(suffix.toLowerCase()) ? `${base}${suffix}` : base
     return {
       title,
       description: str(c.meta_description) || '',
