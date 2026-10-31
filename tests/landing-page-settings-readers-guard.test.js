@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { sqlCode } from './helpers/sql-code.js'
 
 const ROOT = path.resolve(__dirname, '..')
 const OLD_TABLE = 'landing_page_settings'
@@ -49,5 +50,21 @@ describe('landing_page_settings readers (PAGES.1 R10)', () => {
     expect(walked).toContain(script)
     expect(readFileSync(path.join(ROOT, script), 'utf8')).toContain(OLD_TABLE)
     expect(ALLOWED.has(script)).toBe(true)
+  })
+
+  it('the deprecation migration names no reader-visible grant', () => {
+    // Every migration numbered above 792 (the one that deprecated the table):
+    // none may GRANT on landing_page_settings, or grant anything to a client
+    // role on it, so mig 795's REVOKE is not undone by a later file.
+    const dir = path.join(ROOT, 'supabase', 'migrations')
+    const later = readdirSync(dir).filter((f) => f.endsWith('.sql') && parseInt(f, 10) > 792)
+    expect(later).toContain('795_landing_page_settings_resync_and_closed.sql')
+    const offenders = later.filter((f) => {
+      const sql = sqlCode(readFileSync(path.join(dir, f), 'utf8'))
+      return sql
+        .split(/;\s*/)
+        .some((st) => /\bgrant\b/i.test(st) && /landing_page_settings\b/i.test(st))
+    })
+    expect(offenders).toEqual([])
   })
 })
