@@ -28,7 +28,9 @@
 // the class keywords), the corp promo's words, the terms payload. A studio
 // row's `locations.settings` and `attribution` never leave this file, except
 // in edit mode, where the overlay gets the merged blocks for a user who may
-// view the page (canViewPage), as /welcome/[location] does for its editor.
+// view the page (canViewPage), as /welcome/[location] does for its editor,
+// through clientSafeBlocks, and `offerLayout`: the same layout and offer card
+// the public page renders for the previewed studio (offerElementFor).
 
 import { headers } from 'next/headers'
 import { notFound, redirect } from 'next/navigation'
@@ -67,6 +69,8 @@ const HERO_IMAGE =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg'
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+// The two funnels that post against their studio's public path.
+const needsPath = (offerType) => offerType === 'class_funnel' || offerType === 'one_class'
 const isObj = (b) => Boolean(b) && typeof b === 'object'
 
 // The signed-in user behind an `?edit=1`, or null (no flag, anonymous, or a
@@ -93,8 +97,18 @@ async function readPage(props) {
   let orgId = null
   try {
     orgId = editor ? editor.activeOrganization.id : await publicOrgIdForHost((await headers()).get('host'))
-    const loaded = slug ? await loadPageBySlug(db, { orgId, slug }) : null
-    const editMode = Boolean(editor && loaded && canViewPage(editor, loaded.page))
+    let loaded = slug ? await loadPageBySlug(db, { orgId, slug }) : null
+    let editMode = Boolean(editor && loaded && canViewPage(editor, loaded.page))
+    // A signed-in `?edit=1` visitor who has no such page in their own
+    // organisation, or may not view it, is an ordinary visit on the HOST's
+    // organisation, exactly as an anonymous request would be (no overlay).
+    if (editor && slug && !editMode) {
+      const hostOrgId = await publicOrgIdForHost((await headers()).get('host'))
+      if (hostOrgId !== orgId) {
+        orgId = hostOrgId
+        loaded = await loadPageBySlug(db, { orgId, slug })
+      }
+    }
     return { db, slug, rest, sp, orgId, loaded, editMode, failed: false }
   } catch (e) {
     logWarn('public-page', 'page unreadable; answering 404', { slug, orgId, code: e?.cause?.code ?? e?.code ?? null })
@@ -117,7 +131,9 @@ export async function generateMetadata(props) {
     // Customer-visible (the tab, a share): no em-dash (CLAUDE.md).
     const base = str(c.meta_title) || page.title
     const chrome = await resolveOrgChrome({ orgId: page.organization_id })
-    const title = chrome.companyName ? `${base} | ${chrome.companyName}` : base
+    // An operator who already typed the brand into the meta title is not suffixed twice.
+    const suffix = chrome.companyName ? ` | ${chrome.companyName}` : ''
+    const title = suffix && !base.trim().toLowerCase().endsWith(suffix.toLowerCase()) ? `${base}${suffix}` : base
     return {
       title,
       description: str(c.meta_description) || '',
@@ -195,6 +211,103 @@ async function paidTrialItems(db, page, rows) {
   }))
 }
 
+// Step 4: what the page's layout wraps round its blocks, built ONCE for the
+// public page and the editor's preview (`preview`) so the two cannot drift:
+// the layout kind, the CTA, and for an offer the card (`offer`, the live
+// component), its section anchor and photo, the cue under it, and on a
+// one_class page the coach video hero and the expect strip. A paid trial's
+// card renders disabled in the preview (PaidTrialFunnel's `preview`) and never
+// resumes a checkout; every other card stays live, as the editor tests it.
+async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName, preview = false }) {
+  const kind = layoutFor(page.offer_type)
+
+  if (page.offer_type === 'paid_trial') {
+    const { resumePurchaseId, cancelled } = preview ? { resumePurchaseId: null, cancelled: false } : parseTrialReturn(sp)
+    const views = trialItems.map((i) => i.view)
+    const chosen = page.scope === 'one' ? trialItems[0] : trialItems.find((i) => i.row === studio)
+    const initialStudio = chosen?.view.key || null
+    const hatchTerms = trialItems.find((i) => i.hatchTerms)?.hatchTerms || null
+    const lead = trialItems.find((i) => i.view.key === initialStudio && i.view.sellable) || trialItems.find((i) => i.view.sellable) || trialItems[0]
+    const cta = { href: '#trial', label: lead?.view.block?.cta_label || 'Start my trial' }
+    // TRIALSCROLL.1 — the cue under the card; no sections, no cue.
+    const scrollCueLabel = bodyBlocks.length > 0 ? paidTrialCopyFromBlock(lead?.entry.block).scrollCueLabel : null
+    return {
+      kind, cta, anchor: 'trial', heroImageUrl, scrollCueLabel,
+      offer: (
+        <PaidTrialFunnel
+          studios={views}
+          initialStudio={initialStudio}
+          resumePurchaseId={resumePurchaseId}
+          cancelled={cancelled}
+          hatchTerms={hatchTerms}
+          returnPath={`/${page.slug}`}
+          page={page.slug}
+          {...(preview ? { preview: true } : {})}
+        />
+      ),
+    }
+  }
+
+  if (page.offer_type === 'one_class') {
+    const copy = campaignFunnelCopy(mergedOffer || {}, { brand: studioName })
+    return {
+      kind,
+      cta: { href: '#book', label: 'Book a free class' },
+      hero: { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead },
+      expect: { eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards },
+      offer: <CampaignFunnel publicPath={contextPath} campaign={page.slug} page={page.slug} copy={campaignFunnelClientCopy(copy)} locationName={studioName} />,
+    }
+  }
+
+  if (page.offer_type === 'promo_credits') {
+    // The promo is the registry's (credits, expiry, studio); the page names
+    // which one, and only a live promo at this page's studio is offered. The
+    // page offers ONLY its row's promo: a sub-path naming another key (even a
+    // live one) is "not available right now", as the claim route refuses it.
+    const rowKey = str(mergedOffer?.promo_key)
+    const wantedKey = sub.kind === 'promo' ? sub.key : rowKey
+    const resolved = rowKey && wantedKey === rowKey ? resolveCorpPromo(rowKey) : null
+    const promo = resolved && resolved.live && resolved.publicPath === contextPath ? resolved : null
+    const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
+    const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey)
+    const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
+    const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
+    const terms = promo ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
+    return {
+      kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null,
+      offer: <CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} page={page.slug} studio={contextPath} />,
+    }
+  }
+
+  if (page.offer_type === 'class_funnel') {
+    const funnel = mergedOffer || {}
+    return {
+      kind, cta: { href: '#start', label: classFunnelCtaLabel(merged) }, anchor: 'start', heroImageUrl, scrollCueLabel: null,
+      offer: (
+        <ClassFunnel
+          publicPath={contextPath}
+          page={page.slug}
+          locationName={contextBrand?.locationName || ''}
+          // '' is "no consult upsell" and must be passed explicitly: an
+          // absent prop falls back to Stillorgan's booking type.
+          consultSlug={funnel.consult_slug || ''}
+          heading={funnel.heading}
+          subhead={funnel.subhead}
+          consentLabel={funnel.consent_label}
+          classDoneTitle={funnel.class_done_title}
+          classDoneBody={funnel.class_done_body}
+          consultDoneTitle={funnel.consult_done_title}
+          consultDoneBody={funnel.consult_done_body}
+        />
+      ),
+    }
+  }
+
+  // offer_type 'none': the page's own blocks, its CTA from its own capture blocks.
+  const { primary } = pageCtas(bodyBlocks)
+  return { kind, cta: { href: primary?.href || null, label: primary?.label } }
+}
+
 export default async function PublicPage(props) {
   const req = await readPage(props)
   if (req.failed || !req.loaded) notFound()
@@ -256,8 +369,28 @@ export default async function PublicPage(props) {
     ? await paidTrialItems(db, page, offerRows.length ? offerRows : (editMode && context ? [context] : []))
     : []
 
+  const layout = layoutFor(page.offer_type)
+  // The card and the coach video are the hero on these two layouts.
+  const heroBlock = content.find((b) => b.type === 'hero')
+  const bodyBlocks = layout === 'blocks' ? content : content.filter((b) => b.type !== 'hero')
+  const heroImageUrl = str(heroBlock?.image_url) || HERO_IMAGE
+  const offerArgs = { db, page, sp, sub, studio, merged, mergedOffer, bodyBlocks, heroImageUrl, trialItems, contextPath, contextBrand, contextLocationId, studioName }
+
   if (editMode) {
-    const previewItem = trialItems.find((i) => i.row === context) || trialItems[0] || null
+    // The preview renders the page's own layout round the editable blocks:
+    // the same offer card (a paid trial's disabled), and the pinned offer
+    // block (blocks[0], the editor's rule) is the region that selects it.
+    const built = await offerElementFor({ ...offerArgs, preview: true })
+    const offerBlockId = offerIdx === 0 ? mergedOffer.id || null : null
+    // A funnel with no studio path is not for sale (the public page 404s), and
+    // a live card here would book at the fallback studio: say so instead.
+    if (needsPath(page.offer_type) && !contextPath) {
+      built.offer = (
+        <p className="max-w-md rounded-2xl bg-white text-black p-6 text-center text-sm">
+          This studio has no public path yet, so its booking card cannot show here.
+        </p>
+      )
+    }
     return (
       <EditModeOverlay
         // EDITGATE.1 parity: the studio half (trial ids, plan codes, keywords) never rides the RSC payload; the overlay edits words and media only.
@@ -269,9 +402,7 @@ export default async function PublicPage(props) {
         wordmark={chrome.shortName}
         locationName={studioName}
         footer={footer}
-        trialPreview={previewItem
-          ? { studio: previewItem.view, returnPath: `/${page.slug}`, resumePurchaseId: null, cancelled: false, hatchTerms: previewItem.hatchTerms, preview: true }
-          : null}
+        offerLayout={{ ...built, tone, offerBlockId }}
       />
     )
   }
@@ -280,117 +411,23 @@ export default async function PublicPage(props) {
   // nothing to book (ClassFunnel would fall back to Stillorgan, CampaignFunnel
   // would ask for ?path=null), so the page is not for sale: a 404, as a
   // paid-trial studio with no path is not sellable. Edit mode returned above.
-  if ((page.offer_type === 'class_funnel' || page.offer_type === 'one_class') && !contextPath) {
+  if (needsPath(page.offer_type) && !contextPath) {
     logWarn('public-page', 'studio has no public path; offer not for sale', { slug: page.slug, locationId: contextLocationId })
     notFound()
   }
 
-  const layout = layoutFor(page.offer_type)
-  // The card and the coach video are the hero on these two layouts.
-  const heroBlock = content.find((b) => b.type === 'hero')
-  const bodyBlocks = layout === 'blocks' ? content : content.filter((b) => b.type !== 'hero')
   const reviewsData = await loadReviews(db, contextLocationId, bodyBlocks.find((b) => b.type === 'reviews'))
   // PAGES.1 — every form on the page posts `{ page, studio }` (Task 7): the
   // public routes resolve the studio row and its attribution from the page.
   const blockProps = { publicPath: contextPath, page: page.slug, wordmark: chrome.shortName, locationName: studioName, reviewsData }
-  const heroImageUrl = str(heroBlock?.image_url) || HERO_IMAGE
+  const built = await offerElementFor(offerArgs)
+  const shared = { tone, logo, cta: built.cta, footer, blocks: bodyBlocks, blockProps }
 
-  if (page.offer_type === 'paid_trial') {
-    const { resumePurchaseId, cancelled } = parseTrialReturn(sp)
-    const views = trialItems.map((i) => i.view)
-    const chosen = page.scope === 'one' ? trialItems[0] : trialItems.find((i) => i.row === studio)
-    const initialStudio = chosen?.view.key || null
-    const hatchTerms = trialItems.find((i) => i.hatchTerms)?.hatchTerms || null
-    const lead = trialItems.find((i) => i.view.key === initialStudio && i.view.sellable) || trialItems.find((i) => i.view.sellable) || trialItems[0]
-    const cta = { href: '#trial', label: lead?.view.block?.cta_label || 'Start my trial' }
-    // TRIALSCROLL.1 — the cue under the card; no sections, no cue.
-    const scrollCueLabel = bodyBlocks.length > 0 ? paidTrialCopyFromBlock(lead?.entry.block).scrollCueLabel : null
-    return (
-      <FrostedCardLayout
-        tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps}
-        anchor="trial" heroImageUrl={heroImageUrl} scrollCueLabel={scrollCueLabel}
-        offer={(
-          <PaidTrialFunnel
-            studios={views}
-            initialStudio={initialStudio}
-            resumePurchaseId={resumePurchaseId}
-            cancelled={cancelled}
-            hatchTerms={hatchTerms}
-            returnPath={`/${page.slug}`}
-            page={page.slug}
-          />
-        )}
-      />
-    )
+  if (built.kind === 'frosted') {
+    return <FrostedCardLayout {...shared} anchor={built.anchor} heroImageUrl={built.heroImageUrl} scrollCueLabel={built.scrollCueLabel} offer={built.offer} />
   }
-
-  if (page.offer_type === 'one_class') {
-    const copy = campaignFunnelCopy(mergedOffer || {}, { brand: studioName })
-    const cta = { href: '#book', label: 'Book a free class' }
-    return (
-      <OneClassLayout
-        tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps}
-        hero={{ videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }}
-        expect={{ eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards }}
-        offer={<CampaignFunnel publicPath={contextPath} campaign={page.slug} page={page.slug} copy={campaignFunnelClientCopy(copy)} locationName={studioName} />}
-      />
-    )
+  if (built.kind === 'one_class') {
+    return <OneClassLayout {...shared} hero={built.hero} expect={built.expect} offer={built.offer} />
   }
-
-  if (page.offer_type === 'promo_credits') {
-    // The promo is the registry's (credits, expiry, studio); the page names
-    // which one, and only a live promo at this page's studio is offered. The
-    // page offers ONLY its row's promo: a sub-path naming another key (even a
-    // live one) is "not available right now", as the claim route refuses it.
-    const rowKey = str(mergedOffer?.promo_key)
-    const wantedKey = sub.kind === 'promo' ? sub.key : rowKey
-    const resolved = rowKey && wantedKey === rowKey ? resolveCorpPromo(rowKey) : null
-    const promo = resolved && resolved.live && resolved.publicPath === contextPath ? resolved : null
-    const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
-    const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey)
-    const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
-    const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
-    const terms = promo ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
-    const cta = { href: '#corp', label: copy.cta_label }
-    return (
-      <FrostedCardLayout
-        tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps}
-        anchor="corp" heroImageUrl={heroImageUrl}
-        offer={<CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} page={page.slug} studio={contextPath} />}
-      />
-    )
-  }
-
-  if (page.offer_type === 'class_funnel') {
-    const funnel = mergedOffer || {}
-    const cta = { href: '#start', label: classFunnelCtaLabel(merged) }
-    return (
-      <FrostedCardLayout
-        tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps}
-        anchor="start" heroImageUrl={heroImageUrl}
-        offer={(
-          <ClassFunnel
-            publicPath={contextPath}
-            page={page.slug}
-            locationName={contextBrand?.locationName || ''}
-            // '' is "no consult upsell" and must be passed explicitly: an
-            // absent prop falls back to Stillorgan's booking type.
-            consultSlug={funnel.consult_slug || ''}
-            heading={funnel.heading}
-            subhead={funnel.subhead}
-            consentLabel={funnel.consent_label}
-            classDoneTitle={funnel.class_done_title}
-            classDoneBody={funnel.class_done_body}
-            consultDoneTitle={funnel.consult_done_title}
-            consultDoneBody={funnel.consult_done_body}
-          />
-        )}
-      />
-    )
-  }
-
-  // offer_type 'none': the page's own blocks, its CTA from its own capture blocks.
-  const { primary } = pageCtas(bodyBlocks)
-  const cta = { href: primary?.href || null, label: primary?.label }
-  return <BlocksLayout tone={tone} logo={logo} cta={cta} footer={footer} blocks={bodyBlocks} blockProps={blockProps} />
+  return <BlocksLayout {...shared} />
 }

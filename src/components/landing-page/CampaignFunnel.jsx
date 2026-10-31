@@ -17,7 +17,12 @@
 // list, the booking and the funnel events name `{ page, studio: publicPath }`
 // and the server reads everything else from the page's studio row; without
 // it the card sends `path` + `campaign` as before.
+//
+// PAGES.1 — `onEditCopy(key, value)` (optional, the editor's preview only)
+// makes the pick and done words (EDITABLE_COPY_KEYS) editable in place; the
+// booking itself stays live. Without it the card renders exactly as before.
 import { useEffect, useRef, useState } from 'react'
+import EditableText from './EditableText'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
@@ -28,6 +33,8 @@ import { readAttributionFromUrl, buildAttribution, readFbpCookie, funnelSessionI
 import { customerErrorText } from '@/lib/page-request-errors'
 
 const VISIBLE_TILES = 3
+// The card words the editor's preview may edit in place (onEditCopy).
+export const EDITABLE_COPY_KEYS = Object.freeze(['pick_title', 'pick_body', 'done_title', 'done_body'])
 const FUNNEL = '50plus'
 // The CRM's funnel_events accepts only VALID_STEPS (src/lib/funnel-events.js),
 // so the card's steps map onto the /start vocabulary the Ads report counts;
@@ -93,8 +100,11 @@ export function campaignFunnelClassesUrl({ page, publicPath, campaign }) {
   return `/api/public/classes?path=${encodeURIComponent(publicPath)}&campaign=${encodeURIComponent(campaign)}`
 }
 
-export default function CampaignFunnel({ publicPath, campaign, page = null, copy, locationName = '' }) {
+export default function CampaignFunnel({ publicPath, campaign, page = null, copy, locationName = '', onEditCopy = null }) {
   const c = copy && typeof copy === 'object' ? copy : {}
+  const words = (key, multiline = false) => (onEditCopy && EDITABLE_COPY_KEYS.includes(key)
+    ? <EditableText value={c[key] || ''} multiline={multiline} onChange={(v) => onEditCopy(key, v)} />
+    : c[key])
   const [step, setStep] = useState('pick') // pick | details | done
   const [classes, setClasses] = useState([])
   const [loading, setLoading] = useState(true)
@@ -242,8 +252,8 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
   if (step === 'done') {
     return (
       <div id="book" className={`${card} text-center`}>
-        <p className="font-display font-extrabold uppercase text-3xl mb-3">{c.done_title}</p>
-        <p className="text-black/70 text-lg">{c.done_body}</p>
+        <p className="font-display font-extrabold uppercase text-3xl mb-3">{words('done_title')}</p>
+        <p className="text-black/70 text-lg">{words('done_body', true)}</p>
       </div>
     )
   }
@@ -282,8 +292,8 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
   return (
     <div id="book" className={card}>
       <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-black/55">Step 1 of 2</div>
-      <h2 className="font-display font-extrabold uppercase text-2xl sm:text-3xl mt-2 mb-2">{c.pick_title}</h2>
-      <p className="text-black/60 text-base mb-5">{c.pick_body}</p>
+      <h2 className="font-display font-extrabold uppercase text-2xl sm:text-3xl mt-2 mb-2">{words('pick_title')}</h2>
+      <p className="text-black/60 text-base mb-5">{words('pick_body', true)}</p>
       {loading ? (
         <p className="text-black/50 text-base py-6 text-center">Checking the timetable…</p>
       ) : !configured ? (

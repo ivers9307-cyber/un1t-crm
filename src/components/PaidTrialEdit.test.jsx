@@ -43,4 +43,18 @@ describe('PaidTrialEdit', () => {
     const heading = screen.getByText('Heading')
     expect(hint.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
+
+  it('pageOnly shows no plan picker, price, product or studio label', () => {
+    render(<PaidTrialEdit pageOnly block={newBlockOfType('paid_trial')} onUpdate={vi.fn()} locationId="loc-s" membershipSource="glofox" />)
+    expect(screen.queryByText('Glofox product granted after payment')).toBeNull()
+    expect(screen.queryByText('un1t.online product')).toBeNull()
+    expect(screen.queryByText('Price (€)')).toBeNull()
+    expect(screen.queryByText('Product name')).toBeNull()
+    expect(screen.queryByText('Trial length (days)')).toBeNull()
+    expect(screen.queryByText('Studio label on /trial')).toBeNull()
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+    expect(screen.getByText('Heading')).toBeTruthy()
+    expect(screen.getByText('Button label')).toBeTruthy()
+  })
 })

@@ -56,3 +56,9 @@ export function slugProblem(slug) {
   if (RESERVED_PAGE_SLUGS.has(normal)) return 'reserved'
   return null
 }
+
+// A retired page's redirect target: a path on this host only. `//evil.com`
+// (protocol-relative) and `/\evil.com` would send visitors off-site through
+// redirect(). The publish route's schema (landing-page-schemas.js) and the
+// editor's Retire form (PageHeaderCard) both judge with this one pattern.
+export const REDIRECT_PATH_RE = /^\/(?![\/\\])[a-z0-9\-\/?=&._%]*$/i

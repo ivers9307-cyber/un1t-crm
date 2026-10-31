@@ -20,6 +20,24 @@ import { resolveCorpPromo } from '@/lib/corp-promos'
 
 export const OFFER_TYPES = Object.freeze(['paid_trial', 'class_funnel', 'one_class', 'promo_credits', 'none'])
 
+/** The page-level name of each offer type (the New page dialog and the Pages list). */
+export const OFFER_TYPE_LABELS = Object.freeze({
+  paid_trial: 'Paid trial',
+  class_funnel: 'Free class with a timetable',
+  one_class: 'One class',
+  promo_credits: 'Free classes (promo code)',
+  none: 'No offer',
+})
+
+/** One line on what each offer type makes (the New page dialog). */
+export const OFFER_TYPE_DESCRIPTIONS = Object.freeze({
+  paid_trial: 'A trial sold for a price: price card, buyer form, checkout, then the plan or product on their account.',
+  class_funnel: 'Pick a class from the studio\'s timetable, leave details, book; optional consult upsell.',
+  one_class: 'A booking page for one class and one trial plan: coach video, date tiles, details, booked.',
+  promo_credits: 'A corporate or partner promo: a fixed number of free classes claimed with a code.',
+  none: 'A page of content blocks only: no booking card or trial for sale.',
+})
+
 /** The offer type an editor picks, to the block type it stores. */
 export const OFFER_BLOCK_TYPE = Object.freeze({
   paid_trial: 'paid_trial',
@@ -50,6 +68,20 @@ export const STUDIO_OFFER_KEYS = Object.freeze({
 export const DROPPED_BLOCK_KEYS = Object.freeze({
   campaign_funnel: ['campaign', 'show_sections'],
 })
+
+/**
+ * Does an inline edit at `path` on a block of `blockType` write the studio's
+ * half (its offer keys, attribution) or a key the page owns itself? The
+ * preview iframe is a message boundary, so the overlay and the editor both
+ * refuse such a path on the pinned offer block.
+ */
+export function isStudioOwnedPath(blockType, path) {
+  const head = Array.isArray(path) ? path[0] : undefined
+  if (typeof head !== 'string') return false
+  return ATTRIBUTION_KEYS.includes(head)
+    || (STUDIO_OFFER_KEYS[blockType] || []).includes(head)
+    || (DROPPED_BLOCK_KEYS[blockType] || []).includes(head)
+}
 
 /**
  * Cut an offer block in two. `page` keeps `id`, `type` and every key not named
@@ -127,7 +159,7 @@ export const attributionSchema = z.object({
   tag: z.string().max(80).optional(),
   lead_source: z.string().max(80).optional(),
   event_source_url: z.string().url().max(500).optional(),
-})
+}).strict()
 
 /** What a new page starts with: a tag and lead source named for the studio path and the page slug. */
 export function defaultAttribution({ publicPath, slug }) {

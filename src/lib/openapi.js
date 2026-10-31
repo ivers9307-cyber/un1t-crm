@@ -31,6 +31,9 @@ import {
   studioBlastSignoffSchema,
   usageEventsSchema,
 } from './schemas.js'
+import {
+  landingPageCreateSchema, landingPageUpdateSchema, landingPageStudioSchema, landingPagePublishSchema,
+} from './landing-page-schemas.js'
 import { LeadSchema } from './leads.js'
 import { PLATFORM_NAME } from './brand-name.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
@@ -12551,6 +12554,135 @@ registry.registerPath({
     200: { description: 'Feature rows, the timeline and whether the day is still within the 90-day detail window' },
     403: { description: 'Not a master (or viewing as someone)', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Unknown person, or outside the chosen organisation', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// PAGES.1 — the landing pages API: the Pages list, a new campaign page, one
+// page's save, its publish state, one studio's half of its offer, and the
+// slug pre-check. Service role; access is canViewPage / canEditPage
+// (src/lib/landing-pages.js): a page outside the caller's view is a 404.
+const LandingPageCreate = landingPageCreateSchema.extend({}).openapi('LandingPageCreate')
+const LandingPageUpdate = landingPageUpdateSchema.extend({}).openapi('LandingPageUpdate')
+const LandingPageStudioPut = landingPageStudioSchema.extend({}).openapi('LandingPageStudioPut')
+const LandingPagePublish = landingPagePublishSchema.extend({}).openapi('LandingPagePublish')
+const LANDING_PAGE_404 = { description: 'not_found: no such page, or outside your view', content: { 'application/json': { schema: ErrorResponse } } }
+const LANDING_PAGE_503 = { description: 'unavailable: a read failed; try again', content: { 'application/json': { schema: ErrorResponse } } }
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/landing-pages',
+  tags: ['Landing pages'],
+  summary: 'The Pages list: every page the caller may view, with each studio\'s readiness',
+  description: 'Session cookie. The pages of every organisation the caller holds a studio in or administers (a master: every organisation), kept where the caller may view them: a one-studio page at a studio they hold, an all-studios page of their organisation (read-only unless they are an organisation admin). Each row carries `studios: [{ location_id, name, enabled, ready, reason }]` (reason ready | needs_plan | no_platform), `offer_summary` and `can_edit`. No blocks or chrome.',
+  security: [{ CookieAuth: [] }],
+  responses: {
+    200: { description: '{ success, data: pages[] }' },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    503: LANDING_PAGE_503,
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/landing-pages',
+  tags: ['Landing pages'],
+  summary: 'Create a campaign page (a draft with one studio row per active studio)',
+  description: 'Session cookie. scope `one` needs the landing_page permission at primary_location_id; scope `all` needs an organisation admin of the active organisation. The page starts as a draft with the page half of its offer block (or a hero for `none`), plus the content blocks of `start_from_page_id` with fresh ids when the caller may view that page (else 404). One studio row per active studio, switched on only for a one-studio page\'s primary, with the default attribution for its public path.',
+  security: [{ CookieAuth: [] }],
+  request: { body: { content: { 'application/json': { schema: LandingPageCreate } } } },
+  responses: {
+    201: { description: '{ success, data: page }' },
+    400: { description: 'Validation failed, reserved, invalid or primary_location_required', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'No landing_page permission at the studio, or not an organisation admin', content: { 'application/json': { schema: ErrorResponse } } },
+    404: LANDING_PAGE_404,
+    409: { description: 'taken: the organisation already has a page at this slug', content: { 'application/json': { schema: ErrorResponse } } },
+    503: LANDING_PAGE_503,
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/landing-pages/{id}',
+  tags: ['Landing pages'],
+  summary: 'One page with its studio rows and their readiness',
+  security: [{ CookieAuth: [] }],
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ success, data: { page, studios[], can_edit } }' },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    404: LANDING_PAGE_404,
+    503: LANDING_PAGE_503,
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/landing-pages/{id}',
+  tags: ['Landing pages'],
+  summary: 'Save a page\'s title, slug, blocks and chrome',
+  description: 'Session cookie; canEditPage (403). kind, scope, primary_location_id and offer_type are not updatable. On a page with an offer the offer block must be first (a studio page: present); every offer block is stored without its studio half. chrome.was_live is server-owned. A slug change on a page that has been live writes a retired page at the old slug redirecting to the new one; a studio page\'s slug is not renamed (400 studio_page).',
+  security: [{ CookieAuth: [] }],
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: LandingPageUpdate } } } },
+  responses: {
+    200: { description: '{ success, data: page }' },
+    400: { description: 'Validation failed, offer_block_required, reserved, invalid or studio_page', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'You may view the page but not edit it', content: { 'application/json': { schema: ErrorResponse } } },
+    404: LANDING_PAGE_404,
+    409: { description: 'taken', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Not saved; or renamed but the old slug could not be redirected (data carries the renamed page)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/landing-pages/{id}/publish',
+  tags: ['Landing pages'],
+  summary: 'Set a page\'s publish state: draft, live, coming_soon or retired',
+  description: 'Session cookie; canEditPage (403). Live on a page with an offer needs a switched-on studio whose offer is ready, else 409 { error: not_ready, studios: [{ location_id, name, reason }] }. Retired needs redirect_to, a path on this site (400 redirect_required); a studio page is never retired (400 studio_page). Going live stamps chrome.was_live.',
+  security: [{ CookieAuth: [] }],
+  request: { params: z.object({ id: uuidLike }), body: { content: { 'application/json': { schema: LandingPagePublish } } } },
+  responses: {
+    200: { description: '{ success, data: page }' },
+    400: { description: 'Validation failed, redirect_required or studio_page', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'You may view the page but not publish it', content: { 'application/json': { schema: ErrorResponse } } },
+    404: LANDING_PAGE_404,
+    409: { description: 'not_ready', content: { 'application/json': { schema: ErrorResponse } } },
+    503: LANDING_PAGE_503,
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/landing-pages/{id}/studios/{locationId}',
+  tags: ['Landing pages'],
+  summary: 'Save one studio\'s half of a page\'s offer, its attribution and whether the page is on there',
+  description: 'Session cookie; canEditPage (403: on an all-studios page an organisation admin, so a studio manager is refused even on their own row). The studio must be one of the page\'s rows (404). `offer` is parsed with the page\'s offer type schema (strict: an unknown key is 400 with issues); a page with no offer has none (400 no_offer). Answers { row, readiness: { ready, reason } }.',
+  security: [{ CookieAuth: [] }],
+  request: { params: z.object({ id: uuidLike, locationId: uuidLike }), body: { content: { 'application/json': { schema: LandingPageStudioPut } } } },
+  responses: {
+    200: { description: '{ success, data: { row, readiness } }' },
+    400: { description: 'Validation failed or no_offer', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'You may view the page but not edit its studios', content: { 'application/json': { schema: ErrorResponse } } },
+    404: LANDING_PAGE_404,
+    503: LANDING_PAGE_503,
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/landing-pages/slug-check',
+  tags: ['Landing pages'],
+  summary: 'Is a slug free for a new page in the caller\'s active organisation?',
+  security: [{ CookieAuth: [] }],
+  request: { query: z.object({ slug: z.string().max(80) }) },
+  responses: {
+    200: { description: '{ success, data: { available, problem: reserved | invalid | taken | null } }' },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    503: LANDING_PAGE_503,
   },
 })
 

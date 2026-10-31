@@ -12,6 +12,8 @@ import {
 } from './lib/api-auth.test-helpers.js'
 
 let db
+// PAGES.1 task 15b — the slug list the mocked page tier answers.
+const pages = vi.hoisted(() => ({ slugs: [] }))
 const ssrClient = {
   auth: { getUser: vi.fn(async () => ({ data: { user: null } })) },
   from: (table) => db.from(table),
@@ -29,21 +31,29 @@ vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantDomainBrand: async ()
 vi.mock('@/lib/public-pages-edge', () => ({
   PUBLIC_PAGE_HEADER: 'x-public-page',
   publicOrgIdForHost: async () => null,
-  listPublicPageSlugs: async () => [],
+  listPublicPageSlugs: async () => pages.slugs,
   isPublicPagePath: () => false,
-  withPublicPageHeader: (h) => new Headers(h),
+  withPublicPageHeader: (h) => {
+    const next = new Headers(h)
+    next.set('x-public-page', '1')
+    return next
+  },
 }))
 
 import { proxy } from './proxy.js'
 
-function makeReq({ path = '/api/bookings', token = null, method } = {}) {
+function makeReq({ path = '/api/bookings', token = null, method, search = '' } = {}) {
   const headers = new Headers({ host: 'crm.un1tdublin.com' })
   if (token) headers.set('authorization', `Bearer ${token}`)
   return {
     headers,
     method,
-    url: `http://localhost${path}`,
-    nextUrl: { pathname: path, clone: () => new URL(`http://localhost${path}`) },
+    url: `http://localhost${path}${search}`,
+    nextUrl: {
+      pathname: path,
+      searchParams: new URLSearchParams(search),
+      clone: () => new URL(`http://localhost${path}${search}`),
+    },
     cookies: { getAll: () => [], get: () => undefined, set: () => {} },
   }
 }
@@ -57,6 +67,7 @@ beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', 'anon-key')
   vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key')
   db = makeFakeDb(twoOrgFixture())
+  pages.slugs = []
 })
 
 afterEach(() => {
@@ -186,5 +197,77 @@ describe('proxy Bearer gate', () => {
       const res = await proxy(makeReq({ path: '/api/mobile/review-login/', method: 'POST' }))
       expect(admitted(res)).toBe(true)
     })
+  })
+})
+
+// PAGES.1 task 15b — the page editor's preview iframe loads /<slug>?edit=1,
+// including for a DRAFT page that is not in the public slug list. A staff
+// session that passed the cookie gate gets the x-public-page stamp so AppShell
+// renders the preview bare; nothing else changes.
+describe('staff ?edit=1 page preview', () => {
+  const stamped = (res) => res.headers.get('x-middleware-request-x-public-page')
+
+  beforeEach(() => {
+    pages.slugs = ['trial']
+  })
+
+  it('a staff session with ?edit=1 on /january (a draft, not in the slug list) passes with x-public-page', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/january', search: '?edit=1' }))
+    expect(admitted(res)).toBe(true)
+    expect(stamped(res)).toBe('1')
+  })
+
+  it('the same path without ?edit=1 passes WITHOUT the header', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/january' }))
+    expect(admitted(res)).toBe(true)
+    expect(stamped(res)).toBeNull()
+  })
+
+  it('/settings?edit=1 (reserved) passes without the header', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/settings', search: '?edit=1' }))
+    expect(admitted(res)).toBe(true)
+    expect(stamped(res)).toBeNull()
+  })
+
+  it('/Settings?edit=1 (a reserved segment in another case) passes without the header', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/Settings', search: '?edit=1' }))
+    expect(admitted(res)).toBe(true)
+    expect(stamped(res)).toBeNull()
+  })
+
+  it('a forged inbound x-public-page is stripped: only the proxy stamps it, and only on ?edit=1', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const forged = (search) => {
+      const req = makeReq({ path: '/january', search })
+      req.headers.set('x-public-page', 'forged')
+      return req
+    }
+    // With ?edit=1 the outgoing header is the proxy's own (withPublicPageHeader writes '1').
+    const preview = await proxy(forged('?edit=1'))
+    expect(admitted(preview)).toBe(true)
+    expect(stamped(preview)).toBe('1')
+    // Without it the forged copy never reaches the page.
+    const plain = await proxy(forged(''))
+    expect(admitted(plain)).toBe(true)
+    expect(stamped(plain)).toBeNull()
+    // The request headers are re-stated downstream (so a forged copy left behind would show here).
+    expect(plain.headers.get('x-middleware-request-host')).toBe('crm.un1tdublin.com')
+  })
+
+  it('an anonymous /january?edit=1 is redirected to /login as before', async () => {
+    const res = await proxy(makeReq({ path: '/january', search: '?edit=1' }))
+    expect(admitted(res)).toBe(false)
+    expect(res.status).toBe(307)
+    expect(new URL(res.headers.get('location')).pathname).toBe('/login')
+  })
+
+  it('an /api/ path with ?edit=1 never gets the header', async () => {
+    ssrClient.auth.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/api/january', search: '?edit=1' }))
+    expect(stamped(res)).toBeNull()
   })
 })

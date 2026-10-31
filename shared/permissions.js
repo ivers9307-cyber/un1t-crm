@@ -282,7 +282,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // existing locations keep working unchanged; operators can flip
   // it off per location via Location Settings if they don't run
   // marketing for that studio (e.g. CCF Autos).
-  { key: 'landing_page', label: 'Landing page editor',          hint: 'Edit the public marketing page at /welcome. Includes WYSIWYG editor + sidebar settings form.' },
+  { key: 'landing_page', label: 'Landing page editor',          hint: 'Edit the public landing pages: the studio page and campaign pages at this studio.' },
   // ZOOMOPS.1 — operator controls for the Zoom Phone contact sync at
   // /settings/integrations/zoom-contacts (run history, the report of
   // contacts the sync can't use, and preview / run / guard-override

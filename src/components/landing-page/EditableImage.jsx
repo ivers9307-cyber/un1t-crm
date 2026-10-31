@@ -7,7 +7,7 @@
 // endpoint the form uses); on success calls onChange(newUrl) so
 // the iframe can post 'edit-field' upstream to the parent state.
 //
-// Requires `locationId` (passed down from the iframe's edit-mode
+// Requires `pageId` (a landing page row, Task 18) or `locationId` (passed down from the iframe's edit-mode
 // state, originally posted from the settings form). The iframe is
 // loaded under the operator's session — cookies travel with the
 // fetch, so the upload route validates auth normally without any
@@ -29,6 +29,7 @@ export default function EditableImage({
   alt = '',
   kind = 'image',          // 'image' | 'video'
   locationId,
+  pageId = null,           // PAGES.1: a page's uploads attribute to the page; wins over locationId
   onChange,                // (newUrl: string | null) => void
   onError,                 // (msg: string) => void
   className = '',
@@ -45,9 +46,9 @@ export default function EditableImage({
   const inputRef = useRef(null)
 
   async function handleFile(file) {
-    if (!file || !locationId) return
+    if (!file || !(pageId || locationId)) return
     setUploading(true)
-    const res = await uploadLandingMedia({ file, locationId, kind })
+    const res = await uploadLandingMedia({ file, ...(pageId ? { pageId } : { locationId }), kind })
     if (!res.success) onError?.(res.error || 'Upload failed')
     else onChange?.(res.url)
     setUploading(false)

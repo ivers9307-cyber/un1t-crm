@@ -13,6 +13,7 @@ import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
 import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
 import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
+import { RESERVED_PAGE_SLUGS } from '@/lib/page-slug'
 
 // PROXY.1 — renamed from middleware → proxy for the Next.js 16 "proxy"
 // file convention (the old "middleware" name is deprecated and the
@@ -388,8 +389,27 @@ export async function proxy(request) {
     }
   }
 
+  // PAGES.1 — the page editor's preview iframe loads /<slug>?edit=1, DRAFT
+  // pages included, and a draft is not in the public slug list. A request that
+  // reaches the response below has either passed the Bearer gates or is about
+  // to be redirected (no session), so the stamp only ever rides a RESOLVED
+  // session. It only decides whether AppShell draws the staff shell around the
+  // preview; the [slug] route still answers 404 for a page the session cannot
+  // view. Reserved app segments (/settings, /cars …) and /api/ never qualify.
+  // Lowercased: /Settings is the settings segment too, never a page slug.
+  const editSegment = pathname.slice(1).split('/')[0].toLowerCase()
+  const isEditPreview =
+    request.nextUrl.searchParams?.get('edit') === '1' &&
+    !pathname.startsWith('/api/') &&
+    Boolean(editSegment) &&
+    !editSegment.startsWith('_') &&
+    !RESERVED_PAGE_SLUGS.has(editSegment)
+  // Re-read per call: a refreshed session cookie is written onto
+  // request.cookies before the response is rebuilt.
+  const downstreamHeaders = () => (isEditPreview ? withPublicPageHeader(request.headers) : request.headers)
+
   let response = NextResponse.next({
-    request: { headers: request.headers },
+    request: { headers: downstreamHeaders() },
   })
 
   const supabase = createServerClient(
@@ -404,7 +424,7 @@ export async function proxy(request) {
           cookiesToSet.forEach(({ name, value, options }) => {
             request.cookies.set(name, value)
             response = NextResponse.next({
-              request: { headers: request.headers },
+              request: { headers: downstreamHeaders() },
             })
             response.cookies.set(name, value, options)
           })

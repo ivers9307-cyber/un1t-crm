@@ -354,9 +354,9 @@ export const SETTINGS_TREE = [
       },
       {
         id: 'landing-page',
-        label: 'Landing page',
+        label: 'Landing pages',
         href: '/settings/landing-page',
-        description: 'Content + form settings for the public landing pages. The live page stays linked from the Marketing hub.',
+        description: 'The Pages list: the studio page and every campaign page, with a live preview editor.',
         icon: Globe,
         // Mirrors the page's own gate exactly.
         gate: { permission: 'landing_page' },

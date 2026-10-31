@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   user: null,
   loaded: null,
   loadThrows: null,
+  loadedByOrg: null,
   product: { un1t_id: 'UN1T-PROD-1', status: 'active', type: 'one_time', price_cents: 3900, currency: 'eur', title: 'Trial' },
   reviews: [],
   legacyBlocks: null,
@@ -37,6 +38,7 @@ vi.mock('@/lib/landing-pages', async (importOriginal) => {
     loadPageBySlug: vi.fn(async (db, args) => {
       h.calls.load.push(args)
       if (h.loadThrows) throw h.loadThrows
+      if (h.loadedByOrg && args.orgId in h.loadedByOrg) return h.loadedByOrg[args.orgId]
       return h.loaded
     }),
     studioPublicPath: vi.fn(async (db, locationId) => PATHS[locationId] || null),
@@ -157,6 +159,7 @@ beforeEach(() => {
   h.user = null
   h.loaded = null
   h.loadThrows = null
+  h.loadedByOrg = null
   h.reviews = []
   h.legacyBlocks = null
   h.calls = { load: [], reviews: [], legacy: [] }
@@ -342,6 +345,8 @@ describe('the [slug] page route', () => {
     const html = await render({ slug: '50plus', sp: { edit: '1' } })
     expect(html).toContain('data-testid="overlay"')
     expect(html).not.toContain('data-testid="campaign"')
+    // No live card that would book at a fallback studio: a notice instead.
+    expect(propsOf(html, 'overlay').offerLayout.offer.props.children).toContain('no public path yet')
   })
 
   it('anything under a slug that the page does not serve 404s', async () => {
@@ -390,6 +395,43 @@ describe('the [slug] page route', () => {
     expect(overlay.footer).toMatchObject({ brand: 'UN1T', legalName: 'Champ Fitness Ltd' })
   })
 
+  it('edit mode on a one_class page passes offerLayout with the hero copy and the offer block id', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    const overlay = propsOf(html, 'overlay')
+    expect(overlay.offerLayout).toMatchObject({
+      kind: 'one_class',
+      offerBlockId: 'cf',
+      cta: { href: '#book', label: 'Book a free class' },
+      hero: { videoUrl: 'https://x/v.mp4', posterUrl: 'https://x/p.jpg', soundLabel: 'Tap for sound', heading: 'A free trial of The 50+ Club', eyebrow: 'The 50+ Club · Stillorgan' },
+      expect: { eyebrow: 'What to expect', heading: 'Built for where you are now' },
+    })
+    expect(overlay.offerLayout.expect.cards).toHaveLength(3)
+    // The live booking card, built exactly as the public page builds it.
+    expect(overlay.offerLayout.offer.props).toMatchObject({ publicPath: 'stillorgan', campaign: '50plus', page: '50plus', locationName: 'UN1T Stillorgan' })
+    expect(overlay.offerLayout.offer.props.copy.heading).toBe('A free trial of The 50+ Club')
+    expect(overlay.offerLayout.offer.props.copy).not.toHaveProperty('class_keywords')
+    // The trial card hand-off is the legacy overlay's; a page passes its layout instead.
+    expect(overlay.trialPreview ?? null).toBeNull()
+    expectClientSafe(html)
+  })
+
+  it('edit mode on a paid_trial page renders the trial card as preview', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
+    // Choose on page: no ?studio=, the picker over every enabled studio.
+    const picker = propsOf(await render({ slug: 'trial', sp: { edit: '1' } }), 'overlay')
+    expect(picker.offerLayout).toMatchObject({ kind: 'frosted', anchor: 'trial', offerBlockId: 'pt1', cta: { href: '#trial', label: 'Start my trial' } })
+    expect(picker.offerLayout.offer.props).toMatchObject({ preview: true, initialStudio: null, resumePurchaseId: null, cancelled: false, returnPath: '/trial', page: 'trial' })
+    expect(picker.offerLayout.offer.props.studios.map((s) => s.publicPath)).toEqual(['stillorgan', 'hatch-street'])
+    // A previewed studio: its card, still disabled.
+    const html = await render({ slug: 'trial', sp: { edit: '1', studio: 'hatch-street', purchase: 'abc' } })
+    const one = propsOf(html, 'overlay')
+    expect(one.offerLayout.offer.props).toMatchObject({ preview: true, initialStudio: 'hatch', resumePurchaseId: null })
+    expectClientSafe(html)
+  })
+
   it('a signed-in user who may not view the page gets no overlay: a draft 404s, a live page is the public render with nothing secret', async () => {
     h.user = { id: 'u2', isMaster: false, role: 'staff', activeOrganization: { id: 'org-un1t' }, locationIds: ['loc-h'] }
     h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
@@ -401,10 +443,46 @@ describe('the [slug] page route', () => {
     expectClientSafe(html)
   })
 
+  it('a signed-in user of another org with ?edit=1 sees the host\'s live page as a visitor (no overlay)', async () => {
+    h.user = { id: 'u3', isMaster: false, role: 'staff', activeOrganization: { id: 'org-other' }, locationIds: [] }
+    h.loadedByOrg = { 'org-other': null, 'org-un1t': { page: FIFTY, studios: FIFTY_STUDIOS } }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    expect(h.calls.load).toEqual([
+      { orgId: 'org-other', slug: '50plus' },
+      { orgId: 'org-un1t', slug: '50plus' },
+    ])
+    expect(html).not.toContain('data-testid="overlay"')
+    expect(html).toContain('data-testid="campaign"')
+    expectClientSafe(html)
+  })
+
+  it('a signed-in user of another org whose own org has no such page and the host has none either still gets a 404', async () => {
+    h.user = { id: 'u3', isMaster: false, role: 'staff', activeOrganization: { id: 'org-other' }, locationIds: [] }
+    h.loadedByOrg = { 'org-other': null, 'org-un1t': null }
+    expect(await outcome({ slug: '50plus', sp: { edit: '1' } })).toBe('NEXT_NOT_FOUND')
+  })
+
+  it('a signed-in editor of the page\'s org still gets the overlay (one read, no fallback)', async () => {
+    h.user = { id: 'u1', isMaster: true, activeOrganization: { id: 'org-un1t' } }
+    h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
+    const html = await render({ slug: '50plus', sp: { edit: '1' } })
+    expect(html).toContain('data-testid="overlay"')
+    expect(h.calls.load).toEqual([{ orgId: 'org-un1t', slug: '50plus' }])
+  })
+
   it('an anonymous ?edit=1 is an ordinary visit: the host\'s organisation, and a draft 404s', async () => {
     h.loaded = { page: { ...FIFTY, publish_state: 'draft' }, studios: FIFTY_STUDIOS }
     expect(await outcome({ slug: '50plus', sp: { edit: '1' } })).toBe('NEXT_NOT_FOUND')
     expect(h.calls.load[0]).toEqual({ orgId: 'org-un1t', slug: '50plus' })
+  })
+
+  it('a meta_title that already carries the brand is not suffixed twice', async () => {
+    h.loaded = { page: { ...FIFTY, chrome: { meta_title: 'The 50+ Club | UN1T' } }, studios: FIFTY_STUDIOS }
+    const meta = await generateMetadata({ params: Promise.resolve({ slug: '50plus' }), searchParams: Promise.resolve({}) })
+    expect(meta.title).toBe('The 50+ Club | UN1T')
+    h.loaded = { page: { ...FIFTY, chrome: { meta_title: '  The 50+ Club | un1t  ' } }, studios: FIFTY_STUDIOS }
+    const loose = await generateMetadata({ params: Promise.resolve({ slug: '50plus' }), searchParams: Promise.resolve({}) })
+    expect(loose.title).toBe('The 50+ Club | un1t')
   })
 
   it('metadata: the meta title, else the page title, then the brand; noindex follows the chrome', async () => {

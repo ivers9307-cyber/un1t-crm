@@ -716,4 +716,14 @@ describe('getOpenApiSpec', () => {
     expect(spec.components.schemas.CorpPromoClaim.required).not.toContain('promo')
     expect(spec.components.schemas.TrialPurchaseStart.properties.studio.enum).toBeUndefined()
   })
+
+  it('documents the landing pages API (PAGES.1)', () => {
+    expect(spec.paths['/api/landing-pages']).toHaveProperty('get')
+    expect(spec.paths['/api/landing-pages'].post.responses).toHaveProperty('409')
+    expect(spec.paths['/api/landing-pages/{id}']).toHaveProperty('put')
+    expect(spec.paths['/api/landing-pages/{id}/publish']).toHaveProperty('post')
+    expect(spec.paths['/api/landing-pages/{id}/studios/{locationId}']).toHaveProperty('put')
+    expect(spec.paths['/api/landing-pages/slug-check']).toHaveProperty('get')
+    expect(spec.components.schemas.LandingPageUpdate.properties).not.toHaveProperty('offer_type')
+  })
 })

@@ -207,6 +207,29 @@ describe('CampaignFunnel', () => {
   })
 })
 
+describe('CampaignFunnel in the editor preview (PAGES.1)', () => {
+  it('with onEditCopy the pick words are edited in place and the tiles stay live; without it nothing is editable', async () => {
+    const onEditCopy = vi.fn()
+    const { container, unmount } = render(<CampaignFunnel publicPath="stillorgan" campaign="50plus" page="50plus" copy={COPY} onEditCopy={onEditCopy} />)
+    await screen.findByText('Mon, 5 Jan')
+    const title = [...container.querySelectorAll('[contenteditable]')].find((el) => el.textContent === 'Pick your first morning')
+    expect(title.closest('h2')).toBeTruthy()
+    title.textContent = 'Choose a morning'
+    fireEvent.input(title)
+    expect(onEditCopy).toHaveBeenCalledWith('pick_title', 'Choose a morning')
+    // The pick title and body only; the CTA, reassurance and tiles are not editable here.
+    expect([...container.querySelectorAll('[contenteditable]')].map((el) => el.textContent)).toEqual(['Choose a morning', 'B'])
+    fireEvent.click(screen.getByText('Wed, 7 Jan').closest('button'))
+    expect(screen.getByText('Wed, 7 Jan').closest('button').getAttribute('aria-pressed')).toBe('true')
+    unmount()
+
+    const plain = mount()
+    await screen.findByText('Mon, 5 Jan')
+    expect(plain.container.querySelectorAll('[contenteditable]')).toHaveLength(0)
+    expect(screen.getByRole('heading', { name: 'Pick your first morning' })).toBeTruthy()
+  })
+})
+
 describe('cadenceGroups / ctaLabelFor', () => {
   it('groups by day in order', () => {
     expect(cadenceGroups(CLASSES).map((g) => g.day)).toEqual(['2099-01-05', '2099-01-07', '2099-01-09', '2099-01-12'])

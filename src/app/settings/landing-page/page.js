@@ -1,34 +1,73 @@
-// /settings/landing-page — operator editor for the public marketing
-// site. Studio pages: the `landing_page` permission. The front page
-// (chooser) is per ORGANISATION, so its editor is for organisation admins
-// only (C141 ORGROLE.2 — master or an org_admin grant), the same rule as
-// PUT /api/chooser-settings (assertChooserEdit).
-//
-// Edits TWO kinds of public page, chosen via the top "Editing" picker:
-//   1. Front page  (?page=chooser) — the un1tdublin.com split chooser
-//      (ChooserEditorForm): headline/intro, tile order, per-tile
-//      label / CTA / cover image.
-//   2. A studio page (?location_id=<id>) — that studio's block-based
-//      marketing page (LandingPageSettingsForm), with a live preview.
-//
-// The picker switches the edited page WITHOUT changing the user's
-// global active location.
+// /settings/landing-page — Settings → Landing pages (PAGES.1). Three modes:
+//   1. No query: the Pages list (PagesList), every page the caller can view
+//      (listPagesForUser) with "+ New page" (NewPageDialog).
+//   2. ?page=chooser: the front-page (chooser) editor. The front page is per
+//      ORGANISATION, so its editor is for organisation admins only (C141
+//      ORGROLE.2: master or an org_admin grant), the same rule as
+//      PUT /api/chooser-settings (assertChooserEdit). Anyone else gets the list.
+//   3. ?location_id=<id>: the legacy studio editor (LandingPageSettingsForm),
+//      which still edits a studio page until studio pages move to the page
+//      editor in PR3. A studio row's Edit link opens it.
+// A campaign page's editor is /settings/landing-page/<id>.
 
 import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
+import Link from 'next/link'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import { getLocationBranding } from '@/lib/location-branding'
 import ChooserEditorForm from '@/components/ChooserEditorForm'
-import PageSwitcher from '@/components/landing-page/PageSwitcher'
+import PagesList from '@/components/landing-pages/PagesList'
 import { isActiveOrgAdmin } from '@/lib/org-admin'
-import { logWarn } from '@/lib/log'
+import { listPagesForUser, PageReadError } from '@/lib/landing-pages'
+import { logError, logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
 function canEditChooser(user) {
   return isActiveOrgAdmin(user)
+}
+
+const backToPages = (
+  <Link href="/settings/landing-page" className="text-sm font-medium text-un1t-accent hover:underline">
+    Back to pages
+  </Link>
+)
+
+// The list mode: the pages, and who may make a new one. A one-studio page
+// needs the landing_page permission AT that studio (the POST route's rule);
+// an all-studios page needs an organisation admin.
+async function pagesListMode(db, user) {
+  let pages
+  try {
+    pages = await listPagesForUser(db, user)
+  } catch (err) {
+    if (!(err instanceof PageReadError)) throw err
+    logError('landing-page-settings', 'pages list unreadable', { code: err.cause?.code ?? null })
+    return (
+      <div className="p-8 max-w-2xl">
+        <h2 className="text-2xl font-bold mb-2">Landing pages</h2>
+        <p className="text-sm text-un1t-subtle">The pages could not be loaded. Try again in a minute.</p>
+      </div>
+    )
+  }
+  const studios = (user.locations || [])
+    .filter((l) => hasPermissionForLocation(user, l.id, 'landing_page'))
+    .map((l) => ({ id: l.id, name: l.name || 'Studio' }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+  const canCreateAll = isActiveOrgAdmin(user)
+  return (
+    <div className="p-6 max-w-[1800px]">
+      <PagesList
+        pages={pages}
+        studios={studios}
+        canCreate={canCreateAll || studios.length > 0}
+        canCreateAll={canCreateAll}
+        showFrontPage={canCreateAll}
+      />
+    </div>
+  )
 }
 
 export default async function LandingPageSettingsPage(props) {
@@ -38,23 +77,6 @@ export default async function LandingPageSettingsPage(props) {
   if (!hasPermission(user, 'landing_page')) redirect('/')
 
   const db = createServerClient()
-
-  // Studio pages the user can access (master = all active locations).
-  const accessibleIds = getUserLocationIds(user)
-  let pages = []
-  if (accessibleIds.length > 0) {
-    const { data } = await db
-      .from('landing_page_settings')
-      .select('location_id, public_path, locations:location_id ( name )')
-      .in('location_id', accessibleIds)
-    pages = (data || [])
-      .map((r) => ({
-        location_id: r.location_id,
-        public_path: r.public_path,
-        name: r.locations?.name || r.public_path || 'Studio',
-      }))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }
 
   // ── Front-page (chooser) mode ──────────────────────────────────────
   if (searchParams?.page === 'chooser' && canEditChooser(user)) {
@@ -79,10 +101,10 @@ export default async function LandingPageSettingsPage(props) {
           <div>
             <h2 className="text-2xl font-bold">Front page</h2>
             <p className="text-sm text-un1t-subtle mt-1">
-              The split landing page at <code>un1tdublin.com</code> — the two studio tiles visitors choose from.
+              The split landing page at <code>un1tdublin.com</code>: the two studio tiles visitors choose from.
             </p>
           </div>
-          <PageSwitcher current="chooser" studios={pages} />
+          {backToPages}
         </div>
         <ChooserEditorForm
           initialChooser={chooserRes.data || { id: 'default', headline: null, intro: null, tile_order: [] }}
@@ -92,11 +114,30 @@ export default async function LandingPageSettingsPage(props) {
     )
   }
 
-  // ── Studio-page mode ───────────────────────────────────────────────
+  // ── Studio-page mode (legacy editor) ───────────────────────────────
   const requested = searchParams?.location_id
+  if (!requested) return pagesListMode(db, user)
+
+  // Studio pages the user can access (master = all active locations).
+  const accessibleIds = getUserLocationIds(user)
+  let pages = []
+  if (accessibleIds.length > 0) {
+    const { data } = await db
+      .from('landing_page_settings')
+      .select('location_id, public_path, locations:location_id ( name )')
+      .in('location_id', accessibleIds)
+    pages = (data || [])
+      .map((r) => ({
+        location_id: r.location_id,
+        public_path: r.public_path,
+        name: r.locations?.name || r.public_path || 'Studio',
+      }))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  }
+
   const activeId = user.activeLocation?.id || null
   let selectedId = null
-  if (requested && pages.some((p) => p.location_id === requested)) selectedId = requested
+  if (pages.some((p) => p.location_id === requested)) selectedId = requested
   else if (activeId && pages.some((p) => p.location_id === activeId)) selectedId = activeId
   else selectedId = pages[0]?.location_id || activeId || null
 
@@ -132,12 +173,11 @@ export default async function LandingPageSettingsPage(props) {
         <div>
           <h2 className="text-2xl font-bold">Landing page</h2>
           <p className="text-sm text-un1t-subtle mt-1">
-            Edit a studio&apos;s public marketing page. Use the <strong>Editing</strong> picker to switch
-            pages (or jump to the front page). On wide screens a live preview shows on the right —
-            click any section to jump to its edit panel.
+            Edit a studio&apos;s public marketing page. On wide screens a live preview shows on the
+            right: click any section to jump to its edit panel.
           </p>
         </div>
-        {canEditChooser(user) && <PageSwitcher current={selectedId} studios={pages} />}
+        {backToPages}
       </div>
       {/* key=selectedId forces a clean remount on studio switch. */}
       <LandingPageSettingsForm

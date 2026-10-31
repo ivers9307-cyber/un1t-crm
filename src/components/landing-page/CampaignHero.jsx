@@ -11,12 +11,18 @@
 // message lands before the tap. No video: the poster alone; neither: the
 // words on black.
 //
+// PAGES.1 — `renderText(path, value)` (optional) renders the eyebrow,
+// heading and sub-copy instead of the plain words: the editor's preview
+// passes EditableText through it (path ['eyebrow'] | ['heading'] |
+// ['subhead']). Without it the hero renders exactly as before.
+//
 // The video box is the one dark island on a light page: `bg-black` sits on
 // the element whose text is white, which is the rule no-low-contrast-accent-
 // text asks for.
 import { useRef, useState } from 'react'
 
-export default function CampaignHero({ videoUrl, posterUrl, soundLabel = 'Tap for sound', eyebrow, heading, subhead, children }) {
+export default function CampaignHero({ videoUrl, posterUrl, soundLabel = 'Tap for sound', eyebrow, heading, subhead, children, renderText = null }) {
+  const text = (key, value) => (renderText ? renderText([key], value) : value)
   const videoRef = useRef(null)
   const [muted, setMuted] = useState(true)
 
@@ -61,9 +67,9 @@ export default function CampaignHero({ videoUrl, posterUrl, soundLabel = 'Tap fo
             </button>
           )}
           <div className="absolute inset-x-0 bottom-0 p-6 sm:p-8">
-            {eyebrow && <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-white/75 mb-3">{eyebrow}</div>}
-            <h1 className="font-display font-extrabold uppercase text-[clamp(2rem,6vw,3.5rem)] leading-[1.02] tracking-tight">{heading}</h1>
-            {subhead && <p className="mt-4 text-base sm:text-lg text-white/85 max-w-xl leading-relaxed">{subhead}</p>}
+            {eyebrow && <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-white/75 mb-3">{text('eyebrow', eyebrow)}</div>}
+            <h1 className="font-display font-extrabold uppercase text-[clamp(2rem,6vw,3.5rem)] leading-[1.02] tracking-tight">{text('heading', heading)}</h1>
+            {subhead && <p className="mt-4 text-base sm:text-lg text-white/85 max-w-xl leading-relaxed">{text('subhead', subhead)}</p>}
           </div>
         </div>
         <div className="flex items-center justify-center lg:justify-stretch">

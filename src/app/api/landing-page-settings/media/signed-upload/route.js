@@ -5,8 +5,13 @@
 // (which streams the bytes through the function) is bound by.
 //
 // Flow:
-//   1. client POSTs { location_id, kind, content_type } here (tiny JSON)
-//   2. we auth (master/owner + landing_page) and mint a signed upload
+//   1. client POSTs { page_id | location_id, kind, content_type } here
+//      (tiny JSON). page_id (PAGES.1) attributes the upload to a landing
+//      page: gated on canEditPage, path pages/<page_id>/<uuid>.<ext>.
+//      location_id is the studio-level alternative (landing_page permission
+//      there, path landing-page/<location_id>/<uuid>.<ext>). Exactly one is
+//      needed; page_id wins when both are sent.
+//   2. we auth and mint a signed upload
 //      URL for a UUID-named path in the 'branding' bucket
 //   3. client uploads the bytes directly via
 //      supabase.storage.from('branding').uploadToSignedUrl(path, token, file)
@@ -18,7 +23,7 @@
 // bucket enforces size. The token authorises the upload, not RLS: no
 // client session writes this bucket (mig 675, BRANDINGBUCKET.1).
 //
-// Master OR owner at the location (same gate as /media).
+// Same gates as /media.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -28,9 +33,15 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
+import { loadPageById, canViewPage, canEditPage, PageReadError } from '@/lib/landing-pages'
+import { logError } from '@/lib/log'
 
+// Exactly one of page_id / location_id is required (checked below so the
+// refusal can say so); when both arrive page_id wins and location_id is
+// ignored, so it is not validated on the page branch.
 const SignedUploadBody = z.object({
-  location_id: uuidLike,
+  page_id: z.string().optional().nullable(),
+  location_id: z.string().optional().nullable(),
   kind: z.string(),
   content_type: z.string(),
 })
@@ -51,12 +62,45 @@ export async function POST(request) {
 
   const validation = await validateBody(request, SignedUploadBody)
   if (!validation.ok) return validation.response
-  const { location_id: locationId, kind, content_type: contentType } = validation.data
+  const { page_id: pageId, location_id: locationId, kind, content_type: contentType } = validation.data
 
-  const guard = assertLocationAccess(user, locationId)
-  if (guard) return guard
-  if (!hasPermissionForLocation(user, locationId, 'landing_page')) {
-    return NextResponse.json({ success: false, error: 'Landing page editor not enabled for your role at this location' }, { status: 403 })
+  let prefix
+  if (pageId) {
+    if (!user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+    if (!uuidLike.safeParse(pageId).success) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
+    let loaded
+    try {
+      loaded = await loadPageById(createServerClient(), pageId)
+    } catch (err) {
+      if (!(err instanceof PageReadError)) throw err
+      logError('landing-page-settings', 'page unreadable on signed upload', { pageId, code: err.cause?.code ?? null })
+      return NextResponse.json({ success: false, error: 'unavailable' }, { status: 503 })
+    }
+    // 404, not 403, for a page outside the caller's view (no id enumeration).
+    if (!loaded || !canViewPage(user, loaded.page)) {
+      return NextResponse.json({ success: false, error: 'not_found' }, { status: 404 })
+    }
+    if (!canEditPage(user, loaded.page)) {
+      return NextResponse.json({ success: false, error: 'You can view this page but not edit it' }, { status: 403 })
+    }
+    prefix = `pages/${pageId}`
+  } else {
+    if (!locationId) {
+      return NextResponse.json({ success: false, error: 'page_id or location_id is required' }, { status: 400 })
+    }
+    if (!uuidLike.safeParse(locationId).success) {
+      return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
+    }
+    const guard = assertLocationAccess(user, locationId)
+    if (guard) return guard
+    if (!hasPermissionForLocation(user, locationId, 'landing_page')) {
+      return NextResponse.json({ success: false, error: 'Landing page editor not enabled for your role at this location' }, { status: 403 })
+    }
+    prefix = `landing-page/${locationId}`
   }
 
   const isVideo = kind === 'video'
@@ -69,7 +113,7 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
-  const path = `landing-page/${locationId}/${randomUUID()}.${ext}`
+  const path = `${prefix}/${randomUUID()}.${ext}`
 
   const { data, error } = await db.storage.from('branding').createSignedUploadUrl(path)
   if (error || !data?.token) {

@@ -38,6 +38,7 @@ import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import VisitOriginCapture from '@/components/VisitOriginCapture'
 import CampaignHero from '@/components/landing-page/CampaignHero'
 import ExpectStrip from '@/components/landing-page/ExpectStrip'
+import FrostedHero, { learnMoreIdFor } from '@/components/landing-page/FrostedHero'
 
 const shellClass = (tone) => (tone === 'light'
   ? 'min-h-screen bg-white text-black antialiased'
@@ -79,7 +80,7 @@ function Blocks({ blocks = [], blockProps = {}, cta = {}, tone }) {
 }
 
 export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [], blockProps, anchor = 'offer', heroImageUrl = null, offer = null, scrollCueLabel = null }) {
-  const learnMoreId = `${anchor}-learn-more`
+  const learnMoreId = learnMoreIdFor(anchor)
   return (
     <div className={shellClass(tone)}>
       <RevealArmScript />
@@ -87,28 +88,7 @@ export function FrostedCardLayout({ tone = 'dark', logo, cta, footer, blocks = [
       <RevealManager />
       <Header logo={logo} cta={cta} />
 
-      <section id={anchor} className="relative min-h-[92svh] flex flex-col overflow-hidden bg-black lp-grain">
-        {heroImageUrl && (
-          <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
-            <div className="absolute inset-0 bg-cover bg-center lp-kenburns" style={{ backgroundImage: `url(${heroImageUrl})` }} />
-          </div>
-        )}
-        <div className="absolute inset-0 pointer-events-none" aria-hidden="true"
-          style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.5) 45%, rgba(0,0,0,0.85) 100%)' }} />
-        <div className={`relative z-10 flex-1 flex items-center justify-center px-5 pt-28 ${scrollCueLabel ? 'pb-6' : 'pb-16'}`}>
-          {offer}
-        </div>
-        {scrollCueLabel && (
-          <div className="relative z-10 flex justify-center pb-8">
-            <a href={`#${learnMoreId}`} className="group flex flex-col items-center gap-2 text-sm font-semibold uppercase tracking-[0.18em] text-white/80 transition-colors hover:text-white">
-              {scrollCueLabel}
-              <svg className="lp-cue w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 5v14M19 12l-7 7-7-7" />
-              </svg>
-            </a>
-          </div>
-        )}
-      </section>
+      <FrostedHero anchor={anchor} heroImageUrl={heroImageUrl} offer={offer} scrollCueLabel={scrollCueLabel} />
 
       <div id={learnMoreId} className="scroll-mt-20">
         <Blocks blocks={blocks} blockProps={blockProps} cta={cta} tone={tone} />

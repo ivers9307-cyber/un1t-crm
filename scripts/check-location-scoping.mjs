@@ -118,6 +118,19 @@ const SCOPING_HELPERS = [
   // copySourceForRequest are NOT listed: each reads by a location_id or page
   // id its caller already resolved, so they scope nothing themselves.)
   'resolvePublicPageRequest(',
+  // src/lib/landing-pages.js (PAGES.1, the pages API) — canViewPage compares
+  // the page row's organization_id (isOrgAdmin; for scope 'all' the caller's
+  // locations' organization_id) and primary_location_id (the caller's
+  // location ids); canEditPage compares primary_location_id
+  // (hasPermissionForLocation, 'landing_page') or organization_id
+  // (isOrgAdmin). listPagesForUser reads landing_pages filtered on the
+  // caller's organisation ids (every org for a master), keeps the rows
+  // canViewPage admits, and reads landing_page_studios only for those page
+  // ids. The /api/landing-pages* routes load a page through
+  // loadViewablePage (canViewPage) before any write.
+  'canViewPage(',
+  'canEditPage(',
+  'listPagesForUser(',
   // src/lib/contact-studios.js (ORGCONTACTS.1) — every read of contact_studios
   // through contactsAtStudio filters on the studio it is asked for.
   'contactsAtStudio(',
