@@ -17,6 +17,14 @@
 // the web board. Stage placement stays read-only on mobile (classifier-
 // derived); the only pipeline action is the Cold toggle on deal detail.
 //
+// PIPE3.10 — a studio can run several boards (Stillorgan: Acquisition, €39
+// Trial, Programmes). The tab lists them from `pipelines` (listPipelines, the
+// web board's tab row) and reads the chosen board's stages
+// (listStagesForPipeline); with one board the row is not drawn. A studio whose
+// only board is disabled (CCF Autos) keeps today's primary-board read, so its
+// screen is unchanged. The Funnel / Off funnel row is drawn only when the board
+// has an off-funnel pile: the two claim boards share the acquisition board's.
+//
 // Tapping a deal opens its detail screen. Pull-to-refresh re-fetches.
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
@@ -27,7 +35,7 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../../lib/auth-context'
-import { listStages, listDealsByStage, countOpenDealsForStage } from '../../../lib/pipeline-api'
+import { listStages, listPipelines, listStagesForPipeline, listDealsByStage, countOpenDealsForStage } from '../../../lib/pipeline-api'
 import { splitStagesByFunnel } from 'shared/pipeline-classifier'
 import { Tabs } from '../../../components/ui'
 import TabletConstrained from '../../../components/TabletConstrained'
@@ -86,6 +94,8 @@ function DealRow({ deal, onPress }) {
 export default function Pipeline() {
   const { activeLocation } = useAuth()
   const router = useRouter()
+  const [boards, setBoards] = useState([])
+  const [boardId, setBoardId] = useState(null)
   const [stages, setStages] = useState([])
   const [counts, setCounts] = useState({})
   const [view, setView] = useState('funnel')          // 'funnel' | 'off_funnel'
@@ -115,10 +125,24 @@ export default function Pipeline() {
   // queries (no rows) — the off-funnel piles hold thousands of deals
   // and a full select is silently capped at 1,000, so fetching lists
   // just to .length them was both heavy and wrong.
+  // PIPE3.10 — the studio's enabled boards; the first (display_order) is the
+  // default, and a board the user already picked is kept while it still exists.
+  const fetchBoards = useCallback(async () => {
+    if (!activeLocation) return []
+    const res = await listPipelines(activeLocation.id)
+    const list = res.success && Array.isArray(res.data) ? res.data : []
+    setBoards(list)
+    setBoardId((cur) => (list.some((p) => p.id === cur) ? cur : (list[0]?.id ?? null)))
+    return list
+  }, [activeLocation])
+
   const fetchStages = useCallback(async () => {
     if (!activeLocation) return
     setError(null)
-    const res = await listStages(activeLocation.id)
+    // PIPE3.10 — a chosen board reads its own stages; no board (the pipelines
+    // read failed, or the studio's only board is disabled) keeps the
+    // primary-board read, exactly today's screen.
+    const res = boardId ? await listStagesForPipeline(boardId) : await listStages(activeLocation.id)
     if (!res.success) {
       setError(res.error || 'Failed to load stages')
       return
@@ -134,7 +158,7 @@ export default function Pipeline() {
       cMap[all[i].id] = r.success ? r.count : 0
     })
     setCounts(cMap)
-  }, [activeLocation])
+  }, [activeLocation, boardId])
 
   const fetchDealsForStage = useCallback(async () => {
     if (!selectedId || !activeLocation) {
@@ -146,9 +170,21 @@ export default function Pipeline() {
   }, [selectedId, activeLocation])
 
   useEffect(() => {
+    fetchBoards()
+  }, [fetchBoards])
+
+  useEffect(() => {
     setLoading(true)
     fetchStages().finally(() => setLoading(false))
   }, [fetchStages])
+
+  // PIPE3.10 — switching board resets the view and the selected stage.
+  function pickBoard(id) {
+    if (id === boardId) return
+    setBoardId(id)
+    setView('funnel')
+    setSelectedId(null)
+  }
 
   useEffect(() => {
     fetchDealsForStage()
@@ -158,13 +194,14 @@ export default function Pipeline() {
   // changes made elsewhere (web kanban, or a "View as user" switch) without
   // a manual pull-to-refresh.
   useFocusEffect(useCallback(() => {
+    fetchBoards()
     fetchStages()
     fetchDealsForStage()
-  }, [fetchStages, fetchDealsForStage]))
+  }, [fetchBoards, fetchStages, fetchDealsForStage]))
 
   async function onRefresh() {
     setRefreshing(true)
-    await Promise.all([fetchStages(), fetchDealsForStage()])
+    await Promise.all([fetchBoards(), fetchStages(), fetchDealsForStage()])
     setRefreshing(false)
   }
 
@@ -195,10 +232,19 @@ export default function Pipeline() {
           </View>
         ) : null}
 
-        {/* Funnel | Off funnel switcher (web PipelineViewSwitcher parity) */}
-        <View className="mb-3">
-          <Tabs tabs={viewTabs} value={view} onChange={setView} />
-        </View>
+        {/* PIPE3.10 — board row (web PipelineViewSwitcher parity): only when the studio runs more than one board */}
+        {boards.length > 1 ? (
+          <View className="mb-3">
+            <Tabs tabs={boards.map((p) => ({ key: p.id, label: p.name }))} value={boardId} onChange={pickBoard} />
+          </View>
+        ) : null}
+
+        {/* Funnel | Off funnel switcher (web PipelineViewSwitcher parity); a board with no off-funnel pile has one view */}
+        {offFunnel.length > 0 ? (
+          <View className="mb-3">
+            <Tabs tabs={viewTabs} value={view} onChange={setView} />
+          </View>
+        ) : null}
 
         {/* Stage strip — only the active view's stages */}
         <ScrollView
