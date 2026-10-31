@@ -106,6 +106,17 @@ describe('isPublicPagePath', () => {
     expect(isPublicPagePath('/_next/a', ['_next'])).toBe(false)
     expect(isPublicPagePath('/trial', [])).toBe(false)
   })
+
+  it('never admits a reserved app segment, even when the DB list names it', () => {
+    const poisoned = ['trial', 'cars', 'settings', 'api', 'dashboard']
+    expect(isPublicPagePath('/cars/x', poisoned)).toBe(false)
+    expect(isPublicPagePath('/cars', poisoned)).toBe(false)
+    expect(isPublicPagePath('/settings', poisoned)).toBe(false)
+    expect(isPublicPagePath('/settings/staff', poisoned)).toBe(false)
+    expect(isPublicPagePath('/api/contacts', poisoned)).toBe(false)
+    expect(isPublicPagePath('/dashboard', poisoned)).toBe(false)
+    expect(isPublicPagePath('/trial', poisoned)).toBe(true)
+  })
 })
 
 describe('publicOrgIdForHost', () => {

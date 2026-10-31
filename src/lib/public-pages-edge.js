@@ -7,7 +7,8 @@
 // the guaranteed fallback and are not trimmed here.
 //
 // Edge-safe on purpose: the proxy (Next middleware, edge runtime) imports it,
-// so it may import only edge-safe modules (brands, tenant-domains-edge) and
+// so it may import only edge-safe modules (brands, tenant-domains-edge, the
+// pure page-slug rules) and
 // never @/lib/auth, @/lib/permissions or a Node built-in.
 //
 // Fail-safe contract (the proxy runs on EVERY request): a slow, down or
@@ -20,6 +21,7 @@
 
 import { resolveBrand, UN1T_GROUP_ORG_ID, isFrameworkAsset } from '@/lib/brands'
 import { resolveTenantOrgId, makeEdgeClient } from '@/lib/tenant-domains-edge'
+import { RESERVED_PAGE_SLUGS } from '@/lib/page-slug'
 
 export const PUBLIC_PAGES_CACHE_TTL_MS = 60_000
 
@@ -76,13 +78,17 @@ export async function listPublicPageSlugs(orgId, { db = null, nowMs = Date.now()
 /**
  * True when the path's FIRST segment is one of the slugs. Exact on the
  * segment (`/trialx` is not `/trial`); `/`, an empty segment and framework
- * assets are never pages.
+ * assets are never pages, and neither is a reserved app segment
+ * (RESERVED_PAGE_SLUGS): a row slugged `settings` or `cars` (a hand-made row,
+ * or one written before the name was reserved) must never open /settings or
+ * /cars/<id> to the public.
  */
 export function isPublicPagePath(pathname, slugs) {
   if (typeof pathname !== 'string' || !pathname.startsWith('/') || !Array.isArray(slugs) || !slugs.length) return false
   if (isFrameworkAsset(pathname)) return false
   const segment = pathname.slice(1).split('/')[0]
   if (!segment || segment.startsWith('_')) return false
+  if (RESERVED_PAGE_SLUGS.has(segment)) return false
   return slugs.includes(segment)
 }
 
