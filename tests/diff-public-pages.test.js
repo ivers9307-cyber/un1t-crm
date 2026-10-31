@@ -32,6 +32,12 @@ describe('visibleText', () => {
   })
 })
 
+describe('visibleText comments', () => {
+  it('a <!-- inside a script does not swallow content up to the next -->', () => {
+    expect(visibleText('<script>var s = "<!--"</script><p>Keep me</p><!-- gone -->')).toBe('Keep me')
+  })
+})
+
 describe('mediaRefs', () => {
   it('normalises origin, drops _next, data: and _rsc/edit noise, sorts and dedupes', () => {
     const refs = mediaRefs(page('https://crm.un1tdublin.com'))
@@ -61,6 +67,18 @@ describe('diffLines / diffText', () => {
       onlyAfter: ['d'],
     })
   })
+  it('keeps multiplicity: a dropped duplicate is reported', () => {
+    expect(diffLines(['A', 'B', 'B'], ['A', 'B'])).toEqual({ onlyBefore: ['B'], onlyAfter: [] })
+    expect(diffText('Buy now. Buy now. Done.', 'Buy now. Done.')).toEqual(['- Buy now.'])
+  })
+  it('reports a reorder, showing the moved lines', () => {
+    const r = diffLines(['A', 'B', 'C'], ['B', 'A', 'C'])
+    expect(r.onlyBefore.length).toBe(1)
+    expect(r.onlyAfter.length).toBe(1)
+    // the moved line shows on both sides: removed from its old place, added at the new one
+    expect(r.onlyBefore).toEqual(r.onlyAfter)
+    expect(['A', 'B']).toContain(r.onlyBefore[0])
+  })
   it('prefixes removed and added sentences', () => {
     expect(diffText('One. Two. Three.', 'One. Too. Three.')).toEqual(['- Two.', '+ Too.'])
   })
@@ -85,6 +103,14 @@ describe('compare', () => {
     expect(r.same).toBe(false)
     expect(r.textDiff.join('\n')).toContain('- Try a free class')
     expect(r.textDiff.join('\n')).toContain('+ Book a free class')
+  })
+
+  it('is not the same when a sentence is duplicated away or two sentences swap', () => {
+    const side = (html) => ({ status: 200, location: null, html })
+    expect(compare(side('<p>A. B. B.</p>'), side('<p>A. B.</p>')).same).toBe(false)
+    const swapped = compare(side('<p>A. B.</p>'), side('<p>B. A.</p>'))
+    expect(swapped.same).toBe(false)
+    expect(swapped.textDiff.length).toBe(2)
   })
 
   it('treats a 307 with the same location path and query as the same', () => {

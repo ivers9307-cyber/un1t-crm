@@ -21,6 +21,8 @@
  * else 0. Nothing is written anywhere.
  */
 
+import { pathToFileURL } from 'node:url'
+
 const OWN_HOST_RE =
   /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|(?:[a-z0-9-]+\.)*(?:un1tdublin\.com|ccfautos\.com))(?::\d+)?(?=[/?#]|$)/i
 
@@ -39,8 +41,8 @@ function decodeEntities(s) {
 /** Visible text of an HTML document: no scripts/styles/tags, entities decoded, whitespace folded. */
 export function visibleText(html) {
   const stripped = String(html ?? '')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<[^>]*>/g, ' ')
   return decodeEntities(stripped).replace(/\s+/g, ' ').trim()
 }
@@ -89,14 +91,37 @@ export function mediaRefs(html, ownOrigins = []) {
   return [...out].sort()
 }
 
-/** Set difference both ways, order preserved. */
+/**
+ * Sequence diff (LCS) of two line lists. `onlyBefore` / `onlyAfter` keep order
+ * and multiplicity, so a dropped duplicate or a reordered pair is reported.
+ */
 export function diffLines(a, b) {
-  const sa = new Set(a)
-  const sb = new Set(b)
-  return {
-    onlyBefore: a.filter((x) => !sb.has(x)),
-    onlyAfter: b.filter((x) => !sa.has(x)),
+  const n = a.length
+  const m = b.length
+  // lcs[i][j] = LCS length of a[i..] and b[j..]
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+    }
   }
+  const onlyBefore = []
+  const onlyAfter = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      i++
+      j++
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      onlyBefore.push(a[i++])
+    } else {
+      onlyAfter.push(b[j++])
+    }
+  }
+  while (i < n) onlyBefore.push(a[i++])
+  while (j < m) onlyAfter.push(b[j++])
+  return { onlyBefore, onlyAfter }
 }
 
 const sentences = (text) =>
@@ -195,7 +220,7 @@ export async function main(argv = process.argv.slice(2), write = (s) => process.
   return differ ? 1 : 0
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().then(
     (code) => process.exit(code),
     (err) => {
