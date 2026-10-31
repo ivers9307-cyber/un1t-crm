@@ -131,7 +131,9 @@ describe('status webhooks route by the message’s stored studio (ORGCONTACTS.3,
     db = makeDb()
     createServerClient.mockReturnValue(db)
     await POST(reqFor(statusEnvelope('failed', { errors: [{ code: 131026, title: 'Message undeliverable' }] })))
-    expect(new Set(db.tables)).toEqual(new Set(['whatsapp_messages', 'whatsapp_broadcast_recipients']))
+    // WABLASTCOUNTERS.1 — a failed transition also recounts the broadcast's
+    // own counters (its row, not a re-route); still none of the NEVER tables.
+    expect(new Set(db.tables)).toEqual(new Set(['whatsapp_messages', 'whatsapp_broadcast_recipients', 'whatsapp_broadcasts']))
     expect(markUndeliverableIfPermanent).toHaveBeenCalledWith(db, 'c-1', { code: 131026, message: 'Message undeliverable' })
     for (const u of db.updates) expect(u.payload).not.toHaveProperty('location_id')
     expect(resolveWhatsAppNumberByPhoneNumberId).toHaveBeenCalledTimes(1) // the envelope's owner check, nothing per status

@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverableIfPermanent } from '@/lib/whatsapp'
+import { recountBroadcastSendCounters } from '@/lib/whatsapp-broadcast-counters'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion, publishFlowClassBooking } from '@/lib/whatsapp-flow/completion.js'
 import { FLOW_SUBMISSION_BODY, FLOW_UNPROCESSED_BODY, sendFlowSubmissionReply } from '@/lib/whatsapp-flow/booking-notice'
@@ -944,10 +945,8 @@ async function handleStatusUpdate(db, status) {
 
     // Update broadcast metrics — only on a genuine transition (guards
     // against Meta redelivering the same status and double-counting).
-    if (prevStatus !== statusValue && ['delivered', 'read', 'failed'].includes(statusValue)) {
-      const metricField = statusValue === 'delivered' ? 'total_delivered'
-        : statusValue === 'read' ? 'total_read'
-        : 'total_failed'
+    if (prevStatus !== statusValue && ['delivered', 'read'].includes(statusValue)) {
+      const metricField = statusValue === 'delivered' ? 'total_delivered' : 'total_read'
 
       // Atomic; best-effort — a counter must never break the status webhook.
       // (The try/catch is not the error handler: an rpc resolves with
@@ -956,15 +955,25 @@ async function handleStatusUpdate(db, status) {
         const { error: metricErr } = await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: metricField })
         if (metricErr) console.error(`[wa-webhook] broadcast metric ${metricField} bump failed (broadcast ${msg.broadcast_id}):`, metricErr.message)
       } catch {}
+    }
 
-      // A message counted as a successful send (total_sent = dispatched:
-      // sent/delivered/read) that now FAILED must come back OUT of total_sent
-      // or the "sent" figure permanently over-counts async failures.
-      if (statusValue === 'failed' && ['sent', 'delivered', 'read'].includes(prevStatus)) {
-        try {
-          const { error: decErr } = await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: 'total_sent', p_delta: -1 })
-          if (decErr) console.error(`[wa-webhook] total_sent decrement failed (broadcast ${msg.broadcast_id}) — the sent figure now permanently over-counts an async failure:`, decErr.message)
-        } catch {}
+    // WABLASTCOUNTERS.1 — a send Meta accepted and then FAILED (131042
+    // "Business eligibility payment issue" on 2026-10-31; a dead number; a
+    // policy refusal) must leave total_sent and come into total_failed. This
+    // used to be two deltas, +1 / -1, against counters the blast pass writes
+    // only at its END from row counts — so during the pass the deltas drove a
+    // zero to -31, and the pass's final write then replaced them. The two
+    // counters are COUNTS of the recipient rows everywhere now: recount them
+    // from the rows this transition just changed, never bump them. An
+    // unreadable count writes nothing (the stored figures stand; the next
+    // recount, here or at the end of a pass, sets them right) and is logged.
+    // Best-effort: a counter must never break the status webhook.
+    if (prevStatus !== statusValue && statusValue === 'failed') {
+      try {
+        const recount = await recountBroadcastSendCounters(db, msg.broadcast_id)
+        if (!recount.written) console.error(`[wa-webhook] broadcast counter recount failed (broadcast ${msg.broadcast_id}) — total_sent/total_failed left as stored:`, recount.error?.message || recount.error)
+      } catch (e) {
+        console.error(`[wa-webhook] broadcast counter recount threw (broadcast ${msg.broadcast_id}):`, e?.message || e)
       }
     }
   }
