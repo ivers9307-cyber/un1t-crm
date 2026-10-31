@@ -91,9 +91,11 @@ describe('PageHeaderCard', () => {
     const path = screen.getByLabelText('Send visitors to')
     expect(path.value).toBe('/trial')
 
-    fireEvent.change(path, { target: { value: '//evil.example' } })
-    await click('Retire page')
-    expect(screen.getByRole('alert').textContent).toBe('Use a path on this site that starts with /, like /trial.')
+    for (const bad of ['//evil.example', '/a b', '/a#b', 'trial']) {
+      fireEvent.change(path, { target: { value: bad } })
+      await click('Retire page')
+      expect(screen.getByRole('alert').textContent).toBe('Use a path on this site that starts with /, like /trial.')
+    }
     expect(globalThis.fetch).not.toHaveBeenCalled()
 
     answer.body = { success: true, data: basePage({ publish_state: 'retired', redirect_to: '/autumn' }) }
@@ -101,6 +103,17 @@ describe('PageHeaderCard', () => {
     await click('Retire page')
     expect(sentBody()).toEqual({ publish_state: 'retired', redirect_to: '/autumn' })
     expect(onPageChange).toHaveBeenCalledWith(expect.objectContaining({ publish_state: 'retired' }))
+  })
+
+  it('with unsaved edits the status buttons wait for a save', () => {
+    renderCard({ dirty: true })
+    expect(screen.getByRole('button', { name: 'Publish' }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Mark coming soon' }).disabled).toBe(true)
+    expect(screen.getByText('Save your changes first.')).toBeTruthy()
+    cleanup()
+    renderCard({ dirty: false })
+    expect(screen.getByRole('button', { name: 'Publish' }).disabled).toBe(false)
+    expect(screen.queryByText('Save your changes first.')).toBeNull()
   })
 
   it('a retired page shows where it redirects and offers Back to draft', () => {

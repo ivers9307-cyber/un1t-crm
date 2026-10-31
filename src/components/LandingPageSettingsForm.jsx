@@ -64,6 +64,7 @@ import { DEFAULT_FUNNEL_TERMS_COPY, DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_SECTIONS, CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
+import { storedChrome, termsForSave, pageEditSnapshot, pageSaveMessage } from '@/components/landing-pages/page-save'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -128,6 +129,15 @@ export default function LandingPageSettingsForm({
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
   const [savedAt, setSavedAt] = useState(null)
+
+  // PAGES.1 — unsaved edits in page mode: everything Save sends, against
+  // what was last saved (the first render's values until a save lands).
+  // The header card holds the publish buttons back while it differs.
+  const editSnapshot = pageMode
+    ? pageEditSnapshot({ title, blocks, logoUrl, logoAlt, logoWidthPx, showInstagramFeed, terms })
+    : null
+  const [savedSnapshot, setSavedSnapshot] = useState(editSnapshot)
+  const dirty = pageMode && editSnapshot !== savedSnapshot
 
   // Per-key upload spinner / error so multiple file inputs across
   // multiple blocks can show their own status without trampling.
@@ -368,8 +378,11 @@ export default function LandingPageSettingsForm({
         logo_width_px: widthPxOrNull,
         show_instagram_feed: showInstagramFeed,
       }
-      if (pageMode) await savePage(chromeFields)
-      else await saveLegacy(chromeFields)
+      if (pageMode) {
+        const sent = editSnapshot
+        await savePage(chromeFields)
+        setSavedSnapshot(sent)
+      } else await saveLegacy(chromeFields)
       setSavedAt(new Date())
     } catch (err) {
       setError(err.message || 'Save failed')
@@ -402,7 +415,7 @@ export default function LandingPageSettingsForm({
       body: JSON.stringify({ title: trimmedTitle, blocks, chrome }),
     })
     const j = await r.json().catch(() => ({}))
-    if (!r.ok || j.success === false) throw new Error(PAGE_SAVE_MESSAGES[j.error] || j.error || `Save failed (${r.status})`)
+    if (!r.ok || j.success === false) throw new Error(pageSaveMessage(j, r.status))
     if (j.data) setCurrentPage(j.data)
   }
 
@@ -662,43 +675,12 @@ export default function LandingPageSettingsForm({
       <PageHeaderCard
         page={currentPage} studios={studios} canEdit={canEdit}
         title={title} onTitleChange={setTitle} onPageChange={setCurrentPage}
-        terms={terms} onTermsChange={setTerms}
+        terms={terms} onTermsChange={setTerms} dirty={dirty}
       />
       {formEl}
     </div>
   )
 }
-
-// PAGES.1 — the chrome keys a page's PUT accepts (landingPageChromeSchema),
-// less was_live: the stored chrome is sent back through this so a key the
-// schema does not know never fails the save.
-const PAGE_CHROME_KEYS = [
-  'logo_url', 'logo_alt', 'logo_width_px', 'tone', 'noindex', 'meta_title', 'meta_description',
-  'show_instagram_feed', 'chooser_label', 'chooser_cta_text', 'chooser_image_url', 'un1t_terms',
-]
-function storedChrome(chrome) {
-  const out = {}
-  for (const key of PAGE_CHROME_KEYS) if (chrome && chrome[key] !== undefined) out[key] = chrome[key]
-  return out
-}
-// A studio page's un1t.online terms copy: each field trimmed, blank = null
-// (the funnel then uses DEFAULT_FUNNEL_TERMS_COPY).
-function termsForSave(terms) {
-  const out = {}
-  for (const key of Object.keys(DEFAULT_FUNNEL_TERMS_COPY)) {
-    const v = typeof terms?.[key] === 'string' ? terms[key].trim() : ''
-    out[key] = v || null
-  }
-  return out
-}
-const PAGE_SAVE_MESSAGES = Object.freeze({
-  offer_block_required: 'The offer section must stay first on this page.',
-  studio_page: 'A studio page keeps its studio\'s address.',
-  reserved: 'That path is reserved.',
-  taken: 'That path is already taken.',
-  invalid: 'Use letters, numbers and dashes only, 2 to 40 characters.',
-  unavailable: 'The page could not be reached. Try again in a minute.',
-})
 
 // ─────────────────────────────────────────────────────────────
 // SortableBlockCard — wraps each block with drag handle, header

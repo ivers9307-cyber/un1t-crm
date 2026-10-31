@@ -5,14 +5,15 @@
 // its buttons (POST …/publish), the scope (read-only), and on a studio page
 // the un1t.online terms copy (chrome.un1t_terms, lifted and saved like the
 // title). Every answer the API returns is lifted with onPageChange so the chip
-// and the path follow it.
+// and the path follow it. The status buttons act on the STORED row, so while
+// the form has unsaved edits (`dirty`) they wait for a save.
 //
 // Rendered OUTSIDE the editor's <form>, so Enter in the rename or redirect
 // input never submits the page. Client bundle: pure modules only.
 
 import { useState } from 'react'
 import { Button, Card } from '@/components/ui'
-import { slugProblem, normaliseSlug } from '@/lib/page-slug'
+import { slugProblem, normaliseSlug, REDIRECT_PATH_RE } from '@/lib/page-slug'
 import { DEFAULT_FUNNEL_TERMS_COPY, UN1T_FUNNEL_COPY_KEYS } from '@/lib/un1t-online-funnel-copy'
 
 // Same chips as the Pages list.
@@ -61,7 +62,7 @@ function notReadyMessage(studios) {
   return `Not ready to go live: ${named.join(', ')}.`
 }
 
-const redirectOk = (v) => v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\')
+const redirectOk = (v) => REDIRECT_PATH_RE.test(v)
 
 async function call(url, method, body) {
   const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -70,7 +71,7 @@ async function call(url, method, body) {
 }
 
 export default function PageHeaderCard({
-  page, studios = [], canEdit, title, onTitleChange, onPageChange, terms = {}, onTermsChange,
+  page, studios = [], canEdit, title, onTitleChange, onPageChange, terms = {}, onTermsChange, dirty = false,
 }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState(null)
@@ -154,10 +155,11 @@ export default function PageHeaderCard({
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`${CHIP} ${chip.className}`}>{chip.label}</span>
           {canEdit && actions.map(([state, label]) => (
-            <Button key={state} type="button" size="sm" variant={state === 'live' ? 'primary' : 'secondary'} disabled={busy} onClick={() => onAction(state)}>
+            <Button key={state} type="button" size="sm" variant={state === 'live' ? 'primary' : 'secondary'} disabled={busy || dirty} onClick={() => onAction(state)}>
               {label}
             </Button>
           ))}
+          {canEdit && dirty && <span className="text-xs text-un1t-muted">Save your changes first.</span>}
         </div>
       </div>
 
@@ -189,7 +191,7 @@ export default function PageHeaderCard({
           <label htmlFor="page-redirect" className="block text-xs font-medium text-un1t-subtle">Send visitors to</label>
           <div className="flex items-center gap-2">
             <input id="page-redirect" className={INPUT} value={redirectTo} maxLength={300} onChange={(e) => setRedirectTo(e.target.value)} onKeyDown={onEnter(confirmRetire)} />
-            <Button type="button" size="sm" variant="danger" loading={busy} onClick={confirmRetire}>Retire page</Button>
+            <Button type="button" size="sm" variant="danger" loading={busy} disabled={dirty} onClick={confirmRetire}>Retire page</Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => { setRetiring(false); setMessage(null) }}>Cancel</Button>
           </div>
         </div>

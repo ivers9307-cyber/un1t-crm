@@ -4,7 +4,9 @@
 // Service role, so access is decided here: an id that is not a uuid, an
 // unknown page and a page outside canViewPage are all notFound() (the GET
 // route's 404 rule). canEditPage decides read-only; a viewer who may not edit
-// never receives a studio row's offer or attribution (the GET route's rule).
+// never receives a studio row's offer or attribution (the GET route's rule),
+// and gets the blocks through clientSafeBlocks (EDITGATE.1: a backfilled block
+// may still carry operator keys).
 // The studio lists (booking types, events) are read for a one-studio page's
 // studio only. A studio page (kind 'studio') opens here too, under a banner:
 // the public site still renders it from the legacy table until PR3.
@@ -17,6 +19,7 @@ import { hasPermission } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import { getLocationBranding } from '@/lib/location-branding'
 import { resolveOrgChrome } from '@/lib/host-brand'
+import { clientSafeBlocks } from '@/lib/landing-page-blocks'
 import { loadPageById, canViewPage, canEditPage, studioRowView, PageReadError } from '@/lib/landing-pages'
 import LandingPageSettingsForm from '@/components/LandingPageSettingsForm'
 import { logError } from '@/lib/log'
@@ -93,7 +96,7 @@ export default async function LandingPageEditorPage(props) {
       )}
       <LandingPageSettingsForm
         key={page.id}
-        page={page}
+        page={canEdit ? page : { ...page, blocks: clientSafeBlocks(page.blocks) }}
         studios={studiosFor(loaded.studios, canEdit)}
         canEdit={canEdit}
         availableBookingTypes={eventTypesRes.data || []}

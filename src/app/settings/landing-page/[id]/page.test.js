@@ -50,6 +50,8 @@ const STUDIO_ROWS = [{
   locations: { id: LOC, name: 'UN1T Hatch Street', membership_source: 'glofox', settings: { secret: 'x' } },
 }]
 
+const WITHHELD_BLOCKS = [{ id: 'b1', type: 'paid_trial', heading: 'Two weeks', membership_id: 'm-1', plan_code: 'P', tag: 't' }]
+
 function makeDb() {
   const reads = []
   const from = (table) => {
@@ -118,6 +120,12 @@ describe('/settings/landing-page/<id>', () => {
     await expect(open()).rejects.toThrow('NEXT_NOT_FOUND')
   })
 
+  it('an editor gets the blocks as stored', async () => {
+    loadPageById.mockResolvedValue({ page: page({ blocks: WITHHELD_BLOCKS }), studios: STUDIO_ROWS })
+    const [form] = findAll(await open(), LandingPageSettingsForm)
+    expect(form.props.page.blocks).toEqual(WITHHELD_BLOCKS)
+  })
+
   it('an editor gets the page, its studio rows with offer and attribution, and the studio lists', async () => {
     const tree = await open()
     const [form] = findAll(tree, LandingPageSettingsForm)
@@ -136,9 +144,12 @@ describe('/settings/landing-page/<id>', () => {
 
   it('a viewer without edit gets canEdit false and no offer on studios', async () => {
     canEditPage.mockReturnValue(false)
+    loadPageById.mockResolvedValue({ page: page({ blocks: WITHHELD_BLOCKS }), studios: STUDIO_ROWS })
     const tree = await open()
     const [form] = findAll(tree, LandingPageSettingsForm)
     expect(form.props.canEdit).toBe(false)
+    // EDITGATE.1: the withheld keys a backfilled block may still carry.
+    expect(form.props.page.blocks).toEqual([{ id: 'b1', type: 'paid_trial', heading: 'Two weeks' }])
     expect(form.props.studios[0]).not.toHaveProperty('offer')
     expect(form.props.studios[0]).not.toHaveProperty('attribution')
   })

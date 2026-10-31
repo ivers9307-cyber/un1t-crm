@@ -81,6 +81,36 @@ describe('LandingPageSettingsForm (page mode)', () => {
     expect(screen.getByText('The offer section must stay first on this page.')).toBeTruthy()
   })
 
+  it('a 200-character logo alt (the legacy table limit) is sent as is', async () => {
+    const alt = 'a'.repeat(200)
+    renderForm({ page: basePage({ chrome: { logo_alt: alt } }) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(puts[0].body.chrome.logo_alt).toBe(alt)
+    expect(screen.getByText(/^Saved /)).toBeTruthy()
+  })
+
+  it('a save refused by validation names the field', async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false, status: 400,
+      json: async () => ({ success: false, error: 'Invalid request body', issues: [{ path: 'chrome.logo_alt', message: 'Too big' }] }),
+    }))
+    renderForm()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(screen.getByText('Invalid value for chrome.logo_alt')).toBeTruthy()
+  })
+
+  it('unsaved edits hold the publish buttons until the save lands', async () => {
+    renderForm()
+    const publish = () => screen.getByRole('button', { name: 'Publish' })
+    expect(publish().disabled).toBe(false)
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Summer 26' } })
+    expect(publish().disabled).toBe(true)
+    expect(screen.getByText('Save your changes first.')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save changes' })) })
+    expect(publish().disabled).toBe(false)
+    expect(screen.queryByText('Save your changes first.')).toBeNull()
+  })
+
   it('the preview state message carries the page id beside the studio', async () => {
     const { container } = renderForm()
     const win = container.querySelector('iframe').contentWindow
