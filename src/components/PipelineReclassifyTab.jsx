@@ -22,7 +22,7 @@ import { useState } from 'react'
 import { Loader2, Sparkles, CheckCircle2, AlertTriangle, Eye, Play } from 'lucide-react'
 
 // FUNNEL.1 taxonomy — labels mirror the mig 350 stage rows.
-const STAGE_LABELS = {
+export const STAGE_LABELS = {
   new_lead:     'New Leads',
   first_class:  '1st Class Completed',
   second_class: '2nd Class Completed',
@@ -32,6 +32,17 @@ const STAGE_LABELS = {
   classpass:    'ClassPass',
   gympass:      'Gympass',
   dormant:      'Dormant',
+  pack_member:  'Class Pack',
+  cold_lead:    'Cold',
+  // PIPE3 — the €39 Trial and Programmes boards (Stillorgan).
+  paid_trial_new_lead:    '€39 Trial — New Leads',
+  paid_trial_first_class: '€39 Trial — 1st Class',
+  paid_trial_day_7:       '€39 Trial — Day 7',
+  paid_trial_done:        '€39 Trial — Trial Done',
+  paid_trial_converted:   '€39 Trial — Converted',
+  programme_lead:         'Programmes — Lead',
+  programme_first_class:  'Programmes — 1st Class Done',
+  programme_converted:    'Programmes — Converted',
   '':           '(no deal yet)',
   // Legacy labels kept for the one-time FUNNEL.1 migration matrix
   // (migration-day runs render old-slug → new-stage rows in the

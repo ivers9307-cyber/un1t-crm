@@ -28,7 +28,7 @@ const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'),
 // Badge palette keyed by the stage slug (FUNNEL.1 taxonomy). The chip reads
 // studio_stage_slug: the stage AT this studio (ORGCONTACTS.4, decision 3).
 // Unmapped slugs fall back to the neutral grey badge.
-const statusBadge = {
+export const statusBadge = {
   new_lead:     'bg-blue-500/20 text-blue-700',
   first_class:  'bg-green-500/20 text-green-700',
   second_class: 'bg-teal-500/20 text-teal-700',
@@ -40,6 +40,15 @@ const statusBadge = {
   gympass:      'bg-orange-500/20 text-orange-700',
   cold_lead:    'bg-zinc-500/20 text-zinc-700',
   dormant:      'bg-gray-500/20 text-gray-700',
+  // PIPE3 — the €39 Trial and Programmes boards (Stillorgan).
+  paid_trial_new_lead:    'bg-blue-500/20 text-blue-700',
+  paid_trial_first_class: 'bg-green-500/20 text-green-700',
+  paid_trial_day_7:       'bg-violet-500/20 text-violet-700',
+  paid_trial_done:        'bg-amber-500/20 text-amber-700',
+  paid_trial_converted:   'bg-emerald-500/20 text-emerald-700',
+  programme_lead:         'bg-blue-500/20 text-blue-700',
+  programme_first_class:  'bg-green-500/20 text-green-700',
+  programme_converted:    'bg-emerald-500/20 text-emerald-700',
 }
 
 function formatStage(slug) {
