@@ -56,8 +56,8 @@ const CONFIGURED_BLOCKS = [
   { id: 'cf', type: 'class_funnel', heading: 'Free classes', trial_membership_id: WITHHELD.trial_membership_id, trial_plan_code: WITHHELD.trial_plan_code, consult_slug: 'consult' },
   { id: 'pt', type: 'paid_trial', cta_label: 'Start', membership_id: WITHHELD.membership_id, plan_code: WITHHELD.plan_code, un1t_product_id: WITHHELD.un1t_product_id, tag: WITHHELD.tag, lead_source: WITHHELD.lead_source, event_source_url: WITHHELD.event_source_url, price_cents: 3900 },
   { id: 'lf', type: 'lead_form', heading: 'Keep me posted', tag: WITHHELD.tag, lead_source: WITHHELD.lead_source },
-  // #2256's block type: not registered here yet, so blocksOrDefault drops it;
-  // once it is, its attribution fields are withheld the same way.
+  // #2256's campaign page block: its class allow-list and attribution are
+  // withheld the same way.
   { id: 'cmp', type: 'campaign_funnel', heading: '50+', class_keywords: WITHHELD.class_keywords, tag: WITHHELD.tag, lead_source: WITHHELD.lead_source, event_source_url: WITHHELD.event_source_url, trial_membership_id: WITHHELD.trial_membership_id, trial_plan_code: WITHHELD.trial_plan_code },
 ]
 const WITHHELD_KEYS = ['trial_membership_id', 'trial_plan_code', 'membership_id', 'plan_code', 'un1t_product_id', 'class_keywords', 'lead_source', 'event_source_url']
@@ -207,7 +207,7 @@ describe('/welcome/[location] trial-first (TRIALFIRST.1)', () => {
       mocks.row.publish_state = 'draft'
       const out = await html({ edit: '1' })
       expect(out).toContain('data-overlay')
-      expect(mocks.overlayProps.initialBlocks.map((b) => b.id)).toEqual(['h', 'cf', 'pt', 'lf'])
+      expect(mocks.overlayProps.initialBlocks.map((b) => b.id)).toEqual(['h', 'cf', 'pt', 'lf', 'cmp'])
       expect(mocks.overlayProps.initialLogoAlt).toBe('UN1T Stillorgan')
     })
 

@@ -418,10 +418,9 @@ export function blocksOrDefault(savedBlocks) {
 // loaded them through the permission-checked settings page; the first
 // paint is all this seed is for.
 //
-// A key listed here is withheld from that seed. `campaign_funnel` is
-// #2256's block type (the /50plus campaign page): its entry is inert
-// until the type is registered (blocksOrDefault drops unknown types)
-// and withholds its attribution and class allow-list from the day it is.
+// A key listed here is withheld from that seed; the test pins each one
+// to a key its type's factory writes. `campaign_funnel` (#2256, the
+// /50plus campaign page) withholds its class allow-list and attribution.
 // ─────────────────────────────────────────────────────────────
 export const CLIENT_WITHHELD_KEYS = Object.freeze({
   class_funnel:    ['trial_membership_id', 'trial_plan_code'],

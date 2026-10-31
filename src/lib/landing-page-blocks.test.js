@@ -636,13 +636,11 @@ describe('clientSafeBlocks (EDITGATE.1)', () => {
     expect(blocks[1].trial_membership_id).toBe('tm')
   })
 
-  it('every withheld key is one some block factory writes, or a #2256 campaign_funnel field', () => {
-    const known = new Set()
-    for (const t of BLOCK_TYPES) for (const k of Object.keys(t.factory())) known.add(k)
-    const pending = new Set(['class_keywords'])
+  it('every withheld key is one that type\'s factory writes', () => {
     for (const [type, keys] of Object.entries(CLIENT_WITHHELD_KEYS)) {
+      const written = new Set(Object.keys(newBlockOfType(type)))
       expect(Array.isArray(keys) && keys.length > 0, type).toBe(true)
-      for (const k of keys) expect(known.has(k) || pending.has(k), `${type}.${k}`).toBe(true)
+      for (const k of keys) expect(written.has(k), `${type}.${k}`).toBe(true)
     }
   })
 
