@@ -40,6 +40,7 @@ function makeDb({ updateError = null } = {}) {
 
 const okDeps = () => ({
   setVolume: vi.fn(async () => ({ ok: true, statusCode: 200 })),
+  setPlayerVolume: vi.fn(async () => ({ ok: true, statusCode: 200 })),
   loadFavorite: vi.fn(async () => ({ ok: true, statusCode: 200 })),
 })
 
@@ -154,6 +155,66 @@ describe('applyOpen', () => {
     // must be able to tell this apart from `sonos` and report accordingly.
     expect(out).toEqual({ ok: false, reason: 'stamp', error: err })
     expect(db.updates).toHaveLength(1)
+  })
+
+  // SONOSPLAYERVOL.1 — per-speaker levels. The group volume still goes
+  // first (it is the window's default for every speaker), then each named
+  // speaker in that group is set on its own, then the favourite loads.
+  describe('per-speaker volumes', () => {
+    const twoSpeakerGroups = [
+      { id: 'GRP_A', name: 'Studio', playbackState: 'PLAYBACK_STATE_IDLE', playerIds: ['RINCON_1', 'RINCON_2', 'RINCON_9'] },
+      { id: 'GRP_B', name: 'Reception', playbackState: 'PLAYBACK_STATE_PAUSED', playerIds: ['RINCON_3'] },
+    ]
+    const sched = { ...schedule, player_ids: ['RINCON_1', 'RINCON_2', 'RINCON_3'] }
+    const withPlayers = { ...plan, playerVolumes: { RINCON_1: 20, RINCON_2: 45, RINCON_3: 60, RINCON_9: 80, RINCON_GONE: 10 } }
+
+    it('sets group volume, then each named speaker in the group, then the favourite', async () => {
+      const db = makeDb()
+      const deps = okDeps()
+      const order = []
+      deps.setVolume.mockImplementation(async () => { order.push('group'); return { ok: true, statusCode: 200 } })
+      deps.setPlayerVolume.mockImplementation(async (_t, pid) => { order.push(pid); return { ok: true, statusCode: 200 } })
+      deps.loadFavorite.mockImplementation(async () => { order.push('favorite'); return { ok: true, statusCode: 200 } })
+
+      const out = await run(db, { deps, schedule: sched, plan: withPlayers, groups: twoSpeakerGroups, groupIds: ['GRP_A', 'GRP_B'] })
+
+      expect(out).toEqual({ ok: true })
+      expect(order).toEqual(['group', 'RINCON_1', 'RINCON_2', 'favorite', 'group', 'RINCON_3', 'favorite'])
+      expect(deps.setPlayerVolume).toHaveBeenCalledWith('tok', 'RINCON_1', 20)
+      expect(deps.setPlayerVolume).toHaveBeenCalledWith('tok', 'RINCON_2', 45)
+      expect(deps.setPlayerVolume).toHaveBeenCalledWith('tok', 'RINCON_3', 60)
+      // RINCON_9 is in the group but not on the schedule (a speaker someone
+      // grouped in by hand): the schedule's own speakers are its remit, so it
+      // keeps the proportional level the group call gave it. RINCON_GONE is
+      // on neither.
+      expect(deps.setPlayerVolume).not.toHaveBeenCalledWith('tok', 'RINCON_9', expect.anything())
+      expect(deps.setPlayerVolume).not.toHaveBeenCalledWith('tok', 'RINCON_GONE', expect.anything())
+      expect(db.updates).toHaveLength(1)
+    })
+
+    it('makes no player calls when the window names none', async () => {
+      const db = makeDb()
+      const deps = okDeps()
+      await run(db, { deps, schedule: sched, groups: twoSpeakerGroups, groupIds: ['GRP_A'] })
+      expect(deps.setPlayerVolume).not.toHaveBeenCalled()
+      expect(deps.loadFavorite).toHaveBeenCalledTimes(1)
+    })
+
+    it('skips the favourite and stamps nothing when a speaker volume fails', async () => {
+      const db = makeDb()
+      const deps = okDeps()
+      deps.setPlayerVolume.mockImplementation(async (_t, pid) =>
+        pid === 'RINCON_2' ? { ok: false, statusCode: 500 } : { ok: true, statusCode: 200 })
+
+      const out = await run(db, { deps, schedule: sched, plan: withPlayers, groups: twoSpeakerGroups, groupIds: ['GRP_A', 'GRP_B'] })
+
+      expect(out).toEqual({ ok: false, reason: 'sonos' })
+      // GRP_A's favourite is skipped (its levels are wrong); GRP_B still runs.
+      expect(deps.loadFavorite).toHaveBeenCalledTimes(1)
+      expect(deps.loadFavorite).toHaveBeenCalledWith('tok', 'GRP_B', 'fv-1')
+      expect(db.updates).toHaveLength(0)
+      expect(logWarn).toHaveBeenCalledWith('sonos-apply', 'setPlayerVolume failed', { scheduleId: 's1', groupId: 'GRP_A', playerId: 'RINCON_2', statusCode: 500 })
+    })
   })
 
   it('passes a null favoriteId straight through rather than refusing to open', async () => {

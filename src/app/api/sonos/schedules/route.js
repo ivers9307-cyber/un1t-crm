@@ -27,9 +27,25 @@ const MAX_SCHEDULES_PER_LOCATION = 50
 // no longer applies), so refining last is a readability choice, not a
 // necessity: each caller states its own boundary rule on its final shape,
 // which is why windows.js exports the rule as a predicate + message pair.
+// SONOSPLAYERVOL.1 — `player_volumes` names a level per speaker (keyed by
+// the permanent player id, like player_ids) on top of the window's group
+// `volume`, which stays the default for any speaker not named. Optional and
+// capped at the same 32 speakers a schedule may hold. The editor only sends
+// keys for the schedule's selected speakers; a stale key (a speaker since
+// removed from the schedule) is harmless, since applyOpen acts only on the
+// schedule's own speakers.
+export const MAX_PLAYER_VOLUMES = 32
+export const PlayerVolumes = z.record(
+  z.string().min(1).max(128),
+  z.number().int().min(0).max(100),
+).refine((m) => Object.keys(m).length <= MAX_PLAYER_VOLUMES, {
+  message: `At most ${MAX_PLAYER_VOLUMES} speaker volumes per window`,
+})
+
 export const Window = WindowBase.extend({
   volume: z.number().int().min(0).max(100),
   favorite_id: z.string().min(1).max(128),
+  player_volumes: PlayerVolumes.optional(),
 }).refine(NOT_SAME_BOUNDARY.check, { message: NOT_SAME_BOUNDARY.message })
 
 export const SchedulePayload = z.object({

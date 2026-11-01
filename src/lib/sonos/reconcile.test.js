@@ -51,6 +51,7 @@ const deps = (over = {}) => ({
   getToken: async () => ({ ok: true, token: 'tok', householdId: 'HH1' }),
   getGroups: async () => ({ ok: true, statusCode: 200, body: groupsBody }),
   setVolume: vi.fn(async () => ({ ok: true, statusCode: 200 })),
+  setPlayerVolume: vi.fn(async () => ({ ok: true, statusCode: 200 })),
   loadFavorite: vi.fn(async () => ({ ok: true, statusCode: 200 })),
   pause: vi.fn(async () => ({ ok: true, statusCode: 200 })),
   ...over,
@@ -77,6 +78,26 @@ describe('runSonosReconcile', () => {
     expect(order).toEqual(['volume', 'favorite'])
     expect(d.setVolume).toHaveBeenCalledWith('tok', 'GRP_A', 35)
     expect(d.loadFavorite).toHaveBeenCalledWith('tok', 'GRP_A', 'fv-1')
+  })
+
+  // SONOSPLAYERVOL.1 — the cron hands its player-volume client through to
+  // applyOpen; a tick that forgot to would silently fall back to the real
+  // Sonos call in tests and, worse, never set a speaker's own level in prod
+  // if the dep were dropped from the sequence.
+  it('sets a named speaker level between the group volume and the favourite', async () => {
+    const d = deps()
+    const order = []
+    d.setVolume = vi.fn(async () => { order.push('group'); return { ok: true, statusCode: 200 } })
+    d.setPlayerVolume = vi.fn(async (_t, pid) => { order.push(pid); return { ok: true, statusCode: 200 } })
+    d.loadFavorite = vi.fn(async () => { order.push('favorite'); return { ok: true, statusCode: 200 } })
+    const sched = {
+      ...baseSchedule,
+      windows: [{ ...baseSchedule.windows[0], player_volumes: { RINCON_1: 20 } }],
+    }
+    const out = await runSonosReconcile(makeDb([sched]), d)
+    expect(out).toMatchObject({ applied: 1, failed: 0 })
+    expect(order).toEqual(['group', 'RINCON_1', 'favorite'])
+    expect(d.setPlayerVolume).toHaveBeenCalledWith('tok', 'RINCON_1', 20)
   })
 
   it('records last_applied so the next tick is a no-op', async () => {

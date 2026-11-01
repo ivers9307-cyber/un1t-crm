@@ -8299,10 +8299,16 @@ registry.registerPath({
 const SonosWindow = WindowBase.extend({
   volume: z.number().int().min(0).max(100),
   favorite_id: z.string().min(1).max(128),
+  // SONOSPLAYERVOL.1 — optional per-speaker levels keyed by player id; the
+  // group `volume` stays the default for any speaker not named. Mirrors
+  // PlayerVolumes in src/app/api/sonos/schedules/route.js (max 32 keys).
+  player_volumes: z.record(z.string().min(1).max(128), z.number().int().min(0).max(100)).optional(),
 }).openapi('SonosWindow', {
   description: 'A recurring playback window. Enforced server-side, not representable here: on must differ '
     + 'from off, and no two windows on a schedule may overlap on a shared day — an overlapping save is '
-    + 'rejected with 400 rather than silently letting the earlier window always win.',
+    + 'rejected with 400 rather than silently letting the earlier window always win. player_volumes is an '
+    + 'optional { playerId: 0-100 } map applied after the group volume when the window opens, for the '
+    + "schedule's own speakers only; at most 32 entries.",
 })
 
 const SonosSchedulePayload = z.object({
