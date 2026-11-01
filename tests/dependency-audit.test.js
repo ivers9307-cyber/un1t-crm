@@ -308,18 +308,40 @@ describe('the shipped allowlist files', () => {
   // it for `expo start`'s dev-tools schemas; a source-mapped `expo export`
   // holds no module from that copy (the app's own zod is 4.6.7, patched).
   //
+  // DEPAUDIT.8 (2026-11-01, on #2275 MCP.1, which touches nothing under
+  // mobile/) added FIVE more node-forge ids on the same single build-time
+  // copy (TLS record DoS x2, PEM ReDoS, PKCS#12 MAC forgery, X.509
+  // basicConstraints bypass). Unlike DEPAUDIT.6, a patched 1.4.2 NOW exists
+  // and both parents (@expo/cli, @expo/code-signing-certificates) declare
+  // ^1.3.3, so `npm update node-forge --package-lock-only` fixes all six —
+  // they stay accepted for the brace-expansion reason (the mobile lockfile
+  // is an OTA publish path): take the bump with the next native release and
+  // drop every node-forge id here. DEPAUDIT.8 also added decode-uri-component
+  // (GHSA-qr28-fpjm-wq7f), the one RUNTIME-reachable accept: expo-router@57 >
+  // query-string@7.1.3 (pins ^0.2.2) parses the query string of a deep link
+  // the phone opens. Its patched 0.5.1 is ESM-only (type: module, default
+  // export) and query-string 7 does `require('decode-uri-component')()`, so
+  // an override would crash the router at launch (the linkify-it 6.x class
+  // below); npm's fix is expo-router 58, an Expo SDK bump. Drop it with SDK 58.
+  //
   // Exact-match on sorted ids, so ANY additional accept — or a swap to a
   // different id — still fails here and forces a reviewed decision.
-  it('mobile accepts exactly the image-size, build-time brace-expansion, node-forge and dev-server zod advisories', () => {
+  it('mobile accepts exactly the image-size, build-time brace-expansion, node-forge, dev-server zod and expo-router decode-uri-component advisories', () => {
     const ids = load('../mobile/.audit-allowlist.json')
       .accepted.map((e) => e.id)
       .sort()
     expect(ids).toEqual([
       'GHSA-5p2g-fcmc-qvqq', // image-size
+      'GHSA-5x38-2vff-x55p', // node-forge X.509 basicConstraints (DEPAUDIT.8)
       'GHSA-6j4f-fj2g-mc7p', // brace-expansion (DEPAUDIT.5)
+      'GHSA-7wch-p9px-956x', // node-forge PEM ReDoS (DEPAUDIT.8)
       'GHSA-86w9-cpqp-85rv', // node-forge (DEPAUDIT.6)
+      'GHSA-8hrf-8g6f-7xwp', // node-forge TLS record DoS (DEPAUDIT.8)
+      'GHSA-hqq3-7jhf-c5jx', // node-forge TLS stack exhaustion (DEPAUDIT.8)
+      'GHSA-jc66-7q78-782g', // node-forge PKCS#12 MAC forgery (DEPAUDIT.8)
       'GHSA-mrhx-c7xc-m3w5', // zod under @expo/cli (DEPAUDIT.7)
       'GHSA-qhr7-859c-m2p7', // brace-expansion (DEPAUDIT.5)
+      'GHSA-qr28-fpjm-wq7f', // decode-uri-component under expo-router@57 (DEPAUDIT.8)
       'GHSA-w3rx-r6r6-pgpr', // image-size
     ])
   })
