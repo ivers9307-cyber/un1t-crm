@@ -45,6 +45,7 @@ import IntegrationsHub from '@/components/settings/IntegrationsHub'
 import IntegrationHealthPanel from '@/components/settings/IntegrationHealthPanel'
 import ZoomContactsPanel from '@/components/settings/ZoomContactsPanel'
 import { isActiveOrgAdmin, isOrgAdmin } from '@/lib/org-admin'
+import { connectorUrl, loadOrgMcpState } from '@/lib/mcp/org-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -171,13 +172,36 @@ async function loadManagedOrgs(db, user, locations) {
     return []
   }
   const nameById = Object.fromEntries((orgs || []).map((o) => [o.id, o.name]))
-  return orgIds.map((orgId) => ({
+  return Promise.all(orgIds.map(async (orgId) => ({
     id: orgId,
     name: nameById[orgId] || null,
     locations: locations
       .filter((l) => l.organization_id === orgId && l.active === true)
       .map((l) => ({ id: l.id, name: l.name })),
-  }))
+    mcp: await loadMcp(db, orgId),
+  })))
+}
+
+/**
+ * MCP.1 — the Agent access card's state for one organisation the viewer
+ * administers. null when it could not be read (logged): the card then says so
+ * rather than showing a switch that reads "off" over an unread value. A
+ * missing NEXT_PUBLIC_APP_URL leaves the switch readable with no URL.
+ */
+async function loadMcp(db, orgId) {
+  try {
+    const state = await loadOrgMcpState(db, orgId)
+    let url = null
+    try {
+      url = connectorUrl()
+    } catch (error) {
+      logError('integrations-hub', 'hub page connector url unavailable', { error })
+    }
+    return { enabled: state.mcp_enabled, connectorUrl: url, people30d: state.people_30d }
+  } catch (error) {
+    logError('integrations-hub', 'hub page agent access read failed', { error, organizationId: orgId })
+    return null
+  }
 }
 
 function HubUnavailable() {

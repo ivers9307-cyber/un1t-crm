@@ -6190,6 +6190,47 @@ registry.registerPath({
   },
 })
 
+// MCP.1 — the organisation switch for the staff MCP server (org_settings.mcp_enabled, mig 801)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/org-mcp',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff MCP server: the organisation switch, connector URL and 30-day usage (organisation admins only)',
+  description: 'Returns { organization_id, mcp_enabled, connector_url, people_30d } where people_30d is the count of distinct staff who made an MCP tool call for the organisation in the last 30 days. An organisation with no org_settings row yet is off. Organisation admins only (a master, or an org_admin grant); ?organization_id targets another organisation the caller administers (a master: any), else the active one.',
+  responses: {
+    200: { description: 'Switch state' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/settings/org-mcp',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Switch the staff MCP server on or off for an organisation (organisation admins only)',
+  description: 'Upserts org_settings.mcp_enabled (default off) and stamps updated_by for the audit trigger. /api/mcp refuses an organisation whose switch is off.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional(),
+            enabled: z.boolean(),
+          }).openapi('OrgMcpSwitch'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: '{ mcp_enabled }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // MIAORG.1 Task 4 — Mia's organisation defaults (org_settings.customer_agent, mig 729)
 registry.registerPath({
   method: 'get',

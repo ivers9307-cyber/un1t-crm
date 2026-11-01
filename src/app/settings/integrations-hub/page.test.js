@@ -54,7 +54,9 @@ function tablesDb(byTable) {
   return {
     from: (t) => {
       const b = {
-        select: () => b, eq: () => b, order: () => b, in: () => b,
+        select: () => b, eq: () => b, order: () => b, in: () => b, gte: () => b, range: () => b,
+        // MCP.1: org_settings is read with maybeSingle (no row = off).
+        maybeSingle: () => Promise.resolve(byTable[t] || { data: null, error: null }),
         then: (res, rej) => Promise.resolve(byTable[t] || { data: [], error: null }).then(res, rej),
       }
       return b
@@ -225,12 +227,39 @@ describe('/settings/integrations-hub — managedOrgs (INTEGONE.3)', () => {
     expect(from).not.toHaveBeenCalledWith('organizations')
   })
 
-  it('an org admin of org-1 gets org-1 only, named, with its ACTIVE studios', async () => {
+  it('an org admin of org-1 gets org-1 only, named, with its ACTIVE studios and its agent access state', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://crm.example.test'
     getCurrentUser.mockResolvedValue({ id: 'u3', isMaster: false, role: 'owner', orgAdminOrgIds: ['org-1'] })
-    createServerClient.mockReturnValue(tablesDb({ locations: { data: MULTI, error: null }, organizations: ORGS }))
+    createServerClient.mockReturnValue(tablesDb({
+      locations: { data: MULTI, error: null },
+      organizations: ORGS,
+      org_settings: { data: { mcp_enabled: true }, error: null },
+      mcp_tool_calls: { data: [{ profile_id: 'p1' }, { profile_id: 'p1' }, { profile_id: 'p2' }], error: null },
+    }))
     expect(managed(await render())).toEqual([
-      { id: 'org-1', name: 'UN1T Group', locations: [{ id: 'loc-a', name: 'Stillorgan' }, { id: 'loc-b', name: 'Hatch Street' }] },
+      {
+        id: 'org-1',
+        name: 'UN1T Group',
+        locations: [{ id: 'loc-a', name: 'Stillorgan' }, { id: 'loc-b', name: 'Hatch Street' }],
+        mcp: { enabled: true, connectorUrl: 'https://crm.example.test/api/mcp', people30d: 2 },
+      },
     ])
+    delete process.env.NEXT_PUBLIC_APP_URL
+  })
+
+  it('an unreadable agent access state is mcp: null (never "off"), logged, and the hub still renders', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://crm.example.test'
+    getCurrentUser.mockResolvedValue({ id: 'u3', isMaster: false, role: 'owner', orgAdminOrgIds: ['org-1'] })
+    createServerClient.mockReturnValue(tablesDb({
+      locations: { data: MULTI, error: null },
+      organizations: ORGS,
+      org_settings: { data: null, error: { message: 'boom' } },
+    }))
+    const html = await render()
+    expect(managed(html)[0].mcp).toBeNull()
+    expect(html).toContain('HUB_RENDERED')
+    expect(logError).toHaveBeenCalledTimes(1)
+    delete process.env.NEXT_PUBLIC_APP_URL
   })
 
   it('a master gets every organisation among the loaded locations', async () => {
