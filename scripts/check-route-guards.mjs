@@ -137,6 +137,14 @@ const EXEMPT = {
     'App Store reviewer login gate (REPSET-PUB.3A) — it is called BEFORE the reviewer has a session because minting one IS its job, so no session guard can exist. The credential is the REVIEW_LOGIN_CODE env var (no source fallback: unset ⇒ 404, its default state), compared constant-time against a single hardcoded member-only demo email, behind a DB-backed per-IP limiter (mig 449) consulted BEFORE the credential check and failing closed (503). It provisions nothing — signups stay OFF (mig 404).',
   'src/app/api/sonos/callback/route.js':
     'OAuth callback; authorised by signed state — Sonos redirects the browser here directly (no session to attach), so verifyState (HMAC over CRON_SECRET, imported from ../connect/route) stands in for getCurrentUser. SONOS.12.',
+  'src/app/api/mcp/route.js':
+    'MCP.1 — authenticates inside withMcpAuth → verifyMcpToken (src/lib/mcp/auth.js): an OAuth-issued Supabase JWT resolved through getCurrentUser; every tool re-checks role, studio and org switch in runTool.',
+  // Outside src/app/api, so the walk below never classifies them; listed so
+  // the decision is written down, and kept honest by the stale check.
+  'src/app/.well-known/oauth-protected-resource/route.js':
+    'RFC 9728 protected-resource metadata; public by definition, no data.',
+  'src/app/.well-known/oauth-protected-resource/api/mcp/route.js':
+    'RFC 9728 protected-resource metadata; public by definition, no data.',
 }
 
 // ─── Inbox channel-permission pass (INBOX-PERM.1) ────────────────────
