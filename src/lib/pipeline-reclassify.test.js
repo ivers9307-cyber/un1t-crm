@@ -433,6 +433,14 @@ function recordingDb(fixtures = {}, { errors = {} } = {}) {
       if (op === 'insert') {
         return resolve({ data: table === 'pipeline_classification_runs' ? { id: 'run-1' } : null, error: null })
       }
+      // An UPDATE … .select('id') answers the ids it matched, as PostgREST does
+      // (PIPE3: the duplicate-deal and leave-board closes count those rows).
+      if (op === 'update' && entry.some((x) => Array.isArray(x) && x[0] === 'select')) {
+        const inF = filters.find((f) => f.op === 'in' && f.col === 'id')
+        const eqF = filters.find((f) => f.op === 'eq' && f.col === 'id')
+        const ids = inF ? inF.vals : (eqF ? [eqF.val] : [])
+        return resolve({ data: ids.map((id) => ({ id })), error: null })
+      }
       if (op === 'update' || op === 'upsert') return resolve({ data: null, error: null })
       const rows = applyFilters(fixtures[table] || [])
       if (op === 'single') return resolve({ data: rows[0] ?? null, error: null })
@@ -1560,5 +1568,45 @@ describe('PIPE3 — three boards at one location', () => {
     expect(argOf(pipelineCalls[1], 'in')).toEqual(['in', 'key', ['paid_trial']])
     expect(membershipReadsFor).not.toHaveBeenCalled()
     expect(out).toMatchObject({ ok: true, input_source: 'contacts', board_histogram: { acquisition: 1, paid_trial: 1, programmes: 1 } })
+  })
+})
+
+
+// PIPE3 fix pass (review #1, #4) — a contact holding two open deals at the
+// studio: the deal on the target board is the one moved, the surplus is closed
+// 'lost' and counted, so a person is never on two boards.
+describe('PIPE3 — a contact with two open deals', () => {
+  const STILL = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const THREE = [
+    { id: 'p-acq', location_id: STILL, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', location_id: STILL, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+    { id: 'p-prog', location_id: STILL, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES3 = [
+    ...['new_lead', 'pack_member', 'dormant'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL })),
+    ...['paid_trial_new_lead', 'paid_trial_day_7'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid', location_id: STILL })),
+    ...['programme_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog', location_id: STILL })),
+  ]
+  it('keeps the target-board deal, moves it stage-only, closes the surplus lost, and counts it', async () => {
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: THREE, pipeline_stages: STAGES3,
+      contacts: [{ id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', trial_credits_remaining: 10, joined_at: ago(2), created_at: ago(2), recent_bookings: [] }],
+      deals: [
+        { id: 'd-acq', contact_id: 'c-buyer', stage_id: 's-pack_member', pipeline_id: 'p-acq', location_id: STILL, status: 'open' },
+        { id: 'd-paid', contact_id: 'c-buyer', stage_id: 's-paid_trial_day_7', pipeline_id: 'p-paid', location_id: STILL, status: 'open' },
+      ],
+      trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14 }],
+      pipeline_board_claims: [], locations: [{ id: STILL, settings: {} }],
+    })
+    const out = await reclassifyAllContacts(db, { locationId: STILL })
+    const updates = writesTo('deals').filter((e) => argOf(e, 'update'))
+    const move = updates.find((e) => argOf(e, 'update')[1].stage_id)
+    expect(argOf(move, 'update')[1]).toEqual({ stage_id: 's-paid_trial_new_lead' })
+    expect(argOf(move, 'in')).toEqual(['in', 'id', ['d-paid']])
+    const close = updates.find((e) => argOf(e, 'update')[1].status === 'lost')
+    expect(argOf(close, 'in')).toEqual(['in', 'id', ['d-acq']])
+    expect(out).toMatchObject({ deals_moved: 1, boards_moved: 0, duplicate_deals_closed: 1 })
   })
 })

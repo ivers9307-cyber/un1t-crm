@@ -19,7 +19,7 @@
 import { logWarn } from './log.js'
 import { selectAll } from './select-all.js'
 import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
-import { matchProgrammeSignal } from '../../shared/pipelines/programmes.js'
+import { matchProgrammeSignal, programmeClaimLive } from '../../shared/pipelines/programmes.js'
 import { BOARD_KEYS, CLAIM_BOARD_MODULES } from '../../shared/pipelines/router.js'
 
 export const PROGRAMME_RULES_PATH = Object.freeze(['pipelines', 'programmes'])
@@ -142,8 +142,11 @@ export async function loadClaimsForLocation(db, { locationId, contactIds, now = 
 
 /**
  * The programme claims to record: a contact with no claim who matches, or a
- * stored claim a NEWER lead-source touch renews. A plan match never renews (a
- * plan carries no date). Pure.
+ * LAPSED claim (no longer live for this contact) a newer lead-source touch
+ * renews — "a second /50plus signup after the claim went quiet" (spec). A live
+ * claim is never reset: a 1st Class Done lead who re-submits the page to book
+ * again stays at 1st Class Done. A plan match never renews (a plan carries no
+ * date). Pure.
  *
  * @returns {Array<{ contact_id: string, board_key: string, claimed_at: string, source: string }>}
  */
@@ -158,6 +161,7 @@ export function pendingProgrammeClaims(contacts, programmeByContact, rules, now 
     if (existing) {
       if (signal.source !== 'lead_source') continue
       if (!(signal.claimedAt > existing.claimedAt)) continue
+      if (programmeClaimLive(existing, c, now)) continue
     }
     out.push({ contact_id: c.id, board_key: PROGRAMME_BOARD, claimed_at: new Date(signal.claimedAt).toISOString(), source: signal.source })
   }
@@ -257,4 +261,25 @@ export async function loadPlacementClaims(db, { locationId, contactId, contact, 
   const claimsRes = await loadClaimsForContact(db, { locationId, contactId, contact, now, rules: rulesRes.rules, write })
   if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
   return { ok: true, boards, claimBoards: true, claims: claimsRes.claims }
+}
+
+/**
+ * PIPE3 fix pass — this contact's PAID claim alone, one indexed read. For the
+ * sync paths that skip placement (the detail backfill: skipBookings +
+ * skipReclassify) and must still decide the Class Pack stamp: a live €39 claim
+ * means the credits are the trial's. Independent of the studio's boards: the
+ * purchase row is the fact.
+ * @returns {Promise<{ ok: true, claim: object|null } | { ok: false, reason: 'purchases_unreadable', err: string }>}
+ */
+export async function loadPaidClaimForContact(db, { locationId, contactId, now = Date.now() }) {
+  const { data, error } = await db
+    .from('trial_purchases')
+    .select(PURCHASE_COLS)
+    .eq('location_id', locationId)
+    .eq('contact_id', contactId)
+  if (error) {
+    logWarn('pipeline-claims', 'trial_purchases read failed', { locationId, contactId, err: bounded(error) })
+    return { ok: false, reason: 'purchases_unreadable', err: bounded(error) }
+  }
+  return { ok: true, claim: paidTrialClaim(Array.isArray(data) ? data : [], now) }
 }

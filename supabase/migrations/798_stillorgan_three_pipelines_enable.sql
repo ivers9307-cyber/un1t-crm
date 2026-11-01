@@ -51,7 +51,11 @@ BEGIN
      AND tp.status = 'granted'
      AND tp.paid_at IS NOT NULL
      AND c.pack_customer_at IS NOT NULL
-     AND c.pack_customer_at >= tp.paid_at;
+     AND c.pack_customer_at >= tp.paid_at
+     -- inside the trial window only: a pack genuinely bought after the trial
+     -- ended is a conversion (shared/pipelines/paid-trial.js) and stays stamped
+     AND c.pack_customer_at < coalesce(tp.granted_at, tp.paid_at)
+                              + make_interval(days => coalesce(tp.duration_days, 14));
 
   SELECT count(*) INTO v_n FROM public.pipelines WHERE location_id = v_still AND is_primary AND enabled;
   IF v_n <> 1 THEN

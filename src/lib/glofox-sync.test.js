@@ -1524,6 +1524,7 @@ describe('mapGlofoxMember (real Glofox payload — Cathy, comp\'d Credit Member)
 function fakeDb({
   rowsByGlofoxId = [], rowsByEmail = [], openDeal = null,
   pipelines = [{ id: 'p-acq', mode: 'derived' }],
+  purchases = [],
   crossoverLinks = [], orgRowsByGlofoxId = [], orgRowsByEmail = [], contactsById = {},
   lookupError = null, writes = [], studioWriteError = null,
 } = {}) {
@@ -1559,6 +1560,7 @@ function fakeDb({
     c.then = (resolve) => {
       let data
       if (table === 'pipelines')                                data = pipelines
+      else if (table === 'trial_purchases')                     data = purchases
       else if (table === 'locations')                           data = [{ organization_id: 'org-1' }]
       else if (table === 'studio_contacts')                     data = crossoverLinks.map((l) => ({ ...(contactsById[l.contact_id] || { id: l.contact_id, location_id: 'hatch' }), studio_location_id: 'stillorgan', studio_source: 'glofox' }))
       else if (table === 'contact_location_preferences')        data = writes.length && writes.at(-1).table === table ? [{ contact_id: writes.at(-1).payload[0]?.contact_id }] : []
@@ -2708,6 +2710,8 @@ describe('ensureDealForContact — three boards (PIPE3.7)', () => {
 
   // A fluent fake over named tables; writes are recorded with their filters.
   function threeBoardDb({ pipelines = THREE, deals = [], purchases = [], claims = [], errors = {} } = {}) {
+    // The pipelines read filters enabled = true like the real table.
+    pipelines = pipelines.filter((p) => p.enabled !== false || true)
     const tables = { pipelines, pipeline_stages: STAGES, deals, trial_purchases: purchases, pipeline_board_claims: claims, locations: [{ id: LOC, settings: RULES }] }
     const writes = []
     const reads = []
@@ -2809,5 +2813,112 @@ describe('ensureDealForContact — three boards (PIPE3.7)', () => {
     expect(reads).not.toContain('trial_purchases')
     expect(reads).not.toContain('pipeline_board_claims')
     expect(reads).not.toContain('locations')
+  })
+})
+
+
+// PIPE3 fix pass (review #1, #4, #5) — duplicates, disabled boards, pre-loaded boards.
+describe('ensureDealForContact — duplicates and pre-loaded boards (PIPE3 fix pass)', () => {
+  const LOC = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const THREE = [
+    { id: 'p-acq', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+    { id: 'p-prog', location_id: LOC, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES = [
+    ...['new_lead', 'pack_member', 'dormant', 'member'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq' })),
+    ...['paid_trial_new_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid' })),
+    ...['programme_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog' })),
+  ]
+  function db3({ deals = [], purchases = [], claims = [], pipelines = THREE } = {}) {
+    const tables = { pipelines, pipeline_stages: STAGES, deals, trial_purchases: purchases, pipeline_board_claims: claims, locations: [{ id: LOC, settings: { pipelines: { programmes: { lead_sources: ['meta_50plus'], glofox_plan_patterns: [] } } } }] }
+    const writes = []
+    const reads = []
+    function chain(table) {
+      reads.push(table)
+      const filters = []
+      let op = 'select'
+      let payload = null
+      const c = {}
+      c.select = () => c; c.order = () => c; c.limit = () => c; c.in = () => c
+      c.single = () => { if (op === 'select') op = 'single'; return c }
+      c.maybeSingle = c.single
+      c.eq = (col, val) => { filters.push({ col, val }); return c }
+      c.update = (f) => { op = 'update'; payload = f; return c }
+      c.insert = (f) => { op = 'insert'; payload = f; return c }
+      c.upsert = (f, o) => { op = 'upsert'; payload = { rows: f, opts: o }; return c }
+      const apply = (rows) => (rows || []).filter((r) => filters.every((f) => !Object.prototype.hasOwnProperty.call(r, f.col) || r[f.col] === f.val))
+      c.then = (resolve) => {
+        if (op !== 'select' && op !== 'single') {
+          writes.push({ table, op, payload, filters })
+          // An UPDATE … .select('id') answers the id it matched, as PostgREST does.
+          const idF = filters.find((f) => f.col === 'id')
+          const data = op === 'insert' ? { id: 'd-new' } : (op === 'update' && idF ? [{ id: idF.val }] : null)
+          return resolve({ data, error: null })
+        }
+        const rows = apply(tables[table])
+        return resolve({ data: op === 'single' ? (rows[0] ?? null) : rows, error: null })
+      }
+      return c
+    }
+    return { db: { from: chain }, writes, reads }
+  }
+  const lead = { glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [], last_lead_source: 'meta_50plus', last_lead_source_at: ago(1) }
+
+  it('two open deals: the one on the target board is kept (and moved), the other is closed lost; exactly one open deal remains', async () => {
+    const { db, writes } = db3({
+      deals: [
+        { id: 'd-acq', contact_id: 'c2', location_id: LOC, pipeline_id: 'p-acq', stage_id: 's-new_lead', status: 'open', created_at: ago(0) },
+        { id: 'd-prog', contact_id: 'c2', location_id: LOC, pipeline_id: 'p-prog', stage_id: 's-programme_lead', status: 'open', created_at: ago(1) },
+      ],
+      claims: [{ contact_id: 'c2', location_id: LOC, board_key: 'programmes', claimed_at: ago(1), source: 'lead_source' }],
+    })
+    const out = await ensureDealForContact(db, LOC, 'c2', lead, 'Fifty')
+    expect(out).toMatchObject({ action: 'leave', deal_id: 'd-prog', stage_slug: 'programme_lead', duplicates_closed: 1 })
+    const closes = writes.filter((w) => w.table === 'deals' && w.op === 'update' && w.payload.status === 'lost')
+    expect(closes).toHaveLength(1)
+    expect(closes[0].filters).toContainEqual({ col: 'id', val: 'd-acq' })
+    expect(writes.filter((w) => w.table === 'deals' && w.op === 'insert')).toHaveLength(0)
+  })
+
+  it('an open deal on a DISABLED board is ignored: the contact gets a deal on the enabled board', async () => {
+    const { db, writes } = db3({
+      pipelines: [...THREE, { id: 'p-old', location_id: LOC, key: 'returning', module: 'returning', mode: 'derived', enabled: false, is_primary: false }],
+      deals: [{ id: 'd-old', contact_id: 'c2', location_id: LOC, pipeline_id: 'p-old', stage_id: 's-x', status: 'open' }],
+    })
+    const out = await ensureDealForContact(db, LOC, 'c2', lead, 'Fifty')
+    expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-prog' })
+    expect(writes.filter((w) => w.table === 'deals' && w.op === 'update')).toHaveLength(0)
+  })
+
+  it('pre-loaded claims AND boards: no pipelines read at all', async () => {
+    const { db, reads } = db3({ deals: [] })
+    const claims = { paid: null, programme: { claimedAt: NOW - 86_400_000, source: 'lead_source' } }
+    const out = await ensureDealForContact(db, LOC, 'c2', lead, 'Fifty', { claims, boards: THREE })
+    expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-prog' })
+    expect(reads).not.toContain('pipelines')
+    expect(reads).not.toContain('trial_purchases')
+  })
+})
+
+// PIPE3 fix pass (review #2) — the detail backfill (skipBookings + skipReclassify)
+// must not stamp a live €39 buyer as a pack customer from the trial's credits.
+describe('applyMemberSync — pack stamp on the skipBookings path (PIPE3 fix pass)', () => {
+  const member = { _id: 'g-buyer', email: 'buyer@x.com', first_name: 'Buy', last_name: 'Er', lead_status: 'TRIAL' }
+  const existing = { id: 'c-buyer', email: 'buyer@x.com', first_name: 'Buy', last_name: 'Er', glofox_member_id: 'g-buyer', glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: null, location_id: 'stillorgan' }
+  const granted = { id: 'tp1', location_id: 'stillorgan', contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: new Date(Date.now() - 2 * 86_400_000).toISOString(), granted_at: new Date(Date.now() - 2 * 86_400_000).toISOString(), duration_days: 14 }
+  const packStamps = (writes) => writes.filter((w) => w.table === 'contacts' && w.op === 'update' && w.payload && 'pack_customer_at' in w.payload)
+
+  it('a live €39 claim withholds the stamp even when the sync skips bookings and placement', async () => {
+    const writes = []
+    await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [granted], writes }), 'stillorgan', member, { skipBookings: true, skipReclassify: true, skipInteractions: true })
+    expect(packStamps(writes)).toHaveLength(0)
+  })
+  it('with no purchase the same sync stamps as before (10 credits, trial status)', async () => {
+    const writes = []
+    await applyMemberSync(fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing], purchases: [], writes }), 'stillorgan', member, { skipBookings: true, skipReclassify: true, skipInteractions: true })
+    expect(packStamps(writes)).toHaveLength(1)
   })
 })

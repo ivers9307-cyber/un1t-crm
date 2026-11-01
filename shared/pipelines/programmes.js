@@ -81,7 +81,9 @@ export function programmeClaimLive(claim, contact, now = Date.now()) {
   if (!claim || !Number.isFinite(claim.claimedAt)) return false
   const activity = lastActivityMs(contact)
   if (convertedSince(contact, claim.claimedAt)) {
-    const since = parseMs(contact?.converted_at) ?? Math.max(claim.claimedAt, activity ?? claim.claimedAt)
+    // A converted_at older than the claim never counts against it (see paid-trial.js).
+    const convertedMs = parseMs(contact?.converted_at)
+    const since = convertedMs != null ? Math.max(convertedMs, claim.claimedAt) : Math.max(claim.claimedAt, activity ?? claim.claimedAt)
     return now - since < CONVERTED_WINDOW_DAYS * DAY_MS
   }
   const quietFrom = Math.max(claim.claimedAt, activity ?? 0)

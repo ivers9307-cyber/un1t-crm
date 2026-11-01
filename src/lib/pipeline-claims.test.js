@@ -118,11 +118,15 @@ describe('pendingProgrammeClaims (pure)', () => {
       { contact_id: 'c1', board_key: 'programmes', claimed_at: iso(T0), source: 'lead_source' },
     ])
   })
-  it('renews a stored claim when the lead-source touch is newer; leaves an older one', () => {
-    const stored = new Map([['c1', { claimedAt: T0 - 86_400_000, source: 'glofox_plan' }]])
-    expect(pendingProgrammeClaims([fresh], stored, RULES, T0 + 1000)).toEqual([
+  it('renews a LAPSED claim when a newer lead-source touch arrives; never resets a LIVE one (review #3)', () => {
+    // Lapsed: claimed 100 days ago, no class, no payment → the second /50plus signup re-opens it.
+    const lapsed = new Map([['c1', { claimedAt: T0 - 100 * 86_400_000, source: 'glofox_plan' }]])
+    expect(pendingProgrammeClaims([fresh], lapsed, RULES, T0 + 1000)).toEqual([
       { contact_id: 'c1', board_key: 'programmes', claimed_at: iso(T0), source: 'lead_source' },
     ])
+    // Live: claimed a day ago → a re-submission must not move 1st Class Done back to Lead.
+    const live = new Map([['c1', { claimedAt: T0 - 86_400_000, source: 'glofox_plan' }]])
+    expect(pendingProgrammeClaims([{ ...fresh, last_attended_at: iso(T0 - 3600_000) }], live, RULES, T0 + 1000)).toEqual([])
     const newer = new Map([['c1', { claimedAt: T0 + 500, source: 'lead_source' }]])
     expect(pendingProgrammeClaims([fresh], newer, RULES, T0 + 1000)).toEqual([])
   })

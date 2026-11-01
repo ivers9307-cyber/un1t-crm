@@ -12,14 +12,14 @@ import { logWarn, logError } from './log.js'
 import { resolveStudioDismissal } from './studio-pipeline-dismissal.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
-import { findOpenDealForPipeline, findOpenDealAtLocation, findPrimaryPipeline } from './deal-lookup.js'
+import { findOpenDealForPipeline, findOpenDealsAtLocation, findPrimaryPipeline } from './deal-lookup.js'
 import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
 // PIPE3.7 — the router and its claims: at a studio running a claim board
 // (Stillorgan's €39 Trial / Programmes) a contact is placed on ONE of several
 // boards, and the trial's own credits are never a Class Pack.
 import { routeContact, CLAIM_BOARD_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
 import { claimLive as paidClaimLive } from '../../shared/pipelines/paid-trial.js'
-import { loadPlacementClaims, loadBoardsForLocation } from './pipeline-claims.js'
+import { loadPlacementClaims, loadBoardsForLocation, loadPaidClaimForContact } from './pipeline-claims.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
@@ -541,7 +541,11 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   // same defect FUNNEL.1 removed drag-drop to avoid, one layer up. No enabled
   // primary board is the disabled-location case (CCF Autos, SourceIt) — leave
   // it alone rather than invent a placement.
-  const primary = await findPrimaryPipeline(db, locationId)
+  // PIPE3 fix pass — applyMemberSync hands the boards it already read
+  // (opts.boards) so this path reads `pipelines` once per sync, not three times.
+  const primary = Array.isArray(opts?.boards)
+    ? (opts.boards.find((b) => b.is_primary && b.enabled !== false) || null)
+    : await findPrimaryPipeline(db, locationId)
   if (!primary || primary.mode !== PIPELINE_MODES.DERIVED) {
     return { action: 'leave', deal_id: null, stage_slug: null }
   }
@@ -559,9 +563,13 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     return { action: 'error', error: `claims unavailable: ${opts.claimsError}` }
   }
   if (opts?.claims !== undefined) {
-    const boardsRes = await loadBoardsForLocation(db, locationId)
-    if (!boardsRes.ok) return { action: 'error', error: `claims unavailable: ${boardsRes.reason}` }
-    boards = boardsRes.boards
+    if (Array.isArray(opts.boards)) {
+      boards = opts.boards
+    } else {
+      const boardsRes = await loadBoardsForLocation(db, locationId)
+      if (!boardsRes.ok) return { action: 'error', error: `claims unavailable: ${boardsRes.reason}` }
+      boards = boardsRes.boards
+    }
     claims = opts.claims
   } else {
     const placement = await loadPlacementClaims(db, { locationId, contactId, contact: { ...(contactSnapshot || {}), id: contactId }, now, write: true })
@@ -588,17 +596,45 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   }
   const pipelineId = targetBoard.id
 
-  // With claim boards the open deal may sit on ANY board here (it follows the
-  // person); without them, on the primary as before.
-  const existing = claimBoards.length > 0
-    ? await getOpenDealAtLocationWithStage(db, contactId, locationId)
-    : await getOpenDealWithStage(db, contactId, pipelineId)
+  // With claim boards the open deal may sit on ANY enabled board here (it
+  // follows the person); without them, on the primary as before. Two open
+  // deals (a public form raced a move) is a person on two boards: the deal on
+  // the TARGET board is kept, the rest are closed 'lost' (mig 598's own rule
+  // for duplicates) and counted. A deal on a DISABLED board is invisible to
+  // the nightly pass and is left alone.
+  let existing = null
+  let duplicatesClosed = 0
+  if (claimBoards.length > 0) {
+    const enabledIds = new Set((boards || []).filter((b) => b.enabled !== false).map((b) => b.id))
+    const open = await findOpenDealsAtLocation(db, contactId, locationId)
+    if (open === null) return { action: 'error', error: 'open deals unreadable' }
+    const visible = open.filter((d) => enabledIds.has(d.pipeline_id))
+    const keep = visible.find((d) => d.pipeline_id === pipelineId) || visible[0] || null
+    const surplus = visible.filter((d) => keep && d.id !== keep.id)
+    for (const d of surplus) {
+      const { data: closed, error: closeErr } = await db
+        .from('deals')
+        .update({ status: 'lost' })
+        .eq('id', d.id)
+        .eq('status', 'open')
+        .select('id')
+      if (closeErr) {
+        logWarn('glofox-sync', 'duplicate deal close failed', { locationId, contactId, dealId: d.id, err: closeErr.message })
+        continue
+      }
+      if (Array.isArray(closed) && closed.length > 0) duplicatesClosed++
+    }
+    existing = keep ? await withStageSlug(db, keep) : null
+  } else {
+    existing = await getOpenDealWithStage(db, contactId, pipelineId)
+  }
+  const dup = duplicatesClosed > 0 ? { duplicates_closed: duplicatesClosed } : {}
 
   if (!existing && opts?.noCreate) {
     // CROSSOVERDEAL.1 — a sibling-studio contact with nothing done at this
     // studio: no deal on this studio's board. (A deal that already exists,
     // from a class booking here or a person's hand, still moves above.)
-    return { action: 'skipped', reason: SIBLING_STUDIO_NO_ACTIVITY, deal_id: null, stage_slug: targetSlug }
+    return { action: 'skipped', reason: SIBLING_STUDIO_NO_ACTIVITY, deal_id: null, stage_slug: targetSlug, ...dup }
   }
 
   if (!existing) {
@@ -624,14 +660,14 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
       .select('id')
       .single()
     if (error) return { action: 'error', error: error.message }
-    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId }
+    return { action: 'create', deal_id: data.id, stage_slug: resolvedSlug, pipeline_id: pipelineId, ...dup }
   }
 
   // EXISTING deal — move iff the classifier says we should be in a
   // different stage. The classifier is idempotent for unchanged
   // inputs, so re-runs on the same data produce 'leave'.
   if (existing.stage_slug === targetSlug) {
-    return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug }
+    return { action: 'leave', deal_id: existing.id, stage_slug: existing.stage_slug, ...dup }
   }
   const targetStageId = await findStageIdBySlug(db, pipelineId, targetSlug)
   if (!targetStageId) {
@@ -658,19 +694,19 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     pipeline_id: pipelineId,
     location_id: locationId,
     ...(crossBoard ? { from_board: fromBoard, to_board: targetBoard.key } : {}),
+    ...dup,
   }
 }
 
-// PIPE3.7 — the contact's newest open deal at the studio, whichever board it
-// sits on, with its stage slug (getOpenDealWithStage, location-wide).
-export async function getOpenDealAtLocationWithStage(db, contactId, locationId) {
-  const deal = await findOpenDealAtLocation(db, contactId, locationId)
-  if (!deal) return null
-  const { data: stages } = await db
+// PIPE3.7 — a deal row with its stage slug. A failed stage read is logged and
+// reads as "unknown slug" (the caller then moves it, which is harmless).
+async function withStageSlug(db, deal) {
+  const { data: stages, error } = await db
     .from('pipeline_stages')
     .select('slug')
     .eq('id', deal.stage_id)
     .limit(1)
+  if (error) logWarn('glofox-sync', 'stage slug read failed', { dealId: deal.id, err: error.message })
   return { id: deal.id, stage_id: deal.stage_id, pipeline_id: deal.pipeline_id, stage_slug: stages?.[0]?.slug || null }
 }
 
@@ -2330,9 +2366,18 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       liveTrialClaim = true
       logWarn('glofox-sync', 'board claims unreadable; no pack stamp, no placement this sync', { locationId, contactId, reason: placement.reason })
     } else if (placement.claimBoards) {
-      placementOpts = { claims: placement.claims }
+      // The boards ride along so ensureDealForContact reads `pipelines` no more.
+      placementOpts = { claims: placement.claims, boards: placement.boards }
       liveTrialClaim = paidClaimLive(placement.claims?.paid ?? null, claimsRow, syncNow)
     }
+  } else {
+    // PIPE3 fix pass (review #2) — a sync that skips placement (the detail
+    // backfill, every ~30 min over every Stillorgan contact) still runs the
+    // pack stamp with fresh credits, so it must still know about a live €39
+    // claim: one indexed read of this contact's purchases. Unreadable = no
+    // stamp this sync.
+    const paid = await loadPaidClaimForContact(db, { locationId, contactId, now: syncNow })
+    liveTrialClaim = paid.ok ? paidClaimLive(paid.claim, claimsRow, syncNow) : true
   }
 
   // FUNNEL.3 — stamp the Class Pack moment. Same write-once/best-effort

@@ -137,3 +137,20 @@ describe('helpers', () => {
     expect(lastActivityMs({})).toBeNull()
   })
 })
+
+
+// PIPE3 fix pass (review #7) — a lapsed member (converted_at years ago) who
+// buys the €39 trial and re-joins is Converted on THIS board for 60 days from
+// the claim, not shoved to the acquisition Member pile by the old stamp.
+describe('claimLive — a re-joining ex-member', () => {
+  const T0 = Date.parse('2026-10-24T08:19:21Z')
+  const iso = (ms) => new Date(ms).toISOString()
+  const claim = paidTrialClaim([{ status: 'granted', payment_status: 'paid', paid_at: iso(T0), granted_at: iso(T0), duration_days: 14 }], T0)
+  it('an old converted_at never counts against the new claim', () => {
+    const c = { glofox_membership_status: 'member', converted_at: iso(T0 - 700 * DAY_MS) }
+    expect(claimLive(claim, c, T0 + 10 * DAY_MS)).toBe(true)
+    expect(claimLive(claim, c, T0 + 60 * DAY_MS - 1)).toBe(true)
+    expect(claimLive(claim, c, T0 + 60 * DAY_MS)).toBe(false)
+    expect(classify(c, T0 + 10 * DAY_MS, claim)).toBe('paid_trial_converted')
+  })
+})

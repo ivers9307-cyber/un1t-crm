@@ -33,6 +33,7 @@ const C = {
   buyer: 'c0000000-0000-0000-0000-000000000004',       // granted €39 buyer, stamped as a pack customer after paying
   packer: 'c0000000-0000-0000-0000-000000000005',      // a real pack customer, no purchase row
   hatchLead: 'c0000000-0000-0000-0000-000000000006',   // Hatch-home meta_50plus (never backfilled)
+  lateBuyer: 'c0000000-0000-0000-0000-000000000007',   // €39 buyer in September who bought a REAL pack after the trial ended
 }
 
 let db
@@ -81,7 +82,8 @@ const SCHEMA = `
   CREATE TABLE public.trial_purchases (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     contact_id uuid REFERENCES public.contacts(id), location_id uuid NOT NULL,
-    status text NOT NULL, paid_at timestamptz, granted_at timestamptz
+    status text NOT NULL, paid_at timestamptz, granted_at timestamptz,
+    duration_days integer NOT NULL DEFAULT 14
   );
   CREATE TABLE public.deals (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), contact_id uuid, location_id uuid,
@@ -105,10 +107,12 @@ const SCHEMA = `
     ('${C.eliteMember}', '${STILL}', NULL,          NULL,                   'Elite Membership', '2025-10-14T07:27:31Z', NULL),
     ('${C.buyer}',       '${STILL}', 'meta_trial',  '2026-10-30T19:43:52Z', 'The UN1T 14 Day Reset Trial', '2026-10-30T19:44:01Z', '2026-10-30T19:48:20Z'),
     ('${C.packer}',      '${STILL}', NULL,          NULL,                   NULL, '2025-01-01T00:00:00Z', '2026-06-01T00:00:00Z'),
-    ('${C.hatchLead}',   '${HATCH}', 'meta_50plus', '2026-10-31T10:00:00Z', NULL, NULL, NULL);
+    ('${C.hatchLead}',   '${HATCH}', 'meta_50plus', '2026-10-31T10:00:00Z', NULL, NULL, NULL),
+    ('${C.lateBuyer}',   '${STILL}', 'meta_trial',  '2026-09-01T10:00:00Z', NULL, '2026-09-01T10:05:00Z', '2026-10-20T12:00:00Z');
   INSERT INTO public.trial_purchases (contact_id, location_id, status, paid_at, granted_at) VALUES
     ('${C.buyer}',  '${STILL}', 'granted',        '2026-10-30T19:43:52Z', '2026-10-30T19:44:05Z'),
-    ('${C.packer}', '${STILL}', 'payment_failed', NULL, NULL);
+    ('${C.packer}', '${STILL}', 'payment_failed', NULL, NULL),
+    ('${C.lateBuyer}', '${STILL}', 'granted', '2026-09-01T10:00:00Z', '2026-09-01T10:05:00Z');
   INSERT INTO public.deals (id, contact_id, location_id, pipeline_id, stage_id) VALUES
     ('d0000000-0000-0000-0000-000000000001', '${C.buyer}', '${STILL}', '${P.stillAcq}', 'f0000000-0000-0000-0000-000000000001');
 `
@@ -205,13 +209,15 @@ describe('mig 797 — behaviour (PGlite)', () => {
     expect(new Date(rows[1].claimed_at).toISOString()).toBe('2025-09-05T22:09:11.000Z')
   })
 
-  it('clears pack_customer_at on the granted €39 buyer only', async () => {
+  it('clears pack_customer_at only when stamped inside the trial window: the fresh buyer yes, a real pack bought after the trial no', async () => {
     await fresh()
     await runSql(mig797())
     const [{ pack_customer_at: buyer }] = await q(`SELECT pack_customer_at FROM public.contacts WHERE id = $1`, [C.buyer])
     const [{ pack_customer_at: packer }] = await q(`SELECT pack_customer_at FROM public.contacts WHERE id = $1`, [C.packer])
+    const [{ pack_customer_at: late }] = await q(`SELECT pack_customer_at FROM public.contacts WHERE id = $1`, [C.lateBuyer])
     expect(buyer).toBeNull()
     expect(packer).not.toBeNull()
+    expect(late).not.toBeNull()
   })
 
   it('touches no Hatch row and no deals row', async () => {

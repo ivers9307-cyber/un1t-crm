@@ -83,3 +83,13 @@ describe('programmeClaimLive', () => {
   })
   it('null claim is never live', () => { expect(programmeClaimLive(null, {}, T0)).toBe(false) })
 })
+
+
+// PIPE3 fix pass (review #7) — same for the Programmes board.
+describe('programmeClaimLive — a re-joining ex-member', () => {
+  it('an old converted_at never counts against the new claim', () => {
+    const c = { glofox_membership_status: 'member', converted_at: iso(T0 - 700 * DAY_MS) }
+    expect(programmeClaimLive(claim, c, T0 + 10 * DAY_MS)).toBe(true)
+    expect(programmeClaimLive(claim, c, T0 + 60 * DAY_MS)).toBe(false)
+  })
+})

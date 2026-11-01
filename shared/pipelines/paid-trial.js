@@ -136,7 +136,11 @@ export function claimLive(claim, contact, now = Date.now()) {
   if (!claim) return false
   const activity = lastActivityMs(contact)
   if (convertedSince(contact, claim.end)) {
-    const since = parseMs(contact?.converted_at) ?? Math.max(claim.start, activity ?? claim.start)
+    // A converted_at older than the claim (a lapsed member who bought the
+    // trial and re-joined) never counts against it: the window runs from the
+    // later of the stamp and the claim's start.
+    const convertedMs = parseMs(contact?.converted_at)
+    const since = convertedMs != null ? Math.max(convertedMs, claim.start) : Math.max(claim.start, activity ?? claim.start)
     return now - since < CONVERTED_WINDOW_DAYS * DAY_MS
   }
   const quietFrom = Math.max(claim.end, activity ?? 0)

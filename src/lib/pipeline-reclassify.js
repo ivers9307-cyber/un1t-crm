@@ -415,16 +415,20 @@ export async function reclassifyAllContacts(db, args) {
     await markRun(db, runId, { status: 'failed', error_message: `deal load: ${dealsErr.message}` }, startedAt)
     return { ok: false, error: `deal load: ${dealsErr.message}`, run_id: runId }
   }
-  const dealByContact = new Map()
+  // PIPE3 fix pass — EVERY open deal per contact. One is the rule (one open
+  // deal per contact per board, mig 598, and the router keeps a person on one
+  // board), but a public form racing a move can leave two: the loop below
+  // keeps the deal on the contact's TARGET board and closes the surplus
+  // 'lost' (mig 598's own rule for duplicates), so a person is never on two
+  // boards and a cross-board move never collides with the unique index.
+  const dealsByContact = new Map()
   for (const d of dealRows || []) {
     // Skip deals belonging to contacts we didn't load (a contact at
     // a different location somehow joined to a deal here, or a
     // contact deleted between the two queries).
     if (!contactIdSet.has(d.contact_id)) continue
-    // Multiple open deals per contact shouldn't happen (the rest of
-    // the codebase enforces "one open"), but if it does we keep the
-    // first one — moving multiples would be ambiguous.
-    if (!dealByContact.has(d.contact_id)) dealByContact.set(d.contact_id, d)
+    if (!dealsByContact.has(d.contact_id)) dealsByContact.set(d.contact_id, [])
+    dealsByContact.get(d.contact_id).push(d)
   }
 
   // 4b. PIPEEXCL.1 — the people who are active members at ANOTHER studio of
@@ -483,6 +487,8 @@ export async function reclassifyAllContacts(db, args) {
   const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
   const movesLanded = [] // TDSEQ.1: un1t path, real runs: the moves whose write landed
   const leavesToApply = [] // PIPEEXCL.1: [{ deal_id, contact_id, from_slug, contact_name }]
+  const duplicatesToClose = [] // PIPE3: surplus open deals, [{ deal_id, contact_id }]
+  let duplicateDealsClosed = 0
   let createsWithheld = 0
   let createsHeld = 0
   const stageHistogram = {} // dry runs only: { target_slug: count }
@@ -516,7 +522,13 @@ export async function reclassifyAllContacts(db, args) {
       errors++
       continue
     }
-    const existing = dealByContact.get(c.id)
+    // PIPE3 — the deal on the target board wins; any other open deal is surplus.
+    const open = dealsByContact.get(c.id) || []
+    const targetPipelineForPick = stagePipelineById.get(targetStageId) || null
+    const existing = open.find((d) => d.pipeline_id && d.pipeline_id === targetPipelineForPick) || open[0] || undefined
+    for (const d of open) {
+      if (existing && d.id !== existing.id) duplicatesToClose.push({ deal_id: d.id, contact_id: c.id })
+    }
 
     // PIPEEXCL.1 — an active member at another studio leaves this board.
     if (activeElsewhere && leavesBoard(targetSlug, activeElsewhere.has(c.id), { reason: elsewhereReason(c.id), trainsHere: trainingHere.has(c.id) })) {
@@ -724,6 +736,25 @@ export async function reclassifyAllContacts(db, args) {
       const { error: actErr } = await db.from('activities').insert(leftActivities.slice(i, i + BULK_UPDATE_CHUNK))
       if (actErr) logWarn('pipeline-reclassify', 'leave-board activity write failed', { err: boundedErr(actErr.message), locationId })
     }
+
+    // PIPE3 — surplus open deals (a person on two boards) close 'lost'.
+    for (let i = 0; i < duplicatesToClose.length; i += BULK_UPDATE_CHUNK) {
+      const chunk = duplicatesToClose.slice(i, i + BULK_UPDATE_CHUNK)
+      const { data: closed, error: dupErr } = await db
+        .from('deals')
+        .update({ status: 'lost' })
+        .in('id', chunk.map((m) => m.deal_id))
+        .eq('location_id', locationId)
+        .eq('status', 'open')
+        .select('id')
+      if (dupErr) {
+        errors += chunk.length
+        logWarn('pipeline-reclassify', 'duplicate-deal close failed', { err: boundedErr(dupErr.message), chunk_start: i, locationId })
+        continue
+      }
+      duplicateDealsClosed += Array.isArray(closed) ? closed.length : 0
+    }
+    if (duplicateDealsClosed > 0) logWarn('pipeline-reclassify', 'duplicate open deals closed', { locationId, closed: duplicateDealsClosed })
   } else {
     // Dry-run — populate movement_matrix + samples for the operator
     // preview without touching DB.
@@ -742,6 +773,7 @@ export async function reclassifyAllContacts(db, args) {
     dealsMoved = movesToApply.length
     dealsCreated = createsToApply.length
     boardsMoved = movesToApply.filter((m) => m.cross_board).length
+    duplicateDealsClosed = duplicatesToClose.length
     for (const m of leavesToApply) {
       movementMatrix[m.from_slug] = movementMatrix[m.from_slug] || {}
       movementMatrix[m.from_slug][LEFT_BOARD] = (movementMatrix[m.from_slug][LEFT_BOARD] || 0) + 1
@@ -804,6 +836,7 @@ export async function reclassifyAllContacts(db, args) {
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
     // PIPE3
     boards_moved: boardsMoved,
+    duplicate_deals_closed: duplicateDealsClosed,
     ...(needsClaims ? { claims_pending: claimsPending } : {}),
     ...(dryRun && needsClaims ? { board_histogram: boardHistogram } : {}),
   }
