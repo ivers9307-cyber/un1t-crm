@@ -271,3 +271,30 @@ describe('staff ?edit=1 page preview', () => {
     expect(stamped(res)).toBeNull()
   })
 })
+
+// MCP.1 — /api/mcp authenticates itself with an OAuth-issued Supabase token
+// (a JWT whose payload carries `client_id`). Such a token is a different kind
+// of credential from a session: it is scoped to the MCP server and must open
+// NOTHING else. The proxy lets /api/mcp through unauthenticated (the route
+// answers its own 401 challenge) and refuses an OAuth token on every other
+// /api path by never asking Supabase about it, so it falls to the cookie gate.
+describe('MCP.1 — OAuth-issued tokens', () => {
+  const mkJwt = (payload) => `h.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.s`
+
+  it('refuses an OAuth token (client_id) on an ordinary /api route without calling getUser', async () => {
+    const res = await proxy(makeReq({ path: '/api/bookings', token: mkJwt({ sub: 'u1', client_id: 'c1' }) }))
+    expect(admitted(res)).toBe(false)
+    expect(ssrClient.auth.getUser).not.toHaveBeenCalledWith(expect.any(String))
+  })
+
+  it('admits /api/mcp without any token (the route authenticates itself)', async () => {
+    const res = await proxy(makeReq({ path: '/api/mcp', method: 'POST' }))
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('still admits a session JWT on an ordinary /api route', async () => {
+    ssrClient.auth.getUser.mockResolvedValueOnce({ data: { user: { id: 'u1' } } })
+    const res = await proxy(makeReq({ path: '/api/bookings', token: mkJwt({ sub: 'u1' }) }))
+    expect(admitted(res)).toBe(true)
+  })
+})
