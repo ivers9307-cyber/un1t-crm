@@ -34,10 +34,13 @@ export default function ConnectedAppsCard({ connectorUrl, timezone = null }) {
   const load = useCallback(async () => {
     try {
       const { data, error: grantError } = await createBrowserClient().auth.oauth.listGrants()
-      if (grantError) throw grantError
-      setGrants(Array.isArray(data) ? data : [])
+      if (grantError || !Array.isArray(data)) throw grantError || new Error('listGrants returned no list')
+      // A grant with no client id cannot be shown or revoked: skip it.
+      setGrants(data.filter((g) => g?.client?.id))
     } catch {
-      setGrants([])
+      // A failed read is unknown, never "none": grants stay null so neither
+      // the empty state nor a stale list (a revoked app) renders.
+      setGrants(null)
       setError('Could not load your connected apps.')
       return
     }
@@ -106,7 +109,7 @@ export default function ConnectedAppsCard({ connectorUrl, timezone = null }) {
                         {connected && <div className="text-xs text-un1t-subtle mt-0.5">Connected {connected}</div>}
                         {u ? (
                           <div className="text-xs text-un1t-subtle mt-0.5">
-                            Last used {lastUsed}. {u.calls_7d} {u.calls_7d === 1 ? 'call' : 'calls'} in the last 7 days.
+                            {lastUsed ? `Last used ${lastUsed}. ` : ''}{u.calls_7d} {u.calls_7d === 1 ? 'call' : 'calls'} in the last 7 days.
                           </div>
                         ) : null}
                       </div>

@@ -77,6 +77,34 @@ describe('ConnectedAppsCard', () => {
     expect(screen.getByText('Claude')).toBeTruthy()
   })
 
+  it('a failed grant read is an error, never "nothing connected"', async () => {
+    listGrants.mockResolvedValue({ data: null, error: { message: 'down' } })
+    render(<ConnectedAppsCard connectorUrl={URL_} />)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.queryByText(/Nothing connected/)).toBeNull()
+    expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
+  })
+
+  it('a failed reload after a revoke shows the error, not "nothing connected"', async () => {
+    listGrants.mockResolvedValueOnce({ data: [GRANT], error: null }).mockResolvedValueOnce({ data: null, error: { message: 'down' } })
+    revokeGrant.mockResolvedValue({ data: {}, error: null })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ConnectedAppsCard connectorUrl={URL_} />)
+    fireEvent.click(await screen.findByRole('button', { name: /revoke/i }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.queryByText(/Nothing connected/)).toBeNull()
+  })
+
+  it('skips a grant with no client and never prints "Last used null"', async () => {
+    listGrants.mockResolvedValue({ data: [{ scopes: [], granted_at: GRANT.granted_at }, { client: {}, scopes: [] }, GRANT], error: null })
+    usageBody = { success: true, data: { clients: [{ client_id: C1, last_used_at: 'not a date', calls_7d: 2 }] } }
+    render(<ConnectedAppsCard connectorUrl={URL_} />)
+    expect(await screen.findByText('Claude')).toBeTruthy()
+    expect(await screen.findByText(/2 calls in the last 7 days/)).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /revoke/i })).toHaveLength(1)
+    expect(screen.queryByText(/Last used null/)).toBeNull()
+  })
+
   it('still lists the grants when usage cannot be read', async () => {
     listGrants.mockResolvedValue({ data: [GRANT], error: null })
     usageBody = { success: false, error: 'x' }
