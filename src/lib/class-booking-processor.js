@@ -19,6 +19,7 @@ import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { logWarn } from '@/lib/log'
 import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 import { notifyFlowBookingOutcome, readPaidTrialReply } from '@/lib/whatsapp-flow/booking-notice'
+import { FUNDED_NO_BALANCE } from '@/lib/class-first-booking'
 
 // TZ.7: the class's start (an instant, from Glofox or the studio's timetable)
 // labelled on the STUDIO's clock, for the approval card and the customer's
@@ -302,6 +303,12 @@ export async function processClassBookingRequest(db, request) {
     return { outcome: 'failed', detail: 'contact_missing' }
   }
   const firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : '') || 'there'
+  // CLASSFIRST.1 — a row funded by a paid trial or a promo claim: the credits
+  // are already on the account, so no free trial is ever granted for it and
+  // an empty balance is a card (funded_no_balance), never the paid-trial
+  // reply (which would close the row and lose a paying customer's class)
+  // and never needs_credit_grant (whose approve buys a trial).
+  const funded = Boolean(request.funded_by)
 
   // PERSON-ACCT.9 — judge the PERSON, not this row.
   //
@@ -545,7 +552,7 @@ export async function processClassBookingRequest(db, request) {
         throw creditReadError()
       }
     } else if (!(read.remaining > 0) && !activeMembership && !(await rescueSiblingBalance())) {
-      return toReview('prior_attendance')
+      return toReview(funded ? FUNDED_NO_BALANCE : 'prior_attendance')
     }
     return null
   }
@@ -570,6 +577,9 @@ export async function processClassBookingRequest(db, request) {
     // "there is no such person" is exactly the confident negative a mint
     // rests on. Fail safe to a human.
     if (person.readFailed) return toReview('account_check_failed')
+    // CLASSFIRST.1 — a funded buyer with no account to find: never a mint
+    // with a free trial; staff check the purchase.
+    if (funded) return toReview(FUNDED_NO_BALANCE)
     // PAIDTRIALONLY.1 — no free trial where the studio sells a paid one. A
     // failed read throws: the queue retries rather than mint a free trial.
     // PAGETRIAL.1 — a page that offers a free class keeps its free trial.
@@ -641,6 +651,9 @@ export async function processClassBookingRequest(db, request) {
       // (the same rescue the attended path makes). Only a person-wide empty
       // goes to review.
       if (!(await rescueSiblingBalance())) {
+        // CLASSFIRST.1 — the credits a purchase or claim just put on the
+        // account do not show: a card, never a trial or the paid-trial reply.
+        if (funded) return toReview(FUNDED_NO_BALANCE)
         // PAIDTRIALONLY.1 — never attended and nothing to book with: where the
         // free trial is retired, this is the paid trial, not a credit grant.
         const paidTrialText = await readPaidTrialReply(db, request.location_id, { pageId: request.page_id })

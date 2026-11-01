@@ -21,9 +21,12 @@ vi.mock('@/lib/trial-purchase-emails', () => ({ sendTrialPurchaseEmail: mocks.em
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn() }))
 // PIPE3.7 — the board placement after a grant.
 vi.mock('@/lib/pipeline-place-now', () => ({ placeContactNow: vi.fn(async () => ({ ok: true })) }))
+// CLASSFIRST.1 — the funded booking after the grant (its own tests beside it).
+vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: vi.fn(async () => ({ queued: true, id: 'cbr-1' })) }))
 
 import { processTrialPurchase, alertTrialPurchaseStaff, REVIEW_REASONS } from './trial-purchase-processor'
 import { placeContactNow } from '@/lib/pipeline-place-now'
+import { queueFundedClassBooking } from '@/lib/class-first-booking'
 
 const ROW = {
   id: 'tp1', location_id: 'loc1', contact_id: 'c1', status: 'processing', payment_status: 'paid',
@@ -73,6 +76,34 @@ beforeEach(() => {
   mocks.capi.mockResolvedValue({ sent: true })
   mocks.email.mockResolvedValue({ status: 'sent' })
   mocks.ops.mockResolvedValue({ channel: 'email' })
+})
+
+describe('processTrialPurchase — CLASSFIRST.1, the class they picked', () => {
+  const withClass = { ...ROW, class_event_id: 'ev-1', class_name: 'S&C', class_starts_at: '2099-01-05T11:00:00.000Z', page_id: 'p-1' }
+  it('a granted row with a class queues one funded booking for the buyer, after the grant', async () => {
+    const { db } = makeDb()
+    expect(await processTrialPurchase(db, withClass, { now: () => 'T' })).toEqual({ outcome: 'granted' })
+    expect(queueFundedClassBooking).toHaveBeenCalledTimes(1)
+    expect(queueFundedClassBooking).toHaveBeenCalledWith(db, expect.objectContaining({
+      fundedBy: 'trial_purchase', fundedById: 'tp1', locationId: 'loc1', contactId: 'c1', pageId: 'p-1',
+      eventId: 'ev-1', className: 'S&C', startsAt: '2099-01-05T11:00:00.000Z',
+      customer: { name: 'Ava Byrne', email: 'ava@example.com', phone: '+353850000001' },
+    }))
+  })
+  it('no class on the row queues nothing; a refused grant queues nothing', async () => {
+    await processTrialPurchase(makeDb().db, ROW, { now: () => 'T' })
+    expect(queueFundedClassBooking).not.toHaveBeenCalled()
+    mocks.purchase.mockResolvedValueOnce({ ok: false, message_code: 'NO', http_status: 400 })
+    await processTrialPurchase(makeDb().db, withClass, { now: () => 'T' })
+    expect(queueFundedClassBooking).not.toHaveBeenCalled()
+  })
+  it('a queue helper that throws never undoes the grant', async () => {
+    queueFundedClassBooking.mockRejectedValueOnce(new Error('queue down'))
+    const { db, updates } = makeDb()
+    expect(await processTrialPurchase(db, withClass, { now: () => 'T' })).toEqual({ outcome: 'granted' })
+    expect(updates.at(-1).fields).toMatchObject({ status: 'granted' })
+    expect(mocks.email).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('processTrialPurchase', () => {

@@ -28,6 +28,7 @@ import { createBooking, fetchUserBookingsResult, fetchUserCreditsResult, glofoxC
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
+import { readPaidTrialReply } from '@/lib/whatsapp-flow/booking-notice'
 
 function makeDb(contact) {
   // Every select is traced (table + the exact column string requested), not
@@ -58,6 +59,45 @@ function makeDb(contact) {
   return api
 }
 beforeEach(() => vi.clearAllMocks())
+
+// CLASSFIRST.1 — a row funded by a paid trial or a promo claim: the credits
+// are already there, so it books against them; an empty balance is a
+// funded_no_balance card, never the paid-trial reply, never a trial grant.
+describe('processClassBookingRequest — a funded row', () => {
+  const funded = { id: 'r9', location_id: 'L', contact_id: 'c1', glofox_event_id: 'e1', class_name: 'S&C', starts_at: '2026-07-08T17:30:00.000Z', funded_by: 'trial_purchase', funded_by_id: 'tp1' }
+  const buyer = { id: 'c1', first_name: 'Ava', last_name: 'Byrne', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }
+  it('a never-attended buyer with the plan credits books against them, no trial, no card', async () => {
+    const r = await processClassBookingRequest(makeDb(buyer), funded)
+    expect(r.outcome).toBe('booked')
+    expect(createBooking).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: 'gm1', model_id: 'e1' }))
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+  })
+  it('an empty balance is a funded_no_balance card: the paid-trial reply is never read and no trial is bought', async () => {
+    // Not a once-value: the funded path never reads it, so a queued answer
+    // would leak into the next test. Set, assert, restore.
+    readPaidTrialReply.mockResolvedValue('Buy the paid trial at /trial')
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb(buyer), funded)
+    readPaidTrialReply.mockResolvedValue(null)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'funded_no_balance' })
+    expect(readPaidTrialReply).not.toHaveBeenCalled()
+    expect(createBooking).not.toHaveBeenCalled()
+    expect(findOrCreateGlofoxMember).not.toHaveBeenCalled()
+  })
+  it('a funded buyer with no account anywhere is a funded_no_balance card, never a mint with a free trial', async () => {
+    findOrCreateGlofoxMember.mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+    const r = await processClassBookingRequest(makeDb({ ...buyer, glofox_member_id: null }), funded)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'funded_no_balance' })
+    expect(findOrCreateGlofoxMember).toHaveBeenCalledTimes(1)
+    expect(findOrCreateGlofoxMember.mock.calls[0][0]).toMatchObject({ createIfMissing: false })
+    expect(readPaidTrialReply).not.toHaveBeenCalled()
+  })
+  it('a funded returner with nothing to book with is a funded_no_balance card, not prior_attendance', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb({ ...buyer, last_attended_at: '2026-06-01T10:00:00Z' }), funded)
+    expect(r).toEqual({ outcome: 'needs_review', detail: 'funded_no_balance' })
+  })
+})
 
 describe('processClassBookingRequest', () => {
   const req = { id: 'r1', location_id: 'L', contact_id: 'c1', glofox_event_id: 'e1', class_name: 'S&C', starts_at: '2026-07-08T17:30:00.000Z' }

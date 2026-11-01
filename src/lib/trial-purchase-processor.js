@@ -33,6 +33,7 @@ import { sendTrialPurchaseEmail } from '@/lib/trial-purchase-emails'
 import { logError, logWarn } from '@/lib/log'
 import { escapeHtml } from '@/lib/html-escape'
 import { placeContactNow } from '@/lib/pipeline-place-now'
+import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY } from '@/lib/class-first-booking'
 
 /** PAIDTRIAL.4 — the body of every paid-trial plan purchase (see the call). */
 export const TRIAL_PURCHASE_BODY = Object.freeze({ payment_method: 'complimentary' })
@@ -216,6 +217,14 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
     // A recorded grant on a re-run: finish the side effects only.
     try { await stamp(db, row.id, { status: 'granted', granted_at: prior.at || now(), glofox_member_id: memberId, last_error: null }) } catch (e) { logWarn('trial-purchase', 're-run stamp failed', { purchaseId: row.id, err: e }) }
   }
+
+  // CLASSFIRST.1 — the class they picked before paying: queued now, booked
+  // against the plan's credits by the class-booking worker. Best-effort: the
+  // grant already landed, and the helper logs its own failures.
+  try {
+    const funded = fundedBookingFromRow({ ...row, contact_id: contact.id }, { fundedBy: FUNDED_BY.trialPurchase })
+    if (funded) await queueFundedClassBooking(db, funded)
+  } catch (e) { logWarn('trial-purchase', 'funded class booking not queued', { purchaseId: row.id, err: e }) }
 
   // PIPE3.7 — the buyer's card moves to the €39 Trial board now, not at
   // tonight's run. Best-effort: the grant already landed.

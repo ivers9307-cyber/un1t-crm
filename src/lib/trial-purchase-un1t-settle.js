@@ -43,6 +43,7 @@
 // (anything but done / skipped_*, or a throw); the verdict is logged and kept
 // on the row as grant.set_password for staff.
 import { sendWebsiteConversion } from '@/lib/meta-capi'
+import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY } from '@/lib/class-first-booking'
 import { runSetPasswordStep } from '@/lib/un1t-online-account'
 import { readUn1tWriteSettings } from '@/lib/un1t-online-settings'
 import { readPaidTrialAccountEmailCopy } from '@/lib/trial-studios'
@@ -200,6 +201,17 @@ async function settleRow(db, row, tx, nowMs, out) {
   if (!Array.isArray(data) || data.length !== 1) {
     logWarn(LOG, 'un1t trial row no longer open; nothing sent', ids)
     return false
+  }
+
+  // CLASSFIRST.1 — the class they picked before paying: queued now, booked
+  // against the trial's credits by the class-booking worker (the un1t.online
+  // processor, which reads the live ledger). Best-effort: the row is settled.
+  try {
+    const funded = fundedBookingFromRow(row, { fundedBy: FUNDED_BY.trialPurchase })
+    if (funded) await queueFundedClassBooking(db, funded)
+  } catch (err) {
+    out.errors++
+    logWarn(LOG, 'funded class booking not queued', { ...ids, errClass: err?.name })
   }
 
   try {
