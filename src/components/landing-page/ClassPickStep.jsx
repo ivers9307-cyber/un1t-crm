@@ -10,6 +10,13 @@
 // the choice (`chosen` / `onPick`), what happens next (`onContinue`), its
 // telemetry (`onLoaded` tells it what the list said) and the card round it.
 //
+// Two shapes (CLASSFIRST.2): a timetable with at most one slot a day
+// (/50plus: one class, three mornings a week) is the flat date tiles; a
+// timetable with more than one slot on any day (a full studio: eight
+// classes a day) is DAY-FIRST, a row of day tiles and then that day's slots
+// as a short list, so the card stays the height of one day and never
+// stretches the hero beside it.
+//
 // The list itself is `useClassList`'s, held by the PARENT so it survives a
 // step change (Change on the details step returns to the tiles with no
 // second fetch) and is passed in as `list`.
@@ -85,6 +92,44 @@ export function Tile({ cls, selected, onPick, beyondFirstRow, showName = false, 
   )
 }
 
+/** Day-first when any day holds more than one slot. Pure. */
+export function isDayFirst(groups) {
+  return Array.isArray(groups) && groups.some((g) => (g.classes || []).length > 1)
+}
+
+function DayTile({ group, selected, onPick }) {
+  const [weekday, dateNumber = ''] = labelParts(group.day_label)
+  return (
+    <button
+      type="button"
+      data-day={group.day}
+      onClick={() => onPick(group.day)}
+      aria-pressed={selected}
+      className={`rounded-xl px-1 py-2 text-center transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
+    >
+      <span className={`block text-[11px] ${selected ? 'text-white/70' : 'text-black/60'}`}>{weekday}</span>
+      <span className="block font-display font-extrabold text-xl leading-tight">{dateNumber}</span>
+      <span className="sr-only">{group.day_label}</span>
+    </button>
+  )
+}
+
+function SlotRow({ cls, selected, onPick }) {
+  return (
+    <button
+      type="button"
+      data-tile={cls.event_id}
+      onClick={() => onPick(cls)}
+      aria-pressed={selected}
+      className={`w-full flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
+    >
+      <span className="font-display font-extrabold text-lg leading-none tabular-nums">{cls.time}</span>
+      <span className={`text-sm font-semibold uppercase tracking-wide truncate ${selected ? 'text-white/90' : 'text-black/80'}`}>{cls.name}</span>
+      <span className="sr-only">{cls.day_label}</span>
+    </button>
+  )
+}
+
 /**
  * The studio's bookable classes for a card. Fetches on mount and whenever
  * `reloadKey` changes (a reload never preselects: that is the caller's,
@@ -147,9 +192,16 @@ export default function ClassPickStep({
   const c = copy && typeof copy === 'object' ? copy : {}
   const { classes = [], loading = true, configured = true, unavailable = false } = list || {}
   const [showAll, setShowAll] = useState(false)
+  // Day-first: the day in view (the chosen slot's, else the one tapped, else the first).
+  const [dayPick, setDayPick] = useState(null)
 
-  const flat = cadenceGroups(classes).flatMap((g) => g.classes)
+  const groups = cadenceGroups(classes)
+  const flat = groups.flatMap((g) => g.classes)
   const hiddenCount = showAll ? 0 : Math.max(0, flat.length - VISIBLE_TILES)
+  const dayFirst = isDayFirst(groups)
+  const chosenDay = chosen ? groups.find((g) => g.classes.some((c) => c.event_id === chosen.event_id))?.day : null
+  const day = chosenDay || (groups.some((g) => g.day === dayPick) ? dayPick : groups[0]?.day) || null
+  const daySlots = groups.find((g) => g.day === day)?.classes || []
   const empty = !loading && configured && (unavailable || flat.length === 0)
   const skip = onSkip && empty ? (
     <button type="button" onClick={onSkip} className={`${PICK_CTA_CLS} mt-4`}>{c.skip_class_label || 'Continue without picking a class'}</button>
@@ -175,6 +227,18 @@ export default function ClassPickStep({
           {error && <p className="mt-2 text-sm text-red-700" role="alert">{error}</p>}
           <p className="text-black/70 text-lg py-4" role="status">{c.no_classes_text}</p>
           {skip}
+        </>
+      ) : dayFirst ? (
+        <>
+          <div className="grid grid-cols-7 gap-1.5" role="group" aria-label="Day">
+            {groups.map((g) => <DayTile key={g.day} group={g} selected={g.day === day} onPick={setDayPick} />)}
+          </div>
+          <div className="mt-4 space-y-2" role="group" aria-label="Class">
+            {daySlots.map((cls) => <SlotRow key={cls.event_id} cls={cls} selected={chosen?.event_id === cls.event_id} onPick={onPick} />)}
+          </div>
+          {error && <p className="mt-3 text-sm text-red-700" role="alert">{error}</p>}
+          <button type="button" onClick={onContinue} disabled={!chosen} className={`${PICK_CTA_CLS} mt-5`}>{ctaLabel}</button>
+          {reassurance ? <p className="text-center text-sm text-black/55 mt-3">{reassurance}</p> : null}
         </>
       ) : (
         <>
