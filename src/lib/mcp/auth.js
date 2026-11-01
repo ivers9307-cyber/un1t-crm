@@ -26,6 +26,7 @@
 // results made by the registry, which is why this returns the user plus
 // `enabledOrgIds` and `assistantAnywhere` rather than refusing on them.
 
+import { createClient } from '@supabase/supabase-js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermissionAtAnyLocation } from '@/lib/permissions'
@@ -62,14 +63,47 @@ export async function mcpEnabledOrgIds(db, user) {
 }
 
 /**
+ * Ask Supabase Auth who this exact token belongs to. getCurrentUser() takes
+ * no token: it reads the request itself and, when the Bearer fails, falls
+ * back to the SSR cookie session and the studio PIN cookie. So the token has
+ * to be verified here, on its own, and the result bound to what
+ * getCurrentUser() resolved.
+ *
+ * @param {string} token
+ * @returns {Promise<{ id: string } | null>} null for a bad token or an
+ *   unreachable Supabase (logged once for the latter)
+ */
+export async function defaultVerifyToken(token) {
+  try {
+    const client = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    )
+    const { data } = await client.auth.getUser(token)
+    return data?.user ?? null
+  } catch (err) {
+    logError('mcp', 'token did not verify', { code: err?.code })
+    return null
+  }
+}
+
+/**
+ * Order: client_id claim -> verify the token with Supabase Auth -> resolve
+ * the person with getCurrentUser() -> require both to be the same person and
+ * not a master "View as" session (impersonation is forbidden on this path).
+ *
  * @param {string} token the raw Bearer token
- * @param {{ getUser?: Function, db?: object }} [opts] injected in tests
+ * @param {{ getUser?: Function, verifyToken?: Function, db?: object }} [opts] injected in tests
  * @returns {Promise<null | { token: string, clientId: string, scopes: string[],
  *   extra: { user: object, enabledOrgIds: string[], assistantAnywhere: boolean } }>}
  */
-export async function verifyMcpToken(token, { getUser = getCurrentUser, db } = {}) {
+export async function verifyMcpToken(token, { getUser = getCurrentUser, verifyToken = defaultVerifyToken, db } = {}) {
   const clientId = jwtClientId(token)
   if (!clientId) return null
+
+  const authUser = await verifyToken(token)
+  if (!authUser) return null
 
   let user
   try {
@@ -79,6 +113,11 @@ export async function verifyMcpToken(token, { getUser = getCurrentUser, db } = {
     return null
   }
   if (!user) return null
+
+  if (authUser.id !== user.id || user.impersonatingFrom) {
+    logError('mcp', 'token not bound to the resolved session')
+    return null
+  }
 
   const enabledOrgIds = await mcpEnabledOrgIds(db || createServerClient(), user)
   return {
