@@ -249,7 +249,7 @@ describe('LeadFormBlock compact soft path (TRIALFIRST.1)', () => {
     const html = renderToStaticMarkup(<LeadFormBlock block={base} publicPath="hatch-street" compact wordmark="UN1T" />)
     expect(html).toContain('Not ready to join yet?')
     expect(html).toContain('md:grid-cols-[1fr_1.2fr]')
-    expect(html).toContain('border-b border-black/25')
+    expect(html).toContain('border border-black/15 rounded-xl') // the trial card's input (trial-card.js, the /50plus recipe since CLASSFIRST.1)
     expect(html).not.toContain('bg-white/[0.06]')
     expect(html).not.toMatch(/<h2[^>]*uppercase/)
   })

@@ -188,10 +188,10 @@ describe('EditModeOverlay on an offer layout (PAGES.1)', () => {
     expect(screen.getByTestId('block-s1')).toBeTruthy()
     expect(screen.getByText('Learn more')).toBeTruthy()
 
-    const submit = screen.getByRole('button', { name: /Start my trial/ })
-    expect(submit.disabled).toBe(true)
-    expect(screen.getByLabelText('Email').disabled).toBe(true)
-    fireEvent.submit(screen.getByRole('form', { name: 'Your details' }))
+    // CLASSFIRST.1 — the card opens on the class step (the list here answers
+    // nothing, so it offers to continue); the preview never posts.
+    expect(screen.getByRole('heading', { name: 'Pick your first class' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Start my trial/ })).toBeNull()
     expect(globalThis.fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toEqual([])
 
     fireEvent.click(region.querySelector('section'))

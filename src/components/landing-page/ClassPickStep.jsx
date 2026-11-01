@@ -104,7 +104,10 @@ export function useClassList({ page = null, publicPath = null, campaign = null, 
     if (!enabled) return undefined
     let alive = true
     setLoading(true)
-    fetch(campaignFunnelClassesUrl({ page, publicPath, campaign }))
+    // Through a resolved promise so a missing fetch (an old browser, a bare
+    // test) rejects into "unavailable" instead of throwing in the effect.
+    Promise.resolve()
+      .then(() => fetch(campaignFunnelClassesUrl({ page, publicPath, campaign })))
       .then((r) => r.json())
       .then((j) => {
         if (!alive) return
