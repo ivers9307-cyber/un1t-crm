@@ -3,14 +3,15 @@
 // only ever run through `runTool`, which applies the same checks in the same
 // order for all of them:
 //
-//   input (zod) → rate limit (120/min per person) → studio (resolveStudio:
+//   rate limit (120/min per person, malformed calls included) → input (zod) → studio (resolveStudio:
 //   one of the person's studios where they hold `assistant`) → the studio's
 //   organisation has MCP switched on (unless the tool is `alwaysAvailable`)
 //   → the tool's own gate → run.
 //
 // Every refusal is a tool-level result `{ ok: false, code, message }` (the
 // client can explain it), never a throw, and every call, refused or not, ends
-// in one `mcp_tool_calls` row (recordToolCall: no arguments, no result).
+// in one `mcp_tool_calls` row (recordToolCall: no arguments, no result), except
+// `rate_limited`, which the limiter itself bounds.
 // tests/agent-tools-guard.test.js polices the tool files themselves.
 
 import { z } from 'zod'
@@ -106,14 +107,15 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
   }
 
   async function check() {
-    const parsed = tool.inputSchema.safeParse(rawInput ?? {})
-    if (!parsed.success) return { ok: false, code: 'invalid_input', message: zodMessage(parsed.error) }
-    const input = parsed.data
-
+    // Rate limit FIRST, so a malformed call is throttled like any other.
     const limit = await checkRateLimit(db, `mcp:${user.id}`, RATE_LIMIT)
     if (!limit.allowed) {
       return { ok: false, code: 'rate_limited', message: `Too many tool calls. Try again in ${limit.retryAfterSec} seconds.` }
     }
+
+    const parsed = tool.inputSchema.safeParse(rawInput ?? {})
+    if (!parsed.success) return { ok: false, code: 'invalid_input', message: zodMessage(parsed.error) }
+    const input = parsed.data
 
     const resolved = resolveStudio(user, input.studio_id ?? null)
     if (!resolved.ok) return { ok: false, code: resolved.code, message: studioMessage(resolved.code, input.studio_id) }
@@ -135,6 +137,11 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
 
     return { ok: true, data: await tool.run(input, ctx) }
   }
+
+  // A rate_limited refusal is not recorded: the limiter is the bound on how
+  // fast a client can write rows, and recording refusals would hand an
+  // authenticated client an unbounded insert.
+  if (result.code === 'rate_limited') return result
 
   await recordToolCall(db, {
     profileId: user.id,

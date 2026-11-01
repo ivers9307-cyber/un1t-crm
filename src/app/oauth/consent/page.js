@@ -48,6 +48,19 @@ export default async function OAuthConsentPage({ searchParams }) {
     )
   }
 
+  // Under a master's "View as user" the eligibility below would be the
+  // impersonated person's, but Approve runs on the master's real browser
+  // session, so the grant would land on the master. Refuse; no Approve path.
+  if (user.impersonatingFrom) {
+    return (
+      <main className="min-h-screen bg-un1t-bg flex items-center justify-center px-4 py-16">
+        <p role="alert" className="text-sm text-un1t-text">
+          Stop viewing as another user before connecting an app.
+        </p>
+      </main>
+    )
+  }
+
   const enabledOrgs = await mcpEnabledOrgIds(createServerClient(), user)
   const assistant = hasPermissionAtAnyLocation(user, 'assistant')
   const eligibility = enabledOrgs.length === 0

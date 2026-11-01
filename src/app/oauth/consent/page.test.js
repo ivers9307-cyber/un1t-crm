@@ -96,6 +96,14 @@ describe('/oauth/consent page', () => {
     expect(form.props.eligibility).toEqual({ ok: false, reason: 'assistant_permission' })
   })
 
+  it('refuses under View as user: no form, so no Approve path', async () => {
+    getCurrentUser.mockResolvedValue({ ...USER, impersonatingFrom: { id: 'master-1' } })
+    const out = await render('abc')
+    expect(findForm(out)).toBe(null)
+    expect(JSON.stringify(out)).toContain('Stop viewing as another user before connecting an app.')
+    expect(mcpEnabledOrgIds).not.toHaveBeenCalled()
+  })
+
   it('reports the org switch first when both refusals apply', async () => {
     mcpEnabledOrgIds.mockResolvedValue([])
     hasPermissionAtAnyLocation.mockReturnValue(false)

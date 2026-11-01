@@ -137,6 +137,21 @@ describe('search_contacts', () => {
     expect(argOf(studiosQ, 'or')[2]).toEqual({ referencedTable: 'contacts' })
   })
 
+  it('search_contacts strips quotes and backslashes that PostgREST would 400 on', async () => {
+    const { db, on } = makeDb()
+    const r = await run(searchContacts, { query: 'jo"hn\\smith' }, 'manager', db)
+    expect(r.ok).toBe(true)
+    const filter = argOf(on('contacts')[0], 'or')[1]
+    expect(filter).toContain('%jo hn smith%')
+    expect(filter).not.toMatch(/["\\]/)
+
+    // Nothing left once they are gone: invalid_input, no read.
+    const none = makeDb()
+    const refused = await run(searchContacts, { query: '"\\"' }, 'manager', none.db)
+    expect(refused).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(none.on('contacts')).toHaveLength(0)
+  })
+
   it('search_contacts needs Contacts at the studio, not just a role', async () => {
     const { db, on } = makeDb()
     const r = await run(searchContacts, { query: 'john' }, 'owner', db, { contacts: false })

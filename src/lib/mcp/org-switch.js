@@ -7,16 +7,15 @@
 // answer, not an error). "People who used it" is the count of DISTINCT
 // profile_id in mcp_tool_calls for the organisation in the last 30 days.
 
-import { getAppUrl } from '@/lib/app-url'
+import { connectorUrl } from '@/lib/mcp/connector-url'
 import { selectAll } from '@/lib/select-all'
 import { logError } from '@/lib/log'
 
 export const MCP_PEOPLE_WINDOW_DAYS = 30
 
-/** The one connector URL staff paste into Claude (same as mcpResourceUrl()). */
-export function connectorUrl() {
-  return `${getAppUrl()}/api/mcp`
-}
+// The connector URL has one definition (connector-url.js); re-exported so the
+// existing importers keep working.
+export { connectorUrl }
 
 /**
  * @param {object} db  service-role supabase client

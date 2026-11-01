@@ -92,7 +92,7 @@ export default function ConnectedAppsCard({ connectorUrl, timezone = null }) {
 
             {grants && grants.length === 0 && (
               <p className="text-xs text-un1t-text mt-3">
-                Nothing connected. Add the CRM in Claude from {connectorUrl}.
+                Nothing connected. Add the CRM in Claude{connectorUrl ? <> from {connectorUrl}</> : ''}.
               </p>
             )}
 

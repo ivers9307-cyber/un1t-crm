@@ -23,15 +23,16 @@ export default defineTool({
   run: async (input, ctx) => {
     const { db, user, studio } = ctx
 
-    // Built in one expression so the studio filter is visibly part of the chain.
-    const base = db.from('time_off_requests')
+    // Filters first, then order and limit; the studio filter is visibly part of the chain.
+    let query = db.from('time_off_requests')
       .select('id, profile_id, type, status, start_date, end_date, reason')
       .eq('location_id', studio.id)
       .lte('start_date', input.end)
       .gte('end_date', input.start)
+    if (!isManagerAt(user, studio.id)) query = query.eq('profile_id', user.id)
+    const { data, error } = await query
       .order('start_date')
       .limit(MAX_ROWS + 1)
-    const { data, error } = await (isManagerAt(user, studio.id) ? base : base.eq('profile_id', user.id))
     // A failed read is a failed call, never "nobody is off".
     if (error) throw new Error(`Failed to load time off: ${error.message}`)
 

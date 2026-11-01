@@ -102,13 +102,14 @@ describe('runTool', () => {
     expect(inserts[0].row.duration_ms).toBeGreaterThanOrEqual(0)
   })
 
-  it('answers invalid_input with the zod message before touching the db', async () => {
+  it('answers invalid_input with the zod message after the rate-limit check, and records it', async () => {
     const { db, inserts } = fakeDb()
     const r = await runTool(echo, { text: 42 }, fakeAuth(), { db })
     expect(r.ok).toBe(false)
     expect(r.code).toBe('invalid_input')
     expect(r.message).toMatch(/text/)
-    expect(db.rpc).not.toHaveBeenCalled()
+    // The limiter ran first (a malformed call counts), then nothing else touched the db.
+    expect(db.rpc).toHaveBeenCalledWith('rate_limit_hit', expect.objectContaining({ p_key: 'mcp:user-1' }))
     expect(echoRun).not.toHaveBeenCalled()
     // The audit row is the only write, and it names no studio (none was resolved).
     expect(inserts.map((i) => i.table)).toEqual(['mcp_tool_calls'])
@@ -154,12 +155,25 @@ describe('runTool', () => {
   })
 
   it('answers rate_limited when checkRateLimit says no', async () => {
-    const { db, inserts } = fakeDb({ rateCount: 121 })
+    const { db } = fakeDb({ rateCount: 121 })
     const r = await runTool(echo, { text: 'hi' }, fakeAuth(), { db })
     expect(r.ok).toBe(false)
     expect(r.code).toBe('rate_limited')
     expect(echoRun).not.toHaveBeenCalled()
-    expect(inserts[0].row).toMatchObject({ ok: false, error_code: 'rate_limited' })
+  })
+
+  it('does not record a rate_limited refusal (the limiter is the bound on rows)', async () => {
+    const { db, inserts } = fakeDb({ rateCount: 121 })
+    await runTool(echo, { text: 'hi' }, fakeAuth(), { db })
+    expect(inserts).toEqual([])
+    expect(db.from).not.toHaveBeenCalled()
+  })
+
+  it('throttles a malformed call too, and records nothing once limited', async () => {
+    const { db, inserts } = fakeDb({ rateCount: 121 })
+    const r = await runTool(echo, { text: 42 }, fakeAuth(), { db })
+    expect(r.code).toBe('rate_limited')
+    expect(inserts).toEqual([])
   })
 
   it('turns a thrown run into tool_failed and still records the call', async () => {

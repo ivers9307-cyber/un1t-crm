@@ -28,11 +28,13 @@ export default defineTool({
   gate: (user, studioId) => hasPermissionForLocation(user, studioId, 'contacts'),
   run: async (input, ctx) => {
     const { db, studio } = ctx
-    const term = sanitizeSearchTerm(input.query)
+    // sanitizeSearchTerm() leaves " and \, which PostgREST rejects inside an
+    // .or() value (a 400 on every call), so they go too.
+    const term = sanitizeSearchTerm(input.query).replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim()
     if (term.length < MIN_CONTACT_SEARCH_LEN) {
-      throw new ToolRefusal('invalid_input', `The search term needs at least ${MIN_CONTACT_SEARCH_LEN} characters (commas, brackets, % * and _ are ignored).`)
+      throw new ToolRefusal('invalid_input', `The search term needs at least ${MIN_CONTACT_SEARCH_LEN} characters (commas, brackets, quotes, backslashes, % * and _ are ignored).`)
     }
-    // Deliberate substring search: sanitizeSearchTerm() stripped , ( ) % * _,
+    // Deliberate substring search: sanitizeSearchTerm() and the line above stripped , ( ) % * _ " \,
     // so the term carries neither LIKE wildcards nor .or() separators.
     const like = `%${term}%`
     const matches = `name.ilike.${like},email.ilike.${like},phone.ilike.${like}`

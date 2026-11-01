@@ -17,6 +17,7 @@ import { createMcpHandler, withMcpAuth, protectedResourceHandler, metadataCorsOp
 import { TOOLS } from '@/lib/agent-tools'
 import { runTool, toolResult } from '@/lib/agent-tools/registry'
 import { getAppUrl } from '@/lib/app-url'
+import { connectorUrl } from '@/lib/mcp/connector-url'
 import { createServerClient } from '@/lib/supabase'
 
 const UNAUTHENTICATED = {
@@ -82,7 +83,7 @@ export function buildAuthedHandler(verify) {
 
 /** The one MCP resource URL. */
 export function mcpResourceUrl() {
-  return `${getAppUrl()}/api/mcp`
+  return connectorUrl()
 }
 
 function supabaseAuthServerUrl() {

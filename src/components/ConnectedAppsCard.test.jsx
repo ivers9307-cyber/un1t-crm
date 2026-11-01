@@ -67,6 +67,13 @@ describe('ConnectedAppsCard', () => {
     expect(screen.getByText(/https:\/\/crm\.example\.test\/api\/mcp/)).toBeTruthy()
   })
 
+  it('shows the empty state without an address when the connector URL is unavailable', async () => {
+    listGrants.mockResolvedValue({ data: [], error: null })
+    render(<ConnectedAppsCard connectorUrl={null} />)
+    const text = (await screen.findByText(/Nothing connected/)).textContent
+    expect(text).toBe('Nothing connected. Add the CRM in Claude.')
+  })
+
   it('shows a refusal from revokeGrant instead of dropping the row', async () => {
     listGrants.mockResolvedValue({ data: [GRANT], error: null })
     revokeGrant.mockResolvedValue({ data: null, error: { message: 'nope' } })
