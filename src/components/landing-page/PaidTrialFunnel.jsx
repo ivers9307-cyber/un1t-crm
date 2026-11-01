@@ -1,11 +1,16 @@
 'use client'
 
 // PaidTrialFunnel — PAIDTRIAL.1 / TRIALSTUDIO.10: the buyer's side of the paid
-// trial (/trial), in one white card (TRIALFIRST.1: `./trial-card`, the look the
-// studio pages' heroes share). The buyer chooses a studio first
-// (TrialStudioPicker; `?studio=` preselects a sellable one), then the price
-// panel with the form (details → POST /api/public/trial-purchases with the
-// studio). Then, by studio:
+// trial (/trial), in one card (TRIALFIRST.1: `./trial-card`, the look the
+// studio pages' heroes share; CLASSFIRST.1: the /50plus recipe). The buyer
+// chooses a studio first (TrialStudioPicker; `?studio=` preselects a sellable
+// one), then CLASSFIRST.1's class step (ClassPickStep over the studio's
+// visible timetable: the class they will be booked into once the trial is on
+// their account; an empty or unreadable timetable offers "continue without a
+// class"), then the price panel with the form (details → POST
+// /api/public/trial-purchases with the studio and the chosen `event_id`; a
+// class that filled meanwhile answers class_unavailable and the card returns
+// to the tiles with the details kept). Then, by studio:
 //   Stillorgan: the embedded checkout (ClassFunnelCheckout against the trial
 //     status route), then done.
 //   Hatch Street: un1t.online's terms tick on the form, and the browser goes
@@ -49,8 +54,10 @@ import { formatTrialPrice, trialTicks, PAID_TRIAL_PENDING_BODY } from '@/lib/pai
 import ClassFunnelCheckout from './ClassFunnelCheckout'
 import TrialStudioPicker from './TrialStudioPicker'
 import TrialTermsTick from './TrialTermsTick'
-import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK } from './trial-card'
+import ClassPickStep, { useClassList, ctaLabelFor } from './ClassPickStep'
+import { TRIAL_CARD, TRIAL_INPUT, TRIAL_BTN, TRIAL_MUTED, TRIAL_FINE, TRIAL_ERROR, TRIAL_LINK, TRIAL_SUMMARY } from './trial-card'
 import { customerErrorText } from '@/lib/page-request-errors'
+import { classFirstStepCopy, classLine } from '@/lib/class-first-funnel'
 
 const STATUS_PATH = '/api/public/trial-purchases'
 const HELP_PATH = '/api/public/trial-purchases/help'
@@ -89,7 +96,11 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
   const preselected = byKey(initialStudio)?.sellable ? initialStudio : null
   // A return without ?studio= is a Stillorgan redirect-flow payment (the only kind before TRIALSTUDIO).
   const [studioKey, setStudioKey] = useState(resuming ? (initialStudio === 'hatch' ? 'hatch' : 'stillorgan') : preselected)
-  const [step, setStep] = useState(resuming ? 'confirming' : (preselected ? 'form' : 'choose')) // choose | form | payment | confirming | done | refused | help_sent
+  // CLASSFIRST.1 — `pick` (the class) sits between the studio and the form.
+  const [step, setStep] = useState(resuming ? 'confirming' : (preselected ? 'pick' : 'choose')) // choose | pick | form | payment | confirming | done | refused | help_sent
+  const [chosen, setChosen] = useState(null) // the public class picked, or null (skipped)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [doneClass, setDoneClass] = useState(null) // the class the status route reports (a resumed checkout)
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
   const [payment, setPayment] = useState(null) // { purchaseId, checkout, amount_cents, currency, product_name }
   const [done, setDone] = useState(null) // { state: 'paid'|'granted'|'pending' }
@@ -113,6 +124,14 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
   const price = formatTrialPrice(studio?.priceCents, studio?.currency)
   const ticks = trialTicks(block)
+  const stepCopy = classFirstStepCopy(block, 'paid_trial')
+  // The class list for the chosen studio: by the page and the studio's public
+  // path, else (no page: a card that predates PAGES.1) the studio's legacy path.
+  const listPath = studio?.publicPath || (studioKey === 'hatch' ? 'hatch-street' : studioKey) || null
+  // Fetched only while the list can be shown (the class step, and the form
+  // and payment behind it, whose Change returns to the tiles): a resumed
+  // checkout never asks for it.
+  const classList = useClassList({ page, publicPath: listPath, enabled: Boolean(studioKey && listPath && ['pick', 'form', 'payment'].includes(step)), reloadKey })
 
   useEffect(() => {
     try {
@@ -153,6 +172,22 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
     setStudioKey(key)
     setError(null)
     if (!preview) trackFunnelStep('trial_studio_chosen', { studio: key })
+    setChosen(null)
+    setStep('pick')
+  }
+
+  // CLASSFIRST.1 — the class step.
+  function pickClass(cls) { setChosen(cls); setError(null) }
+  function toForm() {
+    if (!chosen) return
+    if (!preview) trackFunnelStep('trial_class_chosen', { studio: studioKey })
+    setError(null)
+    setStep('form')
+  }
+  function skipClass() {
+    setChosen(null)
+    setError(null)
+    if (!preview) trackFunnelStep('trial_class_skipped', { studio: studioKey })
     setStep('form')
   }
 
@@ -189,6 +224,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
           ...(terms ? { terms_accepted: termsAccepted } : {}),
+          ...(chosen ? { event_id: chosen.event_id } : {}),
           attribution: buildAttribution(),
           visit: readVisitOrigin() || undefined,
           lead_event_id: leadEventId,
@@ -196,6 +232,16 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         }),
       })
       const j = await r.json().catch(() => ({}))
+      // CLASSFIRST.1 — the class filled while they typed: back to the tiles,
+      // the details kept, the list reloaded so the same tile cannot be pressed
+      // into the same refusal.
+      if (j.code === 'class_unavailable') {
+        setChosen(null)
+        setStep('pick')
+        setError(customerErrorText(j.error, 'That class filled up while you were typing. Pick another one, your details are saved.'))
+        setReloadKey((k) => k + 1)
+        return
+      }
       // The studio needs un1t.online's tick and this page did not know: show it from the answer.
       if (j.code === 'terms_required' && j.terms?.required === true) {
         setTermsOverride(j.terms)
@@ -283,8 +329,9 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
   useEffect(() => {
     if (step !== 'confirming' && step !== 'done') return
     const id = purchaseIdRef.current
-    // Back to the start with a reason: the form, or the choice when the studio is no longer for sale.
-    const restart = (msg) => { setStep(studio?.sellable ? 'form' : 'choose'); setError(msg) }
+    // Back to the start with a reason: the class step (CLASSFIRST.1: a fresh
+    // page holds no details), or the choice when the studio is no longer for sale.
+    const restart = (msg) => { setStep(studio?.sellable ? 'pick' : 'choose'); setError(msg) }
     if (!id) { restart(null); return }
     let stopped = false
     let polls = 0
@@ -296,6 +343,7 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
         const j = await r.json().catch(() => ({}))
         const d = j?.data
         if (stopped || !d) return
+        if (d.class && d.class.name) setDoneClass(d.class)
         if (d.state === 'granted') {
           firePurchaseOnce({ purchaseId: id, amountCents: d.amount_cents, currency: d.currency, contentName: d.product_name })
           setDone({ state: 'granted' }); setStep('done'); return
@@ -331,6 +379,37 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
     )
   }
 
+  if (step === 'pick' && studio) {
+    const cta = chosen ? ctaLabelFor(stepCopy.pick_cta_label, chosen) : stepCopy.pick_cta_label.replace(/\{day\}|\{time\}/g, '').replace(/\s+/g, ' ').trim()
+    return (
+      <div className={TRIAL_CARD}>
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <p className={`text-xs uppercase tracking-[0.25em] font-semibold ${TRIAL_MUTED}`}>{studio?.label}</p>
+          {list.length > 1 && (
+            <button type="button" disabled={preview} onClick={() => { setError(null); setStep('choose') }} className={`text-xs ${TRIAL_MUTED} ${TRIAL_LINK}`}>
+              Change studio
+            </button>
+          )}
+        </div>
+        <ClassPickStep
+          list={classList}
+          copy={stepCopy}
+          chosen={chosen}
+          onPick={pickClass}
+          onContinue={toForm}
+          onSkip={skipClass}
+          showClassName
+          stepLabel={list.length > 1 ? 'Step 2 of 3' : 'Step 1 of 2'}
+          ctaLabel={cta}
+          error={error}
+          title={stepCopy.pick_title}
+          body={stepCopy.pick_body}
+          reassurance={`${price} once, for ${studio?.durationDays || 14} days`}
+        />
+      </div>
+    )
+  }
+
   if (step === 'confirming') {
     return (
       <div className={`${TRIAL_CARD} text-center`}>
@@ -348,10 +427,14 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
       : state === 'pending'
         ? (block.pending_body || PAID_TRIAL_PENDING_BODY)
         : 'Thanks, your payment is in. We are setting the trial up on your account now; this usually takes under a minute. Your confirmation email has the details.'
+    // CLASSFIRST.1 — the class they picked (this session's, or the one the
+    // status route reports after a checkout return), once the trial is theirs.
+    const line = state === 'pending' ? '' : classLine(stepCopy.done_class_body, chosen || doneClass)
     return (
       <div className={`${TRIAL_CARD} text-center`}>
         <p className="font-display font-extrabold text-3xl text-black mb-3">{title}</p>
         <p className={TRIAL_MUTED}>{body}</p>
+        {line ? <p className="mt-3 text-black font-semibold">{line}</p> : null}
       </div>
     )
   }
@@ -403,20 +486,28 @@ export default function PaidTrialFunnel({ studios = [], initialStudio = null, re
           </button>
         )}
       </div>
+      {/* CLASSFIRST.1 — what they picked, with the way back to the tiles. */}
+      <div className={TRIAL_SUMMARY}>
+        <div className="text-[11px] uppercase tracking-wider text-black/55">{chosen ? 'Your first class' : 'First class'}</div>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <span className="text-base">{chosen ? <><span className="font-bold">{chosen.time}</span> · {chosen.day_label} · {chosen.name}</> : 'Pick one after you pay'}</span>
+          <button type="button" disabled={preview} onClick={() => { setError(null); setStep('pick') }} className="shrink-0 text-sm underline text-black/60 hover:text-black">{chosen ? 'Change' : 'Pick a class'}</button>
+        </div>
+      </div>
       {/* The price region: the heading and the price first, where the eye
           lands (the Hatch foundation-offer lesson). */}
       <div className="mb-6">
         <div className="flex items-start justify-between gap-3">
           <div>
-            {block.eyebrow && <p className="text-[11px] uppercase tracking-[0.35em] font-semibold text-black/50 mb-2">{block.eyebrow}</p>}
-            <h1 className="font-display font-extrabold text-2xl leading-tight">{block.heading}</h1>
+            <p className="text-[11px] uppercase tracking-[0.3em] font-semibold text-black/55 mb-2">{list.length > 1 ? 'Step 3 of 3' : 'Step 2 of 2'}</p>
+            <h1 className="font-display font-extrabold uppercase text-2xl leading-tight">{block.heading}</h1>
           </div>
           <div className="text-right shrink-0">
             <div className="font-display font-extrabold text-4xl leading-none">{price}</div>
             <div className="text-xs text-black/55 mt-1">once, for {studio?.durationDays || 14} days</div>
           </div>
         </div>
-        {block.subhead && <p className="mt-3 text-sm text-black/70">{block.subhead}</p>}
+        <p className="mt-3 text-sm text-black/70">{stepCopy.details_body}</p>
         {ticks.length > 0 && (
           <ul className="mt-4 space-y-1.5">
             {ticks.map((t) => (
