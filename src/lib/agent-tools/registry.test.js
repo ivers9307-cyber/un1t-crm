@@ -118,7 +118,7 @@ describe('runTool', () => {
   it('answers forbidden at a studio where the gate says no and records the code', async () => {
     const { db, inserts } = fakeDb()
     const r = await runTool(echo, { studio_id: B, text: 'hi' }, fakeAuth({ enabledOrgIds: [ORG1, ORG2] }), { db })
-    expect(r).toEqual({ ok: false, code: 'forbidden', message: 'Your role at Studio B does not allow Echo.' })
+    expect(r).toEqual({ ok: false, code: 'forbidden', message: 'The role held at Studio B does not allow Echo.' })
     expect(echoRun).not.toHaveBeenCalled()
     expect(inserts[0].row).toMatchObject({ ok: false, error_code: 'forbidden', location_id: B, organization_id: ORG2 })
   })
@@ -174,6 +174,21 @@ describe('runTool', () => {
   })
 })
 
+describe('runTool assistant_permission wording', () => {
+  it('names the studio case and the default case differently', async () => {
+    const { db } = fakeDb()
+    const auth = fakeAuth()
+    auth.extra.user.assignmentsByLocation[B].permissions = {}
+    const named = await runTool(echo, { studio_id: B, text: 'hi' }, auth, { db })
+    expect(named).toMatchObject({ ok: false, code: 'assistant_permission', message: 'The AI Assistant permission is not held at that studio.' })
+
+    auth.extra.user.rolesByLocation = { [A]: 'staff', [B]: 'staff' }
+    auth.extra.user.assignmentsByLocation[A] = { role: 'staff', permissions: {} }
+    const fallback = await runTool(echo, { text: 'hi' }, auth, { db })
+    expect(fallback).toMatchObject({ ok: false, code: 'assistant_permission', message: 'No studio where the AI Assistant permission is held.' })
+  })
+})
+
 describe('toolResult', () => {
   it('toolResult marks errors isError and serialises data as text', () => {
     expect(toolResult({ ok: true, data: { a: 1 } })).toEqual({ content: [{ type: 'text', text: '{"a":1}' }] })
@@ -181,5 +196,9 @@ describe('toolResult', () => {
       isError: true,
       content: [{ type: 'text', text: JSON.stringify({ error: 'forbidden', message: 'No.' }) }],
     })
+  })
+
+  it('renders a run that returned undefined as the string "null"', () => {
+    expect(toolResult({ ok: true, data: undefined })).toEqual({ content: [{ type: 'text', text: 'null' }] })
   })
 })

@@ -1,6 +1,11 @@
 // MCP.1 guard: the agent tool registry (src/lib/agent-tools/). Every tool runs
-// on the service-role client, so RLS fences nothing: the fence is these rules,
-// checked in the tool's own source.
+// on the service-role client, so RLS fences nothing. This guard is a floor, not
+// proof: it reads each tool's source for the rules below. An id-set filter
+// (`.in('id', ids)`, `.in('contact_id', ids)`) proves only what the caller
+// established before building the set (contactsAtStudio, a readability check),
+// so each tool's own test is the second net. A single-row read by id needs a
+// `location_id` filter in the same chain or an id-set; `.eq('id', x)` alone is
+// not a studio filter.
 //
 //  1. Every tool module is `export default defineTool({ … })` with an optional
 //     `studio_id: z.string().uuid().optional()` in its inputSchema and a gate.
@@ -9,7 +14,7 @@
 //     Xero, fees, trial purchases, un1t.online writes), as `.from('<t>')` or
 //     as an embed inside a select string.
 //  4. Every `.from(…)` chain carries a studio or contact-set filter:
-//     .eq/.in('location_id', …), .eq/.in('contact_id', …), .eq/.in('id', …).
+//     .eq/.in('location_id', …), .eq/.in('contact_id', …), .in('id', …).
 //  5. No tool selects `*` (or a bare `.select()`, which is `*`) from
 //     profiles, locations or contacts, directly or as an embed: each has a
 //     REVOKE in its history, and a service-role `*` ships what it hides.
@@ -31,7 +36,7 @@ const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
 const FORBIDDEN_TABLE = /^(whatsapp_\w+|email_\w+|instagram_\w+|cars\w*|car_\w+|xero_\w+|class_fees\w*|trial_purchases|un1t_write_\w+)$/
 const NO_STAR_TABLES = new Set(['profiles', 'locations', 'contacts'])
-const SCOPE_FILTER = /\.\s*(?:eq|in)\(\s*(['"`])(?:location_id|contact_id|id)\1/
+const SCOPE_FILTER = /\.\s*(?:(?:eq|in)\(\s*(['"`])(?:location_id|contact_id)\1|in\(\s*(['"`])id\2)/
 
 function sourceFiles() {
   if (!existsSync(DIR)) return []
@@ -90,8 +95,8 @@ export function chainAt(code, start) {
 /** Every supabase `.from(…)` chain: `{ table, chain }`, table null when not a literal. */
 export function fromChains(code) {
   const out = []
-  // A capitalised receiver is Array.from / Buffer.from / Set.from, never a client.
-  for (const m of code.matchAll(/(?<![A-Z][\w$]*)\.from\(/g)) {
+  // Built-in `.from` (Array.from, Buffer.from, …) is not a supabase client.
+  for (const m of code.matchAll(/(?<!\b(?:Array|Buffer|Set|Map|Object|Uint8Array|Int8Array|Float64Array|BigInt64Array)\s*)\.from\(/g)) {
     const chain = chainAt(code, m.index)
     const lit = /^\.from\(\s*(['"`])([\w.]+)\1\s*\)/.exec(chain)
     out.push({ table: lit ? lit[2] : null, chain })
@@ -192,7 +197,7 @@ describe('agent tools guard (MCP.1)', () => {
 
   it('every .from() in a tool is followed by a studio or contact-set filter within the same chain', () => {
     const bad = sourceFiles().flatMap((f) => unscopedChains(codeOf(f)).map((c) => `${rel(f)}: ${c}`))
-    expect(bad, `add .eq/.in('location_id' | 'contact_id' | 'id', …) to the same chain:\n${bad.join('\n')}`).toEqual([])
+    expect(bad, `add .eq/.in('location_id' | 'contact_id', …) or .in('id', ids) to the same chain:\n${bad.join('\n')}`).toEqual([])
   })
 
   it('no tool selects * from profiles, locations or contacts', () => {
@@ -218,6 +223,19 @@ describe('agent tools guard scanners', () => {
     expect(unscopedChains(`await db.from('contacts').select('id').in('id', ids)`)).toEqual([])
     expect(unscopedChains(`await db.from('notes').select('id').eq('contact_id', c)`)).toEqual([])
     expect(unscopedChains(`await db.from('bookings').select('id').in("location_id", ids)`)).toEqual([])
+  })
+
+  it('does not take .eq(\'id\') alone as a studio filter', () => {
+    expect(unscopedChains(`db.from('deals').select('id').eq('id', x)`)).toHaveLength(1)
+    expect(unscopedChains(`db.from('deals').select('id').eq('id', x).eq('location_id', s)`)).toEqual([])
+    expect(unscopedChains(`db.from('contacts').select('id').in('id', ids)`)).toEqual([])
+  })
+
+  it('reads any client receiver, capitalised or not, and skips only built-ins', () => {
+    expect(forbiddenTables(`serviceDb.from('cars').select('id').eq('location_id', s)`)).toEqual(['cars'])
+    expect(starSelects(`supabaseAdmin.from('contacts').select().eq('id', x)`)).toHaveLength(1)
+    expect(unscopedChains(`supabaseAdmin.from('deals').select('id')`)).toHaveLength(1)
+    expect(fromChains(`Array.from(x); Buffer.from(y); Uint8Array.from(z)`)).toEqual([])
   })
 
   it('flags forbidden tables as .from() and as embeds, not as columns', () => {

@@ -24,7 +24,9 @@ const RATE_LIMIT = Object.freeze({ max: 120, windowMs: 60_000 })
 
 const MESSAGES = Object.freeze({
   studio_not_found: 'Unknown studio.',
-  assistant_permission: 'This account does not hold the AI Assistant permission at that studio.',
+  assistant_permission: 'The AI Assistant permission is not held at that studio.',
+  assistant_permission_default: 'No studio where the AI Assistant permission is held.',
+  studio_refused: 'That studio cannot be used.',
   mcp_disabled: 'MCP is not switched on for this organisation. Ask an organisation admin.',
   tool_failed: 'The tool failed. The error has been logged.',
 })
@@ -53,6 +55,11 @@ function zodMessage(error) {
     ...formErrors,
     ...Object.entries(fieldErrors).map(([field, msgs]) => `${field}: ${msgs.join(', ')}`),
   ].join('; ') || 'Invalid input.'
+}
+
+function studioMessage(code, studioId) {
+  if (code === 'assistant_permission' && !studioId) return MESSAGES.assistant_permission_default
+  return MESSAGES[code] || MESSAGES.studio_refused
 }
 
 /**
@@ -90,7 +97,7 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
     }
 
     const resolved = resolveStudio(user, input.studio_id ?? null)
-    if (!resolved.ok) return { ok: false, code: resolved.code, message: MESSAGES[resolved.code] }
+    if (!resolved.ok) return { ok: false, code: resolved.code, message: studioMessage(resolved.code, input.studio_id) }
     studio = resolved.studio
 
     if (!tool.alwaysAvailable && !enabledOrgIds.includes(studio.organization_id)) {
@@ -104,7 +111,7 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
       role: roleAt(user, studio.id),
     }
     if (!tool.gate(user, studio.id, ctx)) {
-      return { ok: false, code: 'forbidden', message: `Your role at ${studio.name} does not allow ${tool.title}.` }
+      return { ok: false, code: 'forbidden', message: `The role held at ${studio.name} does not allow ${tool.title}.` }
     }
 
     return { ok: true, data: await tool.run(input, ctx) }
@@ -125,7 +132,7 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
 
 /** A runTool result in the MCP `CallToolResult` shape. */
 export function toolResult(result) {
-  if (result.ok) return { content: [{ type: 'text', text: JSON.stringify(result.data) }] }
+  if (result.ok) return { content: [{ type: 'text', text: JSON.stringify(result.data ?? null) }] }
   return {
     isError: true,
     content: [{ type: 'text', text: JSON.stringify({ error: result.code, message: result.message }) }],
