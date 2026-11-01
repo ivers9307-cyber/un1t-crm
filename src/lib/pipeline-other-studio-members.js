@@ -45,7 +45,9 @@ export const ELSEWHERE_MEMBER = 'member'
 export const ELSEWHERE_TRAINING = 'training'
 
 /** The board's own customer stages: a person placed in one keeps it. */
-export const OWN_STUDIO_MEMBER_SLUGS = Object.freeze(['converted', 'member', 'pack_member'])
+// PIPE3.3 — the €39 Trial and Programmes boards' Converted columns are customer
+// stages here too: a person who joined through either board stays.
+export const OWN_STUDIO_MEMBER_SLUGS = Object.freeze(['converted', 'member', 'pack_member', 'paid_trial_converted', 'programme_converted'])
 
 /**
  * Does this person leave the board? Pure.

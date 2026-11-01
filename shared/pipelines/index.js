@@ -8,10 +8,16 @@
 
 import * as acquisition from './acquisition.js'
 import * as acquisitionUn1t from './acquisition-un1t.js'
+import * as paidTrial from './paid-trial.js'
+import * as programmes from './programmes.js'
 
 export const BOARD_MODULES = Object.freeze({
   acquisition,
   acquisition_un1t: acquisitionUn1t,
+  // PIPE3 — Stillorgan's two claim boards. Contacts-input (no inputSource):
+  // the router (./router.js) decides who they see.
+  paid_trial: paidTrial,
+  programmes,
 })
 
 export const PIPELINE_MODES = Object.freeze({ DERIVED: 'derived', MANUAL: 'manual' })

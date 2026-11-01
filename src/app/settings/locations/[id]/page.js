@@ -36,6 +36,7 @@ import SignatureLinksCard from '@/components/settings/SignatureLinksCard'
 import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
 import PayrollLieuCard from '@/components/settings/PayrollLieuCard'
+import ProgrammeBoardRulesCard from '@/components/settings/ProgrammeBoardRulesCard'
 import SendQuietHoursCard from '@/components/settings/SendQuietHoursCard'
 import EmailCopyCard from '@/components/settings/EmailCopyCard'
 import EmailSpamFilterCard from '@/components/settings/EmailSpamFilterCard'
@@ -229,6 +230,10 @@ export default async function EditLocationPage(props) {
           {/* LIEU.1 — the Sunday time-in-lieu multiplier
               (locations.settings.payroll.sunday_multiplier, default 4/3). */}
           <PayrollLieuCard locationId={location.id} />
+          {/* PIPE3.8 — the Programmes pipeline board's entry rules
+              (locations.settings.pipelines.programmes). Draws itself only at
+              a studio that has that board. */}
+          <ProgrammeBoardRulesCard locationId={location.id} />
         </>
       )}
 

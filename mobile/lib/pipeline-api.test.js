@@ -98,3 +98,26 @@ describe('moveDealToStage — missing ids', () => {
     expect(api).not.toHaveBeenCalled()
   })
 })
+
+// PIPE3.10 — the phone's pipeline tab shows EVERY board at the studio, so the
+// per-board stage read has to carry is_dormant (the Funnel / Off funnel split)
+// like the primary-board read always did.
+describe('listStagesForPipeline — the pipeline tab\'s per-board read (PIPE3.10)', () => {
+  it('selects is_dormant too, scoped to the board, live stages only, in board order', async () => {
+    const calls = []
+    const q = {
+      select: (cols) => { calls.push(['select', cols]); return q },
+      eq: (c, v) => { calls.push(['eq', c, v]); return q },
+      order: (c, o) => { calls.push(['order', c, o]); return Promise.resolve({ data: [{ id: 's1' }], error: null }) },
+    }
+    supabase.from.mockReturnValue(q)
+    const { listStagesForPipeline } = await import('./pipeline-api')
+    const res = await listStagesForPipeline('p-paid')
+    expect(res).toEqual({ success: true, data: [{ id: 's1' }] })
+    expect(supabase.from).toHaveBeenCalledWith('pipeline_stages')
+    expect(calls[0][1].split(/,\s*/)).toEqual(expect.arrayContaining(['id', 'name', 'slug', 'color', 'display_order', 'is_dormant']))
+    expect(calls).toContainEqual(['eq', 'pipeline_id', 'p-paid'])
+    expect(calls).toContainEqual(['eq', 'archived', false])
+    expect(calls.at(-1)).toEqual(['order', 'display_order', { ascending: true }])
+  })
+})

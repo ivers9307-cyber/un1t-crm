@@ -51,6 +51,9 @@ export default function PipelineViewSwitcher({
   pipelines = [],
   activePipelineKey = null,
   isManual = false,
+  // PIPE3.9 — a DERIVED board with no off-funnel stages (the €39 Trial and
+  // Programmes boards share the acquisition board's piles) has one view too.
+  hasDormant = true,
   view,
   activeCount,
   dormantCount,
@@ -103,7 +106,7 @@ export default function PipelineViewSwitcher({
         </div>
       )}
 
-      {!isManual && (
+      {!isManual && hasDormant && (
         <div className="border-b border-un1t-border flex items-center gap-1 mb-4">
           {VIEWS.map(({ id, label, Icon }) => {
             const on = view === id

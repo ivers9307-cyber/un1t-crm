@@ -37,7 +37,8 @@ const PipelineReclassifySchema = z.object({
   // HATCHPIPE.2 — preview a board that is still switched off (Hatch's
   // acquisition row before it is re-enabled), dry-run as acquisition_un1t.
   // Honoured ONLY with dry_run: a real run never classifies a disabled board.
-  include_disabled: z.array(z.literal('acquisition')).optional(),
+  // PIPE3 — and Stillorgan's two claim boards before mig 798 enables them.
+  include_disabled: z.array(z.enum(['acquisition', 'paid_trial', 'programmes'])).optional(),
   // HATCHPIPE.5 — instead of classifying, re-date the open deals on the
   // location's un1t.online boards from the un1t evidence (created_at,
   // stage_entered_at; no stage change). Dry-run it first. Needs an explicit

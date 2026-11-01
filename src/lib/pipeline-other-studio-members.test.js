@@ -96,7 +96,8 @@ describe('leavesBoard (pure)', () => {
   })
 
   it('a member of the board\'s own studio too keeps today\'s placement', () => {
-    expect(OWN_STUDIO_MEMBER_SLUGS).toEqual(['converted', 'member', 'pack_member'])
+    // PIPE3.3 widened the list with the two claim boards' Converted columns.
+    expect(OWN_STUDIO_MEMBER_SLUGS).toEqual(['converted', 'member', 'pack_member', 'paid_trial_converted', 'programme_converted'])
     for (const slug of OWN_STUDIO_MEMBER_SLUGS) expect(leavesBoard(slug, true)).toBe(false)
   })
 
@@ -317,5 +318,15 @@ describe('loadActiveElsewhere', () => {
       const out = await loadActiveElsewhere(db, HATCH)
       expect(out).toMatchObject({ ok: false, reason: 'groups_unreadable' })
     })
+  })
+})
+
+// PIPE3.3 — the two new boards' Converted columns are customer stages here too.
+describe('PIPE3 — leavesBoard keeps the €39 and Programmes converts', () => {
+  it('a person converted on the €39 or Programmes board is kept here', () => {
+    expect(leavesBoard('paid_trial_converted', true)).toBe(false)
+    expect(leavesBoard('programme_converted', true)).toBe(false)
+    expect(leavesBoard('paid_trial_day_7', true)).toBe(true)
+    expect(leavesBoard('programme_lead', true)).toBe(true)
   })
 })

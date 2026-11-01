@@ -193,3 +193,41 @@ describe('placeWaitlistEntry — best-effort', () => {
     await expect(placeWaitlistEntry(db, ARGS)).resolves.toBeUndefined()
   })
 })
+
+
+// PIPE3 fix pass (review #1) — a derived primary board at a studio where the
+// person's deal has moved to another board (the €39 Trial or Programmes board):
+// the open deal is found location-wide, so no second deal is opened on
+// acquisition and nothing collides with deals_one_open_per_contact_pipeline.
+describe('placeWaitlistEntry — the deal may sit on another board (PIPE3)', () => {
+  it('writes nothing on a derived board when the contact has an open deal on a different board', async () => {
+    // Filter-aware: a deals read scoped to the primary board finds nothing; a
+    // read scoped to the location finds the Programmes deal.
+    const inserted = []
+    const db = {
+      from(table) {
+        const filters = {}
+        const q = {
+          select: () => q,
+          order: () => q,
+          eq: (col, val) => { filters[col] = val; return q },
+          limit: () => {
+            if (table === 'pipelines') return Promise.resolve({ data: [{ id: 'p-acq', mode: 'derived' }], error: null })
+            if (table === 'pipeline_stages') return Promise.resolve({ data: [{ id: 'stage-entry', slug: 'new_lead' }], error: null })
+            if (table === 'deals') {
+              const row = { id: 'd-prog', stage_id: 's-programme_lead', pipeline_id: 'p-prog' }
+              if (filters.pipeline_id && filters.pipeline_id !== row.pipeline_id) return Promise.resolve({ data: [], error: null })
+              return Promise.resolve({ data: [row], error: null })
+            }
+            return Promise.resolve({ data: [], error: null })
+          },
+          insert: (row) => { inserted.push({ table, row }); return Promise.resolve({ data: null, error: null }) },
+          update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
+        }
+        return q
+      },
+    }
+    await placeWaitlistEntry(db, ARGS)
+    expect(inserted).toEqual([])
+  })
+})

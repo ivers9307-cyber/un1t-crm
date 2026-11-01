@@ -40,7 +40,7 @@ export const FIELD_GROUPS = Object.freeze([
 // names are explicit so ClassPass keeps its capitals and a retired slug that
 // is NOT in this map is detectable (see the saved-value warning below —
 // three live campaigns still carry `active_member`).
-const STAGE_LABELS = Object.freeze({
+export const STAGE_LABELS = Object.freeze({
   new_lead: 'New lead',
   first_class: 'First class',
   second_class: 'Second class',
@@ -51,6 +51,17 @@ const STAGE_LABELS = Object.freeze({
   classpass: 'ClassPass',
   cold_lead: 'Cold lead',
   dormant: 'Dormant',
+  // PIPE3 — the €39 Trial and Programmes boards (Stillorgan). A person on one
+  // of them carries its slug in pipeline_stage_slug (mig 736's fallback), so an
+  // audience can target "everyone at Day 7".
+  paid_trial_new_lead: '€39 trial: new lead',
+  paid_trial_first_class: '€39 trial: 1st class',
+  paid_trial_day_7: '€39 trial: day 7',
+  paid_trial_done: '€39 trial: done',
+  paid_trial_converted: '€39 trial: converted',
+  programme_lead: 'Programme: lead',
+  programme_first_class: 'Programme: 1st class done',
+  programme_converted: 'Programme: converted',
 })
 
 export const FIELD_OPTIONS = [

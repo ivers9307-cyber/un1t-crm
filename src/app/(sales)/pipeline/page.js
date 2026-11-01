@@ -98,8 +98,11 @@ export default async function PipelinePage(props) {
   const toBoard = boardDealMapper(boardCardOptionsForModule(activePipeline.module))
   // A manual board draws no view toggle, so it can only ever be the one view —
   // otherwise a bookmarked ?view=dormant would strand the operator on a screen
+  // PIPE3.9 — so does a derived board with no off-funnel stages (the €39 Trial
+  // and Programmes boards share the acquisition board's piles): hasDormant,
+  // decided after the stage read below, folds ?view=dormant back to active.
   // with no way back.
-  const view = manual ? 'active' : requestedView
+  let view = manual ? 'active' : requestedView
 
   // 1. Stages — this BOARD's stages, split between active vs dormant. Always
   //    exclude archived. We need BOTH counts (for the tab badges) so do two
@@ -114,6 +117,9 @@ export default async function PipelinePage(props) {
   // splitStagesByFunnel owns the is_dormant partition so the page and the
   // mobile screen can never disagree about which stage sits on which tab.
   const { funnel: activeStages, offFunnel: dormantStages } = splitStagesByFunnel(allStages || [])
+  // PIPE3.9 — a derived board with nothing off-funnel has one view (see above).
+  const hasDormant = manual || dormantStages.length > 0
+  if (!hasDormant && view === 'dormant') view = 'active'
   // A manual board's rows all carry is_dormant=false, so the concat IS
   // activeStages in practice — it is there so a stray is_dormant row can never
   // make a column vanish on a board that has no second view to find it in.
@@ -223,6 +229,7 @@ export default async function PipelinePage(props) {
         pipelines={pipelines}
         activePipelineKey={activePipeline.key}
         isManual={manual}
+        hasDormant={hasDormant}
         view={view}
         activeCount={activeCount || 0}
         dormantCount={dormantCount || 0}

@@ -13,6 +13,7 @@
 import { logWarn } from '@/lib/log'
 import {
   findOpenDealForPipeline,
+  findOpenDealAtLocation,
   findPrimaryPipeline,
   findEntryStageForPipeline,
 } from '@/lib/deal-lookup'
@@ -62,7 +63,15 @@ export async function placeWaitlistEntry(db, { contactId, locationId, title } = 
     const primary = await findPrimaryPipeline(db, locationId)
     if (!primary) return
 
-    const openDeal = await findOpenDealForPipeline(db, contactId, primary.id)
+    // PIPE3 — on a DERIVED primary the person's one deal may sit on another
+    // board at the studio (the €39 Trial or Programmes board, where the router
+    // moved it), so the check is location-wide: a second deal on acquisition
+    // would put them on two boards and collide with
+    // deals_one_open_per_contact_pipeline on the next move. A manual board
+    // keeps the per-board read its re-signup bump relies on.
+    const openDeal = primary.mode === 'manual'
+      ? await findOpenDealForPipeline(db, contactId, primary.id)
+      : await findOpenDealAtLocation(db, contactId, locationId)
 
     // Derived board, deal already open: today's behaviour exactly — leave it
     // to the classifier. Returning here also means the entry column is never

@@ -9,7 +9,9 @@ import ContactDrawer from './contact/ContactDrawer'
 // WAITLIST.1 — the waitlist_* rows are mig 597's manual board at Hatch Street.
 // Without them every waitlist column draws the fallback grey, which reads as
 // "unconfigured" on the one board where the columns are the whole product.
-const stageColors = {
+// PIPE3.9 — exported so pipeline-stage-maps.test.jsx can hold every board's
+// slugs to a colour; the two claim boards' entries mirror their module rows.
+export const stageColors = {
   new_lead:     '#3B82F6',
   first_class:  '#10B981',
   second_class: '#14B8A6',
@@ -26,6 +28,16 @@ const stageColors = {
   waitlist_interested:     '#10B981',
   waitlist_not_interested: '#52525B',
   waitlist_converted:      '#059669',
+  // PIPE3 — Stillorgan's €39 Trial board (shared/pipelines/paid-trial.js)
+  paid_trial_new_lead:     '#3B82F6',
+  paid_trial_first_class:  '#10B981',
+  paid_trial_day_7:        '#8B5CF6',
+  paid_trial_done:         '#F59E0B',
+  paid_trial_converted:    '#059669',
+  // PIPE3 — Stillorgan's Programmes board (shared/pipelines/programmes.js)
+  programme_lead:          '#3B82F6',
+  programme_first_class:   '#10B981',
+  programme_converted:     '#059669',
 }
 
 // Cards with no upcoming class sort first — that's the follow-up list; a booked

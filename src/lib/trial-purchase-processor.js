@@ -32,6 +32,7 @@ import { sendOpsAlert } from '@/lib/ops-alerts'
 import { sendTrialPurchaseEmail } from '@/lib/trial-purchase-emails'
 import { logError, logWarn } from '@/lib/log'
 import { escapeHtml } from '@/lib/html-escape'
+import { placeContactNow } from '@/lib/pipeline-place-now'
 
 /** PAIDTRIAL.4 — the body of every paid-trial plan purchase (see the call). */
 export const TRIAL_PURCHASE_BODY = Object.freeze({ payment_method: 'complimentary' })
@@ -215,6 +216,12 @@ export async function processTrialPurchase(db, row, { now = () => new Date().toI
     // A recorded grant on a re-run: finish the side effects only.
     try { await stamp(db, row.id, { status: 'granted', granted_at: prior.at || now(), glofox_member_id: memberId, last_error: null }) } catch (e) { logWarn('trial-purchase', 're-run stamp failed', { purchaseId: row.id, err: e }) }
   }
+
+  // PIPE3.7 — the buyer's card moves to the €39 Trial board now, not at
+  // tonight's run. Best-effort: the grant already landed.
+  try {
+    await placeContactNow(db, { locationId: row.location_id, contactId: contact.id })
+  } catch (e) { logWarn('trial-purchase', 'board placement failed', { purchaseId: row.id, err: e }) }
 
   // 6. side effects, independent and best-effort
   try { await sendTrialPurchaseEmail(db, { purchase: { ...row, glofox_member_id: memberId }, kind: 'granted' }) } catch (e) { logWarn('trial-purchase', 'confirmation email failed', { purchaseId: row.id, err: e }) }

@@ -394,7 +394,7 @@ describe('PIPELINES.3 — per-pipeline orchestration', () => {
  * audit close are replaced so the log is deterministic. SELECT filters apply
  * as in fakeDb (a filter on a column a fixture row lacks is ignored).
  */
-function recordingDb(fixtures = {}) {
+function recordingDb(fixtures = {}, { errors = {} } = {}) {
   const calls = []
   const norm = (v) => {
     if (v && typeof v === 'object' && !Array.isArray(v)) {
@@ -411,10 +411,11 @@ function recordingDb(fixtures = {}) {
     let op = 'select'
     const filters = []
     const c = {}
-    for (const m of ['select', 'eq', 'in', 'order', 'range', 'single', 'maybeSingle', 'limit', 'gte', 'update', 'insert']) {
+    for (const m of ['select', 'eq', 'in', 'order', 'range', 'single', 'maybeSingle', 'limit', 'gte', 'update', 'insert', 'upsert']) {
       c[m] = (...args) => {
         entry.push([m, ...args.map(norm)])
-        if (m === 'update' || m === 'insert') op = m
+        if (m === 'update' || m === 'insert' || m === 'upsert') op = m
+        if ((m === 'single' || m === 'maybeSingle') && op === 'select') op = 'single'
         if (m === 'eq') filters.push({ op: 'eq', col: args[0], val: args[1] })
         if (m === 'in') filters.push({ op: 'in', col: args[0], vals: args[1] })
         return c
@@ -425,17 +426,31 @@ function recordingDb(fixtures = {}) {
       return f.op === 'in' ? f.vals.includes(row[f.col]) : row[f.col] === f.val
     }))
     c.then = (resolve) => {
+      // PIPE3 — a table named in `errors` fails every read, like a 500.
+      if (errors[table] && op !== 'insert' && op !== 'update' && op !== 'upsert') {
+        return resolve({ data: null, error: { message: errors[table] } })
+      }
       if (op === 'insert') {
         return resolve({ data: table === 'pipeline_classification_runs' ? { id: 'run-1' } : null, error: null })
       }
-      if (op === 'update') return resolve({ data: null, error: null })
-      return resolve({ data: applyFilters(fixtures[table] || []), error: null })
+      // An UPDATE … .select('id') answers the ids it matched, as PostgREST does
+      // (PIPE3: the duplicate-deal and leave-board closes count those rows).
+      if (op === 'update' && entry.some((x) => Array.isArray(x) && x[0] === 'select')) {
+        const inF = filters.find((f) => f.op === 'in' && f.col === 'id')
+        const eqF = filters.find((f) => f.op === 'eq' && f.col === 'id')
+        const ids = inF ? inF.vals : (eqF ? [eqF.val] : [])
+        return resolve({ data: ids.map((id) => ({ id })), error: null })
+      }
+      if (op === 'update' || op === 'upsert') return resolve({ data: null, error: null })
+      const rows = applyFilters(fixtures[table] || [])
+      if (op === 'single') return resolve({ data: rows[0] ?? null, error: null })
+      return resolve({ data: rows, error: null })
     }
     return c
   }
   const db = { from: (t) => chain(t) }
   const tables = () => calls.map((e) => e[0])
-  const writesTo = (table) => calls.filter((e) => e[0] === table && e.some((x) => Array.isArray(x) && (x[0] === 'update' || x[0] === 'insert')))
+  const writesTo = (table) => calls.filter((e) => e[0] === table && e.some((x) => Array.isArray(x) && (x[0] === 'update' || x[0] === 'insert' || x[0] === 'upsert')))
   const argOf = (entry, method) => entry.find((x) => Array.isArray(x) && x[0] === method)
   return { db, calls, tables, writesTo, argOf }
 }
@@ -482,7 +497,8 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
         ['select', 'id, name, email, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, last_attended_at, total_attended_7d, total_attended_30d, last_payment_at, joined_at, created_at, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, gympass_member_id, last_lead_source_at'],
         ['eq', 'location_id', 'loc-st'], ['order', 'id', { ascending: true }], ['range', 0, 999]],
       ['deals',
-        ['select', 'id, contact_id, stage_id'],
+        // PIPE3 — pipeline_id joined the read (a cross-board move must know the board it leaves).
+        ['select', 'id, contact_id, stage_id, pipeline_id'],
         ['eq', 'location_id', 'loc-st'], ['eq', 'status', 'open'], ['in', 'pipeline_id', ['p-acq']],
         ['order', 'id', { ascending: true }], ['range', 0, 999]],
       ['deals', ['update', { stage_id: 's-dormant' }], ['in', 'id', ['d-1']]],
@@ -1407,5 +1423,190 @@ describe('TDSEQ.1 — un1t board moves fire the stage-change trigger at the boar
     const out = await reclassifyAllContacts(rec.db, { locationId: 'loc-1' })
     expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1 })
     expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// PIPE3 — three boards at one location (Stillorgan): the router places each
+// contact on ONE of acquisition / paid_trial / programmes, a deal follows the
+// person across boards, claims are recorded on real runs, and an unreadable
+// claims read stops the run instead of moving every buyer back.
+// ---------------------------------------------------------------------------
+describe('PIPE3 — three boards at one location', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+
+  const STILL = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const RULES = { lead_sources: ['meta_50plus'], glofox_plan_patterns: ['elites trial'] }
+  const THREE = [
+    { id: 'p-acq', location_id: STILL, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', location_id: STILL, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+    { id: 'p-prog', location_id: STILL, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES3 = [
+    ...['new_lead', 'first_class', 'second_class', 'trial_done', 'converted', 'member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant']
+      .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL })),
+    ...['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
+      .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid', location_id: STILL })),
+    ...['programme_lead', 'programme_first_class', 'programme_converted']
+      .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog', location_id: STILL })),
+  ]
+  // The €39 buyer as prod held them on 2026-10-31: trial status, 10 credits,
+  // pack-stamped minutes after the grant, filed in pack_member.
+  const CONTACTS3 = [
+    { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', trial_credits_remaining: 10, pack_customer_at: ago(2), joined_at: ago(2), created_at: ago(2), recent_bookings: [], last_lead_source: 'meta_trial', last_lead_source_at: ago(2) },
+    { id: 'c-fifty', name: 'Fifty', email: null, glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [], last_lead_source: 'meta_50plus', last_lead_source_at: ago(1), glofox_membership_plan: 'The Elites Trial' },
+    { id: 'c-plain', name: 'Plain', email: null, glofox_membership_status: 'lead', joined_at: ago(2), created_at: ago(2), recent_bookings: [] },
+  ]
+  const DEALS3 = [
+    { id: 'd-buyer', contact_id: 'c-buyer', stage_id: 's-pack_member', pipeline_id: 'p-acq', location_id: STILL, status: 'open' },
+    { id: 'd-plain', contact_id: 'c-plain', stage_id: 's-new_lead', pipeline_id: 'p-acq', location_id: STILL, status: 'open' },
+  ]
+  const PURCHASES = [
+    { id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14 },
+  ]
+  const LOCATIONS = [{ id: STILL, settings: { pipelines: { programmes: RULES } } }]
+  const fixtures = (over = {}) => ({
+    pipelines: THREE, pipeline_stages: STAGES3, contacts: CONTACTS3, deals: DEALS3,
+    trial_purchases: PURCHASES, pipeline_board_claims: [], locations: LOCATIONS, ...over,
+  })
+
+  it('a real run: the buyer\'s deal moves to the €39 board (stage AND pipeline in one update), the 50+ lead gets a recorded claim and a Programmes deal, the plain lead is unchanged', async () => {
+    const { db, calls, writesTo, argOf } = recordingDb(fixtures())
+    const out = await reclassifyAllContacts(db, { locationId: STILL, source: 'cron' })
+
+    // The deals read carries pipeline_id (a cross-board move must know the board it leaves).
+    const dealsRead = calls.find((e) => e[0] === 'deals' && argOf(e, 'select'))
+    expect(argOf(dealsRead, 'select')[1]).toBe('id, contact_id, stage_id, pipeline_id')
+
+    // Claim recorded BEFORE the deal writes.
+    const claimWrites = writesTo('pipeline_board_claims')
+    expect(claimWrites).toHaveLength(1)
+    const upsert = argOf(claimWrites[0], 'upsert')
+    expect(upsert[1]).toHaveLength(1)
+    expect(upsert[1][0]).toMatchObject({ contact_id: 'c-fifty', location_id: STILL, board_key: 'programmes', source: 'lead_source' })
+    expect(upsert[2]).toEqual({ onConflict: 'contact_id,location_id,board_key' })
+    const firstDealWrite = calls.findIndex((e) => e[0] === 'deals' && (argOf(e, 'update') || argOf(e, 'insert')))
+    expect(calls.indexOf(claimWrites[0])).toBeLessThan(firstDealWrite)
+
+    const updates = writesTo('deals').filter((e) => argOf(e, 'update'))
+    expect(updates).toHaveLength(1)
+    expect(argOf(updates[0], 'update')[1]).toEqual({ stage_id: 's-paid_trial_new_lead', pipeline_id: 'p-paid' })
+    expect(argOf(updates[0], 'in')).toEqual(['in', 'id', ['d-buyer']])
+
+    const inserts = writesTo('deals').filter((e) => argOf(e, 'insert'))
+    expect(inserts).toHaveLength(1)
+    expect(argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-fifty', stage_id: 's-programme_lead', pipeline_id: 'p-prog', location_id: STILL, status: 'open' })
+
+    expect(out).toMatchObject({
+      ok: true, input_source: 'contacts', contacts_seen: 3, deals_moved: 1, deals_created: 1, deals_unchanged: 1, boards_moved: 1, errors: 0,
+      movement_matrix: { pack_member: { paid_trial_new_lead: 1 }, '': { programme_lead: 1 } },
+    })
+    expect(out.pipelines_skipped).toEqual([])
+  })
+
+  it('a dry run writes nothing and reports the board histogram and the pending claims', async () => {
+    const { db, calls } = recordingDb(fixtures())
+    const out = await reclassifyAllContacts(db, { locationId: STILL, dryRun: true })
+    expect(calls.filter((e) => e.some((x) => Array.isArray(x) && ['update', 'insert', 'upsert'].includes(x[0])))).toHaveLength(0)
+    expect(out).toMatchObject({
+      ok: true, deals_moved: 1, deals_created: 1, deals_unchanged: 1, boards_moved: 1, claims_pending: 1,
+      board_histogram: { acquisition: 1, paid_trial: 1, programmes: 1 },
+      stage_histogram: { new_lead: 1, paid_trial_new_lead: 1, programme_lead: 1 },
+    })
+  })
+
+  it('a same-board move still writes stage_id alone (today\'s payload), and a stored claim is not re-written', async () => {
+    const { db, writesTo, argOf } = recordingDb(fixtures({
+      deals: [{ id: 'd-fifty', contact_id: 'c-fifty', stage_id: 's-programme_first_class', pipeline_id: 'p-prog', location_id: STILL, status: 'open' }],
+      contacts: [CONTACTS3[1]],
+      pipeline_board_claims: [{ contact_id: 'c-fifty', location_id: STILL, board_key: 'programmes', claimed_at: ago(1), source: 'lead_source' }],
+      trial_purchases: [],
+    }))
+    const out = await reclassifyAllContacts(db, { locationId: STILL })
+    expect(writesTo('pipeline_board_claims')).toHaveLength(0)
+    const updates = writesTo('deals').filter((e) => argOf(e, 'update'))
+    expect(updates).toHaveLength(1)
+    expect(argOf(updates[0], 'update')[1]).toEqual({ stage_id: 's-programme_lead' })
+    expect(out).toMatchObject({ deals_moved: 1, boards_moved: 0 })
+  })
+
+  it('an unreadable trial_purchases read fails the run: audit row failed, no deal written, nobody moved back', async () => {
+    const { db, writesTo, argOf } = recordingDb(fixtures(), { errors: { trial_purchases: 'tp down' } })
+    const out = await reclassifyAllContacts(db, { locationId: STILL })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/claims unavailable: purchases_unreadable/)
+    expect(writesTo('deals')).toHaveLength(0)
+    expect(writesTo('pipeline_board_claims')).toHaveLength(0)
+    const close = writesTo('pipeline_classification_runs').find((e) => argOf(e, 'update'))
+    expect(argOf(close, 'update')[1]).toMatchObject({ status: 'failed', error_message: 'claims unavailable: purchases_unreadable' })
+  })
+
+  it('an unreadable settings read fails the run the same way', async () => {
+    const { db, writesTo } = recordingDb(fixtures(), { errors: { locations: 'settings down' } })
+    const out = await reclassifyAllContacts(db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: false, error: 'claims unavailable: settings_unreadable' })
+    expect(writesTo('deals')).toHaveLength(0)
+  })
+
+  it('a location with the acquisition board alone never reads trial_purchases, claims or settings', async () => {
+    const { db, tables } = recordingDb(fixtures({ pipelines: [THREE[0]], deals: DEALS3 }))
+    await reclassifyAllContacts(db, { locationId: STILL })
+    expect(tables()).not.toContain('trial_purchases')
+    expect(tables()).not.toContain('pipeline_board_claims')
+    expect(tables()).not.toContain('locations')
+  })
+
+  it('includeDisabled dry-runs a disabled claim board as its OWN module (paid_trial), not acquisition_un1t', async () => {
+    const disabled = THREE.map((p) => (p.key === 'paid_trial' ? { ...p, enabled: false } : p))
+    const { db, calls, argOf } = recordingDb(fixtures({ pipelines: disabled }))
+    const out = await reclassifyAllContacts(db, { locationId: STILL, dryRun: true, includeDisabled: ['paid_trial'] })
+    const pipelineCalls = calls.filter((e) => e[0] === 'pipelines')
+    expect(pipelineCalls).toHaveLength(2)
+    expect(argOf(pipelineCalls[1], 'in')).toEqual(['in', 'key', ['paid_trial']])
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', board_histogram: { acquisition: 1, paid_trial: 1, programmes: 1 } })
+  })
+})
+
+
+// PIPE3 fix pass (review #1, #4) — a contact holding two open deals at the
+// studio: the deal on the target board is the one moved, the surplus is closed
+// 'lost' and counted, so a person is never on two boards.
+describe('PIPE3 — a contact with two open deals', () => {
+  const STILL = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const THREE = [
+    { id: 'p-acq', location_id: STILL, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', location_id: STILL, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+    { id: 'p-prog', location_id: STILL, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES3 = [
+    ...['new_lead', 'pack_member', 'dormant'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL })),
+    ...['paid_trial_new_lead', 'paid_trial_day_7'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid', location_id: STILL })),
+    ...['programme_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog', location_id: STILL })),
+  ]
+  it('keeps the target-board deal, moves it stage-only, closes the surplus lost, and counts it', async () => {
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: THREE, pipeline_stages: STAGES3,
+      contacts: [{ id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', trial_credits_remaining: 10, joined_at: ago(2), created_at: ago(2), recent_bookings: [] }],
+      deals: [
+        { id: 'd-acq', contact_id: 'c-buyer', stage_id: 's-pack_member', pipeline_id: 'p-acq', location_id: STILL, status: 'open' },
+        { id: 'd-paid', contact_id: 'c-buyer', stage_id: 's-paid_trial_day_7', pipeline_id: 'p-paid', location_id: STILL, status: 'open' },
+      ],
+      trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14 }],
+      pipeline_board_claims: [], locations: [{ id: STILL, settings: {} }],
+    })
+    const out = await reclassifyAllContacts(db, { locationId: STILL })
+    const updates = writesTo('deals').filter((e) => argOf(e, 'update'))
+    const move = updates.find((e) => argOf(e, 'update')[1].stage_id)
+    expect(argOf(move, 'update')[1]).toEqual({ stage_id: 's-paid_trial_new_lead' })
+    expect(argOf(move, 'in')).toEqual(['in', 'id', ['d-paid']])
+    const close = updates.find((e) => argOf(e, 'update')[1].status === 'lost')
+    expect(argOf(close, 'in')).toEqual(['in', 'id', ['d-acq']])
+    expect(out).toMatchObject({ deals_moved: 1, boards_moved: 0, duplicate_deals_closed: 1 })
   })
 })

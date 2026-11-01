@@ -143,10 +143,13 @@ export async function getPipeline(pipelineId) {
 // findEntryStageForPipeline: mig 239 archived nine legacy stages that
 // still sit at display_order 1..9, and an unfiltered list would offer
 // dead columns.
+// PIPE3.10 — the pipeline tab reads THIS board's stages through here when the
+// studio runs several boards (Stillorgan's Acquisition / €39 Trial /
+// Programmes), so is_dormant rides along for the Funnel / Off funnel split.
 export async function listStagesForPipeline(pipelineId) {
   if (!pipelineId) return { success: false, error: 'Missing pipeline' }
   const { data, error } = await supabase.from('pipeline_stages')
-    .select('id, name, slug, color, display_order')
+    .select('id, name, slug, color, display_order, is_dormant')
     .eq('pipeline_id', pipelineId)
     .eq('archived', false)
     .order('display_order', { ascending: true })
