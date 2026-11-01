@@ -64,6 +64,8 @@ export default defineTool({
     const { data, error } = await db.from('class_occurrences')
       .select('id, glofox_event_id, name, program, starts_at, ends_at, capacity, instructor, source_platform')
       .eq('location_id', studio.id)
+      // The sync stamps cancelled_at on a class that vanished from the platform or went inactive.
+      .is('cancelled_at', null)
       .gte('starts_at', from)
       .lt('starts_at', to)
       .order('starts_at', { ascending: true })

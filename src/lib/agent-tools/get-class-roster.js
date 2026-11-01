@@ -38,6 +38,8 @@ export default defineTool({
       .select('id, location_id, glofox_event_id, name, starts_at')
       .eq('id', input.occurrence_id)
       .in('location_id', readable)
+      // A class the sync marked cancelled is not on the timetable get_classes lists: not_found.
+      .is('cancelled_at', null)
       .maybeSingle()
     if (error) throw new Error(`Failed to load the class: ${error.message}`)
     if (!occurrence) throw new ToolRefusal('not_found', NOT_FOUND)

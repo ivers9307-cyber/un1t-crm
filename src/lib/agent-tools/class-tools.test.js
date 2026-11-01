@@ -55,7 +55,7 @@ function makeDb(tables = {}) {
         return t ?? { data: [], error: null }
       }
       const b = {}
-      for (const m of ['select', 'insert', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'or', 'order', 'limit', 'range']) {
+      for (const m of ['select', 'insert', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'or', 'order', 'limit', 'range', 'is']) {
         b[m] = (...args) => { q.calls.push([m, ...args]); return b }
       }
       b.maybeSingle = async () => answer()
@@ -111,6 +111,23 @@ describe('get_classes', () => {
     expect(argOf(bq, 'in', 'glofox_event_id')[2]).toEqual(['e1', 'e2'])
   })
 
+  it('get_classes hides a class the sync marked cancelled', async () => {
+    const row = (id, cancelled_at) => ({
+      id, glofox_event_id: `e-${id}`, name: id, program: null, starts_at: '2031-07-15T07:00:00Z', ends_at: '2031-07-15T08:00:00Z',
+      capacity: 10, instructor: null, source_platform: 'glofox', cancelled_at,
+    })
+    // The stand-in honours the filter the way PostgREST would.
+    const { db, on } = makeDb({
+      class_occurrences: (q) => {
+        const live = Boolean(argOf(q, 'is', 'cancelled_at', null))
+        return { data: [row('live', null), row('gone', '2031-07-10T00:00:00Z')].filter((r) => !live || r.cancelled_at === null), error: null }
+      },
+    })
+    const r = await run(getClasses, { date: '2031-07-15' }, 'staff', db)
+    expect(r.data.classes.map((c) => c.id)).toEqual(['live'])
+    expect(argOf(on('class_occurrences')[0], 'is', 'cancelled_at', null)).toBeDefined()
+  })
+
   it('get_classes refuses more than 14 days', async () => {
     const { db, on } = makeDb()
     const r = await run(getClasses, { start: '2031-07-01', end: '2031-07-20' }, 'staff', db)
@@ -148,6 +165,7 @@ describe('get_class_roster', () => {
     expect(r2).toMatchObject({ ok: false, code: 'not_found' })
     expect(r2.message).toBe(r1.message)
     expect(argOf(on('class_occurrences')[0], 'in', 'location_id')[2]).toEqual([DUB])
+    expect(argOf(on('class_occurrences')[0], 'is', 'cancelled_at', null)).toBeDefined()
     expect(on('class_bookings')).toHaveLength(0)
 
     // No Contacts at the resolved studio: no studio is readable at all, so no read.
