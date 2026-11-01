@@ -292,6 +292,19 @@ describe('MCP.1 — OAuth-issued tokens', () => {
     expect(admitted(res)).toBe(true)
   })
 
+  it('does not extend the exemption to same-stem siblings of /api/mcp', async () => {
+    for (const path of ['/api/mcp-admin', '/api/mcpfoo']) {
+      const res = await proxy(makeReq({ path }))
+      expect(admitted(res)).toBe(false)
+    }
+  })
+
+  it('admits /api/mcp/<child> and an OAuth token sent TO /api/mcp (public check runs before the Bearer gate)', async () => {
+    expect(admitted(await proxy(makeReq({ path: '/api/mcp/sse' })))).toBe(true)
+    const res = await proxy(makeReq({ path: '/api/mcp', method: 'POST', token: mkJwt({ sub: 'u1', client_id: 'c1' }) }))
+    expect(admitted(res)).toBe(true)
+  })
+
   it('still admits a session JWT on an ordinary /api route', async () => {
     ssrClient.auth.getUser.mockResolvedValueOnce({ data: { user: { id: 'u1' } } })
     const res = await proxy(makeReq({ path: '/api/bookings', token: mkJwt({ sub: 'u1' }) }))

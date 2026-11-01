@@ -265,12 +265,7 @@ export async function proxy(request) {
   // reschedule) from the {{manage_url}} link in booking confirmation and
   // reminder emails; the signed token in the path is its only credential.
   // Already under '/book/', listed on its own for the same reason.
-  // /api/mcp — MCP.1. The staff MCP server. An MCP client arrives with no
-  // session, and the route must answer its own 401 + WWW-Authenticate
-  // challenge (the OAuth discovery hint) rather than a 307 to /login. It
-  // verifies the OAuth-issued bearer itself; the same token is refused on
-  // every other /api path by the Bearer gate below.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/', '/api/mcp']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/']
 
   // Public paths matched EXACTLY (or as a parent segment), not as a bare
   // prefix — for entries where a same-stem sibling route must NOT inherit the
@@ -305,7 +300,14 @@ export async function proxy(request) {
   // minted on the CRM host (getAppUrl), so AppShell, brands and tenant-domains
   // do not list it: on a brand host it SHOULD fall back
   // (src/calendar-feed-path.test.js pins both directions).
-  const publicExactPaths = ['/api/mobile/review-login', '/api/calendar-feed']
+  //
+  // /api/mcp — MCP.1. The staff MCP server. An MCP client arrives with no
+  // session, and the route must answer its own 401 + WWW-Authenticate
+  // challenge (the OAuth discovery hint) rather than a 307 to /login. It
+  // verifies the OAuth-issued bearer itself; the same token is refused on
+  // every other /api path by the Bearer gate below. Segment-matched, so a
+  // same-stem sibling (/api/mcp-admin, /api/mcpfoo) is NOT public.
+  const publicExactPaths = ['/api/mobile/review-login', '/api/calendar-feed', '/api/mcp']
 
   const pathname = request.nextUrl.pathname
   const isPublic =
