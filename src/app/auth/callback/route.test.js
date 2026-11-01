@@ -26,6 +26,12 @@ describe('GET /auth/callback', () => {
     expect(loc(res)).toBe('https://crm.test/dashboard')
   })
 
+  it('keeps the query string of next (MCP.1: the OAuth consent page needs ?authorization_id)', async () => {
+    const next = encodeURIComponent('/oauth/consent?authorization_id=abc-123')
+    const res = await GET(req(`code=abc123&next=${next}`))
+    expect(loc(res)).toBe('https://crm.test/oauth/consent?authorization_id=abc-123')
+  })
+
   it('defaults next to /', async () => {
     const res = await GET(req('code=abc123'))
     expect(loc(res)).toBe('https://crm.test/')

@@ -128,6 +128,8 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
     '/fee-appeal/',
     // UN1TDUN.1 — the short pay link in a un1t.online payment reminder:
     '/pay-link/',
+    // MCP.1 — the Supabase OAuth consent page an MCP client sends a person to:
+    '/oauth/consent',
   ]),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',

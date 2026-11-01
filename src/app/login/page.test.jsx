@@ -270,6 +270,46 @@ describe('/login — wordmark (W1.S2)', () => {
   })
 })
 
+describe('/login — an explicit ?redirect survives sign-in (MCP.1: /oauth/consent?authorization_id=…)', () => {
+  const CONSENT = '/oauth/consent?authorization_id=abc-123'
+
+  it('password sign-in pushes the full path, query string included', async () => {
+    auth.signInWithPassword.mockResolvedValue({ error: null })
+    accountState = 'active'
+    search = `redirect=${encodeURIComponent(CONSENT)}`
+    render(<LoginPage />)
+    await usePassword()
+    await waitFor(() => expect(push).toHaveBeenCalledWith(CONSENT))
+  })
+
+  it('the emailed login link carries the redirect as ?next=', async () => {
+    search = `redirect=${encodeURIComponent(CONSENT)}`
+    render(<LoginPage />)
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })
+    fireEvent.click(screen.getByText('Email me a login link'))
+    await waitFor(() => expect(auth.signInWithOtp).toHaveBeenCalled())
+    const { options } = auth.signInWithOtp.mock.calls[0][0]
+    expect(options.emailRedirectTo).toBe(`${window.location.origin}/auth/callback?next=${encodeURIComponent(CONSENT)}`)
+  })
+
+  it('with no redirect the emailed link keeps the bare callback URL', async () => {
+    render(<LoginPage />)
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })
+    fireEvent.click(screen.getByText('Email me a login link'))
+    await waitFor(() => expect(auth.signInWithOtp).toHaveBeenCalled())
+    expect(auth.signInWithOtp.mock.calls[0][0].options.emailRedirectTo).toBe(`${window.location.origin}/auth/callback`)
+  })
+
+  it('an off-origin redirect is dropped before it reaches the emailed link', async () => {
+    search = `redirect=${encodeURIComponent('//evil.com')}`
+    render(<LoginPage />)
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })
+    fireEvent.click(screen.getByText('Email me a login link'))
+    await waitFor(() => expect(auth.signInWithOtp).toHaveBeenCalled())
+    expect(auth.signInWithOtp.mock.calls[0][0].options.emailRedirectTo).toBe(`${window.location.origin}/auth/callback`)
+  })
+})
+
 describe('copy', () => {
   it('is calm, tells them what to do, and carries no em-dash', () => {
     expect(DEACTIVATED_MESSAGE).toBe('This account has been deactivated. Ask an owner to reactivate it.')

@@ -126,7 +126,13 @@ function LoginInner() {
         email,
         options: {
           shouldCreateUser: false,
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          // MCP.1 — carry an explicit ?redirect through the emailed link
+          // (/auth/callback honours ?next=, itself sanitised), or the OAuth
+          // consent page would be lost on the way back from the inbox. No
+          // redirect keeps the bare, already-allowlisted callback URL.
+          emailRedirectTo: `${window.location.origin}/auth/callback${
+            redirect === '/' ? '' : `?next=${encodeURIComponent(redirect)}`
+          }`,
         },
       })
       logAuthEvent({ action: 'auth.magic_link_requested', email })
