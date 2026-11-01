@@ -105,6 +105,18 @@ const MANIFEST = Object.freeze({
     kind: 'data-writing',
     reason: "PIPEEXCL.2: loadActiveElsewhere reads contact_id + status of the OTHER studios' bookings in a 60-day / 30-day window (both platforms: a Hatch trialer must leave Stillorgan's board) to decide whether an acquisition deal leaves this board (status lost) or is withheld; it sends nothing and credits nothing, and carries no class, time or platform anywhere.",
   },
+  'src/lib/agent-tools/get-classes.js': {
+    kind: 'display',
+    reason: "MCP.1: get_classes counts booked and waitlisted per class for a staff member's AI client (status and glofox_event_id only, scoped to the studio). A un1t.online row counts as a booking like any other and the class's platform is surfaced in the answer; it sends nothing, credits nothing and reminds nobody.",
+  },
+  'src/lib/agent-tools/get-class-roster.js': {
+    kind: 'display',
+    reason: "MCP.1: get_class_roster lists who is booked into one class for a staff member with Class roster and Contacts at that studio. A un1t.online booking is meant to show (as on /live); the row's status is surfaced as is. It sends nothing, credits nothing and reminds nobody.",
+  },
+  'src/lib/agent-tools/get-contact.js': {
+    kind: 'display',
+    reason: "MCP.1: get_contact shows a contact's recent class bookings to a staff member's AI client (the contact page's list). A un1t.online booking shows like a Glofox one with its status; it sends nothing, credits nothing and reminds nobody.",
+  },
   'sql:public.campaign_outcome_stats': {
     kind: 'display',
     reason: 'Audit row 10: the campaign outcomes RPC (mig 513, re-created by mig 737 with a case-correct CANCELLED filter) behind the staff /api/campaigns/[id]/outcomes report.',

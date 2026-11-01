@@ -299,6 +299,10 @@ registry.registerComponent('securitySchemes', 'BridgeAuth', {
 // Path registrations — high-traffic / external-facing routes
 // ============================================================================
 
+// MCP.1 — /api/mcp (the staff MCP server) is a JSON-RPC endpoint speaking the
+// Model Context Protocol, authenticated by a Supabase OAuth token. It is
+// deliberately NOT registered here; see docs/architecture/INTEGRATIONS.md.
+
 // Public booking
 registry.registerPath({
   method: 'post',
@@ -6190,6 +6194,47 @@ registry.registerPath({
   },
 })
 
+// MCP.1 — the organisation switch for the staff MCP server (org_settings.mcp_enabled, mig 801)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/org-mcp',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff MCP server: the organisation switch, connector URL and 30-day usage (organisation admins only)',
+  description: 'Returns { organization_id, mcp_enabled, connector_url, people_30d } where people_30d is the count of distinct staff who made an MCP tool call for the organisation in the last 30 days. An organisation with no org_settings row yet is off. Organisation admins only (a master, or an org_admin grant); ?organization_id targets another organisation the caller administers (a master: any), else the active one.',
+  responses: {
+    200: { description: 'Switch state' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/settings/org-mcp',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Switch the staff MCP server on or off for an organisation (organisation admins only)',
+  description: 'Upserts org_settings.mcp_enabled (default off) and stamps updated_by for the audit trigger. /api/mcp refuses an organisation whose switch is off.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional(),
+            enabled: z.boolean(),
+          }).openapi('OrgMcpSwitch'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: '{ mcp_enabled }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — organisation admins only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // MIAORG.1 Task 4 — Mia's organisation defaults (org_settings.customer_agent, mig 729)
 registry.registerPath({
   method: 'get',
@@ -10630,6 +10675,25 @@ registry.registerPath({
     200: { description: '{ revoked }', content: { 'application/json': { schema: SuccessResponse(z.object({ revoked: z.boolean() })) } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Viewing as someone else', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/account/connected-apps',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "The caller's own usage of each connected MCP app, last 7 days",
+  description: "From mcp_tool_calls, the caller's own rows only. The grant list itself is read and revoked in the browser through supabase.auth.oauth.",
+  responses: {
+    200: {
+      description: 'Per OAuth client',
+      content: { 'application/json': { schema: SuccessResponse(z.object({
+        clients: z.array(z.object({ client_id: z.string(), last_used_at: z.string(), calls_7d: z.number().int() })),
+      })) } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read usage', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

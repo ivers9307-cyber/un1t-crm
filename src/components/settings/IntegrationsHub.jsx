@@ -54,6 +54,7 @@ import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
 import { buttonClasses } from '@/components/ui'
 import IntegrationsHubDrawer from './IntegrationsHubDrawer'
 import XeroCallbackNotice from './XeroCallbackNotice'
+import AgentAccessCard from './AgentAccessCard'
 import { HUB_PATH, hubViewHref } from '@/lib/integrations-hub-links'
 import { SECRET_MASK } from '@/lib/secret-keys'
 
@@ -989,6 +990,13 @@ export default function IntegrationsHub({
           </div>
           )}
         </HubCard>
+
+        {/* MCP.1 — Agent access: the organisation's MCP switch, one card per
+            organisation the viewer administers (managedOrgs). Page-supplied
+            `mcp` is undefined for a caller that did not load it: no card. */}
+        {numberOrgs.filter((o) => o.mcp !== undefined).map((o) => (
+          <AgentAccessCard key={`agent-access-${o.id}`} organization={o} mcp={o.mcp} canManage />
+        ))}
 
         {/* Instagram */}
         <HubCard

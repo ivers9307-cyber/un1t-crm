@@ -104,6 +104,10 @@ const COMPLIANCE_PATHS = [
     why: 'CANCEL-FORM.3: per-contact membership cancellation form link sent by email/WhatsApp; must render without a session on every host, incl. the marketing host when the operator builds links there',
   },
   {
+    path: '/oauth/consent',
+    why: 'MCP.1: Supabase OAuth server sends the person here (Authorization Path) from an MCP client such as claude.ai; they may have no session yet, and /login must be reachable from it, on every host',
+  },
+  {
     path: '/legal/un1t/hatch-street/terms',
     why: 'UN1TWRITE.17: the un1t.online terms and waiver the class funnel tick links to; a customer must read them before accepting, on every host',
   },
@@ -981,5 +985,47 @@ describe('page slugs are public from the database', () => {
       pathnameImpl = path
       expect(renderToStaticMarkup(<AppShell user={null} isPublicPage={false} publicPageSlugs={['stillorgan', 'settings']}><p>page-body</p></AppShell>), path).toBe('')
     }
+  })
+})
+
+// ── MCP.1 — /oauth/consent, in all FOUR lists ────────────────────────
+//
+// The COMPLIANCE_PATHS row above exercises the proxy, the marketing brand and
+// AppShell end to end. These pin what a behavioural test can miss: the
+// tenant-domain tier (only reachable through a tenant_domains row), the
+// query string Supabase appends (?authorization_id=…), and the segment-aware
+// shape (a lookalike must not become public).
+
+describe('MCP.1 — /oauth/consent is public on every tier', () => {
+  beforeEach(() => {
+    tenantBrandImpl = async (hostname) =>
+      hostname && hostname.split(':')[0] === TENANT_HOST
+        ? { id: `tenant:${TENANT_HOST}`, hostnames: [TENANT_HOST], ...DB_BRAND_DEFAULTS }
+        : null
+  })
+
+  it('the un1t-marketing brand and the tenant-domain defaults both list it', () => {
+    expect(marketingBrand().allowedPaths).toContain('/oauth/consent')
+    expect(DB_BRAND_DEFAULTS.allowedPaths).toContain('/oauth/consent')
+  })
+
+  it('the CRM host admits it with the authorization_id query attached', async () => {
+    const req = makeReq({ host: CRM_HOST, path: '/oauth/consent' })
+    req.nextUrl.search = '?authorization_id=abc'
+    expect(admitted(await proxy(req))).toBe(true)
+  })
+
+  it('a tenant-domain host serves it instead of rewriting to /welcome', async () => {
+    const res = await proxy(makeReq({ host: TENANT_HOST, path: '/oauth/consent' }))
+    expect(rewrittenTo(res)).toBe(null)
+    expect(admitted(res)).toBe(true)
+  })
+
+  it('AppShell does not treat a lookalike path as public', () => {
+    pathnameImpl = '/oauth/consentless'
+    const html = renderToStaticMarkup(
+      <AppShell user={null}><p>page-body</p></AppShell>
+    )
+    expect(html).toBe('')
   })
 })

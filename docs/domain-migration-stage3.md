@@ -403,6 +403,7 @@ ships dark until `ZOOM_*` is set — `src/lib/settings-tree.js:290`.)
      reset-password PKCE lesson.)
   3. **Do not touch signups** — Supabase signups stay OFF (load-bearing
      security invariant).
+- **MCP.1 depends on this item** (staff MCP server, `docs/architecture/INTEGRATIONS.md` § Staff MCP server): the OAuth consent flow's emailed sign-in links via the Site URL, so it must be moved first, and **Additional Redirect URLs** must also admit `https://crm.repset.ie/auth/callback**` (the flow appends `?next=`). Richard ticks this in the dashboard; not ticked here.
 - **Verification:** trigger a staff password reset; the email link lands on
   `crm.repset.ie/reset-password` and completes. A legacy-host login/reset still
   works afterwards.

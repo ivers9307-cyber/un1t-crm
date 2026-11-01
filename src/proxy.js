@@ -10,6 +10,7 @@ import {
   PUBLIC_PAGE_HEADER,
 } from '@/lib/public-pages-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
+import { jwtClientId } from '@/lib/oauth-token-edge'
 import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
 import { decideLegacyHostRedirect } from '@/lib/legacy-host-redirect'
 import { decideStaffWebLock, STUDIO_SESSION_COOKIE } from '@/lib/staff-web-lock'
@@ -239,6 +240,11 @@ export async function proxy(request) {
   // `${baseUrl}/race/<slug>/confirmed`. So the audience is a customer in
   // WhatsApp and a payer coming back from a card form — neither can ever
   // have a session.
+  // /oauth/consent — MCP.1. Supabase's OAuth server (Authorization Path) sends
+  // a person here from an MCP client (Claude, Claude Code) with
+  // ?authorization_id=…. They may have no session yet: the page itself sends
+  // them to /login?redirect=<this path> and back, so the gate must let the
+  // first hit through. The page approves nothing on its own.
   // /pay-link/ — UN1TDUN.1. The short pay link in a un1t.online payment
   // reminder (WhatsApp URL button). The member has no session; the random
   // token in the path is the only credential, and the page only redirects to
@@ -264,7 +270,7 @@ export async function proxy(request) {
   // reschedule) from the {{manage_url}} link in booking confirmation and
   // reminder emails; the signed token in the path is its only credential.
   // Already under '/book/', listed on its own for the same reason.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/book/manage/', '/event/', '/event/entry/', '/event-pay/', '/race/', '/race-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/view-email/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/offers', '/.well-known/', '/privacy', '/terms', '/legal/', '/technical', '/account-deletion', '/givers', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/', '/use-the-app', '/cancel/', '/pay-done/', '/fee-appeal/', '/pay-link/', '/oauth/consent']
 
   // Public paths matched EXACTLY (or as a parent segment), not as a bare
   // prefix — for entries where a same-stem sibling route must NOT inherit the
@@ -299,7 +305,14 @@ export async function proxy(request) {
   // minted on the CRM host (getAppUrl), so AppShell, brands and tenant-domains
   // do not list it: on a brand host it SHOULD fall back
   // (src/calendar-feed-path.test.js pins both directions).
-  const publicExactPaths = ['/api/mobile/review-login', '/api/calendar-feed']
+  //
+  // /api/mcp — MCP.1. The staff MCP server. An MCP client arrives with no
+  // session, and the route must answer its own 401 + WWW-Authenticate
+  // challenge (the OAuth discovery hint) rather than a 307 to /login. It
+  // verifies the OAuth-issued bearer itself; the same token is refused on
+  // every other /api path by the Bearer gate below. Segment-matched, so a
+  // same-stem sibling (/api/mcp-admin, /api/mcpfoo) is NOT public.
+  const publicExactPaths = ['/api/mobile/review-login', '/api/calendar-feed', '/api/mcp']
 
   const pathname = request.nextUrl.pathname
   const isPublic =
@@ -370,6 +383,13 @@ export async function proxy(request) {
         // Unknown/revoked per-org key. A `unitk_` token is never a valid
         // Supabase JWT — skip Path 2's network round-trip and fall through
         // to the cookie gate below (which rejects keyless callers).
+      } else if (jwtClientId(token)) {
+        // MCP.1: an OAuth-issued token (payload carries `client_id`) opens
+        // /api/mcp ONLY, and /api/mcp is a public path so it never reaches
+        // this branch. Everywhere else it is refused: skip getUser() and fall
+        // through to the cookie gate, which rejects a keyless caller. An OAuth
+        // token is scoped to the MCP server; honouring it here would let a
+        // connector client call any session-authenticated route.
       } else {
         // Path 2: Supabase JWT (mobile app). Use a stripped client (no
         // cookies) since the JWT is the source of truth. If the token is

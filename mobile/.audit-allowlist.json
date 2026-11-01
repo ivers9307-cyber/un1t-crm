@@ -43,7 +43,19 @@
     "(stringToTokens > cleanupTokens > groupTextTokens > omitListItemParagraph > tokensToAST) gives the same AST on 10.0.0 and",
     "14.3.3 for a contract-shaped fixture (only `sourceInfo` on ordered items differs, which no render rule reads), and Metro",
     "bundles 14's index.mjs. zod GHSA-mrhx-c7xc-m3w5 is accepted below: only the copy nested under expo/@expo/cli is vulnerable",
-    "(the app's own zod is 4.6.7), and no @expo/cli release, up to 58.1.15, declares anything but zod ^3.25.76."
+    "(the app's own zod is 4.6.7), and no @expo/cli release, up to 58.1.15, declares anything but zod ^3.25.76.",
+    "",
+    "DEPAUDIT.8 (2026-11-01, on the MCP.1 branch #2275, which touches nothing under mobile/: these advisories were published",
+    "after main's last green audit). FIVE more node-forge ids (TLS record DoS x2, PEM ReDoS, PKCS#12 MAC forgery, X.509",
+    "basicConstraints bypass) on the same single copy, same code paths and same bundle absence as GHSA-86w9-cpqp-85rv. A patched",
+    "release NOW EXISTS (1.4.1 and 1.4.2, 27 Oct 2026; both parents declare ^1.3.3, so `cd mobile && npm update node-forge",
+    "--package-lock-only` moves it, verified 1 Nov). It is still accepted rather than bumped for the brace-expansion reason:",
+    "mobile/package-lock.json is an OTA publish path. Take the bump with the next native release and delete all six entries.",
+    "decode-uri-component GHSA-qr28-fpjm-wq7f is the one RUNTIME-reachable accept here: expo-router@57 > query-string@7.1.3",
+    "(pins ^0.2.2) parses the query string of a deep link opened on the phone. The patched 0.5.1 is ESM-only (type: module,",
+    "default export) while query-string 7 does require('decode-uri-component')() — an override would make every route parse",
+    "call an object and crash the router at launch (the linkify-it 6.x white-screen class). npm's only fix is expo-router 58,",
+    "an Expo SDK bump. Re-decide with the SDK 58 upgrade."
   ],
   "accepted": [
     {
@@ -81,6 +93,42 @@
       "package": "zod",
       "reason": "Dev-server only, first-party input only, and not in the shipped app. The vulnerable copy is zod 3.25.76 at node_modules/expo/node_modules/zod, required only by expo > @expo/cli (declares ^3.25.76; so does every @expo/cli up to 58.1.15, and zod has no patched 3.x, so neither `npm update` nor an override to 4.x, whose root export is a different API, is open). @expo/cli uses it in three files under build/src/start/server, all run by `expo start` on a developer's machine: DevToolsPlugin.js validates the dev-tools plugin manifests of packages installed in our own node_modules, DevToolsPluginCliExtensionResults.js validates the stdout of those plugins' own CLI commands, and createMCPDevToolsExtensionSchema.js builds the schema for the local MCP dev-tools bridge. None of it runs in a build, an export or on a phone: a local `expo export --platform ios --source-maps` (2689 modules, 25 Oct 2026) contains no module under expo/node_modules/zod; the 94 zod modules in it are the app's own root zod 4.6.7, which is patched. Worst case is our own dev server running out of memory on a manifest we installed. The app's direct zod dependency stays on ^4.6.7, outside the vulnerable range.",
       "expires": "2027-01-15"
+    },
+    {
+      "id": "GHSA-7wch-p9px-956x",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, not in the shipped bundle: the same single node-forge 1.4.0 copy and code paths as GHSA-86w9-cpqp-85rv (expo > @expo/cli dev-server manifest signing of the developer's OWN key, and expo-updates > @expo/code-signing-certificates imported only by expo-updates/cli; a local `expo export` lists neither module). Variant: ReDoS in pem.decode; the only PEM decoded is our own dev certificate on the developer's machine. A patched 1.4.2 exists and both parents admit it; the bump waits for the next native release because mobile/package-lock.json publishes an OTA (DEPAUDIT.8).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-jc66-7q78-782g",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, not in the shipped bundle: the same single node-forge 1.4.0 copy and code paths as GHSA-86w9-cpqp-85rv (expo > @expo/cli dev-server manifest signing of the developer's OWN key, and expo-updates > @expo/code-signing-certificates imported only by expo-updates/cli; a local `expo export` lists neither module). Variant: PKCS#12 MAC forgery / constant-key PBE via a zero iteration count; nothing here opens a PKCS#12 file from anyone else. A patched 1.4.2 exists and both parents admit it; the bump waits for the next native release because mobile/package-lock.json publishes an OTA (DEPAUDIT.8).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-8hrf-8g6f-7xwp",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, not in the shipped bundle: the same single node-forge 1.4.0 copy and code paths as GHSA-86w9-cpqp-85rv (expo > @expo/cli dev-server manifest signing of the developer's OWN key, and expo-updates > @expo/code-signing-certificates imported only by expo-updates/cli; a local `expo export` lists neither module). Variant: DoS in TLS record processing; node-forge's TLS stack is never used, the dev server and the app speak TLS through Node and the OS. A patched 1.4.2 exists and both parents admit it; the bump waits for the next native release because mobile/package-lock.json publishes an OTA (DEPAUDIT.8).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-hqq3-7jhf-c5jx",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, not in the shipped bundle: the same single node-forge 1.4.0 copy and code paths as GHSA-86w9-cpqp-85rv (expo > @expo/cli dev-server manifest signing of the developer's OWN key, and expo-updates > @expo/code-signing-certificates imported only by expo-updates/cli; a local `expo export` lists neither module). Variant: DoS in TLS record processing via call stack exhaustion; node-forge's TLS is not used anywhere in these paths. A patched 1.4.2 exists and both parents admit it; the bump waits for the next native release because mobile/package-lock.json publishes an OTA (DEPAUDIT.8).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-5x38-2vff-x55p",
+      "package": "node-forge",
+      "reason": "Build-time/CLI only, not in the shipped bundle: the same single node-forge 1.4.0 copy and code paths as GHSA-86w9-cpqp-85rv (expo > @expo/cli dev-server manifest signing of the developer's OWN key, and expo-updates > @expo/code-signing-certificates imported only by expo-updates/cli; a local `expo export` lists neither module). Variant: X.509 basicConstraints bypass in verifyCertificateChain; the only chain verified is the self-signed dev certificate against our own key pair. A patched 1.4.2 exists and both parents admit it; the bump waits for the next native release because mobile/package-lock.json publishes an OTA (DEPAUDIT.8).",
+      "expires": "2026-12-15"
+    },
+    {
+      "id": "GHSA-qr28-fpjm-wq7f",
+      "package": "decode-uri-component",
+      "reason": "Runtime-reachable, but only through the device's own deep links: expo-router@57 > query-string@7.1.3 (pins ^0.2.2) parses the query string of a URL the phone was asked to open, so the exponential/quadratic percent-decoding DoS can at worst hang that person's own app on a URL they opened; no server and no other user is affected. Not fixable without a crash: the patched 0.5.1 is ESM-only (type: module, default export) and query-string 7 calls require('decode-uri-component') as a function, so an override would break every route parse at launch (the linkify-it 6.x white-screen class). npm's fix is expo-router 58 (semver-major, an Expo SDK bump), which is its own PR; re-decide with the SDK 58 upgrade.",
+      "expires": "2027-01-31"
     }
   ]
 }

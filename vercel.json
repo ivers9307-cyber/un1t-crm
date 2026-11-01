@@ -232,6 +232,7 @@
     { "path": "/api/cron/purge-spam-mail", "schedule": "15 3 * * *" },
     { "path": "/api/cron/purge-webhook-payloads", "schedule": "45 3 * * *" },
     { "path": "/api/cron/purge-glofox-webhook-events", "schedule": "5 4 * * *" },
+    { "path": "/api/cron/purge-mcp-tool-calls", "schedule": "35 4 * * *" },
     { "path": "/api/cron/sweep-car-document-orphans", "schedule": "25 4 * * *" },
     { "path": "/api/cron/mia-purchase-intents", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/lieu-credits", "schedule": "40 3 * * *" },

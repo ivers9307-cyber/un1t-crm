@@ -86,6 +86,7 @@ const REDIRECT_ONLY = {
 // guarded like any public segment below (no staff tab helper).
 const PUBLIC_BY_PAGE_ROWS = {
   '(public)': 'the one public page route, /<slug> rendered from a landing_pages row',
+  oauth: 'MCP.1: one public page, /oauth/consent, listed in AppShell PUBLIC_PATHS as a two-segment path (so not in the derived top-level set): the consent screen that Supabase OAuth sends an MCP client\'s user to',
 }
 
 // ── derive the public set from the allowlist that already decides it ──

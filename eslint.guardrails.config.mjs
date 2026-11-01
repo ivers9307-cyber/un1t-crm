@@ -190,6 +190,9 @@ const config = [
     //    the same one, with the same default: never trade a possible duplicate
     //    for a certain silent loss.
     files: [
+      // MCP.1 — the staff MCP server and its agent tools: born clean, and a
+      // tool that writes must never answer an agent "done" on a failed write.
+      'src/lib/mcp/**', 'src/lib/agent-tools/**',
       // CORPPROMO.1 — the /corp claim path: every write checked from day one.
       'src/lib/corp-promo-*.js', 'src/app/api/public/corp-claims/**', 'src/app/api/corp-promo-claims/**',
       'src/lib/campaign-sender.js',

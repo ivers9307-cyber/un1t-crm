@@ -120,6 +120,7 @@ const REVIEWED = {
   'src/components/ScheduleCalendar.jsx': 'renders week-cost rows, fetched only with canSeeContract (owner/manager/master at the studio)',
   'src/components/ScheduleReporting.jsx': 'renders the utilisation report, admin-only (RATE_REPORT_TYPES)',
   'src/components/StaffForm.jsx': 'the staff editor: owner at the person\'s studio, or master',
+  'src/lib/agent-tools/_staff-report.js': 'MCP.1: reads the column only to derive an hourly rate inside staffCostReport, whose tool (staff_cost_report) is gated to ADMIN_ROLES (owner, manager, master) at the resolved studio; the column itself is never returned, and staff_hours_report calls the pay-free function',
   'src/lib/assistant-prompt.js': 'prompt text only',
   'src/lib/candidates-data.js': 'reads contracts only when withContract (ADMIN_ROLES at the block\'s studio)',
   'src/lib/contracts.js': 'contract template variables, issued by owner/master',

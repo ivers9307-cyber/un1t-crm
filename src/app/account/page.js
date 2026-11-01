@@ -23,10 +23,25 @@ import EmailSignatureForm from '@/components/EmailSignatureForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
 import CalendarFeedCard from '@/components/CalendarFeedCard'
+import ConnectedAppsCard from '@/components/ConnectedAppsCard'
+import { connectorUrl } from '@/lib/mcp/connector-url'
+import { logError } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { viewerZoneOf } from '@/lib/display-zone'
 
 export const dynamic = 'force-dynamic'
+
+// connectorUrl() throws when NEXT_PUBLIC_APP_URL is unset (no silent env
+// fallback). A missing URL must not take the whole Account page down: the
+// card just omits the address.
+function safeConnectorUrl() {
+  try {
+    return connectorUrl()
+  } catch (error) {
+    logError('account', 'connector url unavailable', { error })
+    return null
+  }
+}
 
 export default async function AccountPage() {
   const user = await getCurrentUser()
@@ -110,6 +125,10 @@ export default async function AccountPage() {
 
       <div className="mt-8">
         <CalendarFeedCard timezone={viewerZoneOf(user)} />
+      </div>
+
+      <div className="mt-8">
+        <ConnectedAppsCard connectorUrl={safeConnectorUrl()} timezone={viewerZoneOf(user)} />
       </div>
 
       <div className="mt-8 pt-6 border-t border-un1t-border">

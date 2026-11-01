@@ -78,7 +78,7 @@ import UsageTracker from './UsageTracker'
 // list, which is raw startsWith and therefore keeps one).
 // BOOKINGSELF.1 — '/book/manage': the customer's own booking page (cancel,
 // reschedule); covered by '/book', listed so the flow survives a narrowing.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done', '/fee-appeal', '/pay-link']
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/offers', '/deposit', '/book', '/book/manage', '/event', '/event/entry', '/event-pay', '/race', '/race-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/view-email', '/privacy', '/terms', '/legal', '/technical', '/account-deletion', '/embed', '/givers', '/use-the-app', '/cancel', '/pay-done', '/fee-appeal', '/pay-link', '/oauth/consent']
 
 // PAGES.1 — `isPublicPage` is the proxy's x-public-page header, read ONCE by
 // the root layout, so it is stale after a soft navigation (a <Link> from an
