@@ -21,6 +21,17 @@ const CAPABILITIES = [
   'Act as you: it sees and does no more than you can, and you can disconnect it any time from your Account page.',
 ]
 
+// Dynamic client registration lets anyone register a client called "Claude"
+// with their own redirect URI, so the name alone proves nothing: show where
+// the browser will be sent. A missing or unparseable URI shows the name alone.
+function redirectHost(uri) {
+  try {
+    return new URL(uri).host || null
+  } catch {
+    return null
+  }
+}
+
 /**
  * @param {object} props
  * @param {string} props.authorizationId
@@ -114,6 +125,9 @@ export default function OAuthConsentForm({ authorizationId, eligibility, personN
     <Card className="w-full max-w-md" title="Connect an app">
       <p className="text-sm text-un1t-text">
         <span className="font-semibold">{details.client?.name || 'An app'}</span>
+        {redirectHost(details.redirect_uri) && (
+          <span className="text-un1t-muted"> ({redirectHost(details.redirect_uri)})</span>
+        )}
         {' '}wants to connect to your account{personName ? <> as {personName}</> : null}.
       </p>
       <p className="mt-3 text-sm text-un1t-muted">If you approve, it can:</p>

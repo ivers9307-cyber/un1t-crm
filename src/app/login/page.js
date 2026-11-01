@@ -126,12 +126,15 @@ function LoginInner() {
         email,
         options: {
           shouldCreateUser: false,
-          // MCP.1 — carry an explicit ?redirect through the emailed link
-          // (/auth/callback honours ?next=, itself sanitised), or the OAuth
-          // consent page would be lost on the way back from the inbox. No
-          // redirect keeps the bare, already-allowlisted callback URL.
+          // MCP.1 — carry the redirect through the emailed link ONLY for the
+          // OAuth consent flow (/auth/callback honours ?next=, itself
+          // sanitised), or the consent page would be lost on the way back
+          // from the inbox. Every other sign-in keeps the bare callback URL:
+          // GoTrue glob-matches the whole emailRedirectTo, query included,
+          // against the dashboard redirect allowlist and falls back to the
+          // Site URL on a miss, so a query must not reach ordinary logins.
           emailRedirectTo: `${window.location.origin}/auth/callback${
-            redirect === '/' ? '' : `?next=${encodeURIComponent(redirect)}`
+            redirect.startsWith('/oauth/consent') ? `?next=${encodeURIComponent(redirect)}` : ''
           }`,
         },
       })

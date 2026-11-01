@@ -292,6 +292,15 @@ describe('/login — an explicit ?redirect survives sign-in (MCP.1: /oauth/conse
     expect(options.emailRedirectTo).toBe(`${window.location.origin}/auth/callback?next=${encodeURIComponent(CONSENT)}`)
   })
 
+  it('an ordinary redirect (/contacts) keeps the bare callback URL: no query reaches the allowlist match', async () => {
+    search = `redirect=${encodeURIComponent('/contacts?tab=all')}`
+    render(<LoginPage />)
+    fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })
+    fireEvent.click(screen.getByText('Email me a login link'))
+    await waitFor(() => expect(auth.signInWithOtp).toHaveBeenCalled())
+    expect(auth.signInWithOtp.mock.calls[0][0].options.emailRedirectTo).toBe(`${window.location.origin}/auth/callback`)
+  })
+
   it('with no redirect the emailed link keeps the bare callback URL', async () => {
     render(<LoginPage />)
     fireEvent.change(screen.getByPlaceholderText('you@un1t.ie'), { target: { value: 'coach@example.test' } })

@@ -117,6 +117,23 @@ describe('OAuthConsentForm', () => {
     expect(oauth.approveAuthorization).not.toHaveBeenCalled()
   })
 
+  it('shows the redirect host beside the client name', async () => {
+    form()
+    await screen.findByText('Claude')
+    expect(screen.getByText('(claude.ai)')).toBeTruthy()
+  })
+
+  it('falls back to the name alone when redirect_uri is missing or unparseable', async () => {
+    for (const redirect_uri of [undefined, 'not a url']) {
+      cleanup()
+      oauth.getAuthorizationDetails.mockResolvedValue({ data: { ...DETAILS, redirect_uri }, error: null })
+      form()
+      await screen.findByText('Claude')
+      expect(screen.queryByText(/\(.*\)/)).toBe(null)
+      expect(screen.getByRole('button', { name: /approve/i })).toBeTruthy()
+    }
+  })
+
   it('every button has type="button"', async () => {
     form()
     await screen.findByText('Claude')
