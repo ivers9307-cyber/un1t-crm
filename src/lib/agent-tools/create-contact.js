@@ -5,14 +5,15 @@
 //
 // A contact's email is unique per organisation (contacts_email_org_unique,
 // mig 712). On that violation the existing contact is read by email among
-// the contacts homed at this organisation's studios where the person holds
-// Contacts, and returned as `{ existing: true, contact }`; one homed anywhere
+// the contacts homed at this organisation's studios the person may read
+// through MCP (readableContactStudios), and returned as `{ existing: true, contact }`; one homed anywhere
 // else is a `conflict` that names no one (a contact is never shown to someone
 // who cannot read it, _contact-scope.js).
 
 import { z } from 'zod'
 import { defineTool, ToolRefusal } from './registry.js'
 import { isAdminAt } from '@/lib/mcp/context'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { readableContactStudios } from './_contact-scope.js'
 
@@ -24,7 +25,7 @@ export default defineTool({
   description: 'Create a contact at the studio (a new lead). This writes to the CRM and can start automations '
     + '(Glofox lead creation, welcome sequences): confirm the details with the user first and never retry on your own. '
     + 'If someone in the organisation already has that email the call returns them with existing: true and creates '
-    + 'nothing. For owners and managers.',
+    + 'nothing. For owners and managers with the Contacts permission.',
   inputSchema: z.object({
     studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
     name: z.string().trim().min(1).max(200).describe('Full name.'),
@@ -32,7 +33,7 @@ export default defineTool({
     phone: z.string().trim().max(50).optional().describe('Phone number.'),
     lead_source: z.string().trim().min(1).max(100).optional().describe('Where the lead came from; "other" when omitted.'),
   }),
-  gate: (user, studioId) => isAdminAt(user, studioId),
+  gate: (user, studioId) => isAdminAt(user, studioId) && hasPermissionForLocation(user, studioId, 'contacts'),
   writes: true,
   run: async (input, ctx) => {
     const { db, user, studio } = ctx
@@ -46,8 +47,7 @@ export default defineTool({
     const { data, error } = await db.from('contacts').insert(record).select(RETURN_COLUMNS).single()
 
     if (error?.code === '23505') {
-      const orgIds = new Set((user.locations || []).filter((l) => l.organization_id === studio.organization_id).map((l) => l.id))
-      const orgStudioIds = readableContactStudios(user).filter((id) => orgIds.has(id))
+      const orgStudioIds = readableContactStudios(user, ctx)
       // Case-insensitive equality: contacts keep the email as entered.
       const { data: existing, error: lookupError } = await db.from('contacts')
         .select(RETURN_COLUMNS)
@@ -64,7 +64,7 @@ export default defineTool({
     // AUTOMATIONS: glofox_lead_provisioning, as for an assistant-created lead.
     try {
       const { maybeProvisionLeadInGlofox } = await import('@/lib/automations/glofox-lead-provisioning')
-      await maybeProvisionLeadInGlofox({ db, locationId: studio.id, contact: { ...data, lead_source: record.lead_source }, source: 'assistant' })
+      await maybeProvisionLeadInGlofox({ db, locationId: studio.id, contact: { ...data, phone: record.phone, lead_source: record.lead_source }, source: 'assistant' })
       const { triggerSequencesForContactCreated } = await import('@/lib/sequences/triggers')
       await triggerSequencesForContactCreated(data.id)
     } catch { /* hook never throws */ }

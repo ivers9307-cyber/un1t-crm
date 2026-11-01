@@ -8,14 +8,32 @@
 // row there, any status (a Glofox sibling-studio contact is attached that
 // way, never moved). An unknown contact and an unreadable one get the same
 // answer (null → the tool's `not_found`), so a contact id cannot be probed.
+//
+// Through MCP the studios that count are narrower than the person's Contacts
+// studios: only those in the resolved studio's organisation, whose
+// organisation has MCP switched on, where the person holds the AI Assistant
+// permission as well as Contacts. Otherwise a call resolved at a studio of
+// organisation A would read past organisation B's switch, or past a studio
+// where the assistant is off.
 
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { studiosOfContact } from '@/lib/contact-studios'
 
-/** The ids of the person's studios where they hold Contacts. */
-export function readableContactStudios(user) {
+/**
+ * The ids of the person's studios a tool call may read contacts at: in the
+ * resolved studio's organisation, that organisation's MCP switch on, and the
+ * person holding `assistant` AND `contacts` there.
+ *
+ * @param {object} user getCurrentUser() result
+ * @param {{ studio: { organization_id: string }, enabledOrgIds: string[] }} ctx the tool call's context
+ */
+export function readableContactStudios(user, ctx) {
+  const orgId = ctx?.studio?.organization_id
+  if (!orgId || !(ctx.enabledOrgIds || []).includes(orgId)) return []
   return (user?.locations || [])
-    .filter((l) => l?.id && hasPermissionForLocation(user, l.id, 'contacts'))
+    .filter((l) => l?.id && l.organization_id === orgId
+      && hasPermissionForLocation(user, l.id, 'assistant')
+      && hasPermissionForLocation(user, l.id, 'contacts'))
     .map((l) => l.id)
 }
 
@@ -26,8 +44,8 @@ export function readableContactStudios(user) {
  *
  * @returns {Promise<string | null>}
  */
-export async function contactReadableAt(db, user, contactId) {
-  const readable = readableContactStudios(user)
+export async function contactReadableAt(db, user, contactId, ctx) {
+  const readable = readableContactStudios(user, ctx)
   if (!contactId || readable.length === 0) return null
 
   const { data: contact, error } = await db.from('contacts')

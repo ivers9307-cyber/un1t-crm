@@ -23,14 +23,26 @@ const C1 = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1e01'
 const C2 = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1e02'
 const NOW_MS = Date.UTC(2031, 10, 1, 12, 0, 0)
 
+// Same organisation as DUB, Assistant and Contacts both on: readable from DUB.
+const SIB = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a03'
+// Same organisation, Contacts on but the AI Assistant off: not readable through MCP.
+const NOAST = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a04'
+// Another organisation whose MCP switch is off: not readable through MCP.
+const ORG2 = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a05'
+
 /**
- * A person at DUB (the default studio) and HATCH, same organisation.
- * `perms` are the per-user web overrides at DUB; HATCH never holds Contacts.
+ * A person at DUB (the default studio), HATCH, SIB and NOAST (organisation
+ * org-1, MCP on) and ORG2 (org-2, MCP off). `perms` are the per-user web
+ * overrides at DUB; HATCH never holds Contacts.
  */
 function auth(role = 'manager', perms = {}) {
+  const loc = (id, name, organization_id) => ({ id, name, timezone: 'Europe/Dublin', organization_id })
   const locations = [
-    { id: DUB, name: 'Dublin Studio', timezone: 'Europe/Dublin', organization_id: 'org-1' },
-    { id: HATCH, name: 'Hatch Street', timezone: 'Europe/Dublin', organization_id: 'org-1' },
+    loc(DUB, 'Dublin Studio', 'org-1'),
+    loc(HATCH, 'Hatch Street', 'org-1'),
+    loc(SIB, 'Sibling Studio', 'org-1'),
+    loc(NOAST, 'No Assistant', 'org-1'),
+    loc(ORG2, 'Other Org Studio', 'org-2'),
   ]
   return {
     token: 't',
@@ -44,10 +56,13 @@ function auth(role = 'manager', perms = {}) {
         isMaster: false,
         locations,
         activeLocation: locations[0],
-        rolesByLocation: { [DUB]: role, [HATCH]: role },
+        rolesByLocation: Object.fromEntries(locations.map((l) => [l.id, role])),
         assignmentsByLocation: {
           [DUB]: { role, permissions: { assistant: true, ...perms } },
           [HATCH]: { role, permissions: { assistant: true, contacts: false } },
+          [SIB]: { role, permissions: { assistant: true, contacts: true } },
+          [NOAST]: { role, permissions: { assistant: false, contacts: true } },
+          [ORG2]: { role, permissions: { assistant: true, contacts: true } },
         },
       },
       enabledOrgIds: ['org-1'],
@@ -146,6 +161,29 @@ describe('get_contact', () => {
     // Nothing about the contact was read past the readability check.
     expect(hatch.on('notes')).toHaveLength(0)
     expect(hatch.on('deals')).toHaveLength(0)
+  })
+
+  it('get_contact reads only through studios of this organisation with MCP, Assistant and Contacts on', async () => {
+    const homedAt = (loc) => makeDb({
+      contacts: (q) => (used(q, 'select', 'id, location_id')
+        ? { data: { id: C1, location_id: loc }, error: null }
+        : { data: { id: C1, name: 'Jo', email: 'jo@x.ie', phone: null, lead_source: 'web', pipeline_stage_slug: null, created_at: '2031-01-01T00:00:00Z' }, error: null }),
+    })
+    const missing = await run(getContact, { contact_id: C2 }, 'manager', makeDb({ contacts: { data: null, error: null } }).db)
+    expect(missing).toMatchObject({ ok: false, code: 'not_found' })
+
+    // A studio of an organisation whose MCP switch is off: same answer as a missing contact.
+    studiosOfContact.mockResolvedValue({ ok: true, rows: [{ contact_id: C1, location_id: ORG2, kind: 'lead', status: 'active' }] })
+    expect(await run(getContact, { contact_id: C1 }, 'manager', homedAt(ORG2).db)).toEqual(missing)
+    // A studio where the AI Assistant is off.
+    studiosOfContact.mockResolvedValue({ ok: true, rows: [{ contact_id: C1, location_id: NOAST, kind: 'lead', status: 'active' }] })
+    expect(await run(getContact, { contact_id: C1 }, 'manager', homedAt(NOAST).db)).toEqual(missing)
+    // A sibling studio of the same organisation with both on: readable.
+    studiosOfContact.mockResolvedValue({ ok: true, rows: [{ contact_id: C1, location_id: SIB, kind: 'lead', status: 'active', source: 'manual', membership_status: null }] })
+    const sib = await run(getContact, { contact_id: C1 }, 'manager', homedAt(SIB).db)
+    expect(sib.ok).toBe(true)
+    expect(sib.data.contact.id).toBe(C1)
+    expect(sib.data.studios.map((r) => r.location_id)).toEqual([SIB])
   })
 
   it('get_contact timeline is capped at 20 and carries no message bodies', async () => {
@@ -267,8 +305,9 @@ describe('create_contact', () => {
     expect(r).toEqual({ ok: true, data: { existing: true, contact: existing } })
     const lookup = on('contacts')[1]
     expect(used(lookup, 'ilike', 'email', 'a\\_b@x.ie')).toBe(true)
-    // Only the org's studios where the person holds Contacts (not HATCH).
-    expect(argOf(lookup, 'in')).toEqual(['in', 'location_id', [DUB]])
+    // Only the studios readable through MCP: DUB and SIB (not HATCH: no Contacts;
+    // not NOAST: no Assistant; not ORG2: another organisation, MCP off).
+    expect(argOf(lookup, 'in')).toEqual(['in', 'location_id', [DUB, SIB]])
     expect(maybeProvisionLeadInGlofox).not.toHaveBeenCalled()
     expect(triggerSequencesForContactCreated).not.toHaveBeenCalled()
 
@@ -285,16 +324,24 @@ describe('create_contact', () => {
   it('stamps the studio on the new row and runs both hooks; staff are refused', async () => {
     const row = { id: C1, name: 'Jo', email: 'jo@x.ie', location_id: DUB }
     const { db, on } = makeDb({ contacts: { data: row, error: null } })
-    const r = await run(createContact, { name: 'Jo', email: 'jo@x.ie' }, 'manager', db)
+    const r = await run(createContact, { name: 'Jo', email: 'jo@x.ie', phone: '+353871234567' }, 'manager', db)
     expect(r).toEqual({ ok: true, data: { existing: false, contact: row } })
-    expect(argOf(on('contacts')[0], 'insert')[1]).toEqual({ name: 'Jo', email: 'jo@x.ie', phone: null, lead_source: 'other', location_id: DUB })
+    expect(argOf(on('contacts')[0], 'insert')[1]).toEqual({ name: 'Jo', email: 'jo@x.ie', phone: '+353871234567', lead_source: 'other', location_id: DUB })
     expect(argOf(on('contacts')[0], 'select')[1]).toBe('id, name, email, location_id')
-    expect(maybeProvisionLeadInGlofox).toHaveBeenCalledWith(expect.objectContaining({ db, locationId: DUB, source: 'assistant' }))
+    // The hook gets the phone (Glofox's phone-match check) though the insert returns no phone column.
+    expect(maybeProvisionLeadInGlofox).toHaveBeenCalledWith(expect.objectContaining({
+      db, locationId: DUB, source: 'assistant',
+      contact: expect.objectContaining({ id: C1, phone: '+353871234567', lead_source: 'other' }),
+    }))
     expect(triggerSequencesForContactCreated).toHaveBeenCalledWith(C1)
 
     const staff = makeDb()
     expect(await run(createContact, { name: 'Jo', email: 'jo@x.ie' }, 'staff', staff.db)).toMatchObject({ ok: false, code: 'forbidden' })
     expect(staff.on('contacts')).toHaveLength(0)
+    // An owner without Contacts at the studio.
+    const owner = makeDb()
+    expect(await run(createContact, { name: 'Jo', email: 'jo@x.ie' }, 'owner', owner.db, { contacts: false })).toMatchObject({ ok: false, code: 'forbidden' })
+    expect(owner.on('contacts')).toHaveLength(0)
   })
 })
 
@@ -319,11 +366,34 @@ describe('create_activity', () => {
     expect(r).toEqual({ ok: true, data: { success: true, activity: { id: 'act1', subject: 'Call Jo', type: 'call', due_date: '2031-11-03' } } })
     expect(argOf(ok.on('activities')[0], 'insert')[1]).toMatchObject({
       subject: 'Call Jo', type: 'call', contact_id: C1, location_id: DUB, due_date: '2031-11-03', note: null, done: false,
+      assignee_id: ME, kind: 'task', status: 'todo', source: 'crm',
     })
 
     // A contact the person cannot read: not_found, nothing written.
     const hidden = makeDb({ ...tables, contacts: { data: { id: C1, location_id: HATCH }, error: null } })
     expect(await run(createActivity, input, 'manager', hidden.db)).toMatchObject({ ok: false, code: 'not_found' })
     expect(hidden.on('activities')).toHaveLength(0)
+  })
+
+  it('create_activity refuses a contact readable through another studio but not at this one', async () => {
+    const activities = { data: { id: 'act1', subject: 'Call Jo', type: 'call', due_date: null }, error: null }
+    const input = { contact_id: C1, type: 'call', subject: 'Call Jo' }
+    // Homed at SIB (readable), no relationship row at DUB, written at DUB.
+    const elsewhere = makeDb({ contacts: { data: { id: C1, location_id: SIB }, error: null }, contact_studios: { data: [], error: null }, activities })
+    const r = await run(createActivity, input, 'manager', elsewhere.db)
+    expect(r).toEqual({ ok: false, code: 'not_found', message: 'Contact not found, or not at this studio.' })
+    expect(elsewhere.on('activities')).toHaveLength(0)
+    const relQ = elsewhere.on('contact_studios')[0]
+    expect(used(relQ, 'eq', 'contact_id', C1)).toBe(true)
+    expect(argOf(relQ, 'in')).toEqual(['in', 'location_id', [DUB]])
+
+    // The same contact with a relationship row at DUB: written there.
+    const related = makeDb({
+      contacts: { data: { id: C1, location_id: SIB }, error: null },
+      contact_studios: { data: [{ location_id: DUB, status: 'ended' }], error: null },
+      activities,
+    })
+    expect((await run(createActivity, input, 'manager', related.db)).ok).toBe(true)
+    expect(argOf(related.on('activities')[0], 'insert')[1]).toMatchObject({ contact_id: C1, location_id: DUB, assignee_id: ME })
   })
 })

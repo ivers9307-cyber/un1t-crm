@@ -1,7 +1,8 @@
-// MCP.1 — `get_contact`: one contact's card. Readable when the person holds
-// Contacts at the contact's home studio or at a studio where it has a
-// relationship row (_contact-scope.js); anything else, a random id included,
-// answers the same not_found. Once readable, the contact's deals, notes,
+// MCP.1 — `get_contact`: one contact's card. Readable when the contact is
+// homed at, or has a relationship row at, a studio of the resolved studio's
+// organisation (MCP switched on) where the person holds the AI Assistant and
+// Contacts permissions (_contact-scope.js); anything else, a random id
+// included, answers the same not_found. Once readable, the contact's deals, notes,
 // activities and class bookings are read by contact_id, as the contact page
 // reads them. The timeline never carries a message body: an activity keeps
 // its type and subject only (a WhatsApp activity's `note` holds the message
@@ -32,10 +33,10 @@ async function readContact(db, contactId) {
 }
 
 /** The relationship rows at studios the person can read, with the membership facts. */
-async function readStudios(db, user, contactId) {
+async function readStudios(db, user, contactId, ctx) {
   const res = await studiosOfContact(db, contactId)
   if (!res.ok) throw failed('studios', res.error)
-  const readable = new Set(readableContactStudios(user))
+  const readable = new Set(readableContactStudios(user, ctx))
   return res.rows.filter((r) => readable.has(r.location_id)).map((r) => {
     const [m] = membershipRowsFromStudioRows([r])
     return {
@@ -106,20 +107,21 @@ export default defineTool({
   title: 'Contact',
   description: 'One contact (get the id from search_contacts): details, studios with membership, deals, '
     + 'the 20 most recent notes and activities (subjects only, no message text), and class bookings from '
-    + '30 days back to 30 days ahead (instants in UTC). Needs the Contacts permission at a studio the contact belongs to.',
+    + '30 days back to 30 days ahead (instants in UTC). Needs the Contacts permission at a studio of this organisation the contact belongs to.',
   inputSchema: z.object({
     studio_id: z.string().uuid().optional().describe('A studio id; omit for the default studio.'),
     contact_id: z.string().uuid().describe('The contact (search_contacts).'),
   }),
-  gate: (user) => readableContactStudios(user).length > 0,
+  // At least one studio of the resolved studio's organisation where contacts may be read.
+  gate: (user, _studioId, ctx) => readableContactStudios(user, ctx).length > 0,
   run: async (input, ctx) => {
     const { db, user, nowMs } = ctx
-    const at = await contactReadableAt(db, user, input.contact_id)
+    const at = await contactReadableAt(db, user, input.contact_id, ctx)
     if (!at) throw new ToolRefusal('not_found', 'Contact not found.')
 
     const [contact, studios, deals, timeline, classBookings] = await Promise.all([
       readContact(db, input.contact_id),
-      readStudios(db, user, input.contact_id),
+      readStudios(db, user, input.contact_id, ctx),
       readDeals(db, input.contact_id),
       readTimeline(db, input.contact_id),
       readBookings(db, input.contact_id, nowMs),

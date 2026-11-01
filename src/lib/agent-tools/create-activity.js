@@ -1,9 +1,11 @@
 // MCP.1 — `create_activity`: log a call or meeting, or set a task, on a
 // contact. The in-app assistant's insert (src/app/api/assistant/chat/route.js),
-// stamped with the studio, after the contact is checked readable
-// (_contact-scope.js: an unreadable contact answers not_found, like a missing
-// one). The row is a task row as the web task route writes it (kind 'task',
-// status 'todo', source 'crm'), so it shows on /activities and in list_tasks.
+// stamped with the studio. The contact must be readable (_contact-scope.js)
+// AND at this studio: homed here or holding a contact_studios row here, the
+// web task route's rule (taskLinksRefusal). Missing, unreadable or elsewhere
+// is one not_found. The row is a task row as the web task route writes it
+// (kind 'task', status 'todo', source 'crm'), assigned to the caller, so it
+// shows on /activities and in the caller's list_tasks.
 // Gate: a manager at the studio AND the web task-write rule there
 // (canWriteActivitiesAt: Tasks AND Contacts).
 
@@ -11,6 +13,7 @@ import { z } from 'zod'
 import { defineTool, ToolRefusal } from './registry.js'
 import { contactReadableAt } from './_contact-scope.js'
 import { isManagerAt } from '@/lib/mcp/context'
+import { hasRelationshipAt } from '@/lib/contact-studios'
 import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { isRealCalendarDate } from '@/lib/schemas'
 
@@ -33,7 +36,16 @@ export default defineTool({
   writes: true,
   run: async (input, ctx) => {
     const { db, user, studio } = ctx
-    if (!await contactReadableAt(db, user, input.contact_id)) throw new ToolRefusal('not_found', 'Contact not found.')
+    const notHere = new ToolRefusal('not_found', 'Contact not found, or not at this studio.')
+    const readableAt = await contactReadableAt(db, user, input.contact_id, ctx)
+    if (!readableAt) throw notHere
+    // contactReadableAt answers the home studio first, so any other answer
+    // means the contact is homed elsewhere: it needs a row at this studio.
+    if (readableAt !== studio.id) {
+      const rel = await hasRelationshipAt(db, input.contact_id, [studio.id])
+      if (!rel.ok) throw new Error(`Failed to load the contact's studios: ${rel.error}`)
+      if (!rel.at.has(studio.id)) throw notHere
+    }
 
     const record = {
       subject: input.subject,
@@ -43,6 +55,7 @@ export default defineTool({
       due_date: input.due_date || null,
       note: input.note || null,
       done: false,
+      assignee_id: user.id,
       kind: 'task',
       status: 'todo',
       source: 'crm',
