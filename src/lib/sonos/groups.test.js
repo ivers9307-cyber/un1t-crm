@@ -83,8 +83,29 @@ const schedule = {
 describe('planAction', () => {
   it('opens the window on the first tick inside it, carrying volume and favourite', () => {
     expect(planAction(schedule, at('05:00'), MONDAY)).toEqual({
-      action: 'open', windowOnAt: OPEN_AT, volume: 35, favoriteId: 'fv-1',
+      action: 'open', windowOnAt: OPEN_AT, volume: 35, favoriteId: 'fv-1', playerVolumes: {},
     })
+  })
+
+  // SONOSPLAYERVOL.1 — a window may name a level per speaker on top of its
+  // group volume. The planner carries them through as a clean id → integer
+  // map so applyOpen never has to judge stored data.
+  it('carries per-speaker volumes, dropping junk values and clamping the rest', () => {
+    const s = {
+      ...schedule,
+      windows: [{
+        ...schedule.windows[0],
+        player_volumes: { RINCON_1: 20, RINCON_2: '45', RINCON_3: 140, RINCON_4: -3, RINCON_5: 'loud', RINCON_6: null, '': 10 },
+      }],
+    }
+    expect(planAction(s, at('05:00'), MONDAY)).toMatchObject({
+      playerVolumes: { RINCON_1: 20, RINCON_2: 45, RINCON_3: 100, RINCON_4: 0 },
+    })
+  })
+
+  it('treats a non-object player_volumes as none', () => {
+    const s = { ...schedule, windows: [{ ...schedule.windows[0], player_volumes: [20, 30] }] }
+    expect(planAction(s, at('05:00'), MONDAY)).toMatchObject({ playerVolumes: {} })
   })
 
   it('still opens on a LATER tick if the boundary minute was missed', () => {

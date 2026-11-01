@@ -43,6 +43,23 @@ export function resolveGroupIds(groups, playerIds) {
 
 const DEFAULT_VOLUME = 30
 
+// SONOSPLAYERVOL.1 — a window's optional per-speaker levels,
+// `player_volumes: { [playerId]: 0-100 }`, normalised to a clean map so the
+// apply step never judges stored data. Anything that is not a finite number
+// is dropped (the speaker keeps the group level); the rest is rounded and
+// clamped, as sonosSetGroupVolume does for the group figure.
+export function normalisePlayerVolumes(raw) {
+  const out = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [pid, v] of Object.entries(raw)) {
+    if (typeof pid !== 'string' || !pid) continue
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN)
+    if (!Number.isFinite(n)) continue
+    out[pid] = Math.max(0, Math.min(100, Math.round(n)))
+  }
+  return out
+}
+
 // last_applied.window_on_at comes back from jsonb and SHOULD be the raw
 // epoch-ms number planAction emitted. Normalise anyway: if it ever arrives
 // as a string — a timestamptz column, a .toISOString() "to make it
@@ -61,7 +78,7 @@ const toMs = (v) => {
   return null
 }
 
-// → null | { action:'open', windowOnAt, volume, favoriteId }
+// → null | { action:'open', windowOnAt, volume, favoriteId, playerVolumes }
 //        | { action:'close', windowOnAt }
 //
 // Exactly-once per window, NOT desired-vs-actual. The Homey reconcile could
@@ -115,6 +132,9 @@ export function planAction(schedule, nowMs, dateStr, tz) {
       action: 'open',
       windowOnAt: active.on_at,
       volume: Number.isFinite(Number(src.volume)) ? Number(src.volume) : DEFAULT_VOLUME,
+      // Per-speaker levels on top of the group volume (SONOSPLAYERVOL.1).
+      // {} when the window names none — applyOpen then makes no player call.
+      playerVolumes: normalisePlayerVolumes(src.player_volumes),
       // No favorite_id: pass null through rather than refuse to open. A
       // refusal would leave the room silent with zero signal, which is
       // worse for whoever is debugging this at 7am than a repeating log

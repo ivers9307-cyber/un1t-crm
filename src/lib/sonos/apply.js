@@ -11,6 +11,13 @@
 //   1. setVolume FIRST — after loadFavorite the opening seconds would play at
 //      the previous window's level. A failed volume skips that group's
 //      favourite (no point starting music at the wrong level).
+//   1b. setPlayerVolume for each of the SCHEDULE's speakers in that group the
+//      window names in `player_volumes` (SONOSPLAYERVOL.1). After the group
+//      call, because a group set scales every player from where it already
+//      sat, and these are the levels the operator asked for exactly. A
+//      speaker grouped in by hand but not on the schedule is left at the
+//      group level — the schedule's own speakers are its remit. A failed
+//      player call skips the favourite like a failed group call does.
 //   2. loadFavorite.
 // Then, only if EVERY group succeeded, one UPDATE stamping last_applied +
 // last_state. A partial failure stamps nothing, deliberately: an unapplied
@@ -27,13 +34,14 @@
 //                                           cron counts it as failed.
 
 import { logWarn } from '@/lib/log'
-import { sonosSetGroupVolume, sonosLoadFavorite } from './client'
+import { sonosSetGroupVolume, sonosSetPlayerVolume, sonosLoadFavorite } from './client'
 
 const MODULE = 'sonos-apply'
 
 export async function applyOpen(db, { token, schedule, plan, groups, groupIds, nowMs, deps = {} }) {
   const {
     setVolume = sonosSetGroupVolume,
+    setPlayerVolume = sonosSetPlayerVolume,
     loadFavorite = sonosLoadFavorite,
   } = deps
 
@@ -41,6 +49,9 @@ export async function applyOpen(db, { token, schedule, plan, groups, groupIds, n
   // invariant belongs here: an open with zero Sonos calls must never be
   // recorded as applied.
   if (!groupIds?.length) return { ok: false, reason: 'sonos' }
+
+  const playerVolumes = plan.playerVolumes && typeof plan.playerVolumes === 'object' ? plan.playerVolumes : {}
+  const scheduledPlayers = Array.isArray(schedule.player_ids) ? schedule.player_ids : []
 
   let allOk = true
   for (const groupId of groupIds) {
@@ -50,6 +61,21 @@ export async function applyOpen(db, { token, schedule, plan, groups, groupIds, n
       logWarn(MODULE, 'setVolume failed', { scheduleId: schedule.id, groupId, statusCode: v.statusCode })
       continue
     }
+    // Per-speaker levels: the schedule's speakers that sit in this group and
+    // have a level named for this window, in player_ids order.
+    const group = (groups || []).find((g) => g.id === groupId)
+    const members = Array.isArray(group?.playerIds) ? group.playerIds : []
+    let playersOk = true
+    for (const playerId of scheduledPlayers) {
+      if (!members.includes(playerId) || !(playerId in playerVolumes)) continue
+      const pv = await setPlayerVolume(token, playerId, playerVolumes[playerId])
+      if (!pv.ok) {
+        playersOk = false
+        logWarn(MODULE, 'setPlayerVolume failed', { scheduleId: schedule.id, groupId, playerId, statusCode: pv.statusCode })
+        break
+      }
+    }
+    if (!playersOk) { allOk = false; continue }
     const f = await loadFavorite(token, groupId, plan.favoriteId)
     if (!f.ok) {
       allOk = false

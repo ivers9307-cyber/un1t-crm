@@ -181,6 +181,17 @@ export function sonosSetGroupVolume(token, groupId, volume) {
   return apiCall(token, 'POST', `/groups/${enc(groupId)}/groupVolume`, { volume: v })
 }
 
+// SONOSPLAYERVOL.1 — one speaker's own level. Group volume moves every
+// player in the group proportionally to where it already sits, so two
+// speakers a human last left at 10 and 60 stay lopsided after a group set;
+// a window that names each speaker's level lands them exactly. Player ids
+// are permanent, so this is keyed on what the schedule stores. Same clamp
+// as the group call, for the same reason.
+export function sonosSetPlayerVolume(token, playerId, volume) {
+  const v = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)))
+  return apiCall(token, 'POST', `/players/${enc(playerId)}/playerVolume`, { volume: v })
+}
+
 export function sonosLoadFavorite(token, groupId, favoriteId) {
   return apiCall(token, 'POST', `/groups/${enc(groupId)}/favorites`, {
     favoriteId: String(favoriteId),

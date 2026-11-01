@@ -118,6 +118,7 @@ import {
   sonosGetGroups,
   sonosGetFavorites,
   sonosSetGroupVolume,
+  sonosSetPlayerVolume,
   sonosLoadFavorite,
   sonosPause,
 } from './client'
@@ -176,6 +177,23 @@ describe('control api calls', () => {
     expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ volume: 100 })
     await sonosSetGroupVolume('tok', 'GRP1', -5)
     expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({ volume: 0 })
+  })
+
+  // SONOSPLAYERVOL.1 — the per-speaker leg of a window open. A player id
+  // is permanent (unlike a group id), so this is the one Sonos call keyed
+  // on what the schedule actually stores.
+  it('sets a single player volume on the players endpoint, clamped like the group call', async () => {
+    global.fetch.mockResolvedValue(okEmpty)
+    await sonosSetPlayerVolume('tok', 'RINCON_1', 45)
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toBe('https://api.ws.sonos.com/control/api/v1/players/RINCON_1/playerVolume')
+    expect(opts.method).toBe('POST')
+    expect(JSON.parse(opts.body)).toEqual({ volume: 45 })
+
+    await sonosSetPlayerVolume('tok', 'RINCON_1', 140)
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({ volume: 100 })
+    await sonosSetPlayerVolume('tok', 'RINCON_1', -5)
+    expect(JSON.parse(global.fetch.mock.calls[2][1].body)).toEqual({ volume: 0 })
   })
 
   it('loads a favourite and starts playback', async () => {

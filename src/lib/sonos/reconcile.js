@@ -2,7 +2,7 @@
 // testable with fakes (house pattern: zoom/reconcile.orchestrator.test.js).
 
 import { logWarn } from '@/lib/log'
-import { getSonosConfig, withFreshToken, isHouseholdGone, sonosGetGroups, sonosSetGroupVolume, sonosLoadFavorite, sonosPause } from './client'
+import { getSonosConfig, withFreshToken, isHouseholdGone, sonosGetGroups, sonosSetGroupVolume, sonosSetPlayerVolume, sonosLoadFavorite, sonosPause } from './client'
 import { applyOpen } from './apply'
 import { mapGroups, resolveGroupIds, planAction } from './groups'
 // dayStrIn(instant, zone), NOT todayStrIn(zone) with its default clock — an
@@ -29,6 +29,7 @@ export async function runSonosReconcile(db, deps = {}) {
     getToken = withFreshToken,
     getGroups = sonosGetGroups,
     setVolume = sonosSetGroupVolume,
+    setPlayerVolume = sonosSetPlayerVolume,
     loadFavorite = sonosLoadFavorite,
     pause = sonosPause,
   } = deps
@@ -143,7 +144,7 @@ export async function runSonosReconcile(db, deps = {}) {
           groups,
           groupIds,
           nowMs,
-          deps: { setVolume, loadFavorite },
+          deps: { setVolume, setPlayerVolume, loadFavorite },
         })
         if (!out.ok) {
           // Both outcomes count as failed here. 'sonos' leaves the window

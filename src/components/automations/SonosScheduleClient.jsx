@@ -43,6 +43,19 @@ import ReadFailedNote from '@/components/settings/ReadFailedNote'
 
 const MAX_WINDOWS = 16 // mirrors SchedulePayload's windows.max(16) in the API
 const DEFAULT_VOLUME = 30
+const clampVolume = (v) => Math.max(0, Math.min(100, Math.round(Number(v)) || 0))
+
+// SONOSPLAYERVOL.1 — a window's optional per-speaker levels, read for the
+// editor and the read-only summary. `players` resolves ids to names; an id
+// Sonos no longer reports is shown raw rather than dropped, so an operator
+// can see what the row still carries.
+function speakerVolumeEntries(win, players) {
+  const pv = win?.player_volumes
+  if (!pv || typeof pv !== 'object' || Array.isArray(pv)) return []
+  return Object.entries(pv)
+    .filter(([, v]) => Number.isFinite(Number(v)))
+    .map(([id, v]) => ({ id, name: players.find((p) => p.id === id)?.name || id, volume: clampVolume(v) }))
+}
 
 // A schedule time in the studio's zone ("Sun 08 Mar, 06:00"). Exported for
 // the TZ.10 tests. The old Dublin-only formatter with the zone as a parameter
@@ -606,8 +619,8 @@ function SchedulesSection({ canEdit, players, favorites, favoritesFailed, onRetr
             </p>
           )}
           <p className="mt-2 text-[11px] text-un1t-subtle">
-            Each window is applied once, right at the moment it opens — volume set, then the favourite starts
-            playing — and paused once, when it closes. Nothing re-applies in between: if someone pauses the
+            Each window is applied once, right at the moment it opens — volume set (per speaker, where a
+            speaker has its own level), then the favourite starts playing — and paused once, when it closes. Nothing re-applies in between: if someone pauses the
             music or changes the volume mid-window, it stays that way until the next window opens.
           </p>
         </div>
@@ -671,6 +684,10 @@ function ScheduleCard({ schedule, zone, players, favorites, onReload, editable }
   // A speaker this schedule still names but Sonos no longer reports (removed
   // or renamed on the system) — surfaced so it isn't silently unpickable.
   const unknownPlayerIds = playerIds.filter((id) => !players.some((p) => p.id === id))
+  // The schedule's selected speakers, in player_ids order, resolved to names
+  // for the per-speaker volume rows (SONOSPLAYERVOL.1). Unknown ids still
+  // appear (raw) so a stored level for one is visible, not silently kept.
+  const selectedPlayers = playerIds.map((id) => players.find((p) => p.id === id) || { id, name: id })
 
   function togglePlayer(id) {
     setPlayerIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
@@ -687,13 +704,24 @@ function ScheduleCard({ schedule, zone, players, favorites, onReload, editable }
           name: name.trim() || 'Studio music',
           player_ids: playerIds,
           enabled: nextEnabled,
-          windows: windows.map((w) => ({
-            days: w.days,
-            on: w.on,
-            off: w.off,
-            volume: Math.max(0, Math.min(100, Math.round(Number(w.volume)) || 0)),
-            favorite_id: w.favorite_id,
-          })),
+          windows: windows.map((w) => {
+            // SONOSPLAYERVOL.1 — only the schedule's selected speakers travel;
+            // a level for a speaker since deselected is dropped here rather
+            // than left to accumulate on the row.
+            const pv = Object.fromEntries(
+              playerIds
+                .filter((id) => w.player_volumes && Number.isFinite(Number(w.player_volumes[id])))
+                .map((id) => [id, clampVolume(w.player_volumes[id])]),
+            )
+            return {
+              days: w.days,
+              on: w.on,
+              off: w.off,
+              volume: clampVolume(w.volume),
+              favorite_id: w.favorite_id,
+              ...(Object.keys(pv).length ? { player_volumes: pv } : {}),
+            }
+          }),
         }),
       })
       const j = await res.json()
@@ -857,14 +885,61 @@ function ScheduleCard({ schedule, zone, players, favorites, onReload, editable }
                 ))}
               </select>
             </label>
+            {/* SONOSPLAYERVOL.1 — a level per selected speaker, on top of the
+                window volume. Shown once the schedule has two or more
+                speakers (with one, the window volume IS that speaker). A
+                speaker with no level of its own follows the window volume
+                and says so; "Reset" puts it back. The row takes the full
+                width of the flex container so it sits under the controls. */}
+            {selectedPlayers.length >= 2 && (
+              <div className="basis-full mt-1 rounded border border-un1t-border/60 bg-un1t-surface/40 p-2 space-y-1.5">
+                <p className="text-[11px] font-semibold text-un1t-text">
+                  Speaker volumes
+                  <span className="ml-1 font-normal text-un1t-subtle">— optional; a speaker without its own level plays at the window volume</span>
+                </p>
+                {selectedPlayers.map((p) => {
+                  const pv = win.player_volumes && typeof win.player_volumes === 'object' ? win.player_volumes : {}
+                  const custom = Number.isFinite(Number(pv[p.id]))
+                  const level = custom ? clampVolume(pv[p.id]) : clampVolume(win.volume)
+                  const setLevel = (next) => setWindowField(i, 'player_volumes', { ...pv, [p.id]: next })
+                  const reset = () => {
+                    const rest = { ...pv }
+                    delete rest[p.id]
+                    setWindowField(i, 'player_volumes', rest)
+                  }
+                  return (
+                    <div key={p.id} className="flex flex-wrap items-center gap-2 text-[11px] text-un1t-subtle">
+                      <span className="w-28 truncate text-un1t-text" title={p.name || p.id}>{p.name || p.id}</span>
+                      <input type="range" min="0" max="100" value={level}
+                        aria-label={`${p.name || p.id} volume`}
+                        onChange={(e) => setLevel(Number(e.target.value))}
+                        className="w-24 accent-un1t-text" />
+                      <span className="tabular-nums w-7 text-right text-un1t-text">{level}</span>
+                      {custom ? (
+                        <button type="button" onClick={reset} className="underline hover:text-un1t-text">Reset</button>
+                      ) : (
+                        <span className="text-un1t-muted">window volume</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </>
         )}
-        summaryExtra={(win) => (
+        summaryExtra={(win) => {
           // Read-only: no live favourites to resolve a name from, so show
           // the raw id rather than a "(not found)" label this data can't
-          // support while unreachable.
-          <> · volume {win.volume} · favourite {win.favorite_id || '(none)'}</>
-        )}
+          // support while unreachable. Speaker names come from the last
+          // household read, if any.
+          const sv = speakerVolumeEntries(win, players)
+          return (
+            <>
+              {' · '}volume {win.volume} · favourite {win.favorite_id || '(none)'}
+              {sv.length > 0 && <> · speakers: {sv.map((e) => `${e.name} ${e.volume}`).join(', ')}</>}
+            </>
+          )
+        }}
       />
 
       {editable && (

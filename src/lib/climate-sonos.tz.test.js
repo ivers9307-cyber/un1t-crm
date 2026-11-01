@@ -76,19 +76,19 @@ describe('TZ.10 Europe/Dublin pinned values', () => {
     const applied = schedule({ last_applied: { window_on_at: 0, action: 'open' } })
     const overridden = schedule({ override: { state: 'off', until: '2026-07-01T00:00:00Z' } })
     // Spring-forward night: the Saturday window is open at 01:30 IST, closed by 02:30 IST.
-    expect(plan(schedule(), '2026-03-29T00:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-03-28T22:00:00.000Z', volume: 20, favoriteId: 'fv-2' })
+    expect(plan(schedule(), '2026-03-29T00:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-03-28T22:00:00.000Z', volume: 20, favoriteId: 'fv-2', playerVolumes: {} })
     expect(plan(schedule(), '2026-03-29T01:30:00Z')).toBeNull()
     expect(plan(applied, '2026-03-29T01:30:00Z')).toEqual({ action: 'close', windowOnAt: '1970-01-01T00:00:00.000Z' })
     expect(plan(overridden, '2026-03-29T00:30:00Z')).toBeNull()
     // Sunday 23:15 IST.
-    expect(plan(schedule(), '2026-03-29T22:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-03-29T22:15:00.000Z', volume: 25, favoriteId: 'fv-3' })
+    expect(plan(schedule(), '2026-03-29T22:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-03-29T22:15:00.000Z', volume: 25, favoriteId: 'fv-3', playerVolumes: {} })
     // Fall-back night: still open at 01:30 GMT, closed at 02:30 GMT.
-    expect(plan(schedule(), '2026-10-25T01:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-10-24T21:00:00.000Z', volume: 20, favoriteId: 'fv-2' })
+    expect(plan(schedule(), '2026-10-25T01:30:00Z')).toEqual({ action: 'open', windowOnAt: '2026-10-24T21:00:00.000Z', volume: 20, favoriteId: 'fv-2', playerVolumes: {} })
     expect(plan(applied, '2026-10-25T02:30:00Z')).toEqual({ action: 'close', windowOnAt: '1970-01-01T00:00:00.000Z' })
     // Ordinary summer (06:00 IST) and winter (06:00 GMT) weekday opens.
-    expect(plan(schedule(), '2026-07-01T05:00:00Z')).toEqual({ action: 'open', windowOnAt: '2026-07-01T05:00:00.000Z', volume: 35, favoriteId: 'fv-1' })
+    expect(plan(schedule(), '2026-07-01T05:00:00Z')).toEqual({ action: 'open', windowOnAt: '2026-07-01T05:00:00.000Z', volume: 35, favoriteId: 'fv-1', playerVolumes: {} })
     expect(plan(schedule(), '2026-07-01T20:30:00Z')).toBeNull() // 21:30 IST: closed
-    expect(plan(schedule(), '2026-12-30T06:00:00Z')).toEqual({ action: 'open', windowOnAt: '2026-12-30T06:00:00.000Z', volume: 35, favoriteId: 'fv-1' })
+    expect(plan(schedule(), '2026-12-30T06:00:00Z')).toEqual({ action: 'open', windowOnAt: '2026-12-30T06:00:00.000Z', volume: 35, favoriteId: 'fv-1', playerVolumes: {} })
   })
 
   it('the Sonos health check and its labels', () => {
