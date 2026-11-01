@@ -30,7 +30,7 @@ const ROUTE_SEGMENTS = [
   'contracts', 'dashboard', 'deposit', 'embed', 'event', 'event-pay',
   'events', 'fee-appeal', 'givers', 'h', 'host', 'host-connect',
   'hyrox', 'invoices', 'issues', 'legal', 'live', 'login', 'maintenance',
-  'marketing', 'members', 'money', 'offer-sales', 'offers', 'operations',
+  'marketing', 'members', 'money', 'oauth', 'offer-sales', 'offers', 'operations',
   'orders', 'pay-done', 'pay-link', 'pipeline', 'policies', 'portfolio',
   'preferences', 'present', 'presentations', 'privacy', 'pulse',
   'reset-password', 'sales', 'schedule', 'settings', 'studio-login',

@@ -302,6 +302,41 @@ Returns `{ id, url, events, signing_secret }`. The `signing_secret` (starts `wsk
 **Webhook handler is idempotent.** `runs `getOrder(orderId)` to fetch fresh state rather than trusting payload state (Revolut docs explicitly warn payload state can be stale during retries). `paid_at` only stamps if not already set, so duplicate webhook deliveries don't reset the timestamp. Always returns 200 even on unrecognised events so Revolut doesn't auto-disable the hook.
 
 
+## Staff MCP server (MCP.1)
+
+`GET/POST/DELETE https://crm.repset.ie/api/mcp` is a Model Context Protocol endpoint (Streamable HTTP, stateless, `mcp-handler`) that lets a staff member use their CRM login from Claude (app, Desktop, Claude Code) or any spec-compliant MCP client. Design: `docs/superpowers/specs/2026-11-01-mcp-server-design.md`; plan: `docs/superpowers/plans/2026-11-01-mcp-server.md`.
+
+**Identity.** Supabase Auth is the OAuth 2.1 provider (Authentication → OAuth Server). The client registers itself (dynamic client registration), the person is sent to `/oauth/consent` (`src/app/oauth/consent/page.js`, `OAuthConsentForm.jsx`), signs in with their normal CRM login and approves the client once. The access token is an ordinary Supabase session JWT plus a `client_id` claim. `/.well-known/oauth-protected-resource` (and `…/api/mcp`) serve the RFC 9728 metadata pointing at the Supabase auth server.
+
+**The door** (`verifyMcpToken`, `src/lib/mcp/auth.js`) refuses only a bad, expired or unbound token: 401 plus the RFC 9728 `WWW-Authenticate` challenge. It verifies the token itself with the anon client AND binds it to the `getCurrentUser()` session (`authUser.id === user.id`; impersonation is refused). Everything else is a tool-level `isError` result, never a transport error, with a code: `mcp_disabled` (the organisation's switch is off), `assistant_permission`, `forbidden` (role or permission gate), `not_found`, `invalid_input`, `rate_limited` (120 calls a minute per person; fails open), `conflict`, `tool_failed`.
+
+**Who can connect.** Anyone with an active CRM login who holds the existing **AI Assistant** web permission (`assistant`) at at least one studio, in an organisation whose switch is on. No new permission key. Each tool re-checks `assistant` and its own gate at the studio it resolves; every tool takes an optional `studio_id` (default: the person's default studio), and an id that is not one of theirs answers the same "unknown studio" as one that does not exist.
+
+**Canonical host.** One resource URL in v1: `${NEXT_PUBLIC_APP_URL}/api/mcp` (`getAppUrl()`, no fallback). RFC 9728 needs the metadata's `resource` to equal the URL the client connected with, so `/api/mcp` on any other host (`crm.un1tdublin.com`, a studio subdomain, a `tenant_domains` host) answers 404 from the route itself.
+
+**Tools** (`src/lib/agent-tools/`, 18; `index.js` lists them, `registry.js` runs them). Each module is `defineTool({ name, description, inputSchema, gate, run })`. Reads: `whoami`, `get_shifts`, `get_time_off`, `get_holiday_allowance`, `list_staff`, `list_shift_templates`, `staff_hours_report`, `staff_cost_report` (admin roles only: the one tool that reads pay), `search_contacts`, `get_contact`, `list_pipeline`, `list_tasks`, `get_classes`, `get_class_roster`, `get_appointments`. Writes (the three the in-app assistant already allows, through the same helpers): `create_shift` (manager roles), `create_contact` (admin roles + Contacts), `create_activity` (manager roles + the activity write gate). Their descriptions tell the client to confirm with the person first and never retry. Contact readability for `get_contact` and `create_activity` is limited to studios of the RESOLVED studio's organisation whose switch is on and where the person holds both `assistant` and `contacts`; `create_activity` also needs the contact homed at, or holding a `contact_studios` row at, the resolved studio. Cars, Xero, messaging, fees and money are out of v1 by scope. `tests/agent-tools-guard.test.js` is the floor under every tool (a gate and `studio_id`; listed once in `index.js`; no out-of-scope table; a studio or contact-set filter on every chain; no `select('*')` on `profiles`/`locations`/`contacts`); each tool's own test is the second net.
+
+**Switch.** `org_settings.mcp_enabled` (mig 801, default OFF), flipped by organisation admins on the Integrations hub (`/settings/integrations-hub`, **Agent access** card, `AgentAccessCard.jsx`, `/api/settings/org-mcp`; the card shows the connector URL and how many people used it). `org_settings` has no client privilege (mig 730), so that route is the only writer.
+
+**Connected apps.** The person's own `/account` page has a **Connected apps** card (`ConnectedAppsCard.jsx`, `/api/account/connected-apps`) listing the clients they approved, with a revoke button. Deactivating a profile cuts every connection it holds.
+
+**What is logged.** `mcp_tool_calls` (mig 801; service role only): person, organisation, studio, OAuth `client_id`, tool, `ok`, `error_code`, `duration_ms`. Never arguments or results (they carry member names and message text). Purged after 90 days by `/api/cron/purge-mcp-tool-calls` (daily 04:35 UTC, heartbeat row from mig 802). A write also lands in `audit_events` as it would from any route.
+
+**Token reach (accepted).** The OAuth token is a normal Supabase session JWT, so OUTSIDE this app it can reach what that person's phone session can: the Supabase data API under RLS, and champ-app's Bearer path. Documented, not fenced further in v1. INSIDE this app `src/proxy.js` refuses any Bearer carrying a `client_id` claim on every path but `/api/mcp` (exact match), and `getUserFromBearer()` repeats the check. The audience is not validated (Supabase tokens carry `aud: authenticated`; `client_id` stands in): a token minted for some other MCP server on this project would pass; there is none.
+
+**Connecting.** Claude app / Desktop: Settings → Connectors → add a custom connector with `https://crm.repset.ie/api/mcp`. Claude Code: `claude mcp add --transport http un1t-crm https://crm.repset.ie/api/mcp`, then `/mcp` to sign in. The MCP Inspector shows the raw tool output.
+
+**Rollout (operator steps, in order)**
+1. Supabase dashboard, project `iyvtbjjxdggiadzwwvdj`, one window: **Authentication → URL configuration**: Site URL → `https://crm.repset.ie` (domain-migration runbook item 8, `docs/domain-migration-stage3.md`), and the redirect allow-list must admit `https://crm.repset.ie/auth/callback**` (the consent flow's emailed sign-in appends `?next=`). Send yourself an invite and a password reset and follow both. **Authentication → OAuth Server**: enable, Authorization Path `/oauth/consent`, dynamic client registration ON. Keep sign-ups OFF.
+2. Apply mig 801 via Supabase MCP (`apply_migration`) BEFORE the deploy; then `get_advisors` (security).
+3. Merge; once the deploy is live, apply mig 802 (the heartbeat row; applied earlier it would go stale).
+4. Vercel firewall must not challenge `/api/mcp` (inbound comes from Anthropic's cloud).
+5. Integrations hub → Agent access → on for UN1T Group. Richard connects from Claude Desktop and Claude Code (and the MCP Inspector).
+6. One manager or head coach, one studio, one week; review `mcp_tool_calls` by `tool` and `error_code`.
+
+**Known v1 limits.** No `OPTIONS`/CORS on `/api/mcp` (browser-based MCP clients fail preflight; Claude Desktop, the Claude app and Claude Code are not browsers). `mcp_tool_calls` has no `(organization_id, created_at)` index and the hub's people count reads rows: fine at pilot traffic, add the index if it grows. The in-app assistant (`/api/assistant/chat`) is not yet migrated onto the registry (it keeps its own tool code, and its `search_contacts` still interpolates the raw query). `/api/mcp` is a JSON-RPC endpoint and is deliberately not in `src/lib/openapi.js`. Business-run agents (a named service profile per studio) are designed for and not built.
+
+
 ## Pay subdomain (`pay.ccfautos.com`)
 
 Buyer-facing deposit pages live on a separate hostname from the CRM. Same Vercel project — multi-domain via hostname-aware middleware. The CRM stays at `crm.un1tdublin.com`; everything except the deposit pages + their backing public API is 404'd on the pay hostname so buyers never see CRM URLs.

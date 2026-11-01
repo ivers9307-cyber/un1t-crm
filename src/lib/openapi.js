@@ -299,6 +299,10 @@ registry.registerComponent('securitySchemes', 'BridgeAuth', {
 // Path registrations — high-traffic / external-facing routes
 // ============================================================================
 
+// MCP.1 — /api/mcp (the staff MCP server) is a JSON-RPC endpoint speaking the
+// Model Context Protocol, authenticated by a Supabase OAuth token. It is
+// deliberately NOT registered here; see docs/architecture/INTEGRATIONS.md.
+
 // Public booking
 registry.registerPath({
   method: 'post',

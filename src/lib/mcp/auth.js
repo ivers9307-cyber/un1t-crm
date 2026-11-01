@@ -32,35 +32,12 @@ import { createServerClient } from '@/lib/supabase'
 import { hasPermissionAtAnyLocation } from '@/lib/permissions'
 import { jwtClientId } from '@/lib/oauth-token-edge'
 import { logError } from '@/lib/log'
+import { mcpEnabledOrgIds } from '@/lib/mcp/org-switch'
 
-/**
- * The organisations (of this person's studios, plus those they administer)
- * whose `org_settings.mcp_enabled` switch is on. Also read by the consent
- * page. A failed read answers [] (fail closed) and is logged: an unreadable
- * switch must never read as "on".
- *
- * @param {object} db a service-role supabase client
- * @param {{ locations?: Array<{ organization_id?: string }>, orgAdminOrgIds?: string[] }} user
- * @returns {Promise<string[]>}
- */
-export async function mcpEnabledOrgIds(db, user) {
-  const orgIds = Array.from(new Set([
-    ...(user?.locations || []).map((l) => l?.organization_id),
-    ...(user?.orgAdminOrgIds || []),
-  ].filter(Boolean)))
-  if (orgIds.length === 0) return []
-
-  const { data, error } = await db
-    .from('org_settings')
-    .select('organization_id')
-    .eq('mcp_enabled', true)
-    .in('organization_id', orgIds)
-  if (error) {
-    logError('mcp', 'org switch not readable', { code: error.code })
-    return []
-  }
-  return (data || []).map((r) => r.organization_id)
-}
+// The switch read lives in org-switch.js: this file names the anon key (the token check),
+// so tests/org-settings-client-closed-guard.test.js would read an org_settings read here as
+// browser code. Re-exported for the consent page and the tests.
+export { mcpEnabledOrgIds }
 
 /**
  * Ask Supabase Auth who this exact token belongs to. getCurrentUser() takes

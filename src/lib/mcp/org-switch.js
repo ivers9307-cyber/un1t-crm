@@ -9,6 +9,7 @@
 
 import { getAppUrl } from '@/lib/app-url'
 import { selectAll } from '@/lib/select-all'
+import { logError } from '@/lib/log'
 
 export const MCP_PEOPLE_WINDOW_DAYS = 30
 
@@ -42,4 +43,33 @@ export async function loadOrgMcpState(db, orgId, now = Date.now()) {
   if (calls.error) throw calls.error
   const people = new Set((calls.data || []).map((r) => r.profile_id).filter(Boolean))
   return { mcp_enabled: settings.data?.mcp_enabled === true, people_30d: people.size }
+}
+
+/**
+ * The organisations (of this person's studios, plus those they administer)
+ * whose `org_settings.mcp_enabled` switch is on. Also read by the consent
+ * page. A failed read answers [] (fail closed) and is logged: an unreadable
+ * switch must never read as "on".
+ *
+ * @param {object} db a service-role supabase client
+ * @param {{ locations?: Array<{ organization_id?: string }>, orgAdminOrgIds?: string[] }} user
+ * @returns {Promise<string[]>}
+ */
+export async function mcpEnabledOrgIds(db, user) {
+  const orgIds = Array.from(new Set([
+    ...(user?.locations || []).map((l) => l?.organization_id),
+    ...(user?.orgAdminOrgIds || []),
+  ].filter(Boolean)))
+  if (orgIds.length === 0) return []
+
+  const { data, error } = await db
+    .from('org_settings')
+    .select('organization_id')
+    .eq('mcp_enabled', true)
+    .in('organization_id', orgIds)
+  if (error) {
+    logError('mcp', 'org switch not readable', { code: error.code })
+    return []
+  }
+  return (data || []).map((r) => r.organization_id)
 }
