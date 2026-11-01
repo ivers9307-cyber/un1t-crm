@@ -166,6 +166,32 @@ describe('EditModeOverlay on an offer layout (PAGES.1)', () => {
     expect(sent('add-block')[0]).toMatchObject({ atIndex: 1 })
   })
 
+  // CLASSFIRST.1 — a paid trial page takes the one_class layout: the hero's
+  // words off the pinned paid_trial block, the page's hero photo as its poster.
+  it('a one_class region over a pinned paid_trial block edits the hero in place and shows the page photo as the poster', () => {
+    const PT = { id: 'pt1', type: 'paid_trial', eyebrow: '14 day reset', heading: 'The 14 Day Reset', subhead: 'Pay once.' }
+    const layout = {
+      kind: 'one_class', anchor: 'trial', heroImageUrl: 'https://x/backdrop.jpg', offerBlockId: 'pt1',
+      offer: <div data-testid="trial-card" />, cta: { href: '#trial', label: 'Start my trial' },
+      hero: { heading: 'The 14 Day Reset' }, expect: { eyebrow: 'What to expect', heading: 'Your first two weeks', cards: [] },
+    }
+    const { container } = render(<EditModeOverlay initialBlocks={[PT, HERO, STATS]} offerLayout={layout} />)
+    const region = container.querySelector('[data-pinned-offer]')
+    expect(region.querySelector('video')).toBeNull()
+    expect(region.querySelector('img').getAttribute('src')).toBe('https://x/hero.jpg')
+    expect(screen.getByTestId('trial-card')).toBeTruthy()
+    const heading = screen.getAllByRole('textbox').find((el) => el.textContent === 'The 14 Day Reset')
+    expect(heading.closest('h1')).toBeTruthy()
+    heading.textContent = 'The Reset'
+    fireEvent.input(heading)
+    expect(sent('edit-field')).toContainEqual({ namespace: 'lp-editor', type: 'edit-field', blockId: 'pt1', path: ['heading'], value: 'The Reset' })
+    // The strip shows the trial defaults and edits onto the block.
+    const card = screen.getAllByRole('textbox').find((el) => el.textContent === 'A coach beside you')
+    card.textContent = 'Your coach'
+    fireEvent.input(card)
+    expect(sent('edit-field')).toContainEqual({ namespace: 'lp-editor', type: 'edit-field', blockId: 'pt1', path: ['expect_cards'], value: expect.arrayContaining([expect.objectContaining({ title: 'Your coach' })]) })
+  })
+
   it('the frosted card renders the trial card as preview (disabled), never a live POST', () => {
     const view = {
       key: 'stillorgan', label: 'Stillorgan', publicPath: 'stillorgan', sellable: true,

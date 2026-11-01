@@ -429,7 +429,9 @@ describe('the [slug] page route', () => {
     h.loaded = { page: TRIAL, studios: TRIAL_STUDIOS_ROWS }
     // Choose on page: no ?studio=, the picker over every enabled studio.
     const picker = propsOf(await render({ slug: 'trial', sp: { edit: '1' } }), 'overlay')
-    expect(picker.offerLayout).toMatchObject({ kind: 'frosted', anchor: 'trial', offerBlockId: 'pt1', cta: { href: '#trial', label: 'Start my trial' } })
+    // CLASSFIRST.1 — the one_class layout: the hero reads the block's words, the page's hero photo is the poster, the strip has its defaults.
+    expect(picker.offerLayout).toMatchObject({ kind: 'one_class', anchor: 'trial', offerBlockId: 'pt1', cta: { href: '#trial', label: 'Start my trial' }, hero: { heading: 'Start here', videoUrl: null }, expect: { eyebrow: 'What to expect' } })
+    expect(picker.offerLayout.expect.cards).toHaveLength(3)
     expect(picker.offerLayout.offer.props).toMatchObject({ preview: true, initialStudio: null, resumePurchaseId: null, cancelled: false, returnPath: '/trial', page: 'trial' })
     expect(picker.offerLayout.offer.props.studios.map((s) => s.publicPath)).toEqual(['stillorgan', 'hatch-street'])
     // A previewed studio: its card, still disabled.

@@ -11,8 +11,11 @@
 //   one_class  CampaignHero (coach video, its eyebrow, heading and sub-copy
 //              edited in place) wrapping the booking card, then ExpectStrip
 //              (its eyebrow, heading and cards edited in place). The words
-//              come from the LIVE pinned block (campaignFunnelCopy), so the
-//              hero tracks every keystroke from either side.
+//              come from the LIVE pinned block (oneClassPresentation, for a
+//              campaign_funnel, a paid_trial or a corp_promo block:
+//              CLASSFIRST.1), so the hero tracks every keystroke from either
+//              side. Only the campaign card's own four words are edited in
+//              place; a trial or promo card's words are the left panel's.
 //
 // The whole region selects the offer block on a click outside anything
 // interactive; the booking card itself stays live (spec §7). Every edit goes
@@ -25,6 +28,7 @@ import FrostedHero from './FrostedHero'
 import EditableText from './EditableText'
 import { EDITABLE_COPY_KEYS } from './CampaignFunnel'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
+import { oneClassPresentation } from '@/lib/class-first-funnel'
 
 export const INTERACTIVE = 'button, a, input, select, textarea, iframe, [contenteditable="true"]'
 
@@ -38,14 +42,15 @@ const ownCardsAlign = (block) => Array.isArray(block?.expect_cards)
   && block.expect_cards.length > 0
   && block.expect_cards.every((c) => c && typeof c === 'object' && str(c.title))
 
-function OneClassRegion({ layout, pinned, onEditField }) {
-  const copy = pinned ? campaignFunnelCopy(pinned) : null
-  const hero = copy
-    ? { videoUrl: copy.video_url, posterUrl: copy.poster_url, soundLabel: copy.sound_label, videoFocus: copy.video_focus, soundDefault: copy.sound_default, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }
-    : (layout.hero || {})
-  const strip = copy
-    ? { eyebrow: copy.expect_eyebrow, heading: copy.expect_heading, cards: copy.expect_cards }
-    : (layout.expect || {})
+function OneClassRegion({ layout, pinned, heroBlock, onEditField }) {
+  // The live words off the pinned block, whatever its type; the page's hero
+  // photo stands in for a missing poster as on the public page.
+  const live = pinned ? oneClassPresentation(pinned, { heroImageUrl: str(heroBlock?.image_url) || layout.heroImageUrl || null }) : null
+  const hero = live ? live.hero : (layout.hero || {})
+  const strip = live ? live.expect : (layout.expect || {})
+  // The campaign card's own four words are edited in place (its copy prop); a
+  // trial or promo card is rendered as the route built it.
+  const copy = pinned?.type === 'campaign_funnel' ? campaignFunnelCopy(pinned) : null
 
   const editable = (path, value, multiline) => (
     <EditableText value={value || ''} multiline={multiline} onChange={(v) => onEditField(path, v)} />
@@ -116,7 +121,7 @@ export default function EditOfferLayout({ layout, pinned = null, heroBlock = nul
           scrollCueLabel={layout.scrollCueLabel || null}
         />
       ) : (
-        <OneClassRegion layout={layout} pinned={pinned} onEditField={onEditField} />
+        <OneClassRegion layout={layout} pinned={pinned} heroBlock={heroBlock} onEditField={onEditField} />
       )}
       {/* The type badge, as on every block; no toolbar (the offer is pinned). */}
       {selectable && label && (

@@ -7,10 +7,10 @@ import { layoutFor, redirectTarget, pageSubpath, legacyStudioRedirect } from './
 const page = (over = {}) => ({ slug: 'x', kind: 'campaign', offer_type: 'none', redirect_to: null, ...over })
 
 describe('layoutFor', () => {
-  it('layoutFor maps the five offer types', () => {
-    expect(layoutFor('paid_trial')).toBe('frosted')
+  it('layoutFor maps the five offer types (CLASSFIRST.1: a paid trial and a promo page take the one_class layout)', () => {
+    expect(layoutFor('paid_trial')).toBe('one_class')
     expect(layoutFor('class_funnel')).toBe('frosted')
-    expect(layoutFor('promo_credits')).toBe('frosted')
+    expect(layoutFor('promo_credits')).toBe('one_class')
     expect(layoutFor('one_class')).toBe('one_class')
     expect(layoutFor('none')).toBe('blocks')
   })
@@ -18,7 +18,7 @@ describe('layoutFor', () => {
     expect(layoutFor('paid_trial', 'studio')).toBe('blocks')
     expect(layoutFor('one_class', 'studio')).toBe('blocks')
     expect(layoutFor('none', 'studio')).toBe('blocks')
-    expect(layoutFor('paid_trial', 'campaign')).toBe('frosted')
+    expect(layoutFor('paid_trial', 'campaign')).toBe('one_class')
   })
   it('an unknown or missing type is the plain blocks layout', () => {
     expect(layoutFor('lead_form')).toBe('blocks')
