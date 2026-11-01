@@ -135,3 +135,17 @@ describe('PIPE3 — paid_trial and programmes', () => {
     expect(getBoardModule('paid_trial').stages.map((s) => s.slug)).toEqual(['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted'])
   })
 })
+
+
+// HATCH39 — the un1t.online €39 board shares the Stillorgan module's rules by reference.
+describe('HATCH39 — paid_trial_un1t', () => {
+  it('registers paid_trial_un1t as a un1t-input module sharing paid_trial\'s stages and classify', () => {
+    const mod = getBoardModule('paid_trial_un1t')
+    const paid = getBoardModule('paid_trial')
+    expect(mod).toBeTruthy()
+    expect(mod.inputSource).toBe('un1t_online')
+    expect(mod.stages).toBe(paid.stages)
+    expect(mod.classify).toBe(paid.classify)
+    expect(mod.requiredFields).toEqual(['id', 'name', 'email', 'location_id'])
+  })
+})
