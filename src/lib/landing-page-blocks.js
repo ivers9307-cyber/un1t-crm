@@ -22,6 +22,7 @@ import { classFunnelCtaLabel, classFunnelShownOnLanding } from '@/lib/public-lan
 import { PAID_TRIAL_PENDING_BODY, PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
 import { CAMPAIGN_FUNNEL_COPY_DEFAULTS, CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT, CAMPAIGN_FUNNEL_SECTIONS } from '@/lib/campaign-funnel'
 import { CORP_PROMO_COPY_DEFAULT } from '@/lib/corp-promos'
+import { CLASS_FIRST_HERO_DEFAULTS, PAID_TRIAL_CLASS_FIRST_DEFAULTS, CORP_PROMO_CLASS_FIRST_DEFAULTS } from '@/lib/class-first-copy'
 
 // Stable id helper — a uuid string. We keep ids in the saved JSON
 // because @dnd-kit needs stable per-item keys for smooth drag
@@ -270,6 +271,12 @@ const PAID_TRIAL_DEFAULT = ({ brand = '' } = {}) => ({
   // un1t.online account the CRM created gets once the purchase settles.
   account_email_subject: PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_subject,
   account_email_body:    PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT.account_email_body,
+  // CLASSFIRST.1 — the one_class layout's hero media, the class step's words
+  // and the expect strip (class-first-copy.js). The page's hero photo stands
+  // in for a missing poster.
+  ...CLASS_FIRST_HERO_DEFAULTS,
+  ...PAID_TRIAL_CLASS_FIRST_DEFAULTS,
+  expect_cards:   PAID_TRIAL_CLASS_FIRST_DEFAULTS.expect_cards.map((c) => ({ ...c })),
   membership_id:  '',
   plan_code:      '',
   tag:            '',
@@ -286,6 +293,11 @@ const CORP_PROMO_DEFAULT = () => ({
   promo_key: '',
   ...CORP_PROMO_COPY_DEFAULT,
   ticks:     [...CORP_PROMO_COPY_DEFAULT.ticks],
+  // CLASSFIRST.1 — the one_class layout's hero media, the class step's words
+  // and the expect strip (class-first-copy.js).
+  ...CLASS_FIRST_HERO_DEFAULTS,
+  ...CORP_PROMO_CLASS_FIRST_DEFAULTS,
+  expect_cards: CORP_PROMO_CLASS_FIRST_DEFAULTS.expect_cards.map((c) => ({ ...c })),
 })
 
 const STATS_DEFAULT = () => ({
