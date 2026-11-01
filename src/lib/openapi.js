@@ -10674,6 +10674,25 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'get',
+  path: '/api/account/connected-apps',
+  tags: ['Me'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: "The caller's own usage of each connected MCP app, last 7 days",
+  description: "From mcp_tool_calls, the caller's own rows only. The grant list itself is read and revoked in the browser through supabase.auth.oauth.",
+  responses: {
+    200: {
+      description: 'Per OAuth client',
+      content: { 'application/json': { schema: SuccessResponse(z.object({
+        clients: z.array(z.object({ client_id: z.string(), last_used_at: z.string(), calls_7d: z.number().int() })),
+      })) } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Could not read usage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================

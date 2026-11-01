@@ -23,6 +23,8 @@ import EmailSignatureForm from '@/components/EmailSignatureForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
 import CalendarFeedCard from '@/components/CalendarFeedCard'
+import ConnectedAppsCard from '@/components/ConnectedAppsCard'
+import { connectorUrl } from '@/lib/mcp/org-switch'
 import { getLocationBranding } from '@/lib/location-branding'
 import { viewerZoneOf } from '@/lib/display-zone'
 
@@ -110,6 +112,10 @@ export default async function AccountPage() {
 
       <div className="mt-8">
         <CalendarFeedCard timezone={viewerZoneOf(user)} />
+      </div>
+
+      <div className="mt-8">
+        <ConnectedAppsCard connectorUrl={connectorUrl()} timezone={viewerZoneOf(user)} />
       </div>
 
       <div className="mt-8 pt-6 border-t border-un1t-border">
