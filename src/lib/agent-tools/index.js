@@ -16,6 +16,9 @@ import listPipeline from './list-pipeline.js'
 import listTasks from './list-tasks.js'
 import createContact from './create-contact.js'
 import createActivity from './create-activity.js'
+import getClasses from './get-classes.js'
+import getClassRoster from './get-class-roster.js'
+import getAppointments from './get-appointments.js'
 
 /** @type {ReadonlyArray<ReturnType<typeof import('./registry.js').defineTool>>} */
 export const TOOLS = Object.freeze([
@@ -34,4 +37,7 @@ export const TOOLS = Object.freeze([
   listTasks,
   createContact,
   createActivity,
+  getClasses,
+  getClassRoster,
+  getAppointments,
 ])
