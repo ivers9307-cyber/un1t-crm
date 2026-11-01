@@ -14,10 +14,26 @@ import { trialPurchasePublicState } from '@/lib/paid-trial'
 import { publishQueuePush, TRIAL_PURCHASES_WORKER_PATH } from '@/lib/qstash'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { logWarn } from '@/lib/log'
+import { formatInZone, getLocationZone, DEFAULT_TZ } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 
-const COLS = 'id, status, payment_status, payment_provider, payment_provider_ref, payment_checkout_token, payment_checkout_url, amount_cents, currency, product_name, duration_days, connected_account_id'
+// CLASSFIRST.1 — class_name / class_starts_at / location_id: the class the
+// buyer picked, labelled below on the studio's clock for the done screen.
+const COLS = 'id, status, payment_status, payment_provider, payment_provider_ref, payment_checkout_token, payment_checkout_url, amount_cents, currency, product_name, duration_days, connected_account_id, location_id, class_name, class_starts_at'
+
+// The public class shape's labels (public-classes.js shapeAt), so the done
+// screen's class line reads exactly as the tile did. Display only: an
+// unreadable zone labels in DEFAULT_TZ rather than failing the poll.
+const DAY_LABEL_OPTS = Object.freeze({ weekday: 'short', day: 'numeric', month: 'short' })
+const TIME_OPTS = Object.freeze({ hour: '2-digit', minute: '2-digit', hour12: false })
+async function chosenClassOf(db, row) {
+  if (!row?.class_name || !row?.class_starts_at) return null
+  const d = new Date(row.class_starts_at)
+  if (isNaN(d.getTime())) return null
+  const zone = await getLocationZone(db, row.location_id).catch(() => DEFAULT_TZ)
+  return { name: row.class_name, day_label: formatInZone(d, zone, DAY_LABEL_OPTS, 'en-IE'), time: formatInZone(d, zone, TIME_OPTS, 'en-GB') }
+}
 
 export async function GET(_request, props) {
   const { id } = await props.params
@@ -56,5 +72,6 @@ export async function GET(_request, props) {
       ? null
       : { provider: row.payment_provider, token: row.payment_checkout_token, url: row.payment_checkout_url },
     amount_cents: row.amount_cents, currency: row.currency, product_name: row.product_name, duration_days: row.duration_days,
+    class: await chosenClassOf(db, row),
   } })
 }

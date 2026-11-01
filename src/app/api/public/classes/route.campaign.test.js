@@ -135,6 +135,31 @@ const pageOk = (block, extra = {}) => ({
 })
 
 describe('GET /api/public/classes — page (PAGES.1)', () => {
+  // CLASSFIRST.1 — the class before the details on /trial and /corp.
+  it('a paid_trial page lists the studio\'s whole visible timetable over 14 days, configured, with the blip flag', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ type: 'paid_trial', heading: 'The 14 Day Reset' }, { page: { id: 'p-t', slug: 'trial', offer_type: 'paid_trial' } }))
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })
+    const body = await (await get('page=trial&studio=stillorgan')).json()
+    expect(body.data.classes.map((c) => c.event_id)).toEqual(['a', 'b'])
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: false })
+    expect(body.data.terms).toEqual({ required: false })
+    const opts = fetchUpcomingEvents.mock.calls[0][1]
+    expect(opts.end - opts.start).toBe(14 * 86400)
+  })
+  it('a promo_credits page lists the same way, and a failed read is the blip, never "no classes"', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ type: 'corp_promo' }, { page: { id: 'p-c', slug: 'corp', offer_type: 'promo_credits' } }))
+    fetchUpcomingEvents.mockResolvedValueOnce({ ok: false })
+    const body = await (await get('page=corp&studio=hatch-street')).json()
+    expect(body.data.classes).toEqual([])
+    expect(body.data.campaign).toEqual({ configured: true, timetable_unavailable: true })
+  })
+  it('a page with no offer still lists nothing', async () => {
+    resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ type: 'hero' }, { page: { id: 'p-n', slug: 'about', offer_type: 'none' } }))
+    const body = await (await get('page=about')).json()
+    expect(body.data.classes).toEqual([])
+    expect(fetchUpcomingEvents).not.toHaveBeenCalled()
+  })
+
   it("lists the campaign page's allow-listed class with ?page=50plus and reports configured", async () => {
     resolvePublicPageRequest.mockResolvedValueOnce(pageOk({ type: 'campaign_funnel', campaign: '50plus', class_keywords: '50+', trial_membership_id: 'm', trial_plan_code: 'p' }))
     fetchUpcomingEvents.mockResolvedValueOnce({ ok: true, events: EVENTS })

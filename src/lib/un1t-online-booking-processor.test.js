@@ -79,6 +79,30 @@ beforeEach(() => {
 const run = (req = request(), c = ctx()) => processUn1tClassBookingRequest(makeDb(), req, c, deps)
 const lastRow = () => Object.assign({}, ...rowUpdates)
 
+// CLASSFIRST.1 — a row funded by a paid trial or a promo claim.
+describe('processUn1tClassBookingRequest — a funded row', () => {
+  const funded = () => request({ funded_by: 'corp_promo', funded_by_id: 'claim-1' })
+  it('with the credits on the live ledger it books with no trial step', async () => {
+    writer.read = vi.fn(async () => ({ balance: 3, is_unlimited: false }))
+    deps.ensureUn1tAccount.mockImplementation(async () => { order.push('account'); return { kind: 'existing', un1tUserId: 'usr-1', executingContactId: 'c-1' } })
+    const out = await run(funded())
+    expect(out.outcome).toBe('booked')
+    expect(order).toEqual(['account', 'book', 'set_password'])
+    expect(deps.grantTrial).not.toHaveBeenCalled()
+    expect(lastRow().un1t_steps).toMatchObject({ trial: 'skipped_credits' })
+  })
+  it('with no credits and no membership it is a funded_no_balance card: no trial, and the paid-trial reply never applies', async () => {
+    deps.readPaidTrialReply = vi.fn(async () => 'Buy the trial first')
+    const out = await run(funded())
+    expect(out).toEqual({ outcome: 'needs_review', detail: 'funded_no_balance' })
+    expect(deps.grantTrial).not.toHaveBeenCalled()
+    expect(deps.book).not.toHaveBeenCalled()
+    expect(order).toContain('card:funded_no_balance')
+    expect(lastRow().un1t_steps).toMatchObject({ trial: 'funded_no_credits', card: 'funded_no_balance' })
+    expect(deps.routeToReview).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'q-1' }), 'funded_no_balance', expect.objectContaining({ provider: 'un1t_online' }))
+  })
+})
+
 describe('processUn1tClassBookingRequest', () => {
   it('happy path new person: create, trial, book, explanation email then forgot-password, in that order', async () => {
     const out = await run()

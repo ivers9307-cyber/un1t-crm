@@ -11,15 +11,17 @@
 // changes the row, so a second sweep sees what the first one wrote.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn(), sendAccountEmail: vi.fn() }))
+const mocks = vi.hoisted(() => ({ capi: vi.fn(), setPassword: vi.fn(), settings: vi.fn(), warn: vi.fn(), emailCopy: vi.fn(), sendAccountEmail: vi.fn(), queue: vi.fn() }))
 vi.mock('@/lib/trial-studios', () => ({ readPaidTrialAccountEmailCopy: mocks.emailCopy }))
 vi.mock('@/lib/un1t-online-funnel-emails', () => ({ sendUn1tAccountEmail: mocks.sendAccountEmail }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi }))
 vi.mock('@/lib/un1t-online-account', () => ({ runSetPasswordStep: mocks.setPassword }))
 vi.mock('@/lib/un1t-online-settings', () => ({ readUn1tWriteSettings: mocks.settings }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: mocks.warn, logInfo: vi.fn() }))
+// CLASSFIRST.1 — the funded booking after the settle (its own tests beside it).
+vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: mocks.queue }))
 
-import { settleUn1tTrialPurchases, UN1T_TRIAL_EXPIRY_MS } from './trial-purchase-un1t-settle'
+import { settleUn1tTrialPurchases, UN1T_TRIAL_EXPIRY_MS, UN1T_TRIAL_ROW_COLS } from './trial-purchase-un1t-settle'
 
 const T0 = Date.parse('2026-10-24T10:00:00.000Z')
 const iso = (ms) => new Date(ms).toISOString()
@@ -111,6 +113,40 @@ beforeEach(() => {
   mocks.setPassword.mockResolvedValue({ explanation: 'sent', forgotPassword: 'done' })
   mocks.settings.mockResolvedValue({ membershipSource: 'un1t_online', settings: SETTINGS })
   mocks.emailCopy.mockResolvedValue(EMAIL_COPY)
+  mocks.queue.mockResolvedValue({ queued: true, id: 'cbr-1' })
+})
+
+describe('settleUn1tTrialPurchases — CLASSFIRST.1, the class they picked', () => {
+  it('the row read names the class, the page and the terms columns (the fake answers every column, so the list itself is pinned)', () => {
+    const cols = UN1T_TRIAL_ROW_COLS.split(',').map((c) => c.trim())
+    for (const c of ['page_id', 'class_event_id', 'class_name', 'class_starts_at', 'terms_accepted_at', 'terms_source', 'terms_version', 'contact_id']) {
+      expect(cols).toContain(c)
+    }
+  })
+  it('a settled row with a class queues one funded booking; a row without queues nothing', async () => {
+    const withClass = row({ class_event_id: 'un1t:ev-1', class_name: 'RALLY', class_starts_at: iso(T0 + 48 * 60 * MIN), page_id: 'p-1', terms_accepted_at: iso(T0), terms_source: 'website', terms_version: 'v' })
+    const { db } = makeDb({ rows: [withClass], txs: [tx()] })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r).toMatchObject({ settled: 1, errors: 0 })
+    expect(mocks.queue).toHaveBeenCalledTimes(1)
+    expect(mocks.queue).toHaveBeenCalledWith(db, expect.objectContaining({
+      fundedBy: 'trial_purchase', fundedById: 'tp1', locationId: 'loc2', contactId: 'c1', pageId: 'p-1',
+      eventId: 'un1t:ev-1', className: 'RALLY', terms: { terms_accepted_at: iso(T0), terms_source: 'website', terms_version: 'v' },
+    }))
+    mocks.queue.mockClear()
+    const plain = makeDb({ rows: [row()], txs: [tx()] })
+    await settleUn1tTrialPurchases(plain.db, { now: () => T0 + 10 * MIN })
+    expect(mocks.queue).not.toHaveBeenCalled()
+  })
+  it('a queue helper that throws is counted and warned, and the row stays settled', async () => {
+    mocks.queue.mockRejectedValueOnce(new Error('down'))
+    const { db, rows } = makeDb({ rows: [row({ class_event_id: 'un1t:ev-1', class_name: 'RALLY', class_starts_at: iso(T0 + 48 * 60 * MIN) })], txs: [tx()] })
+    const r = await settleUn1tTrialPurchases(db, { now: () => T0 + 10 * MIN })
+    expect(r.settled).toBe(1)
+    expect(r.errors).toBeGreaterThanOrEqual(1)
+    expect(rows[0].status).toBe('granted')
+    expect(mocks.warn).toHaveBeenCalledWith(expect.anything(), 'funded class booking not queued', expect.objectContaining({ purchaseId: 'tp1' }))
+  })
 })
 
 describe('settleUn1tTrialPurchases', () => {

@@ -46,6 +46,8 @@ import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { logWarn, logError } from '@/lib/log'
+import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/class-first-choice'
+import { classFirstStepCopy } from '@/lib/class-first-funnel'
 
 export const runtime = 'nodejs'
 
@@ -60,6 +62,9 @@ const Schema = z.object({
   // returns there. Allowlisted by normalizeTrialReturnPath (/trial or a live studio
   // page's slug in the host's organisation); unknown → /trial.
   return_path: z.string().max(64).optional(),
+  // CLASSFIRST.1 — the class the buyer picked before their details (the
+  // studio's event id, judged below against the picker's own read).
+  event_id: z.string().trim().min(1).max(64).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -109,6 +114,7 @@ export async function POST(request) {
   let landingPath
   let studioKey
   let pageId = null
+  let pageBlocks = []
   if (b.page) {
     // Resolved first, then limited on the RESOLVED studio path (the legacy
     // key for that studio); a request that resolves to nothing shares one
@@ -135,6 +141,7 @@ export async function POST(request) {
     landingPath = r.publicPath
     studioKey = entry.key
     pageId = r.pageId
+    pageBlocks = r.blocks
   } else {
     // No page: the studio key names a row of the trial page. A page loaded before the studio choice
     // shipped posts no studio: it was the Stillorgan page, so that is the
@@ -189,6 +196,17 @@ export async function POST(request) {
       success: false, code: 'terms_required', error: terms.required_message,
       issues: { terms_accepted: terms.required_message }, terms,
     }, { status: 400 })
+  }
+
+  // CLASSFIRST.1 — the class they picked, judged by the server against the
+  // same read the picker used, before the lead, the row or any money: a class
+  // that filled is class_unavailable (the card returns to the tiles), an
+  // unreadable timetable is 503 in the block's words (the details are kept).
+  // No event_id is "no class yet": the purchase still sells.
+  const choice = await resolveChosenClass(db, { locationId, blocks: pageBlocks, eventId: b.event_id })
+  if (!choice.ok) {
+    const refusal = chosenClassRefusal(choice.code, { timetable_unavailable: classFirstStepCopy(entry.block, 'paid_trial').timetable_unavailable_text })
+    return NextResponse.json(refusal.body, { status: refusal.status })
   }
 
   // ── Capture the lead (the class funnel's steps, same helpers) ──
@@ -332,6 +350,7 @@ export async function POST(request) {
     status: 'awaiting_payment',
     lead_event_id: b.lead_event_id || null,
     attribution,
+    ...classColumnsFor(choice.chosen),
     ...(isHatch ? { payment_provider: 'un1t_online', un1t_product_id: product.un1tProductId, ...termsRecord } : {}),
   }).select('*').single()
   if (insErr || !row) {

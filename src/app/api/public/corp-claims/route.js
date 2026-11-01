@@ -43,6 +43,8 @@ import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
 import { zoneOfLocation } from '@/lib/location-time'
 import { logWarn, logError } from '@/lib/log'
 import { resolvePublicPageRequest, pageRequestRefusal } from '@/lib/landing-pages'
+import { resolveChosenClass, classColumnsFor, chosenClassRefusal } from '@/lib/class-first-choice'
+import { classFirstStepCopy } from '@/lib/class-first-funnel'
 
 export const runtime = 'nodejs'
 
@@ -51,6 +53,9 @@ const Schema = z.object({
   promo: z.string().trim().min(1).max(60).optional(),
   page: z.string().trim().max(40).optional(),
   studio: z.string().trim().max(40).optional(),
+  // CLASSFIRST.1 — the class the claimant picked before their details (the
+  // studio's event id, judged below against the picker's own read).
+  event_id: z.string().trim().min(1).max(64).optional(),
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
@@ -107,6 +112,8 @@ export async function POST(request) {
   let tag
   let leadSource
   let pageId = null
+  let pageBlocks = []
+  let promoBlock = null
   if (b.page) {
     const r = await resolvePublicPageRequest(db, { hostname: request.headers.get('host'), page: b.page, studio: b.studio })
     const block = r.ok && r.page.offer_type === 'promo_credits'
@@ -128,6 +135,8 @@ export async function POST(request) {
     locationId = r.locationId
     pageId = r.pageId
     terms = r.terms
+    pageBlocks = r.blocks
+    promoBlock = block
     const rowAttr = r.studioRow?.attribution || {}
     tag = str(rowAttr.tag) || promo.tag
     leadSource = str(rowAttr.lead_source) || promo.leadSource
@@ -148,6 +157,8 @@ export async function POST(request) {
     copy = corpPromoCopyFromBlocks(r.blocks, promo.key)
     locationId = r.locationId
     terms = r.terms // no page_id: the claim came from the promo's own form, not the studio page
+    pageBlocks = r.blocks
+    promoBlock = r.blocks.find((x) => x && typeof x === 'object' && x.type === 'corp_promo') || null
     tag = promo.tag
     leadSource = promo.leadSource
   }
@@ -169,6 +180,17 @@ export async function POST(request) {
       success: false, code: 'terms_required', error: termsPayload.required_message,
       issues: { terms_accepted: termsPayload.required_message }, terms: termsPayload,
     }, { status: 400 })
+  }
+
+  // CLASSFIRST.1 — the class they picked, judged by the server against the
+  // same read the picker used, before the lead or the row: a class that
+  // filled is class_unavailable (the card returns to the tiles), an
+  // unreadable timetable is 503 in the block's words. No event_id is "no
+  // class yet": the claim still grants.
+  const choice = await resolveChosenClass(db, { locationId, blocks: pageBlocks, eventId: b.event_id })
+  if (!choice.ok) {
+    const refusal = chosenClassRefusal(choice.code, { timetable_unavailable: classFirstStepCopy(promoBlock, 'corp_promo').timetable_unavailable_text })
+    return NextResponse.json(refusal.body, { status: refusal.status })
   }
 
   // ── Capture the lead ──
@@ -248,6 +270,7 @@ export async function POST(request) {
     terms_version: version,
     attribution: { ...utm, ...(a.utm_source ? { utm_source: String(a.utm_source) } : {}) },
     lead_event_id: b.lead_event_id || null,
+    ...classColumnsFor(choice.chosen),
   }).select('*').single()
   if (insErr || !claim) {
     // Ids and the code only: a PostgREST error's details can name the row.

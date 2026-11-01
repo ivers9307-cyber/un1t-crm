@@ -9,9 +9,12 @@ vi.mock('@/lib/un1t-online-settings', () => ({
 vi.mock('@/lib/un1t-online-write', () => ({ Un1tWriteRefused: class Un1tWriteRefused extends Error {} }))
 vi.mock('@/lib/un1t-online-write-ops', () => ({ grantPromoCredits: vi.fn(), UN1T_PROMO_ORIGIN: 'corp_promo' }))
 vi.mock('@/lib/un1t-online-account', () => ({ ensureUn1tAccount: vi.fn(), runSetPasswordStep: vi.fn() }))
+// CLASSFIRST.1 — the funded booking after the grant (its own tests beside it).
+vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: vi.fn(async () => ({ queued: true, id: 'cbr-1' })) }))
 
 import { fulfilCorpPromoClaim } from './corp-promo-claim'
 import { resolveCorpPromo, corpPromoCopyFromBlocks } from './corp-promos'
+import { queueFundedClassBooking } from '@/lib/class-first-booking'
 
 const PROMO = resolveCorpPromo('hatch-3-free')
 const COPY = corpPromoCopyFromBlocks([], PROMO.key)
@@ -49,6 +52,37 @@ const run = (d, db = fakeDb().db) => fulfilCorpPromoClaim(db, { claim, location,
 const lastStatus = (updates) => updates.filter((u) => u.patch.status).at(-1)?.patch
 
 beforeEach(() => vi.clearAllMocks())
+
+describe('fulfilCorpPromoClaim — CLASSFIRST.1, the class they picked', () => {
+  const withClass = { ...claim, contact_id: 'c-1', page_id: 'p-c', class_event_id: 'un1t:ev-1', class_name: 'RALLY', class_starts_at: '2099-01-07T18:00:00.000Z' }
+  it('a granted claim with a class queues one funded booking after the grant, before the email', async () => {
+    const f = fakeDb()
+    const d = deps()
+    const r = await fulfilCorpPromoClaim(f.db, { claim: withClass, location, contact, promo: PROMO, copy: COPY, zone: 'Europe/Dublin', trialProductId: 'tp' }, d)
+    expect(r.kind).toBe('granted')
+    expect(queueFundedClassBooking).toHaveBeenCalledTimes(1)
+    expect(queueFundedClassBooking).toHaveBeenCalledWith(f.db, expect.objectContaining({
+      fundedBy: 'corp_promo', fundedById: 'claim-1', locationId: 'loc-h', contactId: 'c-1', pageId: 'p-c',
+      eventId: 'un1t:ev-1', className: 'RALLY', startsAt: '2099-01-07T18:00:00.000Z',
+      customer: { name: 'Ann Byrne', email: 'ann@work.ie', phone: '0871234567' },
+      terms: { terms_accepted_at: '2026-10-28T10:00:00Z', terms_source: null, terms_version: null },
+    }))
+    expect(d.sendCorpPromoEmail).toHaveBeenCalledTimes(1)
+  })
+  it('no class, an ineligible claim or a refused grant queues nothing', async () => {
+    await run(deps())
+    expect(queueFundedClassBooking).not.toHaveBeenCalled()
+    await fulfilCorpPromoClaim(fakeDb().db, { claim: withClass, location, contact, promo: PROMO, copy: COPY, zone: 'Europe/Dublin', trialProductId: 'tp' }, deps({ grantPromoCredits: vi.fn(async () => ({ outcome: 'ineligible', reason: 'trained' })) }))
+    expect(queueFundedClassBooking).not.toHaveBeenCalled()
+  })
+  it('a queue helper that throws never undoes the grant or the email', async () => {
+    queueFundedClassBooking.mockRejectedValueOnce(new Error('down'))
+    const d = deps()
+    const r = await fulfilCorpPromoClaim(fakeDb().db, { claim: withClass, location, contact, promo: PROMO, copy: COPY, zone: 'Europe/Dublin', trialProductId: 'tp' }, d)
+    expect(r.kind).toBe('granted')
+    expect(d.sendCorpPromoEmail).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('fulfilCorpPromoClaim', () => {
   it('granted: 3 credits for 7 days to the account, the row stamped, one confirmation email', async () => {

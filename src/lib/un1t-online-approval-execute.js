@@ -148,7 +148,7 @@ export async function executeUn1tApproval(db, { row, actor }, deps = {}) {
   let request = null
   if (fromFunnel) {
     const { data: q, error: qErr } = await db.from('class_booking_requests')
-      .select('id, location_id, contact_id, glofox_event_id, class_name, starts_at, terms_accepted_at, terms_source, terms_version, page_id')
+      .select('id, location_id, contact_id, glofox_event_id, class_name, starts_at, terms_accepted_at, terms_source, terms_version, page_id, funded_by')
       .eq('approval_request_id', row.id).limit(1).maybeSingle()
     if (qErr) throw Object.assign(new Error(`queue row read failed (${qErr.code ?? 'no code'})`), { code: qErr.code ?? null })
     request = q
@@ -161,9 +161,13 @@ export async function executeUn1tApproval(db, { row, actor }, deps = {}) {
   const eventId = un1tEventIdOf(rawId) ?? (UUID_RE.test(rawId) ? rawId : null)
   if (!eventId) return done({ ok: false, code: 'class_unavailable', message: 'This card names no un1t.online class.' }, 'failed')
 
+  // CLASSFIRST.1 — a funded row (a paid trial or a promo claim put the credits
+  // on the account) never buys a trial from an approval either: no credits is
+  // the funded_no_balance card again, as the card's copy promises.
+  const funded = Boolean(request?.funded_by) || reason === 'funded_no_balance'
   const once = await bookOnce(db, {
     request, contact, organizationId: ctx.organizationId, eventId, origin: 'approval', originRef: row.id, actor, writer,
-    trialMode: reason === 'un1t_trial_unverified' ? 'credits_only' : 'normal',
+    trialMode: funded ? 'funded' : reason === 'un1t_trial_unverified' ? 'credits_only' : 'normal',
   })
   if (once.kind !== 'booked') {
     const code = once.kind === 'card' ? once.reason : once.kind === 'retry' ? once.code : 'un1t_trial_used'

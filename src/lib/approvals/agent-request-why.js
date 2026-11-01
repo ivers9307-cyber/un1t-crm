@@ -55,6 +55,10 @@ const MACHINE_REASONS = {
     'un1t.online did not answer clearly. Approving checks un1t.online first and books only if it is not already done.',
   un1t_trial_unverified:
     'The free trial could not be confirmed in un1t.online. Approving books only if their credits show; it never buys a trial.',
+  // CLASSFIRST.1 — the class a /trial buyer or a /corp claimant picked; the
+  // purchase or claim had granted credits, but none showed when the booking ran.
+  funded_no_balance:
+    'They paid for a trial or claimed a promo and picked this class, but no credits showed on the account when the booking ran. Check the purchase or claim and the account, add the credits if they are missing, then approve to book. Approving never buys a trial.',
   // UN1TBOOK.20 — the class left un1t.online's timetable before the queued
   // booking ran; nothing was sent there (record-only).
   un1t_class_no_longer_available:

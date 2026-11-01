@@ -39,6 +39,7 @@ import { trialUsedHandoff as handoffOp } from './un1t-online-trial-used.js'
 import { MEMBERSHIP_ACTIVE_STATUSES } from './un1t-online-map.js'
 import { freshCutoff } from './un1t-online-freshness.js'
 import { copySourceForRequest } from './landing-pages.js'
+import { FUNDED_NO_BALANCE } from './class-first-booking.js'
 import { logError, logWarn } from './log'
 
 export const UN1T_PROVIDER = 'un1t_online'
@@ -185,7 +186,10 @@ export async function un1tAfterBooking(db, { request, contact, account, settings
  * Each step resumes from the ledger. Never files a card or stamps the row:
  * the caller maps the answer.
  * trialMode 'normal' grants the trial when nothing else books; 'credits_only'
- * (approving un1t_trial_unverified) never buys: no credits is a card.
+ * (approving un1t_trial_unverified) never buys: no credits is a card;
+ * 'funded' (CLASSFIRST.1: a row a paid trial or a promo claim already put
+ * credits on the account for) never buys either: no credits is a
+ * funded_no_balance card, and the paid-trial reply never applies.
  * @returns {Promise<{ kind: 'booked', account: object, booking: object, executingContactId: string, steps: object }
  *   | { kind: 'card', reason: string, executingContactId?: string, steps: object }
  *   | { kind: 'retry', code: string, executingContactId?: string, steps: object }
@@ -224,6 +228,9 @@ export async function un1tBookOnce(db, { request, contact, organizationId, event
 
   if (hasCredits || hasMembership) {
     steps.trial = hasCredits ? 'skipped_credits' : 'skipped_membership'
+  } else if (trialMode === 'funded') {
+    steps.trial = 'funded_no_credits'
+    return { kind: 'card', reason: FUNDED_NO_BALANCE, executingContactId, steps }
   } else if (paidTrialText) {
     // PAIDTRIALONLY.1 — the studio sells a paid trial instead: no free one.
     steps.trial = 'paid_trial_only'
@@ -335,8 +342,12 @@ async function runFunnel(db, request, ctx, deps, holder) {
 
   // One writer for the whole job.
   const writer = await d.writerFactory(db, request.location_id)
+  // CLASSFIRST.1 — a funded row (the credits came with a purchase or a claim)
+  // never grants a trial and never meets the paid-trial reply.
+  const funded = Boolean(request.funded_by)
   const once = await un1tBookOnce(db, {
-    request, contact, organizationId, eventId, origin: 'funnel', originRef: request.id, actor: null, writer, paidTrialText,
+    request, contact, organizationId, eventId, origin: 'funnel', originRef: request.id, actor: null, writer,
+    trialMode: funded ? 'funded' : 'normal', paidTrialText: funded ? null : paidTrialText,
   }, deps)
   Object.assign(steps, once.steps)
   executingContactId = once.executingContactId ?? null

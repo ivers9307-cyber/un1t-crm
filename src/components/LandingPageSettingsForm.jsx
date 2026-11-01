@@ -56,7 +56,8 @@ import { DEFAULT_TIMETABLE_UNAVAILABLE_MESSAGE, DEFAULT_CLASS_FUNNEL_CTA_LABEL }
 import { DEFAULT_MANUAL_CONFIRM_EMAIL } from '@/lib/manual-booking-confirm-copy'
 import { DEFAULT_FUNNEL_EMAIL_COPY } from '@/lib/un1t-online-funnel-copy'
 import { PAID_TRIAL_ACCOUNT_EMAIL_DEFAULT } from '@/lib/paid-trial'
-import { CAMPAIGN_FUNNEL_COPY_DEFAULTS } from '@/lib/campaign-funnel'
+import { CAMPAIGN_FUNNEL_COPY_DEFAULTS, CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT } from '@/lib/campaign-funnel'
+import { classFirstDefaultsFor } from '@/lib/class-first-copy'
 import PageHeaderCard from '@/components/landing-pages/PageHeaderCard'
 import OfferBlockEditor from '@/components/landing-pages/OfferBlockEditor'
 import { OFFER_BLOCK_TYPE, isStudioOwnedPath } from '@/lib/landing-page-offers'
@@ -1200,7 +1201,7 @@ const CORP_PROMO_TEXTS = [
 
 // PAGES.1 — the page half only; the promo key is the studio row's
 // (StudioOfferRow).
-export function CorpPromoEdit({ block, onUpdate }) {
+export function CorpPromoEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
     const next = [ticks[0] || '', ticks[1] || '', ticks[2] || '']
@@ -1228,6 +1229,10 @@ export function CorpPromoEdit({ block, onUpdate }) {
             : <Input value={block[key] || ''} onChange={(v) => onUpdate({ [key]: v })} maxLength={max} />}
         </Field>
       ))}
+      {/* CLASSFIRST.1 — the one_class layout: the hero media, the class step, the expect strip. */}
+      {uploadMedia && <HeroMediaFields block={block} onUpdate={onUpdate} uploadMedia={uploadMedia} uploading={uploading} uploadErr={uploadErr} progress={progress} posterHint="The still before the video plays; with no video, the picture beside the card. Blank, the page's hero photo is used." />}
+      <ClassFirstStepFields block={block} onUpdate={onUpdate} type="corp_promo" />
+      <ExpectCardsFields block={block} onUpdate={onUpdate} D={classFirstDefaultsFor('corp_promo')} />
     </>
   )
 }
@@ -1236,7 +1241,7 @@ export function CorpPromoEdit({ block, onUpdate }) {
 // plan or product, price, length, product name and picker label are the
 // studio rows' (StudioOfferRow); `membershipSource` only says whether to show
 // the un1t.online copy fields. Exported for its test (PaidTrialEdit.test.jsx).
-export function PaidTrialEdit({ block, onUpdate, membershipSource }) {
+export function PaidTrialEdit({ block, onUpdate, membershipSource, uploadMedia, uploading, uploadErr, progress }) {
   const isUn1tOnline = membershipSource === 'un1t_online'
   const ticks = Array.isArray(block.ticks) ? block.ticks : []
   const setTick = (i, v) => {
@@ -1296,9 +1301,10 @@ export function PaidTrialEdit({ block, onUpdate, membershipSource }) {
       <Field label="Help sent — message" hint="Shown after the buyer taps the help button.">
         <Textarea value={block.help_sent_text || ''} onChange={(v) => onUpdate({ help_sent_text: v })} maxLength={400} rows={2} />
       </Field>
-      <Field label="Scroll cue label" hint="Shown with an arrow at the bottom of the /trial hero, pointing down to the studio sections.">
-        <Input value={block.scroll_cue_label || ''} onChange={(v) => onUpdate({ scroll_cue_label: v })} maxLength={40} placeholder="Learn more about the studio" />
-      </Field>
+      {/* CLASSFIRST.1 — the one_class layout: the hero media, the class step, the expect strip. */}
+      {uploadMedia && <HeroMediaFields block={block} onUpdate={onUpdate} uploadMedia={uploadMedia} uploading={uploading} uploadErr={uploadErr} progress={progress} posterHint="The still before the video plays; with no video, the picture beside the card. Blank, the page's hero photo is used." />}
+      <ClassFirstStepFields block={block} onUpdate={onUpdate} type="paid_trial" />
+      <ExpectCardsFields block={block} onUpdate={onUpdate} D={classFirstDefaultsFor('paid_trial')} />
       {isUn1tOnline && (
         <>
           <Field
@@ -1373,15 +1379,11 @@ function ClassFunnelEdit({ block, onUpdate, publicPath }) {
 // class keywords and the tracking are the studio rows' (StudioOfferRow); the
 // page's slug stands for the campaign key and its own blocks are its
 // sections. Exported for its test (CampaignFunnelEdit.test.jsx).
-export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
+// CLASSFIRST.1 — the hero media of a one_class page (the coach video, how it
+// is framed and starts, the poster), shared by the campaign funnel, the paid
+// trial and the corp promo editors. HEROVIDEO.1's choices live here.
+function HeroMediaFields({ block, onUpdate, uploadMedia, uploading = {}, uploadErr = {}, progress = {}, posterHint = 'The still before the video plays. Captured from the clip when you upload one; replace it here.' }) {
   const k = (suffix) => `${block.id}-${suffix}`
-  const cards = Array.isArray(block.expect_cards) ? block.expect_cards : []
-  const setCard = (i, patch) => {
-    const next = [0, 1, 2].map((j) => ({ title: '', body: '', ...(cards[j] || {}) }))
-    next[i] = { ...next[i], ...patch }
-    onUpdate({ expect_cards: next })
-  }
-  const D = CAMPAIGN_FUNNEL_COPY_DEFAULTS
   // The video's poster: captured from the clip when none was uploaded.
   const onUploadVideo = async (file) => {
     let poster_url = block.poster_url || ''
@@ -1431,7 +1433,7 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
           </select>
         </Field>
       </div>
-      <Field label="Poster image" hint="The still before the video plays. Captured from the clip when you upload one; replace it here.">
+      <Field label="Poster image" hint={posterHint}>
         <MediaSlot
           url={block.poster_url || ''}
           onClear={() => onUpdate({ poster_url: null })}
@@ -1444,6 +1446,63 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
           kind="image"
         />
       </Field>
+    </>
+  )
+}
+
+// CLASSFIRST.1 — the expect strip under a one_class hero: eyebrow, heading,
+// three cards. `D` holds the placeholders (the block type's defaults).
+function ExpectCardsFields({ block, onUpdate, D }) {
+  const cards = Array.isArray(block.expect_cards) ? block.expect_cards : []
+  const setCard = (i, patch) => {
+    const next = [0, 1, 2].map((j) => ({ title: '', body: '', ...(cards[j] || {}) }))
+    next[i] = { ...next[i], ...patch }
+    onUpdate({ expect_cards: next })
+  }
+  return (
+    <>
+      <Field label="What to expect — eyebrow"><Input value={block.expect_eyebrow || ''} onChange={(v) => onUpdate({ expect_eyebrow: v })} maxLength={80} placeholder={D.expect_eyebrow} /></Field>
+      <Field label="What to expect — heading"><Input value={block.expect_heading || ''} onChange={(v) => onUpdate({ expect_heading: v })} maxLength={200} placeholder={D.expect_heading} /></Field>
+      <Field label="What to expect — three cards">
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-2">
+              <Input value={cards[i]?.title || ''} onChange={(v) => setCard(i, { title: v })} maxLength={80} placeholder={`Card ${i + 1} title`} />
+              <Input value={cards[i]?.body || ''} onChange={(v) => setCard(i, { body: v })} maxLength={240} placeholder={`Card ${i + 1} text`} />
+            </div>
+          ))}
+        </div>
+      </Field>
+    </>
+  )
+}
+
+// CLASSFIRST.1 — the class step's words on a paid_trial or corp_promo block
+// (class-first-copy.js): the pick step, its button, the details step, the
+// empty states, the continue-without-a-class button and the done screen's
+// class line.
+function ClassFirstStepFields({ block, onUpdate, type }) {
+  const D = classFirstDefaultsFor(type)
+  return (
+    <>
+      <Field label="Pick a class — title"><Input value={block.pick_title || ''} onChange={(v) => onUpdate({ pick_title: v })} maxLength={120} placeholder={D.pick_title} /></Field>
+      <Field label="Pick a class — message"><Input value={block.pick_body || ''} onChange={(v) => onUpdate({ pick_body: v })} maxLength={200} placeholder={D.pick_body} /></Field>
+      <Field label="Pick a class — button" hint="{day} is the weekday, {time} the class time."><Input value={block.pick_cta_label || ''} onChange={(v) => onUpdate({ pick_cta_label: v })} maxLength={60} placeholder={D.pick_cta_label} /></Field>
+      <Field label="Details step — title"><Input value={block.details_title || ''} onChange={(v) => onUpdate({ details_title: v })} maxLength={120} placeholder={D.details_title} /></Field>
+      <Field label="Details step — message"><Input value={block.details_body || ''} onChange={(v) => onUpdate({ details_body: v })} maxLength={200} placeholder={D.details_body} /></Field>
+      <Field label="No classes — message" hint="Shown when no class is open to book in the next two weeks; the visitor can still continue."><Textarea value={block.no_classes_text || ''} onChange={(v) => onUpdate({ no_classes_text: v })} maxLength={400} rows={2} placeholder={D.no_classes_text} /></Field>
+      <Field label="Timetable unavailable — message"><Textarea value={block.timetable_unavailable_text || ''} onChange={(v) => onUpdate({ timetable_unavailable_text: v })} maxLength={400} rows={2} placeholder={D.timetable_unavailable_text} /></Field>
+      <Field label="Continue without a class — button"><Input value={block.skip_class_label || ''} onChange={(v) => onUpdate({ skip_class_label: v })} maxLength={60} placeholder={D.skip_class_label} /></Field>
+      <Field label="Done — class line" hint="{class} the class, {day} its day, {time} its start."><Input value={block.done_class_body || ''} onChange={(v) => onUpdate({ done_class_body: v })} maxLength={200} placeholder={D.done_class_body} /></Field>
+    </>
+  )
+}
+
+export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, uploadErr, progress }) {
+  const D = CAMPAIGN_FUNNEL_COPY_DEFAULTS
+  return (
+    <>
+      <HeroMediaFields block={block} onUpdate={onUpdate} uploadMedia={uploadMedia} uploading={uploading} uploadErr={uploadErr} progress={progress} />
       <Field label="Eyebrow"><Input value={block.eyebrow || ''} onChange={(v) => onUpdate({ eyebrow: v })} maxLength={80} placeholder={D.eyebrow} /></Field>
       <Field label="Heading"><Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder={D.heading} /></Field>
       <Field label="Sub-copy"><Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} placeholder={D.subhead} /></Field>
@@ -1460,18 +1519,7 @@ export function CampaignFunnelEdit({ block, onUpdate, uploadMedia, uploading, up
       <Field label="No classes — message" hint="Shown when no class is open to book in the next two weeks."><Textarea value={block.no_classes_text || ''} onChange={(v) => onUpdate({ no_classes_text: v })} maxLength={400} rows={2} placeholder={D.no_classes_text} /></Field>
       <Field label="Not configured — message" hint="Shown at a studio with no trial plan set on its row."><Textarea value={block.not_configured_text || ''} onChange={(v) => onUpdate({ not_configured_text: v })} maxLength={400} rows={2} placeholder={D.not_configured_text} /></Field>
       <Field label="Timetable unavailable — message"><Textarea value={block.timetable_unavailable_text || ''} onChange={(v) => onUpdate({ timetable_unavailable_text: v })} maxLength={400} rows={2} placeholder={D.timetable_unavailable_text} /></Field>
-      <Field label="What to expect — eyebrow"><Input value={block.expect_eyebrow || ''} onChange={(v) => onUpdate({ expect_eyebrow: v })} maxLength={80} placeholder={D.expect_eyebrow} /></Field>
-      <Field label="What to expect — heading"><Input value={block.expect_heading || ''} onChange={(v) => onUpdate({ expect_heading: v })} maxLength={200} placeholder={D.expect_heading} /></Field>
-      <Field label="What to expect — three cards">
-        <div className="space-y-2">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-2">
-              <Input value={cards[i]?.title || ''} onChange={(v) => setCard(i, { title: v })} maxLength={80} placeholder={`Card ${i + 1} title`} />
-              <Input value={cards[i]?.body || ''} onChange={(v) => setCard(i, { body: v })} maxLength={240} placeholder={`Card ${i + 1} text`} />
-            </div>
-          ))}
-        </div>
-      </Field>
+      <ExpectCardsFields block={block} onUpdate={onUpdate} D={{ ...D, expect_cards: CAMPAIGN_FUNNEL_EXPECT_CARDS_DEFAULT }} />
     </>
   )
 }

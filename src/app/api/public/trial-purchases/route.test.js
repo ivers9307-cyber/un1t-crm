@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), payment: vi.fn(), capi: vi.fn(), consent: vi.fn(), deal: vi.fn(), tag: vi.fn(),
   read: vi.fn(), inserted: vi.fn(), updated: vi.fn(),
   ensureAccount: vi.fn(), checkout: vi.fn(), legal: vi.fn(), baseUrl: vi.fn(), alert: vi.fn(),
+  chosen: vi.fn(),
   state: null,
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
@@ -33,6 +34,9 @@ vi.mock('@/lib/un1t-online-legal', () => ({ readUn1tLegalDocs: mocks.legal }))
 vi.mock('@/lib/tenant-host', () => ({ resolveCustomerBaseUrl: mocks.baseUrl }))
 vi.mock('@/lib/trial-purchase-processor', () => ({ alertTrialPurchaseStaff: mocks.alert }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+// CLASSFIRST.1 — the chosen class is judged by its own module (its tests
+// live beside it); here it answers what a test sets.
+vi.mock('@/lib/class-first-choice', async (importOriginal) => ({ ...(await importOriginal()), resolveChosenClass: mocks.chosen }))
 
 // A chainable fake: every filter is recorded; a select resolves through
 // mocks.read(table, filters, mode), an insert through mocks.inserted(row)
@@ -165,6 +169,45 @@ beforeEach(() => {
   mocks.ensureAccount.mockResolvedValue({ kind: 'created', un1tUserId: 'u-77', executingContactId: 'c1' })
   mocks.checkout.mockResolvedValue({ checkoutUrl: 'https://pay.un1t.online/s/abc', free: false, ledgerId: 'led-1' })
   mocks.alert.mockResolvedValue(undefined)
+  mocks.chosen.mockImplementation(async (_db, { eventId }) => (eventId
+    ? { ok: true, chosen: { event_id: eventId, name: 'S&C', starts_at: '2099-01-05T11:00:00.000Z' } }
+    : { ok: true, chosen: null }))
+})
+
+// CLASSFIRST.1 — the class before the details.
+describe('POST /api/public/trial-purchases — the chosen class', () => {
+  it('no event_id: no class on the row, nothing judged beyond the empty id', async () => {
+    expect((await POST(req(BODY))).status).toBe(200)
+    expect(mocks.chosen).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: 'loc1', eventId: undefined }))
+    const row = mocks.inserted.mock.calls[0][0]
+    expect(row).not.toHaveProperty('class_event_id')
+  })
+  it('a chosen class is stored on the row as the SERVER saw it, for Stillorgan and for Hatch', async () => {
+    expect((await POST(req({ ...BODY, event_id: 'ev-1', class_name: 'FORGED' }))).status).toBe(200)
+    expect(mocks.inserted.mock.calls[0][0]).toMatchObject({ class_event_id: 'ev-1', class_name: 'S&C', class_starts_at: '2099-01-05T11:00:00.000Z' })
+    expect((await POST(req({ ...HATCH_BODY, event_id: 'un1t:ev-2' }))).status).toBe(200)
+    expect(mocks.chosen).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ locationId: 'loc2', eventId: 'un1t:ev-2' }))
+    expect(mocks.inserted.mock.calls[1][0]).toMatchObject({ class_event_id: 'un1t:ev-2', class_name: 'S&C' })
+  })
+  it('a class that is gone is 400 class_unavailable before the lead, the row or any money', async () => {
+    mocks.chosen.mockResolvedValueOnce({ ok: false, code: 'class_unavailable' })
+    const r = await POST(req({ ...BODY, event_id: 'ev-gone' }))
+    expect(r.status).toBe(400)
+    expect(await r.json()).toMatchObject({ success: false, code: 'class_unavailable' })
+    expect(mocks.contact).not.toHaveBeenCalled()
+    expect(mocks.inserted).not.toHaveBeenCalled()
+    expect(mocks.payment).not.toHaveBeenCalled()
+    expect(mocks.capi).not.toHaveBeenCalled()
+  })
+  it('an unreadable timetable is 503 timetable_unavailable in the block\'s words, nothing captured', async () => {
+    mocks.chosen.mockResolvedValueOnce({ ok: false, code: 'timetable_unavailable' })
+    mocks.state.pages[0].blocks = [{ ...SELLABLE[0], timetable_unavailable_text: 'Timetable down; buy anyway.' }]
+    const r = await POST(req({ ...BODY, event_id: 'ev-1' }))
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ success: false, code: 'timetable_unavailable', error: 'Timetable down; buy anyway.' })
+    expect(mocks.contact).not.toHaveBeenCalled()
+    expect(mocks.inserted).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/public/trial-purchases', () => {

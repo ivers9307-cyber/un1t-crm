@@ -71,6 +71,21 @@ describe('executeUn1tApproval', () => {
     expect(deps.afterBooking.mock.calls[0][1]).toMatchObject({ origin: 'approval' })
   })
 
+  // CLASSFIRST.1 — a funded row (a paid trial or a promo claim put the credits
+  // on the account) never buys a trial from an approval: the card's copy
+  // promises as much.
+  it('funded_no_balance, or a funded queue row under any reason, runs in funded mode and never buys', async () => {
+    tables.class_booking_requests[0].funded_by = 'corp_promo'
+    deps.bookOnce.mockResolvedValueOnce({ kind: 'card', reason: 'funded_no_balance', steps: { trial: 'funded_no_credits' } })
+    const out = await approve(row('funded_no_balance'))
+    expect(deps.bookOnce.mock.calls[0][1].trialMode).toBe('funded')
+    expect(out).toMatchObject({ finalStatus: 'failed', executed: { ok: false, code: 'funded_no_balance' } })
+    // The queue row alone decides too (a card filed under another reason for a funded row).
+    deps.bookOnce.mockClear()
+    await approve(row('un1t_outcome_unknown'))
+    expect(deps.bookOnce.mock.calls[0][1].trialMode).toBe('funded')
+  })
+
   it('un1t_trial_unverified never buys: credits only', async () => {
     deps.bookOnce.mockResolvedValueOnce({ kind: 'card', reason: 'un1t_trial_unverified', steps: { trial: 'unverified_no_credits' } })
     const out = await approve(row('un1t_trial_unverified'))

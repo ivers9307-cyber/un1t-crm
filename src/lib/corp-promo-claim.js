@@ -25,6 +25,7 @@ import { sendCorpPromoEmail } from '@/lib/corp-promo-emails'
 import { sendOpsAlert } from '@/lib/ops-alerts'
 import { escapeHtml } from '@/lib/html-escape'
 import { logError, logWarn } from '@/lib/log'
+import { queueFundedClassBooking, fundedBookingFromRow, FUNDED_BY } from '@/lib/class-first-booking'
 
 const LOG = 'corp-promo'
 
@@ -131,6 +132,16 @@ export async function fulfilCorpPromoClaim(db, { claim, location, contact, promo
     logWarn(LOG, 'a granted claim for this person already exists', { ...ids })
     await stamp({ status: 'ineligible', reason: 'already_claimed', un1t_user_id: un1tUserId })
     return { kind: 'ineligible', reason: 'already_claimed' }
+  }
+
+  // ── 3b. CLASSFIRST.1 — the class they picked before their details: queued
+  // now, booked against the promo's credits by the class-booking worker.
+  // Best-effort: the credits are already on the account.
+  try {
+    const funded = fundedBookingFromRow(grantedRow, { fundedBy: FUNDED_BY.corpPromo })
+    if (funded) await queueFundedClassBooking(db, funded)
+  } catch (e) {
+    logWarn(LOG, 'funded class booking not queued', { ...ids, errClass: e?.name })
   }
 
   // ── 4. Tell them (best-effort: the credits are already on the account) ──

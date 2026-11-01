@@ -6,10 +6,12 @@
 
 import { normaliseSlug } from '@/lib/page-slug'
 
+// CLASSFIRST.1 — a paid trial and a promo page take the /50plus layout too:
+// the hero (a video or poster) beside the card, the expect strip, light.
 const LAYOUT_BY_OFFER = Object.freeze({
-  paid_trial: 'frosted',
+  paid_trial: 'one_class',
   class_funnel: 'frosted',
-  promo_credits: 'frosted',
+  promo_credits: 'one_class',
   one_class: 'one_class',
   none: 'blocks',
 })

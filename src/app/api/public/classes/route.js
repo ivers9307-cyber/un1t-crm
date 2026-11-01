@@ -106,6 +106,18 @@ async function pageGET(db, request, ip, params) {
       const [classes, terms] = await Promise.all([listPublicClasses(db, r.locationId, 7, { blocks: r.blocks }), termsFor(db, studio)])
       return NextResponse.json({ success: true, data: { classes, terms } })
     }
+    // CLASSFIRST.1 — a paid trial or a promo page asks for the class before
+    // the details: the studio's visible timetable (hidden keywords out, full
+    // classes left out; a un1t.online studio lists its synced un1t_events)
+    // over the same 14 days, in the shape the pick step reads. The deny-list
+    // alone governs here (no allow-list), as on /start.
+    if (offerType === 'paid_trial' || offerType === 'promo_credits') {
+      const [read, terms] = await Promise.all([
+        readPublicClasses(db, r.locationId, CAMPAIGN_DAYS, { blocks: r.blocks }),
+        termsFor(db, studio),
+      ])
+      return NextResponse.json({ success: true, data: { classes: read.classes, terms, campaign: { configured: true, timetable_unavailable: Boolean(read.error) } } })
+    }
     // A page whose offer is not a class: nothing to list here.
     return NextResponse.json({ success: true, data: { classes: [], campaign: NOT_OPEN } })
   } catch (e) {

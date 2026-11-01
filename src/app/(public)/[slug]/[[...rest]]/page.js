@@ -63,6 +63,7 @@ import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { resolveGymSiteName } from '@/lib/default-site-name'
 import { campaignFunnelCopy, campaignFunnelClientCopy } from '@/lib/campaign-funnel'
+import { oneClassPresentation, classFirstStepCopy } from '@/lib/class-first-funnel'
 import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '@/lib/corp-promos'
 import { classFunnelCtaLabel } from '@/lib/public-landing'
 import { pageCtas, clientSafeBlocks, blocksOrDefault } from '@/lib/landing-page-blocks'
@@ -322,10 +323,15 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     const cta = { href: '#trial', label: lead?.view.block?.cta_label || 'Start my trial' }
     // TRIALSCROLL.1 — the cue under the card; no sections, no cue.
     const scrollCueLabel = bodyBlocks.length > 0 ? paidTrialCopyFromBlock(lead?.entry.block).scrollCueLabel : null
+    // CLASSFIRST.1 — the one_class layout round the card: the hero's video or
+    // poster (else the page's hero photo) and the expect strip, from the lead
+    // studio's block (its words name that studio's product).
+    const { hero, expect } = oneClassPresentation(lead?.entry.block || mergedOffer || { type: 'paid_trial' }, { heroImageUrl })
     return {
-      kind, cta, anchor: 'trial', heroImageUrl, scrollCueLabel,
+      kind, cta, anchor: 'trial', heroImageUrl, scrollCueLabel, hero, expect,
       offer: (
         <PaidTrialFunnel
+          anchorId="trial"
           studios={views}
           initialStudio={initialStudio}
           resumePurchaseId={resumePurchaseId}
@@ -364,9 +370,13 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
     const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
     const terms = promo ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
+    // CLASSFIRST.1 — the one_class layout round the card: the hero reads the
+    // FILLED words ({studio_name}, {credits}), the strip the block's; the
+    // class step's words go to the card resolved.
+    const { hero, expect } = oneClassPresentation({ ...(mergedOffer || {}), type: 'corp_promo', title: copy.title, eyebrow: copy.eyebrow, heading: copy.heading, subhead: copy.subhead }, { heroImageUrl })
     return {
-      kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null,
-      offer: <CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} page={page.slug} studio={contextPath} />,
+      kind, cta: { href: '#corp', label: copy.cta_label }, anchor: 'corp', heroImageUrl, scrollCueLabel: null, hero, expect,
+      offer: <CorpPromoFunnel promoKey={promo ? promo.key : null} copy={copy} terms={terms} page={page.slug} studio={contextPath} stepCopy={classFirstStepCopy(mergedOffer || {}, 'corp_promo')} />,
     }
   }
 

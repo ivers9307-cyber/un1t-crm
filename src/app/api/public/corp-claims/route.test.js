@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const m = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), capi: vi.fn(), consent: vi.fn(), deal: vi.fn(), tag: vi.fn(),
-  membership: vi.fn(), eligibility: vi.fn(), fulfil: vi.fn(), legal: vi.fn(),
+  membership: vi.fn(), eligibility: vi.fn(), fulfil: vi.fn(), legal: vi.fn(), chosen: vi.fn(),
   reads: {}, readErrors: {}, inserted: vi.fn(), updates: [],
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
@@ -20,6 +20,8 @@ vi.mock('@/lib/corp-promo-eligibility', () => ({ corpPromoEligibility: m.eligibi
 vi.mock('@/lib/corp-promo-claim', () => ({ fulfilCorpPromoClaim: m.fulfil }))
 vi.mock('@/lib/un1t-online-legal', () => ({ readUn1tLegalDocs: m.legal }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+// CLASSFIRST.1 — the chosen class is judged by its own module (tested beside it).
+vi.mock('@/lib/class-first-choice', async (importOriginal) => ({ ...(await importOriginal()), resolveChosenClass: m.chosen }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
     from: (table) => {
@@ -80,6 +82,38 @@ beforeEach(() => {
   m.legal.mockResolvedValue({ version: 'v3' })
   m.inserted.mockImplementation(async (table, row) => ({ data: { id: 'claim-1', ...row }, error: null }))
   m.fulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: '2026-11-04T10:00:00.000Z' })
+  m.chosen.mockImplementation(async (_db, { eventId }) => (eventId
+    ? { ok: true, chosen: { event_id: eventId, name: 'RALLY', starts_at: '2099-01-07T18:00:00.000Z' } }
+    : { ok: true, chosen: null }))
+})
+
+// CLASSFIRST.1 — the class before the details.
+describe('POST /api/public/corp-claims — the chosen class', () => {
+  it('a chosen class is stored on the claim as the server saw it and reaches the fulfilment', async () => {
+    const { status } = await call({ ...BODY, event_id: 'un1t:ev-7', class_name: 'FORGED' })
+    expect(status).toBe(200)
+    expect(m.chosen).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ locationId: LOC, eventId: 'un1t:ev-7' }))
+    expect(m.inserted).toHaveBeenCalledWith('corp_promo_claims', expect.objectContaining({ class_event_id: 'un1t:ev-7', class_name: 'RALLY', class_starts_at: '2099-01-07T18:00:00.000Z' }))
+    expect(m.fulfil).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ claim: expect.objectContaining({ class_event_id: 'un1t:ev-7' }) }))
+  })
+  it('no event_id: no class columns on the claim', async () => {
+    await call()
+    expect(m.inserted.mock.calls[0][1]).not.toHaveProperty('class_event_id')
+  })
+  it('a gone class is 400 class_unavailable, an unreadable timetable 503 in the block words; nothing captured either way', async () => {
+    m.chosen.mockResolvedValueOnce({ ok: false, code: 'class_unavailable' })
+    let r = await call({ ...BODY, event_id: 'x' })
+    expect(r.status).toBe(400)
+    expect(r.json).toMatchObject({ success: false, code: 'class_unavailable' })
+    m.chosen.mockResolvedValueOnce({ ok: false, code: 'timetable_unavailable' })
+    resolvePublicPageRequest.mockResolvedValueOnce(studioPageOk({ blocks: [{ type: 'corp_promo', timetable_unavailable_text: 'Down, claim anyway.' }] }))
+    r = await call({ ...BODY, event_id: 'x' })
+    expect(r.status).toBe(503)
+    expect(r.json).toEqual({ success: false, code: 'timetable_unavailable', error: 'Down, claim anyway.' })
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+    expect(m.fulfil).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/public/corp-claims', () => {

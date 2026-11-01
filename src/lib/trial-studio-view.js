@@ -3,12 +3,15 @@
 // Moved out of the retired /trial route unchanged (PAGES.1).
 
 import { paidTrialCopyFromBlock } from '@/lib/paid-trial'
+import { CLASS_FIRST_STEP_KEYS } from '@/lib/class-first-copy'
 
 // Only the words the card shows travel to the browser: never the Glofox ids,
 // the un1t.online product id, the location or the tag.
 const CLIENT_BLOCK_FIELDS = [
   'eyebrow', 'heading', 'subhead', 'product_name', 'ticks', 'cta_label', 'consent_label',
   'done_title', 'done_body',
+  // CLASSFIRST.1 — the class step's words (each blank one resolved by the card).
+  ...CLASS_FIRST_STEP_KEYS,
 ]
 
 // The refusal, help and being-confirmed words are the resolved ones (each
