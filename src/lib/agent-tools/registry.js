@@ -20,6 +20,21 @@ import { logError } from '@/lib/log'
 import { resolveStudio, roleAt } from '@/lib/mcp/context'
 import { recordToolCall } from '@/lib/mcp/log'
 
+/**
+ * Thrown by a tool's `gate` or `run` for an answer the client can act on (the
+ * person is not at this studio, the target is deactivated): runTool turns it
+ * into `{ ok: false, code, message }` and records that code. It is not logged
+ * as an error. Codes a run may use: forbidden, not_found, invalid_input, conflict.
+ * Any other throw is a failed call (`tool_failed`, logged).
+ */
+export class ToolRefusal extends Error {
+  constructor(code, message) {
+    super(message)
+    this.name = 'ToolRefusal'
+    this.code = code
+  }
+}
+
 const RATE_LIMIT = Object.freeze({ max: 120, windowMs: 60_000 })
 
 const MESSAGES = Object.freeze({
@@ -81,9 +96,13 @@ export async function runTool(tool, rawInput, auth, { db, nowMs = Date.now() } =
   try {
     result = await check()
   } catch (err) {
-    // A throwing run (or gate) is a failed call, recorded like any other.
-    logError('mcp', 'tool failed', { tool: tool.name, err })
-    result = { ok: false, code: 'tool_failed', message: MESSAGES.tool_failed }
+    if (err instanceof ToolRefusal) {
+      result = { ok: false, code: err.code, message: err.message }
+    } else {
+      // Any other throw (run or gate) is a failed call, recorded like any other.
+      logError('mcp', 'tool failed', { tool: tool.name, err })
+      result = { ok: false, code: 'tool_failed', message: MESSAGES.tool_failed }
+    }
   }
 
   async function check() {

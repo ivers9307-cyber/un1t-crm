@@ -26,8 +26,9 @@ const DUB = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a01'
 const ME = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1b01'
 const OTHER = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1b02'
 const TPL = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1c01'
-// 2026-11-01 12:00 UTC: the 1st in Dublin.
-const NOW_MS = Date.UTC(2026, 10, 1, 12, 0, 0)
+// 2031-11-01 12:00 UTC: the 1st in Dublin, in a year the real clock has not reached
+// (so a default year read off the real clock shows).
+const NOW_MS = Date.UTC(2031, 10, 1, 12, 0, 0)
 
 function auth(role = 'manager') {
   const locations = [{ id: DUB, name: 'Dublin Studio', timezone: 'Europe/Dublin', organization_id: 'org-1' }]
@@ -129,6 +130,16 @@ describe('get_shifts', () => {
     expect(used(on('rosters')[0], 'eq', 'location_id', DUB)).toBe(true)
   })
 
+  it('says which rows are published for a manager and leaves the flag off for staff', async () => {
+    const row = (id, published) => ({ id, shift_date: '2026-11-02', profile_id: OTHER, published, profiles: null, shift_templates: null })
+    fetchApiShiftRows.mockResolvedValue({ rows: [row('a1', true), row('a2', false)], error: null })
+    const { db } = makeDb()
+    const manager = await run(getShifts, { start: '2026-11-02', end: '2026-11-02' }, 'manager', db)
+    expect(manager.data.shifts.map((s) => s.published)).toEqual([true, false])
+    const staff = await run(getShifts, { start: '2026-11-02', end: '2026-11-02' }, 'staff', db)
+    expect(staff.data.shifts.every((s) => !('published' in s))).toBe(true)
+  })
+
   it('caps the list at 50 rows and says so', async () => {
     const rows = Array.from({ length: 60 }, (_, i) => ({ id: `a${i}`, shift_date: '2026-11-02', profile_id: OTHER, profiles: null, shift_templates: null }))
     fetchApiShiftRows.mockResolvedValue({ rows, error: null })
@@ -185,21 +196,23 @@ describe('get_holiday_allowance', () => {
   it('answers the caller\'s own allowance for anyone, for this year at the studio', async () => {
     const { db, on } = makeDb()
     const r = await run(getHolidayAllowanceTool, {}, 'staff', db)
-    expect(r.data).toEqual({ profile_id: ME, year: 2026, entitlement_days: 22, used_days: 5, pending_days: 3, remaining_days: 17 })
-    expect(getHolidayAllowance).toHaveBeenCalledWith(db, ME, 2026)
-    expect(getPendingHolidayDays).toHaveBeenCalledWith(db, ME, 2026)
+    expect(r.data).toEqual({ profile_id: ME, year: 2031, entitlement_days: 22, used_days: 5, pending_days: 3, remaining_days: 17 })
+    expect(getHolidayAllowance).toHaveBeenCalledWith(db, ME, 2031)
+    expect(getPendingHolidayDays).toHaveBeenCalledWith(db, ME, 2031)
     expect(on('profile_locations')).toHaveLength(0)
   })
 
   it('for another person needs a manager and a membership at the studio', async () => {
     const staff = makeDb()
     const refused = await run(getHolidayAllowanceTool, { profile_id: OTHER }, 'staff', staff.db)
-    expect(refused.data.error).toMatch(/manager/i)
+    expect(refused).toMatchObject({ ok: false, code: 'forbidden' })
+    expect(refused.message).toMatch(/manager/i)
     expect(getHolidayAllowance).not.toHaveBeenCalled()
 
     const stranger = makeDb({ profile_locations: { data: null, error: null } })
     const notHere = await run(getHolidayAllowanceTool, { profile_id: OTHER }, 'manager', stranger.db)
-    expect(notHere.data.error).toMatch(/not found/i)
+    expect(notHere).toMatchObject({ ok: false, code: 'not_found' })
+    expect(notHere.message).toMatch(/not found/i)
     expect(used(stranger.on('profile_locations')[0], 'eq', 'location_id', DUB)).toBe(true)
     expect(getHolidayAllowance).not.toHaveBeenCalled()
 
@@ -272,14 +285,25 @@ describe('create_shift', () => {
     expect(r.data).toMatchObject({ success: true, created: true, date: '2026-11-03', template: 'Morning', assignment: { id: 'a1' } })
   })
 
-  it('hands back a domain refusal as an error, and a database failure as tool_failed', async () => {
+  it('answers the helper\'s refusals with a code and a database failure as tool_failed', async () => {
     const { db } = makeDb()
     const input = { profile_id: OTHER, shift_template_id: TPL, date: '2026-11-03' }
     upsertShiftAssignment.mockResolvedValueOnce({ error: { message: 'profile not linked to this location' } })
-    const refused = await run(createShift, input, 'manager', db)
-    expect(refused.data).toEqual({ success: false, error: 'profile not linked to this location' })
-    upsertShiftAssignment.mockResolvedValueOnce({ error: { message: 'connection reset', code: '08006' } })
-    expect(await run(createShift, input, 'manager', db)).toMatchObject({ ok: false, code: 'tool_failed' })
+    expect(await run(createShift, input, 'manager', db)).toEqual({ ok: false, code: 'not_found', message: 'profile not linked to this location' })
+    upsertShiftAssignment.mockResolvedValueOnce({ error: { message: 'shift_template not found' } })
+    expect(await run(createShift, input, 'manager', db)).toMatchObject({ ok: false, code: 'not_found' })
+    // notRosterableError carries a code of its own: a refusal, not a database failure.
+    upsertShiftAssignment.mockResolvedValueOnce({
+      error: { code: 'profile_not_rosterable', message: 'Sam is deactivated and cannot be rostered. Reactivate them in Settings > Staff first.' },
+    })
+    const deactivated = await run(createShift, input, 'manager', db)
+    expect(deactivated).toMatchObject({ ok: false, code: 'conflict' })
+    expect(deactivated.message).toMatch(/deactivated/)
+    // A PostgREST error has details and hint.
+    upsertShiftAssignment.mockResolvedValueOnce({ error: { message: 'connection reset', code: '08006', details: '', hint: '' } })
+    const failed = await run(createShift, input, 'manager', db)
+    expect(failed).toMatchObject({ ok: false, code: 'tool_failed' })
+    expect(failed.message).not.toMatch(/connection reset/)
   })
 
   it('refuses a date the calendar does not have, and staff', async () => {

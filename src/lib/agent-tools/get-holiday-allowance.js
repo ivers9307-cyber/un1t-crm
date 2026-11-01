@@ -5,9 +5,9 @@
 // person with no stored row gets their real entitlement, not a default.
 
 import { z } from 'zod'
-import { defineTool } from './registry.js'
+import { defineTool, ToolRefusal } from './registry.js'
 import { isManagerAt } from '@/lib/mcp/context'
-import { parseAllowanceYear } from '@/lib/allowance-year'
+import { parseAllowanceYear, allowanceYearIn } from '@/lib/allowance-year'
 import { getHolidayAllowance, getPendingHolidayDays } from '@/lib/time-off-leave'
 
 export default defineTool({
@@ -27,19 +27,24 @@ export default defineTool({
   }),
   gate: () => true,
   run: async (input, ctx) => {
-    const { db, user, studio, zone } = ctx
-    const { year } = parseAllowanceYear(input.year, zone)
+    const { db, user, studio, zone, nowMs } = ctx
+    // Absent year: this year on the studio's calendar at the call's own clock
+    // (parseAllowanceYear's default reads the real clock). A given year was
+    // validated by the schema.
+    const year = input.year === undefined || input.year === null || input.year === ''
+      ? allowanceYearIn(zone, nowMs)
+      : parseAllowanceYear(input.year, zone).year
     const profileId = input.profile_id ?? user.id
 
     if (profileId !== user.id) {
-      if (!isManagerAt(user, studio.id)) return { error: 'Only a manager can view another person\'s holiday allowance.' }
+      if (!isManagerAt(user, studio.id)) throw new ToolRefusal('forbidden', 'Only a manager can view another person\'s holiday allowance.')
       const { data: link, error: linkError } = await db.from('profile_locations')
         .select('profile_id')
         .eq('profile_id', profileId)
         .eq('location_id', studio.id)
         .maybeSingle()
       if (linkError) throw new Error(`Failed to check the staff member: ${linkError.message}`)
-      if (!link) return { error: 'Staff member not found at this studio.' }
+      if (!link) throw new ToolRefusal('not_found', 'Staff member not found at this studio.')
     }
 
     const { allowance, error } = await getHolidayAllowance(db, profileId, year)

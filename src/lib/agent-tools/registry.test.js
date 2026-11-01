@@ -4,7 +4,7 @@ import { z } from 'zod'
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { logError } from '@/lib/log'
-import { defineTool, runTool, toolResult } from './registry.js'
+import { defineTool, runTool, toolResult, ToolRefusal } from './registry.js'
 import { isManagerAt } from '@/lib/mcp/context'
 
 const A = '0b6d5d8e-6f0c-4a49-9a8e-2b8f0c6d1a01'
@@ -171,6 +171,31 @@ describe('runTool', () => {
     expect(r.message).not.toMatch(/db down/)
     expect(logError).toHaveBeenCalledWith('mcp', expect.any(String), expect.objectContaining({ tool: 'boom' }))
     expect(inserts[0].row).toMatchObject({ tool: 'boom', ok: false, error_code: 'tool_failed', location_id: A })
+  })
+
+  it('turns a thrown ToolRefusal from run into its own code, recorded and not logged as an error', async () => {
+    const { db, inserts } = fakeDb()
+    const refuse = defineTool({ ...echo, name: 'refuse', run: async () => { throw new ToolRefusal('not_found', 'No such person.') } })
+    const r = await runTool(refuse, { text: 'hi' }, fakeAuth(), { db })
+    expect(r).toEqual({ ok: false, code: 'not_found', message: 'No such person.' })
+    expect(logError).not.toHaveBeenCalled()
+    expect(inserts[0].row).toMatchObject({ tool: 'refuse', ok: false, error_code: 'not_found', location_id: A })
+  })
+
+  it('turns a thrown ToolRefusal from gate into its own code too', async () => {
+    const { db, inserts } = fakeDb()
+    const refuse = defineTool({ ...echo, name: 'gated', gate: () => { throw new ToolRefusal('forbidden', 'Not for you.') } })
+    const r = await runTool(refuse, { text: 'hi' }, fakeAuth(), { db })
+    expect(r).toEqual({ ok: false, code: 'forbidden', message: 'Not for you.' })
+    expect(echoRun).not.toHaveBeenCalled()
+    expect(inserts[0].row).toMatchObject({ error_code: 'forbidden' })
+  })
+
+  it('keeps a plain Error named like a refusal as tool_failed', async () => {
+    const { db } = fakeDb()
+    const fake = defineTool({ ...echo, name: 'fake', run: async () => { throw Object.assign(new Error('x'), { name: 'ToolRefusal', code: 'forbidden' }) } })
+    const r = await runTool(fake, { text: 'hi' }, fakeAuth(), { db })
+    expect(r.code).toBe('tool_failed')
   })
 })
 

@@ -65,6 +65,9 @@ export default defineTool({
         profile_id: s.profile_id,
         name: s.profiles?.full_name ?? null,
         template: s.shift_templates?.name ?? null,
+        // A manager sees draft rosters, so says which rows are live; everyone
+        // else only ever sees published shifts.
+        ...(manager ? { published: Boolean(s.published) } : {}),
       })),
       unpublished_days: unpublishedDays,
       capped: Boolean(capped) || rows.length > MAX_ROWS,

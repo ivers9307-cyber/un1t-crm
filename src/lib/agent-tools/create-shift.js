@@ -6,7 +6,7 @@
 // caller as the one who assigned it.
 
 import { z } from 'zod'
-import { defineTool } from './registry.js'
+import { defineTool, ToolRefusal } from './registry.js'
 import { isManagerAt } from '@/lib/mcp/context'
 import { isRealCalendarDate } from '@/lib/schemas'
 import { upsertShiftAssignment } from '@/lib/roster-write'
@@ -36,11 +36,15 @@ export default defineTool({
       actorId: user.id,
     })
     if (result.error) {
-      // A database error carries a code and is a failed call (logged, generic
-      // to the client); the helper's own refusals ("profile not linked to this
-      // location", "shift_template not found") are answers the client can act on.
-      if (result.error.code) throw new Error(`Failed to create the shift: ${result.error.message}`)
-      return { success: false, error: result.error.message }
+      const { error } = result
+      // A PostgREST error (it carries details and hint) is a failed call:
+      // logged, generic to the client. Everything else is the helper's own
+      // refusal, which the client can act on.
+      if ('details' in error || 'hint' in error) throw new Error(`Failed to create the shift: ${error.message}`)
+      // A deactivated or deleted person: the studio holds them but they cannot be rostered.
+      if (error.code === 'profile_not_rosterable') throw new ToolRefusal('conflict', error.message)
+      // "profile not linked to this location", "shift_template not found".
+      throw new ToolRefusal('not_found', error.message)
     }
     return {
       success: true,
