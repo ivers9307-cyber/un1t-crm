@@ -12,7 +12,9 @@ vi.mock('@/lib/agent-tools/registry', async (importOriginal) => {
 })
 
 import { TOOLS } from '@/lib/agent-tools'
-import { buildMcpServer, isCanonicalHost, protectedResourceGET, protectedResourceOPTIONS } from './server.js'
+import {
+  buildAuthedHandler, buildMcpServer, isCanonicalHost, protectedResourceGET, protectedResourceOPTIONS,
+} from './server.js'
 
 function fakeServer() {
   const registered = []
@@ -92,6 +94,59 @@ describe('buildMcpServer under the real mcp-handler', () => {
     expect(runTool).toHaveBeenCalledTimes(1)
     expect(runTool.mock.calls[0][2]).toEqual(authInfo)
     expect(out.result.content[0].text).toBe(JSON.stringify({ n: 1 }))
+  })
+})
+
+describe('buildAuthedHandler under the real withMcpAuth (the route\'s only door)', () => {
+  function call(body, headers = {}) {
+    return new Request('https://crm.repset.ie/api/mcp', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2025-06-18',
+        ...headers,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...body }),
+    })
+  }
+
+  it('answers 401 with the RFC 9728 challenge when the verifier refuses the token', async () => {
+    const verify = vi.fn(async () => null)
+    const handler = buildAuthedHandler(verify)
+    const res = await handler(call(
+      { method: 'tools/call', params: { name: 'whoami', arguments: {} } },
+      { authorization: 'Bearer not-a-real-token' },
+    ))
+    expect(res.status).toBe(401)
+    expect(res.headers.get('www-authenticate'))
+      .toContain('resource_metadata="https://crm.repset.ie/.well-known/oauth-protected-resource/api/mcp"')
+    expect(verify).toHaveBeenCalledWith(expect.any(Request), 'not-a-real-token')
+    expect(runTool).not.toHaveBeenCalled()
+  })
+
+  it('answers 401 when no bearer is sent at all', async () => {
+    const res = await buildAuthedHandler(async () => null)(call({ method: 'tools/list', params: {} }))
+    expect(res.status).toBe(401)
+    expect(res.headers.get('www-authenticate')).toContain('resource_metadata=')
+  })
+
+  it('hands the verified AuthInfo to runTool for a whoami call', async () => {
+    const authInfo = { token: 'tok', clientId: 'client-x', scopes: [], extra: { user: { id: 'u1' }, enabledOrgIds: [] } }
+    runTool.mockResolvedValue({ ok: true, data: { name: 'Pat' } })
+    const res = await buildAuthedHandler(async () => authInfo)(call(
+      { method: 'tools/call', params: { name: 'whoami', arguments: {} } },
+      { authorization: 'Bearer tok' },
+    ))
+    expect(res.status).toBe(200)
+    expect(runTool).toHaveBeenCalledTimes(1)
+    const [tool, , auth] = runTool.mock.calls[0]
+    expect(tool.name).toBe('whoami')
+    expect(auth).toBe(authInfo)
+    const text = await res.text()
+    const line = text.split('\n').find((l) => l.startsWith('data: '))
+    const out = JSON.parse(line ? line.slice(6) : text)
+    expect(out.result.content[0].text).toBe(JSON.stringify({ name: 'Pat' }))
   })
 })
 

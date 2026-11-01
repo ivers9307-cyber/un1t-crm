@@ -13,7 +13,7 @@
 // the metadata names that URL explicitly rather than deriving it from the
 // request: both well-known paths, on any host, serve the same document.
 
-import { protectedResourceHandler, metadataCorsOptionsRequestHandler } from 'mcp-handler'
+import { createMcpHandler, withMcpAuth, protectedResourceHandler, metadataCorsOptionsRequestHandler } from 'mcp-handler'
 import { TOOLS } from '@/lib/agent-tools'
 import { runTool, toolResult } from '@/lib/agent-tools/registry'
 import { getAppUrl } from '@/lib/app-url'
@@ -55,6 +55,29 @@ export function buildMcpServer(server) {
  */
 export function isCanonicalHost(request) {
   return new URL(request.url).host === new URL(getAppUrl()).host
+}
+
+/**
+ * The MCP handler behind its auth gate: the route's only door, so the route
+ * and the test that pins the 401 challenge share these exact options.
+ * Calls getAppUrl() (throws when NEXT_PUBLIC_APP_URL is unset), so build it
+ * per request or lazily, never at import.
+ *
+ * @param {(req: Request, token?: string) => Promise<object | null | undefined>} verify
+ * @returns {(req: Request) => Promise<Response>}
+ */
+export function buildAuthedHandler(verify) {
+  return withMcpAuth(
+    createMcpHandler(buildMcpServer, { serverInfo: { name: 'repset-crm', version: '1' } }),
+    verify,
+    {
+      required: true,
+      resourceMetadataPath: '/.well-known/oauth-protected-resource/api/mcp',
+      // The challenge names the canonical metadata URL, whatever proxy
+      // headers the request carried.
+      resourceUrl: new URL(getAppUrl()).origin,
+    },
+  )
 }
 
 /** The one MCP resource URL. */
