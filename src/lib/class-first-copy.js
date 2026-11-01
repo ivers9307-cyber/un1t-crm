@@ -8,7 +8,7 @@
 // shape (public-classes.js). No em-dashes in customer copy (CLAUDE.md).
 
 export const CLASS_FIRST_STEP_KEYS = Object.freeze([
-  'pick_title', 'pick_body', 'details_title', 'details_body',
+  'pick_title', 'pick_body', 'pick_cta_label', 'details_title', 'details_body',
   'no_classes_text', 'timetable_unavailable_text', 'skip_class_label', 'done_class_body',
 ])
 
@@ -28,6 +28,8 @@ export const CLASS_FIRST_HERO_DEFAULTS = Object.freeze({
 export const PAID_TRIAL_CLASS_FIRST_DEFAULTS = Object.freeze({
   pick_title: 'Pick your first class',
   pick_body: 'Choose a session for your first visit. You pay once, then we book you in.',
+  // {day} is the weekday, {time} the class time (ctaLabelFor).
+  pick_cta_label: 'Choose {day} {time}',
   details_title: 'Last step',
   details_body: 'We just need these to set you up.',
   no_classes_text: 'No classes are open to book in the next two weeks. Buy your trial and we will help you book your first one.',
@@ -46,6 +48,7 @@ export const PAID_TRIAL_CLASS_FIRST_DEFAULTS = Object.freeze({
 export const CORP_PROMO_CLASS_FIRST_DEFAULTS = Object.freeze({
   pick_title: 'Pick your first class',
   pick_body: 'Choose a session for your first visit. Your free classes go on your account and we book you in.',
+  pick_cta_label: 'Choose {day} {time}',
   details_title: 'Last step',
   details_body: 'We just need these to set up your account.',
   no_classes_text: 'No classes are open to book in the next two weeks. Claim your classes and book your first one in the app.',

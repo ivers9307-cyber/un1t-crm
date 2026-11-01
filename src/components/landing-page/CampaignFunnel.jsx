@@ -23,6 +23,7 @@
 // booking itself stays live. Without it the card renders exactly as before.
 import { useEffect, useRef, useState } from 'react'
 import EditableText from './EditableText'
+import ClassPickStep, { useClassList, cadenceGroups, ctaLabelFor, campaignFunnelTarget, campaignFunnelClassesUrl, PICK_CTA_CLS } from './ClassPickStep'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
 import { readVisitOrigin } from '@/lib/visit-origin'
@@ -32,7 +33,6 @@ import { stripDashes } from '@/lib/un1t-online-funnel-copy'
 import { readAttributionFromUrl, buildAttribution, readFbpCookie, funnelSessionId } from '@/lib/campaign-funnel-attribution'
 import { customerErrorText } from '@/lib/page-request-errors'
 
-const VISIBLE_TILES = 3
 // The card words the editor's preview may edit in place (onEditCopy).
 export const EDITABLE_COPY_KEYS = Object.freeze(['pick_title', 'pick_body', 'done_title', 'done_body'])
 const FUNNEL = '50plus'
@@ -41,64 +41,13 @@ const FUNNEL = '50plus'
 // steps with no CRM twin (empty, not_configured, unavailable) go to the
 // Pixel and Vercel only.
 const CRM_STEP = { view: 'view', pick: 'path_class', details: 'details', booked: 'booked_class' }
-// en-IE day labels read "Mon, 2 Nov": the weekday is the first token before
-// the comma or space.
-const labelParts = (label) => String(label || '').split(/[,\s]+/).filter(Boolean)
 const inputCls = 'w-full bg-white border border-black/15 rounded-xl px-4 py-3.5 text-base text-black placeholder-black/40 focus:outline-none focus:border-black/60'
-const ctaCls = 'w-full rounded-full bg-black text-white py-4 px-6 font-bold text-base disabled:opacity-50'
+const ctaCls = PICK_CTA_CLS
 
-/** The slots grouped by day, in day order. Pure. */
-export function cadenceGroups(classes) {
-  const byDay = new Map()
-  for (const c of Array.isArray(classes) ? classes : []) {
-    if (!c || !c.day) continue
-    if (!byDay.has(c.day)) byDay.set(c.day, { day: c.day, day_label: c.day_label || c.day, classes: [] })
-    byDay.get(c.day).classes.push(c)
-  }
-  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day))
-}
-
-/** The CTA label: `{day}` is the weekday off day_label, `{time}` the slot's time. */
-export function ctaLabelFor(template, cls) {
-  const t = typeof template === 'string' && template.trim() ? template : 'Book {day} {time}'
-  const weekday = labelParts(cls?.day_label)[0] || ''
-  return t.replace('{day}', weekday).replace('{time}', cls?.time || '').replace(/\s+/g, ' ').trim()
-}
-
-function Tile({ cls, selected, onPick, beyondFirstRow }) {
-  const [weekday, dateNumber = '', ...rest] = labelParts(cls.day_label)
-  const month = rest.join(' ')
-  // The second week is a tap away on a phone and in view on a wide screen.
-  const reveal = beyondFirstRow ? 'hidden lg:block' : ''
-  return (
-    <button
-      type="button"
-      data-tile={cls.event_id}
-      onClick={() => onPick(cls)}
-      aria-pressed={selected}
-      className={`${reveal} rounded-2xl px-2 py-3 text-center transition ${selected ? 'bg-black text-white' : 'bg-white border border-black/15 text-black hover:border-black/40'}`}
-    >
-      <span className={`block text-xs ${selected ? 'text-white/70' : 'text-black/60'}`}>{weekday}</span>
-      <span className="block font-display font-extrabold text-2xl leading-tight">{dateNumber}</span>
-      <span className={`block text-xs ${selected ? 'text-white/80' : 'text-black/70'}`}>{month ? `${month} · ` : ''}{cls.time}</span>
-      <span className="sr-only">{cls.day_label}</span>
-    </button>
-  )
-}
-
-// Where a request is about: the page and its studio, or (no page) the legacy path and campaign.
-export function campaignFunnelTarget({ page, publicPath, campaign }) {
-  return page ? { page, studio: publicPath || undefined } : { path: publicPath, campaign }
-}
-
-export function campaignFunnelClassesUrl({ page, publicPath, campaign }) {
-  if (page) {
-    const q = new URLSearchParams({ page })
-    if (publicPath) q.set('studio', publicPath)
-    return `/api/public/classes?${q.toString()}`
-  }
-  return `/api/public/classes?path=${encodeURIComponent(publicPath)}&campaign=${encodeURIComponent(campaign)}`
-}
+// CLASSFIRST.1 — the tiles, the grouping and the request helpers moved to
+// ClassPickStep (shared with /trial and /corp); re-exported so every import
+// of this module keeps working.
+export { cadenceGroups, ctaLabelFor, campaignFunnelTarget, campaignFunnelClassesUrl }
 
 export default function CampaignFunnel({ publicPath, campaign, page = null, copy, locationName = '', onEditCopy = null }) {
   const c = copy && typeof copy === 'object' ? copy : {}
@@ -106,12 +55,11 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
     ? <EditableText value={c[key] || ''} multiline={multiline} onChange={(v) => onEditCopy(key, v)} />
     : c[key])
   const [step, setStep] = useState('pick') // pick | details | done
-  const [classes, setClasses] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [configured, setConfigured] = useState(true)
-  const [unavailable, setUnavailable] = useState(false)
   const [chosen, setChosen] = useState(null)
-  const [showAll, setShowAll] = useState(false)
+  // CLASSFIRST.1 — the list lives in ClassPickStep; bumping this re-fetches
+  // it (after class_unavailable), and the first load alone preselects.
+  const [reloadKey, setReloadKey] = useState(0)
+  const preselectRef = useRef(true)
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -143,44 +91,26 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
     } catch { /* never block the funnel */ }
   }
 
-  // The campaign's slots. `preselect` picks the first on the first load; a
-  // reload after class_unavailable leaves nothing chosen until they pick.
-  const aliveRef = useRef(true)
-  function loadClasses({ preselect }) {
-    setLoading(true)
-    return fetch(campaignFunnelClassesUrl({ page, publicPath, campaign }))
-      .then((r) => r.json())
-      .then((j) => {
-        if (!aliveRef.current) return
-        const list = (j?.success && Array.isArray(j.data?.classes)) ? j.data.classes : []
-        const ok = j?.data?.campaign?.configured !== false
-        const blip = j?.data?.campaign?.timetable_unavailable === true
-        setClasses(list)
-        setConfigured(ok)
-        setUnavailable(blip)
-        if (preselect && list.length) setChosen(list[0])
-        if (!ok) fireStep('not_configured')
-        else if (blip) fireStep('unavailable')
-        else if (!list.length) fireStep('empty')
-      })
-      .catch(() => { if (aliveRef.current) { setClasses([]); setUnavailable(true); fireStep('unavailable') } })
-      .finally(() => { if (aliveRef.current) setLoading(false) })
+  // What the list said: the first load preselects the first slot (a reload
+  // after class_unavailable leaves nothing chosen until they pick), and the
+  // empty states go to telemetry.
+  function onLoaded({ classes: list, configured, unavailable }) {
+    if (preselectRef.current && list.length) setChosen(list[0])
+    preselectRef.current = false
+    if (!configured) fireStep('not_configured')
+    else if (unavailable) fireStep('unavailable')
+    else if (!list.length) fireStep('empty')
   }
 
+  const list = useClassList({ page, publicPath, campaign, reloadKey, onLoaded })
+
   useEffect(() => {
-    aliveRef.current = true
     attributionRef.current = readAttributionFromUrl(window.location.search)
     let storage = null
     try { storage = window.sessionStorage } catch { /* private mode */ }
     sessionRef.current = funnelSessionId(storage)
     fireStep('view')
-    loadClasses({ preselect: true })
-    return () => { aliveRef.current = false }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const groups = cadenceGroups(classes)
-  const flat = groups.flatMap((g) => g.classes)
-  const hiddenCount = showAll ? 0 : Math.max(0, flat.length - VISIBLE_TILES)
 
   function pick(cls) {
     setChosen(cls)
@@ -225,7 +155,7 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
           setChosen(null)
           setStep('pick')
           setError('That class filled up while you were typing. Pick another one, your details are saved.')
-          loadClasses({ preselect: false })
+          setReloadKey((k) => k + 1)
           return
         }
         setError(stripDashes(customerErrorText(j.error, 'Something went wrong. Please try again.')))
@@ -291,34 +221,18 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
 
   return (
     <div id="book" className={card}>
-      <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-black/55">Step 1 of 2</div>
-      <h2 className="font-display font-extrabold uppercase text-2xl sm:text-3xl mt-2 mb-2">{words('pick_title')}</h2>
-      <p className="text-black/60 text-base mb-5">{words('pick_body', true)}</p>
-      {loading ? (
-        <p className="text-black/50 text-base py-6 text-center">Checking the timetable…</p>
-      ) : !configured ? (
-        <p className="text-black/70 text-lg py-4" role="status">{c.not_configured_text}</p>
-      ) : unavailable ? (
-        <p className="text-black/70 text-lg py-4" role="status">{c.timetable_unavailable_text}</p>
-      ) : flat.length === 0 ? (
-        <p className="text-black/70 text-lg py-4" role="status">{c.no_classes_text}</p>
-      ) : (
-        <>
-          <div className="grid grid-cols-3 gap-2.5">
-            {flat.map((cls, i) => (
-              <Tile key={cls.event_id} cls={cls} selected={chosen?.event_id === cls.event_id} onPick={pick} beyondFirstRow={!showAll && i >= VISIBLE_TILES} />
-            ))}
-          </div>
-          {hiddenCount > 0 && (
-            <button type="button" onClick={() => setShowAll(true)} className="lg:hidden block mx-auto mt-3 text-sm underline text-black/60 hover:text-black">
-              More dates ({hiddenCount})
-            </button>
-          )}
-          {error && <p className="mt-3 text-sm text-red-700" role="alert">{error}</p>}
-          <button type="button" onClick={toDetails} disabled={!chosen} className={`${ctaCls} mt-5`}>{cta}</button>
-          <p className="text-center text-sm text-black/55 mt-3">{c.reassurance}</p>
-        </>
-      )}
+      <ClassPickStep
+        list={list}
+        copy={c}
+        chosen={chosen}
+        onPick={pick}
+        onContinue={toDetails}
+        ctaLabel={cta}
+        error={error}
+        title={words('pick_title')}
+        body={words('pick_body', true)}
+        reassurance={c.reassurance}
+      />
       {locationName ? <span className="sr-only">{locationName}</span> : null}
     </div>
   )

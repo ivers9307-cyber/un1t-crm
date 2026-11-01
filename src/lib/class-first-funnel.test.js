@@ -46,6 +46,8 @@ describe('oneClassPresentation', () => {
   it('a corp_promo block with a video keeps its own poster, and an unknown focus or sound reads as the default', () => {
     const p = oneClassPresentation({ type: 'corp_promo', heading: '3 free classes', video_url: 'https://x/c.mp4', poster_url: 'https://x/c.jpg', video_focus: 'left', sound_default: 'loud', expect_cards: [{ title: 'One', body: 'B' }, { title: '' }] }, { heroImageUrl: 'https://x/hero.jpg' })
     expect(p.hero.videoUrl).toBe('https://x/c.mp4')
+    expect(p.hero.eyebrow).toBe('')
+    expect(oneClassPresentation({ type: 'corp_promo', title: 'Exclusive Corporate Trial' }).hero.eyebrow).toBe('Exclusive Corporate Trial')
     expect(p.hero.posterUrl).toBe('https://x/c.jpg')
     expect(p.hero.videoFocus).toBe('top')
     expect(p.hero.soundDefault).toBe('on')

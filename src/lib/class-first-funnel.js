@@ -63,7 +63,8 @@ export function oneClassPresentation(block, { heroImageUrl = null } = {}) {
       soundLabel: str(b.sound_label) || CLASS_FIRST_HERO_DEFAULTS.sound_label,
       videoFocus: CAMPAIGN_FUNNEL_VIDEO_FOCUS.includes(b.video_focus) ? b.video_focus : CLASS_FIRST_HERO_DEFAULTS.video_focus,
       soundDefault: CAMPAIGN_FUNNEL_SOUND_DEFAULTS.includes(b.sound_default) ? b.sound_default : CLASS_FIRST_HERO_DEFAULTS.sound_default,
-      eyebrow: str(b.eyebrow) || '',
+      // A corp_promo block's big `title` stands in for a blank eyebrow (the hero has no title slot).
+      eyebrow: str(b.eyebrow) || (b.type === 'corp_promo' ? str(b.title) : null) || '',
       heading: str(b.heading) || '',
       subhead: str(b.subhead) || '',
     },
