@@ -21,7 +21,7 @@ vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: mocks.warn, logInfo: v
 // CLASSFIRST.1 — the funded booking after the settle (its own tests beside it).
 vi.mock('@/lib/class-first-booking', async (importOriginal) => ({ ...(await importOriginal()), queueFundedClassBooking: mocks.queue }))
 
-import { settleUn1tTrialPurchases, UN1T_TRIAL_EXPIRY_MS } from './trial-purchase-un1t-settle'
+import { settleUn1tTrialPurchases, UN1T_TRIAL_EXPIRY_MS, UN1T_TRIAL_ROW_COLS } from './trial-purchase-un1t-settle'
 
 const T0 = Date.parse('2026-10-24T10:00:00.000Z')
 const iso = (ms) => new Date(ms).toISOString()
@@ -117,6 +117,12 @@ beforeEach(() => {
 })
 
 describe('settleUn1tTrialPurchases — CLASSFIRST.1, the class they picked', () => {
+  it('the row read names the class, the page and the terms columns (the fake answers every column, so the list itself is pinned)', () => {
+    const cols = UN1T_TRIAL_ROW_COLS.split(',').map((c) => c.trim())
+    for (const c of ['page_id', 'class_event_id', 'class_name', 'class_starts_at', 'terms_accepted_at', 'terms_source', 'terms_version', 'contact_id']) {
+      expect(cols).toContain(c)
+    }
+  })
   it('a settled row with a class queues one funded booking; a row without queues nothing', async () => {
     const withClass = row({ class_event_id: 'un1t:ev-1', class_name: 'RALLY', class_starts_at: iso(T0 + 48 * 60 * MIN), page_id: 'p-1', terms_accepted_at: iso(T0), terms_source: 'website', terms_version: 'v' })
     const { db } = makeDb({ rows: [withClass], txs: [tx()] })

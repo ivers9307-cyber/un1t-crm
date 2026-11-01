@@ -331,6 +331,7 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
       kind, cta, anchor: 'trial', heroImageUrl, scrollCueLabel, hero, expect,
       offer: (
         <PaidTrialFunnel
+          anchorId="trial"
           studios={views}
           initialStudio={initialStudio}
           resumePurchaseId={resumePurchaseId}

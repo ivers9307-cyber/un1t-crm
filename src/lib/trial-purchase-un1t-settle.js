@@ -56,7 +56,12 @@ const ORIGIN = 'web_trial'
 
 export const UN1T_TRIAL_EXPIRY_MS = 24 * 60 * 60_000 + 45 * 60_000
 
-const ROW_COLS = 'id, location_id, contact_id, created_at, un1t_user_id, un1t_product_id, product_name, amount_cents, currency, customer_email, customer_phone, first_name, last_name, attribution'
+// CLASSFIRST.1 — page_id, the class columns and the terms acceptance ride
+// the row so the funded booking can be queued after the settle (a row read
+// without them queues nothing, silently: fundedBookingFromRow reads null as
+// "no class picked"). Exported so the test pins the list.
+export const UN1T_TRIAL_ROW_COLS = 'id, location_id, contact_id, created_at, un1t_user_id, un1t_product_id, product_name, amount_cents, currency, customer_email, customer_phone, first_name, last_name, attribution, page_id, class_event_id, class_name, class_starts_at, terms_accepted_at, terms_source, terms_version'
+const ROW_COLS = UN1T_TRIAL_ROW_COLS
 const TX_COLS = 'un1t_id, product_id, type, amount_cents, remote_created_at'
 const TX_PAGE = 100
 const UNIQUE_VIOLATION = '23505'

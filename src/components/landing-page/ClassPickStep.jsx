@@ -166,11 +166,13 @@ export default function ClassPickStep({
         <p className="text-black/70 text-lg py-4" role="status">{c.not_configured_text}</p>
       ) : unavailable ? (
         <>
+          {error && <p className="mt-2 text-sm text-red-700" role="alert">{error}</p>}
           <p className="text-black/70 text-lg py-4" role="status">{c.timetable_unavailable_text}</p>
           {skip}
         </>
       ) : flat.length === 0 ? (
         <>
+          {error && <p className="mt-2 text-sm text-red-700" role="alert">{error}</p>}
           <p className="text-black/70 text-lg py-4" role="status">{c.no_classes_text}</p>
           {skip}
         </>

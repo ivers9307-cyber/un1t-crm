@@ -560,7 +560,7 @@ export async function processClassBookingRequest(db, request) {
   let grantedTrial = false
   if (attended) {
     // Attended before with no Glofox account at all → nothing to book with.
-    if (!memberId) return toReview('prior_attendance')
+    if (!memberId) return toReview(funded ? FUNDED_NO_BALANCE : 'prior_attendance')
     const gate = await returnerBalanceGate()
     if (gate) return gate
     // Fall through to the booking — consuming the EXISTING balance, never a

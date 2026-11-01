@@ -89,7 +89,15 @@ function fireBrowserPurchase({ purchaseId, amountCents, currency, contentName })
  * and the server reads the product, price and attribution from that page's
  * studio row; without it they send the studio key as before.
  */
-export default function PaidTrialFunnel({ studios = [], initialStudio = null, resumePurchaseId = null, cancelled = false, hatchTerms = null, returnPath = '/trial', preview = false, page = null }) {
+// CLASSFIRST.1 — `anchorId` ('trial' on the /trial page) wraps every step in
+// one element the page's CTAs can scroll to; the studio pages' hero owns
+// `#trial` itself (HeroTrialFirst) and passes none.
+export default function PaidTrialFunnel({ anchorId = null, ...props }) {
+  const card = <PaidTrialCard {...props} />
+  return anchorId ? <div id={anchorId} className="w-full max-w-lg scroll-mt-24">{card}</div> : card
+}
+
+function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = null, cancelled = false, hatchTerms = null, returnPath = '/trial', preview = false, page = null }) {
   const list = Array.isArray(studios) ? studios : []
   const byKey = (k) => list.find((s) => s.key === k) || null
   const resuming = Boolean(resumePurchaseId) && !cancelled
