@@ -7,12 +7,12 @@
 // unreadable list and only when the parent allows it.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, renderHook, waitFor } from '@testing-library/react'
-import ClassPickStep, { useClassList, cadenceGroups, ctaLabelFor, campaignFunnelClassesUrl } from './ClassPickStep'
+import ClassPickStep, { useClassList, cadenceGroups, ctaLabelFor, campaignFunnelClassesUrl, isDayFirst } from './ClassPickStep'
 
 const COPY = { not_configured_text: 'Not open', timetable_unavailable_text: 'Try later', no_classes_text: 'Nothing open', skip_class_label: 'Carry on without a class' }
 const CLASSES = [
   { event_id: 'a', name: 'S&C', starts_at: '2099-01-05T11:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '11:00' },
-  { event_id: 'b', name: 'RALLY', starts_at: '2099-01-05T18:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '18:00' },
+  { event_id: 'b', name: 'RALLY', starts_at: '2099-01-06T18:00:00.000Z', day: '2099-01-06', day_label: 'Tue, 6 Jan', time: '18:00' },
   { event_id: 'c', name: 'S&C', starts_at: '2099-01-07T11:00:00.000Z', day: '2099-01-07', day_label: 'Wed, 7 Jan', time: '11:00' },
   { event_id: 'd', name: 'S&C', starts_at: '2099-01-09T11:00:00.000Z', day: '2099-01-09', day_label: 'Fri, 9 Jan', time: '11:00' },
 ]
@@ -79,6 +79,45 @@ describe('ClassPickStep', () => {
     mount({ list: { classes: [], loading: true, configured: true, unavailable: false } })
     expect(screen.getByText('Checking the timetable…')).toBeTruthy()
     expect(screen.queryByRole('button')).toBeNull()
+  })
+})
+
+// CLASSFIRST.2 — a busy studio: more than one slot a day is day-first.
+const BUSY = [
+  { event_id: 'm6', name: 'FORCE.', starts_at: '2099-01-05T06:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '06:00' },
+  { event_id: 'm7', name: 'FORCE.', starts_at: '2099-01-05T07:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '07:00' },
+  { event_id: 'm11', name: 'THE 50+ CLUB', starts_at: '2099-01-05T11:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '11:00' },
+  { event_id: 't6', name: 'RECLA1M', starts_at: '2099-01-06T06:00:00.000Z', day: '2099-01-06', day_label: 'Tue, 6 Jan', time: '06:00' },
+  { event_id: 't18', name: 'RECLA1M', starts_at: '2099-01-06T18:00:00.000Z', day: '2099-01-06', day_label: 'Tue, 6 Jan', time: '18:00' },
+  { event_id: 'w9', name: 'CONVOY', starts_at: '2099-01-07T09:30:00.000Z', day: '2099-01-07', day_label: 'Wed, 7 Jan', time: '09:30' },
+]
+
+describe('ClassPickStep — day-first for a busy timetable', () => {
+  it('isDayFirst: more than one slot on any day', () => {
+    expect(isDayFirst(cadenceGroups(CLASSES))).toBe(false)
+    expect(isDayFirst(cadenceGroups(BUSY))).toBe(true)
+  })
+  it('shows one tile per day and only the first day\'s slots; tapping a day swaps the slots; no More dates', () => {
+    const onPick = vi.fn()
+    mount({ list: loaded(BUSY), onPick, showClassName: true })
+    const days = Array.from(document.querySelectorAll('[data-day]'))
+    expect(days.map((d) => d.getAttribute('data-day'))).toEqual(['2099-01-05', '2099-01-06', '2099-01-07'])
+    expect(days[0].getAttribute('aria-pressed')).toBe('true')
+    const slots = () => Array.from(document.querySelectorAll('[data-tile]')).map((b) => b.getAttribute('data-tile'))
+    expect(slots()).toEqual(['m6', 'm7', 'm11'])
+    expect(screen.getByText('THE 50+ CLUB')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /More dates/ })).toBeNull()
+    for (const b of [...days, ...document.querySelectorAll('[data-tile]')]) expect(b.getAttribute('type')).toBe('button')
+    fireEvent.click(days[1])
+    expect(slots()).toEqual(['t6', 't18'])
+    fireEvent.click(document.querySelector('[data-tile="t18"]'))
+    expect(onPick).toHaveBeenCalledWith(BUSY[4])
+  })
+  it('a chosen slot keeps its day in view and the continue button enabled', () => {
+    mount({ list: loaded(BUSY), chosen: BUSY[5] })
+    expect(document.querySelector('[data-day="2099-01-07"]').getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('[data-tile="w9"]').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Next' }).disabled).toBe(false)
   })
 })
 

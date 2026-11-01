@@ -123,8 +123,11 @@ export default function CampaignHero({
 
   return (
     <section className="bg-white text-black pt-20 lg:pt-28 pb-10 lg:pb-16">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 grid gap-5 lg:gap-8 lg:grid-cols-[1.3fr_1fr] lg:items-stretch">
-        <div className="relative overflow-hidden rounded-3xl bg-black text-white aspect-[4/5] sm:aspect-[5/4] lg:aspect-auto lg:min-h-[640px]">
+      {/* CLASSFIRST.2 — the columns start together and the media box keeps its
+          own height (a sticky 4:5 on desktop) instead of stretching to the
+          card: a busy studio's class list used to elongate the photo. */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 grid gap-5 lg:gap-8 lg:grid-cols-[1.3fr_1fr] lg:items-start">
+        <div className="relative overflow-hidden rounded-3xl bg-black text-white aspect-[4/5] sm:aspect-[5/4] lg:aspect-[4/5] lg:max-h-[720px] lg:sticky lg:top-24">
           {videoUrl ? (
             <video
               ref={videoRef}
