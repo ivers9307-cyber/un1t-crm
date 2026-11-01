@@ -15,6 +15,9 @@
 //     as an embed inside a select string.
 //  4. Every `.from(…)` chain carries a studio or contact-set filter:
 //     .eq/.in('location_id', …), .eq/.in('contact_id', …), .in('id', …).
+//     An `.insert(…)` chain is exempt: its fence is the `location_id` /
+//     `contact_id` the tool stamps in the row, which each write tool's own
+//     test pins.
 //  5. No tool selects `*` (or a bare `.select()`, which is `*`) from
 //     profiles, locations or contacts, directly or as an embed: each has a
 //     REVOKE in its history, and a service-role `*` ships what it hides.
@@ -31,11 +34,12 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const DIR = path.join(ROOT, 'src/lib/agent-tools')
-const NOT_TOOLS = new Set(['registry.js', 'index.js', '_dates.js', '_staff-report.js'])
+const NOT_TOOLS = new Set(['registry.js', 'index.js', '_dates.js', '_staff-report.js', '_contact-scope.js'])
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
 const FORBIDDEN_TABLE = /^(whatsapp_\w+|email_\w+|instagram_\w+|cars\w*|car_\w+|xero_\w+|class_fees\w*|trial_purchases|un1t_write_\w+)$/
 const NO_STAR_TABLES = new Set(['profiles', 'locations', 'contacts'])
+const INSERT_CHAIN = /\.\s*insert\(/
 const SCOPE_FILTER = /\.\s*(?:(?:eq|in)\(\s*(['"`])(?:location_id|contact_id)\1|in\(\s*(['"`])id\2)/
 
 function sourceFiles() {
@@ -117,7 +121,9 @@ export function forbiddenTables(code) {
 
 /** `.from()` chains with no studio or contact-set filter. */
 export function unscopedChains(code) {
-  return fromChains(code).filter((c) => !SCOPE_FILTER.test(c.chain)).map((c) => c.chain.split('\n')[0].trim())
+  return fromChains(code)
+    .filter((c) => !SCOPE_FILTER.test(c.chain) && !INSERT_CHAIN.test(c.chain))
+    .map((c) => c.chain.split('\n')[0].trim())
 }
 
 function topLevelColumns(sel) {
@@ -223,6 +229,14 @@ describe('agent tools guard scanners', () => {
     expect(unscopedChains(`await db.from('contacts').select('id').in('id', ids)`)).toEqual([])
     expect(unscopedChains(`await db.from('notes').select('id').eq('contact_id', c)`)).toEqual([])
     expect(unscopedChains(`await db.from('bookings').select('id').in("location_id", ids)`)).toEqual([])
+  })
+
+  it('exempts an insert chain (its fence is the stamped row) and nothing else', () => {
+    expect(unscopedChains(`await db.from('contacts').insert({ name, location_id: studio.id }).select('id, name').single()`)).toEqual([])
+    expect(unscopedChains(`await db\n  .from('activities')\n  .insert(record)\n  .select('id')\n  .single()`)).toEqual([])
+    expect(unscopedChains(`await db.from('activities').update({ done: true }).eq('id', x)`)).toHaveLength(1)
+    expect(unscopedChains(`await db.from('activities').upsert(row).select('id')`)).toHaveLength(1)
+    expect(unscopedChains(`await db.from('activities').delete().eq('id', x)`)).toHaveLength(1)
   })
 
   it('does not take .eq(\'id\') alone as a studio filter', () => {

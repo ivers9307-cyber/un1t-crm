@@ -10,6 +10,12 @@ import listShiftTemplates from './list-shift-templates.js'
 import createShift from './create-shift.js'
 import staffHoursReport from './staff-hours-report.js'
 import staffCostReport from './staff-cost-report.js'
+import searchContacts from './search-contacts.js'
+import getContact from './get-contact.js'
+import listPipeline from './list-pipeline.js'
+import listTasks from './list-tasks.js'
+import createContact from './create-contact.js'
+import createActivity from './create-activity.js'
 
 /** @type {ReadonlyArray<ReturnType<typeof import('./registry.js').defineTool>>} */
 export const TOOLS = Object.freeze([
@@ -22,4 +28,10 @@ export const TOOLS = Object.freeze([
   createShift,
   staffHoursReport,
   staffCostReport,
+  searchContacts,
+  getContact,
+  listPipeline,
+  listTasks,
+  createContact,
+  createActivity,
 ])
