@@ -31,7 +31,7 @@ import { stripComments } from './helpers/js-code.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const DIR = path.join(ROOT, 'src/lib/agent-tools')
-const NOT_TOOLS = new Set(['registry.js', 'index.js'])
+const NOT_TOOLS = new Set(['registry.js', 'index.js', '_dates.js', '_staff-report.js'])
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
 
 const FORBIDDEN_TABLE = /^(whatsapp_\w+|email_\w+|instagram_\w+|cars\w*|car_\w+|xero_\w+|class_fees\w*|trial_purchases|un1t_write_\w+)$/
