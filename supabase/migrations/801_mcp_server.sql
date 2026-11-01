@@ -1,8 +1,13 @@
 -- 801 — MCP.1: the staff MCP server's organisation switch and its call log.
 -- (docs/superpowers/specs: staff MCP server design; plan task 2.)
 --
--- NOT APPLIED YET when this file was written. "VERIFIED LIVE" below is the
--- state of prod BEFORE this file runs; the apply step is the controller's.
+-- APPLIED LIVE 2026-11-01 22:27 UTC via Supabase MCP (apply_migration
+-- `801_mcp_server`, project iyvtbjjxdggiadzwwvdj), ahead of the PR merge as
+-- the invariant requires. Verified afterwards against information_schema:
+-- mcp_enabled boolean DEFAULT false; mcp_tool_calls held by postgres and
+-- service_role only, RLS on, no policy. get_advisors (security): only the
+-- expected rls_enabled_no_policy INFO for the new table. "VERIFIED LIVE"
+-- below is the state of prod BEFORE this file ran.
 --
 -- ===========================================================================
 -- WHY
