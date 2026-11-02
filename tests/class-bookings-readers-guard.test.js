@@ -105,6 +105,10 @@ const MANIFEST = Object.freeze({
     kind: 'data-writing',
     reason: "PIPEEXCL.2: loadActiveElsewhere reads contact_id + status of the OTHER studios' bookings in a 60-day / 30-day window (both platforms: a Hatch trialer must leave Stillorgan's board) to decide whether an acquisition deal leaves this board (status lost) or is withheld; it sends nothing and credits nothing, and carries no class, time or platform anywhere.",
   },
+  'src/lib/pipeline-card-signals.js': {
+    kind: 'display',
+    reason: "HATCHCARD.1: loadUn1tCardSignals reads the board studio's OWN un1t.online bookings (.eq('source_platform', 'un1t_online'), contact_id + starts_at + status + attended only) to show classes done, the next booked class and days since the last class on a un1t.online pipeline card. Staff display only: it sends nothing, credits nothing and reminds nobody.",
+  },
   'src/lib/agent-tools/get-classes.js': {
     kind: 'display',
     reason: "MCP.1: get_classes counts booked and waitlisted per class for a staff member's AI client (status and glofox_event_id only, scoped to the studio). A un1t.online row counts as a booking like any other and the class's platform is surfaced in the answer; it sends nothing, credits nothing and reminds nobody.",
