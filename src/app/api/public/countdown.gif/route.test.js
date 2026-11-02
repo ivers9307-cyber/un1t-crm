@@ -34,7 +34,14 @@ vi.mock('@/lib/supabase', () => ({
 }))
 
 const buildCountdownGif = vi.fn(async () => Buffer.from('GIF89a-pretend-frames'))
-vi.mock('@/lib/countdown-gif', () => ({ buildCountdownGif: (...a) => buildCountdownGif(...a) }))
+// COUNTDOWN.2b — the blank is a real 600×190 GIF header (logical screen
+// 600×190, little-endian) so the fallback tests can read its size.
+const BLANK = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.from([0x58, 0x02, 0xbe, 0x00]), Buffer.alloc(32)])
+const buildBlankCountdownGif = vi.fn(async () => BLANK)
+vi.mock('@/lib/countdown-gif', () => ({
+  buildCountdownGif: (...a) => buildCountdownGif(...a),
+  buildBlankCountdownGif: (...a) => buildBlankCountdownGif(...a),
+}))
 
 import { GET } from './route'
 
@@ -48,12 +55,17 @@ beforeEach(() => {
   buildCountdownGif.mockClear()
 })
 
-const BLANK_LEN = 42 // bytes of the 1×1 transparent fallback
+const BLANK_LEN = BLANK.length
 
 async function expectBlankGif(res) {
   const bytes = Buffer.from(await res.arrayBuffer())
   expect(bytes).toHaveLength(BLANK_LEN)
   expect(bytes.subarray(0, 6).toString('latin1')).toBe('GIF89a')
+  // COUNTDOWN.2b — never the 1×1 pixel: the fallback is the clock's own
+  // 600×190 footprint, so the email's width:100%/height:auto cannot turn it
+  // into a full-width square.
+  expect(bytes.readUInt16LE(6)).toBe(600)
+  expect(bytes.readUInt16LE(8)).toBe(190)
 }
 
 describe('GET /api/public/countdown.gif', () => {

@@ -151,3 +151,21 @@ export async function buildCountdownGif({ msLeft, frames = 60, layout } = {}) {
     .gif({ loop: 1, delay: new Array(count).fill(1000), colours: 8 })
     .toBuffer()
 }
+
+// COUNTDOWN.2b — the "nothing to show" image, at the SAME size as a real
+// frame. The route used to fall back to a 1×1 pixel; the email asks the
+// image for width:100% / height:auto, so a 1×1 scales to a full-width
+// SQUARE and the hero became a 600px black void on the phone (seen on the
+// 2 Nov 2026 test send, while the route was serving the fallback for every
+// sale: COUNTDOWN.2). A 600×190 plain-background frame collapses to the
+// band the real clock would occupy. Built once, cached for the process.
+let blankPromise = null
+export function buildBlankCountdownGif({ layout } = {}) {
+  if (!blankPromise) {
+    const L = layout || layoutFor()
+    blankPromise = sharp({
+      create: { width: L.width, height: L.height, channels: 3, background: { r: COLOURS.bg[0], g: COLOURS.bg[1], b: COLOURS.bg[2] } },
+    }).gif().toBuffer()
+  }
+  return blankPromise
+}
