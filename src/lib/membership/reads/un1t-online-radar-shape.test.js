@@ -736,3 +736,20 @@ describe('arrearsFromFold', () => {
     expect(arrearsFromFold(foldPastDue([], deps))).toEqual({ totalCents: 0, memberCount: 0, estimated: false })
   })
 })
+
+
+// HATCH39 — a €39 trial purchase is a trial membership, never a pack holder on the radar.
+describe('HATCH39 — the paid-trial product set', () => {
+  it('a client whose latest pack transaction is the paid trial is not credit_member; without the set it is (today)', () => {
+    const base = {
+      subs: [],
+      clients: [client({ un1t_user_id: 'u2', contact_id: 'c2', credit_balance: 4 })],
+      packTxs: [ptx({ product_id: 'paid39', product_title: 'The UN1T Trial', amount_cents: 3900 })],
+      products: [...PRODUCTS, { un1t_id: 'paid39', type: 'one_time', price_cents: 3900, title: 'The UN1T Trial' }],
+    }
+    expect(shapeRadarMembers(fx(base)).packHolders).toBe(1)
+    const out = shapeRadarMembers(fx({ ...base, paidTrialProductIds: new Set(['paid39']) }))
+    expect(out.packHolders).toBe(0)
+    expect(out.rows.filter((r) => r.glofox_membership_status === 'credit_member')).toEqual([])
+  })
+})

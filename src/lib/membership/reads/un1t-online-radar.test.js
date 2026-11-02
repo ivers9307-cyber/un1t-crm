@@ -3,6 +3,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+// HATCH39 — the paid-trial product set has its own module and tests.
+vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn(async () => new Set()) }))
 
 import { logInfo } from '@/lib/log'
 import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
@@ -333,8 +335,9 @@ describe('leadContacts', () => {
     const { db, log } = makeDb(seed({ un1t_subscriptions: [] }))
     await leadContacts(db, HATCH, { nowMs: NOW })
     const byLocation = log.filter((q) => q.table === 'contacts' && q.filters.some(([k, c]) => k === 'eq' && c === 'location_id'))
-    expect(byLocation.length).toBe(1)
-    expect(byLocation[0].filters).toContainEqual(['eq', 'location_id', HATCH])
+    // HATCH39 — pipelineInputs now reads the studio's own contacts by location too (form-only enquiries).
+    expect(byLocation.length).toBeGreaterThanOrEqual(1)
+    for (const q of byLocation) expect(q.filters).toContainEqual(['eq', 'location_id', HATCH])
   })
 })
 

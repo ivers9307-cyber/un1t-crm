@@ -209,10 +209,12 @@ export function shapeRadarMembers(input = {}) {
 function radarCore({
   subs = [], clients = [], packTxs = [], products = [], contactsById = new Map(),
   events = [], bookings = [], newestBookingAtByUser = new Map(), lastPaymentAtByUser = new Map(),
+  // HATCH39 — the studio's paid-trial products: a €39 trial is never a pack holder.
+  paidTrialProductIds = new Set(),
   nowMs,
 } = {}) {
   const liveSubs = subs.filter(isLiveSub)
-  const holders = packHolderIds({ subs, clients, packTxs, products })
+  const holders = packHolderIds({ subs, clients, packTxs, products, paidTrialProductIds })
   const { attended7d, bookings30d, skippedEvents } = bookingCounts({ events, bookings, nowMs })
 
   const clientsByUser = groupBy(clients, (c) => c.un1t_user_id)
@@ -221,6 +223,7 @@ function radarCore({
   const latestPack = new Map()
   for (const t of packTxs) {
     if (t.product_type !== 'pack' || t.un1t_user_id == null) continue
+    if (paidTrialProductIds.has(t.product_id)) continue // HATCH39
     const prev = latestPack.get(t.un1t_user_id)
     if (!prev || String(t.remote_created_at ?? '') >= String(prev.remote_created_at ?? '')) latestPack.set(t.un1t_user_id, t)
   }

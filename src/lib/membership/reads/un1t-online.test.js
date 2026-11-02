@@ -3,6 +3,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+// HATCH39 — the studio's paid-trial products come from their own module (settings + the /trial page).
+vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn(async () => new Set(['paid39'])) }))
+import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 
 import { logWarn } from '@/lib/log'
 import { un1tOnlineReads, freshCutoff, listLedgerTrials } from './un1t-online'
@@ -713,7 +716,7 @@ describe('pipelineInputs and trialEligibility', () => {
     id: over.un1t_id ?? 'x1', location_id: HATCH, un1t_id: 'x1', un1t_user_id: 'u1', contact_id: 'c1', product_id: 'trial', product_type: 'pack',
     type: 'one_time', amount_cents: 0, refunded: false, remote_created_at: '2026-10-01T09:00:00Z', ...over,
   })
-  const contact = (over = {}) => ({ id: 'c1', name: 'Test One', email: 'one@example.test', location_id: HATCH, pipeline_dismissed_at: null, last_lead_source_at: null, ...over })
+  const contact = (over = {}) => ({ id: 'c1', name: 'Test One', email: 'one@example.test', location_id: HATCH, pipeline_dismissed_at: null, last_lead_source_at: null, created_at: '2026-01-04T10:00:00Z', ...over })
   const prod = (over = {}) => ({ id: over.un1t_id, location_id: HATCH, un1t_id: 'trial', type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'Trial', ...over })
 
   const world = (over = {}) => ({
@@ -721,7 +724,9 @@ describe('pipelineInputs and trialEligibility', () => {
       client({ location_id: STILLORGAN, un1t_user_id: 'o1', contact_id: 'c9' })],
     un1t_subscriptions: [csub({ un1t_user_id: 'u2', contact_id: 'c2', un1t_id: 's2' })],
     un1t_transactions: [ctx()],
-    un1t_products: [prod(), prod({ un1t_id: 'pack5', type: 'one_time', price_cents: 6000, credits_per_period: 5 }), prod({ location_id: STILLORGAN, un1t_id: 'other' })],
+    un1t_products: [prod(), prod({ un1t_id: 'pack5', type: 'one_time', price_cents: 6000, credits_per_period: 5 }), prod({ location_id: STILLORGAN, un1t_id: 'other' }),
+      // HATCH39 — the €39 14-day trial, sold as a pack
+      prod({ un1t_id: 'paid39', type: 'one_time', price_cents: 3900, credits_per_period: -1, title: 'The UN1T Trial', expire_credits_in_days: '14' })],
     un1t_events: [{ id: 'e1', location_id: HATCH, un1t_id: 'e1', starts_at: '2026-10-10T18:00:00Z' }],
     un1t_bookings: [{ id: 'b1', location_id: HATCH, un1t_id: 'b1', un1t_user_id: 'u1', contact_id: 'c1', event_id: 'e1', status: 'attended', source: 'direct', credit_charged: true, external_member_ref: null, remote_created_at: '2026-10-09T10:00:00Z' }],
     contact_studios: [{ id: 'cs1', location_id: HATCH, contact_id: 'c1', membership_plan: 'Monthly', membership_status: 'ended', membership_since: '2026-01-01T00:00:00Z', membership_ended_at: '2026-09-01T00:00:00Z' }],
@@ -762,7 +767,7 @@ describe('pipelineInputs and trialEligibility', () => {
       expect(out.data.snapshots.get('c2').recent_bookings).toHaveLength(0)
     })
 
-    it('every un1t table filtered by location_id; contacts read by id only, with the six named columns, no Glofox column', async () => {
+    it('every un1t table filtered by location_id; contacts read by id (linked) or by location_id (HATCH39 form-only), seven named columns, no Glofox column', async () => {
       const { db, log } = makeDb(world())
       await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
       const tables = new Set(log.map((q) => q.table))
@@ -771,12 +776,14 @@ describe('pipelineInputs and trialEligibility', () => {
         expect(q.filters, q.table).toContainEqual(['eq', 'location_id', HATCH])
       }
       const contactQueries = log.filter((q) => q.table === 'contacts')
-      expect(contactQueries.length).toBeGreaterThan(0)
+      expect(contactQueries.length).toBeGreaterThan(1)
       for (const q of contactQueries) {
-        expect(q.cols).toBe('id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at')
-        expect(q.filters.map((f) => [f[0], f[1]])).toEqual([['in', 'id']])
+        expect(q.cols).toBe('id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at, created_at')
         expect(q.cols).not.toMatch(/glofox/)
+        const shape = q.filters.map((f) => [f[0], f[1]])
+        expect(shape.length === 1 && (shape[0][0] === 'in' && shape[0][1] === 'id' || shape[0][0] === 'eq' && shape[0][1] === 'location_id')).toBe(true)
       }
+      expect(contactQueries.some((q) => q.filters.some((f) => f[0] === 'eq' && f[1] === 'location_id' && f[2] === HATCH))).toBe(true)
       // the facts read: the relationship rows at the studio, the fact columns (no source filter: the columns carry only what the un1t sync wrote)
       expect(log.some((q) => q.table === 'contact_studios' && /membership_status/.test(q.cols || ''))).toBe(true)
       expect(log.some((q) => q.table === 'contact_memberships')).toBe(false)
@@ -866,7 +873,9 @@ describe('pipelineInputs and trialEligibility', () => {
       })
       const { db } = makeDb(w)
       const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
-      expect(out.data.contacts.map((c) => c.id)).toEqual(['c1'])
+      // HATCH39 — c2 still exists as a Hatch contact with no (readable) client: a form-only lead.
+      expect(out.data.contacts.map((c) => c.id)).toEqual(['c1', 'c2'])
+      expect(out.data.form_only).toBe(1)
       expect(out.data.skipped_no_contact).toBe(2)
       expect(logWarn.mock.calls.filter((c) => c[1] === 'client contact missing')).toEqual([['un1t-pipeline', 'client contact missing', { locationId: HATCH, count: 2 }]])
       // nothing missing → no log, count 0
@@ -878,7 +887,8 @@ describe('pipelineInputs and trialEligibility', () => {
 
     it('a studio with no client rows is an empty answer', async () => {
       const { db } = makeDb({})
-      expect(await un1tOnlineReads.pipelineInputs(db, HATCH)).toEqual({ success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked: 0, skipped_no_contact: 0 } })
+      // HATCH39 — an empty studio (no contacts either) is an empty answer with form_only 0.
+      expect(await un1tOnlineReads.pipelineInputs(db, HATCH)).toEqual({ success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked: 0, skipped_no_contact: 0, form_only: 0 } })
     })
 
     it('refuses a missing location without querying', async () => {
@@ -1544,5 +1554,86 @@ describe('activeMemberContactIds', () => {
       expect(out.success).toBe(false)
       expect(out.error).toMatch(/boom/)
     }
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// HATCH39 — the €39 paid trial on the un1t path, and form-only enquiries.
+// ---------------------------------------------------------------------------
+describe('HATCH39 — pipelineInputs: paid-trial products and form-only contacts', () => {
+  const client = (over = {}) => ({
+    id: over.un1t_user_id ?? 'u1', location_id: HATCH, un1t_user_id: 'u1', contact_id: 'c1', credit_balance: 0,
+    credit_unlimited: false, last_attended_at: null, remote_created_at: '2026-01-05T10:00:00Z', synced_at: SYNCED, ...over,
+  })
+  const ctx = (over = {}) => ({
+    id: over.un1t_id ?? 'x1', location_id: HATCH, un1t_id: 'x1', un1t_user_id: 'u1', contact_id: 'c1', product_id: 'paid39', product_type: 'pack',
+    type: 'one_time', amount_cents: 3900, refunded: false, remote_created_at: '2026-10-16T09:00:00Z', ...over,
+  })
+  const contact = (over = {}) => ({ id: 'c1', name: 'Buyer', email: 'buyer@example.test', location_id: HATCH, pipeline_dismissed_at: null, last_lead_source_at: null, created_at: '2026-01-04T10:00:00Z', ...over })
+  const prod = (over = {}) => ({ id: over.un1t_id, location_id: HATCH, un1t_id: 'trial', type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'Trial', ...over })
+  const world = (over = {}) => ({
+    un1t_clients: [client({ credit_unlimited: true })],
+    un1t_subscriptions: [], un1t_transactions: [ctx()],
+    un1t_products: [prod(), prod({ un1t_id: 'paid39', price_cents: 3900, credits_per_period: -1, title: 'The UN1T Trial', expire_credits_in_days: '14' })],
+    un1t_events: [], un1t_bookings: [], contact_studios: [],
+    contacts: [
+      contact(),
+      // form-only Hatch enquiry (no client row), fresh
+      contact({ id: 'c-form', name: 'Form', email: 'form@example.test', created_at: '2026-10-17T09:00:00Z', last_lead_source_at: '2026-10-17T09:00:00Z' }),
+      // form-only but another studio's contact: not Hatch's enquiry
+      contact({ id: 'c-still', location_id: STILLORGAN, created_at: '2026-10-17T09:00:00Z' }),
+    ],
+    ...over,
+  })
+  beforeEach(() => { vi.mocked(paidTrialProductIdsFor).mockReset(); vi.mocked(paidTrialProductIdsFor).mockResolvedValue(new Set(['paid39'])) })
+
+  it('resolves the studio\'s paid-trial products once and the €39 buyer is a claim, not a pack', async () => {
+    const { db } = makeDb(world())
+    const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+    expect(out.success).toBe(true)
+    expect(paidTrialProductIdsFor).toHaveBeenCalledTimes(1)
+    expect(paidTrialProductIdsFor).toHaveBeenCalledWith(db, HATCH)
+    const s = out.data.snapshots.get('c1')
+    expect(s.pack_customer_at).toBeNull()
+    expect(s.glofox_membership_status).toBe('lead')
+    expect(s.paid_trial_at).toBe('2026-10-16T09:00:00Z')
+    expect(Date.parse(s.paid_trial_expires_at)).toBe(Date.parse('2026-10-16T09:00:00Z') + 14 * 86_400_000)
+  })
+  it('a Hatch-home contact with no account is in the population as a form-only lead, dated at the enquiry; another studio\'s is not', async () => {
+    const { db } = makeDb(world())
+    const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+    expect(out.data.contacts.map((c) => c.id).sort()).toEqual(['c-form', 'c1'])
+    expect(out.data.form_only).toBe(1)
+    const s = out.data.snapshots.get('c-form')
+    expect(s).toMatchObject({ glofox_membership_status: 'lead', joined_at: '2026-10-17T09:00:00Z', recent_bookings: [], paid_trial_at: null })
+    expect(out.data.evidence.get('c-form')).toMatchObject({ client_created_at: '2026-10-17T09:00:00Z', attended_starts: [] })
+    expect(out.data.snapshots.has('c-still')).toBe(false)
+  })
+  it('a form-only contact whose client row appears is no longer form-only (the full snapshot wins)', async () => {
+    const w = world()
+    w.un1t_clients.push(client({ un1t_user_id: 'u-form', contact_id: 'c-form' }))
+    const { db } = makeDb(w)
+    const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+    expect(out.data.form_only).toBe(0)
+    expect(out.data.snapshots.get('c-form').joined_at).toBe('2026-01-05T10:00:00Z')
+  })
+  it('a failed paid-trial product read fails the pass', async () => {
+    vi.mocked(paidTrialProductIdsFor).mockRejectedValue(new Error('settings boom'))
+    const out = await un1tOnlineReads.pipelineInputs(makeDb(world()).db, HATCH, { now: NOW.getTime() })
+    expect(out.success).toBe(false)
+    expect(out.error).toMatch(/settings boom/)
+  })
+  it('trialEligibility: the €39 buyer is ineligible with reason paid_trial, never paid_pack', async () => {
+    const { db } = makeDb(world({ un1t_write_events: [] }))
+    const out = await un1tOnlineReads.trialEligibility(db, HATCH, { un1tUserId: 'u1' })
+    expect(out).toEqual({ success: true, data: { eligible: false, reasons: ['paid_trial'], regrant: false } })
+  })
+  it('membershipCounts: a client holding only the €39 trial is not a class pack', async () => {
+    const w = world()
+    w.un1t_clients = [client({ credit_balance: 3, credit_unlimited: false })]
+    const { db } = makeDb(w)
+    const counts = await un1tOnlineReads.membershipCounts(db, HATCH)
+    expect(counts.class_packs).toBe(0)
   })
 })
