@@ -1684,3 +1684,80 @@ describe('HATCH39 — un1t path: Acquisition + €39 Trial boards', () => {
     expect(out.stage_histogram).toEqual({ trial_done: 1 })
   })
 })
+
+
+// STILL39SEQ.1 — Stillorgan's €39 board is a contacts-input (Glofox) board, and
+// its Day 7 and Trial Done columns are reached by TIME: the nightly pass makes
+// those moves, so a move on the €39 board starts the studio's
+// pipeline_stage_change sequences, guarded like the un1t path. Every other
+// contacts-input board (Acquisition moves thousands a night) still fires
+// nothing here.
+describe('STILL39SEQ.1 — €39 board moves on the contacts path fire the stage-change trigger', () => {
+  beforeEach(() => {
+    vi.mocked(membershipReadsFor).mockReset()
+    vi.mocked(logWarn).mockClear()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockReset()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockResolvedValue(undefined)
+  })
+
+  const STILL = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const BOARDS = [
+    { id: 'p-acq', location_id: STILL, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-paid', location_id: STILL, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES2 = [
+    ...['new_lead', 'first_class', 'second_class', 'trial_done', 'converted', 'member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant']
+      .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL })),
+    ...['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
+      .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid', location_id: STILL })),
+  ]
+  // Paid 8 days ago, one class since: Day 7 on the €39 board.
+  const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(8), created_at: ago(8), last_attended_at: ago(6), recent_bookings: [attendedBooking(6)] }
+  const purchase = { id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(8), granted_at: ago(8), duration_days: 14 }
+  // A long-gone ex-member: Dormant on Acquisition.
+  const lapsed = { id: 'c-lapsed', name: 'Lapsed', email: null, glofox_membership_status: 'ex_member', last_attended_at: ago(400), joined_at: ago(800), created_at: ago(800), recent_bookings: [] }
+  const fixtures = (over = {}) => ({
+    pipelines: BOARDS, pipeline_stages: STAGES2, contacts: [buyer], trial_purchases: [purchase],
+    pipeline_board_claims: [], locations: [{ id: STILL, settings: {} }],
+    deals: [{ id: 'd-buyer', contact_id: 'c-buyer', stage_id: 's-paid_trial_first_class', pipeline_id: 'p-paid', location_id: STILL, status: 'open' }],
+    ...over,
+  })
+  const moveOf = (rec, stageId) => rec.writesTo('deals').find((e) => rec.argOf(e, 'update')?.[1]?.stage_id === stageId)
+
+  it('a move to Day 7 on the €39 board fires once with the studio, and the write is guarded on status open', async () => {
+    const rec = recordingDb(fixtures())
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, input_source: 'contacts', deals_moved: 1 })
+    const move = moveOf(rec, 's-paid_trial_day_7')
+    expect(rec.argOf(move, 'eq')).toEqual(['eq', 'status', 'open'])
+    expect(rec.argOf(move, 'select')).toEqual(['select', 'id'])
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(1)
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-buyer', 'paid_trial_first_class', 'paid_trial_day_7', { locationId: STILL })
+  })
+
+  it('a move onto the €39 board from Acquisition fires too (the deal landed in a €39 column)', async () => {
+    const rec = recordingDb(fixtures({ deals: [{ id: 'd-buyer', contact_id: 'c-buyer', stage_id: 's-pack_member', pipeline_id: 'p-acq', location_id: STILL, status: 'open' }] }))
+    await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-buyer', 'pack_member', 'paid_trial_day_7', { locationId: STILL })
+  })
+
+  it('an Acquisition move at the same studio fires nothing and keeps the unguarded write', async () => {
+    const rec = recordingDb(fixtures({
+      contacts: [lapsed], trial_purchases: [],
+      deals: [{ id: 'd-lapsed', contact_id: 'c-lapsed', stage_id: 's-member', pipeline_id: 'p-acq', location_id: STILL, status: 'open' }],
+    }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, deals_moved: 1 })
+    const move = moveOf(rec, 's-dormant')
+    expect(rec.argOf(move, 'eq')).toBeUndefined()
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('a dry run fires nothing', async () => {
+    const rec = recordingDb(fixtures())
+    await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+})

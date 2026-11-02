@@ -50,6 +50,12 @@ const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
 const STAGE_TRIGGER_MASS_MOVE = 50
+// STILL39SEQ.1 — the contacts-input (Glofox) boards whose moves this pass
+// fires the stage-change trigger for. Stillorgan's €39 board reaches Day 7 and
+// Trial Done by TIME, so this pass makes those moves and nothing else would
+// start a sequence for them. Acquisition is deliberately absent: it moves
+// thousands of deals a night, and its moves fire through ensureDealForContact.
+const CONTACTS_STAGE_TRIGGER_MODULES = Object.freeze(['paid_trial'])
 
 // PIPELINES.3 — the columns a run selects are the UNION of what its enabled
 // derived boards DECLARE, not a hand-maintained list. The list this replaced
@@ -259,6 +265,10 @@ export async function reclassifyAllContacts(db, args) {
   // claims (trial_purchases, pipeline_board_claims) loaded.
   const activeBoardKeys = new Set(activePipelines.map((p) => p.key))
   const needsClaims = inputSource !== UN1T_INPUT && activePipelines.some((p) => CLAIM_BOARD_MODULES.includes(p.module))
+  // STILL39SEQ.1 — the contacts-input boards here whose landed moves fire.
+  const triggerPipelineIds = new Set(inputSource === UN1T_INPUT ? [] : activePipelines
+    .filter((p) => CONTACTS_STAGE_TRIGGER_MODULES.includes(p.module))
+    .map((p) => p.id))
 
   // 2. Build the slug → stage_id lookup ONCE for this location.
   // PIPELINES.5 — pipeline_id comes back with the stage because the create
@@ -489,7 +499,7 @@ export async function reclassifyAllContacts(db, args) {
   const samples = []
   const movesToApply = [] // [{ deal_id, contact_id, from_slug, to_slug, target_stage_id, contact_name }]
   const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
-  const movesLanded = [] // TDSEQ.1: un1t path, real runs: the moves whose write landed
+  const movesLanded = [] // TDSEQ.1 / STILL39SEQ.1: real runs, firing boards: the moves whose write landed
   const leavesToApply = [] // PIPEEXCL.1: [{ deal_id, contact_id, from_slug, contact_name }]
   const duplicatesToClose = [] // PIPE3: surplus open deals, [{ deal_id, contact_id }]
   let duplicateDealsClosed = 0
@@ -628,19 +638,23 @@ export async function reclassifyAllContacts(db, args) {
       // pipeline_id; it is written only when a deal in the group changes board
       // (a same-board move keeps today's stage-only payload).
       const groupCrossBoard = moves.some((m) => m.cross_board)
+      // TDSEQ.1 / STILL39SEQ.1 — every move in a group lands on one board: the
+      // un1t boards and the contacts-path boards in CONTACTS_STAGE_TRIGGER_MODULES
+      // fire the stage-change trigger, so their write is guarded and counted.
+      const groupFires = inputSource === UN1T_INPUT || triggerPipelineIds.has(moves[0].target_pipeline_id)
       const movePatch = groupCrossBoard ? { stage_id: stageId, pipeline_id: moves[0].target_pipeline_id } : { stage_id: stageId }
       for (let i = 0; i < moves.length; i += BULK_UPDATE_CHUNK) {
         const chunk = moves.slice(i, i + BULK_UPDATE_CHUNK)
         const dealIds = chunk.map((m) => m.deal_id)
-        // TDSEQ.1 — on the un1t path the move is guarded on status 'open' and
+        // TDSEQ.1 — on a firing board the move is guarded on status 'open' and
         // returns the ids it changed: only those start a sequence (a deal
-        // closed between the read and this write must not). The contacts
-        // (Glofox) path's write is unchanged.
+        // closed between the read and this write must not). Every other
+        // contacts (Glofox) board's write is unchanged.
         const moveQuery = db
           .from('deals')
           .update(movePatch)
           .in('id', dealIds)
-        const { data: movedRows, error: moveErr } = inputSource === UN1T_INPUT
+        const { data: movedRows, error: moveErr } = groupFires
           ? await moveQuery.eq('status', 'open').select('id')
           : await moveQuery
         if (moveErr) {
@@ -654,7 +668,7 @@ export async function reclassifyAllContacts(db, args) {
         }
         stageMoved += chunk.length
         boardsMoved += chunk.filter((m) => m.cross_board).length
-        if (inputSource === UN1T_INPUT) {
+        if (groupFires) {
           const changed = new Set((movedRows || []).map((r) => r.id))
           movesLanded.push(...chunk.filter((m) => changed.has(m.deal_id)))
         }
@@ -820,7 +834,8 @@ export async function reclassifyAllContacts(db, args) {
     samples,
   }, startedAt)
 
-  // TDSEQ.1 — a landed MOVE on a un1t.online board starts the board studio's
+  // TDSEQ.1 — a landed MOVE on a un1t.online board (STILL39SEQ.1: or on a
+  // contacts board in CONTACTS_STAGE_TRIGGER_MODULES) starts the board studio's
   // pipeline_stage_change sequences (never a create, a leave or a dry run:
   // movesLanded holds only real moves whose write succeeded). After every
   // write and the audit close, so a slow or failing enrolment can never fail
@@ -855,9 +870,12 @@ export async function reclassifyAllContacts(db, args) {
 }
 
 // TDSEQ.1 — fire triggerSequencesForPipelineStageChange for each landed un1t
-// board move, with the board's studio. Glofox (contacts-input) boards never
-// come here: their moves fire through ensureDealForContact, and a nightly
-// re-run of this pass is not a new event for them. A move from an unknown
+// board move, with the board's studio. Glofox (contacts-input) boards come here
+// only when their module is in CONTACTS_STAGE_TRIGGER_MODULES (STILL39SEQ.1:
+// the €39 board, whose Day 7 and Trial Done moves are made by time, in this
+// pass); every other Glofox board fires through ensureDealForContact, and a
+// nightly re-run of this pass is not a new event for it. Enrolment is once per
+// person per sequence, so a move ensureDealForContact also fired is harmless. A move from an unknown
 // stage (from_slug 'unknown') never fires. Best-effort: a throw is
 // logged and the next move still fires. A stage that took more than
 // STAGE_TRIGGER_MASS_MOVE moves this run is held whole (a classifier rule
