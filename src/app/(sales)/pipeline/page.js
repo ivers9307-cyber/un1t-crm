@@ -236,6 +236,13 @@ export default async function PipelinePage(props) {
       />
 
       <KanbanBoard
+        // BOARDKEY.1 — the board tabs and the Active/Dormant toggle navigate
+        // client-side (router.push), which re-renders this page with the new
+        // board's stages but keeps the same KanbanBoard instance, whose column
+        // state was seeded once from the first board. Keyed on board + view it
+        // remounts with the server's fresh first page instead of showing every
+        // column as "Load more (0 of N)" (the €39 Trial board at Hatch, 2 Nov 2026).
+        key={`${activePipeline.id}:${view}`}
         initialStages={visibleStages}
         initialDeals={boardDeals}
         stageCounts={stageCounts}
