@@ -50,6 +50,21 @@ export const isActiveRecurring = (s) => s?.status === 'active' && !s.paused_at &
  */
 export const isTrialProduct = (p) => p?.type === 'one_time' && p.price_cents != null && Number(p.price_cents) === 0
 
+/**
+ * HATCH39 — the studio's PAID trial products (the €39 14-day trial), by
+ * product id. un1t.online records their purchase as a `pack` transaction, so
+ * without this set every €39 buyer read as a Class Pack customer (69 of them
+ * at Hatch Street by 1 Nov 2026). The set comes from the un1t read adapter
+ * (paidTrialProductIdsFor: the studio setting ∪ the /trial page's product);
+ * a shaper given no set behaves exactly as before. A paid trial is a trial
+ * membership, never a pack holder, on EVERY read (Richard, 1 Nov 2026).
+ */
+const EMPTY_IDS = new Set()
+export const isPaidTrialProduct = (p, paidTrialProductIds) => Boolean(p?.un1t_id)
+  && paidTrialProductIds instanceof Set && paidTrialProductIds.has(p.un1t_id)
+const isPaidTrialTx = (t, paidTrialProductIds) => t?.product_id != null
+  && paidTrialProductIds instanceof Set && paidTrialProductIds.has(t.product_id)
+
 // Glofox counts CONTACTS, so a member with two active subscriptions is one
 // member. A row with no un1t_user_id cannot be matched and stands alone.
 const memberKey = (s, i) => (s.un1t_user_id != null ? `u:${s.un1t_user_id}` : `row:${i}`)
@@ -84,13 +99,15 @@ export function glofoxInterval(unit, count) {
  * it, else what they paid; a €0 pack is never one). shapeCounts and the radar's
  * active base both read this one rule, so they can never disagree.
  */
-export function packHolderIds({ subs = [], clients = [], packTxs = [], products = [] } = {}) {
+export function packHolderIds({ subs = [], clients = [], packTxs = [], products = [], paidTrialProductIds = EMPTY_IDS } = {}) {
   const activeUsers = new Set(subs.filter(isActiveSub).map((s) => s.un1t_user_id))
 
   const priceByProduct = new Map(products.map((p) => [p.un1t_id, p.price_cents]))
   const latestPack = new Map()
   for (const t of packTxs) {
     if (t.product_type !== 'pack' || t.un1t_user_id == null) continue
+    // HATCH39 — a paid-trial purchase is not a pack: it never decides holding.
+    if (isPaidTrialTx(t, paidTrialProductIds)) continue
     const prev = latestPack.get(t.un1t_user_id)
     if (!prev || String(t.remote_created_at ?? '') >= String(prev.remote_created_at ?? '')) {
       latestPack.set(t.un1t_user_id, t)
@@ -122,9 +139,9 @@ export function packHolderIds({ subs = [], clients = [], packTxs = [], products 
  * @param {object[]} a.packTxs   un1t_transactions with product_type 'pack'
  * @param {object[]} a.products  un1t_products
  */
-export function shapeCounts({ subs = [], clients = [], packTxs = [], products = [] }) {
+export function shapeCounts({ subs = [], clients = [], packTxs = [], products = [], paidTrialProductIds = EMPTY_IDS }) {
   const active = subs.filter(isActiveSub)
-  const holders = packHolderIds({ subs, clients, packTxs, products })
+  const holders = packHolderIds({ subs, clients, packTxs, products, paidTrialProductIds })
 
   // Members per interval: a member is counted once under each interval they hold.
   const perInterval = Object.fromEntries(GLOFOX_INTERVALS.map((k) => [k, new Set()]))
@@ -445,9 +462,31 @@ const earliestOf = (values) => values.reduce((best, v) => (
  * not a trial product (a trial is never a pack customer, whatever it cost). A
  * product we cannot read (deleted upstream) is not a trial product.
  */
-function isPaidPack(t, productsById) {
+function isPaidPack(t, productsById, paidTrialProductIds = EMPTY_IDS) {
   return lower(t?.product_type) === 'pack' && Number(t.amount_cents) > 0 && t.refunded !== true
     && !isTrialProduct(productOf(productsById, t.product_id))
+    // HATCH39 — the €39 trial is sold as a `pack`; it is a trial, never a pack.
+    && !isPaidTrialTx(t, paidTrialProductIds)
+}
+
+/**
+ * HATCH39 — the newest non-refunded paid-trial purchase: when it was made and
+ * when it runs out (its product's `expire_credits_in_days` in whole days of 24
+ * hours; null when the product carries no positive expiry).
+ * @returns {{ at: string|null, expiresAt: string|null }}
+ */
+function paidTrialOf(transactions, productsById, paidTrialProductIds) {
+  let newest = null
+  for (const t of transactions) {
+    if (!t || t.refunded === true || !isPaidTrialTx(t, paidTrialProductIds)) continue
+    if (msOf(t.remote_created_at) == null) continue
+    if (!newest || msOf(t.remote_created_at) > msOf(newest.remote_created_at)) newest = t
+  }
+  if (!newest) return { at: null, expiresAt: null }
+  const raw = productOf(productsById, newest.product_id)?.expire_credits_in_days
+  const days = raw == null || raw === '' ? NaN : Number(raw)
+  const expiresAt = Number.isFinite(days) && days > 0 ? new Date(msOf(newest.remote_created_at) + days * DAY_MS).toISOString() : null
+  return { at: newest.remote_created_at, expiresAt }
 }
 
 // A fresh subscription that holds a membership: the snapshot's `member` rule.
@@ -498,7 +537,7 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
  * @returns {{ trialCreditsLeft: number, paidCredits: number, hasPaidPack: boolean,
  *   tookTrial: boolean, newestTrialAt: string|null, newestTrialProductId: string|null }}
  */
-export function splitUn1tCredits({ client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [] } = {}) {
+export function splitUn1tCredits({ client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [], paidTrialProductIds = EMPTY_IDS } = {}) {
   const balance = Math.max(0, Number(client?.credit_balance) || 0)
   const trials = trialsTaken({ transactions, productsById, ledgerTrials })
   const newestTrialAt = latestOf(trials.map((t) => t.at))
@@ -510,7 +549,7 @@ export function splitUn1tCredits({ client, transactions = [], productsById = new
   const newestResolvedAt = latestOf(resolved.map((t) => t.at))
   const newest = resolved.find((t) => t.at === newestResolvedAt && newestResolvedAt != null) ?? resolved[0]
     ?? trials.find((t) => t.at === newestTrialAt && newestTrialAt != null) ?? trials[0] ?? null
-  const hasPaidPack = transactions.some((t) => isPaidPack(t, productsById))
+  const hasPaidPack = transactions.some((t) => isPaidPack(t, productsById, paidTrialProductIds))
 
   let trialCreditsLeft = 0
   if (newest) {
@@ -628,9 +667,10 @@ function aggregatorOf(bookings) {
  */
 export function shapePipelineSnapshot({
   client, contact, locationId, studioDismissedAt = null, freshSubs = [], transactions = [], productsById = new Map(),
-  bookings = [], memberships = [], ledgerTrials = [], now: _now = Date.now(),
+  bookings = [], memberships = [], ledgerTrials = [], paidTrialProductIds = EMPTY_IDS, now: _now = Date.now(),
 } = {}) {
-  const credits = splitUn1tCredits({ client, transactions, productsById, bookings, ledgerTrials })
+  const credits = splitUn1tCredits({ client, transactions, productsById, bookings, ledgerTrials, paidTrialProductIds })
+  const paidTrial = paidTrialOf(transactions.filter(Boolean), productsById, paidTrialProductIds)
   const aggregator = aggregatorOf(bookings)
   const attendedStarts = bookings.filter((b) => lower(b?.status) === 'attended').map((b) => b.starts_at)
   const lastAttendedAt = latestOf([client?.last_attended_at, ...attendedStarts])
@@ -647,7 +687,7 @@ export function shapePipelineSnapshot({
     if (ended.length && !own.some((m) => lower(m.status) === 'active')) {
       const endMs = msOf(latestOf(ended.map((m) => m.ended_at)))
       const since = (v) => msOf(v) != null && (endMs == null || msOf(v) > endMs)
-      const packSince = transactions.some((t) => isPaidPack(t, productsById) && since(t.remote_created_at))
+      const packSince = transactions.some((t) => isPaidPack(t, productsById, paidTrialProductIds) && since(t.remote_created_at))
       const attendedSince = since(client?.last_attended_at) || attendedStarts.some(since)
       if (!packSince && !attendedSince) return 'ex_member'
     }
@@ -688,11 +728,53 @@ export function shapePipelineSnapshot({
     trial_credits_remaining: trialCreditsRemaining,
     recent_bookings: recentBookings,
     converted_at: firstSales(transactions.filter(Boolean))[0]?.remote_created_at ?? null,
-    pack_customer_at: earliestOf(transactions.filter((t) => isPaidPack(t, productsById)).map((t) => t.remote_created_at)),
+    pack_customer_at: earliestOf(transactions.filter((t) => isPaidPack(t, productsById, paidTrialProductIds)).map((t) => t.remote_created_at)),
     pipeline_dismissed_at: dismissalAtStudio(contact, locationId, studioDismissedAt),
     last_lead_source_at: owned ? (contact.last_lead_source_at ?? null) : null,
     gympass_member_id: aggregator.gympassMemberId,
     trial_expires_at: trialExpiresAt(credits, productsById),
+    // HATCH39 — the €39 board's claim (shared/pipelines/paid-trial.js paidClaimFromSnapshot).
+    paid_trial_at: paidTrial.at,
+    paid_trial_expires_at: paidTrial.expiresAt,
+  }
+}
+
+/**
+ * HATCH39 — a website enquiry with NO un1t.online account at this studio (the
+ * people the retired Waitlist board used to hold). un1t.online knows nothing
+ * about them, so the snapshot is the contact row alone: a lead whose
+ * `joined_at` is the LATER of the row's creation and its latest public-form
+ * touch (a 2025 race entrant who fills the Hatch form today is a fresh New
+ * Lead; a repeat enquiry revives a Dormant one). classifyContact then gives
+ * new_lead for 60 days and dormant after. Cold and the touch are lent on the
+ * same ownership rule as shapePipelineSnapshot. Same keys as that snapshot.
+ *
+ * @param {{ contact: object, locationId: string, studioDismissedAt?: string|null }} a
+ */
+export function shapeFormOnlySnapshot({ contact, locationId, studioDismissedAt = null } = {}) {
+  const owned = locationId != null && contact?.location_id != null && contact.location_id === locationId
+  const touch = owned ? (contact?.last_lead_source_at ?? null) : null
+  const joinedAt = latestOf([contact?.created_at ?? null, touch])
+  return {
+    glofox_membership_status: 'lead',
+    glofox_membership_state: null,
+    glofox_membership_expiry: null,
+    last_attended_at: null,
+    total_attended_7d: null,
+    total_attended_30d: null,
+    last_payment_at: null,
+    joined_at: joinedAt,
+    created_at: contact?.created_at ?? null,
+    trial_credits_remaining: null,
+    recent_bookings: [],
+    converted_at: null,
+    pack_customer_at: null,
+    pipeline_dismissed_at: dismissalAtStudio(contact, locationId, studioDismissedAt),
+    last_lead_source_at: touch,
+    gympass_member_id: null,
+    trial_expires_at: null,
+    paid_trial_at: null,
+    paid_trial_expires_at: null,
   }
 }
 
@@ -769,16 +851,20 @@ export function shapePipelineDateEvidence({
  * Pure. A failed READ is the caller's to answer as "not eligible"; this only
  * judges rows it was given.
  *
- * @returns {{ eligible: boolean, reasons: Array<'trial_used'|'membership_history'|'paid_pack'> }}
+ * @returns {{ eligible: boolean, reasons: Array<'trial_used'|'membership_history'|'paid_pack'|'paid_trial'> }}
  */
 export function shapeTrialEligibility({
   transactions = [], productsById = new Map(), ledgerTrials = [], subscriptions = [], memberships = [],
+  paidTrialProductIds = EMPTY_IDS,
 } = {}) {
   const txs = transactions.filter(Boolean)
   const reasons = []
   if (trialsTaken({ transactions: txs, productsById, ledgerTrials }).length > 0) reasons.push('trial_used')
   if (subscriptions.some(Boolean) || memberships.some(Boolean) || txs.some(isRecurringTx)) reasons.push('membership_history')
-  if (txs.some((t) => isPaidPack(t, productsById))) reasons.push('paid_pack')
+  if (txs.some((t) => isPaidPack(t, productsById, paidTrialProductIds))) reasons.push('paid_pack')
+  // HATCH39 — a €39 trial buyer has had a trial and has paid: still ineligible
+  // for the free one, under the true label (not 'paid_pack').
+  if (txs.some((t) => t.refunded !== true && isPaidTrialTx(t, paidTrialProductIds))) reasons.push('paid_trial')
   return { eligible: reasons.length === 0, reasons }
 }
 

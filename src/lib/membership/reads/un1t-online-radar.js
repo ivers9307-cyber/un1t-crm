@@ -24,6 +24,8 @@ import { MEMBER_STATUSES } from './un1t-online-shape'
 // both sides only touch the other's bindings at CALL time (and these are
 // hoisted function declarations).
 import { freshCutoff, un1tOnlineReads } from './un1t-online'
+// HATCH39 — a €39 trial is never a pack holder on the radar.
+import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import { shapeRadarMembers, shapeWinbackRows, shapeLeadRows, foldPastDue, arrearsFromFold } from './un1t-online-radar-shape'
 
 const PAGE = 1000
@@ -98,13 +100,14 @@ const contactsByIds = async (db, ids, cols) => {
 async function loadRadarInputs(db, loc, nowMs, subs) {
   const fromIso = new Date(nowMs - WINDOW_30D_MS).toISOString()
   const toIso = new Date(nowMs).toISOString()
-  const [clients, packTxs, products, payments, events, bookedAt] = await Promise.all([
+  const [clients, packTxs, products, payments, events, bookedAt, paidTrialProductIds] = await Promise.all([
     listAt(db, loc, 'un1t_clients', CLIENT_COLS),
     listAt(db, loc, 'un1t_transactions', PACK_TX_COLS, (q) => q.eq('product_type', 'pack')),
     listAt(db, loc, 'un1t_products', PRODUCT_COLS),
     listAt(db, loc, 'un1t_transactions', PAYMENT_COLS, (q) => q.in('type', ['sub_initial', 'sub_renewal']).gt('amount_cents', 0)),
     listAt(db, loc, 'un1t_events', EVENT_COLS, (q) => q.gte('starts_at', fromIso).lte('starts_at', toIso)),
     listBookedAt(db, loc, nowMs),
+    paidTrialProductIdsFor(db, loc),
   ])
   const bookings = await selectAllByKeys(
     [...new Set(events.map((e) => e.un1t_id).filter((id) => id != null))],
@@ -124,6 +127,7 @@ async function loadRadarInputs(db, loc, nowMs, subs) {
     clients,
     packTxs,
     products,
+    paidTrialProductIds,
     contactsById,
     events,
     bookings,

@@ -37,14 +37,19 @@ const OUTRANKS_CLAIMS = new Set(['cold_lead', 'gympass'])
 /**
  * Which board, and which column, a contact belongs on.
  *
- * @param {object} contact   the contacts row (the union of the boards' requiredFields)
+ * @param {object} contact   the contacts row (the union of the boards' requiredFields),
+ *                           or a un1t.online pipeline snapshot (HATCH39)
  * @param {{ paid?: object|null, programme?: { claimedAt:number }|null }|null} claims
  * @param {number} now       epoch ms
- * @param {Set<string>|null} boards  the board keys enabled at the studio
+ * @param {Set<string>|null} boards  the board KEYS enabled at the studio (pipelines.key:
+ *                           'acquisition', 'paid_trial', 'programmes')
+ * @param {{ classifyAcquisition?: Function }} [opts]  HATCH39 — the acquisition
+ *   board's own classify (acquisition_un1t.classify carries TRIALDONE.2); it
+ *   answers the Cold/Gympass check and the fallback. Default: classifyContact.
  * @returns {{ boardKey: string, slug: string }}
  */
-export function routeContact(contact, claims, now = Date.now(), boards = null) {
-  const acq = classifyContact(contact, now)
+export function routeContact(contact, claims, now = Date.now(), boards = null, { classifyAcquisition = classifyContact } = {}) {
+  const acq = classifyAcquisition(contact, now)
   const has = (key) => boards instanceof Set && boards.has(key)
   const paid = claims?.paid ?? null
   const programme = claims?.programme ?? null

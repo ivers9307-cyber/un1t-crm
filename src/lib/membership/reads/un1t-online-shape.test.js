@@ -3,12 +3,14 @@ import { describe, it, expect } from 'vitest'
 import { classifyContact } from '@shared/pipeline-classifier'
 import { un1tDealDates } from './un1t-pipeline-dates'
 import { classify as classifyUn1t } from '@shared/pipelines/acquisition-un1t'
+import { classify as classifyPaid, paidClaimFromSnapshot } from '@shared/pipelines/paid-trial'
 import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
   UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, UN1T_RETRY_NET_WINDOW_MS, normaliseUn1tInvoiceStatus, shapePastDue,
   shapePipelineSnapshot, shapeTrialEligibility, shapeTrialRegrant, splitUn1tCredits, shapePipelineDateEvidence,
   UN1T_AGGREGATOR_GYMPASS_SOURCES, UN1T_AGGREGATOR_MARKER,
+  shapeFormOnlySnapshot, packHolderIds, isPaidTrialProduct,
 } from './un1t-online-shape'
 
 const sub = (over = {}) => ({
@@ -568,8 +570,12 @@ const HATCH = 'loc-hatch-0001'
 const STILLORGAN = 'loc-still-0001'
 const TRIAL = 'prod-trial'
 const PACK5 = 'prod-pack5'
+// HATCH39 — the €39 14-day trial: a one_time product with a price, unlimited credits, 14-day expiry.
+const PAID_TRIAL = 'prod-paid-trial'
+const PAID_IDS = new Set([PAID_TRIAL])
 const PRODUCTS_BY_ID = new Map([
   [TRIAL, { un1t_id: TRIAL, type: 'one_time', price_cents: 0, credits_per_period: 3, title: 'The UN1T Trial' }],
+  [PAID_TRIAL, { un1t_id: PAID_TRIAL, type: 'one_time', price_cents: 3900, credits_per_period: -1, title: 'The UN1T Trial', expire_credits_in_days: '14' }],
   [PACK5, { un1t_id: PACK5, type: 'one_time', price_cents: 6000, credits_per_period: 5, title: '5 class pack' }],
   ['prod-monthly', { un1t_id: 'prod-monthly', type: 'subscription', price_cents: 18900, title: 'Unlimited' }],
 ])
@@ -594,6 +600,7 @@ const tx = (over = {}) => ({
   remote_created_at: daysAgo(10), ...over,
 })
 const trialTx = (over = {}) => tx({ product_id: TRIAL, amount_cents: 0, ...over })
+const paidTrialTx = (over = {}) => tx({ product_id: PAID_TRIAL, amount_cents: 3900, ...over })
 const booking = (over = {}) => ({
   status: 'booked', source: 'direct', credit_charged: false, external_member_ref: null,
   remote_created_at: daysAgo(5), starts_at: daysAgo(4), ...over,
@@ -608,8 +615,8 @@ const snap = (over = {}) => shapePipelineSnapshot({
 const stage = (s) => classifyContact(s, NOW)
 
 describe('shapePipelineSnapshot', () => {
-  it('has exactly the classifier input keys, plus trial_expires_at for the un1t wrapper', () => {
-    expect(Object.keys(snap()).sort()).toEqual([...SNAPSHOT_KEYS].sort())
+  it('has exactly the classifier input keys, plus trial_expires_at for the un1t wrapper and the HATCH39 paid-trial pair', () => {
+    expect(Object.keys(snap()).sort()).toEqual([...SNAPSHOT_KEYS, 'paid_trial_at', 'paid_trial_expires_at'].sort())
   })
 
   it('fresh active subscription → member', () => {
@@ -911,6 +918,7 @@ describe('shapePipelineSnapshot', () => {
       joined_at: daysAgo(200), created_at: null, trial_credits_remaining: 0, recent_bookings: [],
       converted_at: null, pack_customer_at: null, pipeline_dismissed_at: null, last_lead_source_at: null,
       gympass_member_id: null, trial_expires_at: null,
+      paid_trial_at: null, paid_trial_expires_at: null,
     })
     expect(stage(s)).toBe('dormant')
     // owned by Hatch: only the two named contact fields cross over
@@ -1240,5 +1248,111 @@ describe('shapeTrialRegrant (TRIALREGRANT.1)', () => {
     expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: 1 }] })).toBe(false)
     expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: 0, credit_unlimited: true }] })).toBe(false)
     expect(shapeTrialRegrant({ eligibility: used, clients: [{ credit_balance: null }] })).toBe(true)
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// HATCH39 — a €39 paid-trial purchase is a trial membership, never a pack.
+// ---------------------------------------------------------------------------
+describe('paid-trial product (Hatch €39)', () => {
+  it('isPaidTrialProduct: in the set by product id; a missing set matches nothing', () => {
+    expect(isPaidTrialProduct(PRODUCTS_BY_ID.get(PAID_TRIAL), PAID_IDS)).toBe(true)
+    expect(isPaidTrialProduct(PRODUCTS_BY_ID.get(PACK5), PAID_IDS)).toBe(false)
+    expect(isPaidTrialProduct(PRODUCTS_BY_ID.get(PAID_TRIAL), undefined)).toBe(false)
+    expect(isPaidTrialProduct(null, PAID_IDS)).toBe(false)
+  })
+  it('without the set, a €39 transaction is a paid pack (today\'s reading)', () => {
+    const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(2) })], client: pclient({ credit_unlimited: true }) })
+    expect(s.pack_customer_at).toBe(daysAgo(2))
+    expect(s.paid_trial_at).toBeNull()
+  })
+  it('with the set: not a pack, paid_trial_at and paid_trial_expires_at set (+14 days), status lead', () => {
+    const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(2) })], client: pclient({ credit_unlimited: true }), paidTrialProductIds: PAID_IDS })
+    expect(s.pack_customer_at).toBeNull()
+    expect(s.glofox_membership_status).toBe('lead')
+    expect(s.paid_trial_at).toBe(daysAgo(2))
+    expect(Date.parse(s.paid_trial_expires_at)).toBe(Date.parse(daysAgo(2)) + 14 * DAY)
+  })
+  it('day 15 with unlimited credits left: not a pack, not credit_member; the €39 classify says Trial Done', () => {
+    const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(15) })], client: pclient({ credit_unlimited: true }), paidTrialProductIds: PAID_IDS })
+    expect(s.glofox_membership_status).toBe('lead')
+    expect(s.pack_customer_at).toBeNull()
+    const claim = paidClaimFromSnapshot(s)
+    expect(claim).toMatchObject({ start: Date.parse(daysAgo(15)), end: Date.parse(daysAgo(15)) + 14 * DAY, durationDays: 14 })
+    expect(classifyPaid(s, NOW, claim)).toBe('paid_trial_done')
+  })
+  it('a refunded €39 purchase is no claim; the newest unrefunded one is', () => {
+    expect(snap({ transactions: [paidTrialTx({ refunded: true })], paidTrialProductIds: PAID_IDS }).paid_trial_at).toBeNull()
+    const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(40) }), paidTrialTx({ remote_created_at: daysAgo(3) })], paidTrialProductIds: PAID_IDS })
+    expect(s.paid_trial_at).toBe(daysAgo(3))
+  })
+  it('a product with no positive expiry gives paid_trial_at but a null expiry; the claim falls back to 14 days', () => {
+    const products = new Map(PRODUCTS_BY_ID)
+    products.set(PAID_TRIAL, { ...PRODUCTS_BY_ID.get(PAID_TRIAL), expire_credits_in_days: null })
+    const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(2) })], productsById: products, paidTrialProductIds: PAID_IDS })
+    expect(s.paid_trial_at).toBe(daysAgo(2))
+    expect(s.paid_trial_expires_at).toBeNull()
+    expect(paidClaimFromSnapshot(s).end).toBe(Date.parse(daysAgo(2)) + 14 * DAY)
+  })
+  it('a real 5-pack beside the €39 trial is still a pack', () => {
+    const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(20) }), tx({ remote_created_at: daysAgo(3) })], client: pclient({ credit_balance: 5 }), paidTrialProductIds: PAID_IDS })
+    expect(s.pack_customer_at).toBe(daysAgo(3))
+  })
+  it('the snapshot carries exactly the two new keys on top of the classifier set', () => {
+    expect(Object.keys(snap()).sort()).toEqual([...SNAPSHOT_KEYS, 'paid_trial_at', 'paid_trial_expires_at'].sort())
+  })
+  it('an ex-member whose only purchase since ending is the €39 trial is still ex_member (no pack since)', () => {
+    const s = snap({ memberships: [ended({ ended_at: daysAgo(100) })], transactions: [paidTrialTx({ remote_created_at: daysAgo(5) })], paidTrialProductIds: PAID_IDS })
+    expect(s.glofox_membership_status).toBe('ex_member')
+  })
+})
+
+describe('shapeFormOnlySnapshot (HATCH39 — a website enquiry with no un1t.online account)', () => {
+  it('a fresh enquiry is a lead joined at the enquiry; an old row with a fresh submission too; a stale one is dormant', () => {
+    const a = shapeFormOnlySnapshot({ contact: pcontact({ created_at: daysAgo(3), last_lead_source_at: null }), locationId: HATCH })
+    expect(a).toMatchObject({ glofox_membership_status: 'lead', joined_at: daysAgo(3), recent_bookings: [], paid_trial_at: null, paid_trial_expires_at: null, trial_expires_at: null, pack_customer_at: null, converted_at: null })
+    expect(classifyContact(a, NOW)).toBe('new_lead')
+    const b = shapeFormOnlySnapshot({ contact: pcontact({ created_at: daysAgo(400), last_lead_source_at: daysAgo(1) }), locationId: HATCH })
+    expect(b.joined_at).toBe(daysAgo(1))
+    expect(classifyContact(b, NOW)).toBe('new_lead')
+    const c = shapeFormOnlySnapshot({ contact: pcontact({ created_at: daysAgo(90), last_lead_source_at: daysAgo(80) }), locationId: HATCH })
+    expect(classifyContact(c, NOW)).toBe('dormant')
+  })
+  it('has exactly the snapshot keys', () => {
+    expect(Object.keys(shapeFormOnlySnapshot({ contact: pcontact({ created_at: daysAgo(3) }), locationId: HATCH })).sort())
+      .toEqual([...SNAPSHOT_KEYS, 'paid_trial_at', 'paid_trial_expires_at'].sort())
+  })
+  it('lends Cold and the touch only for an owned contact; another studio\'s Cold arrives as studioDismissedAt', () => {
+    const own = shapeFormOnlySnapshot({ contact: pcontact({ created_at: daysAgo(3), pipeline_dismissed_at: daysAgo(1), last_lead_source_at: daysAgo(2) }), locationId: HATCH })
+    expect(own.pipeline_dismissed_at).toBe(daysAgo(1))
+    expect(own.last_lead_source_at).toBe(daysAgo(2))
+    expect(classifyContact(own, NOW)).toBe('cold_lead') // the dismissal (day 1) is newer than the touch (day 2): Cold stands
+    const other = shapeFormOnlySnapshot({ contact: pcontact({ location_id: STILLORGAN, created_at: daysAgo(3), pipeline_dismissed_at: daysAgo(1) }), locationId: HATCH, studioDismissedAt: daysAgo(2) })
+    expect(other.pipeline_dismissed_at).toBe(daysAgo(2))
+    expect(other.last_lead_source_at).toBeNull()
+  })
+})
+
+describe('packHolderIds / shapeCounts / shapeTrialEligibility with the paid-trial set (HATCH39)', () => {
+  const ptx2 = (over = {}) => ({ un1t_user_id: 'u-1', product_type: 'pack', product_id: PACK5, amount_cents: 6000, remote_created_at: daysAgo(10), ...over })
+  const products = [...PRODUCTS_BY_ID.values()]
+  it('a client whose latest pack transaction is the €39 trial is not a pack holder; an older real pack still counts without it', () => {
+    const clients = [{ un1t_user_id: 'u-1', credit_balance: 3, credit_unlimited: false }]
+    const txs = [ptx2({ remote_created_at: daysAgo(30) }), ptx2({ product_id: PAID_TRIAL, amount_cents: 3900, remote_created_at: daysAgo(2) })]
+    expect([...packHolderIds({ clients, packTxs: txs, products })]).toEqual(['u-1'])          // today: the €39 is the latest paid pack
+    expect([...packHolderIds({ clients, packTxs: txs, products, paidTrialProductIds: PAID_IDS })]).toEqual(['u-1']) // the €39 is skipped; the older real pack decides
+    expect([...packHolderIds({ clients, packTxs: [txs[1]], products, paidTrialProductIds: PAID_IDS })]).toEqual([]) // only the €39: no holder
+    expect(shapeCounts({ clients, packTxs: [txs[1]], products, paidTrialProductIds: PAID_IDS }).class_packs).toBe(0)
+  })
+  it('shapeTrialEligibility: a €39 buyer is ineligible with reason paid_trial, not paid_pack; a real pack buyer stays paid_pack', () => {
+    expect(shapeTrialEligibility({ transactions: [paidTrialTx()], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }))
+      .toEqual({ eligible: false, reasons: ['paid_trial'] })
+    expect(shapeTrialEligibility({ transactions: [tx()], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }))
+      .toEqual({ eligible: false, reasons: ['paid_pack'] })
+    expect(shapeTrialEligibility({ transactions: [paidTrialTx()], productsById: PRODUCTS_BY_ID }))
+      .toEqual({ eligible: false, reasons: ['paid_pack'] })
+    expect(shapeTrialEligibility({ transactions: [paidTrialTx({ refunded: true })], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }))
+      .toEqual({ eligible: true, reasons: [] })
   })
 })

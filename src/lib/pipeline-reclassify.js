@@ -20,7 +20,6 @@
 // inputs, so a no-op re-run produces 'unchanged' for every
 // contact. Safe to run hourly if needed.
 
-import { classifyContact } from './pipeline-classifier.js'
 import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
@@ -31,6 +30,7 @@ import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
 // (acquisition / paid_trial / programmes at Stillorgan); the claims it needs
 // are read once per run.
 import { routeContact, CLAIM_BOARD_MODULES } from '../../shared/pipelines/router.js'
+import { paidClaimFromSnapshot } from '../../shared/pipelines/paid-trial.js'
 import {
   loadClaimsForLocation, loadProgrammeRules, pendingProgrammeClaims, upsertProgrammeClaims,
 } from './pipeline-claims.js'
@@ -42,9 +42,11 @@ import {
 const UN1T_INPUT = 'un1t_online'
 // The module a disabled row is dry-run as (includeDisabled, below): Hatch's
 // pre-740 acquisition row still named the Glofox module and was previewed as
-// un1t. PIPE3 — a disabled row on one of the CLAIM board modules (paid_trial,
-// programmes; Stillorgan before mig 798) is dry-run as itself.
+// un1t. PIPE3 / HATCH39 — a disabled row on one of these modules (Stillorgan's
+// claim boards before mig 798; Hatch's €39 board before mig 804) is dry-run as
+// itself.
 const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
+const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_un1t'])
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
 const STAGE_TRIGGER_MASS_MOVE = 50
@@ -171,7 +173,7 @@ export async function reclassifyAllContacts(db, args) {
       return { ok: false, error: `pipeline load: ${disabledErr.message}`, run_id: runId }
     }
     for (const p of disabledRows || []) {
-      boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED, module: CLAIM_BOARD_MODULES.includes(p.module) ? p.module : DRY_RUN_DISABLED_MODULE })
+      boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED, module: DRY_RUN_SELF_MODULES.includes(p.module) ? p.module : DRY_RUN_DISABLED_MODULE })
     }
   }
 
@@ -243,17 +245,19 @@ export async function reclassifyAllContacts(db, args) {
       }
     }
     un1tInputs = loaded.data
-    // Every un1t board shares the acquisition stages and rules today; the
-    // first one's classify places the contact, as the contacts path's single
-    // classifyContact() call does across its boards.
-    un1tClassify = activePipelines[0].mod.classify
+    // HATCH39 — the router places each person: the acquisition board's own
+    // classify (acquisition_un1t, TRIALDONE.2) answers Cold/Gympass and the
+    // fallback; a live paid claim (the snapshot's paid_trial_at) goes to the
+    // €39 board. With the acquisition board alone this IS today's placement.
+    un1tClassify = (activePipelines.find((p) => p.key === 'acquisition') ?? activePipelines[0]).mod.classify
   }
 
   const activePipelineIds = activePipelines.map((p) => p.id)
   const selectCols = selectColsFor(activePipelines.map((p) => p.mod))
-  // PIPE3 — the board modules running here, for the router; and whether any
-  // of them needs claims (trial_purchases, pipeline_board_claims) loaded.
-  const activeModules = new Set(activePipelines.map((p) => p.module))
+  // PIPE3 — the board KEYS running here, for the router (pipelines.key; at
+  // Stillorgan key and module coincide); and whether the contacts path needs
+  // claims (trial_purchases, pipeline_board_claims) loaded.
+  const activeBoardKeys = new Set(activePipelines.map((p) => p.key))
   const needsClaims = inputSource !== UN1T_INPUT && activePipelines.some((p) => CLAIM_BOARD_MODULES.includes(p.module))
 
   // 2. Build the slug → stage_id lookup ONCE for this location.
@@ -496,9 +500,17 @@ export async function reclassifyAllContacts(db, args) {
 
   // HATCHPIPE.2 — the un1t path classifies the contact's snapshot (built from
   // this studio's un1t rows). No snapshot → null → counted as an error below.
-  const classifyFromSnapshot = (contactId) => {
+  // HATCH39 — through the router: the snapshot's paid_trial_at is the €39 claim.
+  const routeFromSnapshot = (contactId) => {
     const snapshot = un1tInputs.snapshots.get(contactId)
-    return snapshot ? un1tClassify(snapshot, nowMs) : null
+    if (!snapshot) return null
+    return routeContact(
+      snapshot,
+      { paid: paidClaimFromSnapshot(snapshot), programme: null },
+      nowMs,
+      activeBoardKeys,
+      { classifyAcquisition: un1tClassify },
+    )
   }
 
   // PIPE3 — the contacts path places through the router. The row carries
@@ -509,12 +521,12 @@ export async function reclassifyAllContacts(db, args) {
     c,
     { paid: paidByContact.get(c.id) ?? null, programme: programmeByContact.get(c.id) ?? null },
     nowMs,
-    activeModules,
+    activeBoardKeys,
   )
 
   for (const c of contacts) {
-    const route = un1tInputs ? null : routeFromRow(c)
-    const targetSlug = un1tInputs ? classifyFromSnapshot(c.id) : route.slug
+    const route = un1tInputs ? routeFromSnapshot(c.id) : routeFromRow(c)
+    const targetSlug = route ? route.slug : null
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {
       // Migration set should guarantee every slug exists; if not,
@@ -834,11 +846,11 @@ export async function reclassifyAllContacts(db, args) {
     } : {}),
     ...un1tCounts(inputSource, un1tInputs),
     ...(dryRun ? { stage_histogram: stageHistogram } : {}),
-    // PIPE3
+    // PIPE3 / HATCH39
     boards_moved: boardsMoved,
     duplicate_deals_closed: duplicateDealsClosed,
     ...(needsClaims ? { claims_pending: claimsPending } : {}),
-    ...(dryRun && needsClaims ? { board_histogram: boardHistogram } : {}),
+    ...(dryRun ? { board_histogram: boardHistogram } : {}),
   }
 }
 
@@ -1055,7 +1067,7 @@ const LEFT_BOARD = '(left board)'
 // un1t.online (Hatch Street). PIPEEXCL.1 ran on acquisition_un1t only.
 // PIPE3 — the two claim boards are acquisition boards too: a Hatch member is
 // not a Stillorgan €39 prospect either.
-const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t', 'paid_trial', 'programmes'])
+const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t', 'paid_trial', 'programmes', 'paid_trial_un1t'])
 // The contact's timeline says why the deal closed, per reason.
 const LEFT_BOARD_ACTIVITY = Object.freeze({
   [ELSEWHERE_MEMBER]: {

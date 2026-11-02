@@ -38,7 +38,8 @@ export const TRIAL_DONE_NUDGE_INSTRUCTION = '[STUDIO SYSTEM - not the customer] 
 // wa_status values that mean "never message this number" (whatsapp-consent.js).
 const OPTED_OUT_STATUSES = new Set(['opted_out', 'blocked', 'undeliverable'])
 // shapeTrialEligibility reasons that mean they bought something.
-const PURCHASE_REASONS = new Set(['membership_history', 'paid_pack'])
+// HATCH39 — a €39 paid trial is a purchase too (shapeTrialEligibility's paid_trial).
+const PURCHASE_REASONS = new Set(['membership_history', 'paid_pack', 'paid_trial'])
 
 /**
  * Is the opener due for this person? Pure; reads no clock but `nowMs`.

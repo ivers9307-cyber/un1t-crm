@@ -55,10 +55,12 @@ import {
   shapeCounts, shapeMrr, shapeFlows, shapeRevenue,
   firstSales, engagementRows, cancelsComparable, MEMBER_STATUSES,
   shapePastDue, normaliseUn1tInvoiceStatus, glofoxInterval,
-  shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility, shapeTrialRegrant,
+  shapePipelineSnapshot, shapePipelineDateEvidence, shapeTrialEligibility, shapeTrialRegrant, shapeFormOnlySnapshot,
 } from './un1t-online-shape'
 import { radarMembers, winbackContacts, leadContacts, radarPastDue, arrears } from './un1t-online-radar'
 import { freshCutoff } from '@/lib/un1t-online-freshness'
+// HATCH39 — the studio's paid-trial products (settings ∪ the /trial page), the one source.
+import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 
 const PAGE = 1000
 
@@ -218,13 +220,15 @@ const newestFirst = (a, b) => {
 
 /** ← computeMembershipCounts(db, locationId). Throws on a failed read. */
 async function membershipCounts(db, locationId) {
-  const [subs, clients, packTxs, products] = await Promise.all([
+  const [subs, clients, packTxs, products, paidTrialProductIds] = await Promise.all([
     listActiveSubs(db, locationId),
     listPackClients(db, locationId),
     listPackTransactions(db, locationId),
     listProducts(db, locationId),
+    // HATCH39 — a €39 trial is never a pack holder.
+    paidTrialProductIdsFor(db, locationId),
   ])
-  return shapeCounts({ subs, clients, packTxs, products })
+  return shapeCounts({ subs, clients, packTxs, products, paidTrialProductIds })
 }
 
 /** ← fetchMrr(db, locationId). */
@@ -472,9 +476,14 @@ const EVENT_COLS = 'un1t_id, starts_at, ends_at'
 // TRIALREGRANT.1 — trialEligibility's re-grant inputs.
 const REGRANT_BOOKING_COLS = 'un1t_id, un1t_user_id, contact_id, status'
 const REGRANT_CLIENT_COLS = 'un1t_user_id, credit_balance, credit_unlimited'
-// Exactly these six, by id: no Glofox column is read (membership and the
-// pipeline are separate per studio; only the contact is shared).
-const PIPE_CONTACT_COLS = 'id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at'
+// Exactly these seven: no Glofox column is read (membership and the pipeline
+// are separate per studio; only the contact is shared). HATCH39 added
+// created_at: a form-only enquiry's New Leads clock starts at the later of its
+// creation and its latest public-form touch.
+const PIPE_CONTACT_COLS = 'id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at, created_at'
+// HATCH39 — the studio's own contacts read for form-only enquiries is bounded
+// like the contacts path (pipeline-reclassify.js HARD_LIMIT); the cap is logged.
+const HOME_CONTACTS_CAP = 20_000
 
 /** Every row of one un1t table at a studio, paginated (not freshness-gated). */
 const listAtStudio = (db, loc, table, cols) => selectAll((from, to) => db
@@ -623,8 +632,59 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
     const clients = await listFresh(db, locationId, 'un1t_clients', CLIENT_COLS)
     const linked = clients.filter((c) => c.contact_id != null)
     const unlinked = clients.length - linked.length
+
+    // HATCH39 — the studio's paid-trial products (a €39 purchase is a claim,
+    // never a pack) and every HOME contact of the studio: those with no client
+    // row are form-only enquiries, placed from the contact row alone. Both are
+    // inputs: a failed read fails the pass (the throw lands in the catch).
+    const [paidTrialProductIds, homeContacts, anyClientRows] = await Promise.all([
+      paidTrialProductIdsFor(db, locationId),
+      selectAll((from, to) => db
+        .from('contacts')
+        .select(PIPE_CONTACT_COLS)
+        .eq('location_id', locationId)
+        .order('id', { ascending: true })
+        .range(from, to), { pageSize: PAGE, hardCap: HOME_CONTACTS_CAP }),
+      // Every client row at the studio, fresh or stale: a contact with ANY
+      // account is not a form-only enquiry (a stale account is still an account).
+      listAtStudio(db, locationId, 'un1t_clients', 'contact_id'),
+    ])
+    if (homeContacts.length >= HOME_CONTACTS_CAP) logWarn('un1t-pipeline', 'home contacts read hit its cap', { locationId, cap: HOME_CONTACTS_CAP })
+    const hasAccount = new Set(anyClientRows.map((c) => c.contact_id).filter((id) => id != null))
+    const formOnlyOf = (studioDismissalBy) => {
+      const contacts = []
+      const snapshots = new Map()
+      const evidence = new Map()
+      for (const contact of homeContacts) {
+        if (!contact?.id || hasAccount.has(contact.id)) continue
+        // A form-only LEAD needs positive evidence of an enquiry: a public-form
+        // touch (last_lead_source_at, stamped by the website lead form and the
+        // class funnel). A contact row with no account and no touch (a race
+        // signup, a WhatsApp-only chat) is not a lead by existing — the same
+        // rule CROSSOVERDEAL.1 applies to a race entry at Stillorgan.
+        if (contact.last_lead_source_at == null) continue
+        contacts.push({ id: contact.id, name: contact.name ?? null, email: contact.email ?? null, location_id: contact.location_id ?? null })
+        const snapshot = shapeFormOnlySnapshot({ contact, locationId, studioDismissedAt: studioDismissalBy.get(contact.id) ?? null })
+        snapshots.set(contact.id, snapshot)
+        evidence.set(contact.id, {
+          client_created_at: snapshot.joined_at,
+          attended_starts: [],
+          attended_ends: [],
+          member_since: null,
+          classpass_since: null,
+          gympass_since: null,
+          membership_ended_at: null,
+          dismissed_at: snapshot.pipeline_dismissed_at,
+          trial_expires_at: null,
+        })
+      }
+      return { contacts, snapshots, evidence }
+    }
+    // No linked account at the studio: the population is the form-only
+    // enquiries alone, and none of the un1t tables (or the ledger) is read.
     if (linked.length === 0) {
-      return { success: true, data: { contacts: [], snapshots: new Map(), evidence: new Map(), unlinked, skipped_no_contact: 0 } }
+      const formOnly = formOnlyOf(new Map())
+      return { success: true, data: { ...formOnly, unlinked, skipped_no_contact: 0, form_only: formOnly.contacts.length } }
     }
 
     const [subs, txs, products, bookings, events, memberships, contactRows, ledger, studioDismissals] = await Promise.all([
@@ -699,6 +759,7 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         bookings: bookingsBy.get(contactId) ?? [],
         memberships: membershipsBy.get(contactId) ?? [],
         ledgerTrials: ledgerEntriesFor(ledger, theirClients.map((c) => c.un1t_user_id), [contactId]),
+        paidTrialProductIds,
         now,
       }
       const snapshot = shapePipelineSnapshot(rows)
@@ -706,8 +767,17 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       // HATCHPIPE.5 — what the board's real dates are read from (un1t-pipeline-dates.js).
       evidence.set(contact.id, shapePipelineDateEvidence({ ...rows, snapshot }))
     }
+
+    // HATCH39 — form-only enquiries: the studio's own contacts with no client
+    // row (the people the retired Waitlist board used to hold). A lead from
+    // the contact row alone, dated at the enquiry; the moment a client row
+    // links them, the loop above owns them instead.
+    const formOnly = formOnlyOf(studioDismissalBy)
+    contacts.push(...formOnly.contacts)
+    for (const [id, snapshot] of formOnly.snapshots) snapshots.set(id, snapshot)
+    for (const [id, ev] of formOnly.evidence) evidence.set(id, ev)
     if (skipped > 0) logWarn('un1t-pipeline', 'client contact missing', { locationId, count: skipped })
-    return { success: true, data: { contacts, snapshots, evidence, unlinked, skipped_no_contact: skipped } }
+    return { success: true, data: { contacts, snapshots, evidence, unlinked, skipped_no_contact: skipped, form_only: formOnly.contacts.length } }
   } catch (e) {
     return { success: false, error: errMessage(e) }
   }
@@ -830,7 +900,7 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
       ),
     ]).then((lists) => unionByUn1tId(...lists))
 
-    const [transactions, subscriptions, products, memberships, ledger, bookings, clients, regrants] = await Promise.all([
+    const [transactions, subscriptions, products, memberships, ledger, bookings, clients, regrants, paidTrialProductIds] = await Promise.all([
       rowsFor('un1t_transactions', PIPE_TX_COLS),
       rowsFor('un1t_subscriptions', ELIGIBILITY_SUB_COLS),
       listAtStudio(db, locationId, 'un1t_products', PRODUCT_COLS),
@@ -857,10 +927,12 @@ async function trialEligibility(db, locationId, { un1tUserId, contactId } = {}) 
         { chunkSize: KEY_CHUNK, pageSize: PAGE },
       ),
       ledgerTrialsOrThrow(db, locationId, { op: 'trial_regrant', un1tUserIds: users, contactIds }),
+      // HATCH39 — a €39 buyer is ineligible under the true label (paid_trial, not paid_pack).
+      paidTrialProductIdsFor(db, locationId),
     ])
     const eligibility = shapeTrialEligibility({
       transactions, subscriptions, memberships, productsById: productsMap(products),
-      ledgerTrials: ledgerEntriesFor(ledger, users, contactIds),
+      ledgerTrials: ledgerEntriesFor(ledger, users, contactIds), paidTrialProductIds,
     })
     const regrant = shapeTrialRegrant({
       eligibility, bookings, clients, ledgerRegrants: ledgerEntriesFor(regrants, users, contactIds),

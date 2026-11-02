@@ -98,6 +98,8 @@ describe('eligibilityVerdict', () => {
   it('purchased for membership_history or paid_pack', () => {
     expect(v({ eligibilityReasons: ['trial_used', 'membership_history'] })).toEqual({ ok: false, reason: 'purchased' })
     expect(v({ eligibilityReasons: ['paid_pack'] })).toEqual({ ok: false, reason: 'purchased' })
+    // HATCH39 — a €39 trial buyer paid too (shapeTrialEligibility's paid_trial reason)
+    expect(v({ eligibilityReasons: ['paid_trial'] })).toEqual({ ok: false, reason: 'purchased' })
   })
 
   it('a purchase is named even when the classification also moved on', () => {

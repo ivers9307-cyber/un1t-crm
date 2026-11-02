@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   stages, requiredFields, paidTrialClaim, claimLive, classify, attendedSince, convertedSince, lastActivityMs, DAY_MS,
+  paidClaimFromSnapshot,
 } from './paid-trial.js'
 
 const T0 = Date.parse('2026-10-24T08:19:21Z')
@@ -152,5 +153,30 @@ describe('claimLive — a re-joining ex-member', () => {
     expect(claimLive(claim, c, T0 + 60 * DAY_MS - 1)).toBe(true)
     expect(claimLive(claim, c, T0 + 60 * DAY_MS)).toBe(false)
     expect(classify(c, T0 + 10 * DAY_MS, claim)).toBe('paid_trial_converted')
+  })
+})
+
+
+// HATCH39 — the claim as a un1t.online snapshot carries it (paid_trial_at / paid_trial_expires_at).
+describe('paidClaimFromSnapshot', () => {
+  const T0 = Date.parse('2026-10-30T19:44:05Z')
+  const iso = (ms) => new Date(ms).toISOString()
+  it('null without paid_trial_at', () => {
+    expect(paidClaimFromSnapshot({})).toBeNull()
+    expect(paidClaimFromSnapshot({ paid_trial_at: null, paid_trial_expires_at: iso(T0) })).toBeNull()
+    expect(paidClaimFromSnapshot(null)).toBeNull()
+  })
+  it('start and end from the two fields; paidAt and grantedAt are the start', () => {
+    expect(paidClaimFromSnapshot({ paid_trial_at: iso(T0), paid_trial_expires_at: iso(T0 + 14 * DAY_MS) }))
+      .toEqual({ start: T0, end: T0 + 14 * DAY_MS, paidAt: T0, grantedAt: T0, durationDays: 14 })
+  })
+  it('a null or unreadable expiry falls back to 14 days', () => {
+    expect(paidClaimFromSnapshot({ paid_trial_at: iso(T0), paid_trial_expires_at: null }).end).toBe(T0 + 14 * DAY_MS)
+    expect(paidClaimFromSnapshot({ paid_trial_at: iso(T0), paid_trial_expires_at: 'nonsense' }).end).toBe(T0 + 14 * DAY_MS)
+  })
+  it('the claim drives classify and claimLive like a purchase row does', () => {
+    const c = paidClaimFromSnapshot({ paid_trial_at: iso(T0), paid_trial_expires_at: iso(T0 + 14 * DAY_MS) })
+    expect(classify({ glofox_membership_status: 'lead' }, T0 + 8 * DAY_MS, c)).toBe('paid_trial_day_7')
+    expect(claimLive(c, { glofox_membership_status: 'lead' }, T0 + 14 * DAY_MS + 60 * DAY_MS)).toBe(false)
   })
 })

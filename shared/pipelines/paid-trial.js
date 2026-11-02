@@ -159,3 +159,18 @@ export function classify(contact, now = Date.now(), claim = null) {
   if (attendedSince(contact, claim.start) >= 1) return 'paid_trial_first_class'
   return 'paid_trial_new_lead'
 }
+
+/**
+ * HATCH39 — the paid claim as a un1t.online snapshot carries it
+ * (shapePipelineSnapshot: paid_trial_at / paid_trial_expires_at, the newest
+ * un-refunded purchase of one of the studio's paid-trial products). A null or
+ * unreadable expiry means the default 14 days. Same shape as paidTrialClaim's.
+ * @returns {{ start:number, end:number, paidAt:number, grantedAt:number, durationDays:number }|null}
+ */
+export function paidClaimFromSnapshot(snapshot) {
+  const start = parseMs(snapshot?.paid_trial_at)
+  if (start == null) return null
+  const expires = parseMs(snapshot?.paid_trial_expires_at)
+  const end = expires != null && expires > start ? expires : start + DEFAULT_DURATION_DAYS * DAY_MS
+  return { start, end, paidAt: start, grantedAt: start, durationDays: Math.round((end - start) / DAY_MS) }
+}

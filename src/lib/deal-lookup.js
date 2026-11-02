@@ -45,15 +45,18 @@ export async function findOpenDealForPipeline(db, contactId, pipelineId) {
  * `mode` comes back so a caller can refuse a manual board: a manual board's
  * deals move only by hand, so no automatic placement may write to one.
  *
+ * HATCH39 — `module` rides along so a caller can tell a un1t.online primary
+ * (placed only by the hourly un1t pass) from a Glofox one.
+ *
  * @param {object} db          service-role Supabase client
  * @param {string} locationId
- * @returns {Promise<{id:string, mode:string}|null>}
+ * @returns {Promise<{id:string, mode:string, module:string|null}|null>}
  */
 export async function findPrimaryPipeline(db, locationId) {
   if (!db || !locationId) return null
   const { data, error } = await db
     .from('pipelines')
-    .select('id, mode')
+    .select('id, mode, module')
     .eq('location_id', locationId)
     .eq('is_primary', true)
     .eq('enabled', true)
