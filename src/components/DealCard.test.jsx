@@ -149,3 +149,69 @@ describe('DealCard — Cold on the board it is drawn on', () => {
     expect(bar().boardLocationId).toBe('l-1')
   })
 })
+
+// HATCHCARD.1 — a un1t.online board's card shows the person's signals.
+describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
+  const SIG = { classes_attended: 1, credits_left: 2, credits_unlimited: false, next_class_at: null, last_class_days: 9, last_class_warm: true, wa_state: 'no_reply', wa_days: 6 }
+  const deal = (signals, slug = 'first_class', over = {}) => ({
+    id: 'd-9', title: 'Jane O\'Quigley', next_class_badge: false, signals,
+    contacts: { id: 'c-9', name: 'Jane O\'Quigley', lead_source: 'website', pipeline_stage_slug: slug },
+    ...over,
+  })
+  const r = (d, stageSlug = d.contacts.pipeline_stage_slug) => renderToStaticMarkup(<DealCard deal={d} locationId="l-1" stageName="1st Class" stageSlug={stageSlug} />)
+
+  it('acquisition column: classes of 3, credits left, no class booked, last class amber, no reply', () => {
+    const html = r(deal(SIG))
+    expect(html).toContain('1 of 3 classes')
+    expect(html).toContain('2 credits left')
+    expect(html).toContain('No class booked')
+    expect(html).toContain('Last class 9d ago')
+    expect(html).toMatch(/bg-amber-500\/10 text-amber-700">Last class 9d ago</)
+    expect(html).toContain('No reply, 6d')
+    expect(html).toContain('website')
+  })
+  it('drops the contact line that only repeats the title', () => {
+    const html = r(deal(SIG))
+    expect(html.match(/Jane O(&#x27;|')Quigley/g)).toHaveLength(1)
+  })
+  it('singulars, unlimited credits, a booked class, a reply, today', () => {
+    const html = r(deal({ ...SIG, classes_attended: 1, credits_left: null, credits_unlimited: true, next_class_at: '2026-11-03T08:00:00Z', last_class_days: 0, last_class_warm: false, wa_state: 'replied', wa_days: 0 }, 'paid_trial_first_class'))
+    expect(html).toContain('1 class')
+    expect(html).not.toContain('of 3')
+    expect(html).toContain('Unlimited')
+    expect(html).toContain('Next:')
+    expect(html).not.toContain('No class booked')
+    expect(html).toContain('Last class today')
+    expect(html).toContain('Replied today')
+    expect(html).not.toContain('credits left')
+    expect(html).toMatch(/bg-un1t-border text-un1t-subtle">Last class today</)   // not amber within a week
+  })
+  it('a never-trained lead: 0 of 3, no last-class chip, never messaged', () => {
+    const html = r(deal({ ...SIG, classes_attended: 0, last_class_days: null, last_class_warm: false, wa_state: 'never', wa_days: null }, 'new_lead'))
+    expect(html).toContain('0 of 3 classes')
+    expect(html).not.toContain('Last class')
+    expect(html).toContain('Never messaged')
+  })
+  it('more than three classes reads as a count, not "4 of 3"', () => {
+    expect(r(deal({ ...SIG, classes_attended: 4 }, 'trial_done'))).toContain('4 classes')
+  })
+  it('null signals (a contact the read had nothing for) render no chips and keep the contact line', () => {
+    const html = r(deal(null))
+    expect(html).not.toContain('classes')
+    expect(html).not.toContain('Never messaged')
+  })
+  it('a Converted or pile column shows no signal chips even when a deal carries them', () => {
+    const html = r(deal(SIG, 'converted'), 'converted')
+    expect(html).not.toContain('of 3 classes')
+    expect(html).not.toContain('No reply')
+  })
+  it('a Glofox card (no signals key) renders exactly as before', () => {
+    const glofox = { id: 'd-1', title: 'Ada', contacts: { id: 'c-1', name: 'Ada Lovelace', pipeline_stage_slug: 'new_lead', lead_source: 'website', trial_credits_remaining: 3 } }
+    const html = renderToStaticMarkup(<DealCard deal={glofox} locationId="l-1" stageName="New Leads" />)
+    expect(html).toContain('Ada Lovelace')
+    expect(html).toContain('3 credits')
+    expect(html).toContain('No class booked')
+    expect(html).not.toContain('of 3 classes')
+    expect(html).not.toContain('messaged')
+  })
+})
