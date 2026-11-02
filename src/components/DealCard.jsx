@@ -16,6 +16,25 @@ import PersonActionBar from './PersonActionBar'
 import { personActionsFor } from '@/lib/activity-write-gate'
 import { nextClassLabel } from '@/components/contact/format'
 import { useViewerZone } from '@/lib/use-viewer-zone'
+import { SIGNAL_SLUGS } from '@/lib/pipeline-card-signal-slugs'
+
+// HATCHCARD.1 — a un1t.online board's card shows the person's signals (the
+// server attaches deal.signals: src/lib/pipeline-card-signals.js). Chip tones
+// follow the light-theme recipe (bg-<c>-500/10 text-<c>-700); literal classes
+// so the guardrails linter can see them. The tone is the LAST class on each
+// chip.
+const CHIP = 'inline-block text-[10px] px-1.5 py-0.5 rounded'
+const TONE = {
+  neutral: 'bg-un1t-border text-un1t-subtle',
+  classes: 'bg-teal-500/10 text-teal-700',
+  credits: 'bg-purple-500/10 text-purple-700',
+  good:    'bg-emerald-500/10 text-emerald-700',
+  warn:    'bg-amber-500/10 text-amber-700',
+  bad:     'bg-red-500/10 text-red-700',
+}
+const ago = (d) => (d === 0 ? 'today' : `${d}d ago`)
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+const sameName = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
 
 // PIPE-AGE.1 footer tones — colour keys on the server-derived
 // deal.age.tone (time in stage, falling back to time in pipeline).
@@ -99,6 +118,17 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
     ? (age.backfilled ? "since May '26" : `${age.total} total`)
     : null
 
+  // HATCHCARD.1 — signals render only in a live funnel column (this board's
+  // column, not the home studio's slug), and only when the server sent them.
+  const columnSlug = stageSlug ?? contact.pipeline_stage_slug
+  const sig = deal.signals && SIGNAL_SLUGS.has(columnSlug) ? deal.signals : null
+  const paidBoard = typeof columnSlug === 'string' && columnSlug.startsWith('paid_trial_')
+  const classesLabel = sig
+    ? (!paidBoard && sig.classes_attended <= 3
+      ? `${sig.classes_attended} of 3 classes`
+      : plural(sig.classes_attended, 'class', 'classes'))
+    : null
+
   function openContact() {
     if (!contact.id || !onOpenContact) return
     onOpenContact(contact.id)
@@ -125,7 +155,7 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
             />
           )}
         </div>
-        {contact.name && (
+        {contact.name && !(sig && sameName(contact.name, deal.title)) && (
           <div className="flex items-center gap-1.5 mt-1.5 text-xs text-un1t-subtle">
             <User size={12} />
             <span className="truncate">{contact.name}</span>
@@ -140,6 +170,31 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
           <span className="inline-block mt-1.5 ml-1 text-[10px] px-1.5 py-0.5 bg-green-500/10 rounded text-green-700">
             {contact.trial_credits_remaining} credits
           </span>
+        )}
+        {sig && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            <span className={`${CHIP} ${sig.classes_attended > 0 ? TONE.classes : TONE.neutral}`}>{classesLabel}</span>
+            {sig.credits_unlimited ? (
+              <span className={`${CHIP} ${TONE.credits}`}>Unlimited</span>
+            ) : sig.credits_left != null ? (
+              <span className={`${CHIP} ${sig.credits_left > 0 ? TONE.credits : TONE.warn}`}>{plural(sig.credits_left, 'credit left', 'credits left')}</span>
+            ) : null}
+            {sig.next_class_at ? (
+              <span className={`${CHIP} ${TONE.good}`}>Next: {nextClassLabel(sig.next_class_at, timezone, viewerZone)}</span>
+            ) : (
+              <span className={`${CHIP} ${TONE.bad}`}>No class booked</span>
+            )}
+            {sig.last_class_days != null && (
+              <span className={`${CHIP} ${sig.last_class_warm ? TONE.warn : TONE.neutral}`}>Last class {ago(sig.last_class_days)}</span>
+            )}
+            {sig.wa_state === 'replied' ? (
+              <span className={`${CHIP} ${TONE.good}`}>{sig.wa_days == null ? 'Replied' : `Replied ${ago(sig.wa_days)}`}</span>
+            ) : sig.wa_state === 'no_reply' ? (
+              <span className={`${CHIP} ${TONE.warn}`}>{sig.wa_days == null ? 'No reply' : `No reply, ${sig.wa_days}d`}</span>
+            ) : (
+              <span className={`${CHIP} ${TONE.neutral}`}>Never messaged</span>
+            )}
+          </div>
         )}
         {showClassBadge && (
           contact.next_class_at ? (

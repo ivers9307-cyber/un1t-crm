@@ -16,12 +16,15 @@ vi.mock('@/lib/activity-write-gate', () => ({ canWriteActivitiesAt: () => true }
 const boardProps = vi.hoisted(() => ({ last: null }))
 vi.mock('@/components/KanbanBoard', () => ({ default: (props) => { boardProps.last = props; return <div>{`board:${props.initialStages.map((s) => s.slug).join(',')}`}</div> } }))
 vi.mock('@/components/PipelineViewSwitcher', () => ({ default: () => <div>switcher</div> }))
+// HATCHCARD.1 — the signals read is mocked; the rest of the module is real.
+vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadUn1tCardSignals: vi.fn() }))
 
 import Page from './page.js'
 import KanbanBoard from '@/components/KanbanBoard'   // the mock above; its identity finds the board element
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
+import { loadUn1tCardSignals } from '@/lib/pipeline-card-signals'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 const CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
@@ -244,5 +247,81 @@ describe('/pipeline — the board remounts per pipeline and view (BOARDKEY.1)', 
     const active = findBoard(await Page({ searchParams: { pipeline: 'acquisition' } }))
     const dormant = findBoard(await Page({ searchParams: { pipeline: 'acquisition', view: 'dormant' } }))
     expect(active.key).not.toBe(dormant.key)
+  })
+})
+
+// HATCHCARD.1 — a un1t.online board's live columns carry each card's signals,
+// read once for the page from the board studio's own rows. A Glofox board and
+// the off-funnel view are untouched; a failed signals read renders the board
+// without them (decoration, never a blank board).
+describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
+  const SIG = { classes_attended: 2, credits_left: 1, credits_unlimited: false, next_class_at: null, last_class_days: 4, last_class_warm: false, wa_state: 'no_reply', wa_days: 5 }
+  const stages = [
+    { id: 'sN', slug: 'new_lead', name: 'New Leads', is_dormant: false, display_order: 301, pipeline_id: 'p1' },
+    { id: 'sC', slug: 'converted', name: 'Converted', is_dormant: false, display_order: 305, pipeline_id: 'p1' },
+    { id: 'sD', slug: 'dormant', name: 'Dormant', is_dormant: true, display_order: 309, pipeline_id: 'p1' },
+  ]
+  const dealsByStage = {
+    sN: [{ id: 'd1', stage_id: 'sN', title: 'Ann', created_at: '2026-10-20T00:00:00Z', contacts: { id: 'c1', name: 'Ann', pipeline_stage_slug: 'new_lead' } }],
+    sC: [{ id: 'd2', stage_id: 'sC', title: 'Bo', created_at: '2026-10-20T00:00:00Z', contacts: { id: 'c2', name: 'Bo', pipeline_stage_slug: 'converted' } }],
+    sD: [{ id: 'd3', stage_id: 'sD', title: 'Cy', created_at: '2026-10-20T00:00:00Z', contacts: { id: 'c3', name: 'Cy', pipeline_stage_slug: 'dormant' } }],
+  }
+  function dbFor(module) {
+    return {
+      from: (table) => {
+        const st = { stageId: null, head: false }
+        const chain = {}
+        chain.select = (_c, o) => { st.head = !!o?.head; return chain }
+        chain.eq = (c, v) => { if (c === 'stage_id') st.stageId = v; return chain }
+        for (const m of ['in', 'order', 'range']) chain[m] = () => chain
+        chain.then = (res, rej) => {
+          let out
+          if (table === 'pipelines') out = { data: [{ id: 'p1', key: 'acquisition', name: 'Acquisition', mode: 'derived', module }], error: null }
+          else if (table === 'pipeline_stages') out = { data: stages, error: null }
+          else if (st.head) out = { count: (dealsByStage[st.stageId] || []).length, error: null }
+          else out = { data: dealsByStage[st.stageId] || [], error: null }
+          return Promise.resolve(out).then(res, rej)
+        }
+        return chain
+      },
+    }
+  }
+  beforeEach(() => {
+    boardProps.last = null
+    loadUn1tCardSignals.mockReset()
+    loadUn1tCardSignals.mockResolvedValue({ signals: new Map([['c1', SIG]]) })
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: CAPS })
+  })
+
+  it('a un1t board: reads signals once, for the live funnel columns only, and attaches them', async () => {
+    createServerClient.mockReturnValue(dbFor('acquisition_un1t'))
+    renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(loadUn1tCardSignals).toHaveBeenCalledTimes(1)
+    const [, args] = loadUn1tCardSignals.mock.calls[0]
+    expect(args.locationId).toBe(LOC)
+    expect(args.contactIds).toEqual(['c1'])          // Converted (c2) carries none
+    const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
+    expect(byId.d1.signals).toEqual(SIG)
+  })
+
+  it('a Glofox board: no signals read, no signals key on any card', async () => {
+    createServerClient.mockReturnValue(dbFor('acquisition'))
+    renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+    expect(boardProps.last.initialDeals.every((d) => !('signals' in d))).toBe(true)
+  })
+
+  it('the off-funnel view of a un1t board: no signals read', async () => {
+    createServerClient.mockReturnValue(dbFor('acquisition_un1t'))
+    renderToStaticMarkup(await Page({ searchParams: { view: 'dormant' } }))
+    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+  })
+
+  it('a failed signals read renders the board without them, never throws', async () => {
+    createServerClient.mockReturnValue(dbFor('acquisition_un1t'))
+    loadUn1tCardSignals.mockResolvedValue({ error: { message: 'boom' } })
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('board:')
+    expect(boardProps.last.initialDeals.every((d) => !('signals' in d))).toBe(true)
   })
 })

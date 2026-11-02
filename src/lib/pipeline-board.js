@@ -155,12 +155,18 @@ export function boardCardOptionsForModule(moduleName) {
 // The returned mapper is deliberately 1-arg (nowMs pinned inside): callers do
 // `.map(mapper)`, and a second parameter would silently receive the array
 // index. Tests inject time via dealAge directly.
-export function boardDealMapper({ badge = true, glofoxCredits = true } = {}) {
+// HATCHCARD.1 — `signals` (a Map from contact id to loadUn1tCardSignals'
+// shape, src/lib/pipeline-card-signals.js) attaches each card's signals on a
+// un1t.online board; a contact missing from the map gets null. Without a map
+// (a Glofox board, or a signals read that failed) the row carries no `signals`
+// key at all, so Stillorgan's rows are exactly what they were.
+export function boardDealMapper({ badge = true, glofoxCredits = true, signals = null } = {}) {
   return (deal) => {
     const { recent_bookings, ...contact } = deal.contacts || {}
     if (!glofoxCredits) delete contact.trial_credits_remaining
     return {
       ...deal,
+      ...(signals instanceof Map ? { signals: signals.get(contact.id) ?? null } : {}),
       age: dealAge(deal, Date.now()),
       // HATCHPIPE.5 — the card must know the badge is OFF, not merely that no
       // class is booked: a null next_class_at alone renders "No class booked"

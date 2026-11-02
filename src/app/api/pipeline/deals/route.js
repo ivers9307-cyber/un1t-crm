@@ -12,6 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import { loadUn1tCardSignals, cardSignalsEnabledForModule, SIGNAL_SLUGS } from '@/lib/pipeline-card-signals'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,7 +41,7 @@ export async function GET(request) {
   // can't be enumerated across tenants.
   const { data: stage } = await db
     .from('pipeline_stages')
-    .select('id, pipeline_id')
+    .select('id, pipeline_id, slug')
     .eq('id', stageId)
     .eq('location_id', locationId)
     .maybeSingle()
@@ -51,6 +52,7 @@ export async function GET(request) {
   // contacts' Glofox credits are another studio's). A stage with no readable
   // board keeps both, i.e. today's behaviour.
   let cardOptions = boardCardOptionsForModule(null)
+  let boardModule = null
   if (stage.pipeline_id) {
     const { data: pipeline, error: pipelineError } = await db
       .from('pipelines')
@@ -65,6 +67,7 @@ export async function GET(request) {
       logWarn('pipeline-deals', 'board read failed; badge kept', { stageId, locationId })
     } else {
       cardOptions = boardCardOptionsForModule(pipeline?.module)
+      boardModule = pipeline?.module ?? null
     }
   }
 
@@ -82,5 +85,16 @@ export async function GET(request) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, deals: (data || []).map(boardDealMapper(cardOptions)) })
+  // HATCHCARD.1 — the same signals the board's first page carries: a
+  // un1t.online board, the live view, a live funnel column. Decoration: a
+  // failed read answers the cards without them (ids-only warning).
+  let signals = null
+  if (view === 'active' && SIGNAL_SLUGS.has(stage.slug) && cardSignalsEnabledForModule(boardModule)) {
+    const contactIds = (data || []).map((d) => d.contacts?.id).filter(Boolean)
+    const res = await loadUn1tCardSignals(db, { locationId, contactIds })
+    if (res?.error) logWarn('pipeline-deals', 'card signals read failed; cards sent without them', { stageId, locationId })
+    else signals = res?.signals ?? null
+  }
+
+  return NextResponse.json({ success: true, deals: (data || []).map(boardDealMapper({ ...cardOptions, signals })) })
 }
