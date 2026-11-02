@@ -58,3 +58,23 @@ describe('routeContact', () => {
     expect([...CLAIM_BOARD_MODULES].sort()).toEqual(['paid_trial', 'programmes'])
   })
 })
+
+
+// HATCH39 — the un1t path hands the router its own acquisition classify
+// (acquisition_un1t.classify: TRIALDONE.2), for the Cold/Gympass check and the fallback.
+describe('routeContact — classifyAcquisition option', () => {
+  const stub = () => 'trial_done'
+  it('the fallback uses the given acquisition classify', () => {
+    expect(routeContact({ glofox_membership_status: 'lead' }, { paid: null, programme: null }, T0, ALL, { classifyAcquisition: stub }))
+      .toEqual({ boardKey: 'acquisition', slug: 'trial_done' })
+  })
+  it('a Cold or Gympass answer from the given classify still beats a live claim', () => {
+    const cold = () => 'cold_lead'
+    expect(routeContact(trialer, { paid, programme }, T0 + DAY_MS, ALL, { classifyAcquisition: cold })).toEqual({ boardKey: 'acquisition', slug: 'cold_lead' })
+    const gym = () => 'gympass'
+    expect(routeContact(trialer, { paid, programme }, T0 + DAY_MS, ALL, { classifyAcquisition: gym })).toEqual({ boardKey: 'acquisition', slug: 'gympass' })
+  })
+  it('a live claim still wins over an ordinary answer from the given classify', () => {
+    expect(routeContact(trialer, { paid, programme: null }, T0 + DAY_MS, ALL, { classifyAcquisition: stub }).boardKey).toBe('paid_trial')
+  })
+})

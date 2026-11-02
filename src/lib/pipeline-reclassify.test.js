@@ -1610,3 +1610,77 @@ describe('PIPE3 — a contact with two open deals', () => {
     expect(out).toMatchObject({ deals_moved: 1, boards_moved: 0, duplicate_deals_closed: 1 })
   })
 })
+
+
+// ---------------------------------------------------------------------------
+// HATCH39 — the un1t path routes each person to Acquisition or the €39 board.
+// ---------------------------------------------------------------------------
+describe('HATCH39 — un1t path: Acquisition + €39 Trial boards', () => {
+  beforeEach(() => { vi.mocked(membershipReadsFor).mockReset(); vi.mocked(logWarn).mockClear() })
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const PIPES = [
+    { id: 'p-h-acq', location_id: HATCH, key: 'acquisition', module: 'acquisition_un1t', mode: 'derived', enabled: true, is_primary: true },
+    { id: 'p-h-paid', location_id: HATCH, key: 'paid_trial', module: 'paid_trial_un1t', mode: 'derived', enabled: true, is_primary: false },
+  ]
+  const STAGES = [
+    ...HATCH_STAGES.filter((s) => s.pipeline_id === 'p-h-acq'),
+    { id: 'h-cold', slug: 'cold_lead', pipeline_id: 'p-h-acq', location_id: HATCH },
+    ...['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
+      .map((slug) => ({ id: `h-${slug}`, slug, pipeline_id: 'p-h-paid', location_id: HATCH })),
+  ]
+  // A €39 buyer two days in, no class yet; a member; a Cold €39 buyer.
+  const paidSnap = (over = {}) => ({ ...leadSnap(), paid_trial_at: ago(2), paid_trial_expires_at: ago(-12), ...over })
+  const inputs = () => hatchInputs({
+    contacts: [
+      { id: 'c-buy', name: 'Buyer', email: null, location_id: HATCH },
+      { id: 'c-mem', name: 'Mem', email: null, location_id: HATCH },
+      { id: 'c-cold', name: 'Cold', email: null, location_id: HATCH },
+    ],
+    snapshots: [['c-buy', paidSnap()], ['c-mem', memberSnap()], ['c-cold', paidSnap({ pipeline_dismissed_at: ago(1) })]],
+  })
+
+  it('a live €39 claim moves the person\'s acquisition deal onto the €39 board (stage AND pipeline); a member stays; Cold beats the claim', async () => {
+    seamWith(vi.fn().mockResolvedValue(inputs()))
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: PIPES, pipeline_stages: STAGES,
+      deals: [
+        { id: 'd-buy', contact_id: 'c-buy', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+        { id: 'd-mem', contact_id: 'c-mem', stage_id: 'h-member', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+        { id: 'd-cold', contact_id: 'c-cold', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' },
+      ],
+    })
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+    const updates = writesTo('deals').filter((e) => argOf(e, 'update'))
+    const toPaid = updates.find((e) => argOf(e, 'update')[1].stage_id === 'h-paid_trial_new_lead')
+    expect(argOf(toPaid, 'update')[1]).toEqual({ stage_id: 'h-paid_trial_new_lead', pipeline_id: 'p-h-paid' })
+    expect(argOf(toPaid, 'in')).toEqual(['in', 'id', ['d-buy']])
+    const toCold = updates.find((e) => argOf(e, 'update')[1].stage_id === 'h-cold')
+    expect(argOf(toCold, 'in')).toEqual(['in', 'id', ['d-cold']])
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', deals_moved: 2, deals_unchanged: 1, boards_moved: 1, errors: 0 })
+  })
+
+  it('a dry run reports the board histogram on the un1t path', async () => {
+    seamWith(vi.fn().mockResolvedValue(inputs()))
+    const { db, calls } = recordingDb({ pipelines: PIPES, pipeline_stages: STAGES, deals: [] })
+    const out = await reclassifyAllContacts(db, { locationId: HATCH, dryRun: true })
+    expect(calls.filter((e) => e.some((x) => Array.isArray(x) && ['update', 'insert', 'upsert'].includes(x[0])))).toHaveLength(0)
+    expect(out).toMatchObject({ ok: true, board_histogram: { acquisition: 2, paid_trial: 1 }, stage_histogram: { paid_trial_new_lead: 1, member: 1, cold_lead: 1 } })
+  })
+
+  it('includeDisabled dry-runs a disabled paid_trial row as paid_trial_un1t', async () => {
+    seamWith(vi.fn().mockResolvedValue(inputs()))
+    const disabled = PIPES.map((p) => (p.key === 'paid_trial' ? { ...p, enabled: false } : p))
+    const { db } = recordingDb({ pipelines: disabled, pipeline_stages: STAGES, deals: [] })
+    const out = await reclassifyAllContacts(db, { locationId: HATCH, dryRun: true, includeDisabled: ['paid_trial'] })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', board_histogram: { acquisition: 2, paid_trial: 1 } })
+  })
+
+  it('the acquisition classify is the un1t one (TRIALDONE.2): two attended and an expired free trial is trial_done', async () => {
+    const twoDone = { ...leadSnap(), recent_bookings: [attendedBooking(5), attendedBooking(3)], last_attended_at: isoBefore(3), joined_at: isoBefore(20), trial_expires_at: isoBefore(1) }
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({ contacts: [{ id: 'c-two', name: 'Two', email: null, location_id: HATCH }], snapshots: [['c-two', twoDone]] })))
+    const { db } = recordingDb({ pipelines: PIPES, pipeline_stages: [...STAGES, { id: 'h-trial-done', slug: 'trial_done', pipeline_id: 'p-h-acq', location_id: HATCH }], deals: [] })
+    const out = await reclassifyAllContacts(db, { locationId: HATCH, dryRun: true })
+    expect(out.stage_histogram).toEqual({ trial_done: 1 })
+  })
+})
