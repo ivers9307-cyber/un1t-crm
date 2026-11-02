@@ -18,6 +18,7 @@ vi.mock('@/components/KanbanBoard', () => ({ default: (props) => { boardProps.la
 vi.mock('@/components/PipelineViewSwitcher', () => ({ default: () => <div>switcher</div> }))
 
 import Page from './page.js'
+import KanbanBoard from '@/components/KanbanBoard'   // the mock above; its identity finds the board element
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
@@ -178,5 +179,70 @@ describe('/pipeline — whole-column load (HATCHPIPE.4)', () => {
     const { db } = dbWith({ countError: { message: 'boom', code: '57014' } })
     createServerClient.mockReturnValue(db)
     await expect(Page({ searchParams: {} })).rejects.toThrow(/pipeline deals count/)
+  })
+})
+
+// BOARDKEY.1 — switching boards (or views) is a client-side router.push, so
+// the page re-renders with the NEW board's stages but React keeps the same
+// KanbanBoard instance, whose column state was seeded once from the first
+// board. The new stage ids had no entries: every column read "Load more
+// (0 of N)" until a full page load (the €39 Trial board at Hatch, 2 Nov
+// 2026). The board element must carry a key that changes with the board and
+// the view, so React remounts it with the server's fresh first page.
+describe('/pipeline — the board remounts per pipeline and view (BOARDKEY.1)', () => {
+  const P1 = { id: 'p1', key: 'acquisition', name: 'Acquisition', mode: 'derived', module: 'acquisition_un1t' }
+  const P2 = { id: 'p2', key: 'paid_trial', name: '€39 Trial', mode: 'derived', module: 'paid_trial_un1t' }
+  const S1 = { id: 's1', slug: 'new_lead', name: 'New Leads', is_dormant: false, display_order: 301, pipeline_id: 'p1' }
+  const S1D = { id: 's1d', slug: 'dormant', name: 'Dormant', is_dormant: true, display_order: 309, pipeline_id: 'p1' }
+  const S2 = { id: 's2', slug: 'paid_trial_new_lead', name: 'New Leads', is_dormant: false, display_order: 601, pipeline_id: 'p2' }
+
+  function dbTwoBoards() {
+    return {
+      from: (table) => {
+        const state = { pipelineId: null }
+        const chain = {}
+        for (const m of ['select', 'in', 'order', 'range']) chain[m] = () => chain
+        chain.eq = (col, v) => { if (col === 'pipeline_id') state.pipelineId = v; return chain }
+        chain.then = (res, rej) => {
+          let out
+          if (table === 'pipelines') out = { data: [P1, P2], error: null }
+          else if (table === 'pipeline_stages') out = { data: [S1, S1D, S2].filter((s) => s.pipeline_id === state.pipelineId), error: null }
+          else out = { data: [], error: null, count: 0 }
+          return Promise.resolve(out).then(res, rej)
+        }
+        return chain
+      },
+    }
+  }
+
+  // The KanbanBoard element in the page's tree (the module is mocked above,
+  // so its type is the mock's default export).
+  function findBoard(node) {
+    if (!node || typeof node !== 'object') return null
+    if (Array.isArray(node)) { for (const n of node) { const f = findBoard(n); if (f) return f }; return null }
+    if (node.type === KanbanBoard) return node
+    return findBoard(node.props?.children)
+  }
+
+  beforeEach(() => {
+    createServerClient.mockReturnValue(dbTwoBoards())
+    membershipStateForPage.mockResolvedValue({ source: 'un1t_online', state: 'configured', label: 'un1t.online', capabilities: CAPS })
+  })
+
+  it('two boards get two different keys, each naming its pipeline', async () => {
+    const acq = findBoard(await Page({ searchParams: { pipeline: 'acquisition' } }))
+    const paid = findBoard(await Page({ searchParams: { pipeline: 'paid_trial' } }))
+    expect(acq).toBeTruthy(); expect(paid).toBeTruthy()
+    expect(typeof acq.key).toBe('string'); expect(acq.key).toContain('p1')
+    expect(typeof paid.key).toBe('string'); expect(paid.key).toContain('p2')
+    expect(acq.key).not.toBe(paid.key)
+    // and the paid board was seeded with its own stages, not the first board's
+    expect(paid.props.initialStages.map((s) => s.slug)).toEqual(['paid_trial_new_lead'])
+  })
+
+  it('the active and dormant views of one board get different keys', async () => {
+    const active = findBoard(await Page({ searchParams: { pipeline: 'acquisition' } }))
+    const dormant = findBoard(await Page({ searchParams: { pipeline: 'acquisition', view: 'dormant' } }))
+    expect(active.key).not.toBe(dormant.key)
   })
 })
