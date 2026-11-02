@@ -1355,4 +1355,34 @@ describe('packHolderIds / shapeCounts / shapeTrialEligibility with the paid-tria
     expect(shapeTrialEligibility({ transactions: [paidTrialTx({ refunded: true })], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }))
       .toEqual({ eligible: true, reasons: [] })
   })
+
+  // PAIDTRIALAMOUNT.1 — un1t.online product 674d62bf ("The UN1T Trial") was the
+  // FREE 3-credit trial until 24 Oct 2026 and was then repriced to €39; its 64
+  // €0 transactions kept the same product id and were swept onto the €39 board
+  // (33 in Trial Done, 2 Nov 2026). A transaction is judged by what was PAID,
+  // never by the product's current price.
+  describe('a €0 transaction on a paid-trial product is the free trial sold under the old price (PAIDTRIALAMOUNT.1)', () => {
+    const freeOnPaidProduct = (over = {}) => paidTrialTx({ amount_cents: 0, ...over })
+    it('is no paid-trial claim: paid_trial_at stays null and the person is a lead, not on the €39 board', () => {
+      const s = snap({ transactions: [freeOnPaidProduct({ remote_created_at: daysAgo(20) })], client: pclient({ credit_balance: 3 }), paidTrialProductIds: PAID_IDS })
+      expect(s.paid_trial_at).toBeNull()
+      expect(s.paid_trial_expires_at).toBeNull()
+      expect(paidClaimFromSnapshot(s)).toBeNull()
+      expect(s.pack_customer_at).toBeNull()
+      expect(s.glofox_membership_status).not.toBe('credit_member')
+    })
+    it('counts as a free trial TAKEN: trial eligibility says trial_used, never paid_trial', () => {
+      expect(shapeTrialEligibility({ transactions: [freeOnPaidProduct()], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }))
+        .toEqual({ eligible: false, reasons: ['trial_used'] })
+      expect(splitUn1tCredits({ client: pclient({ credit_balance: 3 }), transactions: [freeOnPaidProduct({ remote_created_at: daysAgo(2) })], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }).tookTrial).toBe(true)
+    })
+    it('a null amount is not a paid trial either; a positive amount on the same product still is', () => {
+      expect(snap({ transactions: [freeOnPaidProduct({ amount_cents: null, remote_created_at: daysAgo(2) })], paidTrialProductIds: PAID_IDS }).paid_trial_at).toBeNull()
+      expect(snap({ transactions: [paidTrialTx({ amount_cents: 3900, remote_created_at: daysAgo(2) })], paidTrialProductIds: PAID_IDS }).paid_trial_at).toBe(daysAgo(2))
+    })
+    it('the newest PAID transaction dates the claim, not a later €0 one', () => {
+      const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(5) }), freeOnPaidProduct({ remote_created_at: daysAgo(1) })], paidTrialProductIds: PAID_IDS })
+      expect(s.paid_trial_at).toBe(daysAgo(5))
+    })
+  })
 })

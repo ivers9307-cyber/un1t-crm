@@ -62,8 +62,18 @@ export const isTrialProduct = (p) => p?.type === 'one_time' && p.price_cents != 
 const EMPTY_IDS = new Set()
 export const isPaidTrialProduct = (p, paidTrialProductIds) => Boolean(p?.un1t_id)
   && paidTrialProductIds instanceof Set && paidTrialProductIds.has(p.un1t_id)
+// PAIDTRIALAMOUNT.1 — judged by what was PAID, never by the product's current
+// price: un1t.online product 674d62bf was the free 3-credit trial until
+// 24 Oct 2026 and was then repriced to €39 under the same id, so its 64 €0
+// transactions are free trials sold under the old price (see trialsTaken), not
+// €39 purchases. A null or zero amount is never a paid trial.
 const isPaidTrialTx = (t, paidTrialProductIds) => t?.product_id != null
   && paidTrialProductIds instanceof Set && paidTrialProductIds.has(t.product_id)
+  && Number(t.amount_cents) > 0
+// A €0 transaction on a paid-trial product: the free trial it used to be.
+const isFreeTrialOnPaidProduct = (t, paidTrialProductIds) => t?.product_id != null
+  && paidTrialProductIds instanceof Set && paidTrialProductIds.has(t.product_id)
+  && t.amount_cents != null && Number(t.amount_cents) === 0
 
 // Glofox counts CONTACTS, so a member with two active subscriptions is one
 // member. A row with no un1t_user_id cannot be matched and stands alone.
@@ -503,7 +513,7 @@ const isRecurringTx = (t) => RECURRING_TX_TYPES.includes(lower(t?.type)) || lowe
  * (deleted upstream, or not yet synced: it may well have been the trial, so it
  * counts; this only ever DENIES a second free trial), and each of spec D's ledger trial rows.
  */
-function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
+function trialsTaken({ transactions = [], productsById, ledgerTrials = [], paidTrialProductIds = EMPTY_IDS }) {
   const out = []
   for (const t of transactions) {
     if (!t) continue
@@ -512,7 +522,11 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
     // null price) may well have been the trial: it counts. Deny-only.
     const unpricedFree = (product == null || product.price_cents == null)
       && t.amount_cents != null && Number(t.amount_cents) === 0
-    if (isTrialProduct(product) || unpricedFree) out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
+    // PAIDTRIALAMOUNT.1 — a €0 payment on a paid-trial product is the free
+    // trial that product used to be (its CURRENT price says €39).
+    if (isTrialProduct(product) || unpricedFree || isFreeTrialOnPaidProduct(t, paidTrialProductIds)) {
+      out.push({ at: t.remote_created_at ?? null, product_id: t.product_id })
+    }
   }
   for (const l of ledgerTrials) if (l) out.push({ at: l.at ?? null, product_id: l.product_id ?? null })
   return out
@@ -539,7 +553,7 @@ function trialsTaken({ transactions = [], productsById, ledgerTrials = [] }) {
  */
 export function splitUn1tCredits({ client, transactions = [], productsById = new Map(), bookings = [], ledgerTrials = [], paidTrialProductIds = EMPTY_IDS } = {}) {
   const balance = Math.max(0, Number(client?.credit_balance) || 0)
-  const trials = trialsTaken({ transactions, productsById, ledgerTrials })
+  const trials = trialsTaken({ transactions, productsById, ledgerTrials, paidTrialProductIds })
   const newestTrialAt = latestOf(trials.map((t) => t.at))
   const atNewest = newestTrialAt == null ? [] : trials.filter((t) => t.at === newestTrialAt)
   const newestTrial = atNewest.find((t) => productOf(productsById, t.product_id) != null) ?? atNewest[0] ?? null
@@ -859,7 +873,7 @@ export function shapeTrialEligibility({
 } = {}) {
   const txs = transactions.filter(Boolean)
   const reasons = []
-  if (trialsTaken({ transactions: txs, productsById, ledgerTrials }).length > 0) reasons.push('trial_used')
+  if (trialsTaken({ transactions: txs, productsById, ledgerTrials, paidTrialProductIds }).length > 0) reasons.push('trial_used')
   if (subscriptions.some(Boolean) || memberships.some(Boolean) || txs.some(isRecurringTx)) reasons.push('membership_history')
   if (txs.some((t) => isPaidPack(t, productsById, paidTrialProductIds))) reasons.push('paid_pack')
   // HATCH39 — a €39 trial buyer has had a trial and has paid: still ineligible
