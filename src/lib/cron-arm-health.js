@@ -51,6 +51,14 @@
 //                       only when every studio's sweep finished clean. Seeded
 //                       by mig 791, applied RIGHT AFTER the deploy.
 //
+// PAIDTRIALTRIGGER.1 adds an eighth, on the same */15 un1t-online-sync cron:
+//
+//   'un1t-paid-trial-purchase-sweep' — sweepPaidTrialPurchases
+//                       (src/lib/un1t-paid-trial-purchases.js), the €39
+//                       purchase enrolment arm. Same stamp rule as the welcome
+//                       sweep, independent of it. Seeded by mig 805, applied
+//                       RIGHT AFTER the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a
