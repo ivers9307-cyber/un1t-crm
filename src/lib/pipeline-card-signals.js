@@ -20,6 +20,8 @@
 // SSR and hydration render the same text.
 
 import { getBoardModule } from '../../shared/pipelines/index.js'
+import { shapeTrialWindow } from '@/lib/membership/reads/un1t-online-shape'
+import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 
 const DAY_MS = 86_400_000
 /** Past this many days since the last class, the card's last-class chip turns amber. */
@@ -50,7 +52,7 @@ const isAttended = (b) => b?.attended === true || upper(b?.status) === 'ATTENDED
  * One person's signals. Pure; reads no clock but `nowMs`.
  * @param {{ bookings?: object[], clients?: object[], conversations?: object[], nowMs: number }} a
  */
-export function shapeCardSignals({ bookings = [], clients = [], conversations = [], nowMs } = {}) {
+export function shapeCardSignals({ bookings = [], clients = [], conversations = [], trialWindow = null, nowMs } = {}) {
   let classesAttended = 0
   let lastClassMs = null
   let nextClassMs = null
@@ -90,6 +92,13 @@ export function shapeCardSignals({ bookings = [], clients = [], conversations = 
   const waState = !anyThread ? 'never' : replyMs != null ? 'replied' : 'no_reply'
 
   const lastClassDays = daysSince(lastClassMs, nowMs)
+
+  // HATCHCARD.2 — the trial window (shapeTrialWindow): days left while it
+  // runs (rounded up: half a day left reads as 1), days since it ended after.
+  const endsMs = msOf(trialWindow?.ends_at)
+  const trialDaysLeft = endsMs != null && endsMs > nowMs ? Math.ceil((endsMs - nowMs) / DAY_MS) : null
+  const trialEndedDays = endsMs != null && endsMs <= nowMs ? daysSince(endsMs, nowMs) : null
+
   return {
     classes_attended: classesAttended,
     credits_left: unlimited ? null : credits,
@@ -99,6 +108,10 @@ export function shapeCardSignals({ bookings = [], clients = [], conversations = 
     last_class_warm: lastClassDays != null && lastClassDays > LAST_CLASS_WARM_DAYS,
     wa_state: waState,
     wa_days: waState === 'replied' ? daysSince(replyMs, nowMs) : waState === 'no_reply' ? daysSince(lastMessageMs, nowMs) : null,
+    trial_kind: trialWindow?.kind ?? null,
+    trial_ends_at: endsMs != null ? trialWindow.ends_at : null,
+    trial_days_left: trialDaysLeft,
+    trial_ended_days: trialEndedDays,
   }
 }
 
@@ -149,7 +162,23 @@ export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = 
   const ids = [...new Set((contactIds || []).filter(Boolean))]
   if (ids.length === 0) return { signals: new Map() }
 
-  const [bookings, clients, conversations] = await Promise.all([
+  // HATCHCARD.2 — the studio's paid-trial product set (throws on a failed
+  // read: "could not read" must never become "no paid trials") and products,
+  // for the trial window.
+  let paidTrialProductIds
+  try {
+    paidTrialProductIds = await paidTrialProductIdsFor(db, locationId)
+  } catch (e) {
+    return { error: e }
+  }
+  const productsRes = await readChunk(() => db.from('un1t_products')
+    .select('un1t_id, type, price_cents, credits_per_period, title, expire_credits_in_days:raw->>expire_credits_in_days')
+    .eq('location_id', locationId)
+    .order('un1t_id'), null)
+  if (productsRes.error) return { error: productsRes.error }
+  const productsById = new Map(productsRes.rows.map((p) => [p.un1t_id, p]))
+
+  const [bookings, clients, conversations, transactions] = await Promise.all([
     readAll((chunk) => db.from('class_bookings')
       .select('id, contact_id, starts_at, status, attended')
       .eq('location_id', locationId)
@@ -167,19 +196,27 @@ export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = 
       .eq('location_id', locationId)
       .in('contact_id', chunk)
       .order('id'), ids),
+    readAll((chunk) => db.from('un1t_transactions')
+      .select('id, contact_id, product_id, amount_cents, refunded, remote_created_at, type, product_type')
+      .eq('location_id', locationId)
+      .in('contact_id', chunk)
+      .order('remote_created_at', { ascending: true })
+      .order('id'), ids),
   ])
-  const failed = bookings.error || clients.error || conversations.error
+  const failed = bookings.error || clients.error || conversations.error || transactions.error
   if (failed) return { error: failed }
 
   const byBooking = groupBy(bookings.rows)
   const byClient = groupBy(clients.rows)
   const byThread = groupBy(conversations.rows)
+  const byTx = groupBy(transactions.rows)
   const signals = new Map()
   for (const id of ids) {
     signals.set(id, shapeCardSignals({
       bookings: byBooking.get(id) || [],
       clients: byClient.get(id) || [],
       conversations: byThread.get(id) || [],
+      trialWindow: shapeTrialWindow({ transactions: byTx.get(id) || [], productsById, paidTrialProductIds }),
       nowMs,
     }))
   }

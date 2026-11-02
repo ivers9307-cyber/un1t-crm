@@ -1,6 +1,9 @@
 // HATCHCARD.1 — the per-card signals a un1t.online board shows: classes done,
 // credits left, next class, last class, and the last WhatsApp contact.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/paid-trial-products', () => ({ paidTrialProductIdsFor: vi.fn() }))
+import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
 import {
   shapeCardSignals, loadUn1tCardSignals, cardSignalsEnabledForModule,
   SIGNAL_SLUGS, LAST_CLASS_WARM_DAYS,
@@ -23,7 +26,26 @@ describe('shapeCardSignals (pure)', () => {
       last_class_warm: false,
       wa_state: 'never',
       wa_days: null,
+      trial_kind: null,
+      trial_ends_at: null,
+      trial_days_left: null,
+      trial_ended_days: null,
     })
+  })
+
+  // HATCHCARD.2 — the trial window (shapeTrialWindow) becomes days left, or days since it ended.
+  it('a live trial: days left (rounded up), the end date kept for the card to print', () => {
+    const s = shapeCardSignals({ nowMs: NOW, trialWindow: { kind: 'paid', started_at: ago(1), ends_at: ahead(12.5) } })
+    expect(s).toMatchObject({ trial_kind: 'paid', trial_ends_at: ahead(12.5), trial_days_left: 13, trial_ended_days: null })
+  })
+  it('an ended trial: days since it ended (0 = today), no days left', () => {
+    expect(shapeCardSignals({ nowMs: NOW, trialWindow: { kind: 'free', started_at: ago(10), ends_at: ago(3.2) } }))
+      .toMatchObject({ trial_kind: 'free', trial_days_left: null, trial_ended_days: 3 })
+    expect(shapeCardSignals({ nowMs: NOW, trialWindow: { kind: 'free', started_at: ago(7), ends_at: ago(0.1) } }).trial_ended_days).toBe(0)
+  })
+  it('a trial with no known end: the kind only', () => {
+    expect(shapeCardSignals({ nowMs: NOW, trialWindow: { kind: 'free', started_at: ago(2), ends_at: null } }))
+      .toMatchObject({ trial_kind: 'free', trial_ends_at: null, trial_days_left: null, trial_ended_days: null })
   })
 
   it('counts ATTENDED (or attended=true) bookings, takes the newest past one as the last class', () => {
@@ -160,15 +182,23 @@ describe('loadUn1tCardSignals', () => {
       { location_id: LOC, contact_id: 'c1', window_open_at: ago(2), last_message_at: ago(1) },
       { location_id: OTHER, contact_id: 'c2', window_open_at: ago(1), last_message_at: ago(1) },
     ],
+    un1t_transactions: [
+      { id: 't1', location_id: LOC, contact_id: 'c1', product_id: 'paid-39', amount_cents: 3900, refunded: false, remote_created_at: ago(1), type: 'one_time', product_type: 'pack' },
+      { id: 't2', location_id: OTHER, contact_id: 'c2', product_id: 'paid-39', amount_cents: 3900, refunded: false, remote_created_at: ago(1), type: 'one_time', product_type: 'pack' },
+    ],
+    un1t_products: [
+      { location_id: LOC, un1t_id: 'paid-39', type: 'one_time', price_cents: 3900, credits_per_period: -1, title: 'The UN1T Trial', expire_credits_in_days: '14' },
+    ],
   }
+  beforeEach(() => { paidTrialProductIdsFor.mockReset(); paidTrialProductIdsFor.mockResolvedValue(new Set(['paid-39'])) })
 
   it('returns a signal for every requested contact, from this studio\'s un1t rows only', async () => {
     const db = fakeDb(tables)
     const { signals, error } = await loadUn1tCardSignals(db, { locationId: LOC, contactIds: ['c1', 'c2'], nowMs: NOW })
     expect(error).toBeUndefined()
-    expect(signals.get('c1')).toMatchObject({ classes_attended: 1, credits_left: 2, next_class_at: ahead(1), last_class_days: 3, wa_state: 'replied', wa_days: 2 })
+    expect(signals.get('c1')).toMatchObject({ classes_attended: 1, credits_left: 2, next_class_at: ahead(1), last_class_days: 3, wa_state: 'replied', wa_days: 2, trial_kind: 'paid', trial_days_left: 13 })
     // c2's rows are all at another studio: nothing known here
-    expect(signals.get('c2')).toMatchObject({ classes_attended: 0, credits_left: null, wa_state: 'never' })
+    expect(signals.get('c2')).toMatchObject({ classes_attended: 0, credits_left: null, wa_state: 'never', trial_kind: null })
   })
 
   it('every read is scoped to the studio, names its columns, and orders before it ranges', async () => {
@@ -207,5 +237,28 @@ describe('loadUn1tCardSignals', () => {
     const res = await loadUn1tCardSignals(db, { locationId: LOC, contactIds: [], nowMs: NOW })
     expect(res.signals.size).toBe(0)
     expect(db.calls).toHaveLength(0)
+  })
+})
+
+describe('loadUn1tCardSignals — the trial window (HATCHCARD.2)', () => {
+  beforeEach(() => { paidTrialProductIdsFor.mockReset() })
+  it('an unreadable paid-trial product set is { error }, never "no paid trials"', async () => {
+    paidTrialProductIdsFor.mockRejectedValue(new Error('settings down'))
+    const db = fakeDb({})
+    const res = await loadUn1tCardSignals(db, { locationId: LOC, contactIds: ['c1'], nowMs: NOW })
+    expect(res.signals).toBeUndefined()
+    expect(res.error).toBeTruthy()
+  })
+  it('reads the studio\'s products once and the contacts\' transactions in chunks, named columns only', async () => {
+    paidTrialProductIdsFor.mockResolvedValue(new Set())
+    const db = fakeDb({})
+    await loadUn1tCardSignals(db, { locationId: LOC, contactIds: ['c1'], nowMs: NOW })
+    const products = db.calls.filter((c) => c.table === 'un1t_products')
+    const txs = db.calls.filter((c) => c.table === 'un1t_transactions')
+    expect(products).toHaveLength(1)
+    expect(products[0].cols).toContain('expire_credits_in_days:raw->>expire_credits_in_days')
+    expect(txs).toHaveLength(1)
+    expect(txs[0].in.contact_id).toEqual(['c1'])
+    expect(paidTrialProductIdsFor).toHaveBeenCalledWith(db, LOC)
   })
 })

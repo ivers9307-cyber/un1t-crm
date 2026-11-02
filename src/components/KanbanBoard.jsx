@@ -43,9 +43,13 @@ export const stageColors = {
 // Cards with no upcoming class sort first — that's the follow-up list; a booked
 // next class means the funnel is working on its own. Stable partition, so a
 // lazily-loaded page appended to a column re-partitions the growing set cleanly.
+// Unbooked people first (they need a call). HATCHCARD.2 — a un1t.online
+// board's card carries its booking in `signals` (the Glofox field is always
+// null there); a card with a signals key reads it from there, so null signals
+// count as "no booking known". A Glofox card reads contacts.next_class_at as before.
+const isBooked = (d) => ('signals' in d ? Boolean(d.signals?.next_class_at) : Boolean(d.contacts?.next_class_at))
 function sortColumn(deals) {
-  return [...deals].sort((a, b) =>
-    (a.contacts?.next_class_at ? 1 : 0) - (b.contacts?.next_class_at ? 1 : 0))
+  return [...deals].sort((a, b) => (isBooked(a) ? 1 : 0) - (isBooked(b) ? 1 : 0))
 }
 
 // FUNNEL.1 — a DERIVED board is read-only. Every column there is set by the

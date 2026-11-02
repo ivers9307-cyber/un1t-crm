@@ -111,3 +111,34 @@ describe('KanbanBoard — Load more shows only while cards are unloaded', () => 
     expect(html).not.toContain('Load more (1 of 1)')
   })
 })
+
+// HATCHCARD.2 — a un1t.online board sorts unbooked people to the top of each
+// column, like a Glofox board does, reading the card's own signals.
+describe('KanbanBoard — unbooked first on a un1t board (HATCHCARD.2)', () => {
+  const stage = [{ id: 's-n', slug: 'new_lead', name: 'New Leads' }]
+  const sig = (next) => ({ classes_attended: 0, credits_left: 3, credits_unlimited: false, next_class_at: next, last_class_days: null, last_class_warm: false, wa_state: 'never', wa_days: null, trial_kind: null, trial_ends_at: null, trial_days_left: null, trial_ended_days: null })
+  const order = (html) => [...html.matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])
+  const board = (deals) => renderToStaticMarkup(<KanbanBoard initialStages={stage} initialDeals={deals} stageCounts={{ 's-n': deals.length }} locationId="l-1" />)
+
+  it('a booked card sinks below an unbooked one, whatever order the server sent', () => {
+    const deals = [
+      { id: 'booked', stage_id: 's-n', title: 'A', signals: sig('2026-11-05T08:00:00Z'), contacts: { id: 'c-a' } },
+      { id: 'unbooked', stage_id: 's-n', title: 'B', signals: sig(null), contacts: { id: 'c-b' } },
+    ]
+    expect(order(board(deals))).toEqual(['unbooked', 'booked'])
+  })
+  it('a card whose signals are null keeps its place among the unbooked (no booking known)', () => {
+    const deals = [
+      { id: 'booked', stage_id: 's-n', title: 'A', signals: sig('2026-11-05T08:00:00Z'), contacts: { id: 'c-a' } },
+      { id: 'unknown', stage_id: 's-n', title: 'B', signals: null, contacts: { id: 'c-b' } },
+    ]
+    expect(order(board(deals))).toEqual(['unknown', 'booked'])
+  })
+  it('a Glofox board still sorts on contacts.next_class_at, as before', () => {
+    const deals = [
+      { id: 'booked', stage_id: 's-n', title: 'A', contacts: { id: 'c-a', next_class_at: '2026-11-05T08:00:00Z' } },
+      { id: 'unbooked', stage_id: 's-n', title: 'B', contacts: { id: 'c-b', next_class_at: null } },
+    ]
+    expect(order(board(deals))).toEqual(['unbooked', 'booked'])
+  })
+})
