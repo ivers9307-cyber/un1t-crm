@@ -3,7 +3,7 @@
 // the live website lead capture.
 
 import { describe, it, expect } from 'vitest'
-import { findOpenDealForPipeline, findOpenDealAtLocation } from './deal-lookup.js'
+import { findOpenDealForPipeline, findOpenDealAtLocation, findPrimaryPipeline } from './deal-lookup.js'
 
 const fakeDb = (rows) => ({
   from: () => {
@@ -74,5 +74,24 @@ describe('findOpenDealAtLocation', () => {
     const db = { from: () => { const q = { select: () => q, eq: () => q, order: () => q, limit: () => Promise.resolve({ data: null, error: { message: 'boom' } }) }; return q } }
     expect(await findOpenDealAtLocation(db, 'c-1', 'loc-1')).toBeNull()
     expect(await findOpenDealAtLocation(fakeDb([{ id: 'd' }]), null, 'loc-1')).toBeNull()
+  })
+})
+
+
+// HATCH39 — the primary board's module rides along, so ensureDealForContact can
+// tell a un1t.online primary (placed only by the hourly pass) from a Glofox one.
+describe('findPrimaryPipeline', () => {
+  it('selects id, mode and module of the enabled primary', async () => {
+    const calls = []
+    const q = {
+      select: (c) => { calls.push(['select', c]); return q },
+      eq: (c, v) => { calls.push(['eq', c, v]); return q },
+      limit: () => Promise.resolve({ data: [{ id: 'p1', mode: 'derived', module: 'acquisition_un1t' }], error: null }),
+    }
+    const out = await findPrimaryPipeline({ from: (t) => { calls.push(['from', t]); return q } }, 'loc-1')
+    expect(out).toEqual({ id: 'p1', mode: 'derived', module: 'acquisition_un1t' })
+    expect(calls).toContainEqual(['select', 'id, mode, module'])
+    expect(calls).toContainEqual(['eq', 'is_primary', true])
+    expect(calls).toContainEqual(['eq', 'enabled', true])
   })
 })

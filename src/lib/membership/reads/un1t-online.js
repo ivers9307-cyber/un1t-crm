@@ -481,6 +481,9 @@ const REGRANT_CLIENT_COLS = 'un1t_user_id, credit_balance, credit_unlimited'
 // created_at: a form-only enquiry's New Leads clock starts at the later of its
 // creation and its latest public-form touch.
 const PIPE_CONTACT_COLS = 'id, name, email, location_id, pipeline_dismissed_at, last_lead_source_at, created_at'
+// HATCH39 — the studio's own contacts read for form-only enquiries is bounded
+// like the contacts path (pipeline-reclassify.js HARD_LIMIT); the cap is logged.
+const HOME_CONTACTS_CAP = 20_000
 
 /** Every row of one un1t table at a studio, paginated (not freshness-gated). */
 const listAtStudio = (db, loc, table, cols) => selectAll((from, to) => db
@@ -641,11 +644,12 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
         .select(PIPE_CONTACT_COLS)
         .eq('location_id', locationId)
         .order('id', { ascending: true })
-        .range(from, to), { pageSize: PAGE }),
+        .range(from, to), { pageSize: PAGE, hardCap: HOME_CONTACTS_CAP }),
       // Every client row at the studio, fresh or stale: a contact with ANY
       // account is not a form-only enquiry (a stale account is still an account).
       listAtStudio(db, locationId, 'un1t_clients', 'contact_id'),
     ])
+    if (homeContacts.length >= HOME_CONTACTS_CAP) logWarn('un1t-pipeline', 'home contacts read hit its cap', { locationId, cap: HOME_CONTACTS_CAP })
     const hasAccount = new Set(anyClientRows.map((c) => c.contact_id).filter((id) => id != null))
     const formOnlyOf = (studioDismissalBy) => {
       const contacts = []
@@ -653,6 +657,12 @@ async function pipelineInputs(db, locationId, { now = Date.now() } = {}) {
       const evidence = new Map()
       for (const contact of homeContacts) {
         if (!contact?.id || hasAccount.has(contact.id)) continue
+        // A form-only LEAD needs positive evidence of an enquiry: a public-form
+        // touch (last_lead_source_at, stamped by the website lead form and the
+        // class funnel). A contact row with no account and no touch (a race
+        // signup, a WhatsApp-only chat) is not a lead by existing — the same
+        // rule CROSSOVERDEAL.1 applies to a race entry at Stillorgan.
+        if (contact.last_lead_source_at == null) continue
         contacts.push({ id: contact.id, name: contact.name ?? null, email: contact.email ?? null, location_id: contact.location_id ?? null })
         const snapshot = shapeFormOnlySnapshot({ contact, locationId, studioDismissedAt: studioDismissalBy.get(contact.id) ?? null })
         snapshots.set(contact.id, snapshot)

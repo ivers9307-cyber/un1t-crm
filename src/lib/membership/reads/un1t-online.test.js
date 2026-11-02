@@ -873,9 +873,9 @@ describe('pipelineInputs and trialEligibility', () => {
       })
       const { db } = makeDb(w)
       const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
-      // HATCH39 — c2 still exists as a Hatch contact with no (readable) client: a form-only lead.
-      expect(out.data.contacts.map((c) => c.id)).toEqual(['c1', 'c2'])
-      expect(out.data.form_only).toBe(1)
+      // HATCH39 — c2 has no client row AND no public-form touch: not a form-only lead either.
+      expect(out.data.contacts.map((c) => c.id)).toEqual(['c1'])
+      expect(out.data.form_only).toBe(0)
       expect(out.data.skipped_no_contact).toBe(2)
       expect(logWarn.mock.calls.filter((c) => c[1] === 'client contact missing')).toEqual([['un1t-pipeline', 'client contact missing', { locationId: HATCH, count: 2 }]])
       // nothing missing → no log, count 0
@@ -1635,5 +1635,22 @@ describe('HATCH39 — pipelineInputs: paid-trial products and form-only contacts
     const { db } = makeDb(w)
     const counts = await un1tOnlineReads.membershipCounts(db, HATCH)
     expect(counts.class_packs).toBe(0)
+  })
+})
+
+
+// HATCH39 security review — a form-only lead needs positive evidence of an
+// enquiry (a public-form touch, last_lead_source_at); "no account" alone is not
+// one. 45 of Hatch's 68 account-less Waitlist cards were race signups.
+describe('HATCH39 — form-only requires a public-form touch', () => {
+  const contact = (over = {}) => ({ id: 'c1', name: 'Buyer', email: 'b@example.test', location_id: HATCH, pipeline_dismissed_at: null, last_lead_source_at: null, created_at: '2026-10-17T09:00:00Z', ...over })
+  it('a Hatch contact with no account and no touch (a race signup) is NOT in the population; one with a touch is', async () => {
+    const { db } = makeDb({
+      un1t_clients: [], un1t_subscriptions: [], un1t_transactions: [], un1t_products: [], un1t_events: [], un1t_bookings: [], contact_studios: [],
+      contacts: [contact({ id: 'c-race', source: 'race_signup' }), contact({ id: 'c-form', last_lead_source_at: '2026-10-17T09:00:00Z' })],
+    })
+    const out = await un1tOnlineReads.pipelineInputs(db, HATCH, { now: NOW.getTime() })
+    expect(out.data.contacts.map((c) => c.id)).toEqual(['c-form'])
+    expect(out.data.form_only).toBe(1)
   })
 })

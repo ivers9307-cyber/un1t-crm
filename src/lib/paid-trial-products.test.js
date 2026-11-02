@@ -63,3 +63,11 @@ describe('paidTrialProductIdsFor', () => {
     expect(calls).toHaveLength(0)
   })
 })
+
+
+describe('paidTrialProductIdsFor — fail closed on a malformed studios list', () => {
+  it('throws when loadTrialStudios does not answer an array', async () => {
+    vi.mocked(loadTrialStudios).mockResolvedValue(null)
+    await expect(paidTrialProductIdsFor(dbWith().db, HATCH)).rejects.toThrow(/trial page/)
+  })
+})

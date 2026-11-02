@@ -13,7 +13,7 @@ import { resolveStudioDismissal } from './studio-pipeline-dismissal.js'
 import { matchesPush } from './glofox-notes.js'
 import { normaliseGender } from './gender.js'
 import { findOpenDealForPipeline, findOpenDealsAtLocation, findPrimaryPipeline } from './deal-lookup.js'
-import { PIPELINE_MODES } from '../../shared/pipelines/index.js'
+import { PIPELINE_MODES, getBoardModule } from '../../shared/pipelines/index.js'
 // PIPE3.7 — the router and its claims: at a studio running a claim board
 // (Stillorgan's €39 Trial / Programmes) a contact is placed on ONE of several
 // boards, and the trial's own credits are never a Class Pack.
@@ -549,6 +549,13 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
   if (!primary || primary.mode !== PIPELINE_MODES.DERIVED) {
     return { action: 'leave', deal_id: null, stage_slug: null }
   }
+  // HATCH39 — a primary board fed from un1t.online (Hatch Street since the
+  // Waitlist retired) is placed ONLY by the hourly un1t pass: this path's
+  // snapshot is Glofox-shaped (empty at Hatch) and would file everyone as
+  // dormant. The Cold route runs that pass itself (reclassifyUn1tBoardNow).
+  if (getBoardModule(primary.module)?.inputSource === 'un1t_online') {
+    return { action: 'leave', deal_id: null, stage_slug: null, reason: 'un1t_board' }
+  }
 
   // PIPE3.7 — at a studio running a claim board, the ROUTER places the contact
   // (shared/pipelines/router.js: Cold and Gympass, then a live €39 claim, then a
@@ -590,7 +597,7 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     targetSlug = route.slug
     targetBoard = route.boardKey === BOARD_KEYS.ACQUISITION
       ? primary
-      : (derivedBoards.find((b) => b.module === route.boardKey) || primary)
+      : (derivedBoards.find((b) => b.key === route.boardKey) || derivedBoards.find((b) => b.module === route.boardKey) || primary)
   } else {
     targetSlug = classifyContact(contactSnapshot || {})
   }

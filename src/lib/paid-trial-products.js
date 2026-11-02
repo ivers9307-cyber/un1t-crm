@@ -46,7 +46,9 @@ export async function paidTrialProductIdsFor(db, locationId) {
   const ids = new Set(paidTrialIdsFromSettings(data?.settings))
 
   const studios = await loadTrialStudios(db)
-  for (const entry of studios || []) {
+  // Fail closed: a list that is not a list is "could not read", never "no paid trials".
+  if (!Array.isArray(studios)) throw new Error('paid-trial products: trial page list unreadable')
+  for (const entry of studios) {
     if (!entry || entry.locationId !== locationId) continue
     if (entry.unreadable) throw new Error('paid-trial products: trial page unreadable for this studio')
     const fromBlock = clean(entry.block?.un1t_product_id)

@@ -2922,3 +2922,47 @@ describe('applyMemberSync — pack stamp on the skipBookings path (PIPE3 fix pas
     expect(packStamps(writes)).toHaveLength(1)
   })
 })
+
+
+// HATCH39 — once Hatch's primary is the derived un1t.online acquisition board,
+// the Glofox-shaped webhook path must leave it alone: the hourly un1t pass
+// places people there (the Cold route already runs reclassifyUn1tBoardNow).
+describe('ensureDealForContact — a un1t.online primary is left to the hourly pass (HATCH39)', () => {
+  function primaryDb(primary) {
+    const reads = []
+    const writes = []
+    const from = (table) => {
+      reads.push(table)
+      const c = {}
+      c.select = () => c; c.eq = () => c; c.order = () => c; c.limit = () => c; c.single = () => c; c.maybeSingle = () => c; c.in = () => c
+      c.update = () => { writes.push(table); return c }
+      c.insert = () => { writes.push(table); return c }
+      c.then = (resolve) => resolve({
+        data: table === 'pipelines' ? [primary] : table === 'pipeline_stages' ? [{ id: 's-dormant', slug: 'dormant' }] : [],
+        error: null,
+      })
+      return c
+    }
+    return { db: { from }, reads, writes }
+  }
+  it('a derived primary whose module reads un1t.online → leave, with no deals read or write', async () => {
+    const { db, reads, writes } = primaryDb({ id: 'p-h-acq', mode: 'derived', module: 'acquisition_un1t' })
+    const out = await ensureDealForContact(db, 'hatch', 'c1', { glofox_membership_status: 'lead' }, 'Lead')
+    expect(out).toEqual({ action: 'leave', deal_id: null, stage_slug: null, reason: 'un1t_board' })
+    expect(reads.filter((t) => t === 'deals')).toHaveLength(0)
+    expect(writes).toEqual([])
+  })
+  it('a manual primary is still a plain leave; a Glofox derived primary still places', async () => {
+    const manual = await ensureDealForContact(primaryDb({ id: 'p-wait', mode: 'manual', module: null }).db, 'hatch', 'c1', {}, 'Lead')
+    expect(manual).toEqual({ action: 'leave', deal_id: null, stage_slug: null })
+    const glofox = await ensureDealForContact(primaryDb({ id: 'p-acq', mode: 'derived', module: 'acquisition' }).db, 'still', 'c1', {}, 'Lead')
+    expect(glofox.action).toBe('create')
+  })
+  it('pre-loaded boards (opts.boards) are judged the same way', async () => {
+    const { db, writes } = primaryDb({ id: 'p-h-acq', mode: 'derived', module: 'acquisition_un1t' })
+    const boards = [{ id: 'p-h-acq', key: 'acquisition', module: 'acquisition_un1t', mode: 'derived', enabled: true, is_primary: true }]
+    const out = await ensureDealForContact(db, 'hatch', 'c1', {}, 'Lead', { boards, claims: { paid: null, programme: null } })
+    expect(out).toMatchObject({ action: 'leave', reason: 'un1t_board' })
+    expect(writes).toEqual([])
+  })
+})
