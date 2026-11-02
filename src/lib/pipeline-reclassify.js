@@ -43,7 +43,7 @@ const UN1T_INPUT = 'un1t_online'
 // The module a disabled row is dry-run as (includeDisabled, below): Hatch's
 // pre-740 acquisition row still named the Glofox module and was previewed as
 // un1t. PIPE3 / HATCH39 — a disabled row on one of these modules (Stillorgan's
-// claim boards before mig 798; Hatch's €39 board before mig 800) is dry-run as
+// claim boards before mig 798; Hatch's €39 board before mig 804) is dry-run as
 // itself.
 const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
 const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_un1t'])

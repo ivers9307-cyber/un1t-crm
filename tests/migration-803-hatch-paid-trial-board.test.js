@@ -41,6 +41,7 @@ const C = {
   packTrial: 'c0000000-0000-0000-0000-000000000005', // pack_customer_at from the €39 trial alone → cleared
   packReal: 'c0000000-0000-0000-0000-000000000006',  // pack_customer_at with a real pack too → kept
   still: 'c0000000-0000-0000-0000-000000000007',
+  stillTouch: 'c0000000-0000-0000-0000-000000000008', // Stillorgan-home, a Stillorgan form touch, no Hatch account, a Hatch Waitlist card → closes (no pass would ever touch an Acquisition card of theirs)
 }
 const D = {
   onAcqAcq: 'd0000000-0000-0000-0000-000000000001',
@@ -49,6 +50,9 @@ const D = {
   accountWait: 'd0000000-0000-0000-0000-000000000004',
   raceWait: 'd0000000-0000-0000-0000-000000000005',
   still: 'd0000000-0000-0000-0000-000000000006',
+  stillTouchWait: 'd0000000-0000-0000-0000-000000000007',
+  orphanA: 'd0000000-0000-0000-0000-000000000008',  // two open Hatch Acquisition deals with NO contact: the one-open-deal self-check must ignore them
+  orphanB: 'd0000000-0000-0000-0000-000000000009',
 }
 
 let db
@@ -100,8 +104,31 @@ const SCHEMA = `
   CREATE TABLE public.deals (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), contact_id uuid, location_id uuid,
     pipeline_id uuid REFERENCES public.pipelines(id), stage_id uuid REFERENCES public.pipeline_stages(id),
-    status text NOT NULL DEFAULT 'open', updated_at timestamptz NOT NULL DEFAULT '2026-10-01T00:00:00Z'
+    status text NOT NULL DEFAULT 'open', updated_at timestamptz NOT NULL DEFAULT '2026-10-01T00:00:00Z',
+    created_at timestamptz NOT NULL DEFAULT '2026-10-01T00:00:00Z'
   );
+  -- mig 598: one open deal per person per board
+  CREATE UNIQUE INDEX deals_one_open_per_contact_pipeline ON public.deals (contact_id, pipeline_id) WHERE status = 'open';
+  -- mig 736: contacts.pipeline_stage_slug follows the enabled primary, then any enabled board, else stays
+  CREATE OR REPLACE FUNCTION public.sync_contacts_pipeline_stage_slug() RETURNS trigger LANGUAGE plpgsql AS $fn$
+  DECLARE v_contact_id uuid; v_loc uuid; v_slug text;
+  BEGIN
+    v_contact_id := COALESCE(NEW.contact_id, OLD.contact_id);
+    IF v_contact_id IS NULL THEN RETURN COALESCE(NEW, OLD); END IF;
+    v_loc := (SELECT location_id FROM contacts WHERE id = v_contact_id);
+    SELECT ps.slug INTO v_slug FROM deals d JOIN pipeline_stages ps ON ps.id = d.stage_id JOIN pipelines p ON p.id = ps.pipeline_id
+     WHERE d.contact_id = v_contact_id AND d.status = 'open' AND p.location_id = v_loc AND p.enabled AND p.is_primary
+     ORDER BY d.created_at DESC, d.id DESC LIMIT 1;
+    IF v_slug IS NULL THEN
+      SELECT ps.slug INTO v_slug FROM deals d JOIN pipeline_stages ps ON ps.id = d.stage_id JOIN pipelines p ON p.id = ps.pipeline_id
+       WHERE d.contact_id = v_contact_id AND d.status = 'open' AND p.location_id = v_loc AND p.enabled
+       ORDER BY d.created_at DESC, d.id DESC LIMIT 1;
+    END IF;
+    IF v_slug IS NULL THEN RETURN COALESCE(NEW, OLD); END IF;
+    UPDATE contacts SET pipeline_stage_slug = v_slug WHERE id = v_contact_id AND pipeline_stage_slug IS DISTINCT FROM v_slug;
+    RETURN COALESCE(NEW, OLD);
+  END $fn$;
+  CREATE TRIGGER deals_sync_pipeline_stage_slug AFTER INSERT OR UPDATE OR DELETE ON public.deals FOR EACH ROW EXECUTE FUNCTION public.sync_contacts_pipeline_stage_slug();
 
   INSERT INTO public.pipelines (id, location_id, key, name, module, mode, is_primary, display_order, enabled) VALUES
     ('${P.hAcq}',  '${HATCH}', 'acquisition', 'Acquisition', 'acquisition_un1t', 'derived', false, 0, true),
@@ -121,7 +148,8 @@ const SCHEMA = `
     ('${C.race}',      '${HATCH}', NULL,                   NULL, 'waitlist_new_enquiry'),
     ('${C.packTrial}', '${HATCH}', NULL, '2026-10-20T10:05:00Z', NULL),
     ('${C.packReal}',  '${HATCH}', NULL, '2026-09-01T10:05:00Z', NULL),
-    ('${C.still}',     '${STILL}', NULL,                   NULL, 'new_lead');
+    ('${C.still}',     '${STILL}', NULL,                   NULL, 'new_lead'),
+    ('${C.stillTouch}','${STILL}', '2026-10-26T10:00:00Z', NULL, 'new_lead');
   INSERT INTO public.un1t_clients (location_id, contact_id, un1t_user_id) VALUES
     ('${HATCH}', '${C.account}', 'u-account'), ('${HATCH}', '${C.packTrial}', 'u-pt'), ('${HATCH}', '${C.packReal}', 'u-pr');
   INSERT INTO public.un1t_transactions (location_id, contact_id, un1t_user_id, product_id, product_type, amount_cents, remote_created_at) VALUES
@@ -134,7 +162,10 @@ const SCHEMA = `
     ('${D.formWait}',   '${C.form}',    '${HATCH}', '${P.hWait}', '${S.hWaitNew}'),
     ('${D.accountWait}','${C.account}', '${HATCH}', '${P.hWait}', '${S.hWaitNew}'),
     ('${D.raceWait}',   '${C.race}',    '${HATCH}', '${P.hWait}', '${S.hWaitNew}'),
-    ('${D.still}',      '${C.still}',   '${STILL}', '${P.sAcq}',  '${S.sNew}');
+    ('${D.still}',      '${C.still}',   '${STILL}', '${P.sAcq}',  '${S.sNew}'),
+    ('${D.stillTouchWait}', '${C.stillTouch}', '${HATCH}', '${P.hWait}', '${S.hWaitNew}'),
+    ('${D.orphanA}',    NULL,           '${HATCH}', '${P.hAcq}',  '${S.hNew}'),
+    ('${D.orphanB}',    NULL,           '${HATCH}', '${P.hAcq}',  '${S.hNew}');
 `
 
 async function fresh() { db = new PGlite(); await runSql(SCHEMA) }
@@ -195,10 +226,24 @@ describe('mig 803 — behaviour (PGlite)', () => {
     expect(await deal(D.formWait)).toMatchObject({ status: 'open', pipeline_id: P.hAcq, stage_id: S.hNew })
     expect(await deal(D.accountWait)).toMatchObject({ status: 'open', pipeline_id: P.hAcq, stage_id: S.hNew })
     expect(await deal(D.raceWait)).toMatchObject({ status: 'lost', pipeline_id: P.hWait })
+    // a Stillorgan-home person with only a Stillorgan form touch gets no Hatch card: the Hatch pass never loads them
+    expect(await deal(D.stillTouchWait)).toMatchObject({ status: 'lost', pipeline_id: P.hWait })
     expect(await q(`SELECT count(*)::int AS n FROM public.deals WHERE pipeline_id = $1 AND status = 'open'`, [P.hWait])).toEqual([{ n: 0 }])
+    // the two contact-less Acquisition deals are not a "two open deals per person" failure
+    expect(await deal(D.orphanA)).toMatchObject({ status: 'open' })
     // one open deal per person at Hatch
     const dup = await q(`SELECT contact_id FROM public.deals WHERE location_id = $1 AND status = 'open' GROUP BY contact_id HAVING count(*) > 1`, [HATCH])
-    expect(dup).toEqual([])
+    expect(dup.filter((r) => r.contact_id !== null)).toEqual([])
+  })
+  it('contacts.pipeline_stage_slug re-derives off the acquisition deal (mig 736), and a person left with no card loses the retired board\'s slug', async () => {
+    await fresh(); await runSql(mig803())
+    const slug = async (id) => (await q(`SELECT pipeline_stage_slug FROM public.contacts WHERE id = $1`, [id]))[0].pipeline_stage_slug
+    expect(await slug(C.onAcq)).toBe('first_class')
+    expect(await slug(C.form)).toBe('new_lead')
+    expect(await slug(C.account)).toBe('new_lead')
+    expect(await slug(C.race)).toBeNull()
+    expect(await slug(C.stillTouch)).toBe('new_lead')   // their own studio's slug, untouched
+    expect(await slug(C.still)).toBe('new_lead')
   })
   it('seeds settings.pipelines.paid_trial.un1t_product_ids once, keeping sibling keys and a hand-edited list', async () => {
     await fresh(); await runSql(mig803())

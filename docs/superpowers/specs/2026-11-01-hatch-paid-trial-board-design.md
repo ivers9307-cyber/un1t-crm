@@ -115,8 +115,8 @@ A second migration enables `paid_trial` after Richard reads the dry run (`includ
 
 ## Rollout
 
-1. Apply the cutover migration (Waitlist retired, 72 cards moved, 108 closed, `paid_trial` seeded disabled). Hatch keeps working on the acquisition board alone.
-2. Merge and deploy the code (OTA to staff phones: nothing in `mobile/` changes, but `shared/pipelines/` does, a no-op publish).
+1. Merge and deploy the code first (OTA to staff phones: nothing in `mobile/` changes, but `shared/pipelines/` does, a no-op publish). Against pre-cutover data it is a no-op: the Waitlist is still the manual primary, so the `ensureDealForContact` fence never fires and `placeWaitlistEntry` runs as today; the pass's live boards are `{acquisition}`, so the router equals today's classify; the only new behaviour is a New Leads card for the 22 Hatch-home form-only enquiries who still hold a Waitlist card, which step 2 closes as the duplicate.
+2. Apply the cutover migration (Waitlist retired: 108 cards closed as duplicates, 27 moved to New Leads, 45 race signups closed; Acquisition primary; `paid_trial` seeded disabled). Deploy-first matters: the old code has no fence, so with Acquisition already the derived primary a `/api/public/class-booking` or trial-purchase `placeContactNow` at Hatch would place a Glofox-shaped card until the next hourly pass (the anti-goal above; bounded and self-healing, but avoidable).
 3. Dry run on Hatch with `include_disabled: ['paid_trial']`; Richard reads `board_histogram` and `movement_matrix` (expect every live €39 buyer to leave Class Pack / 1st Class etc. for the €39 board).
 4. Enable migration; the next hourly pass moves the cards.
 

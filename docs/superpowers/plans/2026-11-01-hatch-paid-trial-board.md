@@ -27,7 +27,7 @@
 
 1. **A €39 buyer with leftover unlimited credits on day 15**: must be Trial Done on the €39 board (then Dormant after 60 quiet days), never `credit_member`/`pack_member`, never Converted by their own purchase. Pinned in Task 1.
 2. **A form-only enquiry whose contact row is old but whose latest form submission is recent**: New Leads, dated at the submission. Pinned in Task 3.
-3. **The cutover leaves exactly one open deal per Waitlist person** (108 closed, 72 moved, none left open), and `contacts.pipeline_stage_slug` re-derives off the acquisition deal. Pinned in Task 6.
+3. **The cutover leaves exactly one open deal per Waitlist person** (108 closed as duplicates, 27 moved, 45 race signups closed, none left open), and `contacts.pipeline_stage_slug` re-derives off the acquisition deal. Pinned in Task 6.
 4. **`ensureDealForContact` at Hatch after the primary flip** writes nothing (fence on the primary module's `inputSource`); the Cold route still re-places through `reclassifyUn1tBoardNow`. Pinned in Task 5.
 5. **Free-trial eligibility for a €39 buyer is unchanged** (still ineligible, reason `paid_trial`), and Mia's trial-done runner still treats them as a purchaser. Pinned in Task 2.
 
@@ -215,7 +215,7 @@ Expected: PASS.
 
 - `docs/architecture/REFERENCE.md`: a paragraph after the PIPE3 one (Hatch: two boards, the paid-trial product set, form-only leads, Waitlist retired 1 Nov 2026). `CLAUDE.md`: one line appended to the PIPE3 invariant: at a un1t.online studio a paid-trial product (`paidTrialProductIdsFor`) is never a pack on any read, and `ensureDealForContact` never places at a studio whose primary is a un1t board.
 - Commit spec + plan + docs. CI mirror (expect the same three local-only guard failures), `npm run build`. Push, `gh pr create`, changelog entry `docs/changelog/entries/<PR>.md`.
-- Rollout: apply 799 (`get_advisors`); merge/deploy; dry run `POST /api/admin/pipeline-reclassify { location_id: Hatch, dry_run: true, include_disabled: ['paid_trial'] }` → Richard reads `board_histogram` / `movement_matrix`; on his go apply 804; the next hourly un1t pass moves the cards.
+- Rollout: merge/deploy FIRST (a no-op on pre-cutover data), then apply 803 (`get_advisors`); dry run `POST /api/admin/pipeline-reclassify { location_id: Hatch, dry_run: true, include_disabled: ['paid_trial'] }` → Richard reads `board_histogram` / `movement_matrix`; on his go apply 804; the next hourly un1t pass moves the cards.
 
 ## Self-review notes
 

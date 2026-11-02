@@ -3,11 +3,14 @@
 -- setting, and the pack-stamp clear.
 -- Spec: docs/superpowers/specs/2026-11-01-hatch-paid-trial-board-design.md
 --
--- Apply BEFORE the HATCH39 code deploys. Everything here is safe on the old
--- code: a disabled board renders nowhere, the Waitlist's cards are closed or
--- moved onto the acquisition board, and the acquisition board was already the
--- one the hourly un1t pass placed. Mig 804 enables the €39 board after the dry
--- run (spec, Rollout).
+-- Apply AFTER the HATCH39 code deploys (spec, Rollout). The new code is a
+-- no-op on pre-cutover data (the Waitlist is still the manual primary, so the
+-- ensureDealForContact fence never fires and the pass's one live board is
+-- Acquisition, where the router equals today's classify). The OLD code has no
+-- fence: with Acquisition already the derived primary, a placeContactNow at
+-- Hatch (public class booking, trial purchase) would place a Glofox-shaped card
+-- until the next hourly pass. A disabled board renders nowhere; mig 804 enables
+-- the €39 board after the dry run.
 --
 -- WHY. Hatch sells two trials through un1t.online: the free 3-class trial
 -- (today's Acquisition board) and the €39 14-day trial, which the CRM showed
@@ -16,14 +19,18 @@
 -- (shared/pipelines/paid-trial.js), fed from the un1t mirror.
 --
 -- THE WAITLIST (Richard, 1 Nov 2026: "delete the waitlist board"). 180 open
--- cards, every one still in New Enquiry, none ever moved. Of them: 108 people
--- are already on the Acquisition board (their Waitlist card closes); the rest
--- MOVE to Acquisition at New Leads when the person has a un1t.online account
--- (the next hourly pass re-places them) or a public-form touch
--- (last_lead_source_at: a form-only enquiry the pass now keeps, HATCH39), and
--- CLOSE when they have neither — 45 of them are race signups, and a race entry
--- alone is not a lead (CROSSOVERDEAL.1). A board is retired, never deleted:
--- enabled = false, stages and closed deals kept.
+-- cards, every one still in New Enquiry, none ever moved. Measured live on
+-- 2 Nov 2026: 108 people are already on the Acquisition board (their Waitlist
+-- card closes as the duplicate); 27 MOVE to Acquisition at New Leads — anyone
+-- with a un1t.online account at Hatch (the next hourly pass re-places them),
+-- or a HATCH-HOME contact with a public-form touch (last_lead_source_at: a
+-- form-only enquiry the pass now keeps, HATCH39; a sibling-studio contact with
+-- a touch is never loaded by the Hatch pass, so a card for them would sit on
+-- New Leads for ever); 45 CLOSE with no card — all race signups, and a race
+-- entry alone is not a lead (CROSSOVERDEAL.1). A person left with no open
+-- Hatch deal also drops the retired board's pipeline_stage_slug (mig 736's
+-- trigger never NULLs a slug). A board is retired, never deleted: enabled =
+-- false, stages and closed deals kept.
 --
 -- is_primary MOVES, deliberately and once: the Waitlist was Hatch's primary
 -- (mig 598); Acquisition takes it (contacts.pipeline_stage_slug re-derives off
@@ -31,9 +38,10 @@
 -- pipelines_one_primary_per_location holds because the Waitlist is cleared
 -- first, in the same transaction.
 --
--- IDEMPOTENT: every insert conflict-targets its natural key and never touches
--- `enabled`/`is_primary` on a re-run; the settings seed writes only when the
--- key is absent; a second run finds no open Waitlist card and moves nothing.
+-- IDEMPOTENT (until mig 804 enables the board; forward-only after that): every
+-- insert conflict-targets its natural key and never touches `enabled`/
+-- `is_primary` on a re-run; the settings seed writes only when the key is
+-- absent; a second run finds no open Waitlist card and moves nothing.
 --
 -- grant: none (no new relation)
 
@@ -126,26 +134,37 @@ BEGIN
       RETURNING d.id)
     SELECT count(*) INTO v_closed_dup FROM closed;
 
-    -- (b) an account, or a public-form touch: the card MOVES to New Leads.
+    -- (b) a Hatch account, or a Hatch-home contact with a public-form touch:
+    --     the card MOVES to New Leads (both populations the hourly pass loads).
     WITH moved AS (
       UPDATE public.deals d
          SET pipeline_id = v_acq, stage_id = v_new_stage
        WHERE d.pipeline_id = v_wait AND d.status = 'open'
          AND EXISTS (SELECT 1 FROM public.contacts c
                       WHERE c.id = d.contact_id
-                        AND (c.last_lead_source_at IS NOT NULL
+                        AND ((c.last_lead_source_at IS NOT NULL AND c.location_id = v_hatch)
                              OR EXISTS (SELECT 1 FROM public.un1t_clients u
                                          WHERE u.contact_id = c.id AND u.location_id = v_hatch)))
       RETURNING d.id)
     SELECT count(*) INTO v_moved FROM moved;
 
-    -- (c) neither (a race signup): no card → lost.
+    -- (c) neither (a race signup, or a sibling-studio contact): no card → lost.
     WITH closed AS (
       UPDATE public.deals d
          SET status = 'lost'
        WHERE d.pipeline_id = v_wait AND d.status = 'open'
       RETURNING d.id)
     SELECT count(*) INTO v_closed_none FROM closed;
+
+    -- A Hatch-home person with no open Hatch deal left drops the retired
+    -- board's slug: mig 736's trigger re-derives a slug only onto a live board
+    -- and never NULLs one, so the 45 would carry 'waitlist_new_enquiry' for ever.
+    UPDATE public.contacts c
+       SET pipeline_stage_slug = NULL
+     WHERE c.location_id = v_hatch
+       AND c.pipeline_stage_slug IN (SELECT slug FROM public.pipeline_stages WHERE pipeline_id = v_wait)
+       AND NOT EXISTS (SELECT 1 FROM public.deals d
+                        WHERE d.contact_id = c.id AND d.location_id = v_hatch AND d.status = 'open');
 
     SELECT count(*) INTO v_n FROM public.deals WHERE pipeline_id = v_wait AND status = 'open';
     IF v_n <> 0 THEN
@@ -188,7 +207,7 @@ BEGIN
   END IF;
   -- Every moved card sits on Acquisition at New Leads; one open deal per person at Hatch.
   IF EXISTS (
-    SELECT 1 FROM public.deals WHERE location_id = v_hatch AND status = 'open'
+    SELECT 1 FROM public.deals WHERE location_id = v_hatch AND status = 'open' AND contact_id IS NOT NULL
      GROUP BY contact_id HAVING count(*) > 1
   ) THEN
     RAISE EXCEPTION 'HATCH39.5: a Hatch contact holds two open deals after the cutover';
