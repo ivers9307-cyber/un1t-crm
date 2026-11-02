@@ -7,6 +7,7 @@ import { Archivo, Archivo_Black } from 'next/font/google'
 import { createServerClient } from '@/lib/supabase'
 import { formatSaleDeadline } from '@/lib/sale-offers'
 import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
+import { storefrontTitle } from '@/lib/offers-storefront'
 import './offers.css'
 import { displayZoneFor } from '@/lib/display-zone'
 
@@ -27,12 +28,10 @@ export async function generateMetadata() {
     .select('category')
     .eq('active', true)
     .eq('location_id', homeId || NO_HOME_LOCATION_ID)
+  // OFFERS.8 — one rule with the page's hero (src/lib/offers-storefront.js).
   const cats = new Set((data || []).map((o) => o.category))
-  const giftOnly = cats.size > 0 && cats.size === 1 && cats.has('gift_card')
   return {
-    title: giftOnly
-      ? 'Gift Cards — UN1T Stillorgan'
-      : 'Lock In Your Membership — UN1T Stillorgan',
+    title: storefrontTitle(cats),
     robots: { index: false, follow: false },
   }
 }

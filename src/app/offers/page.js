@@ -14,6 +14,7 @@ import { createServerClient } from '@/lib/supabase'
 import { offerIsOpen, offerHasDeadline, formatEuro } from '@/lib/sale-offers'
 import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import SaleCountdown from '@/components/offers/SaleCountdown'
+import { heroFor, CATEGORY_ORDER } from '@/lib/offers-storefront'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,8 +24,7 @@ const CATEGORY_META = {
   membership: { title: 'Memberships', tag: 'Paid upfront' },
   class_pack: { title: 'Class Packs', tag: 'Stock up · train on your schedule' },
 }
-// Display order. A category with no active rows renders nothing at all.
-const CATEGORY_ORDER = ['gift_card', 'membership', 'class_pack']
+// Display order + hero copy: src/lib/offers-storefront.js (OFFERS.8).
 
 // The big numeral at the top of a card. For a gift card the VALUE is the
 // headline — there is no term to state.
@@ -90,26 +90,6 @@ function SectionHead({ idx, title, tag }) {
       <span style={{ fontSize: 12, color: '#8a8a8a', letterSpacing: '.18em', textTransform: 'uppercase', marginLeft: 'auto' }}>{tag}</span>
     </div>
   )
-}
-
-// Hero + marquee follow the storefront, not the calendar: a gift-card-only
-// storefront gets gift copy and NO countdown.
-function heroFor(offers) {
-  const giftOnly = offers.length > 0 && offers.every((o) => o.category === 'gift_card')
-  if (giftOnly) {
-    return {
-      marquee: 'UN1T GIFT CARDS · TRAINING THEY WILL ACTUALLY USE · ',
-      line1: 'GIVE THE GIFT',
-      line2: 'OF TRAINING',
-      blurb: 'A UN1T gift card is coached strength and conditioning, 45 minutes at a time. Pick a value, pay in two minutes, and we will send you everything you need to hand it over.',
-    }
-  }
-  return {
-    marquee: 'LOCK IN YOUR MEMBERSHIP · ',
-    line1: 'LOCK IN YOUR',
-    line2: 'MEMBERSHIP',
-    blurb: 'Every plan comes with extra time or extra classes on the house. Pay once, train more, done.',
-  }
 }
 
 export default async function OffersPage() {
