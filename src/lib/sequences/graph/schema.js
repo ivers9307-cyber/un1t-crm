@@ -43,8 +43,17 @@ export const TRIGGER_TYPES = [
   'manual', 'audience_match', 'booking_created', 'first_booking', 'pipeline_stage_change', 'tag_added',
   'event_reminder', 'segment_added', 'segment_removed', 'membership_state_change', 'anniversary', 'inactivity',
   'race_registered', 'race_finished', 'order_completed', 'order_failed', 'order_abandoned',
-  'achievement_unlocked', 'webhook', 'contact_created', 'un1t_account_created', 'un1t_paid_trial_purchased',
+  'achievement_unlocked', 'webhook', 'contact_created', 'un1t_account_created', 'un1t_paid_trial_purchased', 'paid_trial_checkout_purchased',
 ]
+
+// STILL39SEQ.1 — booked_class_at_studio's optional window: absent = every
+// booking ever (as before); else a whole number of days from 1 to 365.
+export function bookedWithinDaysError(value) {
+  if (value === undefined || value === null || value === '') return null
+  const n = Number(value)
+  if (!Number.isInteger(n) || n < 1 || n > 365) return 'branch "booked a class" window must be a whole number of days from 1 to 365'
+  return null
+}
 
 export const TRIGGER_SOURCE_ID = 'trigger'
 

@@ -245,7 +245,7 @@ describe('evaluateBranchPredicate', () => {
           const ops = []
           calls[table]?.push(ops)
           const builder = {}
-          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit']) {
+          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit', 'gte']) {
             builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
           }
           builder.then = (onF, onR) => Promise.resolve(result[table] || { data: [], error: null }).then(onF, onR)
@@ -280,6 +280,40 @@ describe('evaluateBranchPredicate', () => {
     it('is false when the contact has neither a booking nor a live request at the studio', async () => {
       const db = recordingDb()
       expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    // STILL39SEQ.1 — within_days: only a class in the last N days or still to
+    // come (and a request made in the last N days) counts, so an ex-member's
+    // old bookings do not read as "booked" for a trial they just bought.
+    describe('within_days', () => {
+      const NOW = Date.parse('2026-11-03T12:00:00Z')
+      const since = new Date(NOW - 8 * 86_400_000).toISOString()
+
+      it('narrows both reads to the window', async () => {
+        const db = recordingDb()
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: { ...pred, within_days: 8 }, locationId: 'loc-st', nowMs: NOW })).toBe(false)
+        expect(db.calls.class_bookings[0]).toContainEqual(['gte', 'starts_at', since])
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['gte', 'created_at', since])
+      })
+
+      it('is true for a booking inside the window', async () => {
+        const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: { ...pred, within_days: 8 }, locationId: 'loc-st', nowMs: NOW })).toBe(true)
+      })
+
+      it('without within_days, reads every booking as before (no window)', async () => {
+        const db = recordingDb()
+        await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-st', nowMs: NOW })
+        expect(db.calls.class_bookings[0].some(([m]) => m === 'gte')).toBe(false)
+        expect(db.calls.class_booking_requests[0].some(([m]) => m === 'gte')).toBe(false)
+      })
+
+      it('throws on a within_days that is not a whole number from 1 to 365', async () => {
+        for (const bad of [0, -1, 1.5, 366, 'x']) {
+          await expect(steps.evaluateBranchPredicate(recordingDb(), { contact, predicate: { ...pred, within_days: bad }, locationId: 'loc-st', nowMs: NOW }))
+            .rejects.toThrow(/within_days/)
+        }
+      })
     })
 
     it('throws without the sequence studio rather than guessing', async () => {

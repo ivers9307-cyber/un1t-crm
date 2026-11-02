@@ -1,7 +1,7 @@
 // FLOW-GRAPH.2 — semantic validation of a flow graph. Shared by the
 // builder (inline red flags), the agent (self-correct loop), and publish
 // (the gate). Pure. Returns { ok, errors: [{ code, nodeId?, message }] }.
-import { parseGraphShape, TRIGGER_SOURCE_ID, BRANCH_PREDICATE_TYPES } from './schema.js'
+import { parseGraphShape, TRIGGER_SOURCE_ID, BRANCH_PREDICATE_TYPES, bookedWithinDaysError } from './schema.js'
 import { urlButtonStepBlock } from '../../whatsapp-template-buttons.js'
 
 // TDSEQ.1 — the runner throws on a predicate it cannot evaluate (and retries
@@ -12,6 +12,10 @@ function branchPredicateError(predicate) {
   if (predicate.type === 'in_pipeline_stage_at_studio') {
     const stages = Array.isArray(predicate.stages) ? predicate.stages.filter((s) => String(s ?? '').trim()) : []
     if (stages.length === 0) return 'branch needs at least one pipeline stage'
+  }
+  if (predicate.type === 'booked_class_at_studio') {
+    const err = bookedWithinDaysError(predicate.within_days)
+    if (err) return err
   }
   return null
 }

@@ -514,5 +514,9 @@ describe('Trigger list offers the €39 purchase (PAIDTRIALTRIGGER.1)', () => {
     const opt = Array.from(select.options).find((o) => o.value === 'un1t_paid_trial_purchased')
     expect(opt).toBeTruthy()
     expect(opt.textContent).toMatch(/€39/)
+    // STILL39SEQ.1 — the checkout (Glofox studio) purchase trigger sits beside it.
+    const checkout = Array.from(select.options).find((o) => o.value === 'paid_trial_checkout_purchased')
+    expect(checkout).toBeTruthy()
+    expect(checkout.textContent).toMatch(/€39.*checkout/)
   })
 })

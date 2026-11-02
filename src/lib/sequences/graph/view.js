@@ -58,7 +58,9 @@ function describePredicate(p) {
     case 'has_tag': return `Has tag “${p.tag ?? ''}”`
     case 'field_equals': return `${p.field ?? 'field'} = ${p.value ?? ''}`
     case 'field_in': return `${p.field ?? 'field'} in [${(p.values || []).join(', ')}]`
-    case 'booked_class_at_studio': return 'Has booked a class at this studio'
+    case 'booked_class_at_studio': return p.within_days
+      ? `Has booked a class at this studio in the last ${p.within_days} days or upcoming`
+      : 'Has booked a class at this studio'
     case 'in_pipeline_stage_at_studio': return `In stage ${(p.stages || []).join(' or ') || '(none)'} at this studio`
     case 'whatsapp_reply_since_enrolment': return 'Replied on WhatsApp since this flow began'
     default: return humanise(p.type)
@@ -94,6 +96,7 @@ const TRIGGER_LABELS = {
   contact_created: () => 'When a new lead is created',
   un1t_account_created: () => 'When a new un1t.online account is created',
   un1t_paid_trial_purchased: () => 'When someone buys the €39 trial',
+  paid_trial_checkout_purchased: () => 'When someone buys the €39 trial on our checkout',
   booking_created: () => 'When a booking is created',
   pipeline_stage_change: (c) => c?.to_stage ? `When pipeline stage becomes ${c.to_stage}` : 'When pipeline stage changes',
   tag_added: (c) => c?.tag ? `When the tag “${c.tag}” is added` : 'When a tag is added',

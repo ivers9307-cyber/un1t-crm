@@ -295,10 +295,15 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
             </p>
           )}
           {ptype === 'booked_class_at_studio' && (
-            <p className="text-xs text-un1t-subtle">
-              Yes when the contact has a class booking at this studio from any booking system
-              (Glofox or un1t.online), or a booking request from the website still being processed.
-            </p>
+            <>
+              <p className="text-xs text-un1t-subtle">
+                Yes when the contact has a class booking at this studio from any booking system
+                (Glofox or un1t.online), or a booking request from the website still being processed.
+              </p>
+              <Labeled label="Only count recent bookings (days, optional)" hint="Leave empty to count every booking ever. With a number, only a class in that many past days or still to come counts, so an ex-member's old bookings are ignored.">
+                <Text value={p.within_days ?? ''} onChange={v => setPred({ within_days: String(v).trim() === '' ? undefined : Number(v) })} placeholder="e.g. 8" />
+              </Labeled>
+            </>
           )}
           {ptype === 'has_tag' && (
             <>

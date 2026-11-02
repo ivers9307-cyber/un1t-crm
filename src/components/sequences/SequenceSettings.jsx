@@ -39,6 +39,7 @@ const TRIGGER_OPTIONS = [
   ['contact_created', 'When a new lead is created'],
   ['un1t_account_created', 'When a new un1t.online account is created'],
   ['un1t_paid_trial_purchased', 'When someone buys the €39 trial (un1t.online)'],
+  ['paid_trial_checkout_purchased', 'When someone buys the €39 trial on our /trial checkout (Glofox studios)'],
   ['booking_created', 'When a booking is created'],
   ['first_booking', 'On a contact’s first booking'],
   ['pipeline_stage_change', 'When the pipeline stage changes'],

@@ -8,11 +8,16 @@
 // is counted in un1t_errors and does not. un1t_race_lost (an overlapping
 // sweep settled off the same payment) and un1t_password_pending (a paid buyer
 // whose set-password step did not finish) are counts, never faults.
+// STILL39SEQ.1 — last, the checkout €39 purchase sequence sweep (an ARM with
+// its own heartbeat row, 'trial-checkout-purchase-sweep'): stamped only when
+// the sweep returned ok, in its own try/catch, after the parent's stamp, so
+// neither can stop the other.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { claimAndProcessTrialPurchase, MAX_ATTEMPTS } from '@/lib/trial-purchase-queue'
 import { settleUn1tTrialPurchases } from '@/lib/trial-purchase-un1t-settle'
+import { sweepCheckoutTrialPurchases } from '@/lib/trial-checkout-purchase-sweep'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -21,6 +26,7 @@ export const maxDuration = 300
 
 const STALE_MS = 10 * 60_000
 const FRESH_ROW_GRACE_MS = 30_000
+const CHECKOUT_SWEEP_HEARTBEAT = 'trial-checkout-purchase-sweep'
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -74,8 +80,28 @@ export async function GET(request) {
       logError('process-trial-purchases', 'un1t settle sweep threw', { err: e })
     }
     if (stats.reap_failed === 0 && stats.un1t_read_failed === 0) await stampHeartbeat('process-trial-purchases', stats)
-    return NextResponse.json({ success: true, ...stats })
+    const sweep = await runCheckoutPurchaseSweep(db)
+    return NextResponse.json({ success: true, ...stats, ...sweep })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
+  }
+}
+
+// STILL39SEQ.1 — the arm. Returns its counts for the response; never throws.
+async function runCheckoutPurchaseSweep(db) {
+  try {
+    const res = await sweepCheckoutTrialPurchases(db)
+    if (res?.ok) {
+      const { locations, checked, enrolled, already, failed } = res
+      try {
+        await stampHeartbeat(CHECKOUT_SWEEP_HEARTBEAT, { locations, checked, enrolled, already, failed })
+      } catch (e) {
+        logError('process-trial-purchases', 'checkout purchase sweep stamp threw', { errName: e?.name ?? null })
+      }
+    }
+    return { checkout_seq_ok: Boolean(res?.ok), checkout_seq_checked: res?.checked || 0, checkout_seq_enrolled: res?.enrolled || 0 }
+  } catch (e) {
+    logError('process-trial-purchases', 'checkout purchase sweep threw', { errName: e?.name ?? null })
+    return { checkout_seq_ok: false, checkout_seq_checked: 0, checkout_seq_enrolled: 0 }
   }
 }
