@@ -12,7 +12,10 @@ import { writeContactTag } from './contact-tags'
 import { sendOpsAlert } from './ops-alerts'
 import { resolveZone, DEFAULT_TZ } from '@shared/zoned-time'
 
-export const OFFER_SALE_TAG = 'offer-sale-aug-2026'
+// The purchase tag is the buyer-suppression signal for the sale's emails.
+// Per sale: 'offer-sale-aug-2026' was the August weekend sale; November 2026
+// is the Tuesday-midnight class-pack sale (OFFERS.8).
+export const OFFER_SALE_TAG = 'offer-sale-nov-2026'
 
 export function offerIsOpen(offer, now = new Date()) {
   if (!offer?.active) return false
