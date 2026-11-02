@@ -51,6 +51,12 @@ export async function GET() {
       .select('ends_at')
       .eq('active', true)
       .eq('location_id', homeId || NO_HOME_LOCATION_ID)
+      // COUNTDOWN.2 — only DATED offers can drive the clock. Gift cards
+      // carry ends_at NULL and Postgres sorts NULLs FIRST on DESC, so with
+      // a live gift card the NULL row won this ordering and the route served
+      // the blank pixel for every live sale (the same trap the /offers
+      // layout already guards against).
+      .not('ends_at', 'is', null)
       .order('ends_at', { ascending: false })
       .limit(1)
       .maybeSingle()

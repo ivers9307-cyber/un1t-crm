@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // sale_offers filtered to it. The mock serves the offer row ONLY when the
 // query's location_id filter matches the row's location, so a foreign
 // location's offer is genuinely invisible rather than mocked away.
-const state = { endsAt: null, offerLocationId: 'loc-home', homeLocation: { id: 'loc-home' }, dbThrows: false, filters: {} }
+const state = { endsAt: null, offerLocationId: 'loc-home', homeLocation: { id: 'loc-home' }, dbThrows: false, filters: {}, extraRows: [], notNull: false }
 
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => {
@@ -14,13 +14,20 @@ vi.mock('@/lib/supabase', () => ({
       from(t) { this._table = t; state.filters = {}; return this },
       select() { return this },
       eq(col, val) { state.filters[col] = val; return this },
+      not(col, op, val) { if (col === 'ends_at' && op === 'is' && val === null) state.notNull = true; return this },
       order() { return this }, limit() { return this },
       maybeSingle() {
         if (this._table === 'locations') return Promise.resolve({ data: state.homeLocation })
         // No location filter at all = the row is visible: that is the leak the
         // foreign-location case guards against, so it fails if the .eq goes.
         const visible = state.endsAt && (state.filters.location_id === undefined || state.filters.location_id === state.offerLocationId)
-        return Promise.resolve({ data: visible ? { ends_at: state.endsAt } : null })
+        // COUNTDOWN.2 — model Postgres: ORDER BY ends_at DESC puts NULLs
+        // FIRST, so an evergreen row (gift card) wins the LIMIT 1 unless the
+        // query excluded it with .not('ends_at', 'is', null).
+        const rows = [...state.extraRows, ...(visible ? [{ ends_at: state.endsAt }] : [])]
+          .filter((r) => !state.notNull || r.ends_at != null)
+          .sort((a, b) => (a.ends_at == null ? -1 : b.ends_at == null ? 1 : b.ends_at.localeCompare(a.ends_at)))
+        return Promise.resolve({ data: rows[0] || null })
       },
     }
   },
@@ -36,6 +43,8 @@ beforeEach(() => {
   state.offerLocationId = 'loc-home'
   state.homeLocation = { id: 'loc-home' }
   state.dbThrows = false
+  state.extraRows = []
+  state.notNull = false
   buildCountdownGif.mockClear()
 })
 
@@ -48,6 +57,14 @@ async function expectBlankGif(res) {
 }
 
 describe('GET /api/public/countdown.gif', () => {
+  it('COUNTDOWN.2 — a live gift card (ends_at NULL) never blanks a live sale', async () => {
+    state.extraRows = [{ ends_at: null }]
+    const res = await GET()
+    const bytes = Buffer.from(await res.arrayBuffer())
+    expect(bytes.toString()).toBe('GIF89a-pretend-frames')
+    expect(buildCountdownGif).toHaveBeenCalledTimes(1)
+  })
+
   it('serves image/gif with cache defeated on every hop', async () => {
     const res = await GET()
     expect(res.headers.get('content-type')).toBe('image/gif')
