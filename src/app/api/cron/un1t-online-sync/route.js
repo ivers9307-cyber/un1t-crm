@@ -35,6 +35,7 @@ import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
 import { sweepUn1tWelcomes } from '@/lib/un1t-online-welcome'
+import { sweepPaidTrialPurchases } from '@/lib/un1t-paid-trial-purchases'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -52,6 +53,9 @@ const TOTAL_DEADLINE_MS = 285_000
 // UN1TWELCOME.5 — the welcome sweep: at most 30 s a studio, inside the same total.
 const WELCOME_CAP_MS = 30_000
 const WELCOME_HEARTBEAT = 'un1t-welcome-sweep'
+// PAIDTRIALTRIGGER.1 — the €39 purchase sweep: at most 30 s a studio, inside the same total.
+const PURCHASE_CAP_MS = 30_000
+const PURCHASE_HEARTBEAT = 'un1t-paid-trial-purchase-sweep'
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -158,6 +162,46 @@ export async function GET(request) {
       await stampHeartbeat(WELCOME_HEARTBEAT, welcomeTotals)
     } catch (err) {
       logError(CRON_NAME, 'welcome heartbeat stamp threw', { errName: err?.name ?? null })
+    }
+  }
+
+  // PAIDTRIALTRIGGER.1 — the €39 purchase sweep, an arm with a heartbeat row of
+  // its own (mig 805). Same shape as the welcome sweep above: after the sync
+  // heartbeat and payload are settled, each studio in its own try/catch and
+  // raced against a deadline, independent of the welcome sweep's outcome. Its
+  // row stamps only when every studio's sweep finished clean; zero eligible
+  // studios, or no active sequence, is clean.
+  let purchaseClean = true
+  const purchaseTotals = { locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 }
+  for (const locationId of okLocationIds) {
+    const left = Math.max(0, Math.min(PURCHASE_CAP_MS, TOTAL_DEADLINE_MS - (Date.now() - started)))
+    let timer
+    try {
+      const timedOut = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ timeout: true }), left)
+      })
+      const res = await Promise.race([sweepPaidTrialPurchases(db, locationId), timedOut])
+      if (res?.timeout) {
+        purchaseClean = false
+        logWarn(CRON_NAME, '€39 purchase sweep timed out', { locationId })
+      } else if (!res?.ok) {
+        purchaseClean = false
+      } else {
+        purchaseTotals.locations++
+        for (const k of ['checked', 'enrolled', 'already', 'failed']) purchaseTotals[k] += res[k] || 0
+      }
+    } catch (err) {
+      purchaseClean = false
+      logError(CRON_NAME, '€39 purchase sweep threw', { locationId, errName: err?.name ?? null })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  if (purchaseClean) {
+    try {
+      await stampHeartbeat(PURCHASE_HEARTBEAT, purchaseTotals)
+    } catch (err) {
+      logError(CRON_NAME, '€39 purchase heartbeat stamp threw', { errName: err?.name ?? null })
     }
   }
 

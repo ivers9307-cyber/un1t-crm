@@ -38,6 +38,7 @@ const TRIGGER_OPTIONS = [
   ['audience_match', 'Everyone who matches the audience below — and anyone who starts matching later'],
   ['contact_created', 'When a new lead is created'],
   ['un1t_account_created', 'When a new un1t.online account is created'],
+  ['un1t_paid_trial_purchased', 'When someone buys the €39 trial (un1t.online)'],
   ['booking_created', 'When a booking is created'],
   ['first_booking', 'On a contact’s first booking'],
   ['pipeline_stage_change', 'When the pipeline stage changes'],

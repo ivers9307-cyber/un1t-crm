@@ -24,6 +24,7 @@ vi.mock('@/lib/membership/locations-for-source', async (importOriginal) => ({
 }))
 vi.mock('@/lib/un1t-online-sync', () => ({ runUn1tSync: vi.fn() }))
 vi.mock('@/lib/un1t-online-welcome', () => ({ sweepUn1tWelcomes: vi.fn() }))
+vi.mock('@/lib/un1t-paid-trial-purchases', () => ({ sweepPaidTrialPurchases: vi.fn() }))
 vi.mock('@/lib/un1t-pipeline-cadence', () => ({ maybeReclassifyAfterSync: vi.fn(async () => ({ ran: false, reason: 'recent_run' })) }))
 
 import { GET, BUDGET_MS } from './route.js'
@@ -33,6 +34,7 @@ import { locationsWithSource } from '@/lib/membership/locations-for-source'
 import { runUn1tSync } from '@/lib/un1t-online-sync'
 import { maybeReclassifyAfterSync } from '@/lib/un1t-pipeline-cadence'
 import { sweepUn1tWelcomes } from '@/lib/un1t-online-welcome'
+import { sweepPaidTrialPurchases } from '@/lib/un1t-paid-trial-purchases'
 import { logError, logWarn } from '@/lib/log'
 
 const req = (token = 'test-secret') => ({
@@ -48,6 +50,7 @@ beforeEach(() => {
   stampTenantHeartbeat.mockReset().mockResolvedValue(undefined)
   maybeReclassifyAfterSync.mockReset().mockResolvedValue({ ran: false, reason: 'recent_run' })
   sweepUn1tWelcomes.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, crm_made: 0, waiting: 0, no_contact: 0, no_email: 0, failed: 0 })
+  sweepPaidTrialPurchases.mockReset().mockResolvedValue({ ok: true, skipped_no_sequence: false, checked: 0, enrolled: 0, already: 0, failed: 0 })
   h.discovery = found([])
 })
 
@@ -314,6 +317,62 @@ describe('GET /api/cron/un1t-online-sync', () => {
       runUn1tSync.mockResolvedValue({ ok: false, reason: 'auth', counts: {}, runId: 'r' })
       await GET(req())
       expect(sweepUn1tWelcomes).not.toHaveBeenCalled()
+    })
+  })
+
+  // PAIDTRIALTRIGGER.1 — the €39 purchase sweep, an arm with its own row (mig 805).
+  describe('€39 purchase sweep arm (PAIDTRIALTRIGGER.1)', () => {
+    const syncStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-online-sync')
+    const purchaseStamps = () => stampHeartbeat.mock.calls.filter((c) => c[0] === 'un1t-paid-trial-purchase-sweep')
+
+    it('sweeps every studio whose sync completed and stamps its own row with summed counts', async () => {
+      h.discovery = found([loc('hatch'), loc('other')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      sweepPaidTrialPurchases.mockResolvedValue({ ok: true, checked: 2, enrolled: 1, already: 1, failed: 0 })
+      await GET(req())
+      expect(sweepPaidTrialPurchases.mock.calls.map((c) => c[1])).toEqual(['hatch', 'other'])
+      expect(purchaseStamps()).toEqual([['un1t-paid-trial-purchase-sweep', expect.objectContaining({ locations: 2, checked: 4, enrolled: 2, already: 2, failed: 0 })]])
+      expect(syncStamps()).toHaveLength(1)
+    })
+
+    it('zero eligible studios still stamps', async () => {
+      await GET(req())
+      expect(purchaseStamps()).toHaveLength(1)
+    })
+
+    it('a sweep that is not ok, or throws, skips only its own stamp', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      sweepPaidTrialPurchases.mockResolvedValueOnce({ ok: false, failed: 1 })
+      let res = await GET(req())
+      expect(res.status).toBe(200)
+      expect(purchaseStamps()).toHaveLength(0)
+      expect(syncStamps()).toHaveLength(1)
+
+      stampHeartbeat.mockClear()
+      sweepPaidTrialPurchases.mockRejectedValueOnce(new Error('boom'))
+      res = await GET(req())
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({ success: true, locations_processed: 1 })
+      expect(purchaseStamps()).toHaveLength(0)
+      expect(syncStamps()).toHaveLength(1)
+      expect(logError).toHaveBeenCalled()
+    })
+
+    it('a failing welcome sweep does not stop the purchase sweep, and vice versa', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: true, counts: {}, runId: 'r' })
+      sweepUn1tWelcomes.mockRejectedValue(new Error('welcome down'))
+      await GET(req())
+      expect(sweepPaidTrialPurchases).toHaveBeenCalledTimes(1)
+      expect(purchaseStamps()).toHaveLength(1)
+    })
+
+    it('does not sweep a studio whose sync failed', async () => {
+      h.discovery = found([loc('hatch')])
+      runUn1tSync.mockResolvedValue({ ok: false, reason: 'auth', counts: {}, runId: 'r' })
+      await GET(req())
+      expect(sweepPaidTrialPurchases).not.toHaveBeenCalled()
     })
   })
 })

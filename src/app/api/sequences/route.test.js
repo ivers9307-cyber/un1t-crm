@@ -34,4 +34,14 @@ describe('POST /api/sequences', () => {
     expect(res.status).toBe(200)
     expect(insert).toHaveBeenCalledWith(expect.objectContaining({ trigger_type: 'un1t_account_created' }))
   })
+  it('accepts trigger_type un1t_paid_trial_purchased (PAIDTRIALTRIGGER.1)', async () => {
+    const insert = vi.fn(() => ({ select: () => ({ single: async () => ({ data: { id: 's2' }, error: null }) }) }))
+    createServerClient.mockReturnValue({ from: () => ({ insert }) })
+    const res = await POST(new Request('http://x/api/sequences', {
+      method: 'POST',
+      body: JSON.stringify({ name: '€39 purchase', trigger_type: 'un1t_paid_trial_purchased', location_id: LOC }),
+    }))
+    expect(res.status).toBe(200)
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ trigger_type: 'un1t_paid_trial_purchased' }))
+  })
 })

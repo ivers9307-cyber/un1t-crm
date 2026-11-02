@@ -14,6 +14,7 @@ const triggerLabels = {
   status_change: 'Status change', pipeline_stage_change: 'Pipeline stage change',
   membership_state_change: 'Membership state change', contact_created: 'New lead created',
   un1t_account_created: 'New un1t.online account',
+  un1t_paid_trial_purchased: '€39 trial bought',
   event_reminder: 'Event reminder', tag_added: 'Tag added',
   segment_added: 'Segment entered', segment_removed: 'Segment exited',
   race_registered: 'Race registered', race_finished: 'Race finished',

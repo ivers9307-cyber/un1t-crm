@@ -1012,3 +1012,47 @@ describe('triggerSequencesForUn1tAccountCreated', () => {
     expect(logError).toHaveBeenCalledWith('sequences', expect.any(String), { contactId: args.contactId, locationId: args.locationId, errName: 'Error' })
   })
 })
+
+// ── un1t_paid_trial_purchased (PAIDTRIALTRIGGER.1) ─────────────────
+describe('triggerSequencesForUn1tPaidTrialPurchased', () => {
+  const args = { contactId: 'c1', locationId: 'loc-1', transactionId: 'tx-1' }
+
+  it('enrols into each matching active €39-purchase sequence from step 0, the purchase as the source', async () => {
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-9', audience_filter: null }] } })
+    const res = await triggers.triggerSequencesForUn1tPaidTrialPurchased(db, args)
+    expect(res).toEqual({ ok: true, enrolled: 1 })
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 'seq-9',
+      contactIds: ['c1'],
+      sourceType: 'un1t_paid_trial_purchased',
+      sourceRef: 'tx-1',
+      startStepOrder: 0,
+    })
+  })
+
+  it('asks only for this studio\'s active sequences of this trigger type', async () => {
+    const db = mockDb({ email_sequences: { list: [] } })
+    await triggers.triggerSequencesForUn1tPaidTrialPurchased(db, args)
+    const seqBuilder = db.from.mock.results
+      .map((r, i) => ({ r: r.value, t: db.from.mock.calls[i][0] }))
+      .find((x) => x.t === 'email_sequences').r
+    expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'loc-1')
+    expect(seqBuilder.eq).toHaveBeenCalledWith('trigger_type', 'un1t_paid_trial_purchased')
+    expect(seqBuilder.eq).toHaveBeenCalledWith('status', 'active')
+  })
+
+  it('respects the audience, and reports a failed read as ok:false without its text', async () => {
+    contactMatchesSequenceAudience.mockResolvedValue(false)
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-9', audience_filter: { a: 1 } }] } })
+    expect(await triggers.triggerSequencesForUn1tPaidTrialPurchased(db, args)).toEqual({ ok: true, enrolled: 0 })
+    expect(enrolContacts).not.toHaveBeenCalled()
+
+    const bad = { from: () => {
+      const b = { select: () => b, eq: () => b, then: (f) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(f) }
+      return b
+    } }
+    const res = await triggers.triggerSequencesForUn1tPaidTrialPurchased(bad, args)
+    expect(res).toEqual({ ok: false, reason: 'sequences_unreadable' })
+    expect(JSON.stringify(logError.mock.calls)).not.toMatch(/boom/)
+  })
+})

@@ -19,6 +19,7 @@ import { describeNextStep } from '@/lib/sequences/run-history'
 const SOURCE_LABELS = {
   contact_created: 'New lead',
   un1t_account_created: 'New un1t.online account',
+  un1t_paid_trial_purchased: '€39 trial bought',
   manual: 'Manual enrolment',
   booking_created: 'Booking',
   first_booking: 'First booking',
