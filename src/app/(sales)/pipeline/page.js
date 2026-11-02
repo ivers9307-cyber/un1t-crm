@@ -190,7 +190,7 @@ export default async function PipelinePage(props) {
     const contactIds = perStage
       .filter((sg) => SIGNAL_SLUGS.has(sg.stage.slug))
       .flatMap((sg) => sg.rows.map((d) => d.contacts?.id).filter(Boolean))
-    const res = await loadUn1tCardSignals(db, { locationId, contactIds })
+    const res = await loadUn1tCardSignals(db, { locationId, contactIds, zone: zoneOfLocation(user.activeLocation) })
     if (res?.error) logWarn('pipeline-page', 'card signals read failed; board shown without them', { locationId, pipelineId: activePipeline.id })
     else signals = res?.signals ?? null
   }

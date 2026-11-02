@@ -43,6 +43,19 @@ describe('shapeCardSignals (pure)', () => {
       .toMatchObject({ trial_kind: 'free', trial_days_left: null, trial_ended_days: 3 })
     expect(shapeCardSignals({ nowMs: NOW, trialWindow: { kind: 'free', started_at: ago(7), ends_at: ago(0.1) } }).trial_ended_days).toBe(0)
   })
+  // HATCHCARD.4 — with the studio zone, days are CALENDAR days in that zone,
+  // so the count agrees with the date printed beside it.
+  it('with the studio zone: calendar days, so "15 Nov" two weeks out reads 13, and later today reads 0', () => {
+    const z = 'Europe/Dublin'
+    expect(shapeCardSignals({ nowMs: NOW, zone: z, trialWindow: { kind: 'paid', started_at: ago(1), ends_at: '2026-11-15T12:16:53Z' } }).trial_days_left).toBe(13)
+    expect(shapeCardSignals({ nowMs: NOW, zone: z, trialWindow: { kind: 'paid', started_at: ago(1), ends_at: '2026-11-02T20:00:00Z' } }).trial_days_left).toBe(0)
+    expect(shapeCardSignals({ nowMs: NOW, zone: z, trialWindow: { kind: 'paid', started_at: ago(1), ends_at: '2026-11-03T00:30:00Z' } }).trial_days_left).toBe(1)
+  })
+  it('with the studio zone: an ended trial counts calendar days since its end date', () => {
+    const z = 'Europe/Dublin'
+    expect(shapeCardSignals({ nowMs: NOW, zone: z, trialWindow: { kind: 'free', started_at: ago(10), ends_at: '2026-10-30T23:30:00Z' } }).trial_ended_days).toBe(3)
+    expect(shapeCardSignals({ nowMs: NOW, zone: z, trialWindow: { kind: 'free', started_at: ago(7), ends_at: '2026-11-02T09:00:00Z' } }).trial_ended_days).toBe(0)
+  })
   it('a trial with no known end: the kind only', () => {
     expect(shapeCardSignals({ nowMs: NOW, trialWindow: { kind: 'free', started_at: ago(2), ends_at: null } }))
       .toMatchObject({ trial_kind: 'free', trial_ends_at: null, trial_days_left: null, trial_ended_days: null })
@@ -194,7 +207,7 @@ describe('loadUn1tCardSignals', () => {
 
   it('returns a signal for every requested contact, from this studio\'s un1t rows only', async () => {
     const db = fakeDb(tables)
-    const { signals, error } = await loadUn1tCardSignals(db, { locationId: LOC, contactIds: ['c1', 'c2'], nowMs: NOW })
+    const { signals, error } = await loadUn1tCardSignals(db, { locationId: LOC, contactIds: ['c1', 'c2'], nowMs: NOW, zone: 'Europe/Dublin' })
     expect(error).toBeUndefined()
     expect(signals.get('c1')).toMatchObject({ classes_attended: 1, credits_left: 2, next_class_at: ahead(1), last_class_days: 3, wa_state: 'replied', wa_days: 2, trial_kind: 'paid', trial_days_left: 13 })
     // c2's rows are all at another studio: nothing known here

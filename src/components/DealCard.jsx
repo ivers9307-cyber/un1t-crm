@@ -53,6 +53,7 @@ function shortDate(iso, zone) {
 function trialChip(sig, zone) {
   if (!sig?.trial_kind) return null
   const name = sig.trial_kind === 'paid' ? '€39 trial' : 'Trial'
+  if (sig.trial_days_left === 0) return { text: `${name} ends today`, tone: TONE.warn }
   if (sig.trial_days_left != null) {
     const date = shortDate(sig.trial_ends_at, zone)
     const text = date ? `${name} ends ${date} · ${sig.trial_days_left}d left` : `${name} ends in ${sig.trial_days_left}d`
