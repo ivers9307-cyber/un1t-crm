@@ -36,6 +36,19 @@
 // stamped with a logError. A failed push reached nobody, so a retry cannot
 // re-alert anyone; a lost stamp after a delivered push can (a duplicate staff
 // push), and that is the direction CLAUDE.md asks us to err in.
+//
+// HANDOFFWAIT.1 — a handoff stamped by a BROADCAST is not a customer waiting.
+// A WhatsApp broadcast sent with "handle replies manually" (and every
+// one-person send) takes Mia off each thread by stamping agent_handed_off_at
+// (whatsapp.js pauseAgentOnThread) a few milliseconds after the message row is
+// written. The broadcast row carries no sent_by, so the sweep used to read the
+// thread as "handed off, nobody replied" and pushed managers "X has been waiting
+// since Mia handed off" for every recipient an hour later (13 Hatch pushes on
+// 2 Nov 2026, from a 16-person broadcast nobody had answered). Now, when a
+// broadcast message sits on the handoff stamp, the thread alerts only once the
+// customer has answered it, and the hour is counted from their answer. A real
+// Mia handoff (no broadcast on the stamp) is judged exactly as before, and a
+// failed read falls back to that judgement: an extra push beats a missed one.
 
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -60,6 +73,10 @@ const MIN_MS = 60_000
 // as the operator's own message — tolerate small write-order skew so their
 // message counts as the human reply it is.
 const TAKEOVER_SKEW_MS = 5_000
+// HANDOFFWAIT.1 — how far before the handoff stamp a broadcast message may sit
+// and still be the send that stamped it. pauseAgentOnThread runs right after
+// the message insert (measured gaps on 2 Nov 2026: 15 to 112 ms).
+export const BROADCAST_HANDOFF_WINDOW_MS = 60_000
 
 /** Resolve the per-location SLA in minutes (0/negative disables). Pure. */
 export function resolveHandoffSlaMinutes(settings) {
@@ -129,6 +146,21 @@ export function waitingLabel(handedOffAtMs, nowMs) {
   const h = Math.floor(mins / 60)
   const m = mins % 60
   return h ? `${h}h${m ? ` ${m}m` : ''}` : `${m}m`
+}
+
+/**
+ * HANDOFFWAIT.1 — a thread a broadcast handed over: is the customer waiting,
+ * and since when? Only an answer from the customer starts the clock. Pure.
+ * @returns {{ alert: boolean, reason?: string, waitingSinceMs?: number }}
+ */
+export function classifyBroadcastWait({
+  customerRepliedAtMs,
+  nowMs,
+  slaMinutes = HANDOFF_SLA_DEFAULT_MINUTES,
+} = {}) {
+  if (!customerRepliedAtMs) return { alert: false, reason: 'customer_not_waiting' }
+  if (nowMs - customerRepliedAtMs < slaMinutes * MIN_MS) return { alert: false, reason: 'within_sla' }
+  return { alert: true, waitingSinceMs: customerRepliedAtMs }
 }
 
 // ── MIA-BOARD.1 — handoff AUTO-RESOLVE ──────────────────────────────────────
@@ -309,6 +341,8 @@ const CHANNELS = [
     messagesTable: 'whatsapp_messages',
     pushCategory: 'whatsapp',
     handoffType: 'whatsapp_agent_handoff',
+    // HANDOFFWAIT.1 — whatsapp_messages.broadcast_id marks a broadcast send.
+    broadcastAware: true,
     // Operator send routes stamp sent_by; agent/sequence sends leave it null.
     // C106 (d): a reply typed in the studio's linked phone app is stored as
     // source 'app_echo' with no sent_by, and is a human reply too.
@@ -347,6 +381,40 @@ async function readHumanRepliedAtMs(db, channel, conversationId, handedOffAtMs) 
   return { atMs: row ? new Date(row.created_at).getTime() : null, error: null }
 }
 
+/**
+ * HANDOFFWAIT.1 — was this handoff stamped by a broadcast send, and has the
+ * customer answered since? Reads the broadcast message that sits on the stamp,
+ * then the customer's first message after it. Returns the read error rather
+ * than a guess; the caller falls back to the Mia-handoff judgement.
+ * @returns {Promise<{ broadcast: boolean, customerRepliedAtMs?: number|null, error: object|null }>}
+ */
+async function readBroadcastWait(db, channel, conversationId, handedOffAtMs) {
+  if (!channel.broadcastAware) return { broadcast: false, error: null }
+  const { data: sends, error: sendErr } = await db.from(channel.messagesTable)
+    .select('created_at')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'outbound')
+    .not('broadcast_id', 'is', null)
+    .gte('created_at', new Date(handedOffAtMs - BROADCAST_HANDOFF_WINDOW_MS).toISOString())
+    .lte('created_at', new Date(handedOffAtMs + TAKEOVER_SKEW_MS).toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (sendErr) return { broadcast: false, error: sendErr }
+  const send = Array.isArray(sends) ? sends[0] : null
+  if (!send) return { broadcast: false, error: null }
+
+  const { data: answers, error: answerErr } = await db.from(channel.messagesTable)
+    .select('created_at')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'inbound')
+    .gt('created_at', send.created_at)
+    .order('created_at', { ascending: true })
+    .limit(1)
+  if (answerErr) return { broadcast: true, error: answerErr }
+  const answer = Array.isArray(answers) ? answers[0] : null
+  return { broadcast: true, customerRepliedAtMs: answer ? new Date(answer.created_at).getTime() : null, error: null }
+}
+
 /** Active locations, or [] with the failure logged and counted (never a quiet run). */
 async function readActiveLocations(db, sweep, results) {
   const { data, error } = await db.from('locations')
@@ -365,7 +433,7 @@ async function readActiveLocations(db, sweep, results) {
  * conversation exactly once. Never throws.
  */
 export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
-  const results = { escalated: 0, skipped: 0, alert_failed: 0, gave_up: 0, reply_unread: 0, locations_unread: 0 }
+  const results = { escalated: 0, skipped: 0, alert_failed: 0, gave_up: 0, reply_unread: 0, locations_unread: 0, not_waiting: 0, broadcast_unread: 0 }
 
   const locations = await readActiveLocations(db, 'sla', results)
 
@@ -429,16 +497,45 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
           })
           if (!decision.breach) { results.skipped++; continue }
 
+          // HANDOFFWAIT.1 — a broadcast handover waits for the customer's answer
+          // (see the header). Unstamped when nobody is waiting yet, so a later
+          // answer still alerts.
+          const broadcastWait = await readBroadcastWait(db, channel, c.id, handedOffAtMs)
+          let broadcastRepliedAtMs = null
+          if (broadcastWait.error) {
+            results.broadcast_unread++
+            logWarn('handoff-sla', 'broadcast-handoff read failed; judged as a Mia handoff', {
+              channel: channel.name, conversationId: c.id, err: broadcastWait.error.message || String(broadcastWait.error),
+            })
+          } else if (broadcastWait.broadcast) {
+            const wait = classifyBroadcastWait({ customerRepliedAtMs: broadcastWait.customerRepliedAtMs, nowMs, slaMinutes })
+            if (!wait.alert) {
+              results.skipped++
+              if (wait.reason === 'customer_not_waiting') results.not_waiting++
+              continue
+            }
+            broadcastRepliedAtMs = wait.waitingSinceMs
+          }
+
           // C21 PUSHDONE.1 — send FIRST, stamp after (see the header).
           const contact = c.contacts || {}
           const who = contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'A customer'
+          let body
+          if (broadcastRepliedAtMs) {
+            const ago = waitingLabel(broadcastRepliedAtMs, nowMs)
+            body = replyUnconfirmed
+              ? `${who} answered your WhatsApp message ${ago} ago. We couldn't confirm whether anyone has replied, so please check the conversation.`
+              : `${who} answered your WhatsApp message ${ago} ago and nobody has replied yet.`
+          } else {
+            body = replyUnconfirmed
+              ? `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off. We couldn't confirm whether anyone has replied, so please check the conversation.`
+              : `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`
+          }
           let pushResult = null
           try {
             pushResult = await sendPushToRolesAtLocation(location.id, MANAGER_ROLES, {
-              title: `${channel.label} · still waiting after handoff`,
-              body: replyUnconfirmed
-                ? `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off. We couldn't confirm whether anyone has replied, so please check the conversation.`
-                : `${who} has been waiting ${waitingLabel(handedOffAtMs, nowMs)} since Mia handed off — nobody has replied yet.`,
+              title: broadcastRepliedAtMs ? `${channel.label} · customer waiting for a reply` : `${channel.label} · still waiting after handoff`,
+              body,
               category: channel.pushCategory,
               data: { type: channel.handoffType, conversation_id: c.id },
             })

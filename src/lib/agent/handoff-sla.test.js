@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyHandoffBreach,
+  classifyBroadcastWait,
   resolveHandoffSlaMinutes,
   shouldSweepLocation,
   waitingLabel,
@@ -93,5 +94,19 @@ describe('waitingLabel', () => {
     expect(waitingLabel(NOW - 90 * 60_000, NOW)).toBe('1h 30m')
     expect(waitingLabel(NOW - 2 * H, NOW)).toBe('2h')
     expect(waitingLabel(NOW - 23 * H, NOW)).toBe('23h')
+  })
+})
+
+// HANDOFFWAIT.1 — a broadcast handover waits on the customer's answer.
+describe('classifyBroadcastWait', () => {
+  it('nobody is waiting until the customer answers', () => {
+    expect(classifyBroadcastWait({ customerRepliedAtMs: null, nowMs: NOW, slaMinutes: 60 }))
+      .toEqual({ alert: false, reason: 'customer_not_waiting' })
+  })
+  it('the SLA runs from the answer, not the broadcast', () => {
+    expect(classifyBroadcastWait({ customerRepliedAtMs: NOW - 59 * 60_000, nowMs: NOW, slaMinutes: 60 }))
+      .toEqual({ alert: false, reason: 'within_sla' })
+    expect(classifyBroadcastWait({ customerRepliedAtMs: NOW - 2 * H, nowMs: NOW, slaMinutes: 60 }))
+      .toEqual({ alert: true, waitingSinceMs: NOW - 2 * H })
   })
 })

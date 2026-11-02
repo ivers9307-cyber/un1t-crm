@@ -20,7 +20,10 @@ const NOW = Date.parse('2026-09-28T12:00:00Z')
 // The conversations read honours `.is('handoff_escalated_at', null)`, and a
 // successful UPDATE applies to the in-memory row only when its `.is()` CAS
 // still holds, so several ticks can run against the same fake.
-function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = {}) {
+// HANDOFFWAIT.1 — `broadcastSends` answers the "broadcast message on the stamp"
+// read and `customerAnswers` the customer's-first-message read; `broadcastError`
+// fails only those two reads.
+function sweepDb({ convs, updateError = null, readErrors = {}, replies = [], broadcastSends = [], customerAnswers = [], broadcastError = null } = {}) {
   const updates = []
   const reads = [] // filters on each read, for the human-reply filter test (C106 d)
   const db = {
@@ -29,7 +32,7 @@ function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = 
       const read = { table, or: [], not: [] }
       reads.push(read)
       const b = {
-        select: () => b, lt: () => b, gte: () => b, neq: () => b,
+        select: () => b, lt: () => b, gte: () => b, neq: () => b, lte: () => b, gt: () => b,
         not: (...a) => { read.not.push(a); return b },
         or: (f) => { read.or.push(f); return b },
         order: () => b, limit: () => b,
@@ -47,7 +50,14 @@ function sweepDb({ convs, updateError = null, readErrors = {}, replies = [] } = 
           } else if (readErrors[table]) out = { data: null, error: readErrors[table] }
           else if (table === 'locations') out = { data: [{ id: 'loc-1', name: 'Studio', organization_id: null, settings: { customer_agent: { enabled: true } } }], error: null }
           else if (table === 'whatsapp_conversations') out = { data: (convs || []).filter(casHolds), error: null }
-          else if (table === 'whatsapp_messages') out = { data: replies, error: null }
+          else if (table === 'whatsapp_messages') {
+            const broadcastRead = read.not.some(([c]) => c === 'broadcast_id')
+            const answerRead = state.eqs.direction === 'inbound'
+            if ((broadcastRead || answerRead) && broadcastError) out = { data: null, error: broadcastError }
+            else if (broadcastRead) out = { data: broadcastSends, error: null }
+            else if (answerRead) out = { data: customerAnswers, error: null }
+            else out = { data: replies, error: null }
+          }
           else out = { data: [], error: null } // no Instagram threads
           return Promise.resolve(out).then(res, rej)
         },
@@ -286,5 +296,65 @@ describe('the WhatsApp human-reply read counts phone-app echoes (C106 d)', () =>
     const out = await runHandoffSlaSweep(db, { nowMs: NOW })
     expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
     expect(out).toMatchObject({ escalated: 0 })
+  })
+})
+
+// HANDOFFWAIT.1 — a broadcast sent with "handle replies manually" stamps the
+// handoff on every recipient's thread. Nobody is waiting until the customer
+// answers (13 Hatch pushes on 2 Nov 2026 for a broadcast nobody had answered).
+describe('a broadcast handover alerts only once the customer answers (HANDOFFWAIT.1)', () => {
+  const M = 60_000
+  // Handed off 2h ago, by a broadcast message written 50 ms before the stamp.
+  const broadcastConv = () => conv(2 * H)
+  const sendRow = () => [{ created_at: new Date(NOW - 2 * H - 50).toISOString() }]
+
+  it('no push and no stamp while the customer has not answered', async () => {
+    const thread = broadcastConv()
+    const { db, updates } = sweepDb({ convs: [thread], broadcastSends: sendRow() })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(stampOf(updates)).toBeUndefined()
+    expect(out).toMatchObject({ escalated: 0, skipped: 1, not_waiting: 1 })
+  })
+
+  it('an answer inside the SLA does not alert yet; the clock runs from the answer', async () => {
+    const { db } = sweepDb({ convs: [broadcastConv()], broadcastSends: sendRow(), customerAnswers: [{ created_at: new Date(NOW - 20 * M).toISOString() }] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(sendPushToRolesAtLocation).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ escalated: 0, skipped: 1, not_waiting: 0 })
+  })
+
+  it('an answer left unreplied past the SLA alerts, timed from the answer, without blaming Mia', async () => {
+    const thread = broadcastConv()
+    const { db } = sweepDb({ convs: [thread], broadcastSends: sendRow(), customerAnswers: [{ created_at: new Date(NOW - 75 * M).toISOString() }] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(out).toMatchObject({ escalated: 1 })
+    const [, , payload] = sendPushToRolesAtLocation.mock.calls[0]
+    expect(payload.title).toBe('WhatsApp · customer waiting for a reply')
+    expect(payload.body).toBe('Sam answered your WhatsApp message 1h 15m ago and nobody has replied yet.')
+    expect(payload.body).not.toMatch(/Mia/)
+    expect(thread.handoff_escalated_at).toBe(new Date(NOW).toISOString())
+  })
+
+  it('a Mia handoff (no broadcast on the stamp) is judged exactly as before', async () => {
+    const { db } = sweepDb({ convs: [conv()] })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(out).toMatchObject({ escalated: 1, not_waiting: 0 })
+    expect(sendPushToRolesAtLocation.mock.calls[0][2].body).toMatch(/since Mia handed off/)
+  })
+
+  it('a failed broadcast read falls back to the Mia-handoff alert, said at warn', async () => {
+    const { db } = sweepDb({ convs: [conv()], broadcastError: { message: 'down' } })
+    const out = await runHandoffSlaSweep(db, { nowMs: NOW })
+    expect(out).toMatchObject({ escalated: 1, broadcast_unread: 1 })
+    expect(logWarn).toHaveBeenCalledWith('handoff-sla', 'broadcast-handoff read failed; judged as a Mia handoff',
+      expect.objectContaining({ channel: 'whatsapp', conversationId: 'conv-1', err: 'down' }))
+  })
+
+  it('the broadcast read looks only at broadcast sends', async () => {
+    const { db, reads } = sweepDb({ convs: [conv()] })
+    await runHandoffSlaSweep(db, { nowMs: NOW })
+    const broadcastRead = reads.find(r => r.table === 'whatsapp_messages' && r.not.length)
+    expect(broadcastRead.not).toEqual([['broadcast_id', 'is', null]])
   })
 })
