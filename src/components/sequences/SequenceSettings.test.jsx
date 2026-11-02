@@ -465,3 +465,39 @@ describe('Webhook secret panel after a save (SEQPAGEGATE.1 review)', () => {
     expect(JUST_SET).not.toContain('\u2014')
   })
 })
+
+// HATCHCARD.3 — the €39 board's stages can start a sequence. The Hatch hourly
+// un1t pass fires pipeline_stage_change for every landed move (TDSEQ.1), so a
+// sequence on paid_trial_day_7 / paid_trial_done reaches €39 buyers there.
+describe('Pipeline stage trigger lists the €39 board stages (HATCHCARD.3)', () => {
+  beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) })
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+  const options = (select) => Array.from(select.querySelectorAll('option')).map((o) => [o.value, o.textContent])
+
+  function stageSelects() {
+    const { container, getByText } = render(
+      <SequenceSettings sequence={{ id: 'seq-1', location_id: 'loc-1', name: 'Day 7', status: 'draft', trigger_type: 'pipeline_stage_change', trigger_config: {} }} />,
+    )
+    fireEvent.click(getByText('Settings & trigger'))
+    return Array.from(container.querySelectorAll('select')).filter((s) => options(s).some(([v]) => v === 'new_lead'))
+  }
+
+  it('both stage selects (from / to) offer the five €39 stages after the acquisition ones', () => {
+    const selects = stageSelects()
+    expect(selects).toHaveLength(2)
+    for (const s of selects) {
+      const values = options(s).map(([v]) => v)
+      for (const slug of ['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']) {
+        expect(values).toContain(slug)
+      }
+      expect(values.indexOf('paid_trial_new_lead')).toBeGreaterThan(values.indexOf('dormant'))
+    }
+  })
+  it('each €39 stage is labelled as the €39 board\'s, so it is never mistaken for the free trial\'s', () => {
+    const [to] = stageSelects()
+    const label = Object.fromEntries(options(to))
+    expect(label.paid_trial_day_7).toMatch(/€39/)
+    expect(label.paid_trial_done).toMatch(/€39/)
+    expect(label.trial_done).toBe('trial_done')
+  })
+})
