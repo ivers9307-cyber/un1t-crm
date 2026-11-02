@@ -19,7 +19,7 @@
 // is already public on the website.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { buildCountdownGif } from '@/lib/countdown-gif'
+import { buildCountdownGif, buildBlankCountdownGif } from '@/lib/countdown-gif'
 import { resolveOffersHomeLocationId, NO_HOME_LOCATION_ID } from '@/lib/offers-home'
 import { logWarn } from '@/lib/log'
 
@@ -30,9 +30,16 @@ export const dynamic = 'force-dynamic'
 // seconds of ticking, which is not worth it in an inbox.
 const FRAMES = 30
 
-// 1×1 transparent GIF — served if anything goes wrong, so a failure degrades
-// to "no image" rather than a broken-image icon in the middle of the hero.
-const BLANK_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+// Served when there is no live deadline or anything goes wrong, so a failure
+// degrades to "no clock" rather than a broken-image icon in the hero.
+// COUNTDOWN.2b — it is a plain 600×190 frame, never a 1×1 pixel: the email
+// scales the image to its width with height:auto, so a 1×1 became a
+// full-width black SQUARE on the phone. The pixel is kept only as the last
+// resort if sharp itself cannot render the blank.
+const PIXEL_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+async function blankGif() {
+  try { return await buildBlankCountdownGif() } catch { return PIXEL_GIF }
+}
 
 const NO_CACHE = {
   'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
@@ -51,12 +58,18 @@ export async function GET() {
       .select('ends_at')
       .eq('active', true)
       .eq('location_id', homeId || NO_HOME_LOCATION_ID)
+      // COUNTDOWN.2 — only DATED offers can drive the clock. Gift cards
+      // carry ends_at NULL and Postgres sorts NULLs FIRST on DESC, so with
+      // a live gift card the NULL row won this ordering and the route served
+      // the blank pixel for every live sale (the same trap the /offers
+      // layout already guards against).
+      .not('ends_at', 'is', null)
       .order('ends_at', { ascending: false })
       .limit(1)
       .maybeSingle()
 
     if (!data?.ends_at) {
-      return new NextResponse(BLANK_GIF, { headers: { 'Content-Type': 'image/gif', ...NO_CACHE } })
+      return new NextResponse(await blankGif(), { headers: { 'Content-Type': 'image/gif', ...NO_CACHE } })
     }
 
     const msLeft = new Date(data.ends_at).getTime() - Date.now()
@@ -67,6 +80,6 @@ export async function GET() {
     })
   } catch (e) {
     logWarn('countdown-gif', 'render failed', { err: e })
-    return new NextResponse(BLANK_GIF, { headers: { 'Content-Type': 'image/gif', ...NO_CACHE } })
+    return new NextResponse(await blankGif(), { headers: { 'Content-Type': 'image/gif', ...NO_CACHE } })
   }
 }

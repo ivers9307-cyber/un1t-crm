@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // sale_offers filtered to it. The mock serves the offer row ONLY when the
 // query's location_id filter matches the row's location, so a foreign
 // location's offer is genuinely invisible rather than mocked away.
-const state = { endsAt: null, offerLocationId: 'loc-home', homeLocation: { id: 'loc-home' }, dbThrows: false, filters: {} }
+const state = { endsAt: null, offerLocationId: 'loc-home', homeLocation: { id: 'loc-home' }, dbThrows: false, filters: {}, extraRows: [], notNull: false }
 
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => {
@@ -14,20 +14,34 @@ vi.mock('@/lib/supabase', () => ({
       from(t) { this._table = t; state.filters = {}; return this },
       select() { return this },
       eq(col, val) { state.filters[col] = val; return this },
+      not(col, op, val) { if (col === 'ends_at' && op === 'is' && val === null) state.notNull = true; return this },
       order() { return this }, limit() { return this },
       maybeSingle() {
         if (this._table === 'locations') return Promise.resolve({ data: state.homeLocation })
         // No location filter at all = the row is visible: that is the leak the
         // foreign-location case guards against, so it fails if the .eq goes.
         const visible = state.endsAt && (state.filters.location_id === undefined || state.filters.location_id === state.offerLocationId)
-        return Promise.resolve({ data: visible ? { ends_at: state.endsAt } : null })
+        // COUNTDOWN.2 — model Postgres: ORDER BY ends_at DESC puts NULLs
+        // FIRST, so an evergreen row (gift card) wins the LIMIT 1 unless the
+        // query excluded it with .not('ends_at', 'is', null).
+        const rows = [...state.extraRows, ...(visible ? [{ ends_at: state.endsAt }] : [])]
+          .filter((r) => !state.notNull || r.ends_at != null)
+          .sort((a, b) => (a.ends_at == null ? -1 : b.ends_at == null ? 1 : b.ends_at.localeCompare(a.ends_at)))
+        return Promise.resolve({ data: rows[0] || null })
       },
     }
   },
 }))
 
 const buildCountdownGif = vi.fn(async () => Buffer.from('GIF89a-pretend-frames'))
-vi.mock('@/lib/countdown-gif', () => ({ buildCountdownGif: (...a) => buildCountdownGif(...a) }))
+// COUNTDOWN.2b — the blank is a real 600×190 GIF header (logical screen
+// 600×190, little-endian) so the fallback tests can read its size.
+const BLANK = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.from([0x58, 0x02, 0xbe, 0x00]), Buffer.alloc(32)])
+const buildBlankCountdownGif = vi.fn(async () => BLANK)
+vi.mock('@/lib/countdown-gif', () => ({
+  buildCountdownGif: (...a) => buildCountdownGif(...a),
+  buildBlankCountdownGif: (...a) => buildBlankCountdownGif(...a),
+}))
 
 import { GET } from './route'
 
@@ -36,18 +50,33 @@ beforeEach(() => {
   state.offerLocationId = 'loc-home'
   state.homeLocation = { id: 'loc-home' }
   state.dbThrows = false
+  state.extraRows = []
+  state.notNull = false
   buildCountdownGif.mockClear()
 })
 
-const BLANK_LEN = 42 // bytes of the 1×1 transparent fallback
+const BLANK_LEN = BLANK.length
 
 async function expectBlankGif(res) {
   const bytes = Buffer.from(await res.arrayBuffer())
   expect(bytes).toHaveLength(BLANK_LEN)
   expect(bytes.subarray(0, 6).toString('latin1')).toBe('GIF89a')
+  // COUNTDOWN.2b — never the 1×1 pixel: the fallback is the clock's own
+  // 600×190 footprint, so the email's width:100%/height:auto cannot turn it
+  // into a full-width square.
+  expect(bytes.readUInt16LE(6)).toBe(600)
+  expect(bytes.readUInt16LE(8)).toBe(190)
 }
 
 describe('GET /api/public/countdown.gif', () => {
+  it('COUNTDOWN.2 — a live gift card (ends_at NULL) never blanks a live sale', async () => {
+    state.extraRows = [{ ends_at: null }]
+    const res = await GET()
+    const bytes = Buffer.from(await res.arrayBuffer())
+    expect(bytes.toString()).toBe('GIF89a-pretend-frames')
+    expect(buildCountdownGif).toHaveBeenCalledTimes(1)
+  })
+
   it('serves image/gif with cache defeated on every hop', async () => {
     const res = await GET()
     expect(res.headers.get('content-type')).toBe('image/gif')

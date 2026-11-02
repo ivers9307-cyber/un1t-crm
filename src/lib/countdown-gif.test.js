@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import sharp from 'sharp'
 import {
-  remainingParts, pad2, frameDigits, layoutFor, renderFrame, buildCountdownGif, COLOURS,
+  remainingParts, pad2, frameDigits, layoutFor, renderFrame, buildCountdownGif, buildBlankCountdownGif, COLOURS,
 } from './countdown-gif'
 
 describe('remainingParts', () => {
@@ -130,5 +130,26 @@ describe('buildCountdownGif', () => {
     expect(expired.length).toBeLessThan(many.length)
     expect(expired.subarray(0, 6).toString('latin1')).toBe('GIF89a')
     expect((await sharp(expired, { animated: true }).metadata()).pages).toBe(1)
+  })
+})
+
+describe('buildBlankCountdownGif (COUNTDOWN.2b)', () => {
+  it('is a single frame with exactly the real clock footprint, never a 1x1 pixel', async () => {
+    const [blank, real] = await Promise.all([
+      buildBlankCountdownGif(),
+      buildCountdownGif({ msLeft: 3600e3, frames: 1 }),
+    ])
+    expect(blank.subarray(0, 6).toString('latin1')).toBe('GIF89a')
+    // Logical screen descriptor: width/height, little-endian, at bytes 6-9.
+    expect([blank.readUInt16LE(6), blank.readUInt16LE(8)]).toEqual([real.readUInt16LE(6), real.readUInt16LE(8)])
+    expect(blank.readUInt16LE(6)).toBe(600)
+    expect(blank.readUInt16LE(8)).toBe(190)
+    expect(blank.length).toBeGreaterThan(42)
+  })
+
+  it('is built once and cached', async () => {
+    const a = await buildBlankCountdownGif()
+    const b = await buildBlankCountdownGif()
+    expect(a).toBe(b)
   })
 })
