@@ -13,6 +13,7 @@ import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 import { loadUn1tCardSignals, cardSignalsEnabledForModule, SIGNAL_SLUGS } from '@/lib/pipeline-card-signals'
+import { zoneOfLocation } from '@/lib/location-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,7 +92,7 @@ export async function GET(request) {
   let signals = null
   if (view === 'active' && SIGNAL_SLUGS.has(stage.slug) && cardSignalsEnabledForModule(boardModule)) {
     const contactIds = (data || []).map((d) => d.contacts?.id).filter(Boolean)
-    const res = await loadUn1tCardSignals(db, { locationId, contactIds })
+    const res = await loadUn1tCardSignals(db, { locationId, contactIds, zone: zoneOfLocation(user.activeLocation) })
     if (res?.error) logWarn('pipeline-deals', 'card signals read failed; cards sent without them', { stageId, locationId })
     else signals = res?.signals ?? null
   }

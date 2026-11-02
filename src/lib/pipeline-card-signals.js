@@ -22,6 +22,7 @@
 import { getBoardModule } from '../../shared/pipelines/index.js'
 import { shapeTrialWindow } from '@/lib/membership/reads/un1t-online-shape'
 import { paidTrialProductIdsFor } from '@/lib/paid-trial-products'
+import { dayStrIn } from '@/lib/location-time'
 
 const DAY_MS = 86_400_000
 /** Past this many days since the last class, the card's last-class chip turns amber. */
@@ -52,7 +53,15 @@ const isAttended = (b) => b?.attended === true || upper(b?.status) === 'ATTENDED
  * One person's signals. Pure; reads no clock but `nowMs`.
  * @param {{ bookings?: object[], clients?: object[], conversations?: object[], nowMs: number }} a
  */
-export function shapeCardSignals({ bookings = [], clients = [], conversations = [], trialWindow = null, nowMs } = {}) {
+// HATCHCARD.4 — whole calendar days from one instant's date to another's in
+// `zone` (date arithmetic on YYYY-MM-DD parts, never a re-zoned instant).
+function calendarDaysBetween(fromMs, toMs, zone) {
+  const a = dayStrIn(new Date(fromMs), zone).split('-').map(Number)
+  const b = dayStrIn(new Date(toMs), zone).split('-').map(Number)
+  return Math.round((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / DAY_MS)
+}
+
+export function shapeCardSignals({ bookings = [], clients = [], conversations = [], trialWindow = null, zone = null, nowMs } = {}) {
   let classesAttended = 0
   let lastClassMs = null
   let nextClassMs = null
@@ -96,8 +105,15 @@ export function shapeCardSignals({ bookings = [], clients = [], conversations = 
   // HATCHCARD.2 — the trial window (shapeTrialWindow): days left while it
   // runs (rounded up: half a day left reads as 1), days since it ended after.
   const endsMs = msOf(trialWindow?.ends_at)
-  const trialDaysLeft = endsMs != null && endsMs > nowMs ? Math.ceil((endsMs - nowMs) / DAY_MS) : null
-  const trialEndedDays = endsMs != null && endsMs <= nowMs ? daysSince(endsMs, nowMs) : null
+  // HATCHCARD.4 — with the studio zone, CALENDAR days in that zone, so the
+  // count agrees with the date the card prints (0 = ends later today).
+  // Without one, elapsed time (rounded up while it runs).
+  const live = endsMs != null && endsMs > nowMs
+  const ended = endsMs != null && endsMs <= nowMs
+  const trialDaysLeft = !live ? null
+    : zone ? calendarDaysBetween(nowMs, endsMs, zone) : Math.ceil((endsMs - nowMs) / DAY_MS)
+  const trialEndedDays = !ended ? null
+    : zone ? calendarDaysBetween(endsMs, nowMs, zone) : daysSince(endsMs, nowMs)
 
   return {
     classes_attended: classesAttended,
@@ -158,7 +174,7 @@ const groupBy = (rows) => {
  * @param {object} db service-role client
  * @param {{ locationId: string, contactIds: string[], nowMs?: number }} a
  */
-export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = Date.now() }) {
+export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = Date.now(), zone = null }) {
   const ids = [...new Set((contactIds || []).filter(Boolean))]
   if (ids.length === 0) return { signals: new Map() }
 
@@ -217,6 +233,7 @@ export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = 
       clients: byClient.get(id) || [],
       conversations: byThread.get(id) || [],
       trialWindow: shapeTrialWindow({ transactions: byTx.get(id) || [], productsById, paidTrialProductIds }),
+      zone,
       nowMs,
     }))
   }

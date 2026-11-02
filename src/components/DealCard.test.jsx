@@ -232,6 +232,10 @@ describe('DealCard — trial end chip (HATCHCARD.2)', () => {
     const html = card({ trial_kind: 'free', trial_ends_at: '2026-11-04T09:00:00Z', trial_days_left: 2 }, 'new_lead')
     expect(html).toMatch(/bg-amber-500\/10 text-amber-700">Trial ends 4 Nov · 2d left</)
   })
+  it('ending later today: "ends today", amber (HATCHCARD.4)', () => {
+    expect(card({ trial_kind: 'paid', trial_ends_at: '2026-11-02T20:00:00Z', trial_days_left: 0 }))
+      .toMatch(/bg-amber-500\/10 text-amber-700">€39 trial ends today</)
+  })
   it('an ended trial: how long ago, amber', () => {
     expect(card({ trial_kind: 'free', trial_ends_at: '2026-10-30T09:00:00Z', trial_ended_days: 3 }, 'first_class'))
       .toMatch(/bg-amber-500\/10 text-amber-700">Trial ended 3d ago</)
