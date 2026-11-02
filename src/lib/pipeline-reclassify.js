@@ -20,7 +20,6 @@
 // inputs, so a no-op re-run produces 'unchanged' for every
 // contact. Safe to run hourly if needed.
 
-import { classifyContact } from './pipeline-classifier.js'
 import { logWarn } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
