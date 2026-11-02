@@ -67,7 +67,20 @@ const TRIGGER_OPTIONS = [
 // pulls createServerClient + the whole enrol path.
 const ANNIV_FIELDS = ANNIVERSARY_FROM_FIELD_OPTIONS
 const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at', 'Last email open'], ['last_booking_at', 'Last booking']]
-const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s])]
+// HATCHCARD.3 — the €39 board's stages, labelled as such so "Trial Done" on
+// the €39 board is never mistaken for the free trial's trial_done. A un1t.online
+// studio's hourly pass fires pipeline_stage_change for every landed move
+// (TDSEQ.1), so these reach €39 buyers at Hatch Street. A card CREATED straight
+// onto a stage starts nothing (a create is not a move), so a buyer's first
+// column is better reached with the un1t.online account trigger.
+const PAID_TRIAL_STAGE_OPTS = [
+  ['paid_trial_new_lead', 'paid_trial_new_lead (€39 board)'],
+  ['paid_trial_first_class', 'paid_trial_first_class (€39 board)'],
+  ['paid_trial_day_7', 'paid_trial_day_7 (€39 board)'],
+  ['paid_trial_done', 'paid_trial_done (€39 board)'],
+  ['paid_trial_converted', 'paid_trial_converted (€39 board)'],
+]
+const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s]), ...PAID_TRIAL_STAGE_OPTS]
 // Glofox membership states (mig 195). 'locked' = payment arrears (churn radar's Overdue tab).
 const STATE_OPTS = [['', 'Any state'], ['active', 'active'], ['paused', 'paused'], ['locked', 'locked (arrears)']]
 // SEQGAPS.1 — same vocabulary for the membership_state GOAL, minus the

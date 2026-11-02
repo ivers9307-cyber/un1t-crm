@@ -215,3 +215,36 @@ describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
     expect(html).not.toContain('messaged')
   })
 })
+
+// HATCHCARD.2 — the trial's end on the card.
+describe('DealCard — trial end chip (HATCHCARD.2)', () => {
+  const base = { classes_attended: 0, credits_left: null, credits_unlimited: true, next_class_at: null, last_class_days: null, last_class_warm: false, wa_state: 'never', wa_days: null, trial_kind: null, trial_ends_at: null, trial_days_left: null, trial_ended_days: null }
+  const card = (sig, slug = 'paid_trial_new_lead', tz = 'Europe/Dublin') => renderToStaticMarkup(
+    <DealCard deal={{ id: 'd', title: 'Aoife Morgan', next_class_badge: false, signals: { ...base, ...sig }, contacts: { id: 'c', name: 'Aoife Morgan', pipeline_stage_slug: slug } }}
+      locationId="l-1" stageName="New Leads" stageSlug={slug} timezone={tz} />,
+  )
+  it('a running €39 trial: its end date in the studio zone and the days left', () => {
+    const html = card({ trial_kind: 'paid', trial_ends_at: '2026-11-15T12:16:53Z', trial_days_left: 13 })
+    expect(html).toContain('€39 trial ends 15 Nov · 13d left')
+    expect(html).toMatch(/bg-un1t-border text-un1t-subtle">€39 trial ends/)
+  })
+  it('three days or fewer left turns amber; a free trial says Trial', () => {
+    const html = card({ trial_kind: 'free', trial_ends_at: '2026-11-04T09:00:00Z', trial_days_left: 2 }, 'new_lead')
+    expect(html).toMatch(/bg-amber-500\/10 text-amber-700">Trial ends 4 Nov · 2d left</)
+  })
+  it('an ended trial: how long ago, amber', () => {
+    expect(card({ trial_kind: 'free', trial_ends_at: '2026-10-30T09:00:00Z', trial_ended_days: 3 }, 'first_class'))
+      .toMatch(/bg-amber-500\/10 text-amber-700">Trial ended 3d ago</)
+    expect(card({ trial_kind: 'paid', trial_ends_at: '2026-11-02T09:00:00Z', trial_ended_days: 0 }, 'paid_trial_done'))
+      .toContain('€39 trial ended today')
+  })
+  it('no studio zone: days only, never a date in the wrong zone', () => {
+    const html = card({ trial_kind: 'paid', trial_ends_at: '2026-11-15T12:16:53Z', trial_days_left: 13 }, 'paid_trial_new_lead', null)
+    expect(html).toContain('€39 trial ends in 13d')
+    expect(html).not.toContain('15 Nov')
+  })
+  it('no trial known, or no end known: no chip', () => {
+    expect(card({})).not.toContain('trial ')
+    expect(card({ trial_kind: 'free' }, 'new_lead')).not.toMatch(/Trial (ends|ended)/)
+  })
+})

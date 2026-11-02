@@ -36,6 +36,32 @@ const ago = (d) => (d === 0 ? 'today' : `${d}d ago`)
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 const sameName = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
 
+// HATCHCARD.2 — "15 Nov" in the board studio's zone. Server and browser format
+// with the same zone, so SSR and hydration agree; without a zone the card shows
+// days only rather than a date that could be a day out.
+const TRIAL_WARN_DAYS = 3
+function shortDate(iso, zone) {
+  if (!iso || !zone) return null
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return null
+  try {
+    return new Intl.DateTimeFormat('en-IE', { day: 'numeric', month: 'short', timeZone: zone }).format(t)
+  } catch {
+    return null
+  }
+}
+function trialChip(sig, zone) {
+  if (!sig?.trial_kind) return null
+  const name = sig.trial_kind === 'paid' ? '€39 trial' : 'Trial'
+  if (sig.trial_days_left != null) {
+    const date = shortDate(sig.trial_ends_at, zone)
+    const text = date ? `${name} ends ${date} · ${sig.trial_days_left}d left` : `${name} ends in ${sig.trial_days_left}d`
+    return { text, tone: sig.trial_days_left <= TRIAL_WARN_DAYS ? TONE.warn : TONE.neutral }
+  }
+  if (sig.trial_ended_days != null) return { text: `${name} ended ${ago(sig.trial_ended_days)}`, tone: TONE.warn }
+  return null
+}
+
 // PIPE-AGE.1 footer tones — colour keys on the server-derived
 // deal.age.tone (time in stage, falling back to time in pipeline).
 // Literal classes so the guardrails linter can see them.
@@ -128,6 +154,7 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
       ? `${sig.classes_attended} of 3 classes`
       : plural(sig.classes_attended, 'class', 'classes'))
     : null
+  const trial = sig ? trialChip(sig, timezone) : null
 
   function openContact() {
     if (!contact.id || !onOpenContact) return
@@ -179,6 +206,7 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
             ) : sig.credits_left != null ? (
               <span className={`${CHIP} ${sig.credits_left > 0 ? TONE.credits : TONE.warn}`}>{plural(sig.credits_left, 'credit left', 'credits left')}</span>
             ) : null}
+            {trial && <span className={`${CHIP} ${trial.tone}`}>{trial.text}</span>}
             {sig.next_class_at ? (
               <span className={`${CHIP} ${TONE.good}`}>Next: {nextClassLabel(sig.next_class_at, timezone, viewerZone)}</span>
             ) : (

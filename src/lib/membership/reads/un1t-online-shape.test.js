@@ -8,7 +8,7 @@ import {
   UN1T_CANCEL_TRACKING_START, glofoxInterval, shapeCounts, shapeMrr, shapeFlows,
   shapeRevenue, firstSales, engagementRows, isTrialProduct, cancelsComparable,
   UN1T_ENDED_SUB_STATUSES, UN1T_LIVE_SUB_STATUSES, UN1T_RETRY_NET_WINDOW_MS, normaliseUn1tInvoiceStatus, shapePastDue,
-  shapePipelineSnapshot, shapeTrialEligibility, shapeTrialRegrant, splitUn1tCredits, shapePipelineDateEvidence,
+  shapePipelineSnapshot, shapeTrialEligibility, shapeTrialRegrant, splitUn1tCredits, shapePipelineDateEvidence, shapeTrialWindow,
   UN1T_AGGREGATOR_GYMPASS_SOURCES, UN1T_AGGREGATOR_MARKER,
   shapeFormOnlySnapshot, packHolderIds, isPaidTrialProduct,
 } from './un1t-online-shape'
@@ -1384,5 +1384,40 @@ describe('packHolderIds / shapeCounts / shapeTrialEligibility with the paid-tria
       const s = snap({ transactions: [paidTrialTx({ remote_created_at: daysAgo(5) }), freeOnPaidProduct({ remote_created_at: daysAgo(1) })], paidTrialProductIds: PAID_IDS })
       expect(s.paid_trial_at).toBe(daysAgo(5))
     })
+  })
+})
+
+// HATCHCARD.2 — the person's current trial window, for the pipeline card's
+// "Trial ends" chip. Same rules as the snapshot: a paid trial is judged by the
+// amount paid (PAIDTRIALAMOUNT.1), a free trial is the newest trial taken, and
+// each ends at its start + its product's expire_credits_in_days.
+describe('shapeTrialWindow (HATCHCARD.2)', () => {
+  const FREE7 = new Map(PRODUCTS_BY_ID)
+  FREE7.set(TRIAL, { ...PRODUCTS_BY_ID.get(TRIAL), expire_credits_in_days: '7' })
+  const paidTx = (over = {}) => tx({ product_id: PAID_TRIAL, amount_cents: 3900, ...over })
+
+  it('a €39 buyer: kind paid, ends 14 days after the purchase', () => {
+    const w = shapeTrialWindow({ transactions: [paidTx({ remote_created_at: daysAgo(1) })], productsById: FREE7, paidTrialProductIds: PAID_IDS })
+    expect(w).toEqual({ kind: 'paid', started_at: daysAgo(1), ends_at: new Date(Date.parse(daysAgo(1)) + 14 * DAY).toISOString() })
+  })
+  it('a free trial: kind free, ends at the product\'s expiry; no expiry on the product → no end', () => {
+    const w = shapeTrialWindow({ transactions: [trialTx({ remote_created_at: daysAgo(3) })], productsById: FREE7, paidTrialProductIds: PAID_IDS })
+    expect(w).toEqual({ kind: 'free', started_at: daysAgo(3), ends_at: new Date(Date.parse(daysAgo(3)) + 7 * DAY).toISOString() })
+    expect(shapeTrialWindow({ transactions: [trialTx({ remote_created_at: daysAgo(3) })], productsById: PRODUCTS_BY_ID, paidTrialProductIds: PAID_IDS }))
+      .toEqual({ kind: 'free', started_at: daysAgo(3), ends_at: null })
+  })
+  it('the newer of the two wins: a free trial then a €39 purchase is paid', () => {
+    const w = shapeTrialWindow({ transactions: [trialTx({ remote_created_at: daysAgo(20) }), paidTx({ remote_created_at: daysAgo(2) })], productsById: FREE7, paidTrialProductIds: PAID_IDS })
+    expect(w.kind).toBe('paid')
+    expect(w.started_at).toBe(daysAgo(2))
+  })
+  it('a €0 transaction on the €39 product is the FREE trial it used to be', () => {
+    const w = shapeTrialWindow({ transactions: [paidTx({ amount_cents: 0, remote_created_at: daysAgo(5) })], productsById: FREE7, paidTrialProductIds: PAID_IDS })
+    expect(w.kind).toBe('free')
+  })
+  it('a refunded €39 purchase, or no trial at all: null', () => {
+    expect(shapeTrialWindow({ transactions: [paidTx({ refunded: true })], productsById: FREE7, paidTrialProductIds: PAID_IDS })).toBeNull()
+    expect(shapeTrialWindow({ transactions: [tx()], productsById: FREE7, paidTrialProductIds: PAID_IDS })).toBeNull()
+    expect(shapeTrialWindow({})).toBeNull()
   })
 })

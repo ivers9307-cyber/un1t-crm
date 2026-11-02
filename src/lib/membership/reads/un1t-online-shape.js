@@ -601,6 +601,31 @@ function trialExpiresAt(credits, productsById) {
 }
 
 /**
+ * HATCHCARD.2 — the person's current trial window at the studio, for the
+ * pipeline card's "Trial ends" chip: the newer of the paid trial (paidTrialOf:
+ * judged by the amount paid, PAIDTRIALAMOUNT.1) and the newest free trial taken
+ * (trialsTaken, which counts a €0 transaction on a paid-trial product as the
+ * free trial it used to be). Each ends at its start plus its product's
+ * expire_credits_in_days; un1t.online stores no end date of its own. Null when
+ * no trial was ever taken. `ends_at` is null when the product carries no expiry.
+ * Pure.
+ *
+ * @returns {{ kind: 'paid'|'free', started_at: string, ends_at: string|null }|null}
+ */
+export function shapeTrialWindow({ transactions = [], productsById = new Map(), paidTrialProductIds = EMPTY_IDS } = {}) {
+  const txs = (transactions || []).filter(Boolean)
+  const paid = paidTrialOf(txs, productsById, paidTrialProductIds)
+  const credits = splitUn1tCredits({ client: null, transactions: txs, productsById, paidTrialProductIds })
+  const paidMs = msOf(paid.at)
+  const freeMs = msOf(credits.newestTrialAt)
+  if (paidMs == null && freeMs == null) return null
+  if (paidMs != null && (freeMs == null || paidMs >= freeMs)) {
+    return { kind: 'paid', started_at: paid.at, ends_at: paid.expiresAt }
+  }
+  return { kind: 'free', started_at: credits.newestTrialAt, ends_at: trialExpiresAt(credits, productsById) }
+}
+
+/**
  * Aggregator users (A-3): a booking whose `source` is set and not 'direct', or
  * that carries an `external_member_ref`. A booking with no source at all is not
  * one. Wellhub / Gympass sources take the Gympass pile (the newest such
