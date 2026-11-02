@@ -10,10 +10,12 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: () => db }))
 vi.mock('@/lib/auth', () => ({ getCurrentUser: vi.fn() }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadUn1tCardSignals: vi.fn() }))
 
 import { GET } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { logWarn } from '@/lib/log'
+import { loadUn1tCardSignals } from '@/lib/pipeline-card-signals'
 
 const LOC = 'loc-1'
 const STAGE = 'stage-1'
@@ -94,5 +96,47 @@ describe('GET /api/pipeline/deals — Glofox credit count by board module (HATCH
     setup({ data: { module: 'acquisition' }, error: null })
     const body = await (await GET(req())).json()
     expect(body.deals[0].contacts.trial_credits_remaining).toBe(0)
+  })
+})
+
+// HATCHCARD.1 — a Load-more page carries the same signals as the board's first
+// page: un1t board, active view, a live funnel column.
+describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
+  const SIG = { classes_attended: 1, credits_left: 2, credits_unlimited: false, next_class_at: null, last_class_days: 1, last_class_warm: false, wa_state: 'never', wa_days: null }
+  const withStage = (slug, module) => {
+    db = fakeDb({
+      pipeline_stages: { data: { id: STAGE, pipeline_id: PIPELINE, slug }, error: null },
+      pipelines: { data: { module }, error: null },
+      deals: { data: [dealRow()], error: null },
+    })
+  }
+  beforeEach(() => { loadUn1tCardSignals.mockReset(); loadUn1tCardSignals.mockResolvedValue({ signals: new Map([['c1', SIG]]) }) })
+
+  it('a un1t board\'s live column: the page\'s contacts are read once and each card carries its signals', async () => {
+    withStage('new_lead', 'acquisition_un1t')
+    const body = await (await GET(req())).json()
+    expect(loadUn1tCardSignals).toHaveBeenCalledTimes(1)
+    expect(loadUn1tCardSignals.mock.calls[0][1]).toMatchObject({ locationId: LOC, contactIds: ['c1'] })
+    expect(body.deals[0].signals).toEqual(SIG)
+  })
+  it('a Glofox board, a pile column, or the dormant view: no read and no signals key', async () => {
+    withStage('new_lead', 'acquisition')
+    expect('signals' in (await (await GET(req())).json()).deals[0]).toBe(false)
+    withStage('dormant', 'acquisition_un1t')
+    expect('signals' in (await (await GET(req())).json()).deals[0]).toBe(false)
+    withStage('new_lead', 'acquisition_un1t')
+    const dormantReq = new Request(`http://localhost/api/pipeline/deals?stage_id=${STAGE}&view=dormant`)
+    expect('signals' in (await (await GET(dormantReq)).json()).deals[0]).toBe(false)
+    expect(loadUn1tCardSignals).not.toHaveBeenCalled()
+  })
+  it('a failed signals read still answers 200 with the cards, ids-only warning', async () => {
+    withStage('new_lead', 'acquisition_un1t')
+    loadUn1tCardSignals.mockResolvedValue({ error: { message: 'boom' } })
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.deals).toHaveLength(1)
+    expect('signals' in body.deals[0]).toBe(false)
+    expect(logWarn).toHaveBeenCalledWith('pipeline-deals', expect.stringMatching(/signals/), expect.objectContaining({ stageId: STAGE, locationId: LOC }))
   })
 })

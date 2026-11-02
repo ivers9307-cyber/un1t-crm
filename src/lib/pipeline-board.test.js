@@ -299,3 +299,22 @@ describe('readWholeColumn', () => {
     expect(out.error).toBe(err)
   })
 })
+
+// HATCHCARD.1 — a un1t.online board's mapper attaches each card's signals.
+describe('boardDealMapper({ signals }) (HATCHCARD.1)', () => {
+  const deal = { id: 'd1', stage_id: 's1', title: 'Ann', created_at: '2026-10-01T00:00:00Z', contacts: { id: 'c1', name: 'Ann', pipeline_stage_slug: 'new_lead' } }
+  const SIG = { classes_attended: 1, credits_left: 2, credits_unlimited: false, next_class_at: null, last_class_days: 3, last_class_warm: false, wa_state: 'never', wa_days: null }
+
+  it('attaches the contact\'s signals when a map is given', () => {
+    const out = boardDealMapper({ badge: false, glofoxCredits: false, signals: new Map([['c1', SIG]]) })(deal)
+    expect(out.signals).toEqual(SIG)
+  })
+  it('a contact missing from the map gets null signals, not someone else\'s', () => {
+    const out = boardDealMapper({ badge: false, glofoxCredits: false, signals: new Map([['c2', SIG]]) })(deal)
+    expect(out.signals).toBeNull()
+  })
+  it('no map (a Glofox board, or a failed read): the row carries no signals key at all', () => {
+    expect('signals' in boardDealMapper()(deal)).toBe(false)
+    expect('signals' in boardDealMapper({ badge: false, glofoxCredits: false, signals: null })(deal)).toBe(false)
+  })
+})

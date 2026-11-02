@@ -47,6 +47,8 @@ import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
 import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import Link from 'next/link'
 import { zoneOfLocation } from '@/lib/location-time'
+import { loadUn1tCardSignals, cardSignalsEnabledForModule, SIGNAL_SLUGS } from '@/lib/pipeline-card-signals'
+import { logWarn } from '@/lib/log'
 
 export const dynamic = 'force-dynamic'
 
@@ -95,7 +97,7 @@ export default async function PipelinePage(props) {
   }
 
   const manual = activePipeline.mode === 'manual'
-  const toBoard = boardDealMapper(boardCardOptionsForModule(activePipeline.module))
+  const cardOptions = boardCardOptionsForModule(activePipeline.module)
   // A manual board draws no view toggle, so it can only ever be the one view —
   // otherwise a bookmarked ?view=dormant would strand the operator on a screen
   // PIPE3.9 — so does a derived board with no off-funnel stages (the €39 Trial
@@ -166,7 +168,7 @@ export default async function PipelinePage(props) {
           if (pageRes.error) {
             throw new Error(`pipeline deals load (stage ${stage.id}, location ${locationId}): ${pageRes.error.message}`)
           }
-          return { stageId: stage.id, deals: (pageRes.data || []).map(toBoard), count: total }
+          return { stage, rows: pageRes.data || [], count: total }
         }
         const whole = await readWholeColumn({ readRange, first: pageRes, count: total })
         if (whole.error) {
@@ -175,11 +177,26 @@ export default async function PipelinePage(props) {
         // What was read IS the column: report that, so a card that moved out (or
         // in) between the count and the last page cannot leave a "Load more"
         // that has nothing to load.
-        return { stageId: stage.id, deals: whole.rows.map(toBoard), count: whole.rows.length }
+        return { stage, rows: whole.rows, count: whole.rows.length }
       }))
     : []
-  const boardDeals = perStage.flatMap((sg) => sg.deals)
-  const stageCounts = Object.fromEntries(perStage.map((sg) => [sg.stageId, sg.count]))
+
+  // HATCHCARD.1 — a un1t.online board's live funnel columns carry each card's
+  // signals (classes done, credits left, next and last class, last WhatsApp),
+  // read ONCE for the page from the board studio's own rows. Decoration: a
+  // failed read logs and renders the board without them, never blanks it.
+  let signals = null
+  if (view === 'active' && cardSignalsEnabledForModule(activePipeline.module)) {
+    const contactIds = perStage
+      .filter((sg) => SIGNAL_SLUGS.has(sg.stage.slug))
+      .flatMap((sg) => sg.rows.map((d) => d.contacts?.id).filter(Boolean))
+    const res = await loadUn1tCardSignals(db, { locationId, contactIds })
+    if (res?.error) logWarn('pipeline-page', 'card signals read failed; board shown without them', { locationId, pipelineId: activePipeline.id })
+    else signals = res?.signals ?? null
+  }
+  const toBoard = boardDealMapper({ ...cardOptions, signals })
+  const boardDeals = perStage.flatMap((sg) => sg.rows.map(toBoard))
+  const stageCounts = Object.fromEntries(perStage.map((sg) => [sg.stage.id, sg.count]))
   const visibleTotal = perStage.reduce((n, sg) => n + sg.count, 0)
 
   // 3. Tab badges — total open-deal counts per view. Use HEAD count
