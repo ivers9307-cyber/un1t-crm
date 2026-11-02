@@ -1056,3 +1056,32 @@ describe('triggerSequencesForUn1tPaidTrialPurchased', () => {
     expect(JSON.stringify(logError.mock.calls)).not.toMatch(/boom/)
   })
 })
+
+// ── paid_trial_checkout_purchased (STILL39SEQ.1) ────────────────────
+describe('triggerSequencesForCheckoutTrialPurchased', () => {
+  const args = { contactId: 'c1', locationId: 'loc-st', purchaseId: 'tp-1' }
+
+  it('enrols into each matching active checkout-purchase sequence from step 0, the purchase as the source', async () => {
+    const db = mockDb({ email_sequences: { list: [{ id: 'seq-7', audience_filter: null }] } })
+    const res = await triggers.triggerSequencesForCheckoutTrialPurchased(db, args)
+    expect(res).toEqual({ ok: true, enrolled: 1 })
+    expect(enrolContacts).toHaveBeenCalledWith({
+      sequenceId: 'seq-7',
+      contactIds: ['c1'],
+      sourceType: 'paid_trial_checkout_purchased',
+      sourceRef: 'tp-1',
+      startStepOrder: 0,
+    })
+  })
+
+  it('asks only for this studio\'s active sequences of this trigger type', async () => {
+    const db = mockDb({ email_sequences: { list: [] } })
+    await triggers.triggerSequencesForCheckoutTrialPurchased(db, args)
+    const seqBuilder = db.from.mock.results
+      .map((r, i) => ({ r: r.value, t: db.from.mock.calls[i][0] }))
+      .find((x) => x.t === 'email_sequences').r
+    expect(seqBuilder.eq).toHaveBeenCalledWith('location_id', 'loc-st')
+    expect(seqBuilder.eq).toHaveBeenCalledWith('trigger_type', 'paid_trial_checkout_purchased')
+    expect(seqBuilder.eq).toHaveBeenCalledWith('status', 'active')
+  })
+})

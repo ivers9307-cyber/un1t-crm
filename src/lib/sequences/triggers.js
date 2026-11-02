@@ -863,15 +863,35 @@ export async function triggerSequencesForUn1tAccountCreated(db, { contactId, loc
  * @returns {Promise<{ ok: true, enrolled: number } | { ok: false, reason: string }>}
  */
 export async function triggerSequencesForUn1tPaidTrialPurchased(db, { contactId, locationId, transactionId }) {
+  return enrolForPurchase(db, 'un1t_paid_trial_purchased', { contactId, locationId, sourceRef: transactionId })
+}
+
+// ── paid_trial_checkout_purchased (STILL39SEQ.1) ─────────────────
+//
+// Called by the checkout purchase sweep (src/lib/trial-checkout-purchase-sweep.js)
+// for each recent paid, granted trial_purchases row: the CRM's own /trial
+// checkout, which Stillorgan buyers pay through. Same contract as the un1t one.
+
+/**
+ * @param {object} db  service-role client
+ * @param {{ contactId: string, locationId: string, purchaseId: string }} args
+ * @returns {Promise<{ ok: true, enrolled: number } | { ok: false, reason: string }>}
+ */
+export async function triggerSequencesForCheckoutTrialPurchased(db, { contactId, locationId, purchaseId }) {
+  return enrolForPurchase(db, 'paid_trial_checkout_purchased', { contactId, locationId, sourceRef: purchaseId })
+}
+
+// The two €39 purchase triggers differ only in their trigger type and source.
+async function enrolForPurchase(db, triggerType, { contactId, locationId, sourceRef }) {
   try {
     const { data: sequences, error } = await db
       .from('email_sequences')
       .select('id, audience_filter')
       .eq('location_id', locationId)
-      .eq('trigger_type', 'un1t_paid_trial_purchased')
+      .eq('trigger_type', triggerType)
       .eq('status', 'active')
     if (error) {
-      logError('sequences', 'un1t_paid_trial_purchased sequences unreadable', { locationId, code: error?.code ?? null })
+      logError('sequences', `${triggerType} sequences unreadable`, { locationId, code: error?.code ?? null })
       return { ok: false, reason: 'sequences_unreadable' }
     }
 
@@ -882,15 +902,15 @@ export async function triggerSequencesForUn1tPaidTrialPurchased(db, { contactId,
       const res = await enrolContacts({
         sequenceId: seq.id,
         contactIds: [contactId],
-        sourceType: 'un1t_paid_trial_purchased',
-        sourceRef: transactionId,
+        sourceType: triggerType,
+        sourceRef,
         startStepOrder: 0,
       })
       enrolled += res?.enrolled || 0
     }
     return { ok: true, enrolled }
   } catch (e) {
-    logError('sequences', 'un1t_paid_trial_purchased trigger failed', { contactId, locationId, errName: e?.name ?? null })
+    logError('sequences', `${triggerType} trigger failed`, { contactId, locationId, errName: e?.name ?? null })
     return { ok: false, reason: 'trigger_error' }
   }
 }

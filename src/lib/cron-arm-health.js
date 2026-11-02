@@ -59,6 +59,15 @@
 //                       sweep, independent of it. Seeded by mig 805, applied
 //                       RIGHT AFTER the deploy.
 //
+// STILL39SEQ.1 adds a ninth, on the */2 process-trial-purchases cron:
+//
+//   'trial-checkout-purchase-sweep' — sweepCheckoutTrialPurchases
+//                       (src/lib/trial-checkout-purchase-sweep.js), the
+//                       checkout (Glofox studio) €39 purchase enrolment arm.
+//                       Stamped only when the sweep returned ok, after the
+//                       parent's stamp. Seeded by mig 806, applied RIGHT AFTER
+//                       the deploy.
+//
 // THE RULE. Stamp only when the arm RETURNED an outcome object (a throw, or a
 // resolved non-object, has not shown it ran) and that outcome carries no
 // fault in the arm's own machinery. A run with nothing to send is healthy (a

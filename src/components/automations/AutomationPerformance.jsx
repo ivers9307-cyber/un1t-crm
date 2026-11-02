@@ -20,6 +20,7 @@ const SOURCE_LABELS = {
   contact_created: 'New lead',
   un1t_account_created: 'New un1t.online account',
   un1t_paid_trial_purchased: '€39 trial bought',
+  paid_trial_checkout_purchased: '€39 trial bought (checkout)',
   manual: 'Manual enrolment',
   booking_created: 'Booking',
   first_booking: 'First booking',
