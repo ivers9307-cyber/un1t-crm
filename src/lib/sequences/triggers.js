@@ -847,6 +847,54 @@ export async function triggerSequencesForUn1tAccountCreated(db, { contactId, loc
   }
 }
 
+// ── un1t_paid_trial_purchased (PAIDTRIALTRIGGER.1) ───────────────
+//
+// Called by the €39 purchase sweep (src/lib/un1t-paid-trial-purchases.js) for
+// each recent paid-trial purchase at a un1t.online studio. A purchase is not a
+// pipeline MOVE (a buyer is usually created straight onto the €39 board's New
+// Leads), so pipeline_stage_change could never greet them; this trigger does.
+// Same contract as un1t_account_created: returns its outcome, logs a failure
+// without its text, and dedupe is enrolContacts' own (unique sequence_id +
+// contact_id), which is what lets the sweep re-offer a purchase every tick.
+
+/**
+ * @param {object} db  service-role client
+ * @param {{ contactId: string, locationId: string, transactionId: string }} args
+ * @returns {Promise<{ ok: true, enrolled: number } | { ok: false, reason: string }>}
+ */
+export async function triggerSequencesForUn1tPaidTrialPurchased(db, { contactId, locationId, transactionId }) {
+  try {
+    const { data: sequences, error } = await db
+      .from('email_sequences')
+      .select('id, audience_filter')
+      .eq('location_id', locationId)
+      .eq('trigger_type', 'un1t_paid_trial_purchased')
+      .eq('status', 'active')
+    if (error) {
+      logError('sequences', 'un1t_paid_trial_purchased sequences unreadable', { locationId, code: error?.code ?? null })
+      return { ok: false, reason: 'sequences_unreadable' }
+    }
+
+    let enrolled = 0
+    for (const seq of sequences || []) {
+      const matches = await contactMatchesSequenceAudience(db, contactId, seq.audience_filter)
+      if (!matches) continue
+      const res = await enrolContacts({
+        sequenceId: seq.id,
+        contactIds: [contactId],
+        sourceType: 'un1t_paid_trial_purchased',
+        sourceRef: transactionId,
+        startStepOrder: 0,
+      })
+      enrolled += res?.enrolled || 0
+    }
+    return { ok: true, enrolled }
+  } catch (e) {
+    logError('sequences', 'un1t_paid_trial_purchased trigger failed', { contactId, locationId, errName: e?.name ?? null })
+    return { ok: false, reason: 'trigger_error' }
+  }
+}
+
 // ── achievement_unlocked (Phase 4 Slice B) ───────────────────────
 
 /**

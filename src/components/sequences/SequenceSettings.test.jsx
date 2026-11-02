@@ -501,3 +501,18 @@ describe('Pipeline stage trigger lists the €39 board stages (HATCHCARD.3)', ()
     expect(label.trial_done).toBe('trial_done')
   })
 })
+
+describe('Trigger list offers the €39 purchase (PAIDTRIALTRIGGER.1)', () => {
+  beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) })
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+  it('the trigger select carries un1t_paid_trial_purchased with a plain label', () => {
+    const { container, getByText } = render(
+      <SequenceSettings sequence={{ id: 'seq-1', location_id: 'loc-1', name: 'x', status: 'draft', trigger_type: 'manual', trigger_config: {} }} />,
+    )
+    fireEvent.click(getByText('Settings & trigger'))
+    const select = Array.from(container.querySelectorAll('select')).find((s) => Array.from(s.options).some((o) => o.value === 'un1t_account_created'))
+    const opt = Array.from(select.options).find((o) => o.value === 'un1t_paid_trial_purchased')
+    expect(opt).toBeTruthy()
+    expect(opt.textContent).toMatch(/€39/)
+  })
+})
