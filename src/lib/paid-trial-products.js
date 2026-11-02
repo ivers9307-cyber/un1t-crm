@@ -8,7 +8,7 @@
 // pack customers. A paid trial is a trial membership, never a pack holder, on
 // every read (Richard, 1 Nov 2026) — and this is the ONE place the set comes
 // from: the studio setting `locations.settings.pipelines.paid_trial.un1t_product_ids`
-// (seeded by mig 799) ∪ the product the live /trial page sells for the studio
+// (seeded by mig 803) ∪ the product the live /trial page sells for the studio
 // (its paid_trial block's un1t_product_id, src/lib/trial-studios.js). A second
 // paid trial product plugs in through either.
 //
