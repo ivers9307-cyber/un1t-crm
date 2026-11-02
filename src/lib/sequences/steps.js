@@ -48,6 +48,7 @@ import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampM
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
+import { bookedWithinDaysError } from './graph/schema.js'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -790,8 +791,11 @@ export async function updateFieldStep(db, { step, contact }) {
 //   - has_tag         { tag }           — contact has the active tag
 //   - field_equals    { field, value }  — contact[field] === value
 //   - field_in        { field, values } — contact[field] is in the list
-//   - booked_class_at_studio {}         — the contact has booked a class at
-//                                         the sequence's studio (HATCHNUDGE.1)
+//   - booked_class_at_studio { within_days? } — the contact has booked a class at
+//                                         the sequence's studio (HATCHNUDGE.1);
+//                                         within_days narrows it to a class in
+//                                         the last N days or still to come
+//                                         (STILL39SEQ.1)
 //   - in_pipeline_stage_at_studio { stages } — the contact has an open deal
 //                                         at the sequence's studio, on an
 //                                         enabled board, in one of the stage
@@ -842,24 +846,29 @@ const BRANCH_FIELD_WHITELIST = new Set([
 // been paid for.
 const IN_FLIGHT_CLASS_REQUEST_STATUSES = ['queued', 'processing', 'booked', 'needs_review']
 
-async function hasBookedClassAtStudio(db, { contactId, locationId }) {
-  const { data: bookings, error: bookingsError } = await db
+// STILL39SEQ.1 — `sinceIso` (from the predicate's within_days) narrows both
+// reads: a class starting since then (so one still to come counts) and a
+// request made since then. Absent = every booking ever, as before.
+async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = null }) {
+  let bookingsQuery = db
     .from('class_bookings')
     .select('id')
     .eq('contact_id', contactId)
     .eq('location_id', locationId)
     .neq('status', 'CANCELLED')
-    .limit(1)
+  if (sinceIso) bookingsQuery = bookingsQuery.gte('starts_at', sinceIso)
+  const { data: bookings, error: bookingsError } = await bookingsQuery.limit(1)
   if (bookingsError) throw new Error(`branch booked_class_at_studio: ${bookingsError.message}`)
   if (bookings && bookings.length > 0) return true
 
-  const { data: requests, error: requestsError } = await db
+  let requestsQuery = db
     .from('class_booking_requests')
     .select('id')
     .eq('contact_id', contactId)
     .eq('location_id', locationId)
     .in('status', IN_FLIGHT_CLASS_REQUEST_STATUSES)
-    .limit(1)
+  if (sinceIso) requestsQuery = requestsQuery.gte('created_at', sinceIso)
+  const { data: requests, error: requestsError } = await requestsQuery.limit(1)
   if (requestsError) throw new Error(`branch booked_class_at_studio: ${requestsError.message}`)
   return Boolean(requests && requests.length > 0)
 }
@@ -961,7 +970,7 @@ async function whatsappReplySinceEnrolment(db, { contact, locationId, enrolledAt
   return Boolean(inbound && inbound.length > 0)
 }
 
-export async function evaluateBranchPredicate(db, { contact, predicate, locationId = null, enrolledAt = null }) {
+export async function evaluateBranchPredicate(db, { contact, predicate, locationId = null, enrolledAt = null, nowMs = Date.now() }) {
   if (!predicate || typeof predicate !== 'object') {
     throw new Error('branch step: config.predicate is required')
   }
@@ -989,7 +998,11 @@ export async function evaluateBranchPredicate(db, { contact, predicate, location
     // Thrown, not guessed: the runner retries a throwing step, and a branch
     // that read "no studio" as "not booked" would nudge someone who booked.
     if (!locationId) throw new Error('branch booked_class_at_studio: the sequence studio is required')
-    return hasBookedClassAtStudio(db, { contactId: contact.id, locationId })
+    const windowErr = bookedWithinDaysError(predicate.within_days)
+    if (windowErr) throw new Error(`branch booked_class_at_studio: within_days ${windowErr}`)
+    const days = predicate.within_days == null || predicate.within_days === '' ? null : Number(predicate.within_days)
+    const sinceIso = days ? new Date(nowMs - days * 86_400_000).toISOString() : null
+    return hasBookedClassAtStudio(db, { contactId: contact.id, locationId, sinceIso })
   }
 
   if (type === 'has_tag') {

@@ -209,6 +209,16 @@ describe('validateGraph — dynamic URL button value (SEQ-URLBUTTON.1)', () => {
       }
     })
 
+    it('accepts booked_class_at_studio with or without a whole within_days, and refuses any other (STILL39SEQ.1)', () => {
+      expect(validateGraph(branchGraph({ type: 'booked_class_at_studio' }))).toEqual({ ok: true, errors: [] })
+      expect(validateGraph(branchGraph({ type: 'booked_class_at_studio', within_days: 8 }))).toEqual({ ok: true, errors: [] })
+      for (const bad of [0, 366, 2.5, 'x']) {
+        const g = branchGraph({ type: 'booked_class_at_studio', within_days: bad })
+        expect(codes(g)).toContain('missing_config')
+        expect(messages(g)).toContain('branch "booked a class" window must be a whole number of days from 1 to 365')
+      }
+    })
+
     it('refuses a predicate type the runner does not know', () => {
       const g = branchGraph({ type: 'made_up' })
       expect(codes(g)).toContain('missing_config')

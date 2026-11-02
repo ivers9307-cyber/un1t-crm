@@ -81,6 +81,7 @@ describe('describeNode — operator-facing one-line summary per type', () => {
     [{ type: 'move_pipeline_stage', config: { stage_slug: 'converted' } }, 'Move pipeline', 'Move to converted'],
     [{ type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }, 'Branch', 'Has tag “vip”'],
     [{ type: 'branch', config: { predicate: { type: 'booked_class_at_studio' } } }, 'Branch', 'Has booked a class at this studio'],
+    [{ type: 'branch', config: { predicate: { type: 'booked_class_at_studio', within_days: 8 } } }, 'Branch', 'Has booked a class at this studio in the last 8 days or upcoming'],
     [{ type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] } } }, 'Branch', 'In stage trial_done at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done', 'second_class'] } } }, 'Branch', 'In stage trial_done or second_class at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'whatsapp_reply_since_enrolment' } } }, 'Branch', 'Replied on WhatsApp since this flow began'],
