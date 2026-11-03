@@ -177,8 +177,9 @@ describe('TZ.8a Europe/Dublin pinned values', () => {
     const windows = [{ from: { start_time: '07:10:00', end_time: '08:00:00' }, to: { start_time: '07:20:00', end_time: '08:30:00' } }]
     for (const [nowIso, today, expected] of [
       // per block date (yesterday, today, tomorrow): [notice, shift over]
-      ['2026-03-29T00:30:00Z', '2026-03-29', [['morning', true], ['too_late', false], ['morning', false]]], // quiet night
-      ['2026-10-25T00:30:00Z', '2026-10-25', [['morning', true], ['too_late', false], ['morning', false]]],
+      // PUBSUMMARY.1 — tomorrow's 07:10 is ~30h away on these nights: held for Publish.
+      ['2026-03-29T00:30:00Z', '2026-03-29', [['morning', true], ['too_late', false], ['publish', false]]], // quiet night
+      ['2026-10-25T00:30:00Z', '2026-10-25', [['morning', true], ['too_late', false], ['publish', false]]],
       ['2026-07-01T06:30:00Z', '2026-07-01', [['shortly', true], ['shortly', false], ['shortly', false]]], // 07:30 IST, shift not over
       ['2026-07-01T07:31:00Z', '2026-07-01', [['shortly', true], ['shortly', true], ['shortly', false]]], // 08:31 IST, over
     ]) {
@@ -347,7 +348,8 @@ describe('TZ.8a America/New_York follows New York across DST', () => {
     // The notice: quiet at 23:30 EDT, so the next morning is 1 Jul in New York; a 07:10 shift on 1 Jul is too late.
     const windows = [{ from: { start_time: '07:10:00' }, to: { start_time: '07:10:00' } }]
     expect(blockEditNoticeWhen({ nowMs, timeZone: NY, blockDate: '2026-07-01', windows })).toBe('too_late')
-    expect(blockEditNoticeWhen({ nowMs, timeZone: NY, blockDate: '2026-07-02', windows })).toBe('morning')
+    // PUBSUMMARY.1 — 07:10 on 2 Jul is 31h40m away: held for Publish.
+    expect(blockEditNoticeWhen({ nowMs, timeZone: NY, blockDate: '2026-07-02', windows })).toBe('publish')
   })
 
   it('a NY studio\'s 06:00 shift on Sun 1 Nov 2026 (fall-back) is reminded at 20:00 EDT the evening before', () => {

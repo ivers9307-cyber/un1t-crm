@@ -269,10 +269,19 @@ describe('PUT /api/schedule/blocks/[id] — change log and notice (published onl
   })
 
   it('a start before 7am on a LATER day is only morning', async () => {
-    vi.setSystemTime(new Date('2026-09-28T22:30:00Z')) // 23:30 on the 28th; notice morning is the 29th
+    vi.setSystemTime(new Date('2026-09-29T04:00:00Z')) // 05:00 on the 29th; notice morning is the 29th
+    createServerClient.mockReturnValue(makeDb())
+    const body = await (await PUT(req({ start_time: '04:30' }), params)).json() // the 30th, 23.5h away
+    expect(body.notice).toEqual({ coaches: 1, when: 'morning' })
+  })
+
+  // PUBSUMMARY.1 — neither the old nor the new start within 24 hours: the
+  // change is held for the next Publish's summary, and the toast says so.
+  it('a shift more than 24 hours out is told at the next Publish', async () => {
+    vi.setSystemTime(new Date('2026-09-28T22:30:00Z')) // 23:30 on the 28th
     createServerClient.mockReturnValue(makeDb())
     const body = await (await PUT(req({ start_time: '06:30' }), params)).json()
-    expect(body.notice).toEqual({ coaches: 1, when: 'morning' })
+    expect(body.notice).toEqual({ coaches: 1, when: 'publish' })
   })
 
   it('a draft block is saved but not logged and nobody is told (drafts ride the first publish)', async () => {

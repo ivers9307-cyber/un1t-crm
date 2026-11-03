@@ -22,6 +22,7 @@ import { inStaffPushHours, staffWallClockHHMM, STAFF_PUSH_FROM } from './staff-p
 // Pure zone maths straight from shared/ (this module is also in the client
 // bundle, via ScheduleCalendar): no IO, no logger.
 import { dayStrIn, addDaysISO, resolveZone } from '@shared/zoned-time'
+import { startsWithinNoticeWindow } from './roster-notice-window'
 
 export const BLOCK_EDIT_FIELDS = ['start_time', 'end_time', 'min_coaches', 'max_coaches', 'briefing']
 
@@ -221,10 +222,16 @@ export const TOO_LATE_BEFORE = '07:30'
  *   'too_late' quiet now, and the shift is on that very morning with a start
  *              (old OR new, any coach) before TOO_LATE_BEFORE (07:30): it will have started
  *              before anyone is told, so the manager must ring them.
+ *   'publish'  PUBSUMMARY.1: no start (old OR new, any coach) is within 24
+ *              hours, so the arm holds it and the next Publish's summary tells
+ *              them (src/lib/roster-notice-window.js).
  * @param {{ nowMs: number, timeZone?: string|null, blockDate: string,
  *           windows: Array<{ from: {start_time}, to: {start_time} }> }} args
  */
 export function blockEditNoticeWhen({ nowMs, timeZone, blockDate, windows = [] }) {
+  const soon = windows.length === 0 || windows.some((w) => [w.from?.start_time, w.to?.start_time]
+    .some((t) => startsWithinNoticeWindow({ blockDate, startTime: t }, { nowMs, zone: timeZone })))
+  if (!soon) return 'publish'
   if (inStaffPushHours(nowMs, timeZone)) return 'shortly'
   const wall = staffWallClockHHMM(nowMs, timeZone) || '00:00'
   // TZ.8a — the studio's day, on the same clock as the wall time above.
@@ -261,6 +268,9 @@ export function blockEditNoticeText(notice) {
   }
   if (notice.when === 'too_late') {
     return `Saved. ${who} will NOT be told before it starts (no notifications before 7am). Ring them.`
+  }
+  if (notice.when === 'publish') {
+    return `Saved. ${who} will be told when you publish the roster.`
   }
   return notice.when === 'morning'
     ? `Saved. ${who} will be told after 7am (no notifications overnight).`

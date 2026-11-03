@@ -1,7 +1,7 @@
 // src/lib/block-edit.test.js
 // BLOCKEDIT.1 — what editing ONE shift block means. Pure; table-driven.
 import { describe, it, expect } from 'vitest'
-import { planBlockEdit, toHms, sameWindow, blockEditNoticeText, TOO_LATE_BEFORE } from './block-edit'
+import { planBlockEdit, toHms, sameWindow, blockEditNoticeText, blockEditNoticeWhen, TOO_LATE_BEFORE } from './block-edit'
 
 const coach = (id, name, over = {}) => ({
   id: `a-${id}`, profile_id: id, status: 'scheduled',
@@ -159,6 +159,25 @@ describe('blockEditNoticeText', () => {
     expect(blockEditNoticeText({ coaches: 1, when: 'past' })).toBe('Saved. This shift is over, so the coach is not notified.')
     expect(blockEditNoticeText({ coaches: 2, when: 'past' })).toBe('Saved. This shift is over, so the 2 coaches are not notified.')
     expect(blockEditNoticeText({ coaches: 1, when: 'too_late' })).toBe('Saved. The coach on this shift will NOT be told before it starts (no notifications before 7am). Ring them.')
+    // PUBSUMMARY.1 — held for the next Publish's summary.
+    expect(blockEditNoticeText({ coaches: 2, when: 'publish' })).toBe('Saved. The 2 coaches on this shift will be told when you publish the roster.')
+  })
+})
+
+describe('blockEditNoticeWhen — held for Publish (PUBSUMMARY.1)', () => {
+  const zone = 'Europe/Dublin'
+  const win = (from, to) => ({ from: { start_time: from }, to: { start_time: to } })
+  // Tue 29 Sep 2026 11:00 Dublin, in band.
+  const nowMs = Date.parse('2026-09-29T10:00:00Z')
+
+  it('no start (old or new) within 24 hours: publish', () => {
+    expect(blockEditNoticeWhen({ nowMs, timeZone: zone, blockDate: '2026-10-01', windows: [win('09:00:00', '10:00:00')] })).toBe('publish')
+  })
+
+  it('either start within 24 hours: told as before', () => {
+    // 30 Sep 10:00 is 23h away; 12:00 is 25h.
+    expect(blockEditNoticeWhen({ nowMs, timeZone: zone, blockDate: '2026-09-30', windows: [win('10:00:00', '12:00:00')] })).toBe('shortly')
+    expect(blockEditNoticeWhen({ nowMs, timeZone: zone, blockDate: '2026-09-30', windows: [win('12:00:00', '10:00:00')] })).toBe('shortly')
   })
 })
 

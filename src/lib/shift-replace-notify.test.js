@@ -48,7 +48,7 @@ describe('runReplaceNotices', () => {
     const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
     expect(notifyRosterChanges).toHaveBeenCalledTimes(1)
     expect(notifyRosterChanges).toHaveBeenCalledWith(db, {
-      locationId: 'loc-1', actorId: 'mgr-1', todayStr: '2026-09-29', markNotified: false,
+      locationId: 'loc-1', actorId: 'mgr-1', todayStr: '2026-09-29', nowMs: IN_BAND, timeZone: 'Europe/Dublin', markNotified: false,
       changes: [
         { coachId: 'coach-a', blockId: 'b1', blockDate: '2026-09-29', startTime: '09:00:00', action: 'unassigned' },
         { coachId: 'coach-b', blockId: 'b1', blockDate: '2026-09-29', startTime: '09:00:00', action: 'assigned' },
@@ -182,6 +182,19 @@ describe('runReplaceNotices', () => {
     const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
     expect(chainsFor(db, 'roster_change_log')).toHaveLength(2) // the read + coach-a's stamp
     expect(stats).toMatchObject({ told: 0, undelivered: 2, send_failed: 1, stamp_failed: 0, errors: 0 })
+  })
+
+  // PUBSUMMARY.1 — a shift more than 24 hours out: notifyRosterChanges holds
+  // it, and the arm leaves its rows unstamped for the next Publish.
+  it('a held coach is left unstamped for the next Publish and counted', async () => {
+    notifyRosterChanges.mockImplementation(async () => ({ byCoach: { 'coach-a': 'held' } }))
+    const db = scriptedDb({
+      roster_change_log: [{ data: [row('r1', 'coach-a', 'assigned')], error: null }],
+      locations: [LOC],
+    })
+    const stats = await runReplaceNotices(db, { nowMs: IN_BAND, todayStr: '2026-09-29' })
+    expect(chainsFor(db, 'roster_change_log')).toHaveLength(1) // the read, and no stamp
+    expect(stats).toMatchObject({ held: 1, told: 0, undelivered: 0, errors: 0 })
   })
 
   // The undo trap: B was told "added" (the route's after(), in band) but the

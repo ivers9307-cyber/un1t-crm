@@ -1,6 +1,10 @@
 // NOTIFY.1 — tell a coach, at the moment of change, that they were added to
 // or removed from a shift on a PUBLISHED roster.
 //
+// PUBSUMMARY.1 — only a change to a shift that starts within 24 hours is
+// told here; every other one is held for the next Publish's one summary
+// (the rule: src/lib/roster-notice-window.js).
+//
 // Before this, those edits only wrote a roster_change_log row and waited for
 // the manager to re-publish that exact period from the web week view. The
 // 16 Sep review found 25 of the last 30 changes never sent and 49 notices
@@ -16,6 +20,9 @@
 import { notifyUsers } from './notify'
 import { logWarn } from './log'
 import { todayStrIn, getLocationZone } from './location-time'
+import { startsWithinNoticeWindow } from './roster-notice-window'
+
+export { startsWithinNoticeWindow, NOTICE_NOW_WINDOW_MS } from './roster-notice-window'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -35,6 +42,29 @@ export function formatShiftDate(isoDay) {
 function shiftStartLabel(t) {
   const m = String(t ?? '').match(/^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/)
   return m ? `${m[1]}:${m[2]}` : ''
+}
+
+const BLOCK_START_CHUNK = 200
+
+// PUBSUMMARY.1 — block id -> start_time for changes that did not carry their
+// start. null when the read failed: every change is then told now.
+async function readBlockStarts(db, blockIds) {
+  const starts = new Map()
+  if (!blockIds.length) return starts
+  try {
+    for (let i = 0; i < blockIds.length; i += BLOCK_START_CHUNK) {
+      const { data, error } = await db
+        .from('shift_blocks')
+        .select('id, start_time')
+        .in('id', blockIds.slice(i, i + BLOCK_START_CHUNK))
+      if (error) throw new Error(error.message)
+      for (const b of data || []) starts.set(b.id, b.start_time)
+    }
+    return starts
+  } catch (e) {
+    logWarn('roster-change-notify', 'shift starts unreadable; every change is told now', { err: e?.message })
+    return null
+  }
 }
 
 const shifts = (n) => `${n} ${n === 1 ? 'shift' : 'shifts'}`
@@ -114,6 +144,13 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * and future changes is messaged about the future ones only, and — on
  * delivery — every one of their block ids (past and future) is stamped.
  *
+ * PUBSUMMARY.1 — a future change is told here only when its shift starts
+ * within NOTICE_NOW_WINDOW_MS (startsWithinNoticeWindow). The rest are HELD:
+ * not messaged and not stamped, so the next Publish tells the coach in its
+ * one summary. A coach with only held changes is `byCoach` 'held'; a coach
+ * with both is messaged about the urgent ones, and only their blocks (and
+ * past ones) are stamped.
+ *
  * A coach who opted OUT of shift_adjusted (result.optedOut) is the one
  * exception to "stamp on anything that isn't a hard failure": their rows
  * are left UNSTAMPED, on purpose, so the re-publish/approve safety net
@@ -128,6 +165,10 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  * @param {string} [opts.todayStr]   YYYY-MM-DD; defaults to the STUDIO's day
  *   (TZ.8a: the location's timezone). Injectable for tests. An unreadable
  *   zone sends and stamps NOTHING (logged): a later sender retries.
+ * @param {number} [opts.nowMs]     PUBSUMMARY.1 — the instant urgency is judged
+ *   at; defaults to now. Injectable for tests.
+ * @param {string|null} [opts.timeZone]  PUBSUMMARY.1 — the studio's zone when
+ *   the caller pins `todayStr` (the replace arm knows it); otherwise read.
  * @param {boolean} [opts.markNotified=true]  REPLACE.1a review 1 — false: send
  *   exactly as usual but stamp NOTHING; the caller reads `byCoach` and stamps
  *   its own rows (the held replace-notice arm stamps by row id).
@@ -135,14 +176,19 @@ async function markNotified(db, { locationId, coachId, blockIds }) {
  *   send that failed outright or threw; also counted in `undelivered`),
  *   `stampFailed` (a stamp this call made that errored: the coach may be told
  *   again by the next sender) and `byCoach`, coachId -> 'delivered' | 'self' |
- *   'past' | 'opted_out' | 'undelivered' | 'failed'.
+ *   'past' | 'held' | 'opted_out' | 'undelivered' | 'failed'. `held` counts
+ *   the changes left for the next Publish (PUBSUMMARY.1).
  */
-export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr, markNotified: stamp = true } = {}) {
-  const result = { notified: 0, skippedSelf: 0, skippedPast: 0, undelivered: 0, optedOut: 0, failed: 0, stampFailed: 0, byCoach: {} }
+export async function notifyRosterChanges(db, { locationId, actorId, changes, todayStr, nowMs = Date.now(), timeZone = null, markNotified: stamp = true } = {}) {
+  const result = { notified: 0, skippedSelf: 0, skippedPast: 0, held: 0, undelivered: 0, optedOut: 0, failed: 0, stampFailed: 0, byCoach: {} }
   let today = todayStr
+  // A pinned `todayStr` (tests, the replace arm) skips the zone read; urgency
+  // is then judged on `timeZone`, or the default zone without one.
+  let zone = timeZone
   if (!today) {
     try {
-      today = todayStrIn(await getLocationZone(db, locationId))
+      zone = await getLocationZone(db, locationId)
+      today = todayStrIn(zone)
     } catch (e) {
       logWarn('roster-change-notify', 'studio timezone unreadable; nothing sent or stamped, a later sender retries', { locationId, err: e?.message })
       return result
@@ -161,12 +207,26 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
       byCoach.get(c.coachId).push(c)
     }
 
+    // PUBSUMMARY.1 — the starts urgency needs, for changes that did not carry
+    // one (only a replace does). Read once for the whole request.
+    const needStart = [...new Set([...byCoach.entries()]
+      .filter(([coachId]) => coachId !== actorId)
+      .flatMap(([, list]) => list)
+      .filter((c) => c.blockDate >= today && !c.startTime && c.blockId)
+      .map((c) => c.blockId))]
+    const blockStarts = await readBlockStarts(db, needStart)
+    const isUrgent = (c) => blockStarts === null || startsWithinNoticeWindow(
+      { blockDate: c.blockDate, startTime: c.startTime || blockStarts.get(c.blockId) },
+      { nowMs, zone },
+    )
+
     for (const [coachId, list] of byCoach) {
       try {
         const future = list.filter((c) => c.blockDate >= today)
         const past = list.filter((c) => c.blockDate < today)
         result.skippedPast += past.length
         const allBlockIds = [...new Set(list.map((c) => c.blockId).filter(Boolean))]
+        const pastBlockIds = [...new Set(past.map((c) => c.blockId).filter(Boolean))]
 
         if (future.length === 0) {
           // Nothing left to tell them about, but stamp so the re-publish
@@ -184,8 +244,18 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
           continue
         }
 
-        const { title, body } = buildRosterChangeMessage(future)
-        const firstDate = future.map((c) => c.blockDate).sort()[0]
+        // PUBSUMMARY.1 — held changes wait, unstamped, for the next Publish.
+        const urgent = future.filter(isUrgent)
+        result.held += future.length - urgent.length
+        if (urgent.length === 0) {
+          result.byCoach[coachId] = 'held'
+          if (pastBlockIds.length) await stampRows(coachId, pastBlockIds)
+          continue
+        }
+        const toldBlockIds = [...new Set([...pastBlockIds, ...urgent.map((c) => c.blockId).filter(Boolean)])]
+
+        const { title, body } = buildRosterChangeMessage(urgent)
+        const firstDate = urgent.map((c) => c.blockDate).sort()[0]
         const totals = await notifyUsers([coachId], {
           title,
           body,
@@ -198,7 +268,7 @@ export async function notifyRosterChanges(db, { locationId, actorId, changes, to
         if (delivered) {
           result.notified++
           result.byCoach[coachId] = 'delivered'
-          await stampRows(coachId, allBlockIds)
+          await stampRows(coachId, toldBlockIds)
         } else if (!failed && (totals?.skipped || 0) > 0) {
           // The coach turned shift_adjusted off, but may still have the
           // broader `schedule` category on — two live staff did exactly

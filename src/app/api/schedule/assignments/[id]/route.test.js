@@ -12,7 +12,7 @@
 // Supabase + auth + push are mocked; the mock pattern is the one in
 // src/app/api/schedule/blocks/[id]/assignments/route.test.js.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async (importOriginal) => {
@@ -294,6 +294,49 @@ describe('PUT /api/schedule/assignments/[id] — hours are manager-set (D3)', ()
     expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
     expect(logRosterChange).toHaveBeenCalledTimes(1)
     expect(logRosterChange.mock.calls[0][1]).toMatchObject({ action: 'time_changed' })
+  })
+
+  // PUBSUMMARY.1 — a time change is told now only on a published roster and
+  // within 24 hours of the shift (old or new start). Otherwise it is logged and
+  // left unstamped for the next Publish's one summary.
+  describe('told now only within 24 hours (PUBSUMMARY.1)', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it('a published shift more than 24 hours out: logged, not pushed, not stamped', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-06-08T09:00:00Z')) // the shift is 10 Jun 09:00 Dublin
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const { db } = buildDb()
+      createServerClient.mockReturnValue(db)
+
+      const res = await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+      expect(res.status).toBe(200)
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+      expect(logRosterChange).toHaveBeenCalledTimes(1)
+      expect(markRosterChangesNotified).not.toHaveBeenCalled()
+    })
+
+    it('within 24 hours: pushed now', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-06-09T10:00:00Z')) // 10 Jun 09:00 Dublin is 22h away
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const { db } = buildDb()
+      createServerClient.mockReturnValue(db)
+
+      await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+      expect(notifyUsersOnce).toHaveBeenCalledTimes(1)
+    })
+
+    it('a draft roster: nobody is pushed (its first publish tells them)', async () => {
+      getCurrentUser.mockResolvedValue(MANAGER)
+      const { db } = buildDb({ assignment: assignmentRow({ rosterStatus: 'draft' }) })
+      createServerClient.mockReturnValue(db)
+
+      const res = await PUT(req({ start_time_override: '10:00:00' }), PROPS)
+      expect(res.status).toBe(200)
+      expect(notifyUsersOnce).not.toHaveBeenCalled()
+      expect(logRosterChange).not.toHaveBeenCalled()
+    })
   })
 
   // A manager who works the shift they are editing notifies themselves. That

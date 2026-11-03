@@ -30,6 +30,7 @@ import { MANAGER_ROLES, timeOfDay, assignmentStatusSchema } from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { markRosterChangesNotified } from '@/lib/roster-change-notify'
+import { startsWithinNoticeWindow } from '@/lib/roster-notice-window'
 import { logWarn } from '@/lib/log'
 import { unassignShiftAssignments, SHIFT_CHANGED_ERROR } from '@/lib/shift-unassign'
 
@@ -96,7 +97,7 @@ export async function PUT(request, props) {
 
   const { data: assignment, error: fetchErr } = await db
     .from('shift_assignments')
-    .select('id, profile_id, block_id, start_time_override, end_time_override, partial_reason, shift_blocks!block_id(location_id, start_time, end_time, block_date, roster_id, rosters:roster_id(status))')
+    .select('id, profile_id, block_id, start_time_override, end_time_override, partial_reason, shift_blocks!block_id(location_id, start_time, end_time, block_date, roster_id, rosters:roster_id(status), locations(timezone))')
     .eq('id', params.id)
     .single()
   if (fetchErr || !assignment) {
@@ -173,49 +174,63 @@ export async function PUT(request, props) {
     (updates[field] ?? null) !== (assignment[field] ?? null)
   ))
   if (overrideChanged) {
+    // PUBSUMMARY.1 — told now only when the roster is published AND the
+    // shift (its old or its new start) is within 24 hours. Otherwise the next
+    // Publish tells the coach: a draft's first publish, or a published week's
+    // one change summary, which reads the `time_changed` row logged below.
+    // Before this every save emailed a coach who has no app, draft or not.
+    const published = assignment.shift_blocks?.rosters?.status === 'published'
+    const zone = assignment.shift_blocks?.locations?.timezone ?? null
+    const blockDate = data.shift_blocks?.block_date || assignment.shift_blocks?.block_date
+    const tellNow = published && [
+      assignment.start_time_override || assignment.shift_blocks?.start_time,
+      data.start_time_override || data.shift_blocks?.start_time,
+    ].some((startTime) => startsWithinNoticeWindow({ blockDate, startTime }, { zone }))
     // NOTIFY.1 review — the result decides whether the `time_changed` row
     // below gets stamped: a re-publish must not send a second "your shift
     // changed" message for something this PUT already delivered. `undefined`
     // (the catch below fired, or notifyUsersOnce itself never ran) means
     // delivery can't be judged, so the row is deliberately left unstamped.
     let deliveryResult
-    try {
-      const block = data.shift_blocks
-      const tplName = block?.shift_templates?.name || 'Shift'
-      const date = block?.block_date || ''
-      const dateLabel = date
-        ? new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
-        : ''
-      const blockStart = (block?.start_time || '').slice(0, 5)
-      const blockEnd = (block?.end_time || '').slice(0, 5)
-      const newStart = (data.start_time_override || block?.start_time || '').slice(0, 5)
-      const newEnd = (data.end_time_override || block?.end_time || '').slice(0, 5)
-      const cleared = !data.start_time_override && !data.end_time_override
-      const body = cleared
-        ? `${tplName} ${dateLabel}: back to block default ${blockStart}–${blockEnd}.`
-        : `${tplName} ${dateLabel}: now ${newStart}–${newEnd}` +
-          (data.partial_reason ? ` · ${data.partial_reason}` : '')
+    if (tellNow) {
+      try {
+        const block = data.shift_blocks
+        const tplName = block?.shift_templates?.name || 'Shift'
+        const date = block?.block_date || ''
+        const dateLabel = date
+          ? new Date(date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+          : ''
+        const blockStart = (block?.start_time || '').slice(0, 5)
+        const blockEnd = (block?.end_time || '').slice(0, 5)
+        const newStart = (data.start_time_override || block?.start_time || '').slice(0, 5)
+        const newEnd = (data.end_time_override || block?.end_time || '').slice(0, 5)
+        const cleared = !data.start_time_override && !data.end_time_override
+        const body = cleared
+          ? `${tplName} ${dateLabel}: back to block default ${blockStart}–${blockEnd}.`
+          : `${tplName} ${dateLabel}: now ${newStart}–${newEnd}` +
+            (data.partial_reason ? ` · ${data.partial_reason}` : '')
 
-      // NOTIF.9 — migrated to notifyUsers. Shift changes are
-      // important enough to email-fallback when the coach doesn't
-      // have the app (they need to know their hours changed before
-      // they show up to the wrong shift).
-      // PUSH.2 — keyed on the adjustment CONTENT, not just the assignment:
-      // the same shift can legitimately be adjusted twice (each should
-      // notify); only an identical re-submit of the same times dedupes.
-      deliveryResult = await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
-        title: 'Shift adjusted',
-        body,
-        category: 'shift_adjusted',
-        emailSubject: `Shift adjustment — ${tplName} ${dateLabel}`,
-        data: {
-          type: 'shift_adjusted',
-          assignment_id: data.id,
-          block_date: date,
-        },
-      })
-    } catch (e) {
-      logWarn('assignment-update', `notify failed for ${data.id}`, { err: e })
+        // NOTIF.9 — migrated to notifyUsers. Shift changes are
+        // important enough to email-fallback when the coach doesn't
+        // have the app (they need to know their hours changed before
+        // they show up to the wrong shift).
+        // PUSH.2 — keyed on the adjustment CONTENT, not just the assignment:
+        // the same shift can legitimately be adjusted twice (each should
+        // notify); only an identical re-submit of the same times dedupes.
+        deliveryResult = await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
+          title: 'Shift adjusted',
+          body,
+          category: 'shift_adjusted',
+          emailSubject: `Shift adjustment — ${tplName} ${dateLabel}`,
+          data: {
+            type: 'shift_adjusted',
+            assignment_id: data.id,
+            block_date: date,
+          },
+        })
+      } catch (e) {
+        logWarn('assignment-update', `notify failed for ${data.id}`, { err: e })
+      }
     }
 
     // SCHEDULE-CHANGE-LOG.1 — record the time change on a published roster

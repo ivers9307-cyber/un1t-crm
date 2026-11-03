@@ -97,6 +97,11 @@ describe('replaceNoticeWhen', () => {
     expect(replaceNoticeWhen({ published: true, inBand: true })).toBe('now')
     expect(replaceNoticeWhen({ published: true, inBand: false })).toBe('morning')
   })
+  it('a published shift more than 24 hours out is told at the next Publish (PUBSUMMARY.1)', () => {
+    expect(replaceNoticeWhen({ published: true, inBand: true, soon: false })).toBe('publish')
+    expect(replaceNoticeWhen({ published: true, inBand: false, soon: false })).toBe('publish')
+    expect(replaceNoticeWhen({ published: false, inBand: true, soon: false })).toBe('none')
+  })
 })
 
 describe('replaceResponseOutcome (the web toast)', () => {
@@ -115,11 +120,12 @@ describe('replaceResponseOutcome (the web toast)', () => {
     expect(done('now')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. Coach A and Coach B have been told.' })
     expect(done('morning')).toEqual({ kind: 'done', tone: 'warning', sticky: true, message: 'Coach B is on the shift. Coach A and Coach B are told after 7am; if the shift is at or before 7am, ring them.' })
     expect(done('none')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. The roster is a draft, so nobody is told until it is published.' })
+    expect(done('publish')).toEqual({ kind: 'done', tone: 'success', message: 'Coach B is on the shift. Coach A and Coach B are told when you publish the roster.' })
   })
 })
 
 describe('the phone says exactly what the web says', () => {
-  it.each(['now', 'morning', 'none'])('notice %s', (notice) => {
+  it.each(['now', 'morning', 'none', 'publish'])('notice %s', (notice) => {
     const names = { fromName: 'Coach A', toName: 'Coach B' }
     expect(replaceResultAlert({ success: true, data: { notice } }, names).message)
       .toBe(replaceResponseOutcome(200, { success: true, data: { notice } }, names).message)

@@ -38,15 +38,13 @@ vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), l
 // SNAPSHOT.1 — only WHEN the writer is called matters here.
 vi.mock('@/lib/roster-snapshot', () => ({ writePublishSnapshot: vi.fn(() => Promise.resolve({ saved: true })) }))
 vi.mock('@/lib/roster-notify', () => ({
-  notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
-  publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
-  renotifyChangedCoaches: vi.fn(() => Promise.resolve({ notified: 0 })),
+  notifyRosterPublished: vi.fn(() => Promise.resolve({ notified: 0 })),
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
 const { getCurrentUser } = await import('@/lib/auth')
 const { hasPermissionForLocation } = await import('@/lib/permissions')
-const { notifyStaffOfPublish, renotifyChangedCoaches } = await import('@/lib/roster-notify')
+const { notifyRosterPublished } = await import('@/lib/roster-notify')
 const { projectPublishImpact } = await import('@/lib/roster-publish')
 const { logWarn } = await import('@/lib/log')
 const { writePublishSnapshot } = await import('@/lib/roster-snapshot')
@@ -227,8 +225,7 @@ beforeEach(() => {
   hasPermissionForLocation.mockReturnValue(true)
   projectPublishImpact.mockReset()
   projectPublishImpact.mockResolvedValue(FRESH)
-  notifyStaffOfPublish.mockClear()
-  renotifyChangedCoaches.mockClear()
+  notifyRosterPublished.mockClear()
   getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: 'loc-1' }] })
 })
 
@@ -246,7 +243,7 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
     expect(body.overlapping).toEqual([month])
     expect(updates).toHaveLength(0)
     expect(blockUpdates).toHaveLength(0)
-    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+    expect(notifyRosterPublished).not.toHaveBeenCalled()
   })
 
   // ROSTER-TRIM.1 — approving IS publishing, so it resolves a one-sided
@@ -483,7 +480,7 @@ describe('POST /api/schedule/rosters/[id]/approve — overlap guard', () => {
 
     const res = await POST({}, PROPS)
     expect(res.status).toBe(200)
-    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, { locationId: 'loc-1', periodStart: '2026-05-04', periodEnd: '2026-05-10' })
+    expect(notifyRosterPublished).toHaveBeenCalledWith(db, expect.objectContaining({ locationId: 'loc-1', periodStart: '2026-05-04', periodEnd: '2026-05-10' }))
   })
 })
 
@@ -547,8 +544,7 @@ describe('POST /api/schedule/rosters/[id]/approve — gate ordering', () => {
 
     const res = await POST({}, PROPS)
     expect(res.status).toBe(400)
-    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
-    expect(renotifyChangedCoaches).not.toHaveBeenCalled()
+    expect(notifyRosterPublished).not.toHaveBeenCalled()
   })
 })
 
@@ -616,7 +612,7 @@ describe('POST /api/schedule/rosters/[id]/approve — block errors are not swall
     expect(body.data.status).toBe('published')
     expect(body.warning).toMatch(/block tagging failed: deadlock detected/)
     expect(updates).toHaveLength(1)
-    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+    expect(notifyRosterPublished).not.toHaveBeenCalled()
   })
 })
 
@@ -686,7 +682,7 @@ describe('POST /api/schedule/rosters/[id]/approve — supersede', () => {
     expect(body.error).toMatch(/fetch failed/)
     expect(updates.at(-1).payload).toEqual({ status: 'published', superseded_at: null, superseded_by: null })
     expect(updates.at(-1).where).toContainEqual(['id', ['r-same']])
-    expect(notifyStaffOfPublish).not.toHaveBeenCalled()
+    expect(notifyRosterPublished).not.toHaveBeenCalled()
   })
 
   it('warns that the stood-down rosters are stranded when tagging fails', async () => {

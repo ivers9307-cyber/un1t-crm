@@ -45,7 +45,7 @@ import {
   coversPeriod,
 } from '@/lib/roster-publish'
 import { sendOverBudgetApprovalEmail } from '@/lib/roster-email'
-import { notifyStaffOfPublish, publishNotifyRowsForBlocks, renotifyChangedCoaches } from '@/lib/roster-notify'
+import { notifyRosterPublished } from '@/lib/roster-notify'
 import { sessionStudioZone } from '@/lib/staff-zone'
 import { logWarn, logError } from '@/lib/log'
 import { writePublishSnapshot } from '@/lib/roster-snapshot'
@@ -541,28 +541,21 @@ export async function POST(request) {
       }
     }
 
-    // Coaches assigned to the newly-published blocks.
-    const flippedShifts = await publishNotifyRowsForBlocks(db, newBlockIds)
-
-    // SCHEDULE-NOTIFY.1 — notify each coach their roster is live (one
-    // push per coach, summarising their shifts for the period). Reuses
-    // the same notifyStaffOfPublish() the approval path also uses.
-    // Best-effort; never fails the publish.
+    // SCHEDULE-NOTIFY.1 / PUBSUMMARY.1 — one message per coach: "New
+    // schedule published" for coaches on the newly published blocks, and one
+    // "Roster updated" summary of every held change for everyone else (shared
+    // with the approval path). Best-effort; never fails the publish.
     try {
-      const notified = await notifyStaffOfPublish(db, flippedShifts || [], {
-        startDate: period_start,
-        endDate: period_end,
+      const notified = await notifyRosterPublished(db, {
+        newBlockIds,
         locationId: location_id,
+        periodStart: period_start,
+        periodEnd: period_end,
       })
       coachesNotified += notified?.notified || 0
     } catch (e) {
       logWarn('rosters', 'publish notify failed', { err: e })
     }
-
-    // SCHEDULE-CHANGE-LOG.1 / NOTIFY.1 — re-notify coaches whose published
-    // shifts changed and were not already told at the moment of change.
-    const renotified = await renotifyChangedCoaches(db, { locationId: location_id, periodStart: period_start, periodEnd: period_end })
-    coachesNotified += renotified?.notified || 0
   } else {
     // status === 'draft' — manager publish over budget. Email
     // owners so they can approve. Best-effort; don't fail the

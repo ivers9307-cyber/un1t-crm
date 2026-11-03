@@ -28,6 +28,7 @@ import { SWAP_CONFLICTS_CODE } from '@/lib/swap-lifecycle'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { notifyRosterChanges } from '@/lib/roster-change-notify'
 import { inStaffPushHours } from '@/lib/staff-push-hours'
+import { startsWithinNoticeWindow } from '@/lib/roster-notice-window'
 import { readReplaceContext, replaceShiftAssignment } from '@/lib/shift-replace-server'
 import {
   replaceRefusal, replaceRefusalResponse, replaceShiftStarted, replaceChanges, replaceNoticeWhen, replaceLogDetails,
@@ -99,7 +100,9 @@ export async function POST(request, props) {
 
   const published = ctx.block.rosters?.status === 'published'
   const changes = replaceChanges({ block: ctx.block, fromProfileId: ctx.assignment.profile_id, toProfileId })
-  const notice = replaceNoticeWhen({ published, inBand: inStaffPushHours(nowMs, tz) })
+  // PUBSUMMARY.1 — a shift more than 24 hours out is told at the next Publish.
+  const soon = startsWithinNoticeWindow({ blockDate: ctx.block.block_date, startTime: ctx.block.start_time }, { nowMs, zone: tz })
+  const notice = replaceNoticeWhen({ published, inBand: inStaffPushHours(nowMs, tz), soon })
   if (published) {
     // Best-effort (logRosterChange never throws). Written after the move
     // succeeded, so the log never claims a replace that did not happen.
