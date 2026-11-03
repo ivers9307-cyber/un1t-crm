@@ -71,6 +71,10 @@ describe('sendUn1tAccountEmail', () => {
     expect(e.htmlBody).toContain('Hi Jane, you are booked in for RALLY on Tuesday 20 October at 18:00 at Hatch Street. 12 Hatch Street, Dublin 2.')
     expect(e.htmlBody).toContain('un1t.online app')
     expect(e.htmlBody).not.toMatch(/\{[a-z_]+\}/)
+    // BOOKCOPY.1 — turning up comes before the password, and needs no login.
+    const body = e.htmlBody
+    expect(body).toContain('You do not need the app or a login to come to this class.')
+    expect(body.indexOf('10 minutes early')).toBeLessThan(body.indexOf('set a password'))
     expect(e).toMatchObject({ to: 'jane@example.test', contactId: 'c-1', locationId: 'loc-1' })
   })
 
@@ -129,7 +133,7 @@ describe('fallbacks', () => {
   it('a blank studio name reads the studio\'s own name; an address without a stop gets one; no double spaces', async () => {
     await sendUn1tAccountEmail({}, { ...base, studioName: '', blocks: [], address: '1 Hatch St, Dublin 2' })
     expect(sent().subject).toBe('You are booked in at Brand Studio')
-    expect(sent().htmlBody).toContain('1 Hatch St, Dublin 2. We have set up')
+    expect(sent().htmlBody).toContain('1 Hatch St, Dublin 2. There is nothing else')
     await sendUn1tAccountEmail({}, { ...base, blocks: [], address: null })
     expect(sent().htmlBody).not.toMatch(/ {2}/)
   })

@@ -96,7 +96,10 @@ export function termsLabelSegments(copy, { studioName = '' } = {}) {
 // and {options} (trial used: the studio's offer list, never capacity).
 export const DEFAULT_FUNNEL_EMAIL_COPY = Object.freeze({
   account_email_subject: 'You are booked in at {studio_name}',
-  account_email_body: 'Hi {first_name}, you are booked in for {class_name} on {class_time} at {studio_name}. {address} We have set up your account on the un1t.online app so you can see and manage your bookings. In a minute you will get an email from un1t.online with a code to set your password. Use it to sign in to the app. Arrive about 10 minutes early and a coach will meet you. See you then, {studio_name}',
+  // BOOKCOPY.1 (3 Nov 2026) — lead with "just turn up". The old body put the
+  // password step before the arrival line, and a booker who could not sign in
+  // read the login as a condition of coming and cancelled (Conall, Hatch).
+  account_email_body: 'Hi {first_name}, you are booked in for {class_name} on {class_time} at {studio_name}. {address} There is nothing else you need to do: arrive about 10 minutes early and a coach will meet you. You do not need the app or a login to come to this class. We have also set up an account for you on the un1t.online app, so a separate email from un1t.online will bring a code to set a password. Use it whenever you want to book more classes, and if it gives you any trouble just reply to this email. See you then, {studio_name}',
   trial_used_email_subject: 'About your class at {studio_name}',
   trial_used_email_body: 'Hi {first_name}, thanks for choosing {class_name} on {class_time}. Our records show you have already had the free trial at {studio_name}, so we have not booked this class yet. To book it you can pick one of these: {options} Just reply to this email with the one you want and we will send you a secure payment link. Once you have paid, we will book you in. See you soon, {studio_name}',
 })
