@@ -21,7 +21,7 @@ const HARD_LIMIT = 20_000
  * Pure function — builds the candidate list from scratch given contacts and
  * any existing suggestion rows (dismissed or linked pairs are excluded).
  *
- * @param {Array}  contacts              - Full contact array for this location
+ * @param {Array}  contacts              - Full contact array for the organisation (PERSONORG.1)
  * @param {Array}  existingSuggestions   - Existing suggestion rows (for dismissed/linked exclusion)
  * @param {Map}    primaryByGroup        - groupId → primaryContactId (from person_groups)
  *
@@ -30,7 +30,7 @@ const HARD_LIMIT = 20_000
  *   autoLink    — high-confidence candidates only
  *   review      — medium + low confidence candidates
  */
-export function planDetection({ contacts, existingSuggestions = [], primaryByGroup = new Map() }) {
+export function planDetection({ contacts, existingSuggestions = [], primaryByGroup = new Map(), scopeLocationId = null }) {
   // Build dismissedPairKeys: skip pairs that are already decided
   const dismissedPairKeys = new Set(
     existingSuggestions
@@ -46,7 +46,16 @@ export function planDetection({ contacts, existingSuggestions = [], primaryByGro
     }
   }
 
-  const candidates = detectCandidates(contacts, { dismissedPairKeys, groupOf, primaryByGroup })
+  const found = detectCandidates(contacts, { dismissedPairKeys, groupOf, primaryByGroup })
+
+  // PERSONORG.1 — the contacts are the whole organisation's, so a studio's run
+  // keeps only the pairs that touch ITS contacts: its own duplicates as before,
+  // plus a pair with one account here and one at a sibling studio. A pair wholly
+  // at the sibling is that studio's run's to suggest and link.
+  const homeOf = new Map(contacts.map((c) => [c.id, c.location_id]))
+  const candidates = scopeLocationId
+    ? found.filter((c) => homeOf.get(c.aId) === scopeLocationId || homeOf.get(c.bId) === scopeLocationId)
+    : found
 
   const autoLink = candidates.filter((c) => c.confidence === 'high')
   const review = candidates.filter((c) => c.confidence !== 'high')
@@ -58,15 +67,39 @@ export function planDetection({ contacts, existingSuggestions = [], primaryByGro
 // Paginated load helpers
 // ---------------------------------------------------------------------------
 
-async function loadContactsForLocation(db, locationId) {
+// PERSONORG.1 — the studios a run reads: every studio of the scanned studio's
+// organisation. A person who signs up at a second studio under a new email is a
+// second contact homed THERE (Yvonne, 3 Nov 2026: a Stillorgan member with two
+// Hatch accounts), and a per-studio scan never put the two side by side, so the
+// group that tells Hatch's boards "member at Stillorgan" was never made. Groups
+// already follow the organisation (mig 767). A studio with no organisation is
+// scanned alone; a failed read throws (never "no siblings").
+async function loadOrgLocationIds(db, locationId) {
+  const { data: studio, error: locErr } = await db
+    .from('locations')
+    .select('organization_id')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (locErr) throw locErr
+  if (!studio?.organization_id) return [locationId]
+  const { data: studios, error } = await db
+    .from('locations')
+    .select('id')
+    .eq('organization_id', studio.organization_id)
+  if (error) throw error
+  const ids = (studios || []).map((l) => l.id).filter(Boolean)
+  return ids.includes(locationId) ? ids : [locationId, ...ids]
+}
+
+async function loadContactsForLocations(db, locationIds) {
   const rows = []
   let pageStart = 0
   while (true) {
     const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('contacts')
-      .select('id, name, first_name, last_name, phone, wa_phone, glofox_membership_status, person_group_id')
-      .eq('location_id', locationId)
+      .select('id, location_id, name, first_name, last_name, phone, wa_phone, glofox_membership_status, person_group_id')
+      .in('location_id', locationIds)
       .order('id', { ascending: true })
       .range(pageStart, pageEnd)
     if (error) throw error
@@ -112,7 +145,9 @@ async function loadPrimaryByGroup(db, locationId) {
   return map
 }
 
-async function loadSuggestionsForLocation(db, locationId) {
+// PERSONORG.1 — the organisation's suggestions, so a cross-studio pair a
+// sibling studio's staff dismissed is never re-suggested or auto-linked here.
+async function loadSuggestionsForLocations(db, locationIds) {
   const rows = []
   let pageStart = 0
   while (true) {
@@ -120,7 +155,7 @@ async function loadSuggestionsForLocation(db, locationId) {
     const { data: page, error } = await db
       .from('person_link_suggestions')
       .select('id, contact_id_a, contact_id_b, status')
-      .eq('location_id', locationId)
+      .in('location_id', locationIds)
       .order('id', { ascending: true })
       .range(pageStart, pageEnd)
     if (error) throw error
@@ -151,10 +186,12 @@ async function loadSuggestionsForLocation(db, locationId) {
  *   Returns { dryRun:false, counts, autoLinked, skipped, failures, totalCandidates }
  */
 export async function runDetection(db, { locationId, commit = false, actorId }) {
-  // 1. Load data
+  // 1. Load data — the whole organisation's (PERSONORG.1), scoped back to this
+  //    studio's pairs in planDetection.
+  const orgLocationIds = await loadOrgLocationIds(db, locationId)
   const [contacts, existingSuggestions] = await Promise.all([
-    loadContactsForLocation(db, locationId),
-    loadSuggestionsForLocation(db, locationId),
+    loadContactsForLocations(db, orgLocationIds),
+    loadSuggestionsForLocations(db, orgLocationIds),
   ])
 
   // 1b. Build primaryByGroup via a location-scoped paginated load.
@@ -163,7 +200,7 @@ export async function runDetection(db, { locationId, commit = false, actorId }) 
   const primaryByGroup = await loadPrimaryByGroup(db, locationId)
 
   // 2. Plan
-  const { candidates, autoLink, review } = planDetection({ contacts, existingSuggestions, primaryByGroup })
+  const { candidates, autoLink, review } = planDetection({ contacts, existingSuggestions, primaryByGroup, scopeLocationId: locationId })
 
   const counts = {
     high: autoLink.length,
