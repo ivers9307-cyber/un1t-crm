@@ -160,11 +160,20 @@ export function detectCandidates(contacts, {
         consider(a.id, b.id, { method: 'phone', confidence: 'medium', reason: 'Same phone, different name' })
       }
     } else {
-      // n >= 3: every unordered pair is low-confidence
-      const reason = `Phone shared by ${n} accounts`
+      // n >= 3: every unordered pair is low-confidence, unless every account
+      // carries the same name. PERSONORG.1: one person signing up at a second
+      // studio under new emails (Yvonne, 3 Nov 2026: a Stillorgan member and two
+      // un1t.online accounts at Hatch, one phone, one name) is three accounts,
+      // and "low" never auto-links, so the Stillorgan membership never reached
+      // the Hatch boards. Same phone AND same name on all of them is one person.
+      const names = group.map(contactName)
+      const oneName = names[0] !== '' && names.every((nm) => nm === names[0])
+      const candidate = oneName
+        ? { method: 'phone', confidence: 'high', reason: `Same phone and name on ${n} accounts` }
+        : { method: 'phone', confidence: 'low', reason: `Phone shared by ${n} accounts` }
       for (let i = 0; i < group.length; i++) {
         for (let j = i + 1; j < group.length; j++) {
-          consider(group[i].id, group[j].id, { method: 'phone', confidence: 'low', reason })
+          consider(group[i].id, group[j].id, candidate)
         }
       }
     }
