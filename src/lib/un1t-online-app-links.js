@@ -12,7 +12,8 @@ import { escapeHtml } from './html-escape'
 
 export const DEFAULT_APP_SECTION_COPY = {
   heading: 'Book your classes in the un1t.online app',
-  body: "Download the app and log in with this email address once you've set your password. That's where you'll book and manage every class.",
+  // BOOKCOPY.1 — the app is for booking more, never a condition of coming.
+  body: "Download the app to book and manage your classes. Log in with this email address once you've set your password. You don't need it to come to a class you're already booked into.",
 }
 
 const httpsUrl = (v) => (typeof v === 'string' && v.trim().startsWith('https://') ? v.trim() : null)
