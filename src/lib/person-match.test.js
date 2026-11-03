@@ -168,6 +168,32 @@ describe('detectCandidates — phone matching', () => {
     expect(new Set(keys).size).toBe(3)
   })
 
+  it('PERSONORG.1 — 3 accounts sharing a phone AND one name → 3 high-confidence pairs', () => {
+    const contacts = [
+      { id: 'a', glofox_membership_status: 'member', name: 'Yvonne Treacy', phone: '+353863150010' },
+      { id: 'b', glofox_membership_status: null, name: 'Yvonne  Treacy', phone: '0863150010' },
+      { id: 'c', glofox_membership_status: null, first_name: 'Yvonne', last_name: 'Treacy', phone: '353863150010' },
+    ]
+    const results = detectCandidates(contacts).filter((r) => r.method === 'phone')
+    expect(results).toHaveLength(3)
+    for (const r of results) {
+      expect(r.confidence).toBe('high')
+      expect(r.reason).toBe('Same phone and name on 3 accounts')
+    }
+  })
+
+  it('PERSONORG.1 — 3 accounts on one phone with one name missing stay low', () => {
+    const contacts = [
+      { id: 'a', glofox_membership_status: 'member', name: 'Yvonne Treacy', phone: '0863150010' },
+      { id: 'b', glofox_membership_status: 'member', name: 'Yvonne Treacy', phone: '0863150010' },
+      { id: 'c', glofox_membership_status: 'member', name: '', phone: '0863150010' },
+    ]
+    const results = detectCandidates(contacts)
+    // The named pair may come back as a stronger name match; none is high.
+    expect(results.some((r) => r.confidence === 'high')).toBe(false)
+    expect(results.filter((r) => r.method === 'phone').every((r) => r.confidence === 'low')).toBe(true)
+  })
+
   it('contacts with no phone produce no phone candidates (but may produce name candidates)', () => {
     // Two real contacts with no phone and the same name now produce a real↔real
     // name candidate (MEDIUM — two ungrouped singletons). This test verifies

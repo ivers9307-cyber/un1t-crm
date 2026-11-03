@@ -578,6 +578,98 @@ describe('runDetection — commit=true', () => {
 // supersedeRedundantPending
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PERSONORG.1 — the scan reads the whole organisation
+// ---------------------------------------------------------------------------
+
+describe('runDetection — organisation-wide (PERSONORG.1)', () => {
+  const LOCATIONS = [
+    { id: 'loc-1', organization_id: 'org-1' },
+    { id: 'loc-2', organization_id: 'org-1' },
+    { id: 'loc-x', organization_id: 'org-2' },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    createGroup.mockResolvedValue({ group: { id: 'g-new-1' }, members: [] })
+    addToGroup.mockResolvedValue({ group: { id: 'g-existing' }, members: [] })
+  })
+
+  it('links an account here to the same person homed at a sibling studio', async () => {
+    const here = contact('c1', { phone: PHONE_A, name: 'Yvonne Treacy', location_id: 'loc-1' })
+    const sibling = contact('c2', { phone: PHONE_A, name: 'Yvonne Treacy', location_id: 'loc-2' })
+    const db = makeDb({ locations: LOCATIONS, contacts: [here, sibling], person_link_suggestions: [] })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: null })
+
+    expect(createGroup).toHaveBeenCalledWith(db, expect.objectContaining({
+      contactIds: expect.arrayContaining(['c1', 'c2']),
+      locationId: 'loc-1',
+    }))
+    expect(result.autoLinked).toBe(1)
+  })
+
+  it('joins the sibling account into the group the studio\'s own accounts already share', async () => {
+    const a = contact('c1', { phone: PHONE_A, name: 'Yvonne Treacy', location_id: 'loc-1', person_group_id: 'g-hatch' })
+    const b = contact('c2', { phone: PHONE_A, name: 'Yvonne Treacy', location_id: 'loc-1', person_group_id: 'g-hatch' })
+    const member = contact('c3', { phone: PHONE_A, name: 'Yvonne Treacy', location_id: 'loc-2' })
+    const db = makeDb({ locations: LOCATIONS, contacts: [a, b, member], person_link_suggestions: [] })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: null })
+
+    expect(addToGroup).toHaveBeenCalledWith(db, expect.objectContaining({ groupId: 'g-hatch', contactIds: ['c3'] }))
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(result.autoLinked).toBe(1)
+  })
+
+  it('leaves a pair wholly at the sibling studio to that studio\'s run', async () => {
+    const s1 = contact('c1', { phone: PHONE_A, name: 'Alice Smith', location_id: 'loc-2' })
+    const s2 = contact('c2', { phone: PHONE_A, name: 'Alice Smith', location_id: 'loc-2' })
+    const db = makeDb({ locations: LOCATIONS, contacts: [s1, s2], person_link_suggestions: [] })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: null })
+
+    expect(result.totalCandidates).toBe(0)
+    expect(createGroup).not.toHaveBeenCalled()
+    expect(db._store.person_link_suggestions).toHaveLength(0)
+  })
+
+  it('never reads another organisation\'s contacts', async () => {
+    const here = contact('c1', { phone: PHONE_A, name: 'Alice Smith', location_id: 'loc-1' })
+    const otherOrg = contact('c2', { phone: PHONE_A, name: 'Alice Smith', location_id: 'loc-x' })
+    const db = makeDb({ locations: LOCATIONS, contacts: [here, otherOrg], person_link_suggestions: [] })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: null })
+
+    expect(result.totalCandidates).toBe(0)
+    expect(createGroup).not.toHaveBeenCalled()
+  })
+
+  it('does not re-suggest or link a cross-studio pair the sibling studio dismissed', async () => {
+    const here = contact('c1', { phone: PHONE_A, name: 'Alice Smith', location_id: 'loc-1' })
+    const sibling = contact('c2', { phone: PHONE_A, name: 'Alice Smith', location_id: 'loc-2' })
+    const db = makeDb({
+      locations: LOCATIONS,
+      contacts: [here, sibling],
+      person_link_suggestions: [{ id: 's1', location_id: 'loc-2', contact_id_a: 'c1', contact_id_b: 'c2', status: 'dismissed' }],
+    })
+
+    const result = await runDetection(db, { locationId: 'loc-1', commit: true, actorId: null })
+
+    expect(result.totalCandidates).toBe(0)
+    expect(createGroup).not.toHaveBeenCalled()
+  })
+
+  it('throws when the studio\'s organisation cannot be read (never "no siblings")', async () => {
+    const db = makeDb({
+      locations: () => { throw new Error('boom') },
+      contacts: [],
+      person_link_suggestions: [],
+    })
+    await expect(runDetection(db, { locationId: 'loc-1', commit: true, actorId: null })).rejects.toThrow()
+  })
+})
+
 describe('supersedeRedundantPending — commit=true', () => {
   beforeEach(() => {
     vi.clearAllMocks()
