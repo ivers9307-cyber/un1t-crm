@@ -22,6 +22,16 @@ const NEW_SLUGS = [
   ...getBoardModule('programmes').stages.map((s) => s.slug),
 ]
 
+describe('REBOOK.1 — the Hatch board\'s Rebook column', () => {
+  const rebook = getBoardModule('acquisition_un1t').stages.find((s) => s.slug === 'rebook')
+  it('has a Kanban colour matching its module row, labels, and a light-card chip', () => {
+    expect(stageColors.rebook).toBe(rebook.color)
+    expect(AUDIENCE_LABELS.rebook).toMatch(/^Rebook/)
+    expect(RECLASSIFY_LABELS.rebook).toBe('Rebook')
+    expect(statusBadge.rebook).toMatch(/^bg-[a-z]+-500\/20 text-[a-z]+-700$/)
+  })
+})
+
 describe('the eight new stage slugs', () => {
   it('are the two modules\' slugs', () => {
     expect(NEW_SLUGS).toEqual([

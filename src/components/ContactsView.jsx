@@ -27,7 +27,7 @@ import { hasMoreContacts, CONTACTS_PAGE_SIZE } from '@/lib/contacts-pagination'
 // FUNNEL.1 — chip values are the canonical classifier-derived funnel
 // slugs (mig 350): four lead columns, the win column, and the three
 // off-funnel pools.
-const STATUSES = ['', 'new_lead', 'first_class', 'second_class', 'trial_done',
+const STATUSES = ['', 'new_lead', 'rebook', 'first_class', 'second_class', 'trial_done',
   'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant']
 
 export default function ContactsView({

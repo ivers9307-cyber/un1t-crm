@@ -56,7 +56,7 @@ const ATTENTION_CHIP = {
 
 // Funnel stages show the trial-credit + next-class chips (mirrors the
 // DealCard BADGE_SLUGS set).
-const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
+const BADGE_SLUGS = new Set(['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done'])
 
 // WAITLIST.6 — Cold is a DERIVED-board affordance. It stamps
 // contacts.pipeline_dismissed_at and nothing but the classifier reads that

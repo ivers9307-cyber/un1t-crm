@@ -34,6 +34,7 @@ vi.mock('./membership/reads/index.js', () => ({
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 // TDSEQ.1 — the sequence trigger a un1t board move fires (triggers.test.js covers it).
 vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForPipelineStageChange: vi.fn() }))
+vi.mock('./pipeline-rebook-notes.js', () => ({ writeRebookNotes: vi.fn().mockResolvedValue({ written: 0 }) }))
 // PIPEEXCL.1 — who is an active member at another studio is its own module
 // (pipeline-other-studio-members.test.js); here it answers "nobody" unless a
 // test says otherwise, so every fixture below keeps describing today's board.
@@ -612,6 +613,54 @@ describe('HATCHPIPE.2 — un1t.online-input boards', () => {
       title: 'Dual', contact_id: 'c-dual', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open',
     })
     expect(out.deals_created).toBe(1)
+  })
+
+  // REBOOK.1 — a lead who booked and never came moves to Rebook, and the card
+  // gets its timeline note (landed moves and creates only, never a dry run).
+  it('a cancelled-and-never-came lead moves to Rebook and gets a note; a new one is created there with one', async () => {
+    const { writeRebookNotes } = await import('./pipeline-rebook-notes.js')
+    vi.mocked(writeRebookNotes).mockClear()
+    const cancelled = () => ({ ...leadSnap(), recent_bookings: [{ attended: false, status: 'CANCELLED', time_start: Math.floor((Date.now() - 3600_000) / 1000) }] })
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [
+        { id: 'c-conall', name: 'Conall', email: null, location_id: HATCH },
+        { id: 'c-new', name: 'New', email: null, location_id: HATCH },
+      ],
+      snapshots: [['c-conall', cancelled()], ['c-new', cancelled()]],
+    })))
+    const { db, writesTo, argOf } = recordingDb({
+      pipelines: HATCH_PIPELINES,
+      pipeline_stages: [...HATCH_STAGES, { id: 'h-rebook', slug: 'rebook', pipeline_id: 'p-h-acq', location_id: HATCH }],
+      deals: [{ id: 'd-conall', contact_id: 'c-conall', stage_id: 'h-new', pipeline_id: 'p-h-acq', location_id: HATCH, status: 'open' }],
+    })
+
+    const out = await reclassifyAllContacts(db, { locationId: HATCH })
+
+    const patches = writesTo('deals').map((e) => argOf(e, 'update')?.[1]).filter(Boolean)
+    expect(patches).toContainEqual({ stage_id: 'h-rebook' })
+    const inserts = writesTo('deals').map((e) => argOf(e, 'insert')?.[1]).filter(Boolean)
+    expect(inserts.map((r) => [r.contact_id, r.stage_id])).toEqual([['c-new', 'h-rebook']])
+    expect(out).toMatchObject({ ok: true, errors: 0 })
+    expect(writeRebookNotes).toHaveBeenCalledTimes(1)
+    const [, args] = vi.mocked(writeRebookNotes).mock.calls[0]
+    expect(args.locationId).toBe(HATCH)
+    expect(args.landed).toEqual(expect.arrayContaining([{ contact_id: 'c-conall', deal_id: 'd-conall' }, { contact_id: 'c-new' }]))
+  })
+
+  it('a dry run writes no Rebook note', async () => {
+    const { writeRebookNotes } = await import('./pipeline-rebook-notes.js')
+    vi.mocked(writeRebookNotes).mockClear()
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-new', name: 'New', email: null, location_id: HATCH }],
+      snapshots: [['c-new', { ...leadSnap(), recent_bookings: [{ attended: false, status: 'NO_SHOW', time_start: Math.floor((Date.now() - 86_400_000) / 1000) }] }]],
+    })))
+    const { db } = recordingDb({
+      pipelines: HATCH_PIPELINES,
+      pipeline_stages: [...HATCH_STAGES, { id: 'h-rebook', slug: 'rebook', pipeline_id: 'p-h-acq', location_id: HATCH }],
+      deals: [],
+    })
+    await reclassifyAllContacts(db, { locationId: HATCH, dryRun: true })
+    expect(writeRebookNotes).not.toHaveBeenCalled()
   })
 
   it('a contact with no snapshot is counted as an error, not classified', async () => {

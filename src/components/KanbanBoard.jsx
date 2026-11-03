@@ -13,6 +13,7 @@ import ContactDrawer from './contact/ContactDrawer'
 // slugs to a colour; the two claim boards' entries mirror their module rows.
 export const stageColors = {
   new_lead:     '#3B82F6',
+  rebook:       '#6366F1', // REBOOK.1 (Hatch only)
   first_class:  '#10B981',
   second_class: '#14B8A6',
   trial_done:   '#F59E0B',

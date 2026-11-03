@@ -42,6 +42,7 @@ export const FIELD_GROUPS = Object.freeze([
 // three live campaigns still carry `active_member`).
 export const STAGE_LABELS = Object.freeze({
   new_lead: 'New lead',
+  rebook: 'Rebook (booked, never came)',
   first_class: 'First class',
   second_class: 'Second class',
   trial_done: 'Trial done',
@@ -79,7 +80,7 @@ export const FIELD_OPTIONS = [
   { value: 'pipeline_stage_slug',   label: 'Pipeline stage (at this studio)', type: 'select',
     group: 'Funnel',
     hint: 'Where our funnel classifier places them at this studio. This is the one to use — Membership Status below is the raw vendor field it reads. "Is empty" means no stage here yet.',
-    options: ['new_lead', 'first_class', 'second_class', 'trial_done',
+    options: ['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done',
               'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant'],
     valueLabels: STAGE_LABELS },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',

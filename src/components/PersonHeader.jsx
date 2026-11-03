@@ -16,6 +16,7 @@ import { initials } from '@/lib/person-view'
 // Keyed on pipeline_stage_slug (FUNNEL.1 taxonomy).
 const STAGE_PILL = {
   new_lead:     'bg-blue-500/10 text-blue-700',
+  rebook:       'bg-indigo-500/10 text-indigo-700',
   first_class:  'bg-emerald-500/10 text-emerald-700',
   second_class: 'bg-teal-500/10 text-teal-700',
   trial_done:   'bg-amber-500/10 text-amber-700',

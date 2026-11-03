@@ -20,7 +20,7 @@ import {
 } from '@/lib/sequences/anniversary-fields'
 
 const PIPELINE_SLUGS = [
-  'new_lead', 'first_class', 'second_class', 'trial_done',
+  'new_lead', 'rebook', 'first_class', 'second_class', 'trial_done',
   'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant',
 ]
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']

@@ -4,6 +4,6 @@
 // client component) imports it, and pipeline-card-signals.js re-exports it, so
 // the server read and the card can never disagree about the columns.
 export const SIGNAL_SLUGS = new Set([
-  'new_lead', 'first_class', 'second_class', 'trial_done',
+  'new_lead', 'rebook', 'first_class', 'second_class', 'trial_done',
   'paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done',
 ])

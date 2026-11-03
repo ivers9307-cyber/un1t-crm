@@ -49,10 +49,13 @@ describe('board registry', () => {
     expect(mod.inputSource).toBe('un1t_online')
   })
 
-  it('acquisition_un1t shares acquisition stages by reference; classify is its own wrapper (TRIALDONE.2)', () => {
+  it('acquisition_un1t is acquisition\'s columns plus Rebook after New Leads (REBOOK.1); classify is its own wrapper (TRIALDONE.2)', () => {
     const acq = getBoardModule('acquisition')
     const un1t = getBoardModule('acquisition_un1t')
-    expect(un1t.stages).toBe(acq.stages)
+    expect(un1t.stages.map((s) => s.slug)).toEqual(['new_lead', 'rebook', ...acq.stages.map((s) => s.slug).filter((s) => s !== 'new_lead')])
+    // mig 807: Hatch's live orders, 301..312 with Rebook at 302.
+    expect(un1t.stages.map((s) => s.display_order)).toEqual(Array.from({ length: 12 }, (_, i) => 301 + i))
+    expect(acq.stages.some((s) => s.slug === 'rebook')).toBe(false)
     expect(un1t.classify).toBe(un1tClassify)
     expect(un1t.classify).not.toBe(acq.classify)
   })

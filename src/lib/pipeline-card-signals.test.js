@@ -30,7 +30,31 @@ describe('shapeCardSignals (pure)', () => {
       trial_ends_at: null,
       trial_days_left: null,
       trial_ended_days: null,
+      missed_class: null,
     })
+  })
+
+  // REBOOK.1 — the latest class they booked and never came to.
+  it('a cancelled class with nothing after it is the missed class (Conall)', () => {
+    const s = shapeCardSignals({ nowMs: NOW, bookings: [{ class_name: 'RECLA1M', starts_at: ago(0.1), status: 'CANCELLED', attended: false }] })
+    expect(s.missed_class).toEqual({ class_name: 'RECLA1M', starts_at: ago(0.1), outcome: 'cancelled' })
+  })
+  it('a no-show, and a past booking with nothing recorded, are missed; the newest wins', () => {
+    const s = shapeCardSignals({ nowMs: NOW, bookings: [
+      { class_name: 'A', starts_at: ago(5), status: 'NO_SHOW' },
+      { class_name: 'B', starts_at: ago(2), status: 'BOOKED' },
+    ] })
+    expect(s.missed_class).toMatchObject({ class_name: 'B', outcome: 'not attended' })
+  })
+  it('a class attended after the miss, or a live booking ahead, hides it', () => {
+    expect(shapeCardSignals({ nowMs: NOW, bookings: [
+      { class_name: 'A', starts_at: ago(5), status: 'CANCELLED' },
+      { class_name: 'B', starts_at: ago(2), status: 'ATTENDED', attended: true },
+    ] }).missed_class).toBeNull()
+    expect(shapeCardSignals({ nowMs: NOW, bookings: [
+      { class_name: 'A', starts_at: ago(5), status: 'CANCELLED' },
+      { class_name: 'B', starts_at: ahead(2), status: 'BOOKED' },
+    ] }).missed_class).toBeNull()
   })
 
   // HATCHCARD.2 — the trial window (shapeTrialWindow) becomes days left, or days since it ended.
@@ -141,7 +165,7 @@ describe('cardSignalsEnabledForModule / SIGNAL_SLUGS', () => {
     expect(cardSignalsEnabledForModule(null)).toBe(false)
   })
   it('the live funnel columns of both boards, never the piles or Converted', () => {
-    for (const s of ['new_lead', 'first_class', 'second_class', 'trial_done', 'paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done']) {
+    for (const s of ['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done', 'paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done']) {
       expect(SIGNAL_SLUGS.has(s)).toBe(true)
     }
     for (const s of ['converted', 'paid_trial_converted', 'member', 'pack_member', 'dormant', 'cold_lead']) {

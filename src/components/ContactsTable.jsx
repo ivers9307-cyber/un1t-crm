@@ -30,6 +30,7 @@ const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'),
 // Unmapped slugs fall back to the neutral grey badge.
 export const statusBadge = {
   new_lead:     'bg-blue-500/20 text-blue-700',
+  rebook:       'bg-indigo-500/20 text-indigo-700',
   first_class:  'bg-green-500/20 text-green-700',
   second_class: 'bg-teal-500/20 text-teal-700',
   trial_done:   'bg-amber-500/20 text-amber-700',

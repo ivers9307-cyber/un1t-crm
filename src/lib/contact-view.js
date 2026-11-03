@@ -3,7 +3,7 @@
 // (from dublinTodayStr()) when they want overdue-task detection, so
 // this module never computes "today" itself.
 
-const FUNNEL_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
+const FUNNEL_SLUGS = new Set(['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done'])
 const MESSAGE_TYPES = new Set(['whatsapp_sent', 'whatsapp_received', 'sms_sent', 'email'])
 
 // Unified timeline: notes + activities, newest first. Extracted from
