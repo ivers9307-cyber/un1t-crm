@@ -26,6 +26,7 @@ import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
 import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
 import { loadActiveElsewhere, leavesBoard, ELSEWHERE_MEMBER, ELSEWHERE_TRAINING } from './pipeline-other-studio-members.js'
 import { triggerSequencesForPipelineStageChange } from './sequences/triggers.js'
+import { writeRebookNotes } from './pipeline-rebook-notes.js'
 // PIPE3 — one router places a contact on one of several contacts-input boards
 // (acquisition / paid_trial / programmes at Stillorgan); the claims it needs
 // are read once per run.
@@ -40,6 +41,8 @@ import {
 // un1t_* rows at THIS studio), never from contacts columns. Every other board
 // reads contacts exactly as before.
 const UN1T_INPUT = 'un1t_online'
+// REBOOK.1 — the un1t board's Rebook column (shared/pipelines/acquisition-un1t.js).
+const REBOOK_SLUG = 'rebook'
 // The module a disabled row is dry-run as (includeDisabled, below): Hatch's
 // pre-740 acquisition row still named the Glofox module and was previewed as
 // un1t. PIPE3 / HATCH39 — a disabled row on one of these modules (Stillorgan's
@@ -500,6 +503,7 @@ export async function reclassifyAllContacts(db, args) {
   const movesToApply = [] // [{ deal_id, contact_id, from_slug, to_slug, target_stage_id, contact_name }]
   const createsToApply = [] // [{ contact_id, target_stage_id, target_slug, contact_name }]
   const movesLanded = [] // TDSEQ.1 / STILL39SEQ.1: real runs, firing boards: the moves whose write landed
+  const rebookCreated = [] // REBOOK.1: real runs, the deals created straight into Rebook
   const leavesToApply = [] // PIPEEXCL.1: [{ deal_id, contact_id, from_slug, contact_name }]
   const duplicatesToClose = [] // PIPE3: surplus open deals, [{ deal_id, contact_id }]
   let duplicateDealsClosed = 0
@@ -715,6 +719,7 @@ export async function reclassifyAllContacts(db, args) {
         continue
       }
       dealsCreated++
+      if (c.target_slug === REBOOK_SLUG) rebookCreated.push({ contact_id: c.contact_id })
       movementMatrix[''] = movementMatrix[''] || {}
       movementMatrix[''][c.target_slug] = (movementMatrix[''][c.target_slug] || 0) + 1
     }
@@ -841,6 +846,17 @@ export async function reclassifyAllContacts(db, args) {
   // write and the audit close, so a slow or failing enrolment can never fail
   // or hold up the run.
   if (movesLanded.length > 0) await fireStageTriggers(movesLanded, locationId)
+
+  // REBOOK.1 — a card that landed in Rebook gets a timeline note naming the
+  // class it booked and what became of it. un1t.online boards only (the one
+  // classify that answers 'rebook'); best-effort, after everything else.
+  if (!dryRun && inputSource === UN1T_INPUT) {
+    const rebookLanded = [
+      ...movesLanded.filter((m) => m.to_slug === REBOOK_SLUG).map((m) => ({ contact_id: m.contact_id, deal_id: m.deal_id })),
+      ...rebookCreated,
+    ]
+    if (rebookLanded.length > 0) await writeRebookNotes(db, { locationId, landed: rebookLanded, nowMs })
+  }
 
   return {
     ok: true,

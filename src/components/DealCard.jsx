@@ -50,6 +50,11 @@ function shortDate(iso, zone) {
     return null
   }
 }
+// REBOOK.1 — "RECLA1M 3 Nov · cancelled": the class they booked and never came to.
+function missedClassLabel(m, zone) {
+  const date = shortDate(m.starts_at, zone)
+  return [m.class_name || 'Class', date].filter(Boolean).join(' ') + ` · ${m.outcome}`
+}
 function trialChip(sig, zone) {
   if (!sig?.trial_kind) return null
   const name = sig.trial_kind === 'paid' ? '€39 trial' : 'Trial'
@@ -75,6 +80,7 @@ const AGE_TONES = {
 // Keyed on pipeline_stage_slug (FUNNEL.1 taxonomy).
 const statusColors = {
   new_lead:     'border-l-blue-500',
+  rebook:       'border-l-indigo-500',
   first_class:  'border-l-green-500',
   second_class: 'border-l-teal-500',
   trial_done:   'border-l-amber-500',
@@ -107,7 +113,7 @@ const CARD_ACTIONS = {
 
 // Funnel columns 1–4 show the next-class badge; Converted and the
 // off-funnel stages don't (it'd be noise there).
-const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
+const BADGE_SLUGS = new Set(['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done'])
 
 // C146 TASKSNEEDCONTACTS.1 — `canTask` (the pipeline page's
 // canWriteActivitiesAt at the board's studio) drops the Task item where the
@@ -212,6 +218,11 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
               <span className={`${CHIP} ${TONE.good}`}>Next: {nextClassLabel(sig.next_class_at, timezone, viewerZone)}</span>
             ) : (
               <span className={`${CHIP} ${TONE.bad}`}>No class booked</span>
+            )}
+            {sig.missed_class && (
+              <span className={`${CHIP} ${TONE.warn}`}>
+                {missedClassLabel(sig.missed_class, timezone)}
+              </span>
             )}
             {sig.last_class_days != null && (
               <span className={`${CHIP} ${sig.last_class_warm ? TONE.warn : TONE.neutral}`}>Last class {ago(sig.last_class_days)}</span>

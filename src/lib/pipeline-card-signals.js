@@ -48,6 +48,8 @@ const msOf = (v) => {
 const daysSince = (ms, nowMs) => (ms == null ? null : Math.max(0, Math.floor((nowMs - ms) / DAY_MS)))
 const upper = (v) => String(v ?? '').trim().toUpperCase()
 const isAttended = (b) => b?.attended === true || upper(b?.status) === 'ATTENDED'
+// REBOOK.1 — how a booking ended without the class, for the card's "missed" chip.
+const MISSED_OUTCOME = Object.freeze({ CANCELLED: 'cancelled', LATE_CANCELLED: 'late cancel', NO_SHOW: 'no-show' })
 
 /**
  * One person's signals. Pure; reads no clock but `nowMs`.
@@ -66,9 +68,18 @@ export function shapeCardSignals({ bookings = [], clients = [], conversations = 
   let lastClassMs = null
   let nextClassMs = null
   let nextClassAt = null
+  let missed = null
   for (const b of bookings) {
     if (!b) continue
     const at = msOf(b.starts_at)
+    // REBOOK.1 — the newest booking that ended without the class: cancelled,
+    // a no-show, or a start that passed with nothing recorded.
+    const status = upper(b.status)
+    const outcome = isAttended(b) ? null
+      : MISSED_OUTCOME[status] ?? (at != null && at <= nowMs ? 'not attended' : null)
+    if (outcome && at != null && (missed == null || at > missed.ms)) {
+      missed = { ms: at, class_name: b.class_name ? String(b.class_name) : null, starts_at: b.starts_at, outcome }
+    }
     if (isAttended(b)) {
       classesAttended++
       if (at != null && at <= nowMs && (lastClassMs == null || at > lastClassMs)) lastClassMs = at
@@ -101,6 +112,9 @@ export function shapeCardSignals({ bookings = [], clients = [], conversations = 
   const waState = !anyThread ? 'never' : replyMs != null ? 'replied' : 'no_reply'
 
   const lastClassDays = daysSince(lastClassMs, nowMs)
+  // REBOOK.1 — shown only when it is the latest news: a class they came to
+  // after it, or a live booking ahead, makes the miss history.
+  const missedIsLatest = missed && (lastClassMs == null || missed.ms > lastClassMs) && nextClassMs == null
 
   // HATCHCARD.2 — the trial window (shapeTrialWindow): days left while it
   // runs (rounded up: half a day left reads as 1), days since it ended after.
@@ -128,6 +142,7 @@ export function shapeCardSignals({ bookings = [], clients = [], conversations = 
     trial_ends_at: endsMs != null ? trialWindow.ends_at : null,
     trial_days_left: trialDaysLeft,
     trial_ended_days: trialEndedDays,
+    missed_class: missedIsLatest ? { class_name: missed.class_name, starts_at: missed.starts_at, outcome: missed.outcome } : null,
   }
 }
 
@@ -196,7 +211,7 @@ export async function loadUn1tCardSignals(db, { locationId, contactIds, nowMs = 
 
   const [bookings, clients, conversations, transactions] = await Promise.all([
     readAll((chunk) => db.from('class_bookings')
-      .select('id, contact_id, starts_at, status, attended')
+      .select('id, contact_id, class_name, starts_at, status, attended')
       .eq('location_id', locationId)
       .eq('source_platform', 'un1t_online')
       .in('contact_id', chunk)

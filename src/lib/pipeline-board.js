@@ -57,7 +57,7 @@ export async function readWholeColumn({ readRange, first, count }) {
 // Only funnel columns 1–4 carry the next-class badge (DealCard has a matching
 // set). Others get null so the board's badge-first sort never re-orders a
 // column by a criterion the card doesn't render.
-const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
+const BADGE_SLUGS = new Set(['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done'])
 
 // Off-funnel view keeps the lean field list (no badge, thousands of rows);
 // the funnel view also needs recent_bookings to derive next_class_at.

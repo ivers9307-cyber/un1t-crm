@@ -129,7 +129,7 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
     : []
   // Funnel stages carry the credits / next-class chips (DealCard's set).
   const funnel = contact
-    ? ['new_lead', 'first_class', 'second_class', 'trial_done'].includes(contact.pipeline_stage_slug)
+    ? ['new_lead', 'rebook', 'first_class', 'second_class', 'trial_done'].includes(contact.pipeline_stage_slug)
     : false
 
   return (
