@@ -24,6 +24,11 @@
 //     re-sending on every tick, and a failed send releases its claim so the
 //     next tick retries. Rows older than 48 hours are left to that net.
 //
+// PUBSUMMARY.1 — a coach whose shift (old OR new start) is more than 24
+// hours out is HELD: neither sent nor stamped, so the next Publish's summary
+// tells them. This arm still sends it itself if the shift comes within 24
+// hours before anyone publishes (and the row is under 48 hours old).
+//
 // Category shift_adjusted (NOTIFY.1 D-C): registered, email fallback,
 // default-on for every role; the phone deep-links data.type 'shift_adjusted'
 // + block_date to that week.
@@ -34,7 +39,8 @@ import { formatTimeRange12h } from './schedule-overlap'
 import { inStaffPushHours, staffWallClockHHMM } from './staff-push-hours'
 import { isLiveAssignment } from './roster'
 import { toHms, sameWindow, TIME_CHANGE_SOURCE } from './block-edit'
-import { todayStrIn, resolveZone } from './location-time'
+import { todayStrIn, resolveZone, addDaysISO } from './location-time'
+import { startsWithinNoticeWindow } from './roster-notice-window'
 import { logWarn, logError } from './log'
 
 export { TIME_CHANGE_SOURCE }
@@ -46,7 +52,7 @@ const PAGE = 1000
 
 export function emptyTimeChangeSummary() {
   return {
-    time_change_quiet: 0, time_change_rows: 0, time_change_told: 0, time_change_not_needed: 0,
+    time_change_quiet: 0, time_change_rows: 0, time_change_told: 0, time_change_not_needed: 0, time_change_held: 0,
     time_change_deduped: 0, time_change_undelivered: 0, time_change_send_failed: 0,
     time_change_stamp_failed: 0, time_change_told_stamp_failed: 0, time_change_read_failed: 0, time_change_read_capped: 0,
   }
@@ -70,9 +76,12 @@ const byAge = (a, b) => (a.created_at === b.created_at
  * TZ.8a — "today" is each row's STUDIO day: `todayByLocation[location_id]`,
  * else the single `todayStr` (one studio, or a caller that already knows).
  * @param {Array<object>} rows  roster_change_log rows with the shift_blocks embed
- * @param {{ todayStr?: string, todayByLocation?: Record<string,string>, nowHHMMByLocation: Record<string,string> }} opts
+ * PUBSUMMARY.1 — with a finite `nowMs`, a group whose old and new starts are
+ * both more than 24 hours out (each studio's zone, `zoneByLocation`) goes to
+ * `held`: neither sent nor stamped.
+ * @param {{ todayStr?: string, todayByLocation?: Record<string,string>, nowHHMMByLocation: Record<string,string>, nowMs?: number, zoneByLocation?: Record<string,string|null> }} opts
  */
-export function planTimeChangeNotices(rows, { todayStr, todayByLocation = {}, nowHHMMByLocation = {} } = {}) {
+export function planTimeChangeNotices(rows, { todayStr, todayByLocation = {}, nowHHMMByLocation = {}, nowMs, zoneByLocation = {} } = {}) {
   const groups = new Map()
   for (const r of rows || []) {
     const key = `${r.coach_id}|${r.block_id}`
@@ -81,6 +90,7 @@ export function planTimeChangeNotices(rows, { todayStr, todayByLocation = {}, no
   }
   const send = []
   const silent = []
+  const held = []
   for (const list of groups.values()) {
     list.sort(byAge)
     const oldest = list[0]
@@ -114,6 +124,14 @@ export function planTimeChangeNotices(rows, { todayStr, todayByLocation = {}, no
       silent.push(...list)
       continue
     }
+    const soon = !Number.isFinite(nowMs) || [from.start_time, now.start_time].some((t) => startsWithinNoticeWindow(
+      { blockDate: oldest.block_date, startTime: t },
+      { nowMs, zone: zoneByLocation[oldest.location_id] ?? null },
+    ))
+    if (!soon) {
+      held.push(...list)
+      continue
+    }
     send.push({
       key: `shift_time_changed:${newest.id}`,
       coachId: oldest.coach_id,
@@ -125,7 +143,7 @@ export function planTimeChangeNotices(rows, { todayStr, todayByLocation = {}, no
       rowIds: list.map((r) => r.id),
     })
   }
-  return { send, silent }
+  return { send, silent, held }
 }
 
 /**
@@ -147,6 +165,9 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
   // studio's day, exactly as the single read used to hold every row to one.
   const todayByLocation = Object.fromEntries(inBand.map((l) => [l.id, todayStrIn(resolveZone(l.timezone), nowMs)]))
   const readFrom = Object.values(todayByLocation).sort()[0]
+  // PUBSUMMARY.1 — a shift dated after tomorrow cannot start within 24 hours,
+  // so its rows are held for Publish without being read every tick.
+  const readTo = addDaysISO(Object.values(todayByLocation).sort().at(-1), 1)
   const nowHHMMByLocation = Object.fromEntries(inBand.map((l) => [l.id, staffWallClockHHMM(nowMs, l.timezone)]))
 
   const { data, error } = await db
@@ -165,6 +186,7 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
     .eq('details->>source', TIME_CHANGE_SOURCE)
     .is('notified_at', null)
     .gte('block_date', readFrom)
+    .lte('block_date', readTo)
     .gte('created_at', new Date(nowMs - TIME_CHANGE_WINDOW_MS).toISOString())
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
@@ -182,7 +204,9 @@ export async function runShiftTimeChangeNotices(db, { nowMs = Date.now(), locati
     logWarn('block-edit-notify', 'time-change read hit the 1,000-row page; the rest waits for the next tick', {})
   }
 
-  const { send, silent } = planTimeChangeNotices(rows, { todayByLocation, nowHHMMByLocation })
+  const zoneByLocation = Object.fromEntries(inBand.map((l) => [l.id, l.timezone ?? null]))
+  const { send, silent, held } = planTimeChangeNotices(rows, { todayByLocation, nowHHMMByLocation, nowMs, zoneByLocation })
+  summary.time_change_held = held.length
 
   const stampedAt = new Date(nowMs).toISOString()
   for (const r of silent) {

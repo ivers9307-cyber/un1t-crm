@@ -41,9 +41,7 @@ vi.mock('@/lib/log', async (importOriginal) => ({ ...(await importOriginal()), l
 vi.mock('@/lib/roster-snapshot', () => ({ writePublishSnapshot: vi.fn(() => Promise.resolve({ saved: true })) }))
 vi.mock('@/lib/roster-email', () => ({ sendOverBudgetApprovalEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/roster-notify', () => ({
-  notifyStaffOfPublish: vi.fn(() => Promise.resolve()),
-  publishNotifyRowsForBlocks: vi.fn(() => Promise.resolve([])),
-  renotifyChangedCoaches: vi.fn(() => Promise.resolve({ notified: 0 })),
+  notifyRosterPublished: vi.fn(() => Promise.resolve({ notified: 0 })),
 }))
 
 const { createServerClient } = await import('@/lib/supabase')
@@ -207,8 +205,8 @@ beforeEach(async () => {
   projectPublishImpact.mockReset()
   projectPublishImpact.mockResolvedValue(UNDER_BUDGET)
   getCurrentUser.mockResolvedValue({ id: 'owner-1', role: 'owner', locations: [{ id: LOC_1 }], rolesByLocation: { [LOC_1]: 'owner' } })
-  const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
-  renotifyChangedCoaches.mockClear()
+  const { notifyRosterPublished } = await import('@/lib/roster-notify')
+  notifyRosterPublished.mockClear()
 })
 
 function publish(body) {
@@ -455,12 +453,12 @@ describe('POST /api/schedule/rosters — overlapping published rosters', () => {
     expect(res.status).toBe(201)
     expect(inserts).toHaveLength(1)
 
-    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
-    expect(renotifyChangedCoaches).toHaveBeenCalledWith(db, {
+    const { notifyRosterPublished } = await import('@/lib/roster-notify')
+    expect(notifyRosterPublished).toHaveBeenCalledWith(db, expect.objectContaining({
       locationId: LOC_1,
       periodStart: '2026-05-04',
       periodEnd: '2026-05-10',
-    })
+    }))
   })
 
   it('allows a WIDER period that fully contains the published one', async () => {
@@ -564,8 +562,8 @@ describe('POST /api/schedule/rosters — supersede', () => {
     expect(rosterUpdates).toHaveLength(0)
 
     // A draft is not a publish — nothing to re-notify about until it's approved.
-    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
-    expect(renotifyChangedCoaches).not.toHaveBeenCalled()
+    const { notifyRosterPublished } = await import('@/lib/roster-notify')
+    expect(notifyRosterPublished).not.toHaveBeenCalled()
   })
 
   it('puts the released rosters back when the insert fails', async () => {
@@ -1028,8 +1026,8 @@ describe('POST /api/schedule/rosters — publish snapshot (SNAPSHOT.1)', () => {
     const { db } = buildDb()
     createServerClient.mockReturnValue(db)
     await publish()
-    const { renotifyChangedCoaches } = await import('@/lib/roster-notify')
-    expect(writePublishSnapshot.mock.invocationCallOrder[0]).toBeLessThan(renotifyChangedCoaches.mock.invocationCallOrder[0])
+    const { notifyRosterPublished } = await import('@/lib/roster-notify')
+    expect(writePublishSnapshot.mock.invocationCallOrder[0]).toBeLessThan(notifyRosterPublished.mock.invocationCallOrder[0])
   })
 
   it('a failed block tagging writes no snapshot: those blocks were not published by this roster', async () => {

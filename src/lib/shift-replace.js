@@ -163,9 +163,14 @@ export function replaceRowStartTime(r) {
   return readableStart(r?.details?.start_time)
 }
 
-/** 'none' (draft: the first publish tells them) | 'now' | 'morning' (quiet hours: the arm sends from 07:00). */
-export function replaceNoticeWhen({ published, inBand }) {
+/**
+ * 'none' (draft: the first publish tells them) | 'publish' (PUBSUMMARY.1: the
+ * shift is more than 24 hours out, so the next Publish's summary tells them)
+ * | 'now' | 'morning' (quiet hours: the arm sends from 07:00).
+ */
+export function replaceNoticeWhen({ published, inBand, soon = true }) {
   if (!published) return 'none'
+  if (!soon) return 'publish'
   return inBand ? 'now' : 'morning'
 }
 
@@ -195,6 +200,9 @@ export function replaceResponseOutcome(status, body, { fromName, toName } = {}) 
   }
   if (notice === 'none') {
     return { kind: 'done', tone: 'success', message: `${to} is on the shift. The roster is a draft, so nobody is told until it is published.` }
+  }
+  if (notice === 'publish') {
+    return { kind: 'done', tone: 'success', message: `${to} is on the shift. ${from} and ${to} are told when you publish the roster.` }
   }
   return { kind: 'done', tone: 'success', message: `${to} is on the shift. ${from} and ${to} have been told.` }
 }

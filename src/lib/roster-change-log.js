@@ -13,6 +13,11 @@ import { ROSTER_CHANGE_LOG_MAX_ROWS } from './roster-change-format'
 
 export const ROSTER_CHANGE_ACTIONS = ['assigned', 'unassigned', 'time_changed']
 
+// PostgREST returns at most 1,000 rows per select (CLAUDE.md).
+const CHANGE_LOG_PAGE = 1000
+// PUBSUMMARY.1 — a guard on one publish's read, not an expected size.
+const UNNOTIFIED_MAX_ROWS = 20000
+
 // BLOCKEDIT.1 (mig 629) — one COACHLESS row per edit of a published block
 // (times, minimum, maximum, briefing). Not in ROSTER_CHANGE_ACTIONS: that list
 // is logRosterChange's, which requires a coach.
@@ -98,27 +103,42 @@ export function distinctCoachIds(rows) {
 }
 
 /**
- * Still-unnotified post-publish changes in a period — the coaches the next
- * (re-)publish should re-notify. Best-effort; returns [].
+ * Still-unnotified post-publish changes in a period — what the next
+ * (re-)publish tells each coach about, oldest first. Best-effort; returns [].
+ *
+ * PUBSUMMARY.1 — since changes more than 24 hours out are held for Publish, a
+ * month's worth (a copy onto a published month) can pass the 1,000-row select
+ * cap, so this pages over a total order. A page that fails returns what was
+ * read before it: those rows are told and stamped, the rest wait for the next
+ * publish.
  */
 export async function collectUnnotifiedChanges(db, { locationId, periodStart, periodEnd } = {}) {
   if (!locationId || !periodStart || !periodEnd) return []
+  const rows = []
   try {
-    const { data, error } = await db
-      .from('roster_change_log')
-      .select('id, coach_id, action, block_date')
-      .eq('location_id', locationId)
-      .gte('block_date', periodStart)
-      .lte('block_date', periodEnd)
-      .is('notified_at', null)
-    if (error) {
-      logWarn('roster-change-log', 'collect failed', { err: error.message })
-      return []
+    for (let start = 0; start < UNNOTIFIED_MAX_ROWS; start += CHANGE_LOG_PAGE) {
+      const { data, error } = await db
+        .from('roster_change_log')
+        .select('id, coach_id, action, block_id, block_date, created_at')
+        .eq('location_id', locationId)
+        .gte('block_date', periodStart)
+        .lte('block_date', periodEnd)
+        .is('notified_at', null)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(start, start + CHANGE_LOG_PAGE - 1)
+      if (error) {
+        logWarn('roster-change-log', 'collect failed', { err: error.message, read: rows.length })
+        return rows
+      }
+      const page = data || []
+      rows.push(...page)
+      if (page.length < CHANGE_LOG_PAGE) break
     }
-    return data || []
+    return rows
   } catch (e) {
-    logWarn('roster-change-log', 'collect failed', { err: e?.message })
-    return []
+    logWarn('roster-change-log', 'collect failed', { err: e?.message, read: rows.length })
+    return rows
   }
 }
 
@@ -144,7 +164,6 @@ export async function markChangesNotified(db, rowIds) {
 // different: a manager asked "what changed since I published?", and answering
 // "nothing" when the read failed is a lie. So it returns the error.
 
-const CHANGE_LOG_PAGE = 1000
 // The ceiling is declared in the pure, client-safe formatter module (the drawer
 // prints it) and re-exported here, where the read enforces it.
 export { ROSTER_CHANGE_LOG_MAX_ROWS }

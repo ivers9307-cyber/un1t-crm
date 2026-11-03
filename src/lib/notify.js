@@ -49,6 +49,9 @@ import { logInfo, logWarn, logError } from './log'
  *                                       if missing, a plain-text-style envelope
  *                                       built from title/body is used.
  * @param {string} [payload.emailSubject]  overrides registry default.
+ * @param {string[]} [payload.emailLines]  PUBSUMMARY.1 — a list printed under
+ *                                       the body in the default fallback email
+ *                                       (escaped). The push carries the body only.
  */
 export async function notifyUsers(userIds, payload) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
@@ -198,6 +201,10 @@ export async function notifyUsers(userIds, payload) {
 function defaultFallbackHtml(payload, registry) {
   const title = escapeHtml(payload.title || registry?.label || 'Repset notification')
   const body = escapeHtml(payload.body || '')
+  const lines = Array.isArray(payload.emailLines) ? payload.emailLines.filter(Boolean) : []
+  const list = lines.length
+    ? `<ul style="font-size:15px;line-height:1.5;margin:12px 0 0 0;padding-left:20px">${lines.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+    : ''
   // CHROME.1 — the staff app ships to the stores as "Repset"
   // (mobile/app.config.js `name`). The old copy pointed staff at an app
   // under the legacy gym name, which is not a title they can search for.
@@ -206,6 +213,7 @@ function defaultFallbackHtml(payload, registry) {
     <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111">
       <h2 style="font-size:18px;margin:0 0 12px 0">${title}</h2>
       <p style="font-size:15px;line-height:1.5;margin:0">${body}</p>
+      ${list}
       ${note}
     </div>
   `

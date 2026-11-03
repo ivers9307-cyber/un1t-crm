@@ -114,22 +114,38 @@ describe('logRosterChange', () => {
 describe('collectUnnotifiedChanges — resolved error', () => {
   const range = { locationId: 'loc1', periodStart: '2026-06-01', periodEnd: '2026-06-07' }
 
-  function queryDb(result) {
+  // One result per page, in order.
+  function queryDb(...results) {
+    const ranges = []
     const chain = {
       select: () => chain,
       eq: () => chain,
       gte: () => chain,
       lte: () => chain,
-      is: () => Promise.resolve(result),
+      is: () => chain,
+      order: () => chain,
+      range: (from, to) => { ranges.push([from, to]); return Promise.resolve(results.shift()) },
     }
-    return { from: () => chain }
+    return { ranges, from: () => chain }
   }
 
   it('logs and returns [] on a resolved { error }', async () => {
     const db = queryDb({ data: null, error: { message: 'connection reset' } })
     const rows = await collectUnnotifiedChanges(db, range)
     expect(rows).toEqual([])
-    expect(logWarn).toHaveBeenCalledWith('roster-change-log', 'collect failed', { err: 'connection reset' })
+    expect(logWarn).toHaveBeenCalledWith('roster-change-log', 'collect failed', { err: 'connection reset', read: 0 })
+  })
+
+  // PUBSUMMARY.1 — held changes can pass the 1,000-row cap in one publish.
+  it('pages past 1,000 rows, and a later failed page keeps what was read', async () => {
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: `r${i}` }))
+    const db = queryDb({ data: page, error: null }, { data: [{ id: 'last' }], error: null })
+    const rows = await collectUnnotifiedChanges(db, range)
+    expect(rows).toHaveLength(1001)
+    expect(db.ranges).toEqual([[0, 999], [1000, 1999]])
+
+    const failing = queryDb({ data: page, error: null }, { data: null, error: { message: 'timeout' } })
+    expect(await collectUnnotifiedChanges(failing, range)).toHaveLength(1000)
   })
 })
 

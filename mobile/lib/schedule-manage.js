@@ -170,7 +170,9 @@ export function replaceResultAlert(res, { fromName, toName } = {}) {
     ? `${from} and ${to} are told after 7am; if the shift is at or before 7am, ring them.`
     : notice === 'none'
       ? 'The roster is a draft, so nobody is told until it is published.'
-      : `${from} and ${to} have been told.`
+      : notice === 'publish'
+        ? `${from} and ${to} are told when you publish the roster.`
+        : `${from} and ${to} have been told.`
   return { kind: 'done', title: 'Coach replaced', message: `${to} is on the shift. ${tail}` }
 }
 

@@ -54,6 +54,20 @@ describe('notifyUsers — clean path (control)', () => {
   })
 })
 
+// PUBSUMMARY.1 — the Publish summary's email lists every change.
+describe('notifyUsers — emailLines', () => {
+  it('prints each line, escaped, under the body of the fallback email', async () => {
+    await notifyUsers(['coach-1'], { ...PAYLOAD, emailLines: ['Added: Tue 3 Nov, Open <Gym> 6–9am', '', 'Removed: Wed 4 Nov'] })
+    const html = sendEmail.mock.calls[0][0].htmlBody
+    expect(html).toContain('<li>Added: Tue 3 Nov, Open &lt;Gym&gt; 6–9am</li><li>Removed: Wed 4 Nov</li>')
+  })
+
+  it('no list without lines', async () => {
+    await notifyUsers(['coach-1'], PAYLOAD)
+    expect(sendEmail.mock.calls[0][0].htmlBody).not.toContain('<ul')
+  })
+})
+
 describe('notifyUsers — failed reads (C16 PUSHREADERR.1, D7)', () => {
   it('passes on sendPush\'s read_failed (no fallback category)', async () => {
     getNotificationCategory.mockReturnValue({ fallbackEmail: false })

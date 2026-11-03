@@ -408,3 +408,76 @@ describe('logAndNotifyCopiedShifts', () => {
     expect(logWarn).toHaveBeenCalled()
   })
 })
+
+// PUBSUMMARY.1 — only a shift within 24 hours is told at the moment of change;
+// the rest are held, unstamped, for the next Publish's one summary.
+describe('notifyRosterChanges — held for Publish (PUBSUMMARY.1)', () => {
+  // Wed 16 Sep 2026 09:00 Dublin.
+  const nowMs = Date.parse('2026-09-16T08:00:00Z')
+  const opts = (changes, extra = {}) => ({ locationId: 'loc-1', actorId: 'mgr-1', changes, todayStr: '2026-09-16', nowMs, ...extra })
+  // makeDb plus the shift_blocks read the starts come from.
+  function dbWithStarts(starts, { error = null } = {}) {
+    const db = makeDb()
+    const base = db.from.bind(db)
+    db.blockReads = 0
+    db.from = (table) => {
+      if (table !== 'shift_blocks') return base(table)
+      db.blockReads++
+      const chain = {
+        select: () => chain,
+        in: (_c, ids) => Promise.resolve(error
+          ? { data: null, error }
+          : { data: ids.filter((id) => starts[id]).map((id) => ({ id, start_time: starts[id] })), error: null }),
+      }
+      return chain
+    }
+    return db
+  }
+
+  it('a shift more than 24 hours out: no message, no stamp, the coach is held', async () => {
+    const db = dbWithStarts({ 'blk-2026-09-18': '06:00:00' })
+    const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-18')]))
+    expect(notifyUsers).not.toHaveBeenCalled()
+    expect(db.updates).toEqual([])
+    expect(res).toMatchObject({ held: 1, notified: 0, byCoach: { c1: 'held' } })
+  })
+
+  it('a shift within 24 hours is told now, exactly as before', async () => {
+    const db = dbWithStarts({ 'blk-2026-09-17': '06:00:00' })
+    const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-17')]))
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(res.byCoach).toEqual({ c1: 'delivered' })
+  })
+
+  it('a mix: told about the near one only, and only its block (and past ones) stamped', async () => {
+    const db = dbWithStarts({ 'blk-2026-09-17': '06:00:00', 'blk-2026-09-25': '06:00:00' })
+    const res = await notifyRosterChanges(db, opts([
+      change('c1', '2026-09-17'), change('c1', '2026-09-25'), change('c1', '2026-09-10'),
+    ]))
+    expect(notifyUsers.mock.calls[0][1]).toMatchObject({ title: 'Added to a shift', body: "You're now on the roster for Thu 17 Sep." })
+    const stamped = db.updates[0].filters.find((f) => f[0] === 'in')[2]
+    expect(stamped.sort()).toEqual(['blk-2026-09-10', 'blk-2026-09-17'])
+    expect(res).toMatchObject({ held: 1, notified: 1 })
+  })
+
+  it('a change that carries its start (a replace) needs no read', async () => {
+    const db = dbWithStarts({})
+    await notifyRosterChanges(db, opts([{ ...change('c1', '2026-09-20'), startTime: '06:00:00' }]))
+    expect(db.blockReads).toBe(0)
+    expect(notifyUsers).not.toHaveBeenCalled()
+  })
+
+  it('the starts unreadable: every change is told now, never held on a guess', async () => {
+    const db = dbWithStarts({}, { error: { message: 'timeout' } })
+    const res = await notifyRosterChanges(db, opts([change('c1', '2026-09-25')]))
+    expect(notifyUsers).toHaveBeenCalledTimes(1)
+    expect(res.byCoach).toEqual({ c1: 'delivered' })
+  })
+
+  it("the actor's own change is stamped without a read or a message", async () => {
+    const db = dbWithStarts({ 'blk-2026-09-25': '06:00:00' })
+    const res = await notifyRosterChanges(db, opts([change('mgr-1', '2026-09-25')]))
+    expect(db.blockReads).toBe(0)
+    expect(res.byCoach).toEqual({ 'mgr-1': 'self' })
+  })
+})

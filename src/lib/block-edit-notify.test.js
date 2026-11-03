@@ -63,7 +63,7 @@ describe('planTimeChangeNotices', () => {
   it('the coach is off the shift, or it was deleted: no message', () => {
     const off = row('r1', { shift_blocks: blockEmbed({ shift_assignments: [{ profile_id: 'u1', status: 'cancelled' }] }) })
     const gone = row('r2', { coach_id: 'u2', block_id: null, shift_blocks: null })
-    expect(planTimeChangeNotices([off, gone], opts)).toEqual({ send: [], silent: [off, gone] })
+    expect(planTimeChangeNotices([off, gone], opts)).toEqual({ send: [], silent: [off, gone], held: [] })
   })
 
   // Review fix 3 — "started" is judged on the ORIGINAL start (the time the
@@ -71,7 +71,7 @@ describe('planTimeChangeNotices', () => {
   it('started (by its ORIGINAL start) and only the start moved: no message', () => {
     const r = row('r1', { block_date: '2026-09-29', shift_blocks: blockEmbed({ start_time: '10:00:00', end_time: '12:00:00' }) })
     // from 09:00-12:00, now 10:00-12:00, clock 11:00.
-    expect(planTimeChangeNotices([r], opts)).toEqual({ send: [], silent: [r] })
+    expect(planTimeChangeNotices([r], opts)).toEqual({ send: [], silent: [r], held: [] })
   })
 
   it('started, and the END moved: still told', () => {
@@ -85,7 +85,7 @@ describe('planTimeChangeNotices', () => {
       details: { source: 'block_edit', from: { start_time: '07:00:00', end_time: '09:00:00' }, to: { start_time: '07:00:00', end_time: '10:00:00' } },
       shift_blocks: blockEmbed({ start_time: '07:00:00', end_time: '10:00:00' }),
     }) // clock 11:00
-    expect(planTimeChangeNotices([r], opts)).toEqual({ send: [], silent: [r] })
+    expect(planTimeChangeNotices([r], opts)).toEqual({ send: [], silent: [r], held: [] })
   })
 
   it('not started by its original start, even though the NEW start has passed: told (they are now late)', () => {
@@ -95,6 +95,27 @@ describe('planTimeChangeNotices', () => {
       shift_blocks: blockEmbed({ start_time: '10:00:00', end_time: '16:00:00' }),
     })
     expect(planTimeChangeNotices([r], opts).send[0].to).toEqual({ start_time: '10:00:00', end_time: '16:00:00' })
+  })
+
+  // PUBSUMMARY.1 — more than 24 hours out (old AND new start): held for the
+  // next Publish's summary, neither sent nor stamped.
+  it('a shift more than 24 hours out is held: neither sent nor stamped', () => {
+    const r = row('r1', { block_date: '2026-10-02' })
+    expect(planTimeChangeNotices([r], { ...opts, nowMs: IN_BAND, zoneByLocation: { 'loc-1': 'Europe/Dublin' } }))
+      .toEqual({ send: [], silent: [], held: [r] })
+  })
+
+  it('either start within 24 hours is enough to tell now', () => {
+    // Moved from 10:00 on Wed 30 Sep (23h away) to 10:00 on a window 25h away:
+    // the coach was working to the near one, so they hear now.
+    const r = row('r1', {
+      details: { source: 'block_edit', from: { start_time: '09:00:00', end_time: '12:00:00' }, to: { start_time: '12:30:00', end_time: '15:00:00' } },
+      shift_blocks: blockEmbed({ start_time: '12:30:00', end_time: '15:00:00' }),
+    })
+    // nowMs: Tue 29 Sep 10:30 Dublin. Old start Wed 09:00 (22.5h), new 12:30 (26h).
+    const out = planTimeChangeNotices([r], { ...opts, nowMs: Date.parse('2026-09-29T09:30:00Z'), zoneByLocation: { 'loc-1': 'Europe/Dublin' } })
+    expect(out.send).toHaveLength(1)
+    expect(out.held).toEqual([])
   })
 
   it("the coach's own override counts as their window now", () => {
@@ -112,7 +133,7 @@ function makeDb({ rows = [], readError = null, stampError = null } = {}) {
       return {
         select(cols) {
           const q = { calls: [['select', cols]] }
-          for (const m of ['in', 'eq', 'is', 'gte', 'order', 'range']) q[m] = (...a) => { q.calls.push([m, ...a]); return q }
+          for (const m of ['in', 'eq', 'is', 'gte', 'lte', 'order', 'range']) q[m] = (...a) => { q.calls.push([m, ...a]); return q }
           q.then = (res, rej) => { captured.reads.push(q.calls); return Promise.resolve({ data: readError ? null : rows, error: readError }).then(res, rej) }
           return q
         },
@@ -153,6 +174,17 @@ describe('runShiftTimeChangeNotices', () => {
     expect(calls).toContainEqual(['is', 'notified_at', null])
     expect(calls).toContainEqual(['gte', 'block_date', '2026-09-29'])
     expect(calls).toContainEqual(['gte', 'created_at', '2026-09-27T10:00:00.000Z'])
+    // PUBSUMMARY.1 — after tomorrow nothing can be within 24 hours.
+    expect(calls).toContainEqual(['lte', 'block_date', '2026-09-30'])
+  })
+
+  it('a row more than 24 hours out is held: no message, no stamp, counted', async () => {
+    // Wed 30 Sep 10:00 Dublin is 23h after IN_BAND; at 08:00 Dublin it is 26h.
+    const db = makeDb({ rows: [row('r1')] })
+    const s = await runShiftTimeChangeNotices(db, { nowMs: Date.parse('2026-09-29T07:00:00Z'), locations: [LOC] })
+    expect(notifyUsersOnce).not.toHaveBeenCalled()
+    expect(db.captured.stamps).toEqual([])
+    expect(s.time_change_held).toBe(1)
   })
 
   it('sends shift_adjusted once per coach and stamps every row of the group on delivery', async () => {

@@ -34,6 +34,10 @@
 // replace route), so a deleted shift that has STARTED is stamped silently
 // (review 3's reason) instead of told at 07:00.
 //
+// PUBSUMMARY.1 — notifyRosterChanges holds a change to a shift more than 24
+// hours out ('held'): this arm leaves those rows unstamped for the next
+// Publish, and tells them itself if the shift comes within 24 hours first.
+//
 // Everything else goes through notifyRosterChanges (NOTIFY.1's message and
 // send path) with markNotified: false, and THIS arm stamps exactly its own
 // rows by id after a delivery (or a self / past outcome). So a lost stamp is
@@ -75,8 +79,12 @@ const iso = (ms) => new Date(ms).toISOString()
 // then held to its own studio's day once the zones are read. `todayStr`
 // pins one day for every row (tests).
 export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = null } = {}) {
-  const stats = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
+  const stats = { rows: 0, groups: 0, told: 0, silent: 0, started: 0, gone: 0, quiet: 0, fresh: 0, held: 0, undelivered: 0, send_failed: 0, stamp_failed: 0, errors: 0 }
   const readFrom = todayStr || addDaysISO(new Date(nowMs).toISOString().slice(0, 10), -1)
+  // PUBSUMMARY.1 — a shift dated after tomorrow (the latest zone's tomorrow
+  // is at most the UTC day after next) cannot start within 24 hours: its rows
+  // wait for Publish without being read every tick.
+  const readTo = todayStr ? addDaysISO(todayStr, 1) : addDaysISO(new Date(nowMs).toISOString().slice(0, 10), 2)
   let read
   try {
     const { data, error } = await db.from('roster_change_log')
@@ -85,6 +93,7 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = nul
       .eq('details->>via', REPLACE_VIA)
       .gte('created_at', iso(nowMs - REPLACE_NOTICE_MAX_AGE_MS))
       .gte('block_date', readFrom)
+      .lte('block_date', readTo)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .limit(HELD_LIMIT)
@@ -165,7 +174,7 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = nul
     // nothing here (markNotified: false): the arm stamps exactly its OWN rows
     // below, so it can count a lost stamp and never stamps another writer's.
     const res = await notifyRosterChanges(db, {
-      locationId: g.locationId, actorId: g.actorId, changes: g.changes, todayStr: todayAt(g.locationId), markNotified: false,
+      locationId: g.locationId, actorId: g.actorId, changes: g.changes, todayStr: todayAt(g.locationId), nowMs, timeZone: tzOf(g.locationId), markNotified: false,
     })
     stats.groups++
     for (const [coachId, rowIds] of g.rowIdsByCoach) {
@@ -173,6 +182,11 @@ export async function runReplaceNotices(db, { nowMs = Date.now(), todayStr = nul
       if (outcome === 'delivered' || outcome === 'self' || outcome === 'past') {
         if (outcome === 'delivered') stats.told++
         await stampTold(db, { rowIds, nowMs, stats, coachId })
+      } else if (outcome === 'held') {
+        // PUBSUMMARY.1 — more than 24 hours out: left for the next Publish's
+        // summary. Unstamped, so a later tick still tells the coach if the
+        // shift comes within 24 hours before anyone publishes.
+        stats.held++
       } else if (outcome === 'failed') {
         stats.send_failed++ // nothing stamped: the next tick retries
       } else {
