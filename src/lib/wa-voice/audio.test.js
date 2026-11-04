@@ -24,3 +24,22 @@ test('a zero granule and empty or missing input read as null', () => {
   expect(oggOpusDurationSecs(null)).toBeNull()
   expect(exceedsVoiceLimit(null)).toEqual({ tooLong: false, durationSecs: null })
 })
+
+test('the size bound applies even when the Ogg header claims a short note (security review)', () => {
+  const short = makeOgg(48000 * 5)
+  const padded = new Uint8Array(3 * 1024 * 1024)
+  padded.set(short, padded.length - short.length)
+  expect(exceedsVoiceLimit(padded).tooLong).toBe(true)
+})
+
+test('a truncated or implausible last capture pattern is skipped, not trusted', () => {
+  const real = makeOgg(48000 * 200, { pages: 1 })
+  const fakeTail = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 0, 1, 2]) // 'OggS' cut short
+  const a = new Uint8Array(real.length + fakeTail.length)
+  a.set(real); a.set(fakeTail, real.length)
+  expect(oggOpusDurationSecs(a)).toBe(200)
+  const bad = makeOgg(48000 * 2, { pages: 1 }); bad[4] = 7 // version must be 0
+  const b = new Uint8Array(real.length + bad.length)
+  b.set(real); b.set(bad, real.length)
+  expect(oggOpusDurationSecs(b)).toBe(200)
+})
