@@ -5,7 +5,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.f
 import { resendVoiceReplyAsText } from './reply-fallback.js'
 import { WhatsAppNumberMissingError } from '@/lib/whatsapp-number-missing'
 
-const ROW = { id: 'm-1', voice_kind: 'booking', body: 'Booked you in for seven.', conversation_id: 'conv-1', location_id: 'loc-1', contact_id: 'c-1', voice_fallback_sent_at: null }
+const ROW = { id: 'm-1', message_type: 'audio', voice_kind: 'booking', body: 'Booked you in for seven.', conversation_id: 'conv-1', location_id: 'loc-1', contact_id: 'c-1', voice_fallback_sent_at: null }
 
 function makeDb({ claimRows = [{ id: 'm-1' }], claimError = null, phone = '353871234567', insertError = null } = {}) {
   const calls = []
@@ -56,6 +56,8 @@ describe('resendVoiceReplyAsText', () => {
     const d = deps()
     expect((await resendVoiceReplyAsText(makeDb(), { ...ROW, voice_kind: null }, d)).reason).toBe('not_a_voice_reply')
     expect((await resendVoiceReplyAsText(makeDb(), { ...ROW, body: '  ' }, d)).reason).toBe('not_a_voice_reply')
+    // A failed follow-up text row also carries voice_kind (review C1): it is not the voice note.
+    expect((await resendVoiceReplyAsText(makeDb(), { ...ROW, message_type: 'text' }, d)).reason).toBe('not_a_voice_reply')
     expect(d.sendText).not.toHaveBeenCalled()
   })
   test('no number switched on: recorded skip and a staff push', async () => {

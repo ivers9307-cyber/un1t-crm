@@ -82,7 +82,7 @@ const statusEvent = (status) => ({ entry: [{ changes: [{ field: 'messages', valu
   statuses: [{ id: 'wamid.v1', status, timestamp: '1770000000', recipient_id: '353871234567', ...(status === 'failed' ? { errors: [{ code: 131053, title: 'Media upload error' }] } : {}) }],
 } }] }] })
 const reqFor = (body) => ({ text: async () => JSON.stringify(body), headers: { get: () => 'sha256=sig' } })
-const VOICE_ROW = { id: 'm-1', broadcast_id: null, contact_id: 'c-1', body: 'Booked you in.', voice_kind: 'booking', voice_fallback_sent_at: null, conversation_id: 'conv-1', location_id: 'loc-still' }
+const VOICE_ROW = { id: 'm-1', message_type: 'audio', broadcast_id: null, contact_id: 'c-1', body: 'Booked you in.', voice_kind: 'booking', voice_fallback_sent_at: null, conversation_id: 'conv-1', location_id: 'loc-still' }
 
 let row
 beforeEach(() => {
@@ -107,6 +107,11 @@ describe('VOICEREPLY.1 — failed status on a voice reply', () => {
   })
   it('a failed status on any other message does not', async () => {
     row = { ...VOICE_ROW, voice_kind: null }
+    await POST(reqFor(statusEvent('failed')))
+    expect(resendVoiceReplyAsText).not.toHaveBeenCalled()
+  })
+  it('a failed follow-up text row (voice_kind set, not audio) does not (review C1)', async () => {
+    row = { ...VOICE_ROW, message_type: 'text' }
     await POST(reqFor(statusEvent('failed')))
     expect(resendVoiceReplyAsText).not.toHaveBeenCalled()
   })

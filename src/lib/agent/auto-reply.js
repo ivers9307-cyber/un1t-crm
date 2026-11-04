@@ -79,8 +79,8 @@ import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 import { logWarn, logError } from '@/lib/log'
-import { isVoiceTrigger, splitForVoice, spokenTextFor, voiceKindFor, toolResultSucceeded } from '@/lib/wa-voice/reply-rules'
-import { maybeSendVoiceReply } from '@/lib/wa-voice/reply'
+import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded } from '@/lib/wa-voice/reply-rules'
+import { maybeSendVoiceReply, voiceReplyPossible } from '@/lib/wa-voice/reply'
 import { studiosOfContact } from '@/lib/contact-studios'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
@@ -741,7 +741,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // VOICEREPLY.1 — the newest inbound this turn answers is a voice note, so
     // the reply (or the holding message) goes out by voice where the channel
     // can (WhatsApp). A typed message after it makes the reply text.
+    // Review I3: only when a voice reply could actually go (mode, test numbers,
+    // a voice), so the spoken-reply prompt line never shapes a text reply.
     const voiceTrigger = typeof adapter.sendVoice === 'function' && isVoiceTrigger({ historyRows: history })
+      && (typeof adapter.voiceReplyPossible !== 'function' || await adapter.voiceReplyPossible(db, { locationId, recipient }))
     // Newest inbound this turn will have seen — the wrapper's missed-inbound
     // sweep compares against it after the reply goes out.
     const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
@@ -1657,7 +1660,9 @@ async function replyVoiceKind(db, { contactId, locationId, trace }) {
 // follow-up is logged, never resent as a whole text reply (the customer has
 // already heard it). Never throws.
 async function sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text, options = null, kind, trace, holding = false, stamp = {} }) {
-  const split = holding ? { spoken: spokenTextFor(text), followUp: null } : splitForVoice({ text, options })
+  // A holding message is operator-editable and may carry a link (review I2),
+  // so it splits like any reply.
+  const split = splitForVoice({ text, options: holding ? null : options })
   let r
   try {
     r = await adapter.sendVoice(db, { conversationId, locationId, recipient, spoken: split.spoken, kind })
@@ -1691,10 +1696,12 @@ async function sendVoiceReply(db, adapter, { conversationId, locationId, recipie
     logError('agent', 'voice reply record failed', { conversationId, error: err?.message || String(err) })
   }
 
+  // Follow-up rows carry the voice note's voice_kind, so the missed-inbound
+  // rerun treats them as part of this reply (review C1).
   const sendFollowText = async (followText, label) => {
     try {
       const fr = await adapter.send(recipient, followText, { locationId, connection, settings, conversationId })
-      await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: followText, now: new Date().toISOString() }))
+      await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: followText, now: new Date().toISOString(), voiceKind: r.voiceKind }))
     } catch (err) {
       logError('agent', `voice reply ${label} failed`, { conversationId, error: err?.message || String(err) })
     }
@@ -1702,13 +1709,14 @@ async function sendVoiceReply(db, adapter, { conversationId, locationId, recipie
   const f = split.followUp
   if (f?.kind === 'options' && adapter.sendOptions) {
     try {
-      const fr = await adapter.sendOptions(recipient, r.buttonsLine, f.options, { locationId, connection, conversationId })
-      await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: `${r.buttonsLine}\n[Options: ${f.options.join(' | ')}]`, now: new Date().toISOString() }))
+      const optionsBody = f.text || r.buttonsLine
+      const fr = await adapter.sendOptions(recipient, optionsBody, f.options, { locationId, connection, conversationId })
+      await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: `${optionsBody}\n[Options: ${f.options.join(' | ')}]`, now: new Date().toISOString(), voiceKind: r.voiceKind }))
     } catch (err) {
       logError('agent', 'voice reply follow-up failed', { conversationId, error: err?.message || String(err) })
     }
   } else if (f?.kind === 'options') {
-    await sendFollowText(`${r.buttonsLine}\n\n${f.options.map((o) => `• ${o}`).join('\n')}`, 'follow-up')
+    await sendFollowText(`${f.text || r.buttonsLine}\n\n${f.options.map((o) => `• ${o}`).join('\n')}`, 'follow-up')
   } else if (f?.kind === 'cta_url') {
     await sendFollowText(`${f.body} ${f.url}`, 'follow-up')
   } else if (f?.kind === 'text') {
@@ -2016,7 +2024,7 @@ export const whatsappAdapter = {
   conversationsTable: 'whatsapp_conversations',
   messagesTable: 'whatsapp_messages',
   // VOICENOTE.1 — WhatsApp rows carry the voice-note transcript (mig 808).
-  historyColumns: `${BASE_HISTORY_COLUMNS}, transcript, transcript_status`,
+  historyColumns: `${BASE_HISTORY_COLUMNS}, transcript, transcript_status, voice_kind`,
   nameColumn: 'wa_profile_name',
   pushCategory: 'whatsapp',
   handoffType: 'whatsapp_agent_handoff',
@@ -2057,6 +2065,7 @@ export const whatsappAdapter = {
   sendVoice: (db, { conversationId, locationId, recipient, spoken, kind }) => maybeSendVoiceReply(db, {
     conversationId, locationId, recipient, spoken, kind, replyOpts: waReplyOpts(locationId, conversationId),
   }),
+  voiceReplyPossible: (db, args) => voiceReplyPossible(db, args),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now, messageType = 'text', mediaStoragePath = null, mediaMimeType = null, voiceKind = null }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,

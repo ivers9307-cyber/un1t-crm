@@ -26,6 +26,13 @@ describe('what is spoken', () => {
     expect(splitForVoice({ text: 'See you at 7!', options: null })).toEqual({ spoken: 'See you at 7!', followUp: null })
     expect(splitForVoice({ text: 'https://x.test/b', options: null }).spoken).toBe('')
   })
+  test('options with a link keep the link in the follow-up (review I1)', () => {
+    expect(splitForVoice({ text: 'Timetable here https://x.ie/t then pick one', options: ['Yes', 'No'] }))
+      .toEqual({ spoken: 'Timetable here then pick one', followUp: { kind: 'options', options: ['Yes', 'No'], text: 'Timetable here https://x.ie/t then pick one' } })
+  })
+  test('markup is stripped only in pairs; emails, snake_case and ~ stay (review M3)', () => {
+    expect(spokenTextFor('*7am* _today_ email a_b@x.ie snake_case ~7pm 1️⃣ ok')).toBe('7am today email a_b@x.ie snake_case ~7pm 1 ok')
+  })
   test('the length limit and the prompt line', () => {
     expect(MAX_SPOKEN_CHARS).toBe(600)
     expect(spokenTextFor('a'.repeat(700)).length).toBe(700)

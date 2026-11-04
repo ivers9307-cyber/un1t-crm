@@ -951,7 +951,7 @@ async function handleStatusUpdate(db, status) {
   // in the live data but nothing enforces it — so a >1-row result stays an
   // anomaly worth logging rather than a silent null.
   const { data: msg, error: msgErr } = await db.from('whatsapp_messages')
-    .select('id, broadcast_id, contact_id, body, voice_kind, voice_fallback_sent_at, conversation_id, location_id')
+    .select('id, broadcast_id, contact_id, body, message_type, voice_kind, voice_fallback_sent_at, conversation_id, location_id')
     .eq('wa_message_id', messageId)
     .maybeSingle()
   if (msgErr) console.error('[wa-webhook] status message lookup failed:', msgErr.message)
@@ -959,7 +959,7 @@ async function handleStatusUpdate(db, status) {
   // VOICEREPLY.1 — a voice reply Meta accepted and then failed to deliver
   // (an unfetchable or undecodable file) is resent once as text, so the
   // customer still gets the answer. Never throws out of the webhook.
-  if (statusValue === 'failed' && msg?.voice_kind) {
+  if (statusValue === 'failed' && msg?.voice_kind && msg.message_type === 'audio') {
     try {
       await resendVoiceReplyAsText(db, msg)
     } catch (err) {

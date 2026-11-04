@@ -59,6 +59,7 @@ function makeAdapter(sendVoice = okVoice()) {
     sendOptions: vi.fn().mockResolvedValue({ messageId: 'wamid.o' }),
     sendCta: vi.fn().mockResolvedValue({ messageId: 'wamid.c' }),
     sendVoice,
+    voiceReplyPossible: vi.fn(async () => true),
   }
 }
 const now = () => new Date().toISOString()
@@ -218,6 +219,33 @@ describe('a voice-note turn', () => {
     const c = { ...ctx(), voiceTranscript: { status: 'too_long', text: null } }
     await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, c)
     expect(adapter.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('follow-up rows are marked with the voice kind (review C1)', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Great, book here https://x.test/b')))
+    const calls = []
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls, settings: { enabled: true } }), makeAdapter(), ctx())
+    expect(inserts(calls).map((r) => [r.message_type, r.voice_kind])).toEqual([['audio', 'lead'], ['text', 'lead']])
+  })
+
+  it('voice replies switched off: no spoken-reply line and no voice attempt (review I3)', async () => {
+    const fetchSpy = modelTurns(say('Yes, seven is free.'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const adapter = makeAdapter()
+    adapter.voiceReplyPossible = vi.fn(async () => false)
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
+    expect(JSON.stringify(systemOf(fetchSpy))).not.toContain('This reply will be spoken')
+    expect(adapter.sendVoice).not.toHaveBeenCalled()
+    expect(adapter.send.mock.calls[0][1]).toBe('Yes, seven is free.')
+  })
+
+  it('a link in the holding message follows as text (review I2)', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('never')))
+    const adapter = makeAdapter(okVoice({ voiceKind: 'handoff' }))
+    const c = { ...ctx(), voiceTranscript: { status: 'unclear', text: 'mumble' } }
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true, holding_message: 'Someone will reply soon, or book at https://x.test/b' } }), adapter, c)
+    expect(adapter.sendVoice.mock.calls[0][1].spoken).toBe('Someone will reply soon, or book at')
+    expect(adapter.send.mock.calls.map((x) => x[1])).toEqual(['Someone will reply soon, or book at https://x.test/b'])
   })
 
   it('Instagram has no voice', () => {

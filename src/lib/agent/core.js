@@ -457,6 +457,13 @@ export function isReplyWorthyInbound(stored) {
   return true
 }
 
+// VOICEREPLY.1 — a text row Mia sent right after one of her voice notes, as
+// part of the same reply (it carries the voice note's voice_kind). Pure.
+function isVoiceFollowUp(row) {
+  return !!row && row.direction === 'outbound' && row.source === AGENT_MESSAGE_SOURCE
+    && !!row.voice_kind && row.message_type !== 'audio'
+}
+
 // created_at strings from one column. Compare as instants; fall back to the
 // string when both land in the same millisecond (PostgREST keeps
 // microseconds, Date.parse drops them). Pure.
@@ -506,8 +513,12 @@ export function buildReplyTurnMessages(rows, opts = {}) {
     const late = ordered.filter((r) => isReplyWorthyInbound(r) && r.created_at && isAfterIso(r.created_at, answeredThroughIso))
     if (late.length) {
       const rest = ordered.filter((r) => !late.includes(r))
-      const anchor = rest.findIndex((r) => r.direction === 'outbound' && r.source === AGENT_MESSAGE_SOURCE &&
+      let anchor = rest.findIndex((r) => r.direction === 'outbound' && r.source === AGENT_MESSAGE_SOURCE &&
         r.created_at && isAfterIso(r.created_at, answeredThroughIso))
+      // VOICEREPLY.1 — one voice reply is the voice note plus its follow-up
+      // rows (a link, buttons, a notice), each marked with voice_kind and not
+      // audio. The pass's reply ends after the last of them.
+      while (anchor !== -1 && anchor + 1 < rest.length && isVoiceFollowUp(rest[anchor + 1])) anchor++
       ordered = anchor === -1
         ? [...rest, ...late]
         : [...rest.slice(0, anchor + 1), ...late, ...rest.slice(anchor + 1)]

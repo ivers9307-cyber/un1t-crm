@@ -107,6 +107,29 @@ export async function maybeSendVoiceReply(db, { conversationId, locationId, reci
   }
 }
 
+/**
+ * VOICEREPLY.1 (review I3) — could a voice reply go to this recipient at all?
+ * The org's mode and test numbers and a configured voice, without the cap or
+ * any speech. The agent asks before building the prompt, so the spoken-reply
+ * line never reaches a turn whose reply will be text anyway. false on any
+ * read failure. Never throws.
+ */
+export async function voiceReplyPossible(db, { locationId, recipient } = {}) {
+  try {
+    const { data: loc, error: locError } = await db.from('locations').select('organization_id, settings').eq('id', locationId).maybeSingle()
+    if (locError || !loc?.organization_id) return false
+    const voices = loc.settings?.voice_replies?.voices
+    if (!voices || !Object.values(voices).some((v) => v && String(v.voice_id || '').trim())) return false
+    const { data: org, error: orgError } = await db.from('org_settings')
+      .select('voice_reply_mode, voice_reply_test_phones').eq('organization_id', loc.organization_id).maybeSingle()
+    if (orgError) return false
+    if (org?.voice_reply_mode === 'on') return true
+    return org?.voice_reply_mode === 'test' && phoneMatchesAllowlist(recipient, org?.voice_reply_test_phones || [])
+  } catch {
+    return false
+  }
+}
+
 async function meter(db, { organizationId, locationId, chars }) {
   try {
     await recordMeterUsage({

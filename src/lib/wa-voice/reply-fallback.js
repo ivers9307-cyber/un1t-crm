@@ -36,7 +36,7 @@ export async function resendVoiceReplyAsText(db, msg, deps = {}) {
   }
 
   try {
-    if (!msg?.id || !msg.voice_kind || !String(msg.body || '').trim()) return { resent: false, reason: 'not_a_voice_reply' }
+    if (!msg?.id || !msg.voice_kind || msg.message_type !== 'audio' || !String(msg.body || '').trim()) return { resent: false, reason: 'not_a_voice_reply' }
 
     const { data: claimed, error: claimError } = await db.from('whatsapp_messages')
       .update({ voice_fallback_sent_at: new Date().toISOString() })

@@ -199,7 +199,7 @@ describe('Mia off duty', () => {
 
 describe('history columns per channel', () => {
   it('WhatsApp reads the transcript; Instagram never names it', async () => {
-    expect(whatsappAdapter.historyColumns).toBe('direction, body, message_type, created_at, source, transcript, transcript_status')
+    expect(whatsappAdapter.historyColumns).toBe('direction, body, message_type, created_at, source, transcript, transcript_status, voice_kind')
     expect(instagramAdapter.historyColumns).toBe('direction, body, message_type, created_at, source')
     vi.stubGlobal('fetch', modelReplies('ok'))
     const selects = []

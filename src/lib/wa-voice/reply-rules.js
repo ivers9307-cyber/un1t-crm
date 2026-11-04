@@ -12,9 +12,11 @@ export const MAX_SPOKEN_CHARS = 600
 export { VOICE_REPLY_PROMPT_LINE } from '@/lib/agent/prompt'
 
 const URL_RE = /https?:\/\/\S+/g
-const EMOJI_RE = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}️‍]/gu
+const EMOJI_RE = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}️‍⃣]/gu
 const BULLET_RE = /^\s*[•\-*]\s+/gm
-const MARKUP_RE = /[*_~`]/g
+// WhatsApp markup only in pairs around words (*bold*, _italic_, ~strike~,
+// `code`), so an email, a snake_case word or "~7pm" keeps every character.
+const PAIRED_MARKUP_RE = /(^|[\s(])([*_~`])(?=\S)([^\n]*?\S)\2(?=$|[\s).,!?:;])/gm
 
 // The text to speak: emoji, markup, bullet markers and URLs removed, blank
 // lines collapsed. It never adds or changes a word.
@@ -23,7 +25,7 @@ export function spokenTextFor(text) {
     .replace(URL_RE, '')
     .replace(EMOJI_RE, '')
     .replace(BULLET_RE, '')
-    .replace(MARKUP_RE, '')
+    .replace(PAIRED_MARKUP_RE, '$1$3')
     .split('\n')
     .map((line) => line.replace(/[ \t]+/g, ' ').replace(/\s+([,.!?;:])/g, '$1').trim())
     .filter(Boolean)
@@ -34,7 +36,12 @@ export function spokenTextFor(text) {
 export function splitForVoice({ text, options } = {}) {
   const t = String(text || '')
   const opts = Array.isArray(options) && options.length >= 2 ? options : null
-  if (opts) return { spoken: spokenTextFor(t), followUp: { kind: 'options', options: opts } }
+  if (opts) {
+    // A link with buttons must still reach the customer: the buttons then
+    // carry the full text, link included (review I1).
+    const followUp = /https?:\/\//.test(t) ? { kind: 'options', options: opts, text: t } : { kind: 'options', options: opts }
+    return { spoken: spokenTextFor(t), followUp }
+  }
   const trailing = splitTrailingUrl(t)
   if (trailing) return { spoken: spokenTextFor(trailing.body), followUp: { kind: 'cta_url', body: trailing.body, url: trailing.url } }
   if (/https?:\/\//.test(t)) return { spoken: spokenTextFor(t), followUp: { kind: 'text', text: t } }

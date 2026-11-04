@@ -5,7 +5,7 @@ vi.mock('@/lib/usage', () => ({ recordMeterUsage: vi.fn(async () => {}) }))
 
 import { logWarn } from '@/lib/log'
 import { recordMeterUsage } from '@/lib/usage'
-import { maybeSendVoiceReply } from './reply.js'
+import { maybeSendVoiceReply, voiceReplyPossible } from './reply.js'
 
 const OGG = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 1, 2, 3])
 const VOICES = { booking: { voice_id: 'vb', name: 'Bea' }, default: { voice_id: 'vd', name: 'Dan' } }
@@ -108,5 +108,20 @@ describe('maybeSendVoiceReply success', () => {
   test('never throws when everything throws', async () => {
     const db = { from: () => { throw new Error('db') }, storage: { from: () => { throw new Error('s') } } }
     expect((await maybeSendVoiceReply(db, args(), deps())).sent).toBe(false)
+  })
+})
+
+describe('voiceReplyPossible (review I3: no spoken-reply prompt unless voice can go)', () => {
+  test('on with a voice, or test with the number listed', async () => {
+    expect(await voiceReplyPossible(makeDb(), { locationId: 'loc-1', recipient: '353871234567' })).toBe(true)
+    expect(await voiceReplyPossible(makeDb({ mode: 'test', testPhones: ['+353 87 123 4567'] }), { locationId: 'loc-1', recipient: '353871234567' })).toBe(true)
+  })
+  test('off, test without the number, no voice at all, or unreadable settings', async () => {
+    const r = { locationId: 'loc-1', recipient: '353871234567' }
+    expect(await voiceReplyPossible(makeDb({ mode: 'off' }), r)).toBe(false)
+    expect(await voiceReplyPossible(makeDb({ mode: 'test', testPhones: [] }), r)).toBe(false)
+    expect(await voiceReplyPossible(makeDb({ voices: {} }), r)).toBe(false)
+    expect(await voiceReplyPossible(makeDb({ settingsError: { message: 'x' } }), r)).toBe(false)
+    expect(await voiceReplyPossible({ from: () => { throw new Error('db') } }, r)).toBe(false)
   })
 })
