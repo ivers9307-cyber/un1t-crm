@@ -110,11 +110,11 @@ function mimeForFormat(format) {
 }
 
 /**
- * @param {{ text: string, voiceId: string, outputFormat?: string }} input
+ * @param {{ text: string, voiceId: string, outputFormat?: string, modelId?: string }} input
  * @param {{ fetchImpl?: typeof fetch }} [deps]
  * @returns {Promise<{ ok: true, bytes: Uint8Array, mime: string } | { ok: false, reason: 'not_configured'|'http_error'|'timeout'|'bad_response', status?: number }>}
  */
-export async function synthesizeSpeech({ text, voiceId, outputFormat = 'opus_48000_64' } = {}, { fetchImpl = fetch } = {}) {
+export async function synthesizeSpeech({ text, voiceId, outputFormat = 'opus_48000_64', modelId = ELEVENLABS_TTS_MODEL } = {}, { fetchImpl = fetch } = {}) {
   const key = process.env.ELEVENLABS_API_KEY
   if (!key) return { ok: false, reason: 'not_configured' }
   if (!String(text || '').trim() || !String(voiceId || '').trim()) return { ok: false, reason: 'bad_response' }
@@ -129,7 +129,7 @@ export async function synthesizeSpeech({ text, voiceId, outputFormat = 'opus_480
       res = await fetchImpl(url, {
         method: 'POST',
         headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: mimeForFormat(outputFormat) },
-        body: JSON.stringify({ text: String(text), model_id: ELEVENLABS_TTS_MODEL }),
+        body: JSON.stringify({ text: String(text), model_id: modelId }),
         signal: controller.signal,
       })
     } catch (err) {
