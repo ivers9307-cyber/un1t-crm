@@ -262,7 +262,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     await ready()
     expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
     expect(within(labelRow('Hand-off message')).getByText('Default')).toBeTruthy()
-    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    expect(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
     // an org value fills the inherited field
     expect(screen.getByPlaceholderText('e.g. Never discuss competitor pricing.').value).toBe('Org rule')
   })
@@ -321,9 +321,9 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     await ready()
     const tone = screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.')
     expect(tone.value).toBe('Studio tone')
-    fireEvent.click(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' }))
+    fireEvent.click(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use organisation default' }))
     expect(tone.value).toBe('Org tone')
-    expect(within(labelRow('Tone & voice')).getByText('Organisation default')).toBeTruthy()
+    expect(within(labelRow('Tone and voice')).getByText('Organisation default')).toBeTruthy()
     save()
     await waitFor(() => expect(putBody()).toBeTruthy())
     expect(putBody().overridden).toEqual([])
@@ -335,7 +335,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer({ org: null })])
     render(<CustomerAgentClient canEdit />)
     await ready()
-    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use default' })).toBeTruthy()
+    expect(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use default' })).toBeTruthy()
     expect(within(labelRow('Extra rules (optional)')).getByText('Default')).toBeTruthy()
   })
 
@@ -375,9 +375,9 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer(), reply(200, { success: true, settings: { enabled: true } }), answer({ studio: { enabled: true } })])
     render(<CustomerAgentClient canEdit />)
     await ready()
-    expect(within(labelRow('Tone & voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
+    expect(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
     save()
-    await waitFor(() => expect(within(labelRow('Tone & voice')).getByText('Organisation default')).toBeTruthy())
+    await waitFor(() => expect(within(labelRow('Tone and voice')).getByText('Organisation default')).toBeTruthy())
     expect(screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.').value).toBe('Org tone')
   })
 
@@ -600,7 +600,9 @@ describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
     fireEvent.change(tones().at(-1), { target: { value: 'My studio tone' } })
     await act(async () => { releasePut() })
     await waitFor(() => expect(studioReads).toBe(2))
-    await waitFor(() => expect(within(screen.getByText('Tone & voice').parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
+    // The org editor (above) and the studio's now share the registry's label:
+    // the studio's is the last.
+    await waitFor(() => expect(within(screen.getAllByText('Tone and voice').at(-1).parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
     expect(tones().at(-1).value).toBe('My studio tone')
     fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
     await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
@@ -744,7 +746,9 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     await ready()
     expect(screen.getByText(GROUP)).toBeTruthy()
     const group = screen.getByTestId('hatch-copy-group')
-    expect(group.querySelectorAll('input:not([type="checkbox"])').length).toBe(12)
+    // MIASETTINGS.1c — the 12 Hatch copy fields plus the booking form message
+    // (booking_flow_text), new at the studio and Hatch only.
+    expect(group.querySelectorAll('input:not([type="checkbox"])').length).toBe(13)
     expect(within(group).getByPlaceholderText('Thanks! You can go back to WhatsApp now.')).toBeTruthy()
     expect(within(group).getByPlaceholderText("Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.")).toBeTruthy()
   })
