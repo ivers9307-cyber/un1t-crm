@@ -10,12 +10,20 @@ import { maybeSendVoiceReply, voiceReplyPossible } from './reply.js'
 const OGG = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 1, 2, 3])
 const VOICES = { booking: { voice_id: 'vb', name: 'Bea' }, default: { voice_id: 'vd', name: 'Dan' } }
 
-function makeDb({ mode = 'on', testPhones = [], settingsError = null, voices = VOICES, locError = null, uploadError = null, extra = {} } = {}) {
+// `others` (VOICESTUDIO.1): more studios by id, e.g. { 'loc-2': { organization_id, settings } }.
+function makeDb({ mode = 'on', testPhones = [], settingsError = null, voices = VOICES, locError = null, uploadError = null, extra = {}, others = {}, othersError = null } = {}) {
   const uploads = []
+  const thread = { organization_id: 'org-1', settings: { voice_replies: { voices, ...extra } } }
+  const byId = (id) => (id === 'loc-1' ? thread : others[id] ? others[id] : null)
   return {
     uploads,
     from: vi.fn((table) => {
-      if (table === 'locations') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: locError ? null : { organization_id: 'org-1', settings: { voice_replies: { voices, ...extra } } }, error: locError }) }) }) }
+      if (table === 'locations') return {
+        select: () => ({
+          eq: (_col, id) => ({ maybeSingle: async () => (id === 'loc-1' && locError ? { data: null, error: locError } : id !== 'loc-1' && othersError ? { data: null, error: othersError } : { data: byId(id), error: null }) }),
+          in: async (_col, ids) => (othersError ? { data: null, error: othersError } : { data: ids.filter((id) => others[id]).map((id) => ({ id, ...others[id] })), error: null }),
+        }),
+      }
       if (table === 'org_settings') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: settingsError ? null : { voice_reply_mode: mode, voice_reply_test_phones: testPhones }, error: settingsError }) }) }) }
       throw new Error(`unexpected ${table}`)
     }),
@@ -112,16 +120,67 @@ describe('maybeSendVoiceReply success', () => {
 })
 
 describe('voiceReplyPossible (review I3: no spoken-reply prompt unless voice can go)', () => {
-  test('on with a voice, or test with the number listed', async () => {
-    expect(await voiceReplyPossible(makeDb(), { locationId: 'loc-1', recipient: '353871234567' })).toBe(true)
-    expect(await voiceReplyPossible(makeDb({ mode: 'test', testPhones: ['+353 87 123 4567'] }), { locationId: 'loc-1', recipient: '353871234567' })).toBe(true)
+  const r = { locationId: 'loc-1', recipient: '353871234567' }
+  test('on with a voice, or test with the number listed: the thread studio speaks', async () => {
+    expect(await voiceReplyPossible(makeDb(), r)).toEqual({ possible: true, voiceLocationId: 'loc-1' })
+    expect(await voiceReplyPossible(makeDb({ mode: 'test', testPhones: ['+353 87 123 4567'] }), r)).toEqual({ possible: true, voiceLocationId: 'loc-1' })
   })
-  test('off, test without the number, no voice at all, or unreadable settings', async () => {
-    const r = { locationId: 'loc-1', recipient: '353871234567' }
-    expect(await voiceReplyPossible(makeDb({ mode: 'off' }), r)).toBe(false)
-    expect(await voiceReplyPossible(makeDb({ mode: 'test', testPhones: [] }), r)).toBe(false)
-    expect(await voiceReplyPossible(makeDb({ voices: {} }), r)).toBe(false)
-    expect(await voiceReplyPossible(makeDb({ settingsError: { message: 'x' } }), r)).toBe(false)
-    expect(await voiceReplyPossible({ from: () => { throw new Error('db') } }, r)).toBe(false)
+  test('each refusal says why', async () => {
+    expect(await voiceReplyPossible(makeDb({ mode: 'off' }), r)).toEqual({ possible: false, reason: 'disabled' })
+    expect(await voiceReplyPossible(makeDb({ mode: 'test', testPhones: [] }), r)).toEqual({ possible: false, reason: 'not_in_test_list' })
+    expect(await voiceReplyPossible(makeDb({ voices: {} }), r)).toEqual({ possible: false, reason: 'no_voice' })
+    expect(await voiceReplyPossible(makeDb({ settingsError: { message: 'x' } }), r)).toEqual({ possible: false, reason: 'settings_unreadable' })
+    expect(await voiceReplyPossible(makeDb({ locError: { message: 'x' } }), r)).toEqual({ possible: false, reason: 'settings_unreadable' })
+    expect(await voiceReplyPossible({ from: () => { throw new Error('db') } }, r)).toEqual({ possible: false, reason: 'settings_unreadable' })
+  })
+})
+
+describe('VOICESTUDIO.1 — a studio without voices borrows a member studio\'s', () => {
+  const r = (memberLocationIds) => ({ locationId: 'loc-1', recipient: '353871234567', memberLocationIds })
+  const withVoices = { organization_id: 'org-1', settings: { voice_replies: { voices: VOICES } } }
+  const noVoices = { organization_id: 'org-1', settings: {} }
+
+  test('the first member studio in the organisation with a voice speaks', async () => {
+    const db = makeDb({ voices: {}, others: { 'loc-2': noVoices, 'loc-3': withVoices } })
+    expect(await voiceReplyPossible(db, r(['loc-1', 'loc-2', 'loc-3']))).toEqual({ possible: true, voiceLocationId: 'loc-3' })
+  })
+  test('the thread studio\'s own voices win', async () => {
+    const db = makeDb({ others: { 'loc-3': withVoices } })
+    expect(await voiceReplyPossible(db, r(['loc-3']))).toEqual({ possible: true, voiceLocationId: 'loc-1' })
+  })
+  test('another organisation\'s studio never lends', async () => {
+    const db = makeDb({ voices: {}, others: { 'loc-9': { ...withVoices, organization_id: 'org-2' } } })
+    expect(await voiceReplyPossible(db, r(['loc-9']))).toEqual({ possible: false, reason: 'no_voice' })
+  })
+  test('no member studio, or none with a voice: no_voice', async () => {
+    expect(await voiceReplyPossible(makeDb({ voices: {} }), r([]))).toEqual({ possible: false, reason: 'no_voice' })
+    expect(await voiceReplyPossible(makeDb({ voices: {}, others: { 'loc-2': noVoices } }), r(['loc-2']))).toEqual({ possible: false, reason: 'no_voice' })
+  })
+  test('mode is still the gate: off refuses before any borrowing', async () => {
+    const db = makeDb({ mode: 'off', voices: {}, others: { 'loc-3': withVoices } })
+    expect(await voiceReplyPossible(db, r(['loc-3']))).toEqual({ possible: false, reason: 'disabled' })
+  })
+  test('a failed read of the member studios is settings_unreadable', async () => {
+    const db = makeDb({ voices: {}, othersError: { message: 'x' } })
+    expect(await voiceReplyPossible(db, r(['loc-3']))).toEqual({ possible: false, reason: 'settings_unreadable' })
+  })
+
+  test('maybeSendVoiceReply speaks with the lending studio\'s voice', async () => {
+    const lent = { organization_id: 'org-1', settings: { voice_replies: { voices: { booking: { voice_id: 'vh', name: 'Hatch' } }, buttons_line: 'Pick one:' } } }
+    const d = deps()
+    const res = await maybeSendVoiceReply(makeDb({ voices: {}, others: { 'loc-3': lent } }), args({ voiceLocationId: 'loc-3' }), d)
+    expect(res.sent).toBe(true)
+    expect(res.voiceKind).toBe('booking')
+    expect(res.buttonsLine).toBe('Pick one:')
+    expect(d.synthesize).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'vh' }))
+  })
+  test('maybeSendVoiceReply refuses a lending studio from another organisation', async () => {
+    const foreign = { organization_id: 'org-2', settings: { voice_replies: { voices: VOICES } } }
+    const d = deps()
+    expect(await maybeSendVoiceReply(makeDb({ voices: {}, others: { 'loc-9': foreign } }), args({ voiceLocationId: 'loc-9' }), d)).toEqual({ sent: false, reason: 'no_voice' })
+    expect(d.synthesize).not.toHaveBeenCalled()
+  })
+  test('maybeSendVoiceReply: an unreadable lending studio is settings_unreadable', async () => {
+    expect(await maybeSendVoiceReply(makeDb({ othersError: { message: 'x' } }), args({ voiceLocationId: 'loc-3' }), deps())).toEqual({ sent: false, reason: 'settings_unreadable' })
   })
 })

@@ -26,10 +26,18 @@ export const DEFAULT_BUTTONS_LINE = 'Tap an option:'
 
 /**
  * @param {object} db service-role client
- * @param {{ conversationId: string, locationId: string, recipient: string, spoken: string, kind: string, replyOpts: object }} input
+ * `voiceLocationId` (VOICESTUDIO.1) is the studio whose voices speak the
+ * reply, from voiceReplyPossible: the thread's studio, or another studio of
+ * the same organisation the person is an active member at when the thread's
+ * has no voice. Its whole voice_replies block (voices, buttons line, AI
+ * notice) travels together. Mode, test numbers, cap, metering and the send
+ * stay the thread's.
+ *
+ * @param {object} db service-role client
+ * @param {{ conversationId: string, locationId: string, recipient: string, spoken: string, kind: string, replyOpts: object, voiceLocationId?: string|null }} input
  * @param {{ synthesize?: Function, capStatus?: Function, sendMedia?: Function }} [deps]
  */
-export async function maybeSendVoiceReply(db, { conversationId, locationId, recipient, spoken, kind, replyOpts = {} } = {}, deps = {}) {
+export async function maybeSendVoiceReply(db, { conversationId, locationId, recipient, spoken, kind, replyOpts = {}, voiceLocationId = null } = {}, deps = {}) {
   const synthesize = deps.synthesize || synthesizeSpeech
   const capStatus = deps.capStatus || ((q) => getVoiceReplyCapStatus(q, { db }))
   const sendMedia = deps.sendMedia || ((...a) => sendMediaMessage(...a))
@@ -46,7 +54,17 @@ export async function maybeSendVoiceReply(db, { conversationId, locationId, reci
       .eq('id', locationId)
       .maybeSingle()
     if (locError || !loc?.organization_id) return refuse('settings_unreadable')
-    const studio = loc.settings?.voice_replies || {}
+    let studio = loc.settings?.voice_replies || {}
+    if (voiceLocationId && voiceLocationId !== locationId) {
+      const { data: vLoc, error: vLocError } = await db
+        .from('locations')
+        .select('organization_id, settings')
+        .eq('id', voiceLocationId)
+        .maybeSingle()
+      if (vLocError) return refuse('settings_unreadable')
+      // Another organisation's studio never lends its voices.
+      studio = vLoc?.organization_id === loc.organization_id ? (vLoc.settings?.voice_replies || {}) : {}
+    }
 
     const { data: org, error: orgError } = await db
       .from('org_settings')
@@ -107,26 +125,52 @@ export async function maybeSendVoiceReply(db, { conversationId, locationId, reci
   }
 }
 
+const hasAnyVoice = (settings) => {
+  const voices = settings?.voice_replies?.voices
+  return !!voices && typeof voices === 'object' && Object.values(voices).some((v) => v && String(v.voice_id || '').trim())
+}
+
 /**
  * VOICEREPLY.1 (review I3) — could a voice reply go to this recipient at all?
  * The org's mode and test numbers and a configured voice, without the cap or
  * any speech. The agent asks before building the prompt, so the spoken-reply
- * line never reaches a turn whose reply will be text anyway. false on any
- * read failure. Never throws.
+ * line never reaches a turn whose reply will be text anyway. Never throws.
+ *
+ * VOICESTUDIO.1 — the voice is the thread studio's; when that studio has
+ * none, the first of `memberLocationIds` (studios the person is an active
+ * member at, from the turn's member-studio resolution) in the same
+ * organisation that has one. A Hatch member whose thread files at Stillorgan
+ * used to get text only because of where the thread filed.
+ *
+ * @returns {Promise<{ possible: true, voiceLocationId: string } | { possible: false, reason: string }>}
+ *   reason: 'settings_unreadable' | 'disabled' | 'not_in_test_list' | 'no_voice'
  */
-export async function voiceReplyPossible(db, { locationId, recipient } = {}) {
+export async function voiceReplyPossible(db, { locationId, recipient, memberLocationIds = [] } = {}) {
+  const no = (reason) => ({ possible: false, reason })
   try {
     const { data: loc, error: locError } = await db.from('locations').select('organization_id, settings').eq('id', locationId).maybeSingle()
-    if (locError || !loc?.organization_id) return false
-    const voices = loc.settings?.voice_replies?.voices
-    if (!voices || !Object.values(voices).some((v) => v && String(v.voice_id || '').trim())) return false
+    if (locError || !loc?.organization_id) return no('settings_unreadable')
     const { data: org, error: orgError } = await db.from('org_settings')
       .select('voice_reply_mode, voice_reply_test_phones').eq('organization_id', loc.organization_id).maybeSingle()
-    if (orgError) return false
-    if (org?.voice_reply_mode === 'on') return true
-    return org?.voice_reply_mode === 'test' && phoneMatchesAllowlist(recipient, org?.voice_reply_test_phones || [])
+    if (orgError) return no('settings_unreadable')
+    const mode = org?.voice_reply_mode || 'off'
+    if (mode === 'test') {
+      if (!phoneMatchesAllowlist(recipient, org?.voice_reply_test_phones || [])) return no('not_in_test_list')
+    } else if (mode !== 'on') {
+      return no('disabled')
+    }
+
+    if (hasAnyVoice(loc.settings)) return { possible: true, voiceLocationId: locationId }
+
+    const others = [...new Set((Array.isArray(memberLocationIds) ? memberLocationIds : []).filter((id) => id && id !== locationId))]
+    if (!others.length) return no('no_voice')
+    const { data: rows, error: rowsError } = await db.from('locations').select('id, organization_id, settings').in('id', others)
+    if (rowsError) return no('settings_unreadable')
+    const byId = new Map((rows || []).map((r) => [r.id, r]))
+    const lender = others.map((id) => byId.get(id)).find((r) => r && r.organization_id === loc.organization_id && hasAnyVoice(r.settings))
+    return lender ? { possible: true, voiceLocationId: lender.id } : no('no_voice')
   } catch {
-    return false
+    return no('settings_unreadable')
   }
 }
 
