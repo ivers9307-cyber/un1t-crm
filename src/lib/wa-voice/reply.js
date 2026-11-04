@@ -174,6 +174,44 @@ export async function voiceReplyPossible(db, { locationId, recipient, memberLoca
   }
 }
 
+// VOICEORDER.1 — WhatsApp fetches a voice note's audio from our signed URL
+// before it delivers it, so a text sent straight after overtakes it (4 Nov
+// 2026: the buttons landed a second before the voice note they belong to).
+// The status webhook stamps delivered_at / read_at on the row; wait for that
+// (or a failure) before the follow-up goes. Bounded: a phone that is off never
+// reports delivery, and the follow-up must still go, by then after the fetch.
+export const VOICE_DELIVERY_WAIT_MS = 8000
+export const VOICE_DELIVERY_POLL_MS = 500
+
+/**
+ * @returns {Promise<'delivered'|'failed'|'timeout'|'unreadable'|'no_message_id'>} never throws
+ */
+export async function waitForVoiceNoteDelivery(db, { messageId, timeoutMs = VOICE_DELIVERY_WAIT_MS, intervalMs = VOICE_DELIVERY_POLL_MS } = {}, deps = {}) {
+  if (!messageId) return 'no_message_id'
+  const sleep = deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+  const now = deps.now || (() => Date.now())
+  const deadline = now() + timeoutMs
+  try {
+    for (;;) {
+      const { data, error } = await db.from('whatsapp_messages')
+        .select('status, delivered_at, read_at')
+        .eq('wa_message_id', messageId)
+        .limit(1)
+        .maybeSingle()
+      if (error) return 'unreadable'
+      if (data?.delivered_at || data?.read_at) return 'delivered'
+      if (data?.status === 'failed') return 'failed'
+      if (now() + intervalMs > deadline) {
+        logWarn('wa-voice-reply', 'voice note not delivered in time; follow-up sent anyway', { timeoutMs })
+        return 'timeout'
+      }
+      await sleep(intervalMs)
+    }
+  } catch {
+    return 'unreadable'
+  }
+}
+
 async function meter(db, { organizationId, locationId, chars }) {
   try {
     await recordMeterUsage({
