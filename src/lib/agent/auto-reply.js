@@ -79,7 +79,7 @@ import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 import { logWarn, logError } from '@/lib/log'
-import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded } from '@/lib/wa-voice/reply-rules'
+import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded, memberVoiceLocationIds } from '@/lib/wa-voice/reply-rules'
 import { maybeSendVoiceReply, voiceReplyPossible } from '@/lib/wa-voice/reply'
 import { studiosOfContact } from '@/lib/contact-studios'
 
@@ -1046,10 +1046,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // on the decision row (meta.voice), so a text reply to a voice note always
     // says why. It used to record nothing when this gate said no.
     if (voiceInbound) {
-      const resolution = toolCtx.memberStudios
-      const memberLocationIds = resolution && !resolution.readFailed && Array.isArray(resolution.studios)
-        ? resolution.studios.filter((s) => s?.active === true && s.location_id).map((s) => s.location_id)
-        : []
+      const memberLocationIds = memberVoiceLocationIds(toolCtx.memberStudios)
       let gate = { possible: true, voiceLocationId: locationId }
       if (typeof adapter.voiceReplyPossible === 'function') {
         try {

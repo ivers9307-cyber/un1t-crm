@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest'
 import {
   MAX_SPOKEN_CHARS, VOICE_REPLY_PROMPT_LINE, spokenTextFor, splitForVoice, voiceKindFor, voiceFor,
-  isOggOpus, toolResultSucceeded, isVoiceTrigger,
+  isOggOpus, toolResultSucceeded, isVoiceTrigger, memberVoiceLocationIds,
 } from './reply-rules.js'
 
 describe('what is spoken', () => {
@@ -74,5 +74,29 @@ describe('which kind and which voice', () => {
     expect(isVoiceTrigger({ historyRows: [{ direction: 'inbound', message_type: 'audio' }, { direction: 'inbound', message_type: 'text' }] })).toBe(false)
     expect(isVoiceTrigger({ historyRows: [{ direction: 'inbound', message_type: 'text' }, { direction: 'inbound', message_type: 'audio' }, { direction: 'outbound', message_type: 'text' }] })).toBe(true)
     expect(isVoiceTrigger({ historyRows: [] })).toBe(false)
+  })
+})
+
+// VOICESTUDIO.1 — the in-memory resolution (resolveMemberStudios) names the
+// field locationId; only the decision log writes location_id. The first cut
+// read location_id here and so never borrowed a voice (commit review).
+describe('memberVoiceLocationIds', () => {
+  test('active studios by locationId, in order', () => {
+    const resolution = { readFailed: false, studios: [
+      { locationId: 'hatch', active: true, answerable: true },
+      { locationId: 'still', active: false, answerable: true },
+      { locationId: 'third', active: true, answerable: false },
+    ] }
+    expect(memberVoiceLocationIds(resolution)).toEqual(['hatch', 'third'])
+  })
+  test('the decision-log spelling is not the in-memory one', () => {
+    expect(memberVoiceLocationIds({ studios: [{ location_id: 'hatch', active: true }] })).toEqual([])
+  })
+  test('no, failed or malformed resolution is none', () => {
+    expect(memberVoiceLocationIds(undefined)).toEqual([])
+    expect(memberVoiceLocationIds(null)).toEqual([])
+    expect(memberVoiceLocationIds({ studios: [], readFailed: true })).toEqual([])
+    expect(memberVoiceLocationIds({ studios: [{ locationId: 'x', active: true }], readFailed: true })).toEqual([])
+    expect(memberVoiceLocationIds({ studios: 'nope' })).toEqual([])
   })
 })
