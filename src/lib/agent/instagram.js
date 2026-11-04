@@ -246,6 +246,8 @@ export const instagramAdapter = {
   label: 'Instagram',
   conversationsTable: 'instagram_conversations',
   messagesTable: 'instagram_messages',
+  // VOICENOTE.1 — Instagram has no transcript columns: never name them here.
+  historyColumns: 'direction, body, message_type, created_at, source',
   nameColumn: 'customer_name',
   pushCategory: 'instagram',
   handoffType: 'instagram_agent_handoff',

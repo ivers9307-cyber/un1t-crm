@@ -459,8 +459,10 @@ export async function runChannelAgent(db, adapter, ctx) {
 // its own soft-handoff path in its own webhook, never the in_flight bail.
 async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
   if (!conversationId || !sinceIso) return false
+  // VOICENOTE.1 — the channel's history columns, so a transcribed voice note
+  // counts as the text it says (and a stale `pending` one as audio).
   const { data } = await db.from(adapter.messagesTable)
-    .select('message_type, body')
+    .select(historyColumnsFor(adapter))
     .eq('conversation_id', conversationId)
     .eq('direction', 'inbound')
     .gt('created_at', sinceIso)
@@ -535,7 +537,12 @@ function takeoverCheckFailed(adapter, conversationId, stage, err) {
 }
 
 async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
-  const { conversationId, locationId, recipient, contactId, messageType, body, connection, answeredThroughIso = null } = ctx
+  const { conversationId, locationId, recipient, contactId, connection, answeredThroughIso = null, voiceTranscript = null } = ctx
+  // VOICENOTE.1 — a voice note the webhook transcribed clearly is the text it
+  // says for the whole turn; any other voice note stays 'audio'.
+  const voiceOk = ctx.messageType === 'audio' && voiceTranscript?.status === 'ok' && String(voiceTranscript.text || '').trim()
+  const messageType = voiceOk ? 'text' : ctx.messageType
+  const body = voiceOk ? String(voiceTranscript.text).trim() : ctx.body
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
@@ -628,6 +635,29 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // Non-text message while the agent is on duty — acknowledge the
     // customer + flag a human rather than leave them hanging. Doesn't
     // disable the agent; a follow-up text re-engages it.
+    // VOICENOTE.1 (Richard, 4 Nov 2026) — a voice note Mia cannot answer is a
+    // REAL hand-off into the Agent hand-off queue, not the soft one that files
+    // nothing. Switched off ('disabled') or no transcription keeps the soft one.
+    const voiceReason = ctx.messageType === 'audio' ? VOICE_HANDOFF_REASON[voiceTranscript?.status] : null
+    // It runs under the turn claim: handoff() switches Mia off, and doing that
+    // while another turn (a text sent just before) is composing would make
+    // that turn read a human take-over and drop its reply. With the claim
+    // held elsewhere this returns in_flight and the webhook hands the voice
+    // note to staff silently (VOICE_LOST_TURN_REASONS), so the text is still
+    // answered.
+    if (decision.onDuty && decision.reason === 'unsupported_type' && voiceReason) {
+      const voiceClaim = await claimAgentTurn(db, adapter, conversationId)
+      if (!voiceClaim) return { handled: false, reason: 'in_flight' }
+      try {
+        await handoff(db, adapter, {
+          conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
+          reason: VOICE_HANDOFF_TEXT[voiceReason],
+        })
+      } finally {
+        await releaseAgentTurn(db, adapter, conversationId, voiceClaim)
+      }
+      return { handled: true, action: 'handoff', reason: voiceReason }
+    }
     if (decision.onDuty && decision.reason === 'unsupported_type') {
       return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName, lastReplyAt: conv?.agent_last_reply_at })
     }
@@ -694,7 +724,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // `source` lets the builder find the previous pass's own reply on a rerun
     // (both message tables carry it).
     const { data: historyDesc } = await db.from(adapter.messagesTable)
-      .select('direction, body, message_type, created_at, source')
+      .select(historyColumnsFor(adapter))
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .limit(MAX_HISTORY * 2)
@@ -1575,6 +1605,66 @@ async function recordAgentMessage(db, adapter, row) {
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
+// VOICENOTE.1 — the columns each history read selects. `source` lets the
+// builder find the previous pass's own reply on a rerun (both message tables
+// carry it). The transcript columns exist on whatsapp_messages only, so they
+// live on the WhatsApp adapter, never in a string shared across channels
+// (tests/voice-transcript-select-guard.test.js).
+export const BASE_HISTORY_COLUMNS = 'direction, body, message_type, created_at, source'
+function historyColumnsFor(adapter) {
+  return adapter?.historyColumns || BASE_HISTORY_COLUMNS
+}
+
+// VOICENOTE.1 — a voice note's transcript status → the hand-off reason
+// recorded on agent_decisions (MiaDecisionTrace REASON_LABELS), and the staff
+// push text for it. 'disabled' is absent on purpose: switched off keeps
+// today's soft hand-off.
+export const VOICE_HANDOFF_REASON = Object.freeze({
+  unclear: 'voice_unclear',
+  too_long: 'voice_too_long',
+  capped: 'voice_unavailable',
+  failed: 'voice_unavailable',
+  not_configured: 'voice_unavailable',
+})
+const VOICE_HANDOFF_TEXT = Object.freeze({
+  voice_unclear: "Voice note Mia couldn't make out",
+  voice_too_long: 'Voice note over 3 minutes',
+  voice_unavailable: 'Voice note: transcription unavailable',
+})
+
+/**
+ * VOICENOTE.1 — a voice note whose own turn sent nothing because a
+ * concurrent message won the turn (src/lib/wa-voice/transcribe.js
+ * voiceNoteLostItsTurn). Mia may have
+ * answered the other message correctly, so there is NO customer message and
+ * Mia stays on (agent_active untouched); the thread goes into the Agent
+ * hand-off queue and managers are pushed. Not debounced: volume is tiny and a
+ * missed voice note matters more than a second push. The stamp stays until
+ * staff resolve the thread (the cooldown re-arm only clears hand-offs that
+ * switched Mia off), and while it is set Mia's proactive follow-ups skip the
+ * thread. Never throws.
+ */
+export async function markVoiceNoteForStaff(db, { conversationId, locationId }) {
+  try {
+    const { error } = await db.from(whatsappAdapter.conversationsTable)
+      .update({ agent_handed_off_at: new Date().toISOString(), handoff_escalated_at: null })
+      .eq('id', conversationId)
+    if (error) logError('agent', 'voice note staff stamp failed', { conversationId, error: error.message })
+  } catch (err) {
+    logError('agent', 'voice note staff stamp threw', { conversationId, error: err?.message || String(err) })
+  }
+  try {
+    await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
+      title: `${whatsappAdapter.label} · voice note needs a look`,
+      body: 'A voice note arrived while Mia was answering another message — check it was covered.',
+      category: whatsappAdapter.pushCategory,
+      data: { type: whatsappAdapter.handoffType, conversation_id: conversationId },
+    })
+  } catch (err) {
+    logError('agent', 'voice note staff push failed', { conversationId, error: err?.message || String(err) })
+  }
+}
+
 async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride }) {
   // holdingOverride: a reason-specific script (e.g. the no_credits
   // escalation wording) replaces the generic holding message for this
@@ -1795,6 +1885,8 @@ export const whatsappAdapter = {
   label: 'WhatsApp',
   conversationsTable: 'whatsapp_conversations',
   messagesTable: 'whatsapp_messages',
+  // VOICENOTE.1 — WhatsApp rows carry the voice-note transcript (mig 808).
+  historyColumns: `${BASE_HISTORY_COLUMNS}, transcript, transcript_status`,
   nameColumn: 'wa_profile_name',
   pushCategory: 'whatsapp',
   handoffType: 'whatsapp_agent_handoff',
@@ -1856,6 +1948,8 @@ export async function maybeAutoReply(db, ctx) {
     contactId: ctx.contactId,
     messageType: ctx.messageType,
     body: ctx.body,
+    // VOICENOTE.1 — { status, text } from transcribeInboundVoiceNote for audio.
+    voiceTranscript: ctx.voiceTranscript || null,
     // Inbound wamid — lets onEngage mark-read + show typing while Claude thinks.
     waMessageId: ctx.waMessageId || null,
   })

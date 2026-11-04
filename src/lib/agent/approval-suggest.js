@@ -257,6 +257,14 @@ const MESSAGES_TABLE_BY_CHANNEL = {
   instagram: 'instagram_messages',
 }
 
+// VOICENOTE.1 — the history columns per channel. The transcript columns exist
+// on whatsapp_messages only (mig 808); naming them on Instagram would fail the
+// whole read (tests/voice-transcript-select-guard.test.js).
+export const HISTORY_COLUMNS_BY_CHANNEL = {
+  whatsapp: 'direction, body, message_type, created_at, transcript, transcript_status',
+  instagram: 'direction, body, message_type, created_at',
+}
+
 /**
  * Compose Mia's Wave-3 post-decision suggestion for one decided
  * agent_membership_requests row. Orchestration — not unit-tested
@@ -286,7 +294,7 @@ export async function composeApprovalSuggestion(db, row, { signal } = {}) {
   let historyRows = []
   if (row.conversation_id) {
     const { data } = await db.from(messagesTable)
-      .select('direction, body, message_type, created_at')
+      .select(HISTORY_COLUMNS_BY_CHANNEL[row.channel])
       .eq('conversation_id', row.conversation_id)
       .order('created_at', { ascending: false })
       .limit(15)

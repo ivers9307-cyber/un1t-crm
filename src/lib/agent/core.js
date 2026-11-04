@@ -6,6 +6,7 @@
 
 import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
 import { DEFAULT_TZ } from '@/lib/location-time'
+import { VOICE_TRANSCRIPT_MARKER, effectiveTranscriptStatus } from '@shared/voice-note'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
 // W1.S3 — the holding message is a function of the location's brand
@@ -306,9 +307,11 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // we never acknowledge while disabled, off-allowlist, or in quiet hours.)
   // 'interactive' / 'button' = a tapped button or list row; the webhook maps
   // the tap to its text in body, so it's a text reply in all but name.
-  // Voice notes (Richard's call, 2026-06-12): no transcription vendor —
-  // audio takes the soft-handoff path below, so Mia acknowledges the
-  // voice note and the thread lands in the team's review queue.
+  // Voice notes (VOICENOTE.1): the webhook transcribes them with ElevenLabs
+  // before this turn. An `ok` transcript arrives here as a text message;
+  // anything else stays 'audio', and auto-reply.js takes the voice hand-off
+  // (a real one, into the Agent hand-off queue) for it, or today's soft
+  // hand-off when transcription is switched off.
   const type = message?.type || 'text'
   // MIA-REVIEW.2 — a tapped reaction is a no-op, not an unreadable message:
   // stay fully silent (no holding message, no manager page).
@@ -351,6 +354,22 @@ export function sanitizeInboundText(s) {
 }
 
 /**
+ * VOICENOTE.1 — a stored inbound voice note whose transcript is clear reads
+ * as the text the customer said; every other row comes back unchanged. The
+ * history formatter adds VOICE_TRANSCRIPT_MARKER so Mia knows the turn was
+ * heard, not typed. Pure.
+ */
+export const PENDING_VOICE_PLACEHOLDER = '[voice note, still being transcribed]'
+
+export function effectiveInbound(row, nowMs = Date.now()) {
+  if (!row || row.direction !== 'inbound' || row.message_type !== 'audio') return row
+  if (effectiveTranscriptStatus(row, nowMs) !== 'ok') return row
+  const text = typeof row.transcript === 'string' ? row.transcript.trim() : ''
+  if (!text) return row
+  return { ...row, message_type: 'text', body: text, viaVoice: true }
+}
+
+/**
  * Map stored whatsapp_messages rows into an Anthropic messages array.
  * inbound → user, outbound → assistant. Drops empty/media-only rows to
  * a placeholder, keeps the last `maxMessages`, and ensures the array
@@ -364,11 +383,21 @@ export function formatHistoryForClaude(rows, opts = {}) {
   const maxMessages = opts.maxMessages ?? 20
   const recent = (rows || []).slice(-maxMessages)
   const mapped = []
-  for (const r of recent) {
+  const nowMs = opts.nowMs ?? Date.now()
+  for (const stored of recent) {
+    const r = effectiveInbound(stored, nowMs)
     const role = r.direction === 'inbound' ? 'user' : 'assistant'
     // HARDEN.2 — inbound text is untrusted: neutralise the markers that carry
-    // authority in this protocol before it enters history.
+    // authority in this protocol before it enters history. A transcript is
+    // the customer's words too, so it goes through the same sanitiser; the
+    // voice marker is added after it.
     let text = (role === 'user' ? sanitizeInboundText(r.body) : (r.body || '')).trim()
+    if (r.viaVoice && text) text = `${VOICE_TRANSCRIPT_MARKER}${text}`
+    // A voice note still being transcribed (a concurrent turn read it before
+    // the transcript landed) must not read as old, unanswerable audio.
+    if (!text && role === 'user' && r.message_type === 'audio' && effectiveTranscriptStatus(r, nowMs) === 'pending') {
+      text = PENDING_VOICE_PLACEHOLDER
+    }
     // MIAFIX.1 — a button message is recorded as "text\n[Options: a | b]" for
     // the inbox; the model reads it back as the real sentinel, so a reply that
     // copies its own history makes working buttons instead of plain text.
@@ -418,7 +447,8 @@ export function formatHistoryForClaude(rows, opts = {}) {
  * business auto-responder (AGENT-BOTLOOP.1). Reactions, media, stickers,
  * empty rows and auto-responders are not. Pure.
  */
-export function isReplyWorthyInbound(row) {
+export function isReplyWorthyInbound(stored) {
+  const row = effectiveInbound(stored)
   if (!row || row.direction !== 'inbound') return false
   const type = row.message_type || 'text'
   if (!REPLYABLE_MESSAGE_TYPES.has(type)) return false

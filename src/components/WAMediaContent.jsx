@@ -13,8 +13,32 @@
 
 import { useEffect, useState } from 'react'
 import { mediaRenderKind } from '@shared/whatsapp-media'
+import { voiceNoteCaption } from '@shared/voice-note'
 
 export default function WAMediaContent({ message, endpoint = '/api/whatsapp/media' }) {
+  // VOICENOTE.1 — the transcript (or a one-line note) under a voice note,
+  // shown whether or not the audio itself could be loaded.
+  const caption = voiceNoteCaption(message)
+  if (!caption) return <MediaBody message={message} endpoint={endpoint} />
+  return (
+    <div>
+      <MediaBody message={message} endpoint={endpoint} />
+      <VoiceCaption caption={caption} />
+    </div>
+  )
+}
+
+function VoiceCaption({ caption }) {
+  return (
+    <div data-voice-caption className="mt-1 max-w-[260px]">
+      {caption.note && <p className="text-xs text-un1t-subtle">{caption.note}</p>}
+      {caption.transcript && <p className="text-sm text-un1t-muted whitespace-pre-wrap">{caption.transcript}</p>}
+      {caption.language && <p className="text-xs text-un1t-subtle mt-0.5">Transcribed from {caption.language}</p>}
+    </div>
+  )
+}
+
+function MediaBody({ message, endpoint }) {
   const kind = mediaRenderKind(message.message_type, message.media_mime_type)
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [url, setUrl] = useState(null)

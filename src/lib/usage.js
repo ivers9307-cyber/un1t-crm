@@ -11,6 +11,7 @@
 // reply or an OCR run) and callers do not await-and-branch on it.
 
 import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 
 // Cents per 1M tokens, keyed by model-family substring. An ESTIMATE for
 // operator visibility and caps — Anthropic's invoice is the billing
@@ -77,5 +78,32 @@ export async function recordUsage(evt, { db } = {}) {
     if (process.env.NODE_ENV !== 'production') {
       console.error('[usage] recordUsage swallowed:', e?.message || e)
     }
+  }
+}
+
+/**
+ * VOICENOTE.1 — append one usage_events row for a meter other than
+ * Anthropic tokens (today: 'elevenlabs_stt_seconds'). Awaitable, but never
+ * throws: a metering failure must never cost a customer their reply.
+ *
+ * @param {{ organizationId?: string|null, locationId?: string|null, meter: string,
+ *           source: string, quantity: number, costCents?: number, meta?: object }} evt
+ * @param {{ db?: object }} [deps]
+ */
+export async function recordMeterUsage(evt, { db } = {}) {
+  try {
+    const client = db || createServerClient()
+    const { error } = await client.from('usage_events').insert({
+      organization_id: evt.organizationId ?? null,
+      location_id: evt.locationId ?? null,
+      meter: evt.meter,
+      source: evt.source,
+      quantity: Number(evt.quantity) || 0,
+      cost_estimate_cents: Number(evt.costCents) || 0,
+      meta: evt.meta || {},
+    })
+    if (error) logError('usage', 'meter usage insert failed', { meter: evt.meter, source: evt.source, error: error.message })
+  } catch (e) {
+    logError('usage', 'recordMeterUsage swallowed', { meter: evt?.meter, error: e?.message || String(e) })
   }
 }

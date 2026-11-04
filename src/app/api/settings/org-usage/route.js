@@ -51,6 +51,10 @@ const CapsSchema = z.object({
   // SAAS4-O2 — ops alert recipients. Comma string or array; normalised
   // server-side; null/empty clears (master-push fallback resumes).
   ops_alert_emails: z.union([z.string().max(2000), z.array(z.string().email()).max(20)]).nullable().optional(),
+  // VOICENOTE.1 — transcribe WhatsApp voice notes (ElevenLabs), and the
+  // optional monthly cap in minutes (null clears it: no cap).
+  voice_transcription_enabled: z.boolean().optional(),
+  voice_transcription_monthly_cap_minutes: z.number().int().positive().max(100000).nullable().optional(),
 })
 
 // PUT /api/settings/org-usage — set/clear the org hard caps (organisation admin)
@@ -71,6 +75,8 @@ export async function PUT(request) {
   const patch = { organization_id: orgId, updated_at: new Date().toISOString(), updated_by: user.id }
   if ('ai_hard_cap_cents' in body) patch.ai_hard_cap_cents = body.ai_hard_cap_cents
   if ('email_hard_cap_sends' in body) patch.email_hard_cap_sends = body.email_hard_cap_sends
+  if ('voice_transcription_enabled' in body) patch.voice_transcription_enabled = body.voice_transcription_enabled
+  if ('voice_transcription_monthly_cap_minutes' in body) patch.voice_transcription_monthly_cap_minutes = body.voice_transcription_monthly_cap_minutes
   if ('ops_alert_emails' in body) {
     const emails = parseOpsAlertEmails(body.ops_alert_emails)
     patch.ops_alert_emails = emails.length > 0 ? emails : null
@@ -80,7 +86,7 @@ export async function PUT(request) {
   const { data, error } = await db
     .from('org_settings')
     .upsert(patch, { onConflict: 'organization_id' })
-    .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails')
+    .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, voice_transcription_enabled, voice_transcription_monthly_cap_minutes')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

@@ -23,6 +23,7 @@ import {
   UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal,
   Sparkles, Plus
 } from 'lucide-react'
+import { VOICE_TRANSCRIPT_SUBSCRIPTION, handleVoiceTranscriptUpdate } from '@/components/inbox/wa-voice-realtime'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
@@ -385,6 +386,16 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
             fetchMessages(convId)
           }
         }
+      )
+      // VOICENOTE.1 — a voice note's transcript lands by UPDATE after the
+      // INSERT: refresh the open thread past its unchanged signature.
+      .on(
+        'postgres_changes',
+        VOICE_TRANSCRIPT_SUBSCRIPTION,
+        (payload) => handleVoiceTranscriptUpdate(payload, {
+          selectedId: selectedIdRef.current,
+          forceRefetch: (convId) => { threadSigRef.current = ''; fetchMessages(convId) },
+        })
       )
       // INBOX-APPROVALS.7 — refresh approval cards live (mig 363 publishes
       // this table to supabase_realtime). Until that migration lands in

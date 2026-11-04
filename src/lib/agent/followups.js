@@ -274,7 +274,7 @@ export function summariseThread(rows) {
 // readFailed and the next tick retries (both runners ride a 15-minute cron).
 async function lastInboundFacts(db, conversationId) {
   const { data, error } = await db.from('whatsapp_messages')
-    .select('direction, source, sent_by, body, created_at, message_type')
+    .select('direction, source, sent_by, body, created_at, message_type, transcript, transcript_status')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(15)

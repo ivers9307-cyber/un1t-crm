@@ -8,11 +8,15 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails }) {
+export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails, initialVoice = null }) {
   const router = useRouter()
   const [aiCap, setAiCap] = useState(initialAiCapCents != null ? String(initialAiCapCents / 100) : '')
   const [emailCap, setEmailCap] = useState(initialEmailCapSends != null ? String(initialEmailCapSends) : '')
   const [opsEmails, setOpsEmails] = useState(Array.isArray(initialOpsEmails) ? initialOpsEmails.join(', ') : '')
+  // VOICENOTE.1 — WhatsApp voice-note transcription (ElevenLabs), per org.
+  const [voiceOn, setVoiceOn] = useState(initialVoice?.enabled === true)
+  const [voiceCap, setVoiceCap] = useState(initialVoice?.capMinutes != null ? String(initialVoice.capMinutes) : '')
+  const voiceUsed = initialVoice?.usedMinutes == null ? '—' : String(initialVoice.usedMinutes)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
@@ -23,6 +27,11 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
         Hard caps are set by an owner. Current: AI{' '}
         {initialAiCapCents != null ? `$${(initialAiCapCents / 100).toFixed(2)}/mo` : 'no cap'} · Email{' '}
         {initialEmailCapSends != null ? `${initialEmailCapSends.toLocaleString()} sends/mo` : 'no cap'}.
+        {initialVoice && (
+          <>
+            {' '}Voice notes: {initialVoice.enabled ? 'on' : 'off'}, {initialVoice.capMinutes != null ? `${initialVoice.capMinutes} minutes/mo` : 'no limit'}, {voiceUsed} used.
+          </>
+        )}
       </div>
     )
   }
@@ -45,6 +54,12 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
       setSaving(false)
       return
     }
+    const voiceNum = voiceCap.trim() === '' ? null : Number(voiceCap)
+    if (voiceNum != null && (!Number.isInteger(voiceNum) || voiceNum <= 0)) {
+      setError('Voice note limit must be a positive whole number of minutes, or blank for no limit.')
+      setSaving(false)
+      return
+    }
 
     let json
     try {
@@ -57,6 +72,8 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
           email_hard_cap_sends: emailNum,
           // SAAS4-O2 — comma string; server normalises/validates.
           ops_alert_emails: opsEmails.trim() === '' ? null : opsEmails,
+          voice_transcription_enabled: voiceOn,
+          voice_transcription_monthly_cap_minutes: voiceNum,
         }),
       })
       json = await res.json()
@@ -132,6 +149,34 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
           Where cap warnings and sync-stale alerts go, comma-separated. Blank = platform admin only.
         </span>
       </label>
+
+      <fieldset className="mb-4 max-w-xl border-t border-un1t-border pt-4">
+        <legend className="text-sm font-medium">Voice notes</legend>
+        <label htmlFor="voice-transcription-enabled" className="flex items-center gap-2 text-sm mt-2">
+          <input
+            id="voice-transcription-enabled"
+            type="checkbox"
+            checked={voiceOn}
+            onChange={(e) => setVoiceOn(e.target.checked)}
+          />
+          <span className="text-un1t-text">Transcribe WhatsApp voice notes</span>
+        </label>
+        <label htmlFor="voice-transcription-cap" className="block text-sm mt-3 sm:w-1/2">
+          <span className="text-un1t-text">Monthly limit (minutes)</span>
+          <input
+            id="voice-transcription-cap"
+            type="number"
+            min="1"
+            step="1"
+            value={voiceCap}
+            onChange={(e) => setVoiceCap(e.target.value)}
+            placeholder="No limit"
+            className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
+          />
+        </label>
+        <p className="text-xs text-un1t-subtle mt-2">{voiceUsed} minutes used this month</p>
+        <p className="text-xs text-un1t-subtle mt-1">Voice notes are sent to ElevenLabs to be transcribed.</p>
+      </fieldset>
 
       <button
         type="submit"

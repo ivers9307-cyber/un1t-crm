@@ -50,6 +50,9 @@ function turnDb({ conv, customerAgent }) {
       if (table === 'whatsapp_conversations') return { data: conv, error: null }
       if (table === 'whatsapp_messages') {
         if (state.selectOpts?.head) return { count: 0, error: null }
+        // The missed-inbound check filters created_at > the turn's newest
+        // inbound, so nothing is newer (other harnesses model it the same way).
+        if (state.sawGt) return { data: [], error: null }
         if (String(state.cols).includes('direction')) {
           return { data: [{ direction: 'inbound', body: 'Hi, yes I loved it', message_type: 'text', created_at: '2026-10-19T10:00:00.000+00:00' }], error: null }
         }
@@ -62,7 +65,7 @@ function turnDb({ conv, customerAgent }) {
       select: (cols, opts) => { state.cols = cols || ''; if (opts) state.selectOpts = opts; return builder },
       update: (patch) => { state.op = 'update'; state.patch = patch; return builder },
       insert: () => Promise.resolve({ data: { id: 'row-1' }, error: null }),
-      eq: () => builder, or: () => builder, gte: () => builder, gt: () => builder,
+      eq: () => builder, or: () => builder, gte: () => builder, gt: () => { state.sawGt = true; return builder },
       is: () => builder, in: () => builder, order: () => builder, limit: () => builder,
       single: () => builder, maybeSingle: () => builder,
       then: (resolve, reject) => Promise.resolve(finish()).then(resolve, reject),

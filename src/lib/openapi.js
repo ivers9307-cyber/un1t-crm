@@ -6174,7 +6174,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Set/clear the org hard caps (organisation admins only)',
-  description: 'ai_hard_cap_cents (Mia pauses at cap) and email_hard_cap_sends (campaign starts refused at cap). null clears a cap; both default to no cap.',
+  description: 'ai_hard_cap_cents (Mia pauses at cap) and email_hard_cap_sends (campaign starts refused at cap). null clears a cap; both default to no cap. VOICENOTE.1: voice_transcription_enabled switches WhatsApp voice-note transcription (ElevenLabs) on for the organisation (off by default); voice_transcription_monthly_cap_minutes caps it per month (null = no limit). Only the keys sent are changed.',
   request: {
     body: {
       content: {
@@ -6183,6 +6183,9 @@ registry.registerPath({
             organization_id: uuidLike.optional(),
             ai_hard_cap_cents: z.number().positive().nullable().optional(),
             email_hard_cap_sends: z.number().int().positive().nullable().optional(),
+            ops_alert_emails: z.union([z.string().max(2000), z.array(z.string().email()).max(20)]).nullable().optional(),
+            voice_transcription_enabled: z.boolean().optional(),
+            voice_transcription_monthly_cap_minutes: z.number().int().positive().max(100000).nullable().optional(),
           }).openapi('OrgUsageCaps'),
         },
       },
