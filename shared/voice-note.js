@@ -85,3 +85,23 @@ export function voiceNoteCaption(msg, nowMs = Date.now()) {
 export function isVoiceTranscriptUpdate(row) {
   return !!row && row.message_type === 'audio' && !!row.transcript_status && row.transcript_status !== 'pending'
 }
+
+// VOICEREPLY.1 — the kinds of Mia reply that can each have their own voice
+// (whatsapp_messages.voice_kind CHECK, mig 809: change both together;
+// tests/voice-reply-migration.test.js).
+export const VOICE_KINDS = Object.freeze(['lead', 'booking', 'member', 'handoff', 'default'])
+
+export const VOICE_KIND_LABELS = Object.freeze({
+  lead: 'Leads and trials',
+  booking: 'Bookings',
+  member: 'Member questions',
+  handoff: 'Hand-off message',
+  default: 'Default',
+})
+
+// What staff see under one of Mia's voice replies.
+export function voiceReplyLabel(msg) {
+  if (!msg || msg.direction !== 'outbound' || msg.message_type !== 'audio') return null
+  const label = VOICE_KIND_LABELS[msg.voice_kind]
+  return label ? `Mia replied by voice · ${label}` : null
+}

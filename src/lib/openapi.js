@@ -6154,6 +6154,63 @@ registry.registerPath({
   },
 })
 
+// VOICEREPLY.1 — the studio's voices for Mia's voice replies
+const VoiceChoiceDoc = z.object({ voice_id: z.string(), name: z.string() }).nullable()
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/voice-replies',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: "The active studio's voices for Mia's voice replies, and the ElevenLabs voices available",
+  description: 'Owners and managers at the active studio, and masters. One voice per kind of reply (lead, booking, member, handoff, default), the notice sent after the first voice reply in a thread (empty by default) and the text above follow-up buttons.',
+  responses: {
+    200: { description: 'Voices, notice, buttons line and the available voices' },
+    403: { description: 'Not an owner or manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'put',
+  path: '/api/settings/voice-replies',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: "Set the active studio's voices for Mia's voice replies",
+  description: 'Only voices the ElevenLabs account can use are accepted. Stored in locations.settings.voice_replies; every other settings key is kept.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            voices: z.object({ lead: VoiceChoiceDoc.optional(), booking: VoiceChoiceDoc.optional(), member: VoiceChoiceDoc.optional(), handoff: VoiceChoiceDoc.optional(), default: VoiceChoiceDoc.optional() }),
+            ai_notice: z.string().max(300).nullable().optional(),
+            buttons_line: z.string().max(80).nullable().optional(),
+          }).openapi('VoiceReplySettings'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Saved' },
+    400: { description: 'Invalid body or unknown voice', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner or manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'ElevenLabs voice list unreadable', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'post',
+  path: '/api/settings/voice-replies/sample',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Play a sample sentence in one of the ElevenLabs voices (mp3)',
+  description: 'Same gate as /api/settings/voice-replies. Metered like a voice reply.',
+  request: { body: { content: { 'application/json': { schema: z.object({ voice_id: z.string() }).openapi('VoiceReplySample') } } } },
+  responses: {
+    200: { description: 'audio/mpeg sample' },
+    400: { description: 'Unknown voice', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner or manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'ElevenLabs failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Org usage summary + hard caps (SAAS4-M3)
 registry.registerPath({
   method: 'get',
@@ -6186,6 +6243,9 @@ registry.registerPath({
             ops_alert_emails: z.union([z.string().max(2000), z.array(z.string().email()).max(20)]).nullable().optional(),
             voice_transcription_enabled: z.boolean().optional(),
             voice_transcription_monthly_cap_minutes: z.number().int().positive().max(100000).nullable().optional(),
+            voice_reply_mode: z.enum(['off', 'test', 'on']).optional(),
+            voice_reply_test_phones: z.array(z.string().max(32)).max(20).optional(),
+            voice_reply_monthly_cap: z.number().int().positive().max(100000).nullable().optional(),
           }).openapi('OrgUsageCaps'),
         },
       },

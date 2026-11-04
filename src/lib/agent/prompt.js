@@ -532,6 +532,10 @@ function todayWithWeekday(today) {
   return `${today} (${label.replace(/,/g, '')})`
 }
 
+// VOICEREPLY.1 — added to the volatile (uncached) prompt suffix on a turn
+// whose newest inbound is a voice note, so the reply is written to be spoken.
+export const VOICE_REPLY_PROMPT_LINE = '## This reply will be spoken\nThe customer sent a voice note, so your reply will be sent as a voice note. Write it as you would say it: short and conversational, no emoji, no lists or bullet points, no bold, and spell times the way you would say them. A booking link or buttons are still fine: they are sent as text after the voice note.'
+
 // VOICENOTE.1 — WhatsApp voice notes are transcribed before Mia's turn and
 // reach her history as "(voice note transcript) <words>" (core.js
 // VOICE_TRANSCRIPT_MARKER); one still being transcribed reads as the pending
@@ -633,6 +637,9 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   if (locationName) ctx.push(`- Studio: ${locationName}`)
   if (today) ctx.push(`- Today's date: ${todayWithWeekday(today)}`)
   if (ctx.length) volatileParts.push('## Context\n' + ctx.join('\n'))
+  // VOICEREPLY.1 — the reply will be spoken: uncached suffix only, so the
+  // cached prompt is byte-identical on every other turn.
+  if (opts.voiceReply === true) volatileParts.push(VOICE_REPLY_PROMPT_LINE)
 
   // AGENT-AUTH.1 + .2 — identity already confirmed (by a phone-number match OR
   // a still-fresh prior verification). Overrides the verification steps in the

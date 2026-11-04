@@ -209,6 +209,16 @@ const CALLERS = {
     decision: 'inbound-owner',
     why: 'Mia replies to inbound, which only reaches a location that owns the receiving number. A refusal = number removed mid-flight → the agent’s existing send-failure path.',
   },
+  'src/lib/wa-voice/reply.js': {
+    calls: { sendMediaMessage: 1 },
+    decision: 'inbound-owner',
+    why: 'VOICEREPLY.1: Mia\u2019s reply to an inbound voice note, sent as a voice note through the thread\u2019s own number. A refusal is caught and returned as send_failed, and the caller sends today\u2019s text reply instead.',
+  },
+  'src/lib/wa-voice/reply-fallback.js': {
+    calls: { sendTextMessage: 1 },
+    decision: 'refuse-skip',
+    why: 'VOICEREPLY.1: a voice reply WhatsApp failed to deliver is resent once as text on the thread\u2019s number. A refusal (no number switched on) is a recorded skip, logged, and managers are pushed to reply by hand.',
+  },
   'src/lib/agent/welcome-greeting.js': {
     calls: { sendTextMessage: 1 },
     decision: 'inbound-owner',

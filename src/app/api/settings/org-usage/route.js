@@ -55,6 +55,11 @@ const CapsSchema = z.object({
   // optional monthly cap in minutes (null clears it: no cap).
   voice_transcription_enabled: z.boolean().optional(),
   voice_transcription_monthly_cap_minutes: z.number().int().positive().max(100000).nullable().optional(),
+  // VOICEREPLY.1 — Mia's voice replies: off, test numbers only, or on, and an
+  // optional monthly limit in voice replies (null clears it).
+  voice_reply_mode: z.enum(['off', 'test', 'on']).optional(),
+  voice_reply_test_phones: z.array(z.string().trim().min(1).max(32)).max(20).optional(),
+  voice_reply_monthly_cap: z.number().int().positive().max(100000).nullable().optional(),
 })
 
 // PUT /api/settings/org-usage — set/clear the org hard caps (organisation admin)
@@ -77,6 +82,9 @@ export async function PUT(request) {
   if ('email_hard_cap_sends' in body) patch.email_hard_cap_sends = body.email_hard_cap_sends
   if ('voice_transcription_enabled' in body) patch.voice_transcription_enabled = body.voice_transcription_enabled
   if ('voice_transcription_monthly_cap_minutes' in body) patch.voice_transcription_monthly_cap_minutes = body.voice_transcription_monthly_cap_minutes
+  if ('voice_reply_mode' in body) patch.voice_reply_mode = body.voice_reply_mode
+  if ('voice_reply_test_phones' in body) patch.voice_reply_test_phones = body.voice_reply_test_phones
+  if ('voice_reply_monthly_cap' in body) patch.voice_reply_monthly_cap = body.voice_reply_monthly_cap
   if ('ops_alert_emails' in body) {
     const emails = parseOpsAlertEmails(body.ops_alert_emails)
     patch.ops_alert_emails = emails.length > 0 ? emails : null
@@ -86,7 +94,7 @@ export async function PUT(request) {
   const { data, error } = await db
     .from('org_settings')
     .upsert(patch, { onConflict: 'organization_id' })
-    .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, voice_transcription_enabled, voice_transcription_monthly_cap_minutes')
+    .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

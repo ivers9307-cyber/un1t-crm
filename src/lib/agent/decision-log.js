@@ -45,6 +45,12 @@ export function compactDecisionMeta(trace = {}) {
     if (tools.length > META_MAX_TOOLS) meta.tools_truncated = tools.length
   }
   if (trace.stopReason) meta.stop_reason = String(trace.stopReason).slice(0, 40)
+  // VOICEREPLY.1 — whether a reply to a voice note went by voice, and if not why.
+  if (trace.voice && typeof trace.voice === 'object') {
+    meta.voice = trace.voice.sent
+      ? { sent: true, kind: String(trace.voice.kind || 'default').slice(0, 20) }
+      : { sent: false, reason: String(trace.voice.reason || 'unknown').slice(0, 40) }
+  }
   if (trace.iterations) meta.iterations = trace.iterations
   // MIA-HYGIENE.4 — WHY a turn failed. Error rows used to persist meta: null,
   // so agent_decisions could say a turn errored but never what the API

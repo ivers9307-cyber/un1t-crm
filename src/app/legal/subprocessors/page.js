@@ -33,7 +33,7 @@ const SUBPROCESSORS = [
   ['Revolut Business', 'Payment processing (deposits)', 'EU', 'DPA'],
   ['Xero', 'Accounting (invoices and bills)', 'EU / global', 'DPA'],
   ['Anthropic', 'AI assistant and document extraction — content processed transiently, not used for model training', 'US', 'DPA + SCCs'],
-  ['ElevenLabs', 'Speech-to-text for WhatsApp voice notes sent to a studio (only where the organisation switches it on); the transcript is stored in the CRM', 'US', 'DPA + SCCs'],
+  ['ElevenLabs', 'Speech-to-text for WhatsApp voice notes sent to a studio, and text-to-speech for the assistant\u2019s voice replies to them (only where the organisation switches each on); transcripts and replies are stored in the CRM', 'US', 'DPA + SCCs'],
   ['Upstash', 'Message-queue infrastructure (webhook and job payloads in transit)', 'EU / US', 'DPA + SCCs'],
   ['Apple / Expo', 'Push notification delivery to staff and member devices', 'US', 'DPA + SCCs'],
   ['Ubiquiti (UniFi)', 'Studio door access (door-unlock events)', 'EU / US', 'DPA'],

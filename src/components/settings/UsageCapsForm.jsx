@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails, initialVoice = null }) {
+export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails, initialVoice = null, initialVoiceReplies = null }) {
   const router = useRouter()
   const [aiCap, setAiCap] = useState(initialAiCapCents != null ? String(initialAiCapCents / 100) : '')
   const [emailCap, setEmailCap] = useState(initialEmailCapSends != null ? String(initialEmailCapSends) : '')
@@ -17,6 +17,11 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
   const [voiceOn, setVoiceOn] = useState(initialVoice?.enabled === true)
   const [voiceCap, setVoiceCap] = useState(initialVoice?.capMinutes != null ? String(initialVoice.capMinutes) : '')
   const voiceUsed = initialVoice?.usedMinutes == null ? '—' : String(initialVoice.usedMinutes)
+  // VOICEREPLY.1 — Mia's voice replies, per org.
+  const [replyMode, setReplyMode] = useState(initialVoiceReplies?.mode || 'off')
+  const [replyPhones, setReplyPhones] = useState((initialVoiceReplies?.testPhones || []).join(', '))
+  const [replyCap, setReplyCap] = useState(initialVoiceReplies?.cap != null ? String(initialVoiceReplies.cap) : '')
+  const repliesUsed = initialVoiceReplies?.usedThisMonth == null ? '—' : String(initialVoiceReplies.usedThisMonth)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
@@ -54,6 +59,13 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
       setSaving(false)
       return
     }
+    const replyCapNum = replyCap.trim() === '' ? null : Number(replyCap)
+    if (replyCapNum != null && (!Number.isInteger(replyCapNum) || replyCapNum <= 0)) {
+      setError('Voice reply limit must be a positive whole number, or blank for no limit.')
+      setSaving(false)
+      return
+    }
+    const replyPhoneList = replyPhones.split(',').map((p) => p.trim()).filter(Boolean)
     const voiceNum = voiceCap.trim() === '' ? null : Number(voiceCap)
     if (voiceNum != null && (!Number.isInteger(voiceNum) || voiceNum <= 0)) {
       setError('Voice note limit must be a positive whole number of minutes, or blank for no limit.')
@@ -74,6 +86,9 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
           ops_alert_emails: opsEmails.trim() === '' ? null : opsEmails,
           voice_transcription_enabled: voiceOn,
           voice_transcription_monthly_cap_minutes: voiceNum,
+          voice_reply_mode: replyMode,
+          voice_reply_test_phones: replyPhoneList,
+          voice_reply_monthly_cap: replyCapNum,
         }),
       })
       json = await res.json()
@@ -176,6 +191,50 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
         </label>
         <p className="text-xs text-un1t-subtle mt-2">{voiceUsed} minutes used this month</p>
         <p className="text-xs text-un1t-subtle mt-1">Voice notes are sent to ElevenLabs to be transcribed.</p>
+      </fieldset>
+
+      <fieldset className="mb-4 max-w-xl border-t border-un1t-border pt-4">
+        <legend className="text-sm font-medium">Voice replies</legend>
+        <p className="text-xs text-un1t-subtle mt-1">When a customer sends a voice note, Mia replies with one. Studios pick her voices on the customer agent page.</p>
+        <label htmlFor="voice-reply-mode" className="block text-sm mt-3 sm:w-1/2">
+          <span className="text-un1t-text">Voice replies</span>
+          <select
+            id="voice-reply-mode"
+            value={replyMode}
+            onChange={(e) => setReplyMode(e.target.value)}
+            className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="off">Off</option>
+            <option value="test">Test numbers only</option>
+            <option value="on">On</option>
+          </select>
+        </label>
+        <label htmlFor="voice-reply-phones" className="block text-sm mt-3">
+          <span className="text-un1t-text">Test numbers</span>
+          <input
+            id="voice-reply-phones"
+            value={replyPhones}
+            onChange={(e) => setReplyPhones(e.target.value)}
+            placeholder="+353 87 123 4567"
+            className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
+          />
+        </label>
+        <p className="text-xs text-un1t-subtle">Comma-separated. Only these numbers get voice replies while the setting is &ldquo;Test numbers only&rdquo;.</p>
+        <label htmlFor="voice-reply-cap" className="block text-sm mt-3 sm:w-1/2">
+          <span className="text-un1t-text">Monthly limit (voice replies)</span>
+          <input
+            id="voice-reply-cap"
+            type="number"
+            min="1"
+            step="1"
+            value={replyCap}
+            onChange={(e) => setReplyCap(e.target.value)}
+            placeholder="No limit"
+            className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
+          />
+        </label>
+        <p className="text-xs text-un1t-subtle mt-2">{repliesUsed} voice replies this month</p>
+        <p className="text-xs text-un1t-subtle mt-1">Mia&rsquo;s written reply is sent to ElevenLabs to be turned into speech.</p>
       </fieldset>
 
       <button

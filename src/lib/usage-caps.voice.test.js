@@ -61,3 +61,29 @@ test('read errors fail open', async () => {
   expect((await getVoiceCapStatus({ organizationId: 'org-1' }, { db: stubDb({ eventsError: { message: 'x' } }).db })).capped).toBe(false)
   expect((await getVoiceCapStatus({ organizationId: null }, { db: stubDb().db })).capped).toBe(false)
 })
+
+import { getVoiceReplyCapStatus } from './usage-caps.js'
+function replyDb({ cap = 3, rows = [], settingsError = null, eventsError = null } = {}) {
+  const filters = []
+  return {
+    filters,
+    from: (table) => {
+      if (table === 'org_settings') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: settingsError ? null : { voice_reply_monthly_cap: cap }, error: settingsError }) }) }) }
+      const q = {
+        select: () => q, eq: (c, v) => { filters.push([c, v]); return q }, gte: () => q, order: () => q,
+        range: async (a, b) => (eventsError ? { data: null, error: eventsError } : { data: rows.slice(a, b + 1), error: null }),
+      }
+      return q
+    },
+  }
+}
+test('voice reply cap: counts replies this month and fails open', async () => {
+  expect(await getVoiceReplyCapStatus({ organizationId: 'o' }, { db: replyDb({ rows: [{ quantity: 1 }, { quantity: 1 }, { quantity: 1 }] }) })).toEqual({ capped: true, cap: 3, used: 3 })
+  expect((await getVoiceReplyCapStatus({ organizationId: 'o' }, { db: replyDb({ rows: [{ quantity: 1 }, { quantity: 1 }] }) })).capped).toBe(false)
+  const d = replyDb()
+  await getVoiceReplyCapStatus({ organizationId: 'o' }, { db: d })
+  expect(d.filters).toContainEqual(['meter', 'elevenlabs_tts_replies'])
+  expect((await getVoiceReplyCapStatus({ organizationId: 'o' }, { db: replyDb({ settingsError: { message: 'x' } }) })).capped).toBe(false)
+  expect((await getVoiceReplyCapStatus({ organizationId: 'o' }, { db: replyDb({ eventsError: { message: 'x' } }) })).capped).toBe(false)
+  expect(await getVoiceReplyCapStatus({ organizationId: 'o' }, { db: replyDb({ cap: null }) })).toEqual({ capped: false, cap: null, used: 0 })
+})

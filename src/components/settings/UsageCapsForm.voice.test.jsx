@@ -51,3 +51,18 @@ describe('Voice notes section', () => {
     expect(screen.getByText(/Voice notes: on, 30 minutes\/mo, 4 used/)).toBeTruthy()
   })
 })
+
+describe('Voice replies section', () => {
+  it('shows the mode, numbers, limit and replies this month, and saves them', async () => {
+    render(<UsageCapsForm {...base} initialVoice={{ enabled: false, capMinutes: null, usedMinutes: 0 }} initialVoiceReplies={{ mode: 'test', testPhones: ['353871234567'], cap: 40, usedThisMonth: 3 }} />)
+    expect(screen.getByLabelText('Voice replies').value).toBe('test')
+    expect(screen.getByLabelText('Test numbers').value).toBe('353871234567')
+    expect(screen.getByLabelText('Monthly limit (voice replies)').value).toBe('40')
+    expect(screen.getByText('3 voice replies this month')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Voice replies'), { target: { value: 'on' } })
+    fireEvent.change(screen.getByLabelText('Test numbers'), { target: { value: '353871234567, +353 86 000 1111' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save caps' }))
+    await waitFor(() => expect(fetch).toHaveBeenCalled())
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ voice_reply_mode: 'on', voice_reply_test_phones: ['353871234567', '+353 86 000 1111'], voice_reply_monthly_cap: 40 })
+  })
+})

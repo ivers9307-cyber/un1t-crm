@@ -1,7 +1,7 @@
 // SAAS4-M3 — org usage summary shared by /api/settings/org-usage and
 // the /settings/usage page (one query/aggregation path, two callers).
 
-import { platformMonthStartStr, voiceSecondsThisMonth } from '@/lib/usage-caps'
+import { platformMonthStartStr, voiceSecondsThisMonth, meterSumThisMonth, VOICE_REPLY_METER } from '@/lib/usage-caps'
 
 /** Pure: fold month rollup rows into per-meter + per-location totals. */
 export function aggregateRollups(rows) {
@@ -48,10 +48,10 @@ async function fetchMonthRollups(db, orgId, monthStart) {
 export async function getOrgUsageSummary(db, orgId) {
   const monthStart = platformMonthStartStr()
 
-  const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups, voiceSeconds] =
+  const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups, voiceSeconds, voiceReplies] =
     await Promise.all([
       db.from('org_settings')
-        .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, email_cap_notice_month, voice_transcription_enabled, voice_transcription_monthly_cap_minutes')
+        .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, email_cap_notice_month, voice_transcription_enabled, voice_transcription_monthly_cap_minutes, voice_reply_mode, voice_reply_test_phones, voice_reply_monthly_cap')
         .eq('organization_id', orgId)
         .maybeSingle(),
       db.rpc('org_ai_spend_month_cents', { p_org: orgId, p_month_start: monthStart }),
@@ -60,6 +60,7 @@ export async function getOrgUsageSummary(db, orgId) {
       // VOICENOTE.1 — live from usage_events (the rollup is nightly); null
       // when unreadable, so the card never shows a wrong 0.
       voiceSecondsThisMonth(db, orgId).catch(() => null),
+      meterSumThisMonth(db, orgId, VOICE_REPLY_METER).catch(() => null),
     ])
 
   const { meters, byLocation } = aggregateRollups(rollups || [])
@@ -80,6 +81,13 @@ export async function getOrgUsageSummary(db, orgId) {
       enabled: settings?.voice_transcription_enabled === true,
       capMinutes: settings?.voice_transcription_monthly_cap_minutes ?? null,
       usedMinutes: voiceSeconds == null ? null : Math.ceil(voiceSeconds / 60),
+    },
+    // VOICEREPLY.1 — Mia's voice replies (ElevenLabs text to speech).
+    voiceReplies: {
+      mode: settings?.voice_reply_mode || 'off',
+      testPhones: Array.isArray(settings?.voice_reply_test_phones) ? settings.voice_reply_test_phones : [],
+      cap: settings?.voice_reply_monthly_cap ?? null,
+      usedThisMonth: voiceReplies == null ? null : voiceReplies,
     },
     meters,
     by_location: byLocation,
