@@ -12,6 +12,7 @@ import {
   formatReport,
   failed,
 } from '../scripts/check-dublin-zone.mjs'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const linter = createDublinZoneLinter(ROOT)
@@ -132,7 +133,7 @@ describe('TZ.18b the baseline is gone', () => {
     }
     for (const d of ['src', 'shared', 'mobile/lib']) walk(d)
     expect(found).toStrictEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every allowlist entry carries a reason', () => {
     for (const a of DUBLIN_ZONE_ALLOW) expect(a.reason.length, a.glob).toBeGreaterThan(10)

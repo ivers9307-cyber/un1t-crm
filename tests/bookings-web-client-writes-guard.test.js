@@ -15,6 +15,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
 import { codeOf, isClientFile } from './helpers/js-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 function walk(dir, out = []) {
@@ -43,7 +44,7 @@ describe('no web client code writes bookings (C134)', () => {
       .filter((f) => { const s = readFileSync(f, 'utf8'); return isClientFile(s) && BOOKINGS_WRITE.test(codeOf(s, f)) })
       .map((f) => path.relative(ROOT, f))
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 // C138 (e), mig 701 — and the table is closed to client writes: no client role
@@ -82,7 +83,7 @@ describe('bookings stays closed to client writes (C138 e, mig 701)', () => {
       .filter((f) => { const s = readFileSync(f, 'utf8'); return BOOKINGS_WRITE.test(s) || RAW_URL.test(s) })
       .map((f) => path.relative(ROOT, f))
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no later migration reopens a client write (grant, ALL TABLES grant, write policy, RLS off)', () => {
     const offenders = []
@@ -94,7 +95,7 @@ describe('bookings stays closed to client writes (C138 e, mig 701)', () => {
       }
     }
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detectors see the shapes', () => {
     expect(CLIENT_WRITE_GRANT.test('GRANT INSERT, UPDATE ON public.bookings TO authenticated;')).toBe(true)

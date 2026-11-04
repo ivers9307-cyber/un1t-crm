@@ -21,6 +21,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
 import { USER_PROFILE_COLUMNS, AUTH_USER_FIELDS } from '../src/lib/user-profile.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const PROFILE_COLUMNS = [...collectSchema(path.join(ROOT, 'supabase/migrations')).schema.get('profiles')]
@@ -79,12 +80,12 @@ describe('no reader takes a dropped profile column off the user object (PROFILES
     const hits = []
     for (const f of files) for (const c of droppedReads(readFileSync(f, 'utf8'))) hits.push(`${path.relative(ROOT, f)}: .${c}`)
     expect(hits, 'add the column to USER_PROFILE_COLUMNS (with its reader), or read it fresh by id').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no file spreads the user object into another object', () => {
     const hits = files.filter((f) => userSpreads(readFileSync(f, 'utf8')) > 0).map((f) => path.relative(ROOT, f))
     expect(hits).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the matcher sees the forms it must', () => {
     expect(droppedReads('if (user.pin_hash) x()', ['pin_hash'])).toEqual(['pin_hash'])
@@ -115,7 +116,7 @@ describe('the user object\'s locations carry no settings, and nothing reads them
     const hits = []
     for (const f of files) for (const h of locationSettingsReads(readFileSync(f, 'utf8'))) hits.push(`${path.relative(ROOT, f)}: ${h}`)
     expect(hits, 'read the location row fresh by id (readGlofoxAutomationStatus is the pattern)').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('glofoxConnected( and automationStatus( are called only by the registry and the by-id reader', () => {
     const hits = []
@@ -125,7 +126,7 @@ describe('the user object\'s locations carry no settings, and nothing reads them
       for (const c of glofoxPresenceCalls(readFileSync(f, 'utf8'))) hits.push(`${rel}: ${c}(`)
     }
     expect(hits, 'call readGlofoxAutomationStatus(db, locationId) instead').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the allowed callers exist and still call them (not vacuous)', () => {
     for (const rel of GLOFOX_PRESENCE_CALLERS) {
@@ -172,7 +173,7 @@ describe('only id/email are read off user.user (AUTHUSERPICK.1)', () => {
     const hits = []
     for (const f of files) for (const r of authUserReads(readFileSync(f, 'utf8'))) hits.push(`${path.relative(ROOT, f)}: .user.${r}`)
     expect(hits, 'user.user is { id, email } (src/lib/user-profile.js AUTH_USER_FIELDS): read the field another way, or add it on purpose').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the matcher sees each form', () => {
     expect(authUserReads('user.user.email')).toEqual([])

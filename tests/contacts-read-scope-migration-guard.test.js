@@ -52,6 +52,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
 import { DEFAULT_WEB_PERMISSIONS_BY_ROLE, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '../shared/permissions.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
@@ -386,7 +387,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     const offenders = migrationFiles().filter((f) => migNum(f) > CONTACT_READ_SCOPE_MIGRATION)
       .flatMap((f) => contactReadScopeBreakers(readFileSync(path.join(MIGRATIONS, f), 'utf8'), { migration: migNum(f) }).map((h) => `${f}: ${h}`))
     expect(offenders, 'contacts_select must keep reading private.auth_contact_read_location_ids() (CONTACTREADSCOPE.1, mig 690)').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('690 itself passes, and the detector catches the shapes that would undo it', () => {
     const f690 = migrationFiles().find((f) => migNum(f) === CONTACT_READ_SCOPE_MIGRATION)
@@ -408,7 +409,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts RENAME TO contacts_read;`)).toEqual([])
     expect(contactReadScopeBreakers(`CREATE POLICY contact_goals_read ON public.contact_goals FOR SELECT USING (private.auth_is_in_location(location_id));`)).toEqual([])
     expect(contactReadScopeBreakers(`CREATE POLICY x ON public.contacts_archive FOR SELECT USING (true);`)).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('731 (UN1TDUAL.1) passes: exactly its membership branch and helper are accepted', () => {
     const f731 = migrationFiles().find((f) => migNum(f) === 731)
@@ -423,7 +424,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     const C = `location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
     expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING ((${M}) OR (${C} OR user_id = (SELECT auth.uid())));`)).toEqual([])
     expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING ((location_id = ANY (( SELECT private.${HELPER}() AS ${HELPER})::uuid[])) OR (id = ANY (( SELECT private.${MEMBERSHIP_HELPER}() AS ${MEMBERSHIP_HELPER})::uuid[])));`)).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every other widening of the read is still a breaker', () => {
     const C = `location_id = ANY ((SELECT private.${HELPER}())::uuid[])`
@@ -481,7 +482,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(norm(definitionParts(statementAt(code, code.search(createsFn(MEMBERSHIP_HELPER)))).body)).toBe(MEMBERSHIP_HELPER_BODIES[732])
     // 732 never touches the policy
     expect(code).not.toMatch(/\balter\s+policy\b/i)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('a 732-shaped helper body is a breaker when EITHER branch loses the Contacts restriction', () => {
     const def = (body) => `CREATE OR REPLACE FUNCTION private.${MEMBERSHIP_HELPER}() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $function$ ${body} $function$;`
@@ -553,7 +554,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     const offenders = migrationFiles().filter((f) => migNum(f) > MEMBERSHIP_SCOPE_MIGRATION)
       .flatMap((f) => contactHelperAlterBreakers(readFileSync(path.join(MIGRATIONS, f), 'utf8')).map((h) => `${f}: ${h}`))
     expect(offenders, 're-create the helper (CREATE OR REPLACE, the guarded form) instead of ALTERing it').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the ALTER detector catches every ALTER FUNCTION / ROUTINE on either helper, and nothing else', () => {
     for (const sql of [
@@ -575,7 +576,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     // 731 itself creates, never alters
     const f731 = migrationFiles().find((f) => migNum(f) === MEMBERSHIP_SCOPE_MIGRATION)
     expect(contactHelperAlterBreakers(readFileSync(path.join(MIGRATIONS, f731), 'utf8'))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('765 (ORGCONTACTS.2) passes: the studio helper, the delegate and the one-branch policy are accepted; a studio helper with another body or without the Contacts resolver is a breaker', () => {
     const f765 = migrationFiles().find((f) => migNum(f) === 765 && /contacts_read_by_contact_studios/.test(f)) // main's 765_charity_donations shares the number
@@ -594,7 +595,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(def(STUDIO_HELPER_BODY, 'LANGUAGE sql STABLE SECURITY INVOKER'))).toHaveLength(1)
     expect(contactReadScopeBreakers(`DROP FUNCTION private.${STUDIO_HELPER}();`)).toHaveLength(1)
     expect(contactReadScopeBreakers(`ALTER POLICY contacts_select ON public.contacts USING (id = ANY ((SELECT private.${STUDIO_HELPER}())::uuid[]));`)).toHaveLength(1)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('768 (ORGCONTACTS.5) passes: dropping the membership helper is its retirement; after 768 a re-create of it or of crossover_contact_ids is a breaker, and before 768 the drop still is', () => {
     const f768 = migrationFiles().find((f) => migNum(f) === RETIRED_AT && /contact_side_channels_dropped/.test(f)) // main's 768_fleet_screens shares the number
@@ -612,7 +613,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(contactReadScopeBreakers(rpc, { migration: 765 })).toEqual([])
     // the studio helper's drop is never accepted
     expect(contactReadScopeBreakers(`DROP FUNCTION private.${STUDIO_HELPER}();`, { migration: RETIRED_AT })).toHaveLength(1)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the latest definition of the studio helper in the migrations is 765\'s', () => {
     const creators = migrationFiles().filter((f) => createsFn(STUDIO_HELPER).test(sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))))
@@ -620,7 +621,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     expect(migNum(creators.at(-1))).toBe(LATEST_STUDIO_HELPER_MIGRATION)
     const code = sqlCode(readFileSync(path.join(MIGRATIONS, creators.at(-1)), 'utf8'))
     expect(norm(definitionParts(statementAt(code, code.search(createsFn(STUDIO_HELPER)))).body)).toBe(STUDIO_HELPER_BODY)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the latest definition of the membership helper in the migrations is 765\'s delegate', () => {
     const creators = migrationFiles().filter((f) => createsFn(MEMBERSHIP_HELPER).test(sqlCode(readFileSync(path.join(MIGRATIONS, f), 'utf8'))))
@@ -630,7 +631,7 @@ describe('(c) later migrations keep contacts_select on the Contacts helper', () 
     const code = sqlCode(readFileSync(path.join(MIGRATIONS, creators.at(-1)), 'utf8'))
     const parts = definitionParts(statementAt(code, code.search(createsFn(MEMBERSHIP_HELPER))))
     expect(norm(parts.body), 'the latest helper body must be the one LATEST_MEMBERSHIP_HELPER_MIGRATION names').toBe(MEMBERSHIP_HELPER_BODY)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detector catches row level security toggled on contacts (SEC-3), and nothing else', () => {
     for (const sql of [

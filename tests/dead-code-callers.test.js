@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SCAN = ['src', 'shared', 'mobile', 'scripts', 'tests', 'desktop', 'e2e']
@@ -20,7 +21,6 @@ const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'build'])
 const SOURCE = /\.(js|jsx|mjs)$/
 const SELF = 'tests/dead-code-callers.test.js'
 // The tree is read once, at collection (~4,400 files); each test only matches.
-const SCAN_TIMEOUT_MS = 30_000
 
 // name -> the files (besides this one) still allowed to name it.
 const GONE = {

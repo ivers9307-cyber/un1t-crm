@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SCAN = ['src', 'shared', 'mobile', 'scripts', 'tests']
@@ -24,7 +25,6 @@ const SELF = 'tests/role-recipients-callers.test.js'
 // collection, and each test only matches. Each file is tested against every
 // name as it is read and only the PATHS that name one are kept: holding the
 // text itself pinned ~39 MB of source for the life of the file.
-const SCAN_TIMEOUT_MS = 30_000
 const NAMES = ['resolveRoleRecipientIds', 'resolveLocationMemberIds']
 
 function walk(dir, out = []) {

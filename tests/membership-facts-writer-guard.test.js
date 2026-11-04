@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SKIP_DIRS = new Set(['node_modules', 'ios', 'android', 'dist', 'web-build', '.next'])
@@ -130,7 +131,7 @@ describe('the membership facts have one writer', () => {
       .filter((f) => f.endsWith('.sql') && parseInt(f, 10) >= 770 && !/^77[01]_/.test(f))
       .filter((f) => membershipColumnWrites(fs.readFileSync(path.join(dir, f), 'utf8')).length > 0)
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detector sees 770 and 771 themselves (so the exemption above is doing work)', () => {
     const dir = path.join(ROOT, 'supabase', 'migrations')
@@ -139,5 +140,5 @@ describe('the membership facts have one writer', () => {
       expect(f, `${prefix} migration`).toBeTruthy()
       expect(membershipColumnWrites(fs.readFileSync(path.join(dir, f), 'utf8')).length).toBeGreaterThan(0)
     }
-  })
+  }, SCAN_TIMEOUT_MS)
 })

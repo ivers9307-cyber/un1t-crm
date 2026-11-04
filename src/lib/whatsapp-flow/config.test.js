@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { flowTokenFor, resolveFlowConfigByToken } from './config.js'
+import { SCAN_TIMEOUT_MS } from '../../../tests/helpers/scan-timeout.js'
 
 // FLOWTOKENDEDUP.1 (C73) — no app code builds the token string by hand. The
 // last two (send-flow/route.js and the since-retired ad-lead welcome) moved
@@ -27,7 +28,7 @@ describe('flow_token minting (FLOWTOKENDEDUP.1)', () => {
       .filter((f) => HAND_MINT.test(fs.readFileSync(f, 'utf8')))
       .map((f) => path.relative(SRC, f))
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('flowTokenFor', () => {

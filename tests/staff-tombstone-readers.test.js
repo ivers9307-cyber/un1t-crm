@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -60,7 +61,7 @@ describe('every unfiltered profiles list excludes tombstones', () => {
       'A `from(\'profiles\')` read has no id / active / email filter and is not wrapped in excludeTombstones() ' +
       '(src/lib/staff-tombstone.js). Wrap it — `excludeTombstones(db.from(\'profiles\').select(…))` — or add it to ALLOW with a reason.',
     ).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
   it('every ALLOW entry carries a reason', () => {
     for (const [key, why] of Object.entries(ALLOW)) expect(why, key).toMatch(/\S{10,}/)
   })

@@ -10,6 +10,7 @@ import {
   SEQUENCE_BUILDER_ROW_SELECT, SEQUENCE_BUILDER_PAGE_SELECT, toBuilderSequence, toPerformanceSteps,
 } from './builder-shape.js'
 import { collectSchema, parseSelect } from '../../../scripts/check-select-columns.mjs'
+import { SCAN_TIMEOUT_MS } from '../../../tests/helpers/scan-timeout.js'
 
 const ROW = {
   id: 's1', location_id: 'loc1', name: 'Welcome flow', description: 'memo', status: 'active',
@@ -76,7 +77,7 @@ describe('the selects name real columns and no *', () => {
     for (const column of ['webhook_secret', 'draft_graph', 're_enrolment_cooldown_days']) {
       expect(refs).toContainEqual({ table: 'email_sequences', column })
     }
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('no client component reads the stored secret off the sequence', () => {

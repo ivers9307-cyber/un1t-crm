@@ -25,6 +25,7 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { collectSchema, applyMigrationSql } from '../scripts/check-select-columns.mjs'
 import { AUDIENCE_FIELDS } from '../src/lib/audience-filter.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
@@ -142,5 +143,5 @@ describe('the detector bites', () => {
     const { schema: live } = collectSchema(MIGRATIONS)
     expect(AUDIENCE_FIELDS.pipeline_stage_slug.column).toBe('studio_stage_slug')
     expect(live.get(VIEW).has('studio_stage_slug')).toBe(true)
-  })
+  }, SCAN_TIMEOUT_MS)
 })

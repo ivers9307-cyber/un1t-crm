@@ -26,6 +26,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SRC = path.join(ROOT, 'src')
@@ -123,7 +124,7 @@ describe('Mia settings have one reader (MIAORG.1)', () => {
       for (const hit of customerAgentReads(readFileSync(file, 'utf8'), file)) offenders.push(`${rel}:${hit.line}  ${hit.text}`)
     }
     expect(offenders, `read Mia's settings through resolveAgentSettings (src/lib/agent/settings-resolve.js):\n${offenders.join('\n')}`).toEqual([])
-  }, 30_000) // parses every src file (~2s alone); a loaded runner passed 5s
+  }, SCAN_TIMEOUT_MS) // parses every src file (~2s alone); a loaded runner passed 5s
 
   it('the allowlist is live: the resolver itself is a reader the scan would otherwise flag', () => {
     expect(customerAgentReads(readFileSync(path.join(ROOT, ALLOWED[0]), 'utf8')).length).toBeGreaterThan(0)

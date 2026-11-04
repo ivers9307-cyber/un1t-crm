@@ -31,6 +31,7 @@ import {
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
 import { sqlCode } from './helpers/sql-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 // Every FK column that points at one of the five tables (location_id,
@@ -86,7 +87,7 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     expect(member.writes).toEqual([['contact_external_integrations', 'update'], ['contact_external_integrations', 'update']])
     expect(uses('src/components/LocationForm.jsx').reads.map(([t, c]) => `${t}.${c}`)).toContain('locations.id')
     expect(uses('src/components/CarDepositSettings.jsx').writes).toEqual([['locations', 'update']])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every read is a granted column', () => {
     const offenders = []
@@ -99,7 +100,7 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     // It parses every client file in the repo; on a loaded CI runner it took
     // 5.8 s against the 5 s default (#1951, shard 2). The budget is for the
     // scan, not a wait.
-  }, 30_000)
+  }, SCAN_TIMEOUT_MS)
 
   it('every select on a credential table is readable (fail closed)', () => {
     // A select string the scanner cannot evaluate (a parameter, an import, a
@@ -114,7 +115,7 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
       }
     }
     expect(unread, 'name the columns in a literal or a same-file const, or review it and list it').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('client writes are exactly the reviewed writers, update only', () => {
     const seen = {}
@@ -130,7 +131,7 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
     const actual = Object.fromEntries(Object.entries(seen).map(([t, s]) => [t, [...s].sort()]))
     const expected = Object.fromEntries(Object.entries(CLIENT_WRITERS).map(([t, s]) => [t, [...s].sort()]))
     expect(actual, 'a new client writer: move it to a service-role route, or review it and add it to CLIENT_WRITERS').toEqual(expected)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detector catches withheld columns, `*`, embeds, fk-alias embeds and writes', () => {
     const bad = `
@@ -233,7 +234,7 @@ describe('client code names only granted credential-table columns (SECFIX.3c)', 
       location_id: 'locations', anchor_location_id: 'locations', master_location_id: 'locations',
       sending_location_id: 'locations', channel_connection_id: 'channel_connections',
     })
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 // ── migrations after 648 ──────────────────────────────────────────────
@@ -296,7 +297,7 @@ describe('later migrations keep the credential grants (SECFIX.3c)', () => {
     const file = readdirSync(dir).find((f) => parseInt(f, 10) === CREDENTIAL_GRANT_MIGRATION && /credential_column_grants/.test(f))
     expect(file).toBe('648_credential_column_grants.sql')
     expect(tableLevelClientGrants(readFileSync(path.join(dir, file), 'utf8'))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it.each(later.length ? later : ['(none yet)'])('%s: a new column is granted or withheld on purpose', (file) => {
     if (file === '(none yet)') return

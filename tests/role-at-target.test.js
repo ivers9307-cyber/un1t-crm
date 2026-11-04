@@ -40,6 +40,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { activeRoleGates, otherLocationUses, anyLocationPreChecks, targetJudgements, preCheckOnly, apiKeyOrManagerCalls, apiKeyOrManagerUnjudged } from '../scripts/lib/active-role-gates.mjs'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const API = path.join(ROOT, 'src/app/api')
@@ -185,7 +186,7 @@ describe('/api routes judge the role at the location they act on', () => {
 
   it('finds the route tree (a wrong root finds nothing)', () => {
     expect(routeFiles(API).length).toBeGreaterThan(500)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no route outside the two lists gates on the active studio while acting on another', () => {
     const known = new Set([...Object.keys(REVIEWED), ...pendingRoutes.map((p) => p.route)])
@@ -210,7 +211,7 @@ describe('/api routes judge the role at the location they act on', () => {
       expect(typeof reason === 'string' && reason.length > 20, `${route}: give a reason`).toBe(true)
     }
     expect(Object.keys(PRECHECK_REVIEWED).filter((r) => !preOnly.includes(r))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   // ROLESWEEP.2 — no allowlist: a caller that acts only on the active studio
   // judges hasRoleAtLocation(auth.user, auth.user.activeLocation.id, …).
@@ -221,7 +222,7 @@ describe('/api routes judge the role at the location they act on', () => {
       'bookings/event-types/[id]/route.js', 'bookings/event-types/route.js', 'contacts/[id]/route.js', 'contacts/route.js', 'stages/route.js',
     ]))
     expect(routeFiles(API).filter((f) => apiKeyOrManagerUnjudged(read(f))).map(rel).sort()).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no route is in two lists', () => {
     const all = [...Object.keys(REVIEWED), ...pendingRoutes.map((p) => p.route)]

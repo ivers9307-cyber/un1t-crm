@@ -28,6 +28,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { codeOf } from './helpers/js-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SCAN_DIRS = ['src', 'shared', 'mobile']
@@ -91,7 +92,7 @@ describe('invoices capability readers (HATCHINV.1)', () => {
     const { unclassified, unreasoned } = classify(foundReaders(), MANIFEST)
     expect(unclassified, 'a new reader of the invoices capability: decide what un1t.online `true` means for it, then add it to MANIFEST').toEqual([])
     expect(unreasoned).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('a manifest entry that no longer matches fails as stale', () => {
     // The real tree has no stale entry...
@@ -102,7 +103,7 @@ describe('invoices capability readers (HATCHINV.1)', () => {
     expect(verdict.stale).toEqual(['b.js'])
     expect(classify(new Set(['a.js', 'd.js']), { 'a.js': 'ok' }).unclassified).toEqual(['d.js'])
     expect(verdict.unreasoned).toEqual(['c.js'])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the patterns read each spelling the brief lists, and nothing else', () => {
     const reads = (s) => readsInvoicesCapability(codeOf(s, 'x.jsx'))

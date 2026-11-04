@@ -22,6 +22,7 @@ import { POST as unlock } from './studio-management/unlock/route.js'
 import { POST as sonos } from './sonos/control/route.js'
 import { GET as queueCount } from './home-queue/count/route.js'
 import { GET as widgetDevices } from './widget/devices/route.js'
+import { SCAN_TIMEOUT_MS } from '../../../tests/helpers/scan-timeout.js'
 
 const OPTED_IN = [
   ['shelly toggle', shellyToggle],
@@ -91,5 +92,5 @@ describe('the widget-token opt-in set', () => {
 Found: ${found.join(', ')}
 Expected: ${expected.join(', ')}`
     )
-  })
+  }, SCAN_TIMEOUT_MS)
 })

@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(__dirname, '..')
 
@@ -145,9 +146,9 @@ describe('TZ.10 every schedule-engine and climate-slot caller passes the zone', 
       'src/lib/sonos/groups.js',
       'src/lib/sonos/reconcile.js',
     ]))
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no call omits the zone', () => {
     expect(offences().out).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })

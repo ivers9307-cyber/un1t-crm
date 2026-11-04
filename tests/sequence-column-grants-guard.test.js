@@ -41,6 +41,7 @@ import {
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
 import { sqlCode } from './helpers/sql-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIG_DIR = path.join(ROOT, 'supabase/migrations')
@@ -69,10 +70,6 @@ const uses = (src) => columnUses(src, SEQUENCE_TABLES, FK_ALIASES)
 const readable = (table, col) =>
   READ_ONLY_TABLES.includes(table) || (col !== '*' && EMAIL_SEQUENCES_SELECT.includes(col))
 
-// A whole-repo scan: the first test to parse every client file pays the cold
-// cost (7.2 s on a CI shard, 4 Nov 2026; ~0.1 s once warm), past vitest's 5 s
-// default. Same allowance as the sibling credential/ACL guards.
-const SCAN_TIMEOUT_MS = 30_000
 
 describe('client code and the sequence tables (PROFILESPREAD.1b)', () => {
   const files = clientFiles()
@@ -242,7 +239,7 @@ describe('later migrations keep the sequence grants (PROFILESPREAD.1b)', () => {
     // rollback file needs the name exemption, and nothing else gets it).
     const rollback = sql.match(/^-- ROLLBACK:[\s\S]*?^--\s+BEGIN;\n([\s\S]*?^--\s+COMMIT;)$/m)[1].replace(/^--\s?/gm, '')
     expect(clientTableGrants(rollback)).toHaveLength(1)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it.each(later.length ? later : ['(none yet)'])('%s: a new email_sequences column is granted or withheld on purpose', (file) => {
     if (file === '(none yet)') return

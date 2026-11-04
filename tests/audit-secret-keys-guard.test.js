@@ -20,6 +20,7 @@ import {
   KNOWN_NOT_SECRET_NAMES,
   isAuditSecretKey,
 } from './helpers/audit-secret-keys.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIG_DIR = path.join(ROOT, 'supabase/migrations')
@@ -104,7 +105,7 @@ describe('AUDITSECRETS.1 guard', () => {
       }
     }
     expect(problems).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('a later migration attaching the audit trigger names a table in AUDITED_TABLES', () => {
     const problems = []
@@ -114,7 +115,7 @@ describe('AUDITSECRETS.1 guard', () => {
       }
     }
     expect(problems).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detectors find what they should (self-test)', () => {
     expect(addedAuditedColumns('ALTER TABLE public.locations ADD COLUMN IF NOT EXISTS shelly_auth_key text;'))

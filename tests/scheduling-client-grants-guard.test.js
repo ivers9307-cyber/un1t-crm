@@ -52,6 +52,7 @@ import {
 } from './helpers/scheduling-client-grants.js'
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIG_DIR = path.join(ROOT, 'supabase/migrations')
@@ -333,7 +334,7 @@ describe('later migrations keep the scheduling grants (GRANTSWEEP.1)', () => {
       'REVOKE ALL ON public.shift_blocks, public.shift_assignments FROM authenticated;')
     expect(wiping).not.toBe(sql)
     expect(columnGrantWipers(wiping)).toHaveLength(2)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it.each(later.length ? later : ['(none yet)'])('%s: gives no client back what mig 668 took', (file) => {
     if (file === '(none yet)' || isGrantsweepRollback(file)) return
@@ -358,7 +359,7 @@ describe('later migrations keep the scheduling grants (GRANTSWEEP.1)', () => {
     }
     expect(Object.fromEntries(Object.entries(found).map(([t, p]) => [t, [...p].sort()]))).toEqual(
       Object.fromEntries(Object.entries(COLUMN_GRANTED).map(([t, p]) => [t, [...p].sort()])))
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it.each([
     'REVOKE SELECT ON public.shift_blocks FROM authenticated;',

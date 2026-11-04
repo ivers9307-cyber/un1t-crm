@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { featureForWebPath, featureForPhonePath } from '../shared/usage-features.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(__dirname, '..')
 
@@ -61,12 +62,12 @@ describe('app usage feature coverage', () => {
       .filter((name) => !WEB_NOT_STAFF.has(name) && !(name in WEB_UNCATEGORISED))
       .filter((name) => featureForWebPath(`/${name}`) === 'other')
     expect(missing).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every staff phone screen resolves to a feature', () => {
     const missing = phoneRoutes(path.join(ROOT, 'mobile/app/(staff)'))
       .filter((name) => !(name in PHONE_UNCATEGORISED))
       .filter((name) => featureForPhonePath(`/${name}`) === 'other')
     expect(missing).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })

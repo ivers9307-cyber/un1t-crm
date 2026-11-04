@@ -42,6 +42,7 @@ import { codeOfFile } from './helpers/js-code.js'
 import { sqlCode } from './helpers/sql-code.js'
 import { columnUses, fkAliasesInto } from './helpers/postgrest-column-uses.js'
 import { collectSchema } from '../scripts/check-select-columns.mjs'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIG_DIR = path.join(ROOT, 'supabase/migrations')
@@ -219,7 +220,7 @@ describe('later migrations keep rosters and shift_templates write-closed (ROSTER
     const file = all.find((f) => Number.parseInt(f, 10) === CLOSED_MIGRATION && /rosters_shift_templates_client_writes_off/.test(f))
     expect(file).toBe('679_rosters_shift_templates_client_writes_off.sql')
     expect(rosterWriteReopeners(readFileSync(path.join(MIG_DIR, file), 'utf8'))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the scan covers 646, 668 and 676 (not vacuous)', () => {
     expect(scanned).toEqual(expect.arrayContaining(['646_shift_notes_column_grants.sql',

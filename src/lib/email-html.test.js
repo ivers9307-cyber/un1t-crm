@@ -45,6 +45,7 @@ import {
   UNBLOCK_IMAGES_TO,
   BLOCKED_CSS_URL_PREFIX,
 } from './email-html'
+import { SCAN_TIMEOUT_MS } from '../../tests/helpers/scan-timeout.js'
 
 const clean = (html) => sanitizeEmailHtml(html).html
 
@@ -817,7 +818,7 @@ describe('iframe sandbox — Layer 1', () => {
     }
     walk(path.join(process.cwd(), 'src'))
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('splitQuotedHtml', () => {

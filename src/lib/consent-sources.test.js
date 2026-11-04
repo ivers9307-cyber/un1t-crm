@@ -20,6 +20,7 @@ import {
   countsTowardNetListChange,
   consentSourceRpcArgs,
 } from './consent-sources.js'
+import { SCAN_TIMEOUT_MS } from '../../tests/helpers/scan-timeout.js'
 
 // Every source live in consent_log for channel email_marketing since
 // 2026-05-01, with its row count, as measured 2026-08-10.
@@ -185,12 +186,12 @@ describe('consent sources written beside a consent write in src/', () => {
     // 12 today. If this drops the scan has stopped seeing the writers, which
     // would turn the assertion below into a green no-op.
     expect(consentSourceLiterals().length).toBeGreaterThanOrEqual(10)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('maps all of them', () => {
     const unmapped = consentSourceLiterals().filter((s) => categoriseConsentSource(s) === 'unknown')
     expect(unmapped).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 // ── The consent_log INSERT scan (GAPS-P7.2) ──────────────────────────

@@ -52,6 +52,7 @@ import path from 'node:path'
 import { codeOf, codeOfFile } from './helpers/js-code.js'
 import { sqlCode } from './helpers/sql-code.js'
 import { CRM_CLASS_MESSAGING_PLATFORM } from '../src/lib/class-bookings.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIG_DIR = path.join(ROOT, 'supabase/migrations')
@@ -402,18 +403,18 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
   it('every file that calls .from(\'class_bookings\') is in the manifest', () => {
     const unlisted = [...jsReaders().keys()].filter((p) => !MANIFEST[p])
     expect(unlisted, `New class_bookings reader(s): ${unlisted.join(', ')}. Since mig 737 the table holds un1t.online bookings too (source_platform 'un1t_online'). Decide what such a row means for this reader (a customer message or an attendance credit must filter .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM)) and add it to MANIFEST in tests/class-bookings-readers-guard.test.js.`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every SQL function / view that reads class_bookings is in the manifest', () => {
     const unlisted = [...sqlReadersAll().entries()].filter(([k]) => !MANIFEST[k]).map(([k, e]) => `${k} (${[...e.files].join(', ')})`)
     expect(unlisted, `New SQL reader(s) of class_bookings: ${unlisted.join('; ')}. Classify it in MANIFEST.`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no listed reader is stale', () => {
     const live = new Set([...jsReaders().keys(), ...sqlReadersAll().keys()])
     const stale = Object.keys(MANIFEST).filter((p) => !live.has(p))
     expect(stale, `Listed in MANIFEST but no longer reads class_bookings: ${stale.join(', ')}. Remove the entry.`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every chain in a customer-messaging or reward file is scoped (filters source_platform glofox or is wrapped in scopeToCrmActionable)', () => {
     const missing = []
@@ -424,7 +425,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       reader.chains.forEach((c, i) => { if (!isScoped(c)) missing.push(`${p} (chain ${i + 1})`) })
     }
     expect(missing, `Customer-messaging or reward class_bookings reads neither carrying .eq('source_platform', CRM_CLASS_MESSAGING_PLATFORM) nor wrapped in scopeToCrmActionable(: ${missing.join(', ')}`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every chain in a suppression file reads existence only: selects id, scoped to a contact and a studio', () => {
     const bad = []
@@ -440,7 +441,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       })
     }
     expect(bad, `A suppression reader may only ask whether a booking exists (.select('id') + .eq('contact_id') + .eq('location_id')): ${bad.join(', ')}`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the reminder and crediting crons decide through the class-booking-platform predicate', () => {
     for (const p of HARD_OFF) {
@@ -453,14 +454,14 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
         expect(reader.code, `${p} must import ${name} from @/lib/class-booking-platform`).toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]@/lib/class-booking-platform['"]`))
       }
     }
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no .update( / .delete( on class_bookings without a source_platform filter', () => {
     const bad = []
     for (const [p, { chains }] of jsReaders()) for (const c of unscopedWrites(chains)) bad.push(`${p}: ${c.replace(/\s+/g, ' ').slice(0, 120)}`)
     for (const [k, e] of sqlReadersAll()) for (const f of e.unscopedWrite) bad.push(`${k} (${f})`)
     expect(bad, `class_bookings holds un1t.online rows since mig 737: an update or delete must filter source_platform. ${bad.join('; ')}`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the class_bookings chains inside lookupBookedMember and resolveBookedOccurrenceForMember are scoped', () => {
     const reader = jsReaders().get(HELPER_HOME)
@@ -472,7 +473,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       expect(chains.length, `${name} must read class_bookings`).toBeGreaterThan(0)
       for (const c of chains) expect(isScoped(c), `${name}: a class_bookings chain is not scoped to the CRM-actionable rows: ${c.replace(/\s+/g, ' ').slice(0, 120)}`).toBe(true)
     }
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every manifest entry in HELPER_CALLERS has a known kind and a reason', () => {
     for (const [p, e] of Object.entries(HELPER_CALLERS)) {
@@ -484,13 +485,13 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
   it('every caller of getClassRoster, lookupBookedMember and resolveBookedOccurrenceForMember is in HELPER_CALLERS', () => {
     const unlisted = [...helperCallers()].filter(([p]) => !HELPER_CALLERS[p]).map(([p, used]) => `${p} (${used.join(', ')})`)
     expect(unlisted, `New caller(s) of the class-bookings helpers: ${unlisted.join('; ')}. They read class_bookings, which holds un1t.online rows. Classify each in HELPER_CALLERS in tests/class-bookings-readers-guard.test.js (display, device, data-writing or conversational-read); a customer message or reward must not come from them.`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no HELPER_CALLERS entry is stale', () => {
     const live = new Set(helperCallers().keys())
     const stale = Object.keys(HELPER_CALLERS).filter((p) => !live.has(p))
     expect(stale, `Listed in HELPER_CALLERS but no longer calling a class-bookings helper: ${stale.join(', ')}. Remove the entry.`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('no TV or public file reads class_bookings, imports fetchFloor or calls a class-bookings helper', () => {
     const files = customerFacingFiles()
@@ -502,7 +503,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
     const bad = []
     for (const [p, code] of files) for (const why of bookingReadsIn(code)) bad.push(`${p} ${why}`)
     expect(bad, `Customer-facing code must not read bookings (spec G9: no fill, no-show or aggregate studio metric on a TV or public screen): ${bad.join('; ')}`).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the un1t.online journey lane is imported by the staff /pulse route alone, never by the pace push or the member app', () => {
     // PULSEUN1T.1: it counts un1t.online attendance, which is display-only
@@ -517,7 +518,7 @@ describe('class_bookings reader manifest (UN1TBOOK.2, Decision 1)', () => {
       }
     }
     expect(importers.sort()).toEqual(ALLOWED)
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('class_bookings guard detectors', () => {

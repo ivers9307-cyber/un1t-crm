@@ -39,6 +39,7 @@ import { SHIFT_GRANT_TABLES } from './helpers/shift-column-grants.js'
 import { SEQUENCE_TABLES } from './helpers/sequence-column-grants.js'
 import { CREDENTIAL_GRANT_TABLES } from './helpers/credential-column-grants.js'
 import { ANON_NONE_TABLES } from './helpers/scheduling-client-grants.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
@@ -105,7 +106,7 @@ describe('CLOSED_TABLES knows every table a per-table guard closes', () => {
     }
     expect([...named].filter((t) => !closed.includes(t)), 'add it to CLOSED_TABLES in tests/helpers/sql-escapes.js with its closing migration').toEqual([])
     expect(named.size).toBeGreaterThan(40)
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('the detectors', () => {
