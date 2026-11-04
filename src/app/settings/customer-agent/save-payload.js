@@ -150,6 +150,9 @@ export function buildSavePayload(settings, overridden) {
     ...Object.fromEntries(HATCH_COPY_FIELDS.map(({ key }) => [key, (settings[key] || '').trim() || null])),
     approval_decline_text: settings.approval_decline_text || null,
     // FLOWACK.1 — the WhatsApp booking Flow's acknowledgement + holding line.
+    // MIASETTINGS.1c — and the form's own message, editable at a Hatch studio
+    // and at the organisation (it was missing here, so an edit never saved).
+    booking_flow_text: settings.booking_flow_text || null,
     flow_booking_ack_text: settings.flow_booking_ack_text || null,
     flow_booking_holding_text: settings.flow_booking_holding_text || null,
     flow_booking_duplicate_text: settings.flow_booking_duplicate_text || null,

@@ -83,6 +83,8 @@ export const EDIT_ONE_PER_SECTION = [
   { section: 'handoffs', label: 'Hand back to the agent after (hours)', value: '7', expectKey: 'handoff_cooldown_hours' },
   { section: 'bookings', label: 'Membership sign-up link', value: 'https://example.com/join', expectKey: 'membership_signup_url' },
   { section: 'messages', label: 'No-credits escalation message', value: 'Out of credits, the team will help.', expectKey: 'no_credits_handoff_text' },
+  // MIASETTINGS.1c — new at the studio, Hatch only (the edits run on HATCH_GET).
+  { section: 'messages', label: 'Booking form message (WhatsApp)', value: 'Pick a class below.', expectKey: 'booking_flow_text' },
   { section: 'followups', label: 'Daily cap (per studio)', value: '33', expectKey: 'followups.daily_cap' },
   { section: 'cancellation', label: 'Intro', value: 'Sorry to see you go.', expectKey: 'cancellation_form.form_intro' },
   { section: 'member-app', label: 'Monthly GA Points target', value: '750', expectKey: 'monthly_points_target' },

@@ -241,6 +241,32 @@ describe('MIAHATCH.4 Hatch copy keys through the real save payload', () => {
   })
 })
 
+// MIASETTINGS.1c — the WhatsApp booking form message, editable at a Hatch
+// studio (and at the organisation). It was missing from the payload, so an
+// edit in either editor never reached the PUT.
+describe('booking_flow_text through the real save payload', () => {
+  const shown = shownFor({ enabled: true })
+
+  it('a blank is null, a text is sent as typed', () => {
+    expect(buildSavePayload({ ...shown, booking_flow_text: '' }, [])).toHaveProperty('booking_flow_text', null)
+    expect(buildSavePayload({ ...shown, booking_flow_text: null }, [])).toHaveProperty('booking_flow_text', null)
+    expect(buildSavePayload({ ...shown, booking_flow_text: 'Pick a class below.' }, []).booking_flow_text).toBe('Pick a class below.')
+  })
+
+  it('an overridden value is stored by the PUT; a studio blank leaves the org value showing', () => {
+    const saved = saveThroughPut({ ...shown, booking_flow_text: '  Pick a class below.  ' }, ['booking_flow_text']).blob
+    expect(saved.booking_flow_text).toBe('Pick a class below.')
+    const blank = saveThroughPut({ ...shown, booking_flow_text: '' }, ['booking_flow_text']).blob
+    expect(blank).not.toHaveProperty('booking_flow_text')
+    expect(mergeAgentSettings({ org: { booking_flow_text: 'Org form text.' }, studio: blank }).settings.booking_flow_text).toBe('Org form text.')
+  })
+
+  it('buildOrgSavePayload carries it too', () => {
+    const { settings } = buildOrgSavePayload({ ...shown, booking_flow_text: 'Org form text.' }, ['booking_flow_text'], 'org1')
+    expect(settings.booking_flow_text).toBe('Org form text.')
+  })
+})
+
 // MIAHATCH.5 (Ruling 25) — Mia's chat booking switch at a un1t.online studio:
 // studio-only, always saved, a real boolean.
 describe('un1t_chat_actions_enabled: editor state -> PUT body -> stored blob', () => {
