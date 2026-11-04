@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { MOBILE_PERMISSIONS } from '../shared/permissions.js'
 import { ANDROID_CHANNELS, androidChannelId } from '../shared/push-channels.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SOURCE = /\.(js|jsx|mjs|ts|tsx)$/
@@ -66,7 +67,7 @@ describe('sendPush categories are bare — push.js prepends notify_ itself', () 
       offenders,
       'a prefixed category gates on notify_notify_<x>, which is unregistered and reaches only masters — pass the bare name'
     ).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every registered notify_<category> routes to a real Android channel, not the legacy default', () => {
     const notifyKeys = MOBILE_PERMISSIONS.filter(p => p.isNotify).map(p => p.key)

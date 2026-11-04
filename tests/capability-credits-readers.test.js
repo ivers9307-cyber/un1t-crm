@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { codeOf } from './helpers/js-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SCAN_DIRS = ['src', 'shared', 'mobile']
@@ -86,13 +87,13 @@ function foundReaders() {
 describe('credits capability readers (MIAHATCH.2)', () => {
   it('the reader set is exactly the un1t read executor', () => {
     expect([...foundReaders()].sort()).toEqual(['src/lib/agent/un1t-tools.js'])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every reader of capabilities.credits is classified', () => {
     const { unclassified, unreasoned } = classify(foundReaders(), MANIFEST)
     expect(unclassified, 'a new reader of the credits capability: decide what un1t.online `true` means for it, then add it to MANIFEST').toEqual([])
     expect(unreasoned).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('a manifest entry that no longer matches fails as stale', () => {
     // The real tree has no stale entry...
@@ -103,7 +104,7 @@ describe('credits capability readers (MIAHATCH.2)', () => {
     expect(verdict.stale).toEqual(['b.js'])
     expect(classify(new Set(['a.js', 'd.js']), { 'a.js': 'ok' }).unclassified).toEqual(['d.js'])
     expect(verdict.unreasoned).toEqual(['c.js'])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the patterns read each spelling of a credits capability read (property, index, generic reader calls, gate prop), and nothing else', () => {
     const reads = (s) => readsCreditsCapability(codeOf(s, 'x.jsx'))

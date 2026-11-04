@@ -7,6 +7,7 @@ import {
   contractCountersignatureLabel,
   LEGACY_COUNTERSIGNATURE_ENTITY,
 } from '../src/lib/contracting-entity.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 // SAAS4-W0.2 — the four public legal pages must name ONE legal entity.
 // Before 2026-07-19 they named two (a company formed from the gym brand
@@ -362,7 +363,7 @@ describe('the retired entity appears nowhere in the shipped source', () => {
       .filter((rel) => read(rel).includes(RETIRED_ENTITY))
     expect(offenders, `these files still name the retired entity: ${offenders.join(', ')}`)
       .toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every exemption is real and still needed', () => {
     // An exemption that stops being used is an exemption that has to

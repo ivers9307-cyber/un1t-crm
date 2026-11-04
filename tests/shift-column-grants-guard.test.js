@@ -26,6 +26,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { SHIFT_COLUMN_GRANTS, SHIFT_GRANT_TABLES, SHIFT_GRANT_MIGRATION } from './helpers/shift-column-grants.js'
 import { sqlCode } from './helpers/sql-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const TABLE_ALT = SHIFT_GRANT_TABLES.join('|')
@@ -133,7 +134,7 @@ describe('phone-run code names only granted shift columns (NOTESGRANT.1)', () =>
       }
     }
     expect(offenders, 'read these through a service-role /api route, or grant the column in a migration').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detector catches a withheld column, `*` and a dotted filter', () => {
     const bad = `

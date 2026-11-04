@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SCAN = ['src', 'shared', 'mobile', 'scripts']
@@ -17,7 +18,6 @@ const SOURCE = /\.(js|jsx|mjs)$/
 const TEST = /\.test\.(js|jsx|mjs)$/
 const CALL = /\bresolvePushAllowedIds\s*\(/
 const ALLOWED = new Set(['src/lib/push.js']) // its definition
-const SCAN_TIMEOUT_MS = 30_000
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

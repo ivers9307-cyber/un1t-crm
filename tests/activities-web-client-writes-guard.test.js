@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { codeOf, isClientFile } from './helpers/js-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 function walk(dir, out = []) {
@@ -28,10 +29,6 @@ function walk(dir, out = []) {
 }
 const ACTIVITIES_WRITE = /\.from\(\s*['"`]activities['"`]\s*\)[\s\S]{0,300}?\.(update|insert|upsert|delete)\(/
 
-// A whole-repo scan: the first test to parse every client file pays the cold
-// cost, past vitest's 5 s default on a loaded CI shard (timed out on #2299,
-// 4 Nov 2026). Same allowance as sequence-column-grants-guard (CI-SPEED.1).
-const SCAN_TIMEOUT_MS = 30_000
 
 describe('no web client code writes activities (C148)', () => {
   it('the detector sees the old shapes', () => {

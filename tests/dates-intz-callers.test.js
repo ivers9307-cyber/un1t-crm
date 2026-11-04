@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(__dirname, '..')
 const NAMES = ['formatWeekdayShortDateTimeInTZ', 'formatWeekdayLongDateInTZ', 'formatFullDateTimeInTZ']
@@ -84,7 +85,7 @@ function scan() {
 describe('TZ.16 every *InTZ caller names the record\'s zone', () => {
   it('finds the call sites it guards (the scan is armed)', () => {
     expect(scan().calls).toBeGreaterThanOrEqual(5)
-  })
+  }, SCAN_TIMEOUT_MS)
   it('no NEW one-argument call (the Dublin default) outside the pending list', () => {
     const offences = []
     for (const [rel, sites] of scan().oneArg) {
@@ -92,5 +93,5 @@ describe('TZ.16 every *InTZ caller names the record\'s zone', () => {
       if (sites.length > allowed) offences.push(...sites)
     }
     expect(offences).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })

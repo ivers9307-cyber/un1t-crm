@@ -26,6 +26,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { netPolicyState } from '../scripts/check-rls-restrictive.mjs'
 import { sqlCode, ident, splitTop } from './helpers/sql-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
@@ -89,7 +90,7 @@ describe('(b) no later migration opens activities to anon / PUBLIC', () => {
     const offenders = migrationFiles().filter((f) => migNum(f) > ACTIVITIES_READ_MIGRATION)
       .flatMap((f) => anonActivitiesGrants(readFileSync(path.join(MIGRATIONS, f), 'utf8')).map((h) => `${f}: ${h}`))
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detector', () => {
     expect(anonActivitiesGrants('GRANT SELECT ON public.activities TO anon;')).toHaveLength(1)

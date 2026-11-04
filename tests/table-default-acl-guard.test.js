@@ -50,6 +50,7 @@ import path from 'node:path'
 import { sqlCode, ident, splitTop } from './helpers/sql-code.js'
 import { stripComments, isClientFile } from './helpers/js-code.js'
 import { roleLeaks } from './helpers/sql-escapes.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const TABLE_ACL_MIGRATION = 677
@@ -501,12 +502,12 @@ describe('the detectors', () => {
     expect([...(seqs.get('webhook_dead_letter') ?? [])]).toEqual(['webhook_dead_letter_id_seq'])
     expect(seqs.has('review_login_attempts')).toBe(false)
     expect(seqs.has('glofox_webhook_attempts')).toBe(false)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('newTables reads the LATEST creating migration', () => {
     const files = migrationFiles()
     expect(files.some((f) => parseInt(f, 10) >= TABLE_ACL_MIGRATION)).toBe(true)
     // 677 creates nothing a scanner can read (its probes are format() strings).
     expect([...newTables()].filter(([, f]) => f.startsWith('677_'))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })

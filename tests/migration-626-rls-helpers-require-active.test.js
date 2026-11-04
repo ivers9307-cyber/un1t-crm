@@ -30,6 +30,7 @@ import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
 import { PGlite } from '@electric-sql/pglite'
 import { netPolicyState } from '../scripts/check-rls-restrictive.mjs'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const MIG_DIR = path.resolve(import.meta.dirname, '../supabase/migrations')
 const MIG_626 = readFileSync(path.join(MIG_DIR, '626_rls_helpers_require_active.sql'), 'utf8')
@@ -422,7 +423,7 @@ describe('the replayed pre-626 state is the real one', () => {
     expect(latestPrivateFunctionSql('auth_mobile_can').file).toMatch(/^550_/)
     expect(latestPrivateFunctionSql('auth_is_manager_at_bridge').file).toMatch(/^618_/)
     expect(latestPrivateFunctionSql('auth_is_master').file).toMatch(/^051_/)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the 626 file re-creates exactly the policies this test replays', () => {
     const created = [...sqlCode(MIG_626).matchAll(/CREATE POLICY\s+("[^"]+"|\w+)\s+ON\s+([\w.]+)/g)]

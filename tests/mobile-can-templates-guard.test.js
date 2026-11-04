@@ -25,6 +25,7 @@ import { sqlCode } from './helpers/sql-code.js'
 import {
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE, MOBILE_PERMISSION_KEYS, CROSS_PLATFORM_KEYS, isFeatureGatedByLocation,
 } from '../shared/permissions.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MIGRATIONS = path.join(ROOT, 'supabase/migrations')
@@ -99,7 +100,7 @@ describe('(b) private.mobile_permission_defaults = DEFAULT_MOBILE_PERMISSIONS_BY
     const want = MEMBERSHIP_ROLES.flatMap((role) => keys.map((key) => ({ role, key, allowed: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role][key] === true })))
     const sort = (a) => [...a].sort((x, y) => `${x.role}.${x.key}`.localeCompare(`${y.role}.${y.key}`))
     expect(sort(rows), 'DEFAULT_MOBILE_PERMISSIONS_BY_ROLE changed for an RLS key: reseed the table in a new migration').toEqual(sort(want))
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('(c) no policy goes back to the per-row form', () => {
@@ -107,7 +108,7 @@ describe('(c) no policy goes back to the per-row form', () => {
     const offenders = netPolicies().filter((p) => perRowCalls(exprOf(p)).length)
       .map((p) => `${p.table}.${p.name} (${p.file}): ${perRowCalls(exprOf(p)).join(', ')}`)
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   // Mig 701 (C138 e) dropped bookings_insert / bookings_update: no client writes
   // bookings, the phone only reads (bookings_select stays).
@@ -120,7 +121,7 @@ describe('(c) no policy goes back to the per-row form', () => {
       'public.notes.notes_insert', 'public.notes.notes_select', 'public.notes.notes_update',
       'public.whatsapp_conversations.wa_conv_select', 'public.whatsapp_messages.wa_msg_select', 'public.whatsapp_templates.wa_tmpl_select',
     ])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the detector catches the shapes', () => {
     expect(perRowCalls("private.auth_mobile_can(location_id, 'tasks')")).toHaveLength(1)
@@ -146,7 +147,7 @@ describe('(d) the latest core keeps its tiers (floor)', () => {
     expect(body).toMatch(/active\s+is\s+not\s+false/i)
     expect(body).toMatch(/deleted_at\s+is\s+null/i)
     expect(body).toMatch(/jsonb_typeof/)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('keeps the organisation-admin tier (mig 699, SEC-3: owner at the org\'s active studios, as getCurrentUser)', () => {
     const def = /create\s+(?:or\s+replace\s+)?function\s+private\s*\.\s*mobile_can_location_ids_for\s*\(/i
@@ -158,5 +159,5 @@ describe('(d) the latest core keeps its tiers (floor)', () => {
     expect(body).toMatch(/role\s*=\s*'org_admin'/)
     expect(body).toMatch(/coalesce\(\s*l\.active\s*,\s*false\s*\)/i)
     expect(body).toMatch(/then\s+'owner'/i)
-  })
+  }, SCAN_TIMEOUT_MS)
 })

@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { sqlCode } from './helpers/sql-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(__dirname, '..')
 const OLD_TABLE = 'landing_page_settings'
@@ -42,7 +43,7 @@ describe('landing_page_settings readers (PAGES.1 R10)', () => {
       .map((f) => path.relative(ROOT, f))
       .filter((rel) => readFileSync(path.join(ROOT, rel), 'utf8').includes(OLD_TABLE))
     expect(named.filter((rel) => !ALLOWED.has(rel))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('positive control: the walk reads the allowed script, which names the table (so it would be an offender without ALLOWED)', () => {
     const script = 'scripts/check-location-scoping.mjs'
@@ -50,7 +51,7 @@ describe('landing_page_settings readers (PAGES.1 R10)', () => {
     expect(walked).toContain(script)
     expect(readFileSync(path.join(ROOT, script), 'utf8')).toContain(OLD_TABLE)
     expect(ALLOWED.has(script)).toBe(true)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the deprecation migration names no reader-visible grant', () => {
     // Every migration numbered above 792 (the one that deprecated the table):
@@ -66,5 +67,5 @@ describe('landing_page_settings readers (PAGES.1 R10)', () => {
         .some((st) => /\bgrant\b/i.test(st) && /landing_page_settings\b/i.test(st))
     })
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })

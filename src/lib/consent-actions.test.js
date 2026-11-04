@@ -33,6 +33,7 @@ import {
   normaliseConsentAction,
   isConsentOptOut,
 } from './consent-actions.js'
+import { SCAN_TIMEOUT_MS } from '../../tests/helpers/scan-timeout.js'
 
 describe('the canonical vocabulary', () => {
   it('is exactly opt_in / opt_out', () => {
@@ -182,7 +183,7 @@ describe('the legacy spellings are gone from src/', () => {
       if (/\baction\s*:[^,\n}]*['"]opted_(in|out)['"]/.test(src)) offenders.push(path.relative(SRC, file))
     }
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 // ─── K6: the fossil in mig 488 ────────────────────────────────────────

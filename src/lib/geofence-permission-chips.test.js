@@ -8,6 +8,7 @@ import {
   CHIP_TONE_CLASSES,
   geofencePermissionChip,
 } from './geofence-permission-chips.js'
+import { SCAN_TIMEOUT_MS } from '../../tests/helpers/scan-timeout.js'
 
 // GEO-ATT.22 — the registry's whole job is that the DB, the API and the three
 // operator surfaces cannot drift apart. Scanning the migrations is what makes
@@ -34,12 +35,12 @@ function checkConstraintValues() {
 describe('geofence permission chips ↔ the database', () => {
   it('finds the CHECK constraint in the migrations at all', () => {
     expect(checkConstraintValues()).not.toBeNull()
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('covers exactly the values the DB accepts, in both directions', () => {
     const fromDb = checkConstraintValues().slice().sort()
     expect(GEOFENCE_PERMISSION_VALUES.slice().sort()).toEqual(fromDb)
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('gives every accepted value a chip, so none renders as a blank dash', () => {
     for (const v of GEOFENCE_PERMISSION_VALUES) {

@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SCAN = ['src', 'shared']
@@ -48,7 +49,6 @@ function writesNudgeLedger(source) {
   return false
 }
 const ALLOWED = new Set(['src/lib/customer-nudge-claim.js'])
-const SCAN_TIMEOUT_MS = 30_000
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

@@ -64,6 +64,7 @@ import path from 'node:path'
 import ts from 'typescript'
 import { netPolicyState } from '../scripts/check-rls-restrictive.mjs'
 import { TV_IMAGE_MIME_TYPES, TV_IMAGE_MAX_BYTES } from '../src/lib/tv-media.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const BUCKET_MIGRATION = 671
@@ -568,7 +569,7 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
     const names = net.map((p) => p.name)
     expect(names).not.toContain('tv_content_storage_write')
     expect(names).not.toContain('tv_content_storage_delete')
-  })
+  }, SCAN_TIMEOUT_MS)
 
   const later = migrationFiles().filter((f) => parseInt(f, 10) >= SCAN_FROM)
   it.each(later)('%s: no client policy that admits the bucket', (file) => {
@@ -585,7 +586,7 @@ describe('migrations keep the bucket closed to clients and its limits in step (m
       mimes: EXPECTED_MIMES,
       makesPrivate: false,
     })
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it.each(later)('%s: never makes the bucket private, and any limit it sets matches tv-media.js', (file) => {
     // Per file, not only the latest write: a lower-numbered file that merges

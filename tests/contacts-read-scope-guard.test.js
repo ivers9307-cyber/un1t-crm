@@ -25,6 +25,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { stripComments, isClientFile } from './helpers/js-code.js'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
@@ -143,7 +144,7 @@ describe('(b) the phone never reads contacts through the shared fetchers', () =>
   it('mobile/ never imports the server-only readers', () => {
     const offenders = walk(path.join(ROOT, 'mobile')).filter((f) => importsServerOnlyReader(stripComments(readFileSync(f, 'utf8')))).map(rel)
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   // REVIEWNITS.1 (D5): the named-import regex missed `import * as dd` then
   // `dd.fetchStudioContactCounts(…)`, a dynamic import or require, a relative

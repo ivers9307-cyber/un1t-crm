@@ -22,6 +22,7 @@ import { loadStaffFormLocations, STAFF_FORM_LOCATION_SELECT } from './staff-form
 import { CLIENT_LOCATION_COLUMNS } from './location-secrets.js'
 import { overlayConnectionsMany } from './connection-registry.js'
 import { logError, logWarn } from './log.js'
+import { SCAN_TIMEOUT_MS } from '../../tests/helpers/scan-timeout.js'
 
 const A = 'a0000000-0000-4000-8000-00000000000a'
 const B = 'b0000000-0000-4000-8000-00000000000b'
@@ -198,5 +199,5 @@ describe('STAFF_FORM_LOCATION_SELECT names only real columns (the check:select-c
     for (const column of ['features', 'settings', 'is_host_anchor', 'sensibo_api_key', 'thinq_pat', 'thinq_client_id']) {
       expect(refs).toContainEqual({ table: 'locations', column })
     }
-  })
+  }, SCAN_TIMEOUT_MS)
 })

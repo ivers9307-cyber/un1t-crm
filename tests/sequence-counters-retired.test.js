@@ -17,6 +17,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const ROOTS = ['src', 'shared', 'mobile']
@@ -44,7 +45,7 @@ describe('sequence counters stay retired (SEQCOUNTERS.1)', () => {
   it('no source names an increment_sequence_* rpc or a total_enrolled / total_completed / total_exited counter', () => {
     const hits = files.filter((f) => namesRetired(readFileSync(f, 'utf8')))
     expect(hits.map((f) => path.relative(ROOT, f))).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   // openapi.js is the measured case: its `// the /api/shelly/* request
   // vocabulary` comment opened a "block comment" that a regex stripper closed

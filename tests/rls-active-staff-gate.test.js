@@ -52,6 +52,7 @@ import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'n
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { netPolicyState } from '../scripts/check-rls-restrictive.mjs'
+import { SCAN_TIMEOUT_MS } from './helpers/scan-timeout.js'
 
 const MIG_DIR = path.resolve(import.meta.dirname, '../supabase/migrations')
 const GATE = /auth_is_active_staff/
@@ -243,7 +244,7 @@ describe('RLSACTIVE.1 — the detectors fail CLOSED', () => {
       '002.sql': `ALTER POLICY p ON public.t USING (EXISTS (SELECT 1 FROM profile_locations pl WHERE pl.profile_id = (SELECT auth.uid())));`,
     })
     expect(ungatedPolicies(state, {})).toEqual(['public.t :: p'])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('a table rename carries the ungated policy to its new name (and an allowlist entry for the old name no longer covers it)', () => {
     const state = replayFixture({
@@ -251,7 +252,7 @@ describe('RLSACTIVE.1 — the detectors fail CLOSED', () => {
       '002.sql': 'ALTER TABLE public.old_t RENAME TO new_t;',
     })
     expect(ungatedPolicies(state, { 'public.old_t :: p': 'stale' })).toEqual(['public.new_t :: p'])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('a function "gate" must sit in the SELECT that reads profiles', () => {
     expect(functionGated(`SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = (SELECT auth.uid()) AND active IS NOT FALSE AND deleted_at IS NULL)`)).toBe(true)
