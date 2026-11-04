@@ -18,6 +18,8 @@ export default function MiaVoicesCard({ canEdit }) {
   const [message, setMessage] = useState(null)
   const [saving, setSaving] = useState(false)
   const [playing, setPlaying] = useState(null)
+  const [check, setCheck] = useState(null) // null | 'running' | result
+
   const audioRef = useRef(null)
 
   useEffect(() => {
@@ -63,6 +65,18 @@ export default function MiaVoicesCard({ canEdit }) {
       setMessage('Could not play that sample. Try again.')
     } finally {
       setPlaying(null)
+    }
+  }
+
+  // Runs the live setup check on the server with the key already in Vercel.
+  async function runCheck() {
+    setCheck('running')
+    try {
+      const res = await fetch('/api/settings/voice-replies/check', { method: 'POST' })
+      const j = await res.json()
+      setCheck(j?.success ? j.data : { error: j?.error || 'The check could not run.' })
+    } catch {
+      setCheck({ error: 'The check could not run. Try again.' })
     }
   }
 
@@ -152,6 +166,19 @@ export default function MiaVoicesCard({ canEdit }) {
         />
       </label>
       {canEdit && (
+        <div className="mt-4 border-t border-un1t-border pt-4">
+          <button
+            type="button"
+            onClick={runCheck}
+            disabled={check === 'running'}
+            className="text-sm border border-un1t-border rounded-lg px-3 py-2 disabled:opacity-50"
+          >
+            {check === 'running' ? 'Checking…' : 'Check voice setup'}
+          </button>
+          {check && check !== 'running' && <CheckResult result={check} />}
+        </div>
+      )}
+      {canEdit && (
         <button
           type="submit"
           disabled={saving || status !== 'ready'}
@@ -161,5 +188,26 @@ export default function MiaVoicesCard({ canEdit }) {
         </button>
       )}
     </form>
+  )
+}
+
+function CheckResult({ result }) {
+  if (result.error) return <p className="text-sm text-un1t-text mt-2">{result.error}</p>
+  const lines = [`Key: ${result.key ? 'found' : 'not set in Vercel'}`]
+  if (result.key) lines.push(result.voices?.ok ? `Voices: ${result.voices.count} on the account (tested with ${result.voices.tested})` : 'Voices: could not read the ElevenLabs voice list')
+  for (const m of result.models || []) {
+    lines.push(m.accepted
+      ? `${m.model}: accepted · ${m.ogg ? 'WhatsApp voice-note format (Ogg)' : 'not in WhatsApp voice-note format'}`
+      : `${m.model}: refused${m.status ? ` (HTTP ${m.status})` : ''}`)
+  }
+  return (
+    <div className="mt-2 text-sm">
+      {lines.map((l) => <p key={l} className="text-un1t-text">{l}</p>)}
+      <p className="text-xs text-un1t-subtle mt-1">
+        {result.ready
+          ? `Ready: voice replies use ${result.inUse}.`
+          : `Not ready: voice replies use ${result.inUse}, which needs to be accepted and in Ogg. Until then Mia replies in text.`}
+      </p>
+    </div>
   )
 }

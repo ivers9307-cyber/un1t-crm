@@ -42,3 +42,26 @@ describe('Mia\'s voices card', () => {
     expect(screen.queryByRole('button', { name: 'Save voices' })).toBeNull()
   })
 })
+
+describe('Check voice setup', () => {
+  it('runs the check and shows key, model and audio results', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (String(url).endsWith('/check')) return { ok: true, json: async () => ({ success: true, data: {
+        key: true, voices: { ok: true, count: 2, tested: 'Aoife' }, inUse: 'eleven_v4_turbo', ready: false,
+        models: [{ model: 'eleven_v4_turbo', accepted: false, status: 422, ogg: null }, { model: 'eleven_flash_v2_5', accepted: true, status: null, ogg: true }],
+      } }) }
+      return { ok: true, json: async () => ({ success: true, data: DATA }) }
+    }))
+    render(<MiaVoicesCard canEdit />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Check voice setup' }))
+    expect(await screen.findByText('Key: found')).toBeTruthy()
+    expect(screen.getByText('eleven_v4_turbo: refused (HTTP 422)')).toBeTruthy()
+    expect(screen.getByText('eleven_flash_v2_5: accepted · WhatsApp voice-note format (Ogg)')).toBeTruthy()
+    expect(screen.getByText(/Not ready/)).toBeTruthy()
+  })
+  it('no button without edit rights', async () => {
+    render(<MiaVoicesCard canEdit={false} />)
+    await screen.findByLabelText('Bookings')
+    expect(screen.queryByRole('button', { name: 'Check voice setup' })).toBeNull()
+  })
+})
