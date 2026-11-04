@@ -118,7 +118,9 @@ export async function synthesizeSpeech({ text, voiceId, outputFormat = 'opus_480
   const key = process.env.ELEVENLABS_API_KEY
   if (!key) return { ok: false, reason: 'not_configured' }
   if (!String(text || '').trim() || !String(voiceId || '').trim()) return { ok: false, reason: 'bad_response' }
-  const url = `${ELEVENLABS_TTS_BASE_URL}/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(outputFormat)}`
+  // Same retention control as transcribeAudio: enterprise-only zero retention.
+  const retention = process.env.ELEVENLABS_ZERO_RETENTION === 'true' ? '&enable_logging=false' : ''
+  const url = `${ELEVENLABS_TTS_BASE_URL}/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(outputFormat)}${retention}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), ELEVENLABS_TTS_TIMEOUT_MS)
   try {

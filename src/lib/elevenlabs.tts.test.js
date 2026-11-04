@@ -30,6 +30,12 @@ describe('synthesizeSpeech', () => {
     expect(r.bytes).toBeInstanceOf(Uint8Array)
     expect(r.mime).toBe('audio/ogg')
   })
+  test('zero retention only when switched on, as for transcription (security review)', async () => {
+    vi.stubEnv('ELEVENLABS_ZERO_RETENTION', 'true')
+    const fetchImpl = vi.fn(async () => audioRes(200))
+    await synthesizeSpeech({ text: 'x', voiceId: 'v-1' }, { fetchImpl })
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.elevenlabs.io/v1/text-to-speech/v-1?output_format=opus_48000_64&enable_logging=false')
+  })
   test('mp3 for the browser sample', async () => {
     const fetchImpl = vi.fn(async () => audioRes(200))
     const r = await synthesizeSpeech({ text: 'x', voiceId: 'v/1', outputFormat: 'mp3_44100_64' }, { fetchImpl })
