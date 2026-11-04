@@ -12,7 +12,8 @@ import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { maybeAutoReply } from '@/lib/agent/auto-reply'
+import { maybeAutoReply, markVoiceNoteForStaff } from '@/lib/agent/auto-reply'
+import { transcribeInboundVoiceNote, VOICE_LOST_TURN_REASONS } from '@/lib/wa-voice/transcribe'
 import { resolveNewSenderStudio } from '@/lib/wa-studio-pick/resolve'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent, studiosForNumbers } from '@/lib/whatsapp-number-events'
@@ -604,6 +605,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     media_mime_type: mediaMime,
     status: 'delivered',
     sent_at: timestamp.toISOString(),
+    // VOICENOTE.1 — a voice note is `pending` from the moment it is stored, so
+    // a concurrent turn reads "being transcribed", never old unanswerable audio.
+    ...(messageType === 'audio' ? { transcript_status: 'pending' } : {}),
   }).select('id').single()
   // Mirror recordAgentMessage's loud-failure posture: supabase-js returns
   // { error } without throwing, so an unchecked rejected insert (the
@@ -707,9 +711,10 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
   // so the inbox shows it without a first-view round-trip and it survives
   // Meta's ~30-day media expiry. Best-effort and bounded: never block or
   // fail the webhook — /api/whatsapp/media re-hosts lazily if this misses.
+  let rehostedPath = null
   if (mediaExternalId && insertedMessage?.id) {
     try {
-      await ensureMediaRehosted(db, {
+      rehostedPath = await ensureMediaRehosted(db, {
         id: insertedMessage.id,
         location_id: locationId,
         conversation_id: conversationId,
@@ -720,6 +725,31 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
       })
     } catch (e) {
       console.error('[wa-webhook] inbound media rehost failed (will lazy-load):', e?.message)
+    }
+  }
+
+  // VOICENOTE.1 — transcribe a voice note now, from the bytes just rehosted,
+  // before Mia's turn and whether or not Mia is on (staff always see it).
+  // The step never throws and always leaves a final status on the row; the
+  // catch is belt and braces, and Mia then takes the voice hand-off.
+  let voiceNote = null
+  if (messageType === 'audio' && insertedMessage?.id) {
+    try {
+      voiceNote = await transcribeInboundVoiceNote(db, {
+        messageId: insertedMessage.id,
+        locationId,
+        storagePath: rehostedPath || null,
+        mime: mediaMime || null,
+      })
+    } catch (err) {
+      logError('wa-webhook', 'voice transcription threw', { conversationId, err: err?.message || String(err) })
+      voiceNote = { status: 'failed', transcript: null, language: null }
+    }
+    if (voiceNote?.transcript) {
+      const { error: previewErr } = await db.from('whatsapp_conversations')
+        .update({ last_message_preview: `Voice note: ${voiceNote.transcript.slice(0, 80)}` })
+        .eq('id', conversationId)
+      if (previewErr) logError('wa-webhook', 'voice note preview update failed', { conversationId, error: previewErr.message })
     }
   }
 
@@ -786,9 +816,24 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         messageType,
         body,
         waMessageId: message.id || null,
+        ...(voiceNote ? { voiceTranscript: { status: voiceNote.status, text: voiceNote.transcript || null } } : {}),
       })
     } catch (err) {
       console.error('[whatsapp webhook] agent auto-reply failed', err?.message)
+    }
+  }
+
+  // VOICENOTE.1 — a clear voice note whose own turn sent nothing because a
+  // concurrent message (a quick text after it) won the turn. The missed-inbound
+  // rerun cannot catch it (it is older than that text), so staff get it in the
+  // Agent hand-off queue with no customer message and Mia left on.
+  if (voiceNote?.status === 'ok' && agentResult
+    && !(agentResult.handled && agentResult.action === 'reply')
+    && VOICE_LOST_TURN_REASONS.has(agentResult.reason)) {
+    try {
+      await markVoiceNoteForStaff(db, { conversationId, locationId })
+    } catch (err) {
+      logError('wa-webhook', 'voice note staff hand-off threw', { conversationId, err: err?.message || String(err) })
     }
   }
 
@@ -818,7 +863,9 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
         || conv?.wa_profile_name
         || senderName
         || 'a contact'
-      const preview = body?.substring(0, 140) || `[${messageType}]`
+      const preview = voiceNote?.transcript
+        ? `Voice note: ${voiceNote.transcript}`.substring(0, 140)
+        : (body?.substring(0, 140) || `[${messageType}]`)
       const payload = {
         title: `WhatsApp · ${senderLabel}`,
         body: preview,
