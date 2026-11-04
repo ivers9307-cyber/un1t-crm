@@ -238,7 +238,9 @@ function PlatformMemberPrivacyPolicy() {
             If you send a studio a voice note on WhatsApp, the audio may be sent
             to ElevenLabs, our transcription provider, so that our team and our
             AI assistant can read what you said. The written transcript is kept
-            with your WhatsApp messages. ElevenLabs is based in the United States.
+            with your WhatsApp messages. If you send a voice note, the reply may
+            also come as a voice note, created by ElevenLabs from the assistant&rsquo;s
+            written reply. ElevenLabs is based in the United States.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">10. How long we keep it</h2>

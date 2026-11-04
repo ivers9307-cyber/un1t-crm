@@ -152,7 +152,7 @@ export default function PrivacyPolicy() {
             <li><strong>Sensibo</strong> — controls in-studio AC units; receives a location identifier and the requested set-point.</li>
             <li><strong>Apple Push Notification Service</strong> and <strong>Expo</strong> — deliver push notifications to staff iPhones.</li>
             <li><strong>Anthropic</strong> — provides the AI assistant used by some staff features. Conversations are sent transiently to Anthropic&rsquo;s API and are not used to train models.</li>
-            <li><strong>ElevenLabs</strong> — transcribes WhatsApp voice notes sent to a studio, so the assistant and staff can read them. The audio is sent to ElevenLabs for transcription and the transcript is stored in the CRM.</li>
+            <li><strong>ElevenLabs</strong> — transcribes WhatsApp voice notes sent to a studio, so the assistant and staff can read them, and turns the assistant&rsquo;s written reply to a voice note into a voice note. The audio, or the reply text, is sent to ElevenLabs and the result is stored in the CRM.</li>
             <li><strong>UniFi (Ubiquiti)</strong> — door access at studio sites; we send a door-unlock command and store the result.</li>
           </ul>
 

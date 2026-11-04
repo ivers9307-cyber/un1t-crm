@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react'
 import { View, Text, Image, Pressable, Linking, ActivityIndicator } from 'react-native'
 import { api } from '../lib/api'
 import { mediaRenderKind } from 'shared/whatsapp-media'
-import { voiceNoteCaption } from 'shared/voice-note'
+import { voiceNoteCaption, voiceReplyLabel } from 'shared/voice-note'
 
 const MEDIA_ENDPOINT = {
   whatsapp: '/api/whatsapp/media',
@@ -25,6 +25,16 @@ export default function WAMediaThumb({ msg, channel = 'whatsapp' }) {
   // VOICENOTE.1 — the transcript (or a one-line note) under a voice note, the
   // same text the web inbox shows (shared/voice-note voiceNoteCaption).
   const caption = voiceNoteCaption(msg)
+  // VOICEREPLY.1 — one of Mia's voice replies: who spoke and in which voice.
+  const replyLabel = voiceReplyLabel(msg)
+  if (replyLabel) {
+    return (
+      <View>
+        <MediaBody msg={msg} channel={channel} />
+        <Text className="text-xs text-un1t-muted mt-1">{replyLabel}</Text>
+      </View>
+    )
+  }
   if (!caption) return <MediaBody msg={msg} channel={channel} />
   return (
     <View>

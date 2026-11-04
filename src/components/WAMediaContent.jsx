@@ -13,12 +13,23 @@
 
 import { useEffect, useState } from 'react'
 import { mediaRenderKind } from '@shared/whatsapp-media'
-import { voiceNoteCaption } from '@shared/voice-note'
+import { voiceNoteCaption, voiceReplyLabel } from '@shared/voice-note'
 
 export default function WAMediaContent({ message, endpoint = '/api/whatsapp/media' }) {
   // VOICENOTE.1 — the transcript (or a one-line note) under a voice note,
   // shown whether or not the audio itself could be loaded.
   const caption = voiceNoteCaption(message)
+  // VOICEREPLY.1 — one of Mia's voice replies: the bubble already shows the
+  // words (its body); this says who spoke and in which voice.
+  const replyLabel = voiceReplyLabel(message)
+  if (replyLabel) {
+    return (
+      <div>
+        <MediaBody message={message} endpoint={endpoint} />
+        <p className="mt-1 text-xs text-un1t-subtle">{replyLabel}</p>
+      </div>
+    )
+  }
   if (!caption) return <MediaBody message={message} endpoint={endpoint} />
   return (
     <div>

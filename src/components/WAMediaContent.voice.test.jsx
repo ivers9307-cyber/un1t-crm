@@ -43,3 +43,15 @@ describe('voice note caption', () => {
     expect(screen.getByText('Can I book 7am?')).toBeTruthy()
   })
 })
+
+describe('Mia\'s voice replies (VOICEREPLY.1)', () => {
+  it('an outbound voice reply shows who spoke and the kind', async () => {
+    render(<WAMediaContent message={{ id: 'm2', direction: 'outbound', message_type: 'audio', media_mime_type: 'audio/ogg', voice_kind: 'member', body: 'Your plan renews on the first.' }} />)
+    expect(await screen.findByText('Mia replied by voice · Member questions')).toBeTruthy()
+  })
+  it('an inbound voice note keeps its transcript caption, with no Mia label', async () => {
+    render(<WAMediaContent message={voice({ transcript_status: 'ok', transcript: 'Can I book 7am?' })} />)
+    expect(await screen.findByText('Can I book 7am?')).toBeTruthy()
+    expect(screen.queryByText(/Mia replied by voice/)).toBeNull()
+  })
+})
