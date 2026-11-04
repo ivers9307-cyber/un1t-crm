@@ -148,6 +148,8 @@ on:
       # Watching the directory costs a handful of runs on the desktop-*.yml
       # files and can never miss the next workflow a test decides to read.
       - '.github/workflows/**'
+      # CI-SPEED.1 — the install step every job uses lives here.
+      - '.github/actions/**'
 
   # ─── pull_request: base main ─────────────────────────────────────
   # DELIBERATELY UNFILTERED. Do not add a `paths:` key here.
@@ -352,59 +354,89 @@ jobs:
   # the other shards reporting when one fails (you want the whole picture,
   # not the first red). Nothing here is required by branch protection —
   # the aggregator job below is.
+  #
+  # CI-SPEED.1 (2026-11-04) — four shards became six. At four the slowest
+  # shard took ~5 min of vitest and set the finish time of every run (lint
+  # ~5 min, build ~2). Six, not eight: the free plan runs 20 jobs at once
+  # across the repo, a run is now 6 shards + lint + build (the aggregator
+  # starts after), and a PR run, a sibling's PR run and a main push often
+  # overlap; at eight, three overlapping runs would queue. The shard total
+  # is SHARDS below and the matrix list must count up to it.
   vitest:
-    name: Vitest (shard ${{ matrix.shard }} of 4)
+    name: Vitest (shard ${{ matrix.shard }} of 6)
     runs-on: ubuntu-latest
+    env:
+      SHARDS: 6
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-
       - name: Install dependencies
-        run: npm ci
+        uses: ./.github/actions/install-deps
 
       - name: Vitest
-        run: npx vitest run --shard=${{ matrix.shard }}/4
+        run: npx vitest run --shard="${{ matrix.shard }}/$SHARDS"
 
   # CI-SHARD.1 — ESLint and the check:* gates, run beside the shards rather
-  # than after them. ESLint keeps its file cache between runs (keyed on the
-  # lockfile + the config files, refined by commit so the newest compatible
-  # cache restores) — a PR touching a handful of files lints those, not the
-  # repo. The guardrails run is a second ESLint config and stays uncached:
-  # its own file set is small and a shared cache would mix two rule sets.
+  # than after them.
+  #
+  # CI-SPEED.1 (2026-11-04) — the ESLint cache CI-SHARD.1 added NEVER WORKED,
+  # for two independent reasons, and both had to go:
+  #   1. It was deleted before it could be saved. ESLint run WITHOUT
+  #      `--cache` deletes the file at its default cache location
+  #      (`.eslintcache`), and three later steps (mobile imports, mobile
+  #      lint, guardrails) are uncached ESLint runs. Every job ended with
+  #      "Path(s) specified ... do(es) not exist, hence no cache is being
+  #      saved", so every run linted the whole repo cold (~2.5 min). Each
+  #      cached run now has its own location under .cache/eslint/, which no
+  #      uncached run touches.
+  #   2. It would have missed every file anyway. ESLint's default
+  #      `--cache-strategy metadata` compares mtimes, and a fresh checkout
+  #      stamps every file with the checkout time. `content` hashes the
+  #      file instead.
+  # The guardrails ESLint is cached too now (~1 min cold). Its rules are
+  # custom code in eslint-rules/, and ESLint's cache cannot see a change to
+  # a plugin's code, only to the config object, so the key hashes
+  # eslint-rules/** and both cached configs: a rule edit starts a fresh
+  # cache. That is also why the local scripts stay uncached.
+  # Both caches are sound only while every enabled rule is FILE-LOCAL (a
+  # cached file is not re-linted when another file changes). True today:
+  # the one eslint-plugin-import rule on is no-anonymous-default-export.
+  # Mobile import resolution is the cross-file check and stays uncached for
+  # exactly that reason; do not cache it, and do not keep these caches if a
+  # config turns on import/named, import/no-unresolved or typed linting.
+  # Saved from main only (a PR-ref cache is visible to that PR alone); a PR
+  # restores the newest main entry and re-lints only what differs from it.
   lint:
     name: Lint & gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-
       - name: Install dependencies
-        run: npm ci
-
-      - name: Restore ESLint cache
-        uses: actions/cache@v6
+        uses: ./.github/actions/install-deps
         with:
-          path: .eslintcache
-          key: eslint-${{ hashFiles('package-lock.json', 'eslint.config.*') }}-${{ github.sha }}
+          save: 'true'
+
+      # hashFiles needs the checkout, so the key is a step output, not a
+      # job-level env (evaluated before checkout, it would hash nothing).
+      - name: ESLint cache key
+        id: eslint-key
+        run: echo "prefix=eslint-v2-${{ hashFiles('package-lock.json', 'eslint.config.mjs', 'eslint.guardrails.config.mjs', 'eslint-rules/**') }}-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ESLint caches
+        uses: actions/cache/restore@v6
+        with:
+          path: .cache/eslint
+          key: ${{ steps.eslint-key.outputs.prefix }}${{ github.sha }}
           restore-keys: |
-            eslint-${{ hashFiles('package-lock.json', 'eslint.config.*') }}-
+            ${{ steps.eslint-key.outputs.prefix }}
 
       - name: ESLint
-        run: npm run lint -- --cache --cache-location .eslintcache
+        run: npm run lint -- --cache --cache-strategy content --cache-location .cache/eslint/main
 
       - name: Web/mobile parity
         run: npm run check:mobile-parity
@@ -457,8 +489,15 @@ jobs:
       # supabase thenable (throws, query never runs) and a .limit(>=1000) without
       # .range() (PostgREST silently caps at 1000 rows). ERROR-level custom ESLint
       # rules in a scoped config. See eslint.guardrails.config.mjs.
+      # CI-SPEED.1 — `npm run check:guardrails` is these two scripts run one
+      # after the other; CI runs them as two steps so the ESLint half can take
+      # the cache flags (see the lint job's header). Add a third part to
+      # check:guardrails and it needs a step here too.
       - name: Supabase guardrails
-        run: npm run check:guardrails
+        run: npm run check:guardrails:eslint -- --cache --cache-strategy content --cache-location .cache/eslint/guardrails
+
+      - name: Dublin zone literal ban
+        run: npm run check:dublin-zone
 
       # Catches the ENROLFIX.1 class (#1685) — a `.select()` naming a column
       # that does not exist. PostgREST 400s it, and a discarded error turns
@@ -513,6 +552,17 @@ jobs:
       - name: OTA trigger paths
         run: npm run check:ota-paths
 
+      # Saved whatever the result: the cache records a file's errors as well
+      # as its passes, so a red run's cache is just as right for the fix push.
+      # PR runs save too (two small files, visible to that PR's later pushes:
+      # the changelog push after `gh pr create` is the usual one).
+      - name: Save ESLint caches
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: .cache/eslint
+          key: ${{ steps.eslint-key.outputs.prefix }}${{ github.sha }}
+
   # SAAS4-W0.3 (INFRA_BACKLOG #7) — `next build` as a first-class CI gate.
   # Vitest runs on mocked imports, so a missing/renamed export or an
   # unresolvable import sails through tests + eslint and only fails in
@@ -549,26 +599,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-
       - name: Install dependencies
-        run: npm ci
+        uses: ./.github/actions/install-deps
 
       # Persist Next's incremental compilation cache between runs —
       # keyed on the lockfile (dependency graph) with a source-hash
       # refinement so the newest compatible cache restores on any
       # source change.
+      # CI-SPEED.1 — restored on every run, SAVED only from main. Each entry
+      # is ~580 MB and every run used to save one (PR refs included), which
+      # kept the repo at its 10 GB cache limit and evicted everything else.
+      # A PR's entry is visible to that PR alone and the build job is not
+      # the slow one, so PRs restore main's newest entry and save nothing.
+      - name: Next build cache key
+        id: next-key
+        run: |
+          echo "prefix=next-build-${{ hashFiles('package-lock.json') }}-" >> "$GITHUB_OUTPUT"
+          echo "key=next-build-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**', 'shared/**') }}" >> "$GITHUB_OUTPUT"
+
       - name: Restore Next build cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: .next/cache
-          key: next-build-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**', 'shared/**') }}
+          key: ${{ steps.next-key.outputs.key }}
           restore-keys: |
-            next-build-${{ hashFiles('package-lock.json') }}-
+            ${{ steps.next-key.outputs.prefix }}
 
       - name: Next build
         run: npm run build
+
+      - name: Save Next build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: .next/cache
+          key: ${{ steps.next-key.outputs.key }}
