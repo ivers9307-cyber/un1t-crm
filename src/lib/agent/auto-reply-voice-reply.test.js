@@ -59,7 +59,7 @@ function makeAdapter(sendVoice = okVoice()) {
     sendOptions: vi.fn().mockResolvedValue({ messageId: 'wamid.o' }),
     sendCta: vi.fn().mockResolvedValue({ messageId: 'wamid.c' }),
     sendVoice,
-    voiceReplyPossible: vi.fn(async () => true),
+    voiceReplyPossible: vi.fn(async () => ({ possible: true, voiceLocationId: 'loc-1' })),
   }
 }
 const now = () => new Date().toISOString()
@@ -232,11 +232,45 @@ describe('a voice-note turn', () => {
     const fetchSpy = modelTurns(say('Yes, seven is free.'))
     vi.stubGlobal('fetch', fetchSpy)
     const adapter = makeAdapter()
-    adapter.voiceReplyPossible = vi.fn(async () => false)
+    adapter.voiceReplyPossible = vi.fn(async () => ({ possible: false, reason: 'disabled' }))
     await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
     expect(JSON.stringify(systemOf(fetchSpy))).not.toContain('This reply will be spoken')
     expect(adapter.sendVoice).not.toHaveBeenCalled()
     expect(adapter.send.mock.calls[0][1]).toBe('Yes, seven is free.')
+  })
+
+  // VOICESTUDIO.1 — the gate's refusal used to leave meta.voice empty, so a
+  // text reply to a voice note said nothing about why (4 Nov 2026: Richard's
+  // Stillorgan thread, no voices at Stillorgan, four text replies, no reason).
+  it('a gate refusal is recorded on the decision row', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Yes, seven is free.')))
+    const calls = []
+    const adapter = makeAdapter()
+    adapter.voiceReplyPossible = vi.fn(async () => ({ possible: false, reason: 'no_voice' }))
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls, settings: { enabled: true } }), adapter, ctx())
+    const decision = calls.find((c) => c.op === 'insert' && c.table === 'agent_decisions')
+    expect(decision.row.meta.voice).toEqual({ sent: false, reason: 'no_voice' })
+  })
+
+  it('a typed message records no voice reason at all', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Yes, 7am is free.')))
+    const calls = []
+    const adapter = makeAdapter()
+    await runChannelAgent(agentDb({ conv, history: textHistory, calls, settings: { enabled: true } }), adapter, ctx('text'))
+    expect(adapter.voiceReplyPossible).not.toHaveBeenCalled()
+    const decision = calls.find((c) => c.op === 'insert' && c.table === 'agent_decisions')
+    expect(decision.row.meta?.voice).toBeUndefined()
+  })
+
+  it('the voice studio the gate picked speaks the reply (VOICESTUDIO.1)', async () => {
+    const fetchSpy = modelTurns(say('Yes, seven is free.'))
+    vi.stubGlobal('fetch', fetchSpy)
+    const adapter = makeAdapter()
+    adapter.voiceReplyPossible = vi.fn(async () => ({ possible: true, voiceLocationId: 'loc-2' }))
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
+    expect(adapter.voiceReplyPossible.mock.calls[0][1]).toMatchObject({ locationId: 'loc-1', memberLocationIds: expect.any(Array) })
+    expect(JSON.stringify(systemOf(fetchSpy))).toContain('This reply will be spoken')
+    expect(adapter.sendVoice.mock.calls[0][1]).toMatchObject({ locationId: 'loc-1', voiceLocationId: 'loc-2' })
   })
 
   it('a link in the holding message follows as text (review I2)', async () => {

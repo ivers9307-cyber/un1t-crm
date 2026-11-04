@@ -96,3 +96,13 @@ export function isVoiceTrigger({ historyRows } = {}) {
   }
   return false
 }
+
+// VOICESTUDIO.1 — the studios a turn's member-studio resolution says this
+// person is an active member at (resolveMemberStudios: { studios, readFailed },
+// each studio { locationId, active, ... }; the decision log renames the field
+// to location_id, the in-memory row does not). A failed or missing resolution
+// is none.
+export function memberVoiceLocationIds(resolution) {
+  if (!resolution || resolution.readFailed || !Array.isArray(resolution.studios)) return []
+  return resolution.studios.filter((s) => s?.active === true && s.locationId).map((s) => s.locationId)
+}

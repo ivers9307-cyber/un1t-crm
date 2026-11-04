@@ -79,7 +79,7 @@ import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 import { logWarn, logError } from '@/lib/log'
-import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded } from '@/lib/wa-voice/reply-rules'
+import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded, memberVoiceLocationIds } from '@/lib/wa-voice/reply-rules'
 import { maybeSendVoiceReply, voiceReplyPossible } from '@/lib/wa-voice/reply'
 import { studiosOfContact } from '@/lib/contact-studios'
 
@@ -743,8 +743,12 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // can (WhatsApp). A typed message after it makes the reply text.
     // Review I3: only when a voice reply could actually go (mode, test numbers,
     // a voice), so the spoken-reply prompt line never shapes a text reply.
-    const voiceTrigger = typeof adapter.sendVoice === 'function' && isVoiceTrigger({ historyRows: history })
-      && (typeof adapter.voiceReplyPossible !== 'function' || await adapter.voiceReplyPossible(db, { locationId, recipient }))
+    // VOICESTUDIO.1 — the gate itself runs once the turn knows which studios
+    // the person is a member at (below), so a studio without voices can borrow
+    // the voices of one they belong to; until then the reply is text.
+    const voiceInbound = typeof adapter.sendVoice === 'function' && isVoiceTrigger({ historyRows: history })
+    let voiceTrigger = false
+    let voiceLocationId = null
     // Newest inbound this turn will have seen — the wrapper's missed-inbound
     // sweep compares against it after the reply goes out.
     const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
@@ -929,7 +933,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // MIAHATCH.2 — these are TODAY's options; a turn whose plan is not today's
     // block adds the plan's (settleTurn below).
     const systemOpts = {
-      voiceReply: voiceTrigger,
+      voiceReply: false, // VOICESTUDIO.1 — set by the voice gate below
       businessName: branding.companyName,
       locationName: loc?.name || null,
       agentName: settings?.agent_name || DEFAULTS.agent_name,
@@ -1035,6 +1039,27 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       trace.memberStudios = resolution.readFailed ? null : resolution.studios
     }
     applyMemberStudios(await resolveTurnMemberStudios(resolvedVerifiedContactId || conv?.contact_id))
+
+    // VOICEREPLY.1 / VOICESTUDIO.1 — the newest inbound is a voice note: can
+    // the reply go by voice, and whose voices speak it (the thread studio's,
+    // else a studio the person is an active member at)? A refusal is recorded
+    // on the decision row (meta.voice), so a text reply to a voice note always
+    // says why. It used to record nothing when this gate said no.
+    if (voiceInbound) {
+      const memberLocationIds = memberVoiceLocationIds(toolCtx.memberStudios)
+      let gate = { possible: true, voiceLocationId: locationId }
+      if (typeof adapter.voiceReplyPossible === 'function') {
+        try {
+          gate = (await adapter.voiceReplyPossible(db, { locationId, recipient, memberLocationIds })) || { possible: false, reason: 'unknown' }
+        } catch {
+          gate = { possible: false, reason: 'settings_unreadable' }
+        }
+      }
+      voiceTrigger = gate.possible === true
+      voiceLocationId = voiceTrigger ? (gate.voiceLocationId || locationId) : null
+      if (!voiceTrigger) trace.voice = { sent: false, reason: gate.reason || 'unknown' }
+      systemOpts.voiceReply = voiceTrigger
+    }
 
     // MIAHATCH.2 — the turn's tool block from the studios this sender may be
     // answered for (turn-studios.js). Today's block (a studio answering its
@@ -1438,7 +1463,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     }
 
     const parsed = parseAgentResponse(modelText)
-    const common = { conversationId, locationId, recipient, contactId, connection, voice: voiceTrigger ? { kind: 'handoff', trace } : null }
+    const common = { conversationId, locationId, recipient, contactId, connection, voice: voiceTrigger ? { kind: 'handoff', trace, voiceLocationId } : null }
 
     // AGENT-REARM.3 — a human may have TAKEN OVER while the model was
     // generating (Aisling Fagan 2026-07-13: Garrett's inbox takeover and Mia's
@@ -1525,7 +1550,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     }
 
     const replyVoice = voiceTrigger
-      ? { kind: await replyVoiceKind(db, { contactId: conv?.contact_id || contactId, locationId, trace }), trace }
+      ? { kind: await replyVoiceKind(db, { contactId: conv?.contact_id || contactId, locationId, voiceLocationId, trace }), trace, voiceLocationId }
       : null
     const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings, voice: replyVoice })
     if (!sent) {
@@ -1586,7 +1611,7 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
   if (voice && typeof adapter.sendVoice === 'function') {
     const voiced = await sendVoiceReply(db, adapter, {
       conversationId, locationId, recipient, contactId, connection, settings, text, options: opts,
-      kind: voice.kind, trace: voice.trace, stamp: { agent_last_reply_at: true },
+      kind: voice.kind, trace: voice.trace, voiceLocationId: voice.voiceLocationId || null, stamp: { agent_last_reply_at: true },
     })
     if (voiced) return true
   }
@@ -1640,13 +1665,15 @@ async function recordAgentMessage(db, adapter, row) {
 // VOICEREPLY.1 — which voice a reply to a voice note uses: a booking change
 // this turn, else an active member at the studio, else a lead. A failed
 // membership read is "lead": it only picks a voice, never blocks the reply.
-async function replyVoiceKind(db, { contactId, locationId, trace }) {
+async function replyVoiceKind(db, { contactId, locationId, voiceLocationId = null, trace }) {
   const bookingToolSucceeded = (trace?.tools || []).some((t) => t?.succeeded === true)
   let isMember = false
   if (!bookingToolSucceeded && contactId) {
     try {
       const res = await studiosOfContact(db, contactId)
-      isMember = !!res?.ok && (res.rows || []).some((r) => r.location_id === locationId
+      // VOICESTUDIO.1 — a member at the studio whose voices speak counts too.
+      const studioIds = new Set([locationId, voiceLocationId].filter(Boolean))
+      isMember = !!res?.ok && (res.rows || []).some((r) => studioIds.has(r.location_id)
         && ((r.kind === 'member' && r.status === 'active') || r.membership_status === 'active'))
     } catch { /* lead */ }
   }
@@ -1659,13 +1686,13 @@ async function replyVoiceKind(db, { contactId, locationId, trace }) {
 // today's text. Once the voice note is out it counts as sent: a failed
 // follow-up is logged, never resent as a whole text reply (the customer has
 // already heard it). Never throws.
-async function sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text, options = null, kind, trace, holding = false, stamp = {} }) {
+async function sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text, options = null, kind, trace, voiceLocationId = null, holding = false, stamp = {} }) {
   // A holding message is operator-editable and may carry a link (review I2),
   // so it splits like any reply.
   const split = splitForVoice({ text, options: holding ? null : options })
   let r
   try {
-    r = await adapter.sendVoice(db, { conversationId, locationId, recipient, spoken: split.spoken, kind })
+    r = await adapter.sendVoice(db, { conversationId, locationId, recipient, spoken: split.spoken, kind, voiceLocationId })
   } catch (err) {
     r = { sent: false, reason: 'send_failed' }
     logError('agent', 'voice reply threw', { conversationId, error: err?.message || String(err) })
@@ -1815,7 +1842,7 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   // VOICEREPLY.1 — after a voice note the holding message is spoken in the
   // hand-off voice; a refusal sends it as text exactly as before.
   const voicedHolding = voice && typeof adapter.sendVoice === 'function'
-    ? await sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text: holding, kind: 'handoff', trace: voice.trace, holding: true, stamp: {} })
+    ? await sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text: holding, kind: 'handoff', trace: voice.trace, voiceLocationId: voice.voiceLocationId || null, holding: true, stamp: {} })
     : false
   if (!voicedHolding) try {
     const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
@@ -1962,7 +1989,7 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   const holding = (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
   const voicedHolding = voice && typeof adapter.sendVoice === 'function'
-    ? await sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text: holding, kind: 'handoff', trace: voice.trace, holding: true, stamp: { agent_last_reply_at: true } })
+    ? await sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text: holding, kind: 'handoff', trace: voice.trace, voiceLocationId: voice.voiceLocationId || null, holding: true, stamp: { agent_last_reply_at: true } })
     : false
   if (!voicedHolding) try {
     const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
@@ -2062,8 +2089,8 @@ export const whatsappAdapter = {
   sendOptions: (recipient, text, options, { locationId, conversationId }) => sendInteractiveOptions(recipient, text, options, waReplyOpts(locationId, conversationId)),
   // VOICEREPLY.1 — a reply as a voice note (src/lib/wa-voice/reply.js). WhatsApp
   // only: Instagram has no sendVoice, so its replies are always text.
-  sendVoice: (db, { conversationId, locationId, recipient, spoken, kind }) => maybeSendVoiceReply(db, {
-    conversationId, locationId, recipient, spoken, kind, replyOpts: waReplyOpts(locationId, conversationId),
+  sendVoice: (db, { conversationId, locationId, recipient, spoken, kind, voiceLocationId = null }) => maybeSendVoiceReply(db, {
+    conversationId, locationId, recipient, spoken, kind, voiceLocationId, replyOpts: waReplyOpts(locationId, conversationId),
   }),
   voiceReplyPossible: (db, args) => voiceReplyPossible(db, args),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now, messageType = 'text', mediaStoragePath = null, mediaMimeType = null, voiceKind = null }) => ({
