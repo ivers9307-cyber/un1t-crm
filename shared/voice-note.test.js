@@ -35,3 +35,13 @@ test('stale pending reads as failed', () => {
   expect(effectiveTranscriptStatus({ transcript_status: 'ok', created_at: old })).toBe('ok')
   expect(voiceNoteCaption({ message_type: 'audio', transcript_status: 'pending', created_at: old }).note).toBe('Transcription unavailable')
 })
+
+import { isVoiceTranscriptUpdate } from './voice-note.js'
+test('only a voice-note row with a final transcript status is a transcript update', () => {
+  expect(isVoiceTranscriptUpdate({ message_type: 'audio', transcript_status: 'ok' })).toBe(true)
+  expect(isVoiceTranscriptUpdate({ message_type: 'audio', transcript_status: 'too_long' })).toBe(true)
+  expect(isVoiceTranscriptUpdate({ message_type: 'audio', transcript_status: 'pending' })).toBe(false)
+  expect(isVoiceTranscriptUpdate({ message_type: 'audio', transcript_status: null })).toBe(false)
+  expect(isVoiceTranscriptUpdate({ message_type: 'text', status: 'read' })).toBe(false)
+  expect(isVoiceTranscriptUpdate(null)).toBe(false)
+})

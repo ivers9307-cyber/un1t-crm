@@ -78,3 +78,10 @@ export function voiceNoteCaption(msg, nowMs = Date.now()) {
   if (!note) return null
   return { transcript: null, note, language: null }
 }
+
+// A realtime UPDATE on whatsapp_messages that is a voice note's transcript
+// landing (not a delivery or read receipt): the web inbox refreshes the open
+// thread only for these.
+export function isVoiceTranscriptUpdate(row) {
+  return !!row && row.message_type === 'audio' && !!row.transcript_status && row.transcript_status !== 'pending'
+}

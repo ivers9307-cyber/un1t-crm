@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react'
 import { View, Text, Image, Pressable, Linking, ActivityIndicator } from 'react-native'
 import { api } from '../lib/api'
 import { mediaRenderKind } from 'shared/whatsapp-media'
+import { voiceNoteCaption } from 'shared/voice-note'
 
 const MEDIA_ENDPOINT = {
   whatsapp: '/api/whatsapp/media',
@@ -21,6 +22,23 @@ const MEDIA_ENDPOINT = {
 }
 
 export default function WAMediaThumb({ msg, channel = 'whatsapp' }) {
+  // VOICENOTE.1 — the transcript (or a one-line note) under a voice note, the
+  // same text the web inbox shows (shared/voice-note voiceNoteCaption).
+  const caption = voiceNoteCaption(msg)
+  if (!caption) return <MediaBody msg={msg} channel={channel} />
+  return (
+    <View>
+      <MediaBody msg={msg} channel={channel} />
+      <View className="mt-1" style={{ maxWidth: 240 }}>
+        {caption.note ? <Text className="text-xs text-un1t-muted">{caption.note}</Text> : null}
+        {caption.transcript ? <Text className="text-sm text-un1t-muted">{caption.transcript}</Text> : null}
+        {caption.language ? <Text className="text-xs text-un1t-muted mt-0.5">Transcribed from {caption.language}</Text> : null}
+      </View>
+    </View>
+  )
+}
+
+function MediaBody({ msg, channel }) {
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [url, setUrl] = useState(null)
   // The route resolves the kind server-side from the re-hosted MIME, which is

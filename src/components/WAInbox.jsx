@@ -23,6 +23,7 @@ import {
   UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal,
   Sparkles, Plus
 } from 'lucide-react'
+import { isVoiceTranscriptUpdate } from '@shared/voice-note'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
@@ -382,6 +383,19 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
           fetchConversations()
           const convId = payload?.new?.conversation_id
           if (convId && convId === selectedIdRef.current) {
+            fetchMessages(convId)
+          }
+        }
+      )
+      // VOICENOTE.1 — a voice note's transcript is written by UPDATE after the
+      // row's INSERT, so refresh the open thread when one lands. Delivery and
+      // read receipts are UPDATEs too: ignore everything else.
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'whatsapp_messages' },
+        (payload) => {
+          const convId = payload?.new?.conversation_id
+          if (convId && convId === selectedIdRef.current && isVoiceTranscriptUpdate(payload.new)) {
             fetchMessages(convId)
           }
         }
