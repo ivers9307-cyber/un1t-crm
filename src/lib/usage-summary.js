@@ -1,7 +1,7 @@
 // SAAS4-M3 — org usage summary shared by /api/settings/org-usage and
 // the /settings/usage page (one query/aggregation path, two callers).
 
-import { platformMonthStartStr } from '@/lib/usage-caps'
+import { platformMonthStartStr, voiceSecondsThisMonth } from '@/lib/usage-caps'
 
 /** Pure: fold month rollup rows into per-meter + per-location totals. */
 export function aggregateRollups(rows) {
@@ -48,15 +48,18 @@ async function fetchMonthRollups(db, orgId, monthStart) {
 export async function getOrgUsageSummary(db, orgId) {
   const monthStart = platformMonthStartStr()
 
-  const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups] =
+  const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups, voiceSeconds] =
     await Promise.all([
       db.from('org_settings')
-        .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, email_cap_notice_month')
+        .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, email_cap_notice_month, voice_transcription_enabled, voice_transcription_monthly_cap_minutes')
         .eq('organization_id', orgId)
         .maybeSingle(),
       db.rpc('org_ai_spend_month_cents', { p_org: orgId, p_month_start: monthStart }),
       db.rpc('org_email_sends_month', { p_org: orgId, p_month_start: monthStart }),
       fetchMonthRollups(db, orgId, monthStart),
+      // VOICENOTE.1 — live from usage_events (the rollup is nightly); null
+      // when unreadable, so the card never shows a wrong 0.
+      voiceSecondsThisMonth(db, orgId).catch(() => null),
     ])
 
   const { meters, byLocation } = aggregateRollups(rollups || [])
@@ -71,6 +74,12 @@ export async function getOrgUsageSummary(db, orgId) {
       ai_hard_cap_cents: settings?.ai_hard_cap_cents ?? null,
       email_hard_cap_sends: settings?.email_hard_cap_sends ?? null,
       ops_alert_emails: settings?.ops_alert_emails ?? null,
+    },
+    // VOICENOTE.1 — WhatsApp voice-note transcription (ElevenLabs).
+    voice: {
+      enabled: settings?.voice_transcription_enabled === true,
+      capMinutes: settings?.voice_transcription_monthly_cap_minutes ?? null,
+      usedMinutes: voiceSeconds == null ? null : Math.ceil(voiceSeconds / 60),
     },
     meters,
     by_location: byLocation,
