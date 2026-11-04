@@ -13,7 +13,8 @@
 -- voice_reply_monthly_cap counts voice replies per platform month
 -- (usage_events meter elevenlabs_tts_replies); null = no cap.
 --
--- whatsapp_messages: voice_kind marks one of Mia's voice replies (the list is
+-- whatsapp_messages: voice_kind marks one of Mia's voice replies, and the text
+-- rows sent right after it as part of the same reply (the list is
 -- shared/voice-note.js VOICE_KINDS: change both together;
 -- tests/voice-reply-migration.test.js). voice_fallback_sent_at is the claim
 -- that a voice reply WhatsApp failed to deliver was resent as text, once.
@@ -60,7 +61,7 @@ ALTER TABLE public.whatsapp_messages ADD CONSTRAINT whatsapp_messages_voice_kind
   CHECK (voice_kind IS NULL OR voice_kind IN ('lead', 'booking', 'member', 'handoff', 'default'));
 
 COMMENT ON COLUMN public.whatsapp_messages.voice_kind IS
-  'VOICEREPLY.1 (mig 809): set only on one of Mia''s voice replies: lead | booking | member | handoff | default (shared/voice-note.js VOICE_KINDS).';
+  'VOICEREPLY.1 (mig 809): set on one of Mia''s voice replies (message_type audio) and on the text rows sent after it as part of the same reply (link, buttons, notice): lead | booking | member | handoff | default (shared/voice-note.js VOICE_KINDS).';
 COMMENT ON COLUMN public.whatsapp_messages.voice_fallback_sent_at IS
   'VOICEREPLY.1 (mig 809): when a voice reply WhatsApp failed to deliver was resent as text (the once-only claim).';
 
