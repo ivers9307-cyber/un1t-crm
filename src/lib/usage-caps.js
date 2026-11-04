@@ -168,6 +168,14 @@ export async function getVoiceCapStatus({ organizationId }, { db } = {}) {
 
 /** Seconds transcribed this platform month for the org, or null when unreadable. */
 export async function voiceSecondsThisMonth(client, organizationId) {
+  return meterSumThisMonth(client, organizationId, VOICE_METER)
+}
+
+/**
+ * The sum of usage_events.quantity for one meter this platform month (D5:
+ * PLATFORM_TZ), paged past the 1,000-row cap. null when unreadable.
+ */
+export async function meterSumThisMonth(client, organizationId, meter) {
   const startMs = zonedWallClockToInstant(platformMonthStartStr(), '00:00', PLATFORM_TZ)
   if (startMs == null) return null
   const since = new Date(startMs).toISOString()
@@ -177,7 +185,7 @@ export async function voiceSecondsThisMonth(client, organizationId) {
       .from('usage_events')
       .select('quantity')
       .eq('organization_id', organizationId)
-      .eq('meter', VOICE_METER)
+      .eq('meter', meter)
       .gte('occurred_at', since)
       .order('occurred_at', { ascending: true })
       .range(from, from + PAGE - 1)
@@ -185,5 +193,36 @@ export async function voiceSecondsThisMonth(client, organizationId) {
     const rows = data || []
     for (const r of rows) total += Number(r.quantity) || 0
     if (rows.length < PAGE) return total
+  }
+}
+
+export const VOICE_REPLY_METER = 'elevenlabs_tts_replies'
+
+/**
+ * VOICEREPLY.1 — has the org sent its monthly voice replies? Counts meter
+ * 'elevenlabs_tts_replies' this platform month against
+ * org_settings.voice_reply_monthly_cap. Fails OPEN on any read error (the
+ * transcription cap's posture): a reply still goes, as text or voice.
+ *
+ * @returns {Promise<{ capped: boolean, cap: number|null, used: number|null }>}
+ */
+export async function getVoiceReplyCapStatus({ organizationId }, { db } = {}) {
+  const open = { capped: false, cap: null, used: null }
+  try {
+    if (!organizationId) return open
+    const client = db || createServerClient()
+    const { data: settings, error } = await client
+      .from('org_settings')
+      .select('voice_reply_monthly_cap')
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+    if (error) return open
+    const cap = settings?.voice_reply_monthly_cap ?? null
+    const used = await meterSumThisMonth(client, organizationId, VOICE_REPLY_METER)
+    if (cap == null) return { capped: false, cap: null, used }
+    if (used == null) return { capped: false, cap: Number(cap), used: null }
+    return { capped: used >= Number(cap), cap: Number(cap), used }
+  } catch {
+    return open
   }
 }

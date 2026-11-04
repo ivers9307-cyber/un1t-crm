@@ -86,3 +86,95 @@ export async function transcribeAudio({ bytes, mime, keyterms = [] } = {}, { fet
     clearTimeout(timer)
   }
 }
+
+// ── VOICEREPLY.1 — text to speech, for Mia's voice replies ──────────────────
+// Opus at 48 kHz by default: WhatsApp renders a voice note only for Ogg/Opus
+// (the caller checks the bytes really are Ogg: src/lib/wa-voice/reply-rules.js
+// isOggOpus). mp3 is for the settings card's in-browser sample.
+// scripts/elevenlabs-tts-probe.mjs is the live check of both facts the docs
+// leave open: the Opus container, and whether this model is accepted here.
+export const ELEVENLABS_TTS_BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech'
+export const ELEVENLABS_VOICES_URL = 'https://api.elevenlabs.io/v2/voices'
+export const ELEVENLABS_TTS_MODEL = 'eleven_v4_turbo'
+export const ELEVENLABS_TTS_TIMEOUT_MS = 15_000
+// US cents per 1,000 characters: v4 Turbo, $0.04 (Richard's price sheet,
+// 4 Nov 2026). An estimate for usage_events; ElevenLabs' invoice is the truth.
+export const ELEVENLABS_TTS_CENTS_PER_1K_CHARS = 4
+
+const MAX_VOICE_PAGES = 10
+
+function mimeForFormat(format) {
+  if (String(format).startsWith('opus')) return 'audio/ogg'
+  if (String(format).startsWith('mp3')) return 'audio/mpeg'
+  return 'application/octet-stream'
+}
+
+/**
+ * @param {{ text: string, voiceId: string, outputFormat?: string }} input
+ * @param {{ fetchImpl?: typeof fetch }} [deps]
+ * @returns {Promise<{ ok: true, bytes: Uint8Array, mime: string } | { ok: false, reason: 'not_configured'|'http_error'|'timeout'|'bad_response', status?: number }>}
+ */
+export async function synthesizeSpeech({ text, voiceId, outputFormat = 'opus_48000_64' } = {}, { fetchImpl = fetch } = {}) {
+  const key = process.env.ELEVENLABS_API_KEY
+  if (!key) return { ok: false, reason: 'not_configured' }
+  if (!String(text || '').trim() || !String(voiceId || '').trim()) return { ok: false, reason: 'bad_response' }
+  const url = `${ELEVENLABS_TTS_BASE_URL}/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(outputFormat)}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ELEVENLABS_TTS_TIMEOUT_MS)
+  try {
+    let res
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: mimeForFormat(outputFormat) },
+        body: JSON.stringify({ text: String(text), model_id: ELEVENLABS_TTS_MODEL }),
+        signal: controller.signal,
+      })
+    } catch (err) {
+      if (controller.signal.aborted || err?.name === 'AbortError') return { ok: false, reason: 'timeout' }
+      return { ok: false, reason: 'http_error' }
+    }
+    if (!res?.ok) return { ok: false, reason: 'http_error', status: res?.status }
+    let bytes
+    try {
+      bytes = new Uint8Array(await res.arrayBuffer())
+    } catch {
+      if (controller.signal.aborted) return { ok: false, reason: 'timeout' }
+      return { ok: false, reason: 'bad_response' }
+    }
+    if (!bytes.length) return { ok: false, reason: 'bad_response' }
+    return { ok: true, bytes, mime: mimeForFormat(outputFormat) }
+  } catch {
+    return { ok: false, reason: 'bad_response' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * The voices the account can use, for the settings picker. Never throws.
+ * @returns {Promise<{ ok: true, voices: Array<{ voice_id: string, name: string, category: string|null, labels: object }> } | { ok: false, reason: string, status?: number }>}
+ */
+export async function listVoices({ fetchImpl = fetch } = {}) {
+  const key = process.env.ELEVENLABS_API_KEY
+  if (!key) return { ok: false, reason: 'not_configured' }
+  const voices = []
+  let token = null
+  try {
+    for (let page = 0; page < MAX_VOICE_PAGES; page++) {
+      const url = `${ELEVENLABS_VOICES_URL}?page_size=100${token ? `&next_page_token=${encodeURIComponent(token)}` : ''}`
+      const res = await fetchImpl(url, { headers: { 'xi-api-key': key } })
+      if (!res?.ok) return { ok: false, reason: 'http_error', status: res?.status }
+      const body = await res.json()
+      for (const v of Array.isArray(body?.voices) ? body.voices : []) {
+        if (!v?.voice_id) continue
+        voices.push({ voice_id: v.voice_id, name: v.name || v.voice_id, category: v.category ?? null, labels: v.labels || {} })
+      }
+      if (!body?.has_more || !body?.next_page_token) break
+      token = body.next_page_token
+    }
+    return { ok: true, voices }
+  } catch {
+    return { ok: false, reason: 'bad_response' }
+  }
+}
