@@ -52,7 +52,7 @@ function PlatformMemberPrivacyPolicy() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Privacy policy</h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated 18 August 2026</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated 4 November 2026</p>
         </header>
 
         <section className="prose prose-gray max-w-none">
@@ -233,6 +233,12 @@ function PlatformMemberPrivacyPolicy() {
             is visible to staff who use our phone system. It is not used for
             marketing, and you can ask us to remove your details from it at any
             time using the contact details in section 16.
+          </p>
+          <p className="mt-3">
+            If you send a studio a voice note on WhatsApp, the audio may be sent
+            to ElevenLabs, our transcription provider, so that our team and our
+            AI assistant can read what you said. The written transcript is kept
+            with your WhatsApp messages. ElevenLabs is based in the United States.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">10. How long we keep it</h2>

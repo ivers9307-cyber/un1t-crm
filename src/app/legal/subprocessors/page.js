@@ -33,6 +33,7 @@ const SUBPROCESSORS = [
   ['Revolut Business', 'Payment processing (deposits)', 'EU', 'DPA'],
   ['Xero', 'Accounting (invoices and bills)', 'EU / global', 'DPA'],
   ['Anthropic', 'AI assistant and document extraction — content processed transiently, not used for model training', 'US', 'DPA + SCCs'],
+  ['ElevenLabs', 'Speech-to-text for WhatsApp voice notes sent to a studio (only where the organisation switches it on); the transcript is stored in the CRM', 'US', 'DPA + SCCs'],
   ['Upstash', 'Message-queue infrastructure (webhook and job payloads in transit)', 'EU / US', 'DPA + SCCs'],
   ['Apple / Expo', 'Push notification delivery to staff and member devices', 'US', 'DPA + SCCs'],
   ['Ubiquiti (UniFi)', 'Studio door access (door-unlock events)', 'EU / US', 'DPA'],
@@ -78,7 +79,7 @@ export default function SubprocessorsPage() {
       <div className="mx-auto max-w-3xl px-6 py-12">
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Subprocessors</h1>
-          <p className="mt-2 text-sm text-gray-500">Last updated 29 September 2026</p>
+          <p className="mt-2 text-sm text-gray-500">Last updated 4 November 2026</p>
         </header>
 
         <section className="prose prose-gray max-w-none">
