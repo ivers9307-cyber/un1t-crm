@@ -69,6 +69,11 @@ const uses = (src) => columnUses(src, SEQUENCE_TABLES, FK_ALIASES)
 const readable = (table, col) =>
   READ_ONLY_TABLES.includes(table) || (col !== '*' && EMAIL_SEQUENCES_SELECT.includes(col))
 
+// A whole-repo scan: the first test to parse every client file pays the cold
+// cost (7.2 s on a CI shard, 4 Nov 2026; ~0.1 s once warm), past vitest's 5 s
+// default. Same allowance as the sibling credential/ACL guards.
+const SCAN_TIMEOUT_MS = 30_000
+
 describe('client code and the sequence tables (PROFILESPREAD.1b)', () => {
   const files = clientFiles()
 
@@ -92,7 +97,7 @@ describe('client code and the sequence tables (PROFILESPREAD.1b)', () => {
       }
     }
     expect(offenders, 'read it through a service-role /api route, or grant the column in a migration').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('every select on a sequence table is readable (fail closed)', () => {
     // A select the scanner cannot evaluate could name any column (or embed
@@ -107,7 +112,7 @@ describe('client code and the sequence tables (PROFILESPREAD.1b)', () => {
       }
     }
     expect(unread, 'name the columns in a literal or a same-file const, or review it and list it').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('writes none of the three tables (mig 654 grants no client write)', () => {
     const writes = []
@@ -115,7 +120,7 @@ describe('client code and the sequence tables (PROFILESPREAD.1b)', () => {
       for (const [t, op] of uses(readFileSync(f, 'utf8')).writes) writes.push(`${path.relative(ROOT, f)}: ${op} on ${t}`)
     }
     expect(writes, 'write through a service-role /api/sequences route').toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('the scanner sees the forms it must', () => {
     const r = (src) => uses(src).reads.map(([t, c]) => `${t}.${c}`)
