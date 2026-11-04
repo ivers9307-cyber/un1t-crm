@@ -19,7 +19,7 @@
 // silence Mia or block a campaign.
 
 import { createServerClient } from '@/lib/supabase'
-import { todayStrIn, PLATFORM_TZ } from '@/lib/location-time'
+import { todayStrIn, zonedWallClockToInstant, PLATFORM_TZ } from '@/lib/location-time'
 
 /**
  * First day of the billing month containing `todayStr` (default: today on
@@ -130,5 +130,60 @@ export async function getEmailCapStatus({ organizationId, locationId }, { db } =
     }
   } catch {
     return { capped: false }
+  }
+}
+
+const VOICE_METER = 'elevenlabs_stt_seconds'
+const PAGE = 1000
+
+/**
+ * VOICENOTE.1 — has the org used its monthly voice-transcription minutes?
+ * Sums usage_events.quantity (seconds) for meter 'elevenlabs_stt_seconds'
+ * this platform month (D5: PLATFORM_TZ, as getAiCapStatus). Fails OPEN on
+ * any read error, the same posture as the AI cap: metering trouble must not
+ * silence the feature (the vendor's own billing is the backstop).
+ *
+ * @returns {Promise<{ capped: boolean, capMinutes: number|null, usedSeconds: number|null }>}
+ */
+export async function getVoiceCapStatus({ organizationId }, { db } = {}) {
+  const open = { capped: false, capMinutes: null, usedSeconds: null }
+  try {
+    if (!organizationId) return open
+    const client = db || createServerClient()
+    const { data: settings, error: settingsError } = await client
+      .from('org_settings')
+      .select('voice_transcription_monthly_cap_minutes')
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+    if (settingsError) return open
+    const capMinutes = settings?.voice_transcription_monthly_cap_minutes ?? null
+    const usedSeconds = await voiceSecondsThisMonth(client, organizationId)
+    if (capMinutes == null) return { capped: false, capMinutes: null, usedSeconds }
+    if (usedSeconds == null) return { capped: false, capMinutes: Number(capMinutes), usedSeconds: null }
+    return { capped: usedSeconds >= Number(capMinutes) * 60, capMinutes: Number(capMinutes), usedSeconds }
+  } catch {
+    return open
+  }
+}
+
+/** Seconds transcribed this platform month for the org, or null when unreadable. */
+export async function voiceSecondsThisMonth(client, organizationId) {
+  const startMs = zonedWallClockToInstant(platformMonthStartStr(), '00:00', PLATFORM_TZ)
+  if (startMs == null) return null
+  const since = new Date(startMs).toISOString()
+  let total = 0
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from('usage_events')
+      .select('quantity')
+      .eq('organization_id', organizationId)
+      .eq('meter', VOICE_METER)
+      .gte('occurred_at', since)
+      .order('occurred_at', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return null
+    const rows = data || []
+    for (const r of rows) total += Number(r.quantity) || 0
+    if (rows.length < PAGE) return total
   }
 }
