@@ -6211,6 +6211,19 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/settings/voice-replies/check',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Check the ElevenLabs voice setup on the live server',
+  description: 'Owners and managers at the active studio, and masters. Reports whether ELEVENLABS_API_KEY is set (never its value), whether the voice list is readable, and for eleven_v4_turbo and eleven_flash_v2_5 whether text-to-speech is accepted and returns Ogg audio (a WhatsApp voice note). Metered as characters only.',
+  responses: {
+    200: { description: '{ key, voices, models[], inUse, ready }' },
+    403: { description: 'Not an owner or manager at the studio', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Org usage summary + hard caps (SAAS4-M3)
 registry.registerPath({
   method: 'get',
