@@ -32,7 +32,7 @@ export const DEFAULT_BUTTONS_LINE = 'Tap an option:'
 export async function maybeSendVoiceReply(db, { conversationId, locationId, recipient, spoken, kind, replyOpts = {} } = {}, deps = {}) {
   const synthesize = deps.synthesize || synthesizeSpeech
   const capStatus = deps.capStatus || ((q) => getVoiceReplyCapStatus(q, { db }))
-  const sendMedia = deps.sendMedia || sendMediaMessage
+  const sendMedia = deps.sendMedia || ((...a) => sendMediaMessage(...a))
   const ids = { conversationId, locationId, kind }
   const refuse = (reason, extra = {}) => {
     logWarn('wa-voice-reply', 'reply sent as text, not voice', { ...ids, reason, ...extra })

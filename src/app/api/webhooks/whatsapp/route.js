@@ -14,6 +14,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply, markVoiceNoteForStaff } from '@/lib/agent/auto-reply'
 import { transcribeInboundVoiceNote, voiceNoteLostItsTurn } from '@/lib/wa-voice/transcribe'
+import { resendVoiceReplyAsText } from '@/lib/wa-voice/reply-fallback'
 import { resolveNewSenderStudio } from '@/lib/wa-studio-pick/resolve'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent, studiosForNumbers } from '@/lib/whatsapp-number-events'
@@ -950,10 +951,21 @@ async function handleStatusUpdate(db, status) {
   // in the live data but nothing enforces it — so a >1-row result stays an
   // anomaly worth logging rather than a silent null.
   const { data: msg, error: msgErr } = await db.from('whatsapp_messages')
-    .select('broadcast_id, contact_id')
+    .select('id, broadcast_id, contact_id, body, voice_kind, voice_fallback_sent_at, conversation_id, location_id')
     .eq('wa_message_id', messageId)
     .maybeSingle()
   if (msgErr) console.error('[wa-webhook] status message lookup failed:', msgErr.message)
+
+  // VOICEREPLY.1 — a voice reply Meta accepted and then failed to deliver
+  // (an unfetchable or undecodable file) is resent once as text, so the
+  // customer still gets the answer. Never throws out of the webhook.
+  if (statusValue === 'failed' && msg?.voice_kind) {
+    try {
+      await resendVoiceReplyAsText(db, msg)
+    } catch (err) {
+      logError('wa-webhook', 'voice reply fallback threw', { messageId: msg.id, err: err?.message || String(err) })
+    }
+  }
 
   if (msg?.broadcast_id) {
     // Prior recipient status — so counter adjustments fire once per real
