@@ -13,9 +13,12 @@
 export const ELEVENLABS_STT_URL = 'https://api.elevenlabs.io/v1/speech-to-text'
 export const ELEVENLABS_STT_MODEL = 'scribe_v2'
 export const ELEVENLABS_STT_TIMEOUT_MS = 20_000
-// ESTIMATE — confirm against the ElevenLabs plan. Cents per minute of audio,
-// for operator visibility on usage_events only; ElevenLabs' invoice is the truth.
-export const ELEVENLABS_STT_CENTS_PER_MINUTE = 0.4
+// US cents per minute of audio, for operator visibility on usage_events only;
+// ElevenLabs' invoice is the truth. The Starter plan (Richard, 4 Nov 2026):
+// Scribe v2 $0.22 an hour plus keyterm prompting $0.05 an hour, and every call
+// sends keyterms, so $0.27 an hour. The plan includes 27 hours a month, so the
+// metered figure overstates the bill until those are used up.
+export const ELEVENLABS_STT_CENTS_PER_MINUTE = (22 + 5) / 60
 
 function extensionFor(mime) {
   const m = String(mime || '').toLowerCase()
