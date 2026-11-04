@@ -1,0 +1,65 @@
+# CI-SPEED.1 — Node + node_modules for every Web CI job, with node_modules
+# itself cached.
+#
+# Before this, each of the workflow's six jobs ran `npm ci` from the npm
+# download cache: 35-55 s per job, on the critical path of every run. The
+# installed tree (~900 MB, ~250 MB compressed) restores in a fraction of that.
+#
+# The key is the lockfile + the Node major + the runner OS, so a cached tree
+# is only ever reused for exactly the dependency set it was installed from
+# (Node minors inside a major are ABI-compatible, so native modules are safe).
+# It changes only when package-lock.json does, so it is ONE cache entry per
+# lockfile, not one per run: it does not add to the churn that evicts the
+# other caches (the repo's 10 GB cache budget is shared).
+#
+# On a hit `npm ci` is skipped, so the `postinstall` hook (it copies the
+# ffmpeg core files from node_modules into public/ffmpeg/, which is gitignored
+# and so not in the cache) is run by hand. A new lifecycle hook in
+# package.json that writes outside node_modules must be run here too.
+#
+# Saving: only the job that passes `save: 'true'`, and only on a push to main.
+# A PR-ref cache is visible to that PR alone, so a PR saving would spend the
+# shared budget for nothing; main's entry is visible to every PR. One job
+# saves so the other five do not race to reserve the same key.
+name: Install dependencies
+description: Set up Node 24 and restore or install node_modules
+inputs:
+  save:
+    description: "'true' on the one job that saves the node_modules cache from main"
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+        cache: npm
+
+    - name: Restore node_modules
+      id: nm
+      uses: actions/cache/restore@v6
+      with:
+        path: node_modules
+        key: node-modules-${{ runner.os }}-node24-${{ hashFiles('package-lock.json') }}
+
+    - name: npm ci
+      if: steps.nm.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci
+
+    - name: postinstall (cache hit)
+      if: steps.nm.outputs.cache-hit == 'true'
+      shell: bash
+      run: npm run postinstall
+
+    - name: Save node_modules
+      if: >-
+        steps.nm.outputs.cache-hit != 'true' &&
+        inputs.save == 'true' &&
+        github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v6
+      with:
+        path: node_modules
+        key: ${{ steps.nm.outputs.cache-primary-key }}
