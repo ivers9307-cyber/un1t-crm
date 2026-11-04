@@ -36,6 +36,11 @@ describe('synthesizeSpeech', () => {
     await synthesizeSpeech({ text: 'x', voiceId: 'v-1' }, { fetchImpl })
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.elevenlabs.io/v1/text-to-speech/v-1?output_format=opus_48000_64&enable_logging=false')
   })
+  test('a model can be named for the setup check', async () => {
+    const fetchImpl = vi.fn(async () => audioRes(200))
+    await synthesizeSpeech({ text: 'x', voiceId: 'v-1', modelId: 'eleven_flash_v2_5' }, { fetchImpl })
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).model_id).toBe('eleven_flash_v2_5')
+  })
   test('mp3 for the browser sample', async () => {
     const fetchImpl = vi.fn(async () => audioRes(200))
     const r = await synthesizeSpeech({ text: 'x', voiceId: 'v/1', outputFormat: 'mp3_44100_64' }, { fetchImpl })
