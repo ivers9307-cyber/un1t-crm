@@ -79,6 +79,9 @@ import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 import { logWarn, logError } from '@/lib/log'
+import { isVoiceTrigger, splitForVoice, spokenTextFor, voiceKindFor, toolResultSucceeded } from '@/lib/wa-voice/reply-rules'
+import { maybeSendVoiceReply } from '@/lib/wa-voice/reply'
+import { studiosOfContact } from '@/lib/contact-studios'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
 // agentic work, and Mia was unusually cheap to migrate: she never sent
@@ -543,6 +546,11 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   const voiceOk = ctx.messageType === 'audio' && voiceTranscript?.status === 'ok' && String(voiceTranscript.text || '').trim()
   const messageType = voiceOk ? 'text' : ctx.messageType
   const body = voiceOk ? String(voiceTranscript.text).trim() : ctx.body
+  // VOICEREPLY.1 — a holding message sent before the history read answers the
+  // live message, so the trigger there is the live message's type.
+  const preHistoryVoice = ctx.messageType === 'audio' && typeof adapter.sendVoice === 'function'
+    ? { kind: 'handoff', trace }
+    : null
 
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { handled: false, reason: 'no_api_key' }
@@ -652,6 +660,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
         await handoff(db, adapter, {
           conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
           reason: VOICE_HANDOFF_TEXT[voiceReason],
+          voice: preHistoryVoice,
         })
       } finally {
         await releaseAgentTurn(db, adapter, conversationId, voiceClaim)
@@ -659,7 +668,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       return { handled: true, action: 'handoff', reason: voiceReason }
     }
     if (decision.onDuty && decision.reason === 'unsupported_type') {
-      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName, lastReplyAt: conv?.agent_last_reply_at })
+      return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName, lastReplyAt: conv?.agent_last_reply_at, voice: preHistoryVoice })
     }
     return { handled: false, reason: decision.reason }
   }
@@ -729,6 +738,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       .order('created_at', { ascending: false })
       .limit(MAX_HISTORY * 2)
     const history = (historyDesc || []).slice().reverse()
+    // VOICEREPLY.1 — the newest inbound this turn answers is a voice note, so
+    // the reply (or the holding message) goes out by voice where the channel
+    // can (WhatsApp). A typed message after it makes the reply text.
+    const voiceTrigger = typeof adapter.sendVoice === 'function' && isVoiceTrigger({ historyRows: history })
     // Newest inbound this turn will have seen — the wrapper's missed-inbound
     // sweep compares against it after the reply goes out.
     const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
@@ -913,6 +926,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // MIAHATCH.2 — these are TODAY's options; a turn whose plan is not today's
     // block adds the plan's (settleTurn below).
     const systemOpts = {
+      voiceReply: voiceTrigger,
       businessName: branding.companyName,
       locationName: loc?.name || null,
       agentName: settings?.agent_name || DEFAULTS.agent_name,
@@ -1283,6 +1297,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
               if (intentId) trace.tools[trace.tools.length - 1].intentId = intentId
               result = forModel
             }
+            // VOICEREPLY.1 — a booking, move or cancel that went through picks
+            // the booking voice for a voice reply.
+            if (trace.tools.length) trace.tools[trace.tools.length - 1].succeeded = toolResultSucceeded(block.name, result)
             if (block.name === 'book_class' && result?.no_credits === true) {
               noCreditsHandoff = true
             }
@@ -1418,7 +1435,7 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     }
 
     const parsed = parseAgentResponse(modelText)
-    const common = { conversationId, locationId, recipient, contactId, connection }
+    const common = { conversationId, locationId, recipient, contactId, connection, voice: voiceTrigger ? { kind: 'handoff', trace } : null }
 
     // AGENT-REARM.3 — a human may have TAKEN OVER while the model was
     // generating (Aisling Fagan 2026-07-13: Garrett's inbox takeover and Mia's
@@ -1504,7 +1521,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
       return { handled: true, action: 'handoff', reason: parsed.reason }
     }
 
-    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings })
+    const replyVoice = voiceTrigger
+      ? { kind: await replyVoiceKind(db, { contactId: conv?.contact_id || contactId, locationId, trace }), trace }
+      : null
+    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings, voice: replyVoice })
     if (!sent) {
       // The reply existed and never reached the customer (the 2026-06-12
       // dead-token class). Staff pages ride a different provider than the
@@ -1552,12 +1572,21 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
 // the customer got NOTHING and the caller must report it (a swallowed
 // send failure here returned { handled: true } during the 2026-06-12
 // dead-token incident and hid the outage from every surface).
-export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text, options, settings }) {
+export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text, options, settings, voice = null }) {
   // AGENT-UX.1 — tap choices. Channels with adapter.sendOptions render
   // real buttons; the rest get the choices appended as plain text so the
   // customer always sees them. recordedText is what actually reached the
   // customer (the agent re-reads it as its own history next turn).
   const opts = Array.isArray(options) && options.length >= 2 ? options : null
+  // VOICEREPLY.1 — a reply to a voice note goes by voice where it can; any
+  // refusal falls through to exactly today's text send below.
+  if (voice && typeof adapter.sendVoice === 'function') {
+    const voiced = await sendVoiceReply(db, adapter, {
+      conversationId, locationId, recipient, contactId, connection, settings, text, options: opts,
+      kind: voice.kind, trace: voice.trace, stamp: { agent_last_reply_at: true },
+    })
+    if (voiced) return true
+  }
   let messageId = null
   let recordedText = text
   try {
@@ -1605,6 +1634,99 @@ async function recordAgentMessage(db, adapter, row) {
 }
 
 // Escalate: holding message, stop the agent on this thread, notify staff.
+// VOICEREPLY.1 — which voice a reply to a voice note uses: a booking change
+// this turn, else an active member at the studio, else a lead. A failed
+// membership read is "lead": it only picks a voice, never blocks the reply.
+async function replyVoiceKind(db, { contactId, locationId, trace }) {
+  const bookingToolSucceeded = (trace?.tools || []).some((t) => t?.succeeded === true)
+  let isMember = false
+  if (!bookingToolSucceeded && contactId) {
+    try {
+      const res = await studiosOfContact(db, contactId)
+      isMember = !!res?.ok && (res.rows || []).some((r) => r.location_id === locationId
+        && ((r.kind === 'member' && r.status === 'active') || r.membership_status === 'active'))
+    } catch { /* lead */ }
+  }
+  return voiceKindFor({ isHandoff: false, bookingToolSucceeded, isMember })
+}
+
+// VOICEREPLY.1 — send one reply (or holding message) as a voice note, record
+// it, and send what cannot be spoken (a link, buttons, a mid-text link) as
+// text after it. Returns false when the voice was refused, so the caller sends
+// today's text. Once the voice note is out it counts as sent: a failed
+// follow-up is logged, never resent as a whole text reply (the customer has
+// already heard it). Never throws.
+async function sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text, options = null, kind, trace, holding = false, stamp = {} }) {
+  const split = holding ? { spoken: spokenTextFor(text), followUp: null } : splitForVoice({ text, options })
+  let r
+  try {
+    r = await adapter.sendVoice(db, { conversationId, locationId, recipient, spoken: split.spoken, kind })
+  } catch (err) {
+    r = { sent: false, reason: 'send_failed' }
+    logError('agent', 'voice reply threw', { conversationId, error: err?.message || String(err) })
+  }
+  if (trace) trace.voice = r?.sent ? { sent: true, kind: r.voiceKind } : { sent: false, reason: r?.reason || 'send_failed' }
+  if (!r?.sent) return false
+
+  // The AI notice goes with the thread's FIRST voice reply only (decision 6;
+  // empty by default). Read before this reply's own row is written.
+  let sendNotice = false
+  if (r.aiNotice) {
+    try {
+      const { count, error } = await db.from('whatsapp_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('conversation_id', conversationId)
+        .not('voice_kind', 'is', null)
+      sendNotice = !error && (count || 0) === 0
+    } catch { /* no notice this time */ }
+  }
+
+  const now = new Date().toISOString()
+  try {
+    await recordAgentMessage(db, adapter, adapter.outboundRow({
+      conversationId, locationId, contactId, messageId: r.messageId || null, text, now,
+      messageType: 'audio', mediaStoragePath: r.storagePath, mediaMimeType: 'audio/ogg', voiceKind: r.voiceKind,
+    }))
+  } catch (err) {
+    logError('agent', 'voice reply record failed', { conversationId, error: err?.message || String(err) })
+  }
+
+  const sendFollowText = async (followText, label) => {
+    try {
+      const fr = await adapter.send(recipient, followText, { locationId, connection, settings, conversationId })
+      await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: followText, now: new Date().toISOString() }))
+    } catch (err) {
+      logError('agent', `voice reply ${label} failed`, { conversationId, error: err?.message || String(err) })
+    }
+  }
+  const f = split.followUp
+  if (f?.kind === 'options' && adapter.sendOptions) {
+    try {
+      const fr = await adapter.sendOptions(recipient, r.buttonsLine, f.options, { locationId, connection, conversationId })
+      await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: `${r.buttonsLine}\n[Options: ${f.options.join(' | ')}]`, now: new Date().toISOString() }))
+    } catch (err) {
+      logError('agent', 'voice reply follow-up failed', { conversationId, error: err?.message || String(err) })
+    }
+  } else if (f?.kind === 'options') {
+    await sendFollowText(`${r.buttonsLine}\n\n${f.options.map((o) => `• ${o}`).join('\n')}`, 'follow-up')
+  } else if (f?.kind === 'cta_url') {
+    await sendFollowText(`${f.body} ${f.url}`, 'follow-up')
+  } else if (f?.kind === 'text') {
+    await sendFollowText(f.text, 'follow-up')
+  }
+  if (sendNotice) await sendFollowText(r.aiNotice, 'notice')
+
+  try {
+    await db.from(adapter.conversationsTable).update({
+      last_message_at: now,
+      last_message_direction: 'outbound',
+      last_message_preview: String(text).substring(0, 100),
+      ...(stamp.agent_last_reply_at ? { agent_last_reply_at: now } : {}),
+    }).eq('id', conversationId)
+  } catch { /* the reply is out; the stamp only orders the inbox */ }
+  return true
+}
+
 // VOICENOTE.1 — the columns each history read selects. `source` lets the
 // builder find the previous pass's own reply on a rerun (both message tables
 // carry it). The transcript columns exist on whatsapp_messages only, so they
@@ -1665,7 +1787,7 @@ export async function markVoiceNoteForStaff(db, { conversationId, locationId }) 
   }
 }
 
-async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride }) {
+async function handoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, reason, settings, brand, holdingOverride, voice = null }) {
   // holdingOverride: a reason-specific script (e.g. the no_credits
   // escalation wording) replaces the generic holding message for this
   // handoff only.
@@ -1682,7 +1804,12 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
     handoff_escalated_at: null,
   }).eq('id', conversationId)
 
-  try {
+  // VOICEREPLY.1 — after a voice note the holding message is spoken in the
+  // hand-off voice; a refusal sends it as text exactly as before.
+  const voicedHolding = voice && typeof adapter.sendVoice === 'function'
+    ? await sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text: holding, kind: 'handoff', trace: voice.trace, holding: true, stamp: {} })
+    : false
+  if (!voicedHolding) try {
     const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
@@ -1812,7 +1939,7 @@ async function claimSoftHandoff(db, adapter, conversationId) {
 // API recovering) re-engages it. Debounced via agent_last_reply_at so a
 // burst of photos / webhook retries during an outage sends ONE ack, not a
 // string of them. `notify` overrides the push copy per cause.
-async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand, lastReplyAt, reason = 'unsupported_type', notify = null }) {
+async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, brand, lastReplyAt, reason = 'unsupported_type', notify = null, voice = null }) {
   if (lastReplyAt && Date.now() - new Date(lastReplyAt).getTime() < SOFT_NOTIFY_GAP_MS) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
@@ -1826,7 +1953,10 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   }
   const holding = (settings?.holding_message || '').trim() || defaultHoldingMessage(brand)
   const now = new Date().toISOString()
-  try {
+  const voicedHolding = voice && typeof adapter.sendVoice === 'function'
+    ? await sendVoiceReply(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, text: holding, kind: 'handoff', trace: voice.trace, holding: true, stamp: { agent_last_reply_at: true } })
+    : false
+  if (!voicedHolding) try {
     const r = await adapter.send(recipient, holding, { locationId, connection, settings, conversationId })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
@@ -1922,17 +2052,24 @@ export const whatsappAdapter = {
     return sendTextMessage(recipient, text, waReplyOpts(locationId, conversationId))
   },
   sendOptions: (recipient, text, options, { locationId, conversationId }) => sendInteractiveOptions(recipient, text, options, waReplyOpts(locationId, conversationId)),
-  outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
+  // VOICEREPLY.1 — a reply as a voice note (src/lib/wa-voice/reply.js). WhatsApp
+  // only: Instagram has no sendVoice, so its replies are always text.
+  sendVoice: (db, { conversationId, locationId, recipient, spoken, kind }) => maybeSendVoiceReply(db, {
+    conversationId, locationId, recipient, spoken, kind, replyOpts: waReplyOpts(locationId, conversationId),
+  }),
+  outboundRow: ({ conversationId, locationId, contactId, messageId, text, now, messageType = 'text', mediaStoragePath = null, mediaMimeType = null, voiceKind = null }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,
     location_id: locationId,
     wa_message_id: messageId,
     direction: 'outbound',
-    message_type: 'text',
+    message_type: messageType,
     body: text,
     status: 'sent',
     source: AGENT_MESSAGE_SOURCE,
     sent_at: now,
+    ...(mediaStoragePath ? { media_storage_path: mediaStoragePath, media_mime_type: mediaMimeType } : {}),
+    ...(voiceKind ? { voice_kind: voiceKind } : {}),
   }),
 }
 

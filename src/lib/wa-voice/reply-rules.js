@@ -7,8 +7,9 @@ import { splitTrailingUrl } from '@/lib/whatsapp'
 // About 45 seconds of speech (Richard, 4 Nov 2026). Longer goes as text.
 export const MAX_SPOKEN_CHARS = 600
 
-// Added to the volatile (uncached) prompt suffix on a voice-note turn only.
-export const VOICE_REPLY_PROMPT_LINE = '## This reply will be spoken\nThe customer sent a voice note, so your reply will be sent as a voice note. Write it as you would say it: short and conversational, no emoji, no lists or bullet points, no bold, and spell times the way you would say them. A booking link or buttons are still fine: they are sent as text after the voice note.'
+// The prompt line lives in prompt.js (an import-free module); re-exported here
+// so the voice-reply rules read as one set.
+export { VOICE_REPLY_PROMPT_LINE } from '@/lib/agent/prompt'
 
 const URL_RE = /https?:\/\/\S+/g
 const EMOJI_RE = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}️‍]/gu

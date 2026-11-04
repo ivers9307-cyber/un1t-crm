@@ -61,6 +61,9 @@ function makeAdapter() {
     trustsSenderIdentity: false,
     isHumanOutbound: undefined,
     onEngage: undefined,
+    // VOICEREPLY.1 voice replies are tested in auto-reply-voice-reply.test.js;
+    // these tests are about transcription, so replies stay text here.
+    sendVoice: undefined,
     send: vi.fn().mockResolvedValue({ messageId: 'wamid.x' }),
   }
 }
