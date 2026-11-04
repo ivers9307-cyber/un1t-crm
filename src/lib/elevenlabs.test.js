@@ -41,6 +41,12 @@ describe('transcribeAudio', () => {
     expect(fd.get('file')).toBeTruthy()
   })
 
+  test('a language code, when given, is sent (VOICELANG.1)', async () => {
+    const { fetchImpl, calls } = stubFetch(jsonResponse(200, okBody))
+    await transcribeAudio({ bytes, mime: 'audio/ogg', languageCode: 'eng' }, { fetchImpl })
+    expect(calls[0].init.body.get('language_code')).toBe('eng')
+  })
+
   test('zero retention only when switched on', async () => {
     vi.stubEnv('ELEVENLABS_ZERO_RETENTION', 'true')
     const { fetchImpl, calls } = stubFetch(jsonResponse(200, okBody))

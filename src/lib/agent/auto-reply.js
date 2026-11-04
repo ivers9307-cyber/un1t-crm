@@ -79,8 +79,8 @@ import { recordErrorEvent } from '@/lib/error-events'
 import { getAiCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 import { logWarn, logError } from '@/lib/log'
-import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded, memberVoiceLocationIds } from '@/lib/wa-voice/reply-rules'
-import { maybeSendVoiceReply, voiceReplyPossible } from '@/lib/wa-voice/reply'
+import { isVoiceTrigger, splitForVoice, voiceKindFor, toolResultSucceeded, memberVoiceLocationIds, buttonsBodyFor } from '@/lib/wa-voice/reply-rules'
+import { maybeSendVoiceReply, voiceReplyPossible, waitForVoiceNoteDelivery } from '@/lib/wa-voice/reply'
 import { studiosOfContact } from '@/lib/contact-studios'
 
 // MIA-SONNET5 — Claude Sonnet 5. Reaches previous Opus-tier quality on
@@ -1734,16 +1734,24 @@ async function sendVoiceReply(db, adapter, { conversationId, locationId, recipie
     }
   }
   const f = split.followUp
+  // VOICEORDER.1 — the follow-up (buttons, link, notice) goes only once the
+  // voice note has landed, or the bounded wait runs out; never before it.
+  if ((f || sendNotice) && typeof adapter.awaitVoiceDelivered === 'function') {
+    try {
+      await adapter.awaitVoiceDelivered(db, { messageId: r.messageId || null })
+    } catch { /* the follow-up still goes */ }
+  }
   if (f?.kind === 'options' && adapter.sendOptions) {
     try {
-      const optionsBody = f.text || r.buttonsLine
+      // VOICEQUESTION.1 — the buttons carry the reply's question, not just the buttons line.
+      const optionsBody = f.text || buttonsBodyFor(text) || r.buttonsLine
       const fr = await adapter.sendOptions(recipient, optionsBody, f.options, { locationId, connection, conversationId })
       await recordAgentMessage(db, adapter, adapter.outboundRow({ conversationId, locationId, contactId, messageId: fr?.messageId || null, text: `${optionsBody}\n[Options: ${f.options.join(' | ')}]`, now: new Date().toISOString(), voiceKind: r.voiceKind }))
     } catch (err) {
       logError('agent', 'voice reply follow-up failed', { conversationId, error: err?.message || String(err) })
     }
   } else if (f?.kind === 'options') {
-    await sendFollowText(`${f.text || r.buttonsLine}\n\n${f.options.map((o) => `• ${o}`).join('\n')}`, 'follow-up')
+    await sendFollowText(`${f.text || buttonsBodyFor(text) || r.buttonsLine}\n\n${f.options.map((o) => `• ${o}`).join('\n')}`, 'follow-up')
   } else if (f?.kind === 'cta_url') {
     await sendFollowText(`${f.body} ${f.url}`, 'follow-up')
   } else if (f?.kind === 'text') {
@@ -2093,6 +2101,7 @@ export const whatsappAdapter = {
     conversationId, locationId, recipient, spoken, kind, voiceLocationId, replyOpts: waReplyOpts(locationId, conversationId),
   }),
   voiceReplyPossible: (db, args) => voiceReplyPossible(db, args),
+  awaitVoiceDelivered: (db, args) => waitForVoiceNoteDelivery(db, args),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now, messageType = 'text', mediaStoragePath = null, mediaMimeType = null, voiceKind = null }) => ({
     conversation_id: conversationId,
     contact_id: contactId || null,

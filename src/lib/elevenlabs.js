@@ -31,12 +31,14 @@ function extensionFor(mime) {
 }
 
 /**
- * @param {{ bytes: Uint8Array, mime?: string, keyterms?: string[] }} input
+ * @param {{ bytes: Uint8Array, mime?: string, keyterms?: string[], languageCode?: string|null }} input
+ *   languageCode (VOICELANG.1): when set, Scribe transcribes in that language
+ *   instead of detecting one.
  * @param {{ fetchImpl?: typeof fetch }} [deps]
  * @returns {Promise<{ ok: true, text: string, languageCode: string|null, languageProbability: number|null, durationSecs: number|null, words: object[] }
  *                 | { ok: false, reason: 'not_configured'|'http_error'|'timeout'|'bad_response', status?: number }>}
  */
-export async function transcribeAudio({ bytes, mime, keyterms = [] } = {}, { fetchImpl = fetch } = {}) {
+export async function transcribeAudio({ bytes, mime, keyterms = [], languageCode = null } = {}, { fetchImpl = fetch } = {}) {
   const key = process.env.ELEVENLABS_API_KEY
   if (!key) return { ok: false, reason: 'not_configured' }
 
@@ -51,6 +53,7 @@ export async function transcribeAudio({ bytes, mime, keyterms = [] } = {}, { fet
     form.append('model_id', ELEVENLABS_STT_MODEL)
     form.append('diarize', 'false')
     form.append('tag_audio_events', 'false')
+    if (languageCode) form.append('language_code', String(languageCode))
     for (const term of Array.isArray(keyterms) ? keyterms : []) form.append('keyterms', term)
     const type = mime || 'application/octet-stream'
     form.append('file', new Blob([bytes], { type }), `voice-note.${extensionFor(type)}`)

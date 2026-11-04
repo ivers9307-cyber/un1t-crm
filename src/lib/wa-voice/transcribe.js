@@ -15,12 +15,35 @@ import { transcribeAudio, ELEVENLABS_STT_CENTS_PER_MINUTE, ELEVENLABS_STT_MODEL 
 import { recordMeterUsage } from '@/lib/usage'
 import { getVoiceCapStatus } from '@/lib/usage-caps'
 import { exceedsVoiceLimit, VOICE_LIMIT_SECS } from './audio.js'
-import { judgeTranscript } from './judge.js'
+import { judgeTranscript, meanWordLogprob } from './judge.js'
 
 export const VOICE_MEDIA_BUCKET = 'whatsapp-media'
 export const VOICE_METER = 'elevenlabs_stt_seconds'
 export const VOICE_USAGE_SOURCE = 'wa_voice_note'
 export const FIXED_KEYTERMS = Object.freeze(['UN1T', 'HYROX', 'Glofox', 'class pack', 'trial'])
+
+// VOICELANG.1 — Scribe detects the language, and on a two-second clip it can
+// guess wrong with confidence: Richard's English "and can I book a class
+// tomorrow" came back as Danish (4 Nov 2026), passed the judge, and Mia
+// answered in Norwegian. Every studio today is in Dublin, so a note detected
+// as anything but English is read once more as English, and the English
+// reading wins when it is clear and at least as confident. A real Polish or
+// Spanish note forced into English scores badly, so it keeps its own reading.
+export const EXPECTED_LANGUAGE = 'eng'
+const ENGLISH_CODES = new Set(['en', 'eng'])
+export const isExpectedLanguage = (code) => !code || ENGLISH_CODES.has(String(code).toLowerCase())
+
+// Should the forced-English reading replace the detected one? Pure.
+export function preferExpectedReading(detected, english) {
+  if (!english?.ok) return false
+  const englishStatus = judgeTranscript({ text: String(english.text || '').trim(), languageProbability: english.languageProbability, words: english.words })
+  if (englishStatus !== 'ok') return false
+  const detectedStatus = judgeTranscript({ text: String(detected.text || '').trim(), languageProbability: detected.languageProbability, words: detected.words })
+  if (detectedStatus !== 'ok') return true
+  const e = meanWordLogprob(english.words)
+  const d = meanWordLogprob(detected.words)
+  return e != null && (d == null || e >= d)
+}
 
 // An `ok` voice note whose own agent turn sent nothing for one of these reasons
 // lost the turn to a concurrent message (a quick text right after it), and the
@@ -138,11 +161,27 @@ export async function transcribeInboundVoiceNote(db, { messageId, locationId, st
 
     // 5. Scribe.
     const keyterms = await buildKeyterms(client, locationId, { studioName: location.name })
-    const result = await transcribe({ bytes, mime: mime || blob.type || 'audio/ogg', keyterms })
+    const audio = { bytes, mime: mime || blob.type || 'audio/ogg', keyterms }
+    let result = await transcribe(audio)
     if (!result?.ok) {
       if (result?.reason === 'not_configured') return await finish('not_configured')
       logWarn('wa-voice', 'transcription call failed', { ...ids, reason: result?.reason, httpStatus: result?.status ?? null })
       return await finish('failed')
+    }
+    // VOICELANG.1 — a non-English detection is read again as English. Each
+    // answered call is billed, so each is metered.
+    let answeredCalls = 1
+    if (!isExpectedLanguage(result.languageCode)) {
+      let english = null
+      try {
+        english = await transcribe({ ...audio, languageCode: EXPECTED_LANGUAGE })
+      } catch { /* keep the detected reading */ }
+      if (english?.ok) {
+        answeredCalls++
+        const swap = preferExpectedReading(result, english)
+        logWarn('wa-voice', 'voice note detected as another language; read again as English', { ...ids, detected: result.languageCode, kept: swap ? 'english' : 'detected' })
+        if (swap) result = english
+      }
     }
 
     // 6. Clarity.
@@ -152,7 +191,7 @@ export async function transcribeInboundVoiceNote(db, { messageId, locationId, st
     // 7. Metering, only when ElevenLabs answered.
     const seconds = result.durationSecs ?? oggSecs
     if (seconds == null) logWarn('wa-voice', 'no audio duration to meter', ids)
-    const quantity = seconds ?? 0
+    const quantity = (seconds ?? 0) * answeredCalls
     try {
       await recordUsage({
         organizationId,

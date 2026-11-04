@@ -3,7 +3,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 import { logWarn, logError } from '@/lib/log'
-import { transcribeInboundVoiceNote, buildKeyterms, VOICE_LOST_TURN_REASONS, voiceNoteLostItsTurn } from './transcribe.js'
+import { transcribeInboundVoiceNote, buildKeyterms, VOICE_LOST_TURN_REASONS, voiceNoteLostItsTurn, preferExpectedReading, isExpectedLanguage } from './transcribe.js'
 import { ELEVENLABS_STT_CENTS_PER_MINUTE } from '@/lib/elevenlabs'
 import { makeOgg } from './test-helpers.js'
 
@@ -196,6 +196,61 @@ describe('transcribeInboundVoiceNote', () => {
   test('never throws, even when everything throws', async () => {
     const db = { from: () => { throw new Error('boom') }, storage: { from: () => { throw new Error('boom') } } }
     await expect(transcribeInboundVoiceNote(db, args, deps())).resolves.toMatchObject({ status: 'failed' })
+  })
+})
+
+// VOICELANG.1 — a two-second English note detected as Danish (4 Nov 2026).
+describe('a non-English detection is read again as English', () => {
+  const reading = (text, languageCode, lp, n = 6, prob = 0.8) => ({ ok: true, text, languageCode, languageProbability: prob, durationSecs: 2, words: Array(n).fill(w(lp)) })
+  const danish = reading('Og klassisk kan jeg booke en tid i morgen', 'dan', -0.3, 8, 0.7)
+  const english = reading('And can I book a class tomorrow', 'eng', -0.1, 7, 1)
+
+  test('English and Danish codes', () => {
+    expect(isExpectedLanguage('eng')).toBe(true)
+    expect(isExpectedLanguage('en')).toBe(true)
+    expect(isExpectedLanguage(null)).toBe(true)
+    expect(isExpectedLanguage('dan')).toBe(false)
+  })
+
+  test('the clearer English reading replaces the guess, both calls metered', async () => {
+    const db = makeDb()
+    const transcribe = vi.fn(async ({ languageCode }) => (languageCode === 'eng' ? english : danish))
+    const d = deps({ transcribe })
+    const r = await transcribeInboundVoiceNote(db, args, d)
+    expect(transcribe).toHaveBeenCalledTimes(2)
+    expect(transcribe.mock.calls[0][0].languageCode).toBeUndefined()
+    expect(transcribe.mock.calls[1][0]).toMatchObject({ languageCode: 'eng', keyterms: transcribe.mock.calls[0][0].keyterms })
+    expect(r).toEqual({ status: 'ok', transcript: 'And can I book a class tomorrow', language: 'eng' })
+    expect(d.recordUsage.mock.calls[0][0].quantity).toBe(4)
+  })
+
+  test('a real foreign note keeps its own reading when English scores worse', async () => {
+    const polish = reading('Czy mogę zarezerwować zajęcia jutro', 'pol', -0.1, 5, 0.95)
+    const forced = reading('Cheese more girls are very wide', 'eng', -1.2, 6, 1)
+    const r = await transcribeInboundVoiceNote(makeDb(), args, deps({ transcribe: vi.fn(async ({ languageCode }) => (languageCode ? forced : polish)) }))
+    expect(r).toMatchObject({ status: 'ok', transcript: 'Czy mogę zarezerwować zajęcia jutro', language: 'pol' })
+  })
+
+  test('an English detection is read once', async () => {
+    const d = deps()
+    await transcribeInboundVoiceNote(makeDb(), args, d)
+    expect(d.transcribe).toHaveBeenCalledTimes(1)
+  })
+
+  test('a failed English re-read keeps the guess and meters one call', async () => {
+    const transcribe = vi.fn(async ({ languageCode }) => (languageCode ? { ok: false, reason: 'http_error', status: 500 } : danish))
+    const d = deps({ transcribe })
+    const r = await transcribeInboundVoiceNote(makeDb(), args, d)
+    expect(r.language).toBe('dan')
+    expect(d.recordUsage.mock.calls[0][0].quantity).toBe(2)
+  })
+
+  test('preferExpectedReading', () => {
+    expect(preferExpectedReading(danish, english)).toBe(true)
+    expect(preferExpectedReading(danish, { ok: false })).toBe(false)
+    expect(preferExpectedReading(danish, reading('mumble', 'eng', -0.1, 1))).toBe(false)
+    expect(preferExpectedReading(reading('x', 'dan', -0.1, 1), english)).toBe(true)
+    expect(preferExpectedReading(reading('Og klassisk kan jeg booke', 'dan', -0.05, 5, 0.9), english)).toBe(false)
   })
 })
 

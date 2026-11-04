@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest'
 import {
   MAX_SPOKEN_CHARS, VOICE_REPLY_PROMPT_LINE, spokenTextFor, splitForVoice, voiceKindFor, voiceFor,
-  isOggOpus, toolResultSucceeded, isVoiceTrigger, memberVoiceLocationIds,
+  isOggOpus, toolResultSucceeded, isVoiceTrigger, memberVoiceLocationIds, buttonsBodyFor,
 } from './reply-rules.js'
 
 describe('what is spoken', () => {
@@ -98,5 +98,28 @@ describe('memberVoiceLocationIds', () => {
     expect(memberVoiceLocationIds({ studios: [], readFailed: true })).toEqual([])
     expect(memberVoiceLocationIds({ studios: [{ locationId: 'x', active: true }], readFailed: true })).toEqual([])
     expect(memberVoiceLocationIds({ studios: 'nope' })).toEqual([])
+  })
+})
+
+describe('buttonsBodyFor (VOICEQUESTION.1)', () => {
+  test('a long question stands alone', () => {
+    expect(buttonsBodyFor('It builds your engine and stamina, so it suits all levels. Want me to lock you in for the 06:00 DR1VE class tomorrow?'))
+      .toBe('Want me to lock you in for the 06:00 DR1VE class tomorrow?')
+  })
+  test('a short question takes the sentence before it', () => {
+    expect(buttonsBodyFor("Tomorrow at Hatch Street there's DR1VE at 06:00, 07:00 and 18:00. Which one suits you?"))
+      .toBe("Tomorrow at Hatch Street there's DR1VE at 06:00, 07:00 and 18:00. Which one suits you?")
+  })
+  test('the last question wins, across lines', () => {
+    expect(buttonsBodyFor('Is it for you?\nGreat.\nShall I book DR1VE at 06:00 tomorrow at Hatch Street for you?'))
+      .toBe('Shall I book DR1VE at 06:00 tomorrow at Hatch Street for you?')
+  })
+  test('a short question with nothing before it stands alone', () => {
+    expect(buttonsBodyFor('Which one?')).toBe('Which one?')
+  })
+  test('no question, or too long for a button body, is null', () => {
+    expect(buttonsBodyFor('Here are the times.')).toBeNull()
+    expect(buttonsBodyFor('')).toBeNull()
+    expect(buttonsBodyFor(`${'a'.repeat(1100)}?`)).toBeNull()
   })
 })
