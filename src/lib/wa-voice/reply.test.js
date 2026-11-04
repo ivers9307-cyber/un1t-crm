@@ -5,7 +5,7 @@ vi.mock('@/lib/usage', () => ({ recordMeterUsage: vi.fn(async () => {}) }))
 
 import { logWarn } from '@/lib/log'
 import { recordMeterUsage } from '@/lib/usage'
-import { maybeSendVoiceReply, voiceReplyPossible } from './reply.js'
+import { maybeSendVoiceReply, voiceReplyPossible, waitForVoiceNoteDelivery } from './reply.js'
 
 const OGG = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 1, 2, 3])
 const VOICES = { booking: { voice_id: 'vb', name: 'Bea' }, default: { voice_id: 'vd', name: 'Dan' } }
@@ -182,5 +182,51 @@ describe('VOICESTUDIO.1 — a studio without voices borrows a member studio\'s',
   })
   test('maybeSendVoiceReply: an unreadable lending studio is settings_unreadable', async () => {
     expect(await maybeSendVoiceReply(makeDb({ othersError: { message: 'x' } }), args({ voiceLocationId: 'loc-3' }), deps())).toEqual({ sent: false, reason: 'settings_unreadable' })
+  })
+})
+
+describe('waitForVoiceNoteDelivery (VOICEORDER.1)', () => {
+  // rows: the row the poll sees on each read, in turn (the last repeats).
+  const pollDb = (rows, error = null) => {
+    let i = 0
+    const reads = []
+    return {
+      reads,
+      from: (table) => ({ select: () => ({ eq: (col, val) => ({ limit: () => ({ maybeSingle: async () => {
+        reads.push({ table, col, val })
+        if (error) return { data: null, error }
+        const row = rows[Math.min(i++, rows.length - 1)]
+        return { data: row, error: null }
+      } }) }) }) }),
+    }
+  }
+  const clock = () => {
+    let t = 0
+    return { now: () => t, sleep: vi.fn(async (ms) => { t += ms }) }
+  }
+
+  test('returns once the status webhook stamps delivery', async () => {
+    const db = pollDb([{ status: 'sent' }, { status: 'sent' }, { status: 'delivered', delivered_at: 'x' }])
+    const c = clock()
+    expect(await waitForVoiceNoteDelivery(db, { messageId: 'wamid.v' }, c)).toBe('delivered')
+    expect(c.sleep).toHaveBeenCalledTimes(2)
+    expect(db.reads[0]).toEqual({ table: 'whatsapp_messages', col: 'wa_message_id', val: 'wamid.v' })
+  })
+  test('read counts as delivered; failed stops the wait', async () => {
+    expect(await waitForVoiceNoteDelivery(pollDb([{ status: 'read', read_at: 'x' }]), { messageId: 'm' }, clock())).toBe('delivered')
+    expect(await waitForVoiceNoteDelivery(pollDb([{ status: 'failed' }]), { messageId: 'm' }, clock())).toBe('failed')
+  })
+  test('gives up at the limit, never later', async () => {
+    const c = clock()
+    expect(await waitForVoiceNoteDelivery(pollDb([{ status: 'sent' }]), { messageId: 'm', timeoutMs: 2000, intervalMs: 500 }, c)).toBe('timeout')
+    expect(c.now()).toBeLessThanOrEqual(2000)
+    expect(logWarn).toHaveBeenCalled()
+  })
+  test('no message id, or a failed read, does not wait', async () => {
+    const c = clock()
+    expect(await waitForVoiceNoteDelivery(pollDb([]), { messageId: null }, c)).toBe('no_message_id')
+    expect(await waitForVoiceNoteDelivery(pollDb([], { message: 'x' }), { messageId: 'm' }, c)).toBe('unreadable')
+    expect(await waitForVoiceNoteDelivery({ from: () => { throw new Error('db') } }, { messageId: 'm' }, c)).toBe('unreadable')
+    expect(c.sleep).not.toHaveBeenCalled()
   })
 })

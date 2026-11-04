@@ -28,6 +28,11 @@ function walk(dir, out = []) {
 }
 const ACTIVITIES_WRITE = /\.from\(\s*['"`]activities['"`]\s*\)[\s\S]{0,300}?\.(update|insert|upsert|delete)\(/
 
+// A whole-repo scan: the first test to parse every client file pays the cold
+// cost, past vitest's 5 s default on a loaded CI shard (timed out on #2299,
+// 4 Nov 2026). Same allowance as sequence-column-grants-guard (CI-SPEED.1).
+const SCAN_TIMEOUT_MS = 30_000
+
 describe('no web client code writes activities (C148)', () => {
   it('the detector sees the old shapes', () => {
     expect(ACTIVITIES_WRITE.test("await db.from('activities').insert(insert).select('*').single()")).toBe(true)
@@ -48,5 +53,5 @@ describe('no web client code writes activities (C148)', () => {
       .filter((f) => { const s = readFileSync(f, 'utf8'); return isClientFile(s) && ACTIVITIES_WRITE.test(codeOf(s, f)) })
       .map((f) => path.relative(ROOT, f))
     expect(offenders).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })

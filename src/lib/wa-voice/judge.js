@@ -33,3 +33,12 @@ export function judgeTranscript({ text, languageProbability, words } = {}) {
   if (unsure / scored.length > MAX_VERY_UNSURE_SHARE) return 'unclear'
   return 'ok'
 }
+
+// VOICELANG.1 — the mean word logprob of a transcript, or null when there is
+// nothing to score. Used to compare two readings of the same voice note.
+export function meanWordLogprob(words) {
+  const scored = (Array.isArray(words) ? words : [])
+    .filter((x) => x && x.type === 'word' && typeof x.logprob === 'number' && Number.isFinite(x.logprob))
+    .map((x) => x.logprob)
+  return scored.length ? scored.reduce((a, b) => a + b, 0) / scored.length : null
+}

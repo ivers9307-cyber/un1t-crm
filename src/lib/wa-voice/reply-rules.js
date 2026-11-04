@@ -106,3 +106,24 @@ export function memberVoiceLocationIds(resolution) {
   if (!resolution || resolution.readFailed || !Array.isArray(resolution.studios)) return []
   return resolution.studios.filter((s) => s?.active === true && s.locationId).map((s) => s.locationId)
 }
+
+// VOICEQUESTION.1 — the body of the buttons that follow a voice note: the
+// reply's own question, so the buttons read on their own (Richard, 4 Nov 2026:
+// "the question should have context, not just choose an option"). A short
+// question takes the sentence before it too. No question, or one WhatsApp
+// would refuse as a button body, is null and the caller uses the buttons line.
+export const MAX_BUTTON_BODY_CHARS = 1024
+const SHORT_QUESTION_CHARS = 40
+export function buttonsBodyFor(text) {
+  const sentences = String(text || '')
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?<=[.!?])\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean)
+  let i = sentences.length - 1
+  while (i >= 0 && !sentences[i].endsWith('?')) i--
+  if (i < 0) return null
+  let body = sentences[i]
+  if (body.length < SHORT_QUESTION_CHARS && i > 0) body = `${sentences[i - 1]} ${body}`
+  return body.length <= MAX_BUTTON_BODY_CHARS ? body : null
+}

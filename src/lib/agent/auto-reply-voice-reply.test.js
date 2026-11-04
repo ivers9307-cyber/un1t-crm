@@ -60,6 +60,7 @@ function makeAdapter(sendVoice = okVoice()) {
     sendCta: vi.fn().mockResolvedValue({ messageId: 'wamid.c' }),
     sendVoice,
     voiceReplyPossible: vi.fn(async () => ({ possible: true, voiceLocationId: 'loc-1' })),
+    awaitVoiceDelivered: vi.fn(async () => 'delivered'),
   }
 }
 const now = () => new Date().toISOString()
@@ -148,12 +149,46 @@ describe('a voice-note turn', () => {
     expect(inserts(calls).map((r) => r.message_type)).toEqual(['audio', 'text'])
   })
 
-  it('options follow as buttons under the buttons line', async () => {
+  // VOICEQUESTION.1 — the buttons carry the reply's question.
+  it('options follow as buttons under the reply\'s question', async () => {
     vi.stubGlobal('fetch', modelTurns(say('Which time suits?\n[[OPTIONS]] 7am | 8am')))
     const adapter = makeAdapter(okVoice({ buttonsLine: 'Pick one:' }))
     await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
     expect(adapter.sendVoice.mock.calls[0][1].spoken).toBe('Which time suits?')
     expect(adapter.sendOptions).toHaveBeenCalledTimes(1)
+    expect(adapter.sendOptions.mock.calls[0].slice(1, 3)).toEqual(['Which time suits?', ['7am', '8am']])
+  })
+
+  it('the buttons wait for the voice note to be delivered (VOICEORDER.1)', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Which time suits?\n[[OPTIONS]] 7am | 8am')))
+    const order = []
+    const adapter = makeAdapter(vi.fn(async () => { order.push('voice'); return { sent: true, messageId: 'wamid.v', storagePath: 'p', voiceKind: 'lead', chars: 5, buttonsLine: 'x', aiNotice: null } }))
+    adapter.awaitVoiceDelivered = vi.fn(async () => { order.push('wait'); return 'delivered' })
+    adapter.sendOptions.mockImplementation(async () => { order.push('buttons'); return { messageId: 'wamid.o' } })
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
+    expect(order).toEqual(['voice', 'wait', 'buttons'])
+    expect(adapter.awaitVoiceDelivered.mock.calls[0][1]).toEqual({ messageId: 'wamid.v' })
+  })
+
+  it('a voice note with nothing to follow waits for nothing', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Yes, seven is free.')))
+    const adapter = makeAdapter()
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
+    expect(adapter.awaitVoiceDelivered).not.toHaveBeenCalled()
+  })
+
+  it('a wait that throws still sends the buttons', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Which time suits?\n[[OPTIONS]] 7am | 8am')))
+    const adapter = makeAdapter()
+    adapter.awaitVoiceDelivered = vi.fn(async () => { throw new Error('db') })
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
+    expect(adapter.sendOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('options with no question follow under the buttons line', async () => {
+    vi.stubGlobal('fetch', modelTurns(say('Here are the times.\n[[OPTIONS]] 7am | 8am')))
+    const adapter = makeAdapter(okVoice({ buttonsLine: 'Pick one:' }))
+    await runChannelAgent(agentDb({ conv, history: voiceHistory, calls: [], settings: { enabled: true } }), adapter, ctx())
     expect(adapter.sendOptions.mock.calls[0].slice(1, 3)).toEqual(['Pick one:', ['7am', '8am']])
   })
 
