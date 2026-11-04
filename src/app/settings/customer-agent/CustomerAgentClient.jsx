@@ -1,31 +1,24 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { hubManageHref } from '@/lib/integrations-hub-links'
 import { zoneCity } from '@/lib/record-time'
-// MIAORG.1 Task 3 — which fields this studio sets itself (zod-free, shared
-// with the PUT's contract).
-import {
-  initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, orgSetsAny,
-  isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
-  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
-} from '@/lib/agent/settings-overrides'
-import {
-  buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse,
-  trialDoneErrors, parseTrialDoneContactIds,
-} from './save-payload'
+import { valueAt, TRIAL_DONE_MIA_INSTRUCTION_DEFAULT } from '@/lib/agent/settings-overrides'
+import { bookingLinkErrors, trialDoneErrors, parseTrialDoneContactIds } from './save-payload'
 // MIASETTINGS.1c — the plain fields render from the one registry.
 import { fieldsFor } from './fields'
 import AgentField from './components/AgentField'
-import SourceTag from './components/SourceTag'
 import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
 import MiaOffersSection from './MiaOffersSection'
 // MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
 import OrgDefaultsClient from './OrgDefaultsClient'
+// MIASETTINGS.2a — the studio settings state (load, edits, overrides, save,
+// unsaved changes, holds) lives in one hook.
+import { useAgentSettings } from './useAgentSettings'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -54,6 +47,31 @@ function FieldLabel({ tag, children }) {
   )
 }
 
+// AGENT-CHECKIN.2 — humanise the last tick's skip-reason tally.
+function describeCheckinReasons(checkins) {
+  const reasons = checkins?.reasons || {}
+  const parts = Object.entries(reasons).map(([k, n]) => `${k.replace(/_/g, ' ')} ×${n}`)
+  if (checkins?.reason === 'quiet_hours') parts.unshift('quiet hours')
+  return parts.length ? ` (${parts.join(', ')})` : ''
+}
+
+// CHECKINSTALL.1 — one line per Dublin day from last_outcome.checkins_day.
+// Counts are per 15-minute run, not per person (one lead skipped all
+// afternoon shows ×20). Staff copy, not customer-facing.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function describeCheckinDay(d) {
+  if (!d?.day) return null
+  const [, mm, dd] = d.day.split('-')
+  const label = `${Number(dd)} ${MONTHS[Number(mm) - 1] || ''}`
+  const sent = (d.freeform || 0) + (d.templates || 0)
+  const runs = d.daytime_ticks || 0
+  const checks = d.candidates || 0
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const failed = d.failed_ticks ? ` · ${plural(d.failed_ticks, 'failed run')}` : ''
+  const partial = d.carry_failed ? ' (partial: an earlier run could not be read)' : ''
+  return `${label}: ${plural(runs, 'daytime run')} · ${plural(checks, 'candidate check')} · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
+}
+
 // MIAROLE.1 (C80) — `canEdit` comes from the server page (canEditMiaSettings:
 // owner at the active studio, or master), the same predicate the PUT gates
 // on. Omitted, it fails closed: the settings render read-only, with no Save.
@@ -63,312 +81,53 @@ function FieldLabel({ tag, children }) {
 // (resolveAdminOrgId); it shows the organisation defaults section above this
 // studio's settings. Null for everyone else: the page is exactly as before.
 export default function CustomerAgentClient({ canEdit = false, orgDefaults = null } = {}) {
-  const [settings, setSettings] = useState(null)
-  const [location, setLocation] = useState(null)
-  // W1.S3 — the studio's resolved brand (GET payload), for the placeholders.
-  const [brand, setBrand] = useState({ companyName: '', shortName: '' })
+  const {
+    loading, loadFailed, reload, settings, location, membershipSourceKey, checkinStats, templates, ctx,
+    setField, setQuietHours, setNoQuietHours, sourceTag: tagFor, inheritedNumber, holds,
+    saving, savedAt, error, serverFieldErrors, save: saveSettings, refreshInherited,
+  } = useAgentSettings({ canEdit })
+
+  // The knowledge editor keeps its own state: each entry saves as you go.
+  // A failed knowledge read must not be reported as a failed settings read
+  // (the editor would hide a Save it can safely offer).
   const [entries, setEntries] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState(null)
-  const [checkinStats, setCheckinStats] = useState(null)
-  const [error, setError] = useState(null)
-  // SETTINGSWIPE.1 — true when the settings GET failed. The editor must then
-  // show nothing it could save: the GET used to answer a failed read with
-  // the DEFAULTS, and Save wrote them back (Mia off).
-  const [loadFailed, setLoadFailed] = useState(false)
-  // MIAORG.1 Task 3 — the fields this studio sets itself (override paths:
-  // 'tone', 'followups.daily_cap'). Only these are stored on Save; every other
-  // inheritable field keeps following the organisation default (or the code
-  // default), so a later org change still reaches this studio. Starts from
-  // the stored blob: every value it holds counts as the studio's own (T3-D),
-  // so the first save of a legacy full blob keeps all of it.
-  const [overridden, setOverridden] = useState([])
-  // The CURRENT override set, for work that finishes after an await
-  // (refreshInherited runs after the org PUT; that render's `overridden`
-  // would be stale if the operator edited a field meanwhile).
-  const overriddenRef = useRef(overridden)
-  useEffect(() => { overriddenRef.current = overridden }, [overridden])
-  // The org layer (raw) and what each key resolves to with no override.
-  const [org, setOrg] = useState(null)
-  const [inherited, setInherited] = useState(null)
-  // MIAORG.1 final review — false at a studio whose membership source takes
-  // no bookings (GET `bookings`): the Booking link fields show there. An
-  // older GET without the key shows them too (never hides a saved link).
-  const [bookings, setBookings] = useState(null)
-  // MIAHATCH.4 — the studio's membership source key (GET): the Hatch payments
-  // and booking copy group shows only for 'un1t_online'.
-  const [membershipSourceKey, setMembershipSourceKey] = useState(null)
-  // The PUT's 400 issues on the booking fields, shown beside them.
-  const [serverFieldErrors, setServerFieldErrors] = useState({})
-
-  // After a save (refreshSettings). load() sets the same state inline.
-  function applySettingsResponse(sRes) {
-    setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
-    setBrand(sRes.brand || { companyName: '', shortName: '' })
-    setOverridden(initialOverridden(sRes.studio))
-    setOrg(sRes.org || null)
-    setInherited(sRes.inherited || null)
-    setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
-    setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
-  }
-
-  async function load(isCancelled = () => false) {
+  const [knowledgeError, setKnowledgeError] = useState(null)
+  async function loadKnowledge(isCancelled = () => false) {
     try {
-      // allSettled: a failed KNOWLEDGE read must not be reported as a failed
-      // settings read (the editor would hide a Save it can safely offer).
-      const [sOut, kOut] = await Promise.allSettled([
-        fetch('/api/settings/customer-agent').then(r => r.json()),
-        fetch('/api/agent/knowledge').then(r => r.json()),
-      ])
-      if (isCancelled()) return
-      const sRes = sOut.status === 'fulfilled' ? sOut.value : null
-      if (sRes?.success && sRes.settings) {
-        // Inline (not applySettingsResponse) so the mount effect below keeps
-        // depending on nothing reactive; keep the two in step.
-        setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
-        setBrand(sRes.brand || { companyName: '', shortName: '' })
-        setOverridden(initialOverridden(sRes.studio)); setOrg(sRes.org || null); setInherited(sRes.inherited || null)
-        setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
-        setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
-        setLoadFailed(false)
-      } else {
-        setSettings(null); setLoadFailed(true)
-      }
-      if (kOut.status === 'fulfilled' && kOut.value?.success) setEntries(kOut.value.entries || [])
-    } catch {
-      if (!isCancelled()) { setSettings(null); setLoadFailed(true) }
-    } finally {
-      if (!isCancelled()) setLoading(false)
-    }
+      const k = await fetch('/api/agent/knowledge').then(r => r.json())
+      if (!isCancelled() && k?.success) setEntries(k.entries || [])
+    } catch { /* the settings still load; the list stays as it was */ }
   }
-
   useEffect(() => {
     let cancelled = false
-    load(() => cancelled)
+    loadKnowledge(() => cancelled)
     return () => { cancelled = true }
-    // load is re-created each render and only ever sets state; run once on mount.
+    // loadKnowledge only ever sets state; run once on mount.
   }, [])
 
-  // Editing an inheritable field makes it this studio's own (studio-only and
-  // sibling keys are ignored by withOverride: they are always saved).
-  function markOverridden(...paths) { setOverridden(o => withOverride(o, ...paths)) }
-  function setField(k, v) {
-    setSettings(s => ({ ...s, [k]: v })); markOverridden(k)
-    setServerFieldErrors(e => (k in e ? Object.fromEntries(Object.entries(e).filter(([f]) => f !== k)) : e))
-  }
-  // Quiet hours are a pair: editing either end makes both the studio's own
-  // (and ends a "no quiet hours" opt-out).
-  function setQuietHours(k, v) {
-    setSettings(s => {
-      const { off: _off, ...q } = s.quiet_hours || {}
-      return { ...s, quiet_hours: { ...q, [k]: v } }
-    })
-    setOverridden(o => withOverride(withoutOverride(o, 'quiet_hours.off'), 'quiet_hours.start', 'quiet_hours.end'))
-  }
-  // MIAORG.1 Task 4 (T4-A) — "No quiet hours (ignore the organisation's)".
-  // Null cannot say "none" once the organisation sets quiet hours, so the
-  // studio stores `quiet_hours.off`. Ticking clears start and end; unticking
-  // drops the opt-out, so the window is inherited again.
-  function setNoQuietHours(on) {
-    if (on) {
-      setSettings(s => ({ ...s, quiet_hours: { start: null, end: null, tz: null, off: true } }))
-      setOverridden(o => withOverride(withoutOverride(o, 'quiet_hours.start', 'quiet_hours.end', 'quiet_hours.tz'), 'quiet_hours.off'))
-    } else {
-      setOverridden(o => withoutOverride(o, 'quiet_hours'))
-      setSettings(s => {
-        const q = inherited?.quiet_hours
-        return { ...s, quiet_hours: q && typeof q === 'object' ? { ...q } : null }
-      })
-    }
-  }
   const noQuietHours = settings?.quiet_hours?.off === true
-  // MIAORG.1 Task 4 — one end of the window only: the payload would drop it
-  // silently, so the editor says "Set both times" and holds Save.
-  const quietHalf = isHalfQuietWindow(settings?.quiet_hours)
-  // MIAORG.1 final review — the Booking link fields, checked as the PUT
-  // checks them; an invalid value shows beside its field and holds Save.
-  // MIAHATCH.4 (Task 14): a un1t.online studio books through Mia now, but the
-  // link stays as the fallback (and Mia's answer where a class cannot be
-  // booked), so its fields show there whatever `bookings` says.
-  const showBookingLink = bookings !== true || membershipSourceKey === 'un1t_online'
+  // The three holds on Save (useAgentSettings), each naming its section:
+  // MIAORG.1 Task 4 — one end of the quiet-hours window only (the editor says
+  // "Set both times"); MIAORG.1 final review — an invalid Booking link field,
+  // where those fields show; TRIALDONE.3 — an invalid trial finisher value, at
+  // a un1t.online studio.
+  const held = (section) => holds.some(h => h.section === section)
+  const quietHalf = held('overview')
+  const bookingInvalid = held('bookings')
+  const trialInvalid = held('followups')
+  // The booking link and trial finisher messages shown beside their fields.
   const bookingErrors = { ...serverFieldErrors, ...bookingLinkErrors(settings) }
-  const bookingInvalid = showBookingLink && Object.keys(bookingLinkErrors(settings)).length > 0
-  // TRIALDONE.3 — the trial-finisher card (a un1t.online studio only), checked
-  // as the PUT checks it; an invalid value shows beside its field and holds Save.
   const showTrialDone = membershipSourceKey === 'un1t_online'
   const trialErrors = showTrialDone ? trialDoneErrors(settings) : {}
-  const trialInvalid = Object.keys(trialErrors).length > 0
 
-  // "Use organisation default": the field stops being the studio's own and
-  // shows the value it now inherits (GET's `inherited`).
-  function revertToInherited(paths) {
-    setOverridden(o => withoutOverride(o, ...paths))
-    setSettings(s => {
-      const next = { ...s }
-      for (const p of paths) {
-        const dot = p.indexOf('.')
-        if (dot < 0) {
-          const v = inherited?.[p]
-          next[p] = v && typeof v === 'object' ? { ...v } : (v ?? null)
-        } else {
-          const key = p.slice(0, dot)
-          next[key] = { ...(next[key] || {}), [p.slice(dot + 1)]: valueAt(inherited, p) ?? null }
-        }
-      }
-      return next
-    })
-  }
-
-  // A cleared number field shows what it then inherits, as its placeholder.
-  const inheritedNumber = (path, fallback) => String(valueAt(inherited, path) ?? fallback)
-
-  // The tag beside an inheritable field's label (staff copy, T3-F;
-  // components/SourceTag.jsx since MIASETTINGS.1c). A whole object key
-  // (quiet_hours) counts as set at the organisation only on a set FIELD.
-  function tagFor(paths) {
-    return (
-      <SourceTag source={fieldSource(paths, { overridden, org })} canEdit={canEdit}
-        orgHas={orgSetsAny(paths, org)} onRevert={() => revertToInherited(paths)} />
-    )
-  }
-
-  // AGENT-CHECKIN.2 — humanise the last tick's skip-reason tally.
-  function describeCheckinReasons(checkins) {
-    const reasons = checkins?.reasons || {}
-    const parts = Object.entries(reasons).map(([k, n]) => `${k.replace(/_/g, ' ')} ×${n}`)
-    if (checkins?.reason === 'quiet_hours') parts.unshift('quiet hours')
-    return parts.length ? ` (${parts.join(', ')})` : ''
-  }
-
-  // CHECKINSTALL.1 — one line per Dublin day from last_outcome.checkins_day.
-  // Counts are per 15-minute run, not per person (one lead skipped all
-  // afternoon shows ×20). Staff copy, not customer-facing.
-  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  function describeCheckinDay(d) {
-    if (!d?.day) return null
-    const [, mm, dd] = d.day.split('-')
-    const label = `${Number(dd)} ${MONTHS[Number(mm) - 1] || ''}`
-    const sent = (d.freeform || 0) + (d.templates || 0)
-    const runs = d.daytime_ticks || 0
-    const checks = d.candidates || 0
-    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
-    const failed = d.failed_ticks ? ` · ${plural(d.failed_ticks, 'failed run')}` : ''
-    const partial = d.carry_failed ? ' (partial: an earlier run could not be read)' : ''
-    return `${label}: ${plural(runs, 'daytime run')} · ${plural(checks, 'candidate check')} · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
-  }
-
-  async function saveSettings() {
-    setSaving(true); setError(null)
-    try {
-      // MIAORG.1 Task 3 — pure (./save-payload.js), so the Stillorgan round
-      // trip test runs this exact body.
-      const payload = buildSavePayload(settings, overridden)
-      const res = await fetch('/api/settings/customer-agent', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      })
-      const j = await res.json()
-      if (j.success) {
-        setSavedAt(Date.now()); setServerFieldErrors({})
-        await refreshSettings()
-      } else {
-        setServerFieldErrors(bookingIssuesFromResponse(j.issues))
-        setError(j.error || 'Failed to save')
-      }
-    } catch { setError('Failed to save') } finally { setSaving(false) }
-  }
-
-  // MIAORG.1 Task 3 — after a save, re-read so every tag and value shows the
-  // truth (a field cleared to blank is "not set here" and inherits again).
-  // Settings only: a knowledge edit in progress is never overwritten. A failed
-  // re-read keeps what is on screen (the save itself succeeded).
-  async function refreshSettings() {
-    try {
-      const sRes = await fetch('/api/settings/customer-agent').then(r => r.json())
-      if (sRes?.success && sRes.settings) applySettingsResponse(sRes)
-    } catch { /* keep the edited state; the save went through */ }
-  }
-
-  // MIAORG.1 Task 4 — after an ORGANISATION save: re-read what this studio
-  // inherits and show it in every field the studio does not set, without
-  // touching the studio's own (possibly unsaved) edits.
-  async function refreshInherited() {
-    try {
-      const sRes = await fetch('/api/settings/customer-agent').then(r => r.json())
-      if (!sRes?.success || !sRes.settings) return
-      const nextInherited = sRes.inherited || null
-      setOrg(sRes.org || null)
-      setInherited(nextInherited)
-      setSettings(s => {
-        if (!s) return s
-        // Read when React applies the update, so an edit made while the org
-        // save was in flight keeps the operator's value.
-        const overridden = overriddenRef.current
-        const next = { ...s }
-        for (const k of INHERITABLE_SCALAR_KEYS) {
-          if (!isOverridden(overridden, k)) next[k] = nextInherited?.[k] ?? null
-        }
-        for (const key of INHERITABLE_OBJECT_KEYS) {
-          // A studio that switched quiet hours off keeps showing none.
-          if (key === 'quiet_hours' && isOverridden(overridden, 'quiet_hours.off')) continue
-          const obj = { ...(next[key] || {}) }
-          for (const f of INHERITABLE_OBJECT_FIELDS[key]) {
-            if (!isOverridden(overridden, `${key}.${f}`)) obj[f] = valueAt(nextInherited, `${key}.${f}`) ?? null
-          }
-          next[key] = obj
-        }
-        return next
-      })
-    } catch { /* the org save went through; this studio's screen keeps what it shows */ }
-  }
-
-  // AGENT-FOLLOWUP.1 — approved templates for the stage-2 picker. The
-  // template COPY lives in the WhatsApp Templates manager (edit &
-  // resubmit there any time); this picker just selects which one the
-  // follow-up uses — fully updatable without code.
-  const [templates, setTemplates] = useState([])
-  useEffect(() => {
-    fetch('/api/whatsapp/templates')
-      .then(r => r.json())
-      .then(j => {
-        const list = j.templates || j.data || []
-        setTemplates(list.filter(t => String(t.status || '').toUpperCase() === 'APPROVED'))
-      })
-      .catch(() => {})
-  }, [])
-  // Object keys are overridden per field (MIAORG.1 Task 3).
-  const setFollowup = (key, value) => {
-    setSettings(s => ({ ...s, followups: { ...(s.followups || {}), [key]: value } }))
-    markOverridden(`followups.${key}`)
-  }
-  const setCheckin = (key, value) => {
-    setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
-    markOverridden(`first_class_checkin.${key}`)
-  }
-  // TRIALDONE.3 — studio-only, so no override bookkeeping: the block is always saved.
-  const setTrialDone = (key, value) =>
-    setSettings(s => ({ ...s, trial_done: { ...(s.trial_done || {}), [key]: value } }))
-  // MIASETTINGS.1c — a registry field's edit, by its settings path: a plain
-  // key (setField) or one field of an object key ('followups.daily_cap'),
-  // overridden per field as setFollowup / setCheckin do.
-  function setPath(path, value) {
-    const dot = path.indexOf('.')
-    if (dot < 0) { setField(path, value); return }
-    const key = path.slice(0, dot)
-    setSettings(s => ({ ...s, [key]: { ...(s[key] || {}), [path.slice(dot + 1)]: value } }))
-    markOverridden(path)
-  }
+  // Object keys are overridden per field (MIAORG.1 Task 3); the trial finisher
+  // and the cancellation form are studio-only, with no override bookkeeping.
+  const setFollowup = (key, value) => setField(`followups.${key}`, value)
+  const setCheckin = (key, value) => setField(`first_class_checkin.${key}`, value)
+  const setTrialDone = (key, value) => setField(`trial_done.${key}`, value)
   // CANCEL-FORM.2 — nested editors for the cancellation-form block.
-  const setCancelForm = (key, value) =>
-    setSettings(s => ({ ...s, cancellation_form: { ...(s.cancellation_form || {}), [key]: value } }))
-  const setCancelReason = (code, value) =>
-    setSettings(s => ({
-      ...s,
-      cancellation_form: {
-        ...(s.cancellation_form || {}),
-        reason_labels: { ...((s.cancellation_form || {}).reason_labels || {}), [code]: value },
-      },
-    }))
+  const setCancelForm = (key, value) => setField(`cancellation_form.${key}`, value)
+  const setCancelReason = (code, value) => setField(`cancellation_form.reason_labels.${code}`, value)
 
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
@@ -377,22 +136,22 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // types + descriptions into knowledge. Existing titles are never
   // overwritten, so re-running after adding a class is safe.
   async function importFromGlofox() {
-    setImporting(true); setError(null); setImportNote(null)
+    setImporting(true); setKnowledgeError(null); setImportNote(null)
     try {
       const res = await fetch('/api/agent/knowledge/import-classes', { method: 'POST' })
       const j = await res.json()
-      if (!j.success) { setError(j.error || 'Import failed'); return }
+      if (!j.success) { setKnowledgeError(j.error || 'Import failed'); return }
       if (j.imported?.length) setEntries(e => [...e, ...j.imported])
       const bits = []
       bits.push(`${j.imported?.length || 0} class${(j.imported?.length || 0) === 1 ? '' : 'es'} imported`)
       if (j.skipped?.length) bits.push(`${j.skipped.length} already in knowledge`)
       if (j.missing_description?.length) bits.push(`no Glofox description for: ${j.missing_description.join(', ')} (added as drafts — fill them in below)`)
       setImportNote(j.message || bits.join(' · '))
-    } catch { setError('Import failed') } finally { setImporting(false) }
+    } catch { setKnowledgeError('Import failed') } finally { setImporting(false) }
   }
 
   async function addEntry() {
-    setError(null)
+    setKnowledgeError(null)
     try {
       const res = await fetch('/api/agent/knowledge', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -400,8 +159,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
       })
       const j = await res.json()
       if (j.success) setEntries(e => [...e, j.entry])
-      else setError(j.error || 'Could not add the entry')
-    } catch { setError('Could not add the entry') }
+      else setKnowledgeError(j.error || 'Could not add the entry')
+    } catch { setKnowledgeError('Could not add the entry') }
   }
   function editLocal(id, patch) {
     setEntries(e => e.map(x => x.id === id ? { ...x, ...patch } : x))
@@ -413,8 +172,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
       })
       const j = await res.json()
-      if (!j.success) setError(j.error || 'Could not save the entry')
-    } catch { setError('Could not save the entry') }
+      if (!j.success) setKnowledgeError(j.error || 'Could not save the entry')
+    } catch { setKnowledgeError('Could not save the entry') }
   }
   async function deleteEntry(id) {
     setEntries(e => e.filter(x => x.id !== id))
@@ -426,7 +185,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     return (
       <div className="max-w-3xl">
         <h1 className="text-xl font-bold text-un1t-text mb-4">Customer Agent</h1>
-        <ReadFailedNote what="the customer agent settings" onRetry={() => load()} />
+        <ReadFailedNote what="the customer agent settings" onRetry={() => { reload(); loadKnowledge() }} />
       </div>
     )
   }
@@ -436,7 +195,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   // MIASETTINGS.1c — the plain fields, from the one registry (fields.js).
   // fieldsFor applies each field's `when` (the booking link fields, the
   // Hatch-only ones) and builds labels and placeholders from this studio.
-  const fieldCtx = { membershipSourceKey, bookings, brand, agentName: settings.agent_name }
+  const fieldCtx = ctx
   const registry = Object.fromEntries(fieldsFor('studio', null, fieldCtx).map(f => [f.id, f]))
   // An inheritable field ('both': the organisation can set it too) carries
   // its source tag; a studio-only one has none. A number field's placeholder
@@ -446,7 +205,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     if (!f) return null
     const path = f.paths[0]
     return (
-      <AgentField key={id} field={f} ctx={fieldCtx} value={valueAt(settings, path)} onChange={setPath}
+      <AgentField key={id} field={f} ctx={fieldCtx} value={valueAt(settings, path)} onChange={setField}
         tag={f.scope === 'both' ? tagFor(f.paths) : undefined}
         placeholder={f.kind === 'number' && f.fallback != null ? inheritedNumber(path, f.fallback) : undefined}
         {...extra} />
@@ -642,7 +401,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           </label>
         </div>
 
-        {error && <div className="text-sm text-red-600">{error}</div>}
+        {/* The settings Save's error, else the knowledge editor's (shown here as before). */}
+        {(error || knowledgeError) && <div className="text-sm text-red-600">{error || knowledgeError}</div>}
         {canEdit && (
           <div>
             <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid || trialInvalid}
