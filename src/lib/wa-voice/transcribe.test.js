@@ -3,7 +3,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 
 import { logWarn, logError } from '@/lib/log'
-import { transcribeInboundVoiceNote, buildKeyterms, VOICE_LOST_TURN_REASONS } from './transcribe.js'
+import { transcribeInboundVoiceNote, buildKeyterms, VOICE_LOST_TURN_REASONS, voiceNoteLostItsTurn } from './transcribe.js'
 import { ELEVENLABS_STT_CENTS_PER_MINUTE } from '@/lib/elevenlabs'
 import { makeOgg } from './test-helpers.js'
 
@@ -15,7 +15,7 @@ function makeDb({
   locationError = null,
   settings = { voice_transcription_enabled: true },
   settingsError = null,
-  staff = [{ profiles: { full_name: 'Dean Murphy', active: true, deleted_at: null } }],
+  staff = [{ profiles: { full_name: 'Zara Quill', active: true, deleted_at: null } }],
   staffError = null,
   bytes = makeOgg(48000 * 6),
   downloadError = null,
@@ -110,6 +110,16 @@ describe('transcribeInboundVoiceNote', () => {
     expect(d.transcribe).not.toHaveBeenCalled()
   })
 
+  test('a non-Ogg clip Scribe measures over 3 minutes → too_long, metered, no transcript (review I-3)', async () => {
+    const db = makeDb({ bytes: new Uint8Array(500 * 1024) })
+    const d = deps({ transcribe: vi.fn(async () => ({ ok: true, text: 'a long forwarded clip about classes', languageCode: 'en', languageProbability: 0.95, durationSecs: 360, words: Array(6).fill(w(-0.1)) })) })
+    const r = await transcribeInboundVoiceNote(db, args, d)
+    expect(r).toEqual({ status: 'too_long', transcript: null, language: null })
+    expect(db.updates.at(-1).patch).toMatchObject({ transcript_status: 'too_long', transcript: null })
+    expect(d.recordUsage).toHaveBeenCalledTimes(1)
+    expect(d.recordUsage.mock.calls[0][0].quantity).toBe(360)
+  })
+
   test('not_configured and http errors: no usage recorded', async () => {
     const db1 = makeDb()
     const d1 = deps({ transcribe: vi.fn(async () => ({ ok: false, reason: 'not_configured' })) })
@@ -170,7 +180,7 @@ describe('transcribeInboundVoiceNote', () => {
     const d = deps()
     await transcribeInboundVoiceNote(db, args, d)
     const keyterms = d.transcribe.mock.calls[0][0].keyterms
-    expect(keyterms).toEqual(expect.arrayContaining(['UN1T Hatch Street', 'Dean', 'UN1T', 'HYROX', 'Glofox', 'class pack', 'trial']))
+    expect(keyterms).toEqual(expect.arrayContaining(['UN1T Hatch Street', 'Zara', 'UN1T', 'HYROX', 'Glofox', 'class pack', 'trial']))
   })
 
   test('the transcript text is never logged', async () => {
@@ -193,15 +203,15 @@ describe('buildKeyterms', () => {
   test('studio name, active coaches first names, fixed list; deduped and bounded', async () => {
     const db = makeDb({
       staff: [
-        { profiles: { full_name: 'Dean Murphy', active: true, deleted_at: null } },
-        { profiles: { full_name: 'dean o brien', active: true, deleted_at: null } },
+        { profiles: { full_name: 'Zara Quill', active: true, deleted_at: null } },
+        { profiles: { full_name: 'zara o brien', active: true, deleted_at: null } },
         { profiles: { full_name: 'Gone Person', active: false, deleted_at: null } },
         { profiles: { full_name: 'Ghost', active: true, deleted_at: '2026-01-01' } },
         { profiles: null },
       ],
     })
     const terms = await buildKeyterms(db, 'loc-1', { studioName: 'UN1T Hatch Street' })
-    expect(terms).toEqual(['UN1T Hatch Street', 'Dean', 'UN1T', 'HYROX', 'Glofox', 'class pack', 'trial'])
+    expect(terms).toEqual(['UN1T Hatch Street', 'Zara', 'UN1T', 'HYROX', 'Glofox', 'class pack', 'trial'])
     for (const t of terms) { expect(t.length).toBeLessThanOrEqual(50); expect(t.split(/\s+/).length).toBeLessThanOrEqual(5) }
   })
 
@@ -213,4 +223,14 @@ describe('buildKeyterms', () => {
 
 test('lost-turn reasons', () => {
   expect([...VOICE_LOST_TURN_REASONS]).toEqual(['in_flight', 'nothing_to_answer'])
+})
+
+test('which voice notes go to staff when their turn was lost', () => {
+  for (const s of ['ok', 'unclear', 'too_long', 'capped', 'failed', 'not_configured']) {
+    expect(voiceNoteLostItsTurn(s, { handled: false, reason: 'in_flight' })).toBe(true)
+  }
+  expect(voiceNoteLostItsTurn('disabled', { handled: false, reason: 'in_flight' })).toBe(false)
+  expect(voiceNoteLostItsTurn('ok', { handled: true, action: 'reply' })).toBe(false)
+  expect(voiceNoteLostItsTurn('ok', { handled: false, reason: 'quiet_hours' })).toBe(false)
+  expect(voiceNoteLostItsTurn('ok', null)).toBe(false)
 })

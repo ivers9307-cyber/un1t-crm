@@ -184,10 +184,20 @@ describe('VOICENOTE.1 — an inbound voice note', () => {
       expect(markVoiceNoteForStaff).not.toHaveBeenCalled()
     }
     vi.clearAllMocks()
-    transcribeInboundVoiceNote.mockResolvedValueOnce({ status: 'unclear', transcript: 'mumble', language: 'en' })
+    transcribeInboundVoiceNote.mockResolvedValueOnce({ status: 'disabled', transcript: null, language: null })
     maybeAutoReply.mockResolvedValueOnce({ handled: false, reason: 'in_flight' })
     await POST(reqFor(voice()))
     expect(markVoiceNoteForStaff).not.toHaveBeenCalled()
+  })
+
+  it('a voice note Mia could not answer that lost the turn goes to staff silently too (review I-2)', async () => {
+    for (const status of ['unclear', 'too_long', 'capped', 'failed', 'not_configured']) {
+      vi.clearAllMocks()
+      transcribeInboundVoiceNote.mockResolvedValueOnce({ status, transcript: status === 'unclear' ? 'mumble' : null, language: null })
+      maybeAutoReply.mockResolvedValueOnce({ handled: false, reason: 'in_flight' })
+      await POST(reqFor(voice()))
+      expect(markVoiceNoteForStaff).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('a transcription step that throws still reaches Mia as failed; the webhook 200s', async () => {

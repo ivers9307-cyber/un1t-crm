@@ -21,12 +21,14 @@ import { runChannelAgent, whatsappAdapter, markVoiceNoteForStaff, VOICE_HANDOFF_
 import { instagramAdapter } from './instagram'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 
-function agentDb({ conv, history, calls, settings, selects = [] }) {
+function agentDb({ conv, history, calls, settings, selects = [], claimHeld = false }) {
   const mk = (table) => {
     const state = { op: 'select', patch: null, selectOpts: null }
     const finish = () => {
       if (state.op === 'update') {
         calls.push({ table, op: 'update', patch: state.patch })
+        // Another turn holds the agent_processing_at claim: the claim matches no row.
+        if (claimHeld && state.patch?.agent_processing_at) return { data: [], error: null }
         return { data: [{ id: 'conv-1' }], error: null }
       }
       if (table === 'locations') return { data: { name: 'Stillorgan', membership_source: 'glofox', settings: { customer_agent: settings } }, error: null }
@@ -130,6 +132,30 @@ describe('a voice note Mia cannot answer', () => {
       expect(push.body).toContain(pushText)
     })
   }
+  it('runs under the turn claim and releases it (review I-2)', async () => {
+    vi.stubGlobal('fetch', modelReplies('never'))
+    const calls = []
+    const db = agentDb({ conv, history: [audioRow('unclear', 'x')], calls, settings: { enabled: true } })
+    await runChannelAgent(db, makeAdapter(), audioCtx({ status: 'unclear', text: 'mumble' }))
+    const claimAt = calls.findIndex((c) => c.op === 'update' && c.patch?.agent_processing_at)
+    const handoffAt = calls.findIndex((c) => c.op === 'update' && c.patch?.agent_active === false)
+    const releaseAt = calls.findIndex((c) => c.op === 'update' && c.patch && 'agent_processing_at' in c.patch && c.patch.agent_processing_at === null)
+    expect(claimAt).toBeGreaterThanOrEqual(0)
+    expect(handoffAt).toBeGreaterThan(claimAt)
+    expect(releaseAt).toBeGreaterThan(handoffAt)
+  })
+
+  it('while another turn holds the claim: no hand-off, no holding message, in_flight (review I-2)', async () => {
+    vi.stubGlobal('fetch', modelReplies('never'))
+    const calls = []
+    const adapter = makeAdapter()
+    const db = agentDb({ conv, history: [audioRow('unclear', 'x')], calls, settings: { enabled: true }, claimHeld: true })
+    const result = await runChannelAgent(db, adapter, audioCtx({ status: 'unclear', text: 'mumble' }))
+    expect(result).toMatchObject({ handled: false, reason: 'in_flight' })
+    expect(calls.find((c) => c.op === 'update' && c.patch?.agent_active === false)).toBeUndefined()
+    expect(adapter.send).not.toHaveBeenCalled()
+  })
+
   it('every non-ok status but disabled maps to a reason', () => {
     expect(VOICE_HANDOFF_REASON).toEqual({ unclear: 'voice_unclear', too_long: 'voice_too_long', capped: 'voice_unavailable', failed: 'voice_unavailable', not_configured: 'voice_unavailable' })
   })

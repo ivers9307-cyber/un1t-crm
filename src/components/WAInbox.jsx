@@ -23,7 +23,7 @@ import {
   UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal,
   Sparkles, Plus
 } from 'lucide-react'
-import { isVoiceTranscriptUpdate } from '@shared/voice-note'
+import { VOICE_TRANSCRIPT_SUBSCRIPTION, handleVoiceTranscriptUpdate } from '@/components/inbox/wa-voice-realtime'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
@@ -387,18 +387,15 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
           }
         }
       )
-      // VOICENOTE.1 — a voice note's transcript is written by UPDATE after the
-      // row's INSERT, so refresh the open thread when one lands. Delivery and
-      // read receipts are UPDATEs too: ignore everything else.
+      // VOICENOTE.1 — a voice note's transcript lands by UPDATE after the
+      // INSERT: refresh the open thread past its unchanged signature.
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'whatsapp_messages' },
-        (payload) => {
-          const convId = payload?.new?.conversation_id
-          if (convId && convId === selectedIdRef.current && isVoiceTranscriptUpdate(payload.new)) {
-            fetchMessages(convId)
-          }
-        }
+        VOICE_TRANSCRIPT_SUBSCRIPTION,
+        (payload) => handleVoiceTranscriptUpdate(payload, {
+          selectedId: selectedIdRef.current,
+          forceRefetch: (convId) => { threadSigRef.current = ''; fetchMessages(convId) },
+        })
       )
       // INBOX-APPROVALS.7 — refresh approval cards live (mig 363 publishes
       // this table to supabase_realtime). Until that migration lands in

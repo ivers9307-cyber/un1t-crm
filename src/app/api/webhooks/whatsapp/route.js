@@ -13,7 +13,7 @@ import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply, markVoiceNoteForStaff } from '@/lib/agent/auto-reply'
-import { transcribeInboundVoiceNote, VOICE_LOST_TURN_REASONS } from '@/lib/wa-voice/transcribe'
+import { transcribeInboundVoiceNote, voiceNoteLostItsTurn } from '@/lib/wa-voice/transcribe'
 import { resolveNewSenderStudio } from '@/lib/wa-studio-pick/resolve'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent, studiosForNumbers } from '@/lib/whatsapp-number-events'
@@ -823,15 +823,14 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId, r
     }
   }
 
-  // VOICENOTE.1 — a clear voice note whose own turn sent nothing because a
-  // concurrent message (a quick text after it) won the turn. The missed-inbound
-  // rerun cannot catch it (it is older than that text), so staff get it in the
-  // Agent hand-off queue with no customer message and Mia left on.
-  if (voiceNote?.status === 'ok' && agentResult
-    && !(agentResult.handled && agentResult.action === 'reply')
-    && VOICE_LOST_TURN_REASONS.has(agentResult.reason)) {
+  // VOICENOTE.1 — a voice note whose own turn sent nothing because a
+  // concurrent message won the turn: a clear one the missed-inbound rerun
+  // cannot catch (it is older than that text), or one Mia could not answer
+  // whose hand-off would have cut off the other turn's reply. Staff get it in
+  // the Agent hand-off queue with no customer message and Mia left on.
+  if (voiceNote) {
     try {
-      await markVoiceNoteForStaff(db, { conversationId, locationId })
+      if (voiceNoteLostItsTurn(voiceNote.status, agentResult)) await markVoiceNoteForStaff(db, { conversationId, locationId })
     } catch (err) {
       logError('wa-webhook', 'voice note staff hand-off threw', { conversationId, err: err?.message || String(err) })
     }

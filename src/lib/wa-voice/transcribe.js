@@ -14,7 +14,7 @@ import { logWarn, logError } from '@/lib/log'
 import { transcribeAudio, ELEVENLABS_STT_CENTS_PER_MINUTE, ELEVENLABS_STT_MODEL } from '@/lib/elevenlabs'
 import { recordMeterUsage } from '@/lib/usage'
 import { getVoiceCapStatus } from '@/lib/usage-caps'
-import { exceedsVoiceLimit } from './audio.js'
+import { exceedsVoiceLimit, VOICE_LIMIT_SECS } from './audio.js'
 import { judgeTranscript } from './judge.js'
 
 export const VOICE_MEDIA_BUCKET = 'whatsapp-media'
@@ -27,6 +27,18 @@ export const FIXED_KEYTERMS = Object.freeze(['UN1T', 'HYROX', 'Glofox', 'class p
 // missed-inbound rerun cannot catch it because it is older than that text. The
 // webhook hands it to staff silently (markVoiceNoteForStaff).
 export const VOICE_LOST_TURN_REASONS = new Set(['in_flight', 'nothing_to_answer'])
+
+// The statuses whose turn matters to staff when lost: a clear note Mia would
+// have answered, and one she would have handed off (that hand-off runs under
+// the turn claim, so it is in_flight while a concurrent text is answered).
+// 'disabled' keeps today's soft hand-off and is not here.
+const STAFF_ON_LOST_TURN = new Set(['ok', 'unclear', 'too_long', 'capped', 'failed', 'not_configured'])
+
+export function voiceNoteLostItsTurn(status, agentResult) {
+  if (!STAFF_ON_LOST_TURN.has(status) || !agentResult) return false
+  if (agentResult.handled && agentResult.action === 'reply') return false
+  return VOICE_LOST_TURN_REASONS.has(agentResult.reason)
+}
 
 const MAX_TERM_CHARS = 50
 const MAX_TERM_WORDS = 5
@@ -155,7 +167,10 @@ export async function transcribeInboundVoiceNote(db, { messageId, locationId, st
       logError('wa-voice', 'usage record threw', { ...ids, error: err?.message || String(err) })
     }
 
-    // 8. The row.
+    // 8. The row. A file with no readable Ogg duration (a forwarded .m4a/.amr)
+    // was only size-bounded before the call: if Scribe measured it over the
+    // limit it goes to staff untranscribed, like any long note (decision 7).
+    if (result.durationSecs != null && result.durationSecs > VOICE_LIMIT_SECS) return await finish('too_long')
     return await finish(status, { transcript: text || null, language: result.languageCode || null })
   } catch (err) {
     logError('wa-voice', 'voice transcription threw', { ...ids, error: err?.message || String(err) })

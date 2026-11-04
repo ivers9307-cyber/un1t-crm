@@ -639,11 +639,23 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
     // REAL hand-off into the Agent hand-off queue, not the soft one that files
     // nothing. Switched off ('disabled') or no transcription keeps the soft one.
     const voiceReason = ctx.messageType === 'audio' ? VOICE_HANDOFF_REASON[voiceTranscript?.status] : null
+    // It runs under the turn claim: handoff() switches Mia off, and doing that
+    // while another turn (a text sent just before) is composing would make
+    // that turn read a human take-over and drop its reply. With the claim
+    // held elsewhere this returns in_flight and the webhook hands the voice
+    // note to staff silently (VOICE_LOST_TURN_REASONS), so the text is still
+    // answered.
     if (decision.onDuty && decision.reason === 'unsupported_type' && voiceReason) {
-      await handoff(db, adapter, {
-        conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
-        reason: VOICE_HANDOFF_TEXT[voiceReason],
-      })
+      const voiceClaim = await claimAgentTurn(db, adapter, conversationId)
+      if (!voiceClaim) return { handled: false, reason: 'in_flight' }
+      try {
+        await handoff(db, adapter, {
+          conversationId, locationId, recipient, contactId, connection, settings, brand: branding.companyName,
+          reason: VOICE_HANDOFF_TEXT[voiceReason],
+        })
+      } finally {
+        await releaseAgentTurn(db, adapter, conversationId, voiceClaim)
+      }
       return { handled: true, action: 'handoff', reason: voiceReason }
     }
     if (decision.onDuty && decision.reason === 'unsupported_type') {
@@ -1621,12 +1633,16 @@ const VOICE_HANDOFF_TEXT = Object.freeze({
 })
 
 /**
- * VOICENOTE.1 — an `ok` voice note whose own turn sent nothing because a
- * concurrent message won the turn (VOICE_LOST_TURN_REASONS). Mia may have
+ * VOICENOTE.1 — a voice note whose own turn sent nothing because a
+ * concurrent message won the turn (src/lib/wa-voice/transcribe.js
+ * voiceNoteLostItsTurn). Mia may have
  * answered the other message correctly, so there is NO customer message and
  * Mia stays on (agent_active untouched); the thread goes into the Agent
  * hand-off queue and managers are pushed. Not debounced: volume is tiny and a
- * missed voice note matters more than a second push. Never throws.
+ * missed voice note matters more than a second push. The stamp stays until
+ * staff resolve the thread (the cooldown re-arm only clears hand-offs that
+ * switched Mia off), and while it is set Mia's proactive follow-ups skip the
+ * thread. Never throws.
  */
 export async function markVoiceNoteForStaff(db, { conversationId, locationId }) {
   try {
