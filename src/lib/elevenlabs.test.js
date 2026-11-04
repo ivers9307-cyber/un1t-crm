@@ -83,7 +83,7 @@ describe('transcribeAudio', () => {
     expect((await transcribeAudio({ bytes, mime: 'audio/ogg' }, { fetchImpl: f2 })).reason).toBe('bad_response')
   })
 
-  test('the cost constant is a positive estimate', () => {
-    expect(ELEVENLABS_STT_CENTS_PER_MINUTE).toBeGreaterThan(0)
+  test('the cost is the Starter plan rate: Scribe v2 $0.22/h + keyterm prompting $0.05/h', () => {
+    expect(ELEVENLABS_STT_CENTS_PER_MINUTE).toBeCloseTo((22 + 5) / 60, 10)
   })
 })
