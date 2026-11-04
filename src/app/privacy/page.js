@@ -36,7 +36,7 @@ export default function PrivacyPolicy() {
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Privacy policy</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Last updated 29 September 2026
+            Last updated 4 November 2026
           </p>
         </header>
 
@@ -152,12 +152,13 @@ export default function PrivacyPolicy() {
             <li><strong>Sensibo</strong> — controls in-studio AC units; receives a location identifier and the requested set-point.</li>
             <li><strong>Apple Push Notification Service</strong> and <strong>Expo</strong> — deliver push notifications to staff iPhones.</li>
             <li><strong>Anthropic</strong> — provides the AI assistant used by some staff features. Conversations are sent transiently to Anthropic&rsquo;s API and are not used to train models.</li>
+            <li><strong>ElevenLabs</strong> — transcribes WhatsApp voice notes sent to a studio, so the assistant and staff can read them. The audio is sent to ElevenLabs for transcription and the transcript is stored in the CRM.</li>
             <li><strong>UniFi (Ubiquiti)</strong> — door access at studio sites; we send a door-unlock command and store the result.</li>
           </ul>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">7. International transfers</h2>
           <p>
-            Most processing happens within the EU. Some sub-processors (Postmark, Meta, Stripe, Upstash, Anthropic, Apple, Expo) are based in the United States and may process data there. Where this happens we rely on the European Commission&rsquo;s Standard Contractual Clauses or, where applicable, the EU-US Data Privacy Framework.
+            Most processing happens within the EU. Some sub-processors (Postmark, Meta, Stripe, Upstash, Anthropic, ElevenLabs, Apple, Expo) are based in the United States and may process data there. Where this happens we rely on the European Commission&rsquo;s Standard Contractual Clauses or, where applicable, the EU-US Data Privacy Framework.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">8. How long we keep it</h2>
