@@ -26,3 +26,10 @@ test('defaults when nothing is set; unreadable usage is null, not zero', async (
   expect((await getOrgUsageSummary(db({ settings: null }), 'org-1')).voice).toEqual({ enabled: false, capMinutes: null, usedMinutes: 0 })
   expect((await getOrgUsageSummary(db({ settings: null, eventsError: { message: 'x' } }), 'org-1')).voice.usedMinutes).toBeNull()
 })
+
+test('the summary carries the voice-reply mode, numbers, cap and replies this month', async () => {
+  const d = db({ settings: { voice_reply_mode: 'test', voice_reply_test_phones: ['353871234567'], voice_reply_monthly_cap: 40 }, rows: [{ quantity: 1 }, { quantity: 1 }] })
+  const s = await getOrgUsageSummary(d, 'org-1')
+  expect(s.voiceReplies).toEqual({ mode: 'test', testPhones: ['353871234567'], cap: 40, usedThisMonth: 2 })
+  expect((await getOrgUsageSummary(db({ settings: null }), 'org-1')).voiceReplies).toEqual({ mode: 'off', testPhones: [], cap: null, usedThisMonth: 0 })
+})

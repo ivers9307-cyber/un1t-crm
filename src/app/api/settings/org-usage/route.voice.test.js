@@ -57,3 +57,23 @@ describe('PUT /api/settings/org-usage — voice transcription', () => {
     expect(upserts).toHaveLength(0)
   })
 })
+
+describe('PUT /api/settings/org-usage — voice replies', () => {
+  test('sets mode, test numbers and cap, and returns them', async () => {
+    const res = await put({ voice_reply_mode: 'test', voice_reply_test_phones: ['+353 87 123 4567'], voice_reply_monthly_cap: 50 })
+    expect(res.status).toBe(200)
+    expect(upserts[0]).toMatchObject({ voice_reply_mode: 'test', voice_reply_test_phones: ['+353 87 123 4567'], voice_reply_monthly_cap: 50 })
+    for (const col of ['voice_reply_mode', 'voice_reply_test_phones', 'voice_reply_monthly_cap']) expect(selects[0]).toContain(col)
+  })
+  test('an unknown mode, a zero cap or too many numbers is refused', async () => {
+    expect((await put({ voice_reply_mode: 'maybe' })).status).toBe(400)
+    expect((await put({ voice_reply_monthly_cap: 0 })).status).toBe(400)
+    expect((await put({ voice_reply_test_phones: Array(21).fill('1') })).status).toBe(400)
+    expect(upserts).toHaveLength(0)
+  })
+  test('only the keys sent change', async () => {
+    await put({ voice_reply_mode: 'on' })
+    expect(upserts[0]).not.toHaveProperty('voice_reply_test_phones')
+    expect(upserts[0]).not.toHaveProperty('voice_reply_monthly_cap')
+  })
+})

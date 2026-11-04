@@ -140,6 +140,7 @@ export default async function UsageSettingsPage() {
         initialEmailCapSends={emailCap}
         initialOpsEmails={summary.caps.ops_alert_emails}
         initialVoice={summary.voice}
+        initialVoiceReplies={summary.voiceReplies}
       />
     </div>
   )
