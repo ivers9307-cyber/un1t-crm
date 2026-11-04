@@ -19,7 +19,11 @@ import { formatRelative } from '@/lib/dates'
 // Raw reason tokens (from src/lib/agent/auto-reply.js) → staff-readable text.
 // Anything not listed falls back to humanise() so the model's own free-text
 // handoff reasons still render sensibly.
-const REASON_LABELS = {
+export const REASON_LABELS = {
+  // VOICENOTE.1 — a WhatsApp voice note Mia could not answer (a real hand-off).
+  voice_unclear: "Voice note Mia couldn't make out",
+  voice_too_long: 'Voice note over 3 minutes',
+  voice_unavailable: 'Voice note: transcription unavailable',
   human_took_over: 'A staff member had already replied',
   verify_failed: "Couldn't verify the member's identity",
   rate_limited: 'Hourly reply cap reached',

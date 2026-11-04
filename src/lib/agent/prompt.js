@@ -532,6 +532,13 @@ function todayWithWeekday(today) {
   return `${today} (${label.replace(/,/g, '')})`
 }
 
+// VOICENOTE.1 — WhatsApp voice notes are transcribed before Mia's turn and
+// reach her history as "(voice note transcript) <words>" (core.js
+// VOICE_TRANSCRIPT_MARKER); one still being transcribed reads as the pending
+// placeholder (core.js PENDING_VOICE_PLACEHOLDER). Richard, 4 Nov 2026: she
+// answers what they said and never comments on the format.
+export const VOICE_NOTES_PROMPT_SECTION = '## Voice notes\nMessages that begin "(voice note transcript)" are automatic transcripts of a voice note the customer sent, and may contain small mis-hearings. Answer them exactly as you would the same words typed. Never mention the label, never say it was a voice note, and never comment on the format. If a transcript does not make sense, hand off rather than guess. A message reading "[voice note, still being transcribed]" is not ready: do not guess at what it says.'
+
 /**
  * Split the customer-agent system prompt into a location-stable prefix and a
  * per-request volatile suffix, for prompt caching (CACHE.2). Pure.
@@ -596,6 +603,7 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
   // section below").
   const stableParts = [identity + ' ' + renderCustomerAgentBasePrompt(membershipSource || GLOFOX_PROMPT_SOURCE, { bookings, bookingUrl, un1tVariant, multiStudio: opts.multiStudio === true, un1tStudioName: un1tVariant ? opts.un1tStudioName : null })]
+  stableParts.push(VOICE_NOTES_PROMPT_SECTION)
   // MIAFLOW.1 — only on a turn offered send_booking_flow (booking-flow.js);
   // absent or false, the prompt is byte-identical to before.
   if (opts.bookingFlow === true) stableParts.push(BOOKING_FLOW_PROMPT_SECTION)
