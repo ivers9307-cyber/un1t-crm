@@ -45,3 +45,13 @@ test('only a voice-note row with a final transcript status is a transcript updat
   expect(isVoiceTranscriptUpdate({ message_type: 'text', status: 'read' })).toBe(false)
   expect(isVoiceTranscriptUpdate(null)).toBe(false)
 })
+
+import { VOICE_KINDS, VOICE_KIND_LABELS, voiceReplyLabel } from './voice-note.js'
+test('voice reply kinds and the staff label', () => {
+  expect(VOICE_KINDS).toEqual(['lead', 'booking', 'member', 'handoff', 'default'])
+  expect(VOICE_KIND_LABELS).toEqual({ lead: 'Leads and trials', booking: 'Bookings', member: 'Member questions', handoff: 'Hand-off message', default: 'Default' })
+  expect(voiceReplyLabel({ direction: 'outbound', message_type: 'audio', voice_kind: 'booking' })).toBe('Mia replied by voice · Bookings')
+  expect(voiceReplyLabel({ direction: 'inbound', message_type: 'audio', voice_kind: 'booking' })).toBeNull()
+  expect(voiceReplyLabel({ direction: 'outbound', message_type: 'audio' })).toBeNull()
+  expect(voiceReplyLabel(null)).toBeNull()
+})
