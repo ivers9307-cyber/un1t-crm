@@ -1086,30 +1086,27 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     <div className="relative w-full">
       {/* ── HERO — full page only; the paste-anywhere iframe embed uses a
              compact header ──────────────────────────────────────────
-             EVENTHERO.1 — with a hero photo the image stands on its own and
-             the pill, date line and title sit BELOW it: operators upload
-             posters with their own logos and words, and text laid over them
-             collided with the artwork on desktop and covered it on phones.
-             The image is shown whole (contain, capped at 75% of the screen
-             height) rather than cropped. With no photo the monochrome poster
-             look stays, text on the artwork as before. */}
+             EVENTHERO.1 — with a hero photo the banner is the photo alone
+             (cover, slow ken-burns zoom, as before) and the pill, date line
+             and title sit BELOW it: operators upload posters with their own
+             logos and words, and the text, the outlined name watermark and
+             the dark scrim laid over them hid the artwork on desktop and
+             covered it on phones. Only a short fade into the page is left on
+             the photo. With no photo the monochrome poster look stays, text
+             on the artwork. */}
       {!embedded && hasHeroImage && (
       <section className="relative">
-        <div className="relative w-full bg-black overflow-hidden">
-          {/* a blurred, dimmed copy fills the sides when the photo is
-              narrower than the screen (a portrait poster on desktop) */}
+        <div className="relative min-h-[58svh] overflow-hidden">
           <div
-            aria-hidden="true"
-            className="absolute inset-0 scale-110 blur-2xl opacity-40"
-            style={{ backgroundImage: `url(${JSON.stringify(heroImageUrl)})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-          />
-          <img
-            src={heroImageUrl}
-            alt=""
-            className="relative block w-full h-auto max-h-[75svh] object-contain mx-auto"
+            className="absolute inset-[-4%] lp-kenburns"
+            style={{
+              backgroundImage: `url(${JSON.stringify(heroImageUrl)})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
           />
           {/* soft fade from the photo into the page */}
-          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 md:h-20 bg-gradient-to-t from-black to-transparent" />
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-16 md:h-24 bg-gradient-to-t from-black to-transparent" />
         </div>
         <div className="max-w-6xl mx-auto w-full px-5 pt-6 md:pt-8 lp-hero-stagger">
           {heroText}
