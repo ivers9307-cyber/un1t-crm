@@ -207,9 +207,15 @@ describe('StudioOfferRow', () => {
     expect(screen.getByText('Needs a plan')).toBeTruthy()
     fireEvent.change(screen.getByRole('combobox', { name: 'Promo' }), { target: { value: 'hatch-3-free' } })
     expect(screen.getByText('Ready')).toBeTruthy()
-    expect(screen.getByRole('option', { name: 'hatch-3-free · 3 credits' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Corporate trial (Hatch Street) · 3 credits' })).toBeTruthy()
     await save()
     expect(puts[0].body.offer).toEqual({ promo_key: 'hatch-3-free' })
+  })
+
+  it('a corp_promo row that knows its studio lists only that studio\'s promos', () => {
+    mount({ page: pageFor('promo_credits', 'corp_promo'), row: glofoxRow({ public_path: 'stillorgan' }) })
+    // stillorgan-newstart ships live:false, and hatch-3-free is another studio's.
+    expect(screen.queryByRole('option', { name: 'Corporate trial (Hatch Street) · 3 credits' })).toBeNull()
   })
 
   it('a refused save names the field, or shows the API error', async () => {

@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   rateLimit: vi.fn(), contact: vi.fn(), capi: vi.fn(), consent: vi.fn(), deal: vi.fn(), tag: vi.fn(),
   membership: vi.fn(), eligibility: vi.fn(), fulfil: vi.fn(), legal: vi.fn(), chosen: vi.fn(),
   reads: {}, readErrors: {}, inserted: vi.fn(), updates: [],
+  gElig: vi.fn(), gFulfil: vi.fn(), gPlan: vi.fn(), gCreds: vi.fn(),
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
 vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: m.contact }))
@@ -18,6 +19,16 @@ vi.mock('@/lib/contact-tags', () => ({ writeContactTag: m.tag }))
 vi.mock('@/lib/trial-eligibility', () => ({ hatchActiveMembership: m.membership }))
 vi.mock('@/lib/corp-promo-eligibility', () => ({ corpPromoEligibility: m.eligibility }))
 vi.mock('@/lib/corp-promo-claim', () => ({ fulfilCorpPromoClaim: m.fulfil }))
+// NEWSTART.1 — the Glofox branch. The shipped registry keeps the promo off, so the
+// tests present it live with plan ids (controller ruling 3).
+vi.mock('@/lib/corp-promos', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, resolveCorpPromo: (k) => (k === 'stillorgan-newstart' ? { ...actual.CORP_PROMOS[k], live: true } : actual.resolveCorpPromo(k)) }
+})
+vi.mock('@/lib/corp-promo-glofox-plans', () => ({ glofoxPlanForPromo: m.gPlan }))
+vi.mock('@/lib/corp-promo-eligibility-glofox', () => ({ glofoxCorpPromoEligibility: m.gElig }))
+vi.mock('@/lib/corp-promo-claim-glofox', () => ({ fulfilGlofoxCorpPromoClaim: m.gFulfil }))
+vi.mock('@/lib/glofox', async (importOriginal) => ({ ...(await importOriginal()), glofoxCredentialsForLocation: m.gCreds }))
 vi.mock('@/lib/un1t-online-legal', () => ({ readUn1tLegalDocs: m.legal }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 // CLASSFIRST.1 — the chosen class is judged by its own module (tested beside it).
@@ -81,6 +92,10 @@ beforeEach(() => {
   m.eligibility.mockResolvedValue({ ok: true, eligible: true })
   m.legal.mockResolvedValue({ version: 'v3' })
   m.inserted.mockImplementation(async (table, row) => ({ data: { id: 'claim-1', ...row }, error: null }))
+  m.gPlan.mockReturnValue({ membershipId: 'mem-1', planCode: 'plan-1', planName: 'New Start' })
+  m.gCreds.mockResolvedValue({ branchId: 'b', apiKey: 'k', apiToken: 't' })
+  m.gElig.mockResolvedValue({ ok: true, eligible: true })
+  m.gFulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: null })
   m.fulfil.mockResolvedValue({ kind: 'granted', credits: 3, expiresAt: '2026-11-04T10:00:00.000Z' })
   m.chosen.mockImplementation(async (_db, { eventId }) => (eventId
     ? { ok: true, chosen: { event_id: eventId, name: 'RALLY', starts_at: '2099-01-07T18:00:00.000Z' } }
@@ -287,5 +302,97 @@ describe('POST /api/public/corp-claims — page (PAGES.1)', () => {
   it('without page a body with no promo is a 400', async () => {
     const { promo: _omit, ...noPromo } = BODY
     expect((await call(noPromo)).status).toBe(400)
+  })
+})
+
+// NEWSTART.1 — a Glofox promo: no terms tick, no waitlist placement, its own
+// eligibility and fulfilment; Hatch's un1t.online flow is untouched.
+describe('POST /api/public/corp-claims — Glofox promo (NEWSTART.1)', () => {
+  const GLOC = 'loc-still'
+  const GBODY = { promo: 'stillorgan-newstart', first_name: 'Ann', last_name: 'Byrne', email: 'Ann@Work.ie', phone: '0871234567', consent: true }
+  beforeEach(() => {
+    m.reads.locations = { id: GLOC, name: 'UN1T Stillorgan', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: {} }
+    resolvePublicPageRequest.mockResolvedValue(studioPageOk({ locationId: GLOC, publicPath: 'stillorgan' }))
+  })
+
+  it('granted without a terms tick: the Glofox fulfilment runs, not the un1t one, and no waitlist placement', async () => {
+    const { status, json } = await call(GBODY)
+    expect(status).toBe(200)
+    expect(json).toMatchObject({ success: true, data: { credits: 3, expires_at: null } })
+    expect(json.data.message).not.toContain('un1t.online')
+    expect(m.gFulfil).toHaveBeenCalledTimes(1)
+    expect(m.gFulfil.mock.calls[0][1]).toMatchObject({ promo: expect.objectContaining({ key: 'stillorgan-newstart' }) })
+    expect(m.fulfil).not.toHaveBeenCalled()
+    expect(m.deal).not.toHaveBeenCalled()
+    expect(m.legal).not.toHaveBeenCalled()
+    expect(m.membership).not.toHaveBeenCalled()
+    expect(m.eligibility).not.toHaveBeenCalled()
+    const row = m.inserted.mock.calls[0][1]
+    expect(row).not.toHaveProperty('terms_accepted_at')
+    expect(row).not.toHaveProperty('terms_source')
+    expect(row).not.toHaveProperty('terms_version')
+    expect(m.gElig).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ promoKey: 'stillorgan-newstart', locationId: GLOC }))
+  })
+
+  it('no plan ids: 400 not_available before any write', async () => {
+    m.gPlan.mockReturnValue(null)
+    const { status, json } = await call(GBODY)
+    expect([status, json.code]).toEqual([400, 'not_available'])
+    expect(m.contact).not.toHaveBeenCalled()
+    expect(m.inserted).not.toHaveBeenCalled()
+  })
+
+  it('credentials unreadable: 503; missing: 400 not_available; nothing captured', async () => {
+    m.gCreds.mockResolvedValueOnce({ readError: 'x' })
+    expect((await call(GBODY)).status).toBe(503)
+    m.gCreds.mockResolvedValueOnce({ branchId: 'b' })
+    const r = await call(GBODY)
+    expect([r.status, r.json.code]).toEqual([400, 'not_available'])
+    expect(m.contact).not.toHaveBeenCalled()
+  })
+
+  it('eligibility: unreadable 503, active member, already claimed, in progress', async () => {
+    m.gElig.mockResolvedValueOnce({ ok: false })
+    expect((await call(GBODY)).status).toBe(503)
+    m.gElig.mockResolvedValueOnce({ ok: true, eligible: false, reason: 'active_member' })
+    expect((await call(GBODY)).json.code).toBe('active_member')
+    m.gElig.mockResolvedValueOnce({ ok: true, eligible: false, reason: 'already_claimed' })
+    expect((await call(GBODY)).json.code).toBe('already_claimed')
+    m.gElig.mockResolvedValueOnce({ ok: true, eligible: false, reason: 'in_progress' })
+    const r = await call(GBODY)
+    expect([r.status, r.json.code]).toEqual([200, 'help_filed'])
+    expect(m.inserted).not.toHaveBeenCalled()
+    expect(m.gFulfil).not.toHaveBeenCalled()
+  })
+
+  it('a duplicate in-flight claim (23505) answers help_filed; other insert errors 503', async () => {
+    m.inserted.mockResolvedValueOnce({ data: null, error: { code: '23505' } })
+    const r = await call(GBODY)
+    expect([r.status, r.json.code]).toEqual([200, 'help_filed'])
+    m.inserted.mockResolvedValueOnce({ data: null, error: { code: '42P01' } })
+    expect((await call(GBODY)).status).toBe(503)
+    expect(m.gFulfil).not.toHaveBeenCalled()
+  })
+
+  it('help_filed and unavailable outcomes from the fulfilment', async () => {
+    m.gFulfil.mockResolvedValueOnce({ kind: 'help_filed' })
+    expect((await call(GBODY)).json.code).toBe('help_filed')
+    m.gFulfil.mockResolvedValueOnce({ kind: 'unavailable' })
+    expect((await call(GBODY)).status).toBe(503)
+  })
+
+  it('Hatch regression: still needs the terms tick, then un1t fulfilment and waitlist placement; no Glofox module runs', async () => {
+    m.reads.locations = { id: LOC, name: 'UN1T Hatch Street', organization_id: 'org-1', timezone: 'Europe/Dublin', settings: { un1t_online: { writes_enabled: true, trial_product_id: 'tp' } } }
+    resolvePublicPageRequest.mockResolvedValue(studioPageOk())
+    const noTick = await call({ ...BODY, terms_accepted: undefined })
+    expect([noTick.status, noTick.json.code]).toEqual([400, 'terms_required'])
+    expect(m.gFulfil).not.toHaveBeenCalled()
+    expect((await call()).status).toBe(200)
+    expect(m.fulfil).toHaveBeenCalledTimes(1)
+    expect(m.deal).toHaveBeenCalledTimes(1)
+    expect(m.gFulfil).not.toHaveBeenCalled()
+    expect(m.gElig).not.toHaveBeenCalled()
+    expect(m.gPlan).not.toHaveBeenCalled()
+    expect(m.gCreds).not.toHaveBeenCalled()
   })
 })
