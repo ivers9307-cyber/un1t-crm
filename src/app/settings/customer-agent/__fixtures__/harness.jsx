@@ -46,6 +46,10 @@ export async function editByLabel(label, value, { section } = {}) {
       .find((b) => (b.textContent || '').startsWith(label))
     if (toggle) fireEvent.click(toggle)
   }
+  // A card folded while its switch is off hides its details behind "Show settings".
+  if (!screen.queryAllByText(label, { selector: 'label' }).length) {
+    for (const b of screen.queryAllByRole('button', { name: 'Show settings', expanded: false })) fireEvent.click(b)
+  }
   const labelEl = (await screen.findAllByText(label, { selector: 'label' }))[0]
   let node = labelEl.parentElement
   let field = null

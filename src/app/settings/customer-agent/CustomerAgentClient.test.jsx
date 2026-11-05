@@ -13,6 +13,12 @@ import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import { initialOverridden, TRIAL_DONE_MIA_INSTRUCTION_DEFAULT } from '@/lib/agent/settings-overrides'
 import CustomerAgentClient from './CustomerAgentClient.jsx'
 
+// MIASETTINGS.3b — a follow-up card folded while its switch is off keeps its
+// details behind "Show settings"; open every folded card (in `scope`).
+function showAllSettings(scope = screen) {
+  for (const b of scope.queryAllByRole('button', { name: 'Show settings', hidden: true })) fireEvent.click(b)
+}
+
 const NOTE = 'Could not load the customer agent settings just now, so nothing is shown and nothing can be changed here until it loads.'
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body })
 const GOOD = reply(200, {
@@ -445,6 +451,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer()])
     const { container } = render(<CustomerAgentClient canEdit />)
     await ready()
+    showAllSettings()
     const caps = [...container.querySelectorAll('input[type="number"][max="500"]')]
     expect(caps).toHaveLength(1)
     fireEvent.change(caps[0], { target: { value: '' } })
@@ -961,6 +968,8 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     expect(screen.getByText(TITLE)).toBeTruthy()
     const card = screen.getByTestId('trial-done-card')
     expect(within(card).getByLabelText('Enable trial finisher follow-up').checked).toBe(false)
+    expect(within(card).queryByLabelText('Opener template')).toBeNull()
+    showAllSettings(within(card))
     expect(within(card).getByLabelText('Opener template').value).toBe('hatch_trial_done_checkin')
     expect(within(card).getByLabelText('Follow-up template').value).toBe('hatch_trial_done_followup')
     expect(within(card).getByLabelText('Send after (hours)').value).toBe('2')
@@ -974,10 +983,46 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     render(<CustomerAgentClient canEdit />)
     await ready()
     const card = screen.getByTestId('trial-done-card')
+    showAllSettings(within(card))
     expect(card.textContent).toContain('has done 3 trial classes, or 2 classes and the trial has expired')
     expect(card.textContent).toContain('Hours after the trial ends')
     expect(card.textContent).not.toContain('attends their second class')
     expect(card.textContent).not.toContain('Hours after their last class')
+  })
+
+  it('MIASETTINGS.3b: the trial finisher shows only at Hatch, and folds its details while off', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    expect(within(card).getByRole('button', { name: 'Show settings', hidden: true }).getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(within(card).getByLabelText('Enable trial finisher follow-up'))
+    expect(within(card).queryByRole('button', { name: 'Show settings', hidden: true })).toBeNull()
+    expect(within(card).getByLabelText('Opener template')).toBeTruthy()
+    fireEvent.click(within(card).getByLabelText('Enable trial finisher follow-up'))
+    expect(within(card).queryByLabelText('Opener template')).toBeNull()
+  })
+
+  it('MIASETTINGS.3b: the test tag stays in the header while the details are folded', async () => {
+    const studio = { enabled: true, trial_done: { ...DEFAULTS.trial_done, enabled: false, only_contact_ids: [ID_A] } }
+    mockFetch([answer({ membership_source_key: 'un1t_online', studio })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const card = screen.getByTestId('trial-done-card')
+    expect(within(card).getByText('Test: 1 contact only')).toBeTruthy()
+    expect(within(card).queryByLabelText('Test contact ids')).toBeNull()
+  })
+
+  it('MIASETTINGS.3b: a stored value in a folded detail is still in the PUT body', async () => {
+    const studio = { enabled: true, followups: { enabled: false, nudge_after_hours: 5, template_name: 'nudge_v2', daily_cap: 33 } }
+    mockFetch([answer({ studio }), reply(200, { success: true, settings: {} }), answer({ studio })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryByLabelText('Nudge after (hours)')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Enable inline suggestions'))
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(putBody()).toBeTruthy())
+    expect(putBody().followups).toMatchObject({ nudge_after_hours: 5, template_name: 'nudge_v2', daily_cap: 33 })
   })
 
   it('a Glofox studio, no source, or an older GET shows no card', async () => {
@@ -1033,6 +1078,7 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     render(<CustomerAgentClient canEdit />)
     await ready()
     const card = screen.getByTestId('trial-done-card')
+    showAllSettings(within(card))
     expect(saveButton().disabled).toBe(false)
     fireEvent.change(within(card).getByLabelText('Opener template'), { target: { value: 'Has Caps' } })
     expect(within(card).getByText(/lowercase letters, numbers and underscores/)).toBeTruthy()
@@ -1216,6 +1262,7 @@ describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', ()
     render(<CustomerAgentClient canEdit />)
     await ready()
     openSection('Follow-ups')
+    showAllSettings()
     expect(screen.getByRole('option', { name: 'None (in-window nudge only)' })).toBeTruthy()
     expect(screen.getByRole('option', { name: 'None (open-window check-ins only)' })).toBeTruthy()
   })
@@ -1272,6 +1319,7 @@ describe('CustomerAgentClient — save bar and unsaved-change guards (MIASETTING
     render(<CustomerAgentClient canEdit />)
     await ready()
     openSection('Follow-ups')
+    showAllSettings(within(screen.getByTestId('trial-done-card')))
     fireEvent.change(within(screen.getByTestId('trial-done-card')).getByLabelText('Opener template'), { target: { value: 'Has Caps' } })
     openSection('Overview')
     expect(within(bar()).getByRole('button', { name: 'Save' }).disabled).toBe(true)
