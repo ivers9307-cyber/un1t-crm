@@ -156,6 +156,19 @@ describe('TRIALSTUDIO.10 / CLASSFIRST.1 — PaidTrialFunnel', () => {
     expect(posts[0].body.event_id).toBe('t6')
   })
 
+  it('MOBILEFUNNEL.1: the consent box starts unticked; ticking it sends consent true', async () => {
+    answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'trial_used', error: 'Already had one.' } }
+    render(<PaidTrialFunnel studios={[STILLORGAN, HATCH]} initialStudio="stillorgan" />)
+    await pickClass()
+    const box = screen.getByRole('checkbox')
+    expect(box.checked).toBe(false)
+    fillDetails()
+    fireEvent.click(box)
+    fireEvent.click(submitButton())
+    expect(await screen.findByText('Already had one.')).toBeTruthy()
+    expect(posts[0].body.consent).toBe(true)
+  })
+
   it('Stillorgan trial_used answer shows the message and the help button; pressing it posts to /help and shows help_sent_text', async () => {
     answers['/api/public/trial-purchases'] = { status: 200, body: { success: false, code: 'trial_used', error: "It looks like you've already had a trial with us at Stillorgan.", help: { cta_label: 'I need help' } } }
     answers['/api/public/trial-purchases/help'] = { status: 200, body: { success: true, data: { message: 'Thanks. The team at UN1T Stillorgan will be in touch shortly.', purchaseId: 'p-help' } } }
@@ -165,7 +178,8 @@ describe('TRIALSTUDIO.10 / CLASSFIRST.1 — PaidTrialFunnel', () => {
     fireEvent.click(submitButton())
 
     expect(await screen.findByText("It looks like you've already had a trial with us at Stillorgan.")).toBeTruthy()
-    expect(posts[0].body).toMatchObject({ studio: 'stillorgan', first_name: 'Sam', email: 'sam@example.com', consent: true, lead_event_id: 'lead-id-123', event_id: 'a' })
+    // MOBILEFUNNEL.1 — the consent box starts unticked and never blocks the purchase.
+    expect(posts[0].body).toMatchObject({ studio: 'stillorgan', first_name: 'Sam', email: 'sam@example.com', consent: false, lead_event_id: 'lead-id-123', event_id: 'a' })
     expect(posts[0].body).not.toHaveProperty('terms_accepted')
     expect(posts[0].body).not.toHaveProperty('path')
     // The server sent its Lead; the browser shares its id. No checkout opened.

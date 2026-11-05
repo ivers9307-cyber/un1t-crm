@@ -140,6 +140,26 @@ describe('CorpPromoFunnel', () => {
     expect(posts[0].body.event_id).toBe('m7')
   })
 
+  it('MOBILEFUNNEL.1: the consent box starts unticked and never blocks the claim; ticking it sends consent true', async () => {
+    answers = [
+      { status: 200, body: { success: true, data: { title: 'Done', message: 'On your account' } } },
+      { status: 200, body: { success: true, data: { title: 'Done', message: 'On your account' } } },
+    ]
+    render(<CorpPromoFunnel promoKey="hatch-3-free" copy={COPY} terms={null} page="corp" studio="hatch-street" />)
+    await pickClass()
+    expect(screen.getByRole('checkbox').checked).toBe(false)
+    fillAndSubmit()
+    expect(await screen.findByText('On your account')).toBeTruthy()
+    expect(posts[0].body.consent).toBe(false)
+    cleanup()
+    render(<CorpPromoFunnel promoKey="hatch-3-free" copy={COPY} terms={null} page="corp" studio="hatch-street" />)
+    await pickClass()
+    fireEvent.click(screen.getByRole('checkbox'))
+    fillAndSubmit()
+    expect(await screen.findByText('On your account')).toBeTruthy()
+    expect(posts[1].body.consent).toBe(true)
+  })
+
   it('no live promo shows the unavailable text and fetches nothing', () => {
     render(<CorpPromoFunnel promoKey={null} copy={COPY} terms={null} page="corp" studio="hatch-street" />)
     expect(screen.getByText('Not now')).toBeTruthy()

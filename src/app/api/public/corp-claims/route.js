@@ -27,7 +27,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
-import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
+import { applyOfferFormConsent } from '@/lib/offer-form-consent'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
@@ -64,7 +65,8 @@ const Schema = z.object({
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
   phone: z.string().trim().min(1).max(50).refine(isValidMobileNumber, 'Enter a valid mobile number'),
-  consent: z.boolean().refine((v) => v === true, { message: 'Please tick consent to continue' }),
+  // MOBILEFUNNEL.1 — optional, unticked by default (src/lib/offer-form-consent.js).
+  consent: z.boolean().optional(),
   terms_accepted: z.boolean().optional(),
   attribution: z.object({
     utm_source: z.string().max(200).optional(),
@@ -214,7 +216,7 @@ export async function POST(request) {
   // ── Capture the lead ──
   const name = `${b.first_name} ${b.last_name}`.trim()
   const email = b.email.toLowerCase()
-  const contactId = await findOrCreateRaceContact({
+  const { contactId, created: contactCreated } = await findOrCreateRaceContactWithOutcome({
     db, locationId, email, name, phone: b.phone, restrictToOrg: true,
     insertFields: { source: 'corp_promo', first_name: b.first_name, last_name: b.last_name },
   })
@@ -237,9 +239,11 @@ export async function POST(request) {
       .eq('id', contactId).is('visit_captured_at', null))
   }
   await bestEffort('tag', () => writeContactTag(db, { contactId, locationId, tag }))
+  // MOBILEFUNNEL.1 — ticked: opt in; unticked: opt a contact made just now out
+  // (a new contact's marketing defaults to on), leave an existing one alone.
   await bestEffort('consent', async () => {
-    const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    return applyFormMarketingConsent(db, { contactId, consent: true, source: 'corp_promo', ipAddress: ip, locationId })
+    const r = await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: b.consent, source: 'corp_promo', ipAddress: ip, locationId })
+    return r.result
   })
   // A Glofox promo is placed on its board by the fulfilment, after the grant.
   if (!isGlofox) await bestEffort('deal placement', () => placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Corporate promo' }))

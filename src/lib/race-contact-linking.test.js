@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findOrCreateRaceContact, pickEmailHolder } from './race-contact-linking'
+import { findOrCreateRaceContact, findOrCreateRaceContactWithOutcome, pickEmailHolder } from './race-contact-linking'
 import { ilikeMatches } from './like-escape.test-helpers'
 
 // Minimal chainable db mock for the restrictToLocation path only (it never
@@ -38,6 +38,23 @@ function makeDb({ atLocation = null, anywhere = null, insertedId = 'new-id' }) {
 }
 
 const base = { locationId: 'loc-1', email: 'Sam@Example.com', name: 'Sam Lee', phone: '0871234567' }
+
+// MOBILEFUNNEL.1 — the outcome form says whether THIS call made the contact
+// (the offer forms opt a contact they just made out of marketing when the box
+// is unticked); findOrCreateRaceContact still returns the bare id.
+describe('findOrCreateRaceContactWithOutcome', () => {
+  it('created is true only when this call inserted the row', async () => {
+    const fresh = makeDb({ atLocation: null, anywhere: null, insertedId: 'fresh-id' })
+    expect(await findOrCreateRaceContactWithOutcome({ db: fresh.db, ...base, restrictToLocation: true })).toEqual({ contactId: 'fresh-id', created: true })
+    const here = makeDb({ atLocation: { id: 'here' } })
+    expect(await findOrCreateRaceContactWithOutcome({ db: here.db, ...base, restrictToLocation: true })).toEqual({ contactId: 'here', created: false })
+    expect(await findOrCreateRaceContactWithOutcome({ db: here.db, ...base, email: 'not-an-email' })).toEqual({ contactId: null, created: false })
+  })
+  it('findOrCreateRaceContact keeps returning the bare id', async () => {
+    const { db } = makeDb({ atLocation: null, anywhere: null, insertedId: 'fresh-id' })
+    expect(await findOrCreateRaceContact({ db, ...base, restrictToLocation: true })).toBe('fresh-id')
+  })
+})
 
 describe('findOrCreateRaceContact — restrictToLocation', () => {
   it('restrictToLocation: skips the sibling-location match and creates within the location', async () => {
@@ -225,11 +242,12 @@ describe('findOrCreateRaceContact — restrictToOrg (LEADCAP.1)', () => {
       return q
     }
 
-    const id = await findOrCreateRaceContact({
+    const out = await findOrCreateRaceContactWithOutcome({
       db, locationId: HATCH, email: 'race@example.com', name: 'Racer', restrictToOrg: true,
     })
 
-    expect(id).toBe('race-winner')
+    // The concurrent request made it: this call did not (MOBILEFUNNEL.1).
+    expect(out).toEqual({ contactId: 'race-winner', created: false })
   })
 })
 

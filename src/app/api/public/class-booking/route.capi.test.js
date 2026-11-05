@@ -35,7 +35,12 @@ vi.mock('@/lib/rate-limit', () => ({
 vi.mock('@/lib/public-classes', () => ({
   readPublicClasses: vi.fn(async () => ({ classes: [{ event_id: 'ev-1', name: 'Strength', starts_at: '2099-01-01T08:00:00Z' }], error: null })),
 }))
-vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: vi.fn(async () => 'c1') }))
+// MOBILEFUNNEL.1 — the route reads the outcome form; it wraps this mock so
+// every findOrCreateRaceContact assertion below still holds (an existing contact).
+vi.mock('@/lib/race-contact-linking', () => {
+  const findOrCreateRaceContact = vi.fn(async () => 'c1')
+  return { findOrCreateRaceContact, findOrCreateRaceContactWithOutcome: vi.fn(async (a) => ({ contactId: await findOrCreateRaceContact(a), created: false })) }
+})
 vi.mock('@/lib/contact-tags', () => ({ writeContactTag: vi.fn() }))
 vi.mock('@/lib/marketing-consent', () => ({ applyFormMarketingConsent: vi.fn() }))
 vi.mock('@/lib/qstash', () => ({ publishQueuePush: vi.fn(), CLASS_BOOKINGS_WORKER_PATH: '/api/webhooks/qstash/class-bookings' }))
@@ -50,7 +55,8 @@ vi.mock('@/lib/meta-capi', async (importOriginal) => ({
 
 import { POST } from './route.js'
 import { sendWebsiteConversion } from '@/lib/meta-capi'
-import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
+import { findOrCreateRaceContact, findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
+import { applyFormMarketingConsent } from '@/lib/marketing-consent'
 import { writeContactTag } from '@/lib/contact-tags'
 import { resolvePublicPageRequest } from '@/lib/landing-pages'
 
@@ -65,6 +71,39 @@ const book = (attribution, headers = {}) => POST(new Request('http://localhost/a
 }))
 
 beforeEach(() => { vi.clearAllMocks() })
+
+// MOBILEFUNNEL.1 — consent is optional and starts unticked (src/lib/offer-form-consent.js).
+describe('POST /api/public/class-booking — marketing consent', () => {
+  const bookWith = (consent) => POST(new Request('http://localhost/api/public/class-booking', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      path: 'hatch-street', event_id: 'ev-1', first_name: 'Sam', last_name: 'Byrne',
+      email: 'sam@example.com', phone: '0871234567', ...(consent === undefined ? {} : { consent }),
+    }),
+  }))
+  it('ticked: opts in', async () => {
+    const res = await bookWith(true)
+    expect(res.status).toBe(200)
+    expect(applyFormMarketingConsent).toHaveBeenCalledTimes(1)
+    expect(applyFormMarketingConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c1', consent: true, source: 'start_class' }))
+  })
+  it('unticked and the contact was created by this booking: opts out (a new contact defaults to on)', async () => {
+    findOrCreateRaceContactWithOutcome.mockResolvedValueOnce({ contactId: 'c1', created: true })
+    const res = await bookWith(false)
+    expect(res.status).toBe(200)
+    expect(applyFormMarketingConsent).toHaveBeenCalledTimes(1)
+    expect(applyFormMarketingConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c1', consent: false, source: 'start_class' }))
+  })
+  it('unticked (or absent) and the contact already existed: the booking goes through and no consent is written', async () => {
+    for (const consent of [false, undefined]) {
+      applyFormMarketingConsent.mockClear()
+      const res = await bookWith(consent)
+      expect(res.status).toBe(200)
+      expect((await res.json()).success).toBe(true)
+      expect(applyFormMarketingConsent).not.toHaveBeenCalled()
+    }
+  })
+})
 
 // PAGES.1 spec §9 — a studio page posting page=<slug> whose row holds no
 // attribution keeps the class funnel's own defaults (the pre-PAGES.1 values),

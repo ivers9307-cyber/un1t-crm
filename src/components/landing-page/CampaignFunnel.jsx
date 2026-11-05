@@ -60,7 +60,8 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
   // it (after class_unavailable), and the first load alone preselects.
   const [reloadKey, setReloadKey] = useState(0)
   const preselectRef = useRef(true)
-  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
+  // MOBILEFUNNEL.1 — marketing consent starts unticked and is optional.
+  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: false })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const attributionRef = useRef({})
@@ -134,7 +135,6 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
     if (!chosen) { setError('Pick a class first.'); setStep('pick'); return }
     if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim()) { setError('Please fill in every field.'); return }
     if (!isValidMobileNumber(form.phone.trim())) { setError('Please enter a valid mobile number.'); return }
-    if (!form.consent) { setError('Please tick the box to continue.'); return }
     setSubmitting(true); setError(null)
     fireStep('details')
     const leadEventId = newLeadEventId()
@@ -145,7 +145,7 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
           ...campaignFunnelTarget({ page, publicPath, campaign }),
           event_id: chosen.event_id, class_name: chosen.name, starts_at: chosen.starts_at,
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
-          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
+          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent === true,
           attribution: buildAttribution(attributionRef.current, readFbpCookie(typeof document !== 'undefined' ? document.cookie : '')),
           visit: readVisitOrigin() || undefined,
           lead_event_id: leadEventId,

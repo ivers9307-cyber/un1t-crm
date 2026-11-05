@@ -150,11 +150,32 @@ async function recordJoinedHere(db, contactId, locationId) {
   if (!rel.ok) logWarn('race-contact-linking', 'contact_studios lead row not written', { locationId, contactId, error: rel.error })
 }
 
-export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, insertFields = {} }) {
-  if (!email || typeof email !== 'string') return null
+export async function findOrCreateRaceContact(args) {
+  return (await findOrCreateRaceContactWithOutcome(args)).contactId
+}
+
+/**
+ * MOBILEFUNNEL.1 — findOrCreateRaceContact, also saying whether THIS call
+ * created the contact. `created` is true only when this call's INSERT made
+ * the row; a match at this studio, a sibling-studio match and a raced 23505
+ * adoption are all `false` (the person existed before this request). Same
+ * arguments, same lookups and the same writes as findOrCreateRaceContact,
+ * which is this function's `contactId`.
+ *
+ * The public offer forms (/api/public/corp-claims, class-booking,
+ * trial-purchases) use it to record an unticked consent box as an opt-out
+ * for a contact they just created (a new contact's marketing rows default
+ * to TRUE, migs 005/487/489), while leaving an existing contact's earlier
+ * choice alone.
+ *
+ * @returns {Promise<{ contactId: string|null, created: boolean }>}
+ */
+export async function findOrCreateRaceContactWithOutcome({ db, locationId, email, name = null, phone = null, restrictToLocation = false, insertFields = {} }) {
+  const found = (contactId) => ({ contactId: contactId || null, created: false })
+  if (!email || typeof email !== 'string') return found(null)
   const normalised = email.toLowerCase().trim()
-  if (!normalised || !normalised.includes('@')) return null
-  if (!locationId) return null
+  if (!normalised || !normalised.includes('@')) return found(null)
+  if (!locationId) return found(null)
 
   try {
     // Match at this location first.
@@ -175,7 +196,7 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       logWarn('race-contact-linking', `location lookup failed for ${normalised}`, { locationId, err: existingErr })
     }
     const here = holderFrom(existing || [], normalised, 'at this location')
-    if (here) return here
+    if (here) return found(here)
 
     // No match here. Unless the caller restricts to this location, try the
     // sibling locations in the same organisation. Don't change location_id —
@@ -187,7 +208,7 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       const sibling = await findContactInOrg(db, locationId, normalised)
       if (sibling) {
         await recordJoinedHere(db, sibling, locationId)
-        return sibling
+        return found(sibling)
       }
     }
 
@@ -226,18 +247,18 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
         const raced = await findContactInOrg(db, locationId, normalised)
         if (raced) {
           await recordJoinedHere(db, raced, locationId)
-          return raced
+          return found(raced)
         }
         logWarn('race-contact-linking', `email exists outside this org, refusing to link: ${normalised}`, { locationId })
-        return null
+        return found(null)
       }
       logWarn('race-contact-linking', `insert failed for ${normalised}`, { err: error })
-      return null
+      return found(null)
     }
-    return inserted?.id || null
+    return inserted?.id ? { contactId: inserted.id, created: true } : found(null)
   } catch (e) {
     logWarn('race-contact-linking', `threw`, { err: e })
-    return null
+    return found(null)
   }
 }
 

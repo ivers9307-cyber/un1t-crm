@@ -130,7 +130,8 @@ describe('CampaignFunnel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Book Mon 11:00' }))
     expect(await screen.findByText('Booked')).toBeTruthy()
     expect(screen.getByText('See you')).toBeTruthy()
-    expect(posts[0]).toMatchObject({ path: 'stillorgan', campaign: '50plus', event_id: 'a', first_name: 'Mary', consent: true, lead_event_id: 'lead-id-123' })
+    // MOBILEFUNNEL.1 — the consent box starts unticked and never blocks the booking.
+    expect(posts[0]).toMatchObject({ path: 'stillorgan', campaign: '50plus', event_id: 'a', first_name: 'Mary', consent: false, lead_event_id: 'lead-id-123' })
   })
 
   it('MOBILEFUNNEL.1: day-first, tapping a time goes straight to the details with that class (not the preselected one)', async () => {
@@ -151,6 +152,18 @@ describe('CampaignFunnel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Book Mon 07:00' }))
     expect(await screen.findByText('Booked')).toBeTruthy()
     expect(posts[0].event_id).toBe('m7')
+  })
+
+  it('MOBILEFUNNEL.1: the consent box starts unticked; ticking it sends consent true', async () => {
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: 'Book Mon 11:00' }))
+    const box = screen.getByRole('checkbox')
+    expect(box.checked).toBe(false)
+    await fillDetails()
+    fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: 'Book Mon 11:00' }))
+    expect(await screen.findByText('Booked')).toBeTruthy()
+    expect(posts[0].consent).toBe(true)
   })
 
   it('class_unavailable returns to the tiles with details kept', async () => {

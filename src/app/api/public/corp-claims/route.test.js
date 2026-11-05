@@ -11,7 +11,8 @@ const m = vi.hoisted(() => ({
   gElig: vi.fn(), gFulfil: vi.fn(), gPlan: vi.fn(), gCreds: vi.fn(),
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: m.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
-vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: m.contact }))
+// MOBILEFUNNEL.1 — the route reads the outcome form; `m.created` says whether this POST made the contact.
+vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: m.contact, findOrCreateRaceContactWithOutcome: async (a) => ({ contactId: await m.contact(a), created: m.created === true }) }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: m.capi, fbcFromFbclid: () => null }))
 vi.mock('@/lib/marketing-consent', () => ({ applyFormMarketingConsent: m.consent }))
 vi.mock('@/lib/waitlist-entry', () => ({ placeWaitlistEntry: m.deal }))
@@ -78,6 +79,7 @@ const call = async (body = BODY) => { const r = await POST(req(body)); return { 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  m.created = false
   m.updates = []
   m.readErrors = {}
   m.reads = {
@@ -128,6 +130,34 @@ describe('POST /api/public/corp-claims — the chosen class', () => {
     expect(m.contact).not.toHaveBeenCalled()
     expect(m.inserted).not.toHaveBeenCalled()
     expect(m.fulfil).not.toHaveBeenCalled()
+  })
+})
+
+// MOBILEFUNNEL.1 — consent is optional and starts unticked (src/lib/offer-form-consent.js).
+describe('POST /api/public/corp-claims — marketing consent', () => {
+  it('ticked: opts in', async () => {
+    const { status } = await call({ ...BODY, consent: true })
+    expect(status).toBe(200)
+    expect(m.consent).toHaveBeenCalledTimes(1)
+    expect(m.consent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c-1', consent: true, source: 'corp_promo', locationId: LOC }))
+  })
+  it('unticked and the contact was created by this claim: opts out (a new contact defaults to on)', async () => {
+    m.created = true
+    const { status, json } = await call({ ...BODY, consent: false })
+    expect(status).toBe(200)
+    expect(json.success).toBe(true)
+    expect(m.consent).toHaveBeenCalledTimes(1)
+    expect(m.consent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c-1', consent: false, source: 'corp_promo', locationId: LOC }))
+  })
+  it('unticked (or absent) and the contact already existed: the claim succeeds and no consent is written', async () => {
+    const { consent: _drop, ...noConsent } = BODY
+    for (const body of [{ ...BODY, consent: false }, noConsent]) {
+      m.consent.mockClear()
+      const { status, json } = await call(body)
+      expect(status).toBe(200)
+      expect(json.success).toBe(true)
+      expect(m.consent).not.toHaveBeenCalled()
+    }
   })
 })
 
