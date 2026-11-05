@@ -2,7 +2,7 @@
 //
 // SERVER-ONLY by convention (no server-only package in this repo): these ids are operator configuration for the Glofox purchase
 // and never reach a client component. Blank ids mean the plan has not been
-// created in Glofox yet, and the promo stays off (glofoxPlanForPromo -> null).
+// created in Glofox yet, and the promo cannot grant (glofoxPlanForPromo -> null).
 
 import { CORP_PROMOS } from '@/lib/corp-promos'
 
