@@ -627,10 +627,10 @@ export function PillarsBlock({ block, onEdit, locationId, pageId, wordmark = '' 
   const items = Array.isArray(block.items) ? block.items.slice(0, 3) : []
   if (items.length === 0 && !onEdit) return null
   return (
-    <section className="bg-lp-pale text-black py-20 md:py-28">
+    <section className="bg-lp-pale text-black py-14 md:py-28">
       <div className="max-w-6xl mx-auto px-6">
         <Eyebrow dark={false}>{wordmark ? `Why ${wordmark}` : 'Why us'}</Eyebrow>
-        <div className="grid md:grid-cols-3 gap-6 md:gap-6">
+        <div className="grid md:grid-cols-3 gap-3 md:gap-6">
           {items.map((p, i) => (
             <Pillar
               key={i}
@@ -951,14 +951,17 @@ function ReviewCard({ review }) {
   )
 }
 
+// MOBILEFUNNEL.1 — below `md` a pillar is a compact row: a 72px square photo
+// beside the number, title and text (three tall photo cards were ~2,200px on
+// a phone). From `md` the card as before: the 3:4 photo over the words.
 function Pillar({ number, title, body, photoUrl, onEdit, locationId, pageId, itemIndex, delayClass = '' }) {
   // Show the photo region if there IS a photo OR we're in edit mode
   // (so the operator has somewhere to drop one).
   const showPhotoRegion = !!photoUrl || !!onEdit
   return (
-    <div className={`lp-reveal ${delayClass} group bg-white border border-black/10 rounded p-7`}>
+    <div data-pillar="" className={`lp-reveal ${delayClass} group bg-white border border-black/10 rounded p-4 md:p-7 flex items-start gap-4 md:block`}>
       {showPhotoRegion && (
-        <div className="aspect-[3/4] overflow-hidden bg-black/5 relative rounded-xl">
+        <div className="shrink-0 w-[72px] h-[72px] md:w-auto md:h-auto md:aspect-[3/4] overflow-hidden bg-black/5 relative rounded-xl">
           {onEdit ? (
             <EditableImage
               src={photoUrl || ''}
@@ -979,18 +982,20 @@ function Pillar({ number, title, body, photoUrl, onEdit, locationId, pageId, ite
           )}
         </div>
       )}
-      <div className="mt-6 flex items-baseline gap-4">
-        <span className="font-display font-extrabold text-3xl text-black/20 tracking-wide">
-          <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
-        </span>
-        <span className="h-px flex-1 bg-black/10" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <div className="md:mt-6 flex items-baseline gap-4">
+          <span className="font-display font-extrabold text-xl md:text-3xl text-black/20 tracking-wide">
+            <E value={number} onEdit={onEdit} path={['items', itemIndex, 'number']} />
+          </span>
+          <span className="h-px flex-1 bg-black/10" aria-hidden="true" />
+        </div>
+        <h3 className="mt-1 md:mt-3 font-display font-extrabold uppercase text-base md:text-[1.3rem] leading-snug tracking-wide">
+          <E value={title} onEdit={onEdit} path={['items', itemIndex, 'title']} />
+        </h3>
+        <p className="mt-1 md:mt-3 text-sm md:text-base text-black/65 leading-relaxed">
+          <E value={body} onEdit={onEdit} path={['items', itemIndex, 'body']} multiline />
+        </p>
       </div>
-      <h3 className="mt-3 font-display font-extrabold uppercase text-[1.3rem] leading-snug tracking-wide">
-        <E value={title} onEdit={onEdit} path={['items', itemIndex, 'title']} />
-      </h3>
-      <p className="mt-3 text-black/65 leading-relaxed">
-        <E value={body} onEdit={onEdit} path={['items', itemIndex, 'body']} multiline />
-      </p>
     </div>
   )
 }
