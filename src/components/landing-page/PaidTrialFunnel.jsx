@@ -109,8 +109,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
   const [chosen, setChosen] = useState(null) // the public class picked, or null (skipped)
   const [reloadKey, setReloadKey] = useState(0)
   const [doneClass, setDoneClass] = useState(null) // the class the status route reports (a resumed checkout)
-  // MOBILEFUNNEL.1 — marketing consent starts unticked and is optional.
-  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: false })
+  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
   const [payment, setPayment] = useState(null) // { purchaseId, checkout, amount_cents, currency, product_name }
   const [done, setDone] = useState(null) // { state: 'paid'|'granted'|'pending' }
   const [refusal, setRefusal] = useState(null) // { message, ctaLabel }
@@ -215,8 +214,8 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
     e.preventDefault()
     if (preview) return
     setError(null)
-    if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim()) {
-      setError('Please complete every field.'); return
+    if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim() || !form.consent) {
+      setError('Please complete every field and tick consent.'); return
     }
     if (!isValidMobileNumber(form.phone)) { setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return }
     if (terms && !termsAccepted) { setError(terms.required_message || 'Please tick to accept the terms and waiver.'); return }
@@ -235,7 +234,7 @@ function PaidTrialCard({ studios = [], initialStudio = null, resumePurchaseId = 
         body: JSON.stringify({
           ...target(),
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
-          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent === true,
+          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
           ...(terms ? { terms_accepted: termsAccepted } : {}),
           ...(chosen ? { event_id: chosen.event_id } : {}),
           attribution: buildAttribution(),
