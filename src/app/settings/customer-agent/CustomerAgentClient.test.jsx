@@ -47,13 +47,18 @@ const openSection = (name) => fireEvent.click(screen.getByRole('button', { name 
 // not open the next test's page somewhere else.
 afterEach(() => { cleanup(); delete global.fetch; window.history.replaceState(null, '', '/') })
 
+// MIASETTINGS.3a — Messages rows start folded: open one by its label.
+const openRow = (label) => fireEvent.click(screen.getAllByRole('button', { expanded: false, hidden: true }).find((b) => (b.textContent || '').startsWith(label)))
+
 describe('CustomerAgentClient — placeholders carry the brand (W1.S3)', () => {
   it('renders the hand-off and welcome defaults and the Points label from the GET brand', async () => {
     mockFetch([reply(200, { ...(await GOOD.json()), brand: { companyName: 'Gym A', shortName: 'GA' } })])
     const { container } = render(<CustomerAgentClient canEdit />)
     await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
+    // MIASETTINGS.3a — a folded row previews its default.
+    const previews = [...container.querySelectorAll('[data-testid="message-preview"]')].map((n) => n.textContent)
     expect(container.querySelector('input[placeholder="Thanks for your message! One of the Gym A team will get back to you shortly."]')).toBeTruthy()
-    expect(container.querySelector('textarea[placeholder^="Hi, I\'m Mia, the studio\'s assistant at Gym A."]')).toBeTruthy()
+    expect(previews.some((t) => t.startsWith("Hi, I'm Mia, the studio's assistant at Gym A."))).toBe(true)
     expect(screen.getByText('Monthly GA Points target')).toBeTruthy()
     expect(container.textContent).not.toContain('UN1T')
   })
@@ -757,7 +762,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
   const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
   const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
   // MIASETTINGS.2c — the group's heading is its Messages group title.
-  const GROUP = 'Payments at Hatch'
+  const GROUP = /^Payments at Hatch/
 
   it('a un1t.online studio shows the group with every field and the code defaults as placeholders', async () => {
     mockFetch([answer({ membership_source_key: 'un1t_online' })])
@@ -768,11 +773,10 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     // MIASETTINGS.1c — the 12 Hatch copy fields plus the booking form message
     // (booking_flow_text), new at the studio and Hatch only. MIASETTINGS.2c:
     // the booking form message sits in Messages' WhatsApp booking form group.
-    expect(group.querySelectorAll('input:not([type="checkbox"])').length).toBe(12)
-    const flowText = screen.getByLabelText('Booking form message (WhatsApp)')
-    expect(screen.getByTestId('message-group-booking-form').contains(flowText)).toBe(true)
-    expect(within(group).getByPlaceholderText('Thanks! You can go back to WhatsApp now.')).toBeTruthy()
-    expect(within(group).getByPlaceholderText("Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.")).toBeTruthy()
+    expect(group.querySelectorAll('[data-testid^="message-row-"]').length).toBe(12)
+    expect(within(screen.getByTestId('message-group-booking-form')).getByRole('button', { name: /^Booking form message \(WhatsApp\)/, hidden: true })).toBeTruthy()
+    expect(within(group).getByText('Thanks! You can go back to WhatsApp now.')).toBeTruthy()
+    expect(within(group).getByText("Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.")).toBeTruthy()
   })
 
   it('no dash (em or en) in the group\'s labels, help or placeholders', async () => {
@@ -781,7 +785,6 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     await ready()
     const group = screen.getByTestId('hatch-copy-group')
     expect(group.textContent).not.toMatch(/[—–]/)
-    for (const input of group.querySelectorAll('input:not([type="checkbox"])')) expect(input.getAttribute('placeholder')).not.toMatch(/[—–]/)
   })
 
   it('a Glofox studio, no source, or an older GET shows no group', async () => {
@@ -799,6 +802,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     mockFetch([answer({ membership_source_key: 'un1t_online' }), reply(200, { success: true, settings: {} }), answer({ membership_source_key: 'un1t_online' })])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openRow('Payment done page text')
     fireEvent.change(screen.getByPlaceholderText('Thanks! You can go back to WhatsApp now.'), { target: { value: '  All done, back to WhatsApp.  ' } })
     fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(putBody()).toBeTruthy())
@@ -812,8 +816,9 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     render(<CustomerAgentClient canEdit />)
     await ready()
     const group = screen.getByTestId('hatch-copy-group')
-    expect(within(group).getByDisplayValue('Org refund text.')).toBeTruthy()
-    expect(within(screen.getByText('Refund request message').parentElement).getByText('Organisation default')).toBeTruthy()
+    expect(within(group).getByText('Org refund text.')).toBeTruthy()
+    const row = within(group).getByText('Refund request message').closest('[data-testid^="message-row-"]')
+    expect(within(row).getByText('Organisation default')).toBeTruthy()
   })
 
   // MIAHATCH.4 (Task 14) — "What Mia can sell" mounts in the same gate, and the
@@ -1074,7 +1079,7 @@ describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', ()
     render(<CustomerAgentClient canEdit />)
     await ready()
     expect(current()).toEqual(['Messages'])
-    expect(screen.getByRole('textbox', { name: 'No-credits escalation message' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^No-credits escalation message/ })).toBeTruthy()
     expect(screen.queryByRole('radiogroup', { name: 'Mia is' })).toBeNull()
   })
 
@@ -1281,6 +1286,7 @@ describe('CustomerAgentClient — save bar and unsaved-change guards (MIASETTING
     openSection('Personality and voice')
     fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
     openSection('Messages')
+    openRow('No-credits escalation message')
     fireEvent.change(screen.getByRole('textbox', { name: 'No-credits escalation message' }), { target: { value: 'Call us' } })
     fireEvent.click(within(bar()).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(puts()).toHaveLength(1))

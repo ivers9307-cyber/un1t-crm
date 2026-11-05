@@ -40,6 +40,12 @@ export async function editByLabel(label, value, { section } = {}) {
       .flatMap((role) => screen.queryAllByRole(role, { name: menuName }))
     if (items.length) fireEvent.click(items[0])
   }
+  // A folded row (Messages) shows a toggle named by its label; open it first.
+  if (!screen.queryAllByText(label, { selector: 'label' }).length) {
+    const toggle = screen.queryAllByRole('button', { expanded: false })
+      .find((b) => (b.textContent || '').startsWith(label))
+    if (toggle) fireEvent.click(toggle)
+  }
   const labelEl = (await screen.findAllByText(label, { selector: 'label' }))[0]
   let node = labelEl.parentElement
   let field = null
