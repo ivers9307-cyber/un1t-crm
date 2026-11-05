@@ -1,425 +1,135 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import Link from 'next/link'
-import { BarChart3 } from 'lucide-react'
-import { CANCELLATION_FORM_DEFAULTS, REASON_CODES } from '@/lib/cancellation-form/defaults'
-import { defaultHoldingMessage, defaultWelcomeGreeting, DEFAULT_BOOKING_CTA_LABEL, DEFAULT_FLOW_BOOKING_ACK_TEXT, DEFAULT_FLOW_BOOKING_HOLDING_TEXT, DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT } from '@/lib/agent/default-copy'
-import { productName } from '@/lib/brand-name'
-import ReadFailedNote from '@/components/settings/ReadFailedNote'
-import { hubManageHref } from '@/lib/integrations-hub-links'
-import { zoneCity } from '@/lib/record-time'
-import { Button } from '@/components/ui'
-// MIAORG.1 Task 3 — which fields this studio sets itself (zod-free, shared
-// with the PUT's contract).
-import {
-  initialOverridden, withOverride, withoutOverride, valueAt, fieldSource, sourceTagLabel, orgSetsAny,
-  isOverridden, INHERITABLE_SCALAR_KEYS, INHERITABLE_OBJECT_KEYS, INHERITABLE_OBJECT_FIELDS, isHalfQuietWindow,
-  TRIAL_DONE_MIA_INSTRUCTION_DEFAULT,
-} from '@/lib/agent/settings-overrides'
-import {
-  buildSavePayload, bookingLinkErrors, bookingIssuesFromResponse, BOOKING_CTA_LABEL_MAX,
-  trialDoneErrors, parseTrialDoneContactIds,
-} from './save-payload'
-import { HATCH_COPY_FIELDS, HATCH_COPY_GROUP_TITLE } from './hatch-copy-fields'
-import MiaOffersSection from './MiaOffersSection'
-// MIAORG.1 Task 4 — the organisation defaults, for masters and org admins.
-import OrgDefaultsClient from './OrgDefaultsClient'
-
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
-// Instagram agent. Manager+ only. Two parts: behaviour settings + the
-// knowledge editor the agent answers from (channel connections moved to
-// the per-location Integrations tab strip — IG-HOME.1; a pointer card
-// keeps the old path discoverable). Ships OFF by default.
-
-const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'general', 'faq']
-
-// CANCEL-FORM.2 — placeholders + reason codes come from the pure copy module
-// (no server-only imports), so the editor's defaults can never drift from
-// what the form actually renders.
-const CF_DEFAULTS = CANCELLATION_FORM_DEFAULTS
-const CF_REASON_CODES = REASON_CODES
-
-// MIAORG.1 Task 3 — a field label with its source tag ("Organisation
-// default" / "Default", or the "Use organisation default" link) beside it.
-function FieldLabel({ tag, children }) {
-  return (
-    <div className="flex items-center justify-between gap-2 mb-1">
-      <label className="block text-sm font-medium text-un1t-text">{children}</label>
-      {tag}
-    </div>
-  )
-}
-
+// Instagram agent. Manager+ only. Ships OFF by default.
+//
+// MIASETTINGS.2c — the shell: a header (title, studio, the SAVED status and
+// quiet hours), a section menu, and one section at a time. Every section
+// stays mounted and the others get `hidden`, so a draft survives a switch
+// (offers, voices and knowledge drafts too). The open section is in the URL
+// (`?section=<key>`, sections.js), read once on mount and written with
+// history.replaceState. The header, the menu and its links sit outside the
+// disabled <fieldset>s, so a read-only viewer can still move around; each
+// section puts its settings in its own fieldset. The studio settings state
+// lives in useAgentSettings; one Save saves edits made in every section.
+//
 // MIAROLE.1 (C80) — `canEdit` comes from the server page (canEditMiaSettings:
 // owner at the active studio, or master), the same predicate the PUT gates
 // on. Omitted, it fails closed: the settings render read-only, with no Save.
-// The knowledge editor below is outside that rule.
+// The knowledge editor is outside that rule; Mia's voices carry their own
+// (`canEditVoices`, owners and managers: VOICEREPLY.1).
 // MIAORG.1 Task 4 — `orgDefaults` ({ organizationId, organizationName }) is
 // set by the server page only for a master or an admin of the organisation
-// (resolveAdminOrgId); it shows the organisation defaults section above this
-// studio's settings. Null for everyone else: the page is exactly as before.
-export default function CustomerAgentClient({ canEdit = false, orgDefaults = null } = {}) {
-  const [settings, setSettings] = useState(null)
-  const [location, setLocation] = useState(null)
-  // W1.S3 — the studio's resolved brand (GET payload), for the placeholders.
-  const [brand, setBrand] = useState({ companyName: '', shortName: '' })
-  const [entries, setEntries] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState(null)
-  const [checkinStats, setCheckinStats] = useState(null)
-  const [error, setError] = useState(null)
-  // SETTINGSWIPE.1 — true when the settings GET failed. The editor must then
-  // show nothing it could save: the GET used to answer a failed read with
-  // the DEFAULTS, and Save wrote them back (Mia off).
-  const [loadFailed, setLoadFailed] = useState(false)
-  // MIAORG.1 Task 3 — the fields this studio sets itself (override paths:
-  // 'tone', 'followups.daily_cap'). Only these are stored on Save; every other
-  // inheritable field keeps following the organisation default (or the code
-  // default), so a later org change still reaches this studio. Starts from
-  // the stored blob: every value it holds counts as the studio's own (T3-D),
-  // so the first save of a legacy full blob keeps all of it.
-  const [overridden, setOverridden] = useState([])
-  // The CURRENT override set, for work that finishes after an await
-  // (refreshInherited runs after the org PUT; that render's `overridden`
-  // would be stale if the operator edited a field meanwhile).
-  const overriddenRef = useRef(overridden)
-  useEffect(() => { overriddenRef.current = overridden }, [overridden])
-  // The org layer (raw) and what each key resolves to with no override.
-  const [org, setOrg] = useState(null)
-  const [inherited, setInherited] = useState(null)
-  // MIAORG.1 final review — false at a studio whose membership source takes
-  // no bookings (GET `bookings`): the Booking link fields show there. An
-  // older GET without the key shows them too (never hides a saved link).
-  const [bookings, setBookings] = useState(null)
-  // MIAHATCH.4 — the studio's membership source key (GET): the Hatch payments
-  // and booking copy group shows only for 'un1t_online'.
-  const [membershipSourceKey, setMembershipSourceKey] = useState(null)
-  // The PUT's 400 issues on the booking fields, shown beside them.
-  const [serverFieldErrors, setServerFieldErrors] = useState({})
+// (resolveAdminOrgId).
+// MIASETTINGS.4 — for them the header has a scope switch, "This studio" or
+// "All studios (organisation)" (`?scope=org`). In the organisation scope the
+// menu lists only the sections the organisation can set, and
+// OrgDefaultsClient draws that section's organisation fields with its own
+// save bar; the studio sections and their bar stay mounted, hidden. Both
+// scopes stay mounted, so a draft survives a section switch either way.
+// Switching scope while the scope you are in has unsaved changes asks
+// "Discard your unsaved changes?" first: No stays, Yes drops them and
+// switches.
 
-  // After a save (refreshSettings). load() sets the same state inline.
-  function applySettingsResponse(sRes) {
-    setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
-    setBrand(sRes.brand || { companyName: '', shortName: '' })
-    setOverridden(initialOverridden(sRes.studio))
-    setOrg(sRes.org || null)
-    setInherited(sRes.inherited || null)
-    setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
-    setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
-  }
+import { useEffect, useRef, useState } from 'react'
+import ReadFailedNote from '@/components/settings/ReadFailedNote'
+import { hubManageHref } from '@/lib/integrations-hub-links'
+import OrgDefaultsClient from './OrgDefaultsClient'
+import { useAgentSettings } from './useAgentSettings'
+import { SECTIONS, parseLocation, writeLocation } from './sections'
+import { statusOf } from './status'
+import { fieldsFor } from './fields'
+import SectionMenu from './components/SectionMenu'
+import SaveBar from './components/SaveBar'
+import { changedFieldCount } from './dirty'
+import { fieldRenderer } from './sections/field-renderer'
+import OverviewSection from './sections/OverviewSection'
+import PersonalitySection from './sections/PersonalitySection'
+import HandoffsSection from './sections/HandoffsSection'
+import BookingsSection from './sections/BookingsSection'
+import MessagesSection from './sections/MessagesSection'
+import FollowupsSection from './sections/FollowupsSection'
+import CancellationSection from './sections/CancellationSection'
+import KnowledgeSection from './sections/KnowledgeSection'
+import MemberAppSection from './sections/MemberAppSection'
 
-  async function load(isCancelled = () => false) {
-    try {
-      // allSettled: a failed KNOWLEDGE read must not be reported as a failed
-      // settings read (the editor would hide a Save it can safely offer).
-      const [sOut, kOut] = await Promise.allSettled([
-        fetch('/api/settings/customer-agent').then(r => r.json()),
-        fetch('/api/agent/knowledge').then(r => r.json()),
-      ])
-      if (isCancelled()) return
-      const sRes = sOut.status === 'fulfilled' ? sOut.value : null
-      if (sRes?.success && sRes.settings) {
-        // Inline (not applySettingsResponse) so the mount effect below keeps
-        // depending on nothing reactive; keep the two in step.
-        setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null)
-        setBrand(sRes.brand || { companyName: '', shortName: '' })
-        setOverridden(initialOverridden(sRes.studio)); setOrg(sRes.org || null); setInherited(sRes.inherited || null)
-        setBookings(typeof sRes.bookings === 'boolean' ? sRes.bookings : null)
-        setMembershipSourceKey(typeof sRes.membership_source_key === 'string' ? sRes.membership_source_key : null)
-        setLoadFailed(false)
-      } else {
-        setSettings(null); setLoadFailed(true)
-      }
-      if (kOut.status === 'fulfilled' && kOut.value?.success) setEntries(kOut.value.entries || [])
-    } catch {
-      if (!isCancelled()) { setSettings(null); setLoadFailed(true) }
-    } finally {
-      if (!isCancelled()) setLoading(false)
-    }
-  }
+const SECTION_COMPONENTS = {
+  overview: OverviewSection,
+  personality: PersonalitySection,
+  handoffs: HandoffsSection,
+  bookings: BookingsSection,
+  messages: MessagesSection,
+  followups: FollowupsSection,
+  cancellation: CancellationSection,
+  knowledge: KnowledgeSection,
+  'member-app': MemberAppSection,
+}
 
+const CHIP = 'text-xs rounded-full px-2 py-0.5 whitespace-nowrap'
+const STATUS_CHIPS = {
+  off: { text: 'Off', cls: 'border border-un1t-border text-un1t-muted' },
+  test: { text: 'Test', cls: 'bg-amber-500/10 text-amber-700' },
+  live: { text: 'Live', cls: 'bg-green-500/10 text-green-700' },
+  // Live and Test both on is live for everyone: it reads as Live.
+  live_and_test: { text: 'Live', cls: 'bg-green-500/10 text-green-700' },
+}
+
+// The section and scope the page opens on: the URL's, made safe
+// (sections.js): the organisation scope only for someone the server passed
+// orgDefaults, and only a section that scope has.
+function initialLocation(canOrg) {
+  if (typeof window === 'undefined') return { section: 'overview', scope: 'studio' }
+  return parseLocation(window.location.search, { canOrg })
+}
+
+const ORG_SECTIONS = SECTIONS.filter((s) => s.scopes.includes('org'))
+const ORG_MESSAGE_COUNT = fieldsFor('org', 'messages').length
+const SCOPES = [['studio', 'This studio'], ['org', 'All studios (organisation)']]
+const NO_SECTIONS = new Set()
+
+export default function CustomerAgentClient({ canEdit = false, orgDefaults = null, canEditVoices = false } = {}) {
+  const agent = useAgentSettings({ canEdit })
+  const { loading, loadFailed, reload, settings, saved, location, holds, saving, savedAt, error, save, discard, refreshInherited, dirtyPaths, dirtySections } = agent
+  const canOrg = !!orgDefaults?.organizationId
+  const [{ section, scope }, setPlace] = useState(() => initialLocation(canOrg))
+  // MIASETTINGS.3c — the Knowledge entries are loaded by its section; it reports the total here for the menu.
+  const [knowledgeCount, setKnowledgeCount] = useState(null)
+  // MIASETTINGS.4 — the organisation editor's unsaved changes (its own state).
+  const [orgDirty, setOrgDirty] = useState({ count: 0, sections: NO_SECTIONS })
+  const orgRef = useRef(null)
+
+  // Leaving the page (close, reload, a typed address) with unsaved changes.
+  const isDirty = dirtyPaths.length > 0
+  const anyDirty = isDirty || orgDirty.count > 0
   useEffect(() => {
-    let cancelled = false
-    load(() => cancelled)
-    return () => { cancelled = true }
-    // load is re-created each render and only ever sets state; run once on mount.
-  }, [])
+    if (!anyDirty) return undefined
+    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [anyDirty])
 
-  // Editing an inheritable field makes it this studio's own (studio-only and
-  // sibling keys are ignored by withOverride: they are always saved).
-  function markOverridden(...paths) { setOverridden(o => withOverride(o, ...paths)) }
-  function setField(k, v) {
-    setSettings(s => ({ ...s, [k]: v })); markOverridden(k)
-    setServerFieldErrors(e => (k in e ? Object.fromEntries(Object.entries(e).filter(([f]) => f !== k)) : e))
+  function openSection(key) {
+    setPlace({ section: key, scope })
+    writeLocation({ section: key, scope })
   }
-  // Quiet hours are a pair: editing either end makes both the studio's own
-  // (and ends a "no quiet hours" opt-out).
-  function setQuietHours(k, v) {
-    setSettings(s => {
-      const { off: _off, ...q } = s.quiet_hours || {}
-      return { ...s, quiet_hours: { ...q, [k]: v } }
-    })
-    setOverridden(o => withOverride(withoutOverride(o, 'quiet_hours.off'), 'quiet_hours.start', 'quiet_hours.end'))
-  }
-  // MIAORG.1 Task 4 (T4-A) — "No quiet hours (ignore the organisation's)".
-  // Null cannot say "none" once the organisation sets quiet hours, so the
-  // studio stores `quiet_hours.off`. Ticking clears start and end; unticking
-  // drops the opt-out, so the window is inherited again.
-  function setNoQuietHours(on) {
-    if (on) {
-      setSettings(s => ({ ...s, quiet_hours: { start: null, end: null, tz: null, off: true } }))
-      setOverridden(o => withOverride(withoutOverride(o, 'quiet_hours.start', 'quiet_hours.end', 'quiet_hours.tz'), 'quiet_hours.off'))
-    } else {
-      setOverridden(o => withoutOverride(o, 'quiet_hours'))
-      setSettings(s => {
-        const q = inherited?.quiet_hours
-        return { ...s, quiet_hours: q && typeof q === 'object' ? { ...q } : null }
-      })
+
+  // Switching scope: the scope you leave keeps no unsaved change unless you
+  // say so (a No stays put). A section the new scope lacks opens Overview.
+  function switchScope(next) {
+    if (next === scope) return
+    const leavingDirty = scope === 'org' ? orgDirty.count > 0 : isDirty
+    if (leavingDirty) {
+      if (!window.confirm('Discard your unsaved changes?')) return
+      if (scope === 'org') orgRef.current?.discard()
+      else discard()
     }
+    const has = SECTIONS.find((s) => s.key === section)?.scopes.includes(next)
+    const place = { section: has ? section : 'overview', scope: next }
+    setPlace(place)
+    writeLocation(place)
   }
-  const noQuietHours = settings?.quiet_hours?.off === true
-  // MIAORG.1 Task 4 — one end of the window only: the payload would drop it
-  // silently, so the editor says "Set both times" and holds Save.
-  const quietHalf = isHalfQuietWindow(settings?.quiet_hours)
-  // MIAORG.1 final review — the Booking link fields, checked as the PUT
-  // checks them; an invalid value shows beside its field and holds Save.
-  // MIAHATCH.4 (Task 14): a un1t.online studio books through Mia now, but the
-  // link stays as the fallback (and Mia's answer where a class cannot be
-  // booked), so its fields show there whatever `bookings` says.
-  const showBookingLink = bookings !== true || membershipSourceKey === 'un1t_online'
-  const bookingErrors = { ...serverFieldErrors, ...bookingLinkErrors(settings) }
-  const bookingInvalid = showBookingLink && Object.keys(bookingLinkErrors(settings)).length > 0
-  // TRIALDONE.3 — the trial-finisher card (a un1t.online studio only), checked
-  // as the PUT checks it; an invalid value shows beside its field and holds Save.
-  const showTrialDone = membershipSourceKey === 'un1t_online'
-  const trialErrors = showTrialDone ? trialDoneErrors(settings) : {}
-  const trialInvalid = Object.keys(trialErrors).length > 0
-
-  // "Use organisation default": the field stops being the studio's own and
-  // shows the value it now inherits (GET's `inherited`).
-  function revertToInherited(paths) {
-    setOverridden(o => withoutOverride(o, ...paths))
-    setSettings(s => {
-      const next = { ...s }
-      for (const p of paths) {
-        const dot = p.indexOf('.')
-        if (dot < 0) {
-          const v = inherited?.[p]
-          next[p] = v && typeof v === 'object' ? { ...v } : (v ?? null)
-        } else {
-          const key = p.slice(0, dot)
-          next[key] = { ...(next[key] || {}), [p.slice(dot + 1)]: valueAt(inherited, p) ?? null }
-        }
-      }
-      return next
-    })
-  }
-
-  // A cleared number field shows what it then inherits, as its placeholder.
-  const inheritedNumber = (path, fallback) => String(valueAt(inherited, path) ?? fallback)
-
-  // The tag beside an inheritable field's label (staff copy, T3-F).
-  function sourceTag(paths) {
-    const source = fieldSource(paths, { overridden, org })
-    if (source === 'studio') {
-      if (!canEdit) return null
-      // a whole object key (quiet_hours) counts only on a set FIELD
-      const orgHas = orgSetsAny(paths, org)
-      return (
-        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs underline" onClick={() => revertToInherited(paths)}>
-          {orgHas ? 'Use organisation default' : 'Use default'}
-        </Button>
-      )
-    }
-    return (
-      <span className="text-[11px] rounded-full border border-un1t-border px-2 py-0.5 text-un1t-muted whitespace-nowrap">
-        {sourceTagLabel(source)}
-      </span>
-    )
-  }
-
-  // AGENT-CHECKIN.2 — humanise the last tick's skip-reason tally.
-  function describeCheckinReasons(checkins) {
-    const reasons = checkins?.reasons || {}
-    const parts = Object.entries(reasons).map(([k, n]) => `${k.replace(/_/g, ' ')} ×${n}`)
-    if (checkins?.reason === 'quiet_hours') parts.unshift('quiet hours')
-    return parts.length ? ` (${parts.join(', ')})` : ''
-  }
-
-  // CHECKINSTALL.1 — one line per Dublin day from last_outcome.checkins_day.
-  // Counts are per 15-minute run, not per person (one lead skipped all
-  // afternoon shows ×20). Staff copy, not customer-facing.
-  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  function describeCheckinDay(d) {
-    if (!d?.day) return null
-    const [, mm, dd] = d.day.split('-')
-    const label = `${Number(dd)} ${MONTHS[Number(mm) - 1] || ''}`
-    const sent = (d.freeform || 0) + (d.templates || 0)
-    const runs = d.daytime_ticks || 0
-    const checks = d.candidates || 0
-    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
-    const failed = d.failed_ticks ? ` · ${plural(d.failed_ticks, 'failed run')}` : ''
-    const partial = d.carry_failed ? ' (partial: an earlier run could not be read)' : ''
-    return `${label}: ${plural(runs, 'daytime run')} · ${plural(checks, 'candidate check')} · ${sent} sent · ${d.skipped || 0} skipped${describeCheckinReasons({ reasons: d.reasons })}${failed}${partial}`
-  }
-
-  async function saveSettings() {
-    setSaving(true); setError(null)
-    try {
-      // MIAORG.1 Task 3 — pure (./save-payload.js), so the Stillorgan round
-      // trip test runs this exact body.
-      const payload = buildSavePayload(settings, overridden)
-      const res = await fetch('/api/settings/customer-agent', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      })
-      const j = await res.json()
-      if (j.success) {
-        setSavedAt(Date.now()); setServerFieldErrors({})
-        await refreshSettings()
-      } else {
-        setServerFieldErrors(bookingIssuesFromResponse(j.issues))
-        setError(j.error || 'Failed to save')
-      }
-    } catch { setError('Failed to save') } finally { setSaving(false) }
-  }
-
-  // MIAORG.1 Task 3 — after a save, re-read so every tag and value shows the
-  // truth (a field cleared to blank is "not set here" and inherits again).
-  // Settings only: a knowledge edit in progress is never overwritten. A failed
-  // re-read keeps what is on screen (the save itself succeeded).
-  async function refreshSettings() {
-    try {
-      const sRes = await fetch('/api/settings/customer-agent').then(r => r.json())
-      if (sRes?.success && sRes.settings) applySettingsResponse(sRes)
-    } catch { /* keep the edited state; the save went through */ }
-  }
-
-  // MIAORG.1 Task 4 — after an ORGANISATION save: re-read what this studio
-  // inherits and show it in every field the studio does not set, without
-  // touching the studio's own (possibly unsaved) edits.
-  async function refreshInherited() {
-    try {
-      const sRes = await fetch('/api/settings/customer-agent').then(r => r.json())
-      if (!sRes?.success || !sRes.settings) return
-      const nextInherited = sRes.inherited || null
-      setOrg(sRes.org || null)
-      setInherited(nextInherited)
-      setSettings(s => {
-        if (!s) return s
-        // Read when React applies the update, so an edit made while the org
-        // save was in flight keeps the operator's value.
-        const overridden = overriddenRef.current
-        const next = { ...s }
-        for (const k of INHERITABLE_SCALAR_KEYS) {
-          if (!isOverridden(overridden, k)) next[k] = nextInherited?.[k] ?? null
-        }
-        for (const key of INHERITABLE_OBJECT_KEYS) {
-          // A studio that switched quiet hours off keeps showing none.
-          if (key === 'quiet_hours' && isOverridden(overridden, 'quiet_hours.off')) continue
-          const obj = { ...(next[key] || {}) }
-          for (const f of INHERITABLE_OBJECT_FIELDS[key]) {
-            if (!isOverridden(overridden, `${key}.${f}`)) obj[f] = valueAt(nextInherited, `${key}.${f}`) ?? null
-          }
-          next[key] = obj
-        }
-        return next
-      })
-    } catch { /* the org save went through; this studio's screen keeps what it shows */ }
-  }
-
-  // AGENT-FOLLOWUP.1 — approved templates for the stage-2 picker. The
-  // template COPY lives in the WhatsApp Templates manager (edit &
-  // resubmit there any time); this picker just selects which one the
-  // follow-up uses — fully updatable without code.
-  const [templates, setTemplates] = useState([])
-  useEffect(() => {
-    fetch('/api/whatsapp/templates')
-      .then(r => r.json())
-      .then(j => {
-        const list = j.templates || j.data || []
-        setTemplates(list.filter(t => String(t.status || '').toUpperCase() === 'APPROVED'))
-      })
-      .catch(() => {})
-  }, [])
-  // Object keys are overridden per field (MIAORG.1 Task 3).
-  const setFollowup = (key, value) => {
-    setSettings(s => ({ ...s, followups: { ...(s.followups || {}), [key]: value } }))
-    markOverridden(`followups.${key}`)
-  }
-  const setCheckin = (key, value) => {
-    setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
-    markOverridden(`first_class_checkin.${key}`)
-  }
-  // TRIALDONE.3 — studio-only, so no override bookkeeping: the block is always saved.
-  const setTrialDone = (key, value) =>
-    setSettings(s => ({ ...s, trial_done: { ...(s.trial_done || {}), [key]: value } }))
-  const setInlineSuggestion = (key, value) => {
-    setSettings(s => ({ ...s, inline_suggestion: { ...(s.inline_suggestion || {}), [key]: value } }))
-    markOverridden(`inline_suggestion.${key}`)
-  }
-  // CANCEL-FORM.2 — nested editors for the cancellation-form block.
-  const setCancelForm = (key, value) =>
-    setSettings(s => ({ ...s, cancellation_form: { ...(s.cancellation_form || {}), [key]: value } }))
-  const setCancelReason = (code, value) =>
-    setSettings(s => ({
-      ...s,
-      cancellation_form: {
-        ...(s.cancellation_form || {}),
-        reason_labels: { ...((s.cancellation_form || {}).reason_labels || {}), [code]: value },
-      },
-    }))
-
-  const [importing, setImporting] = useState(false)
-  const [importNote, setImportNote] = useState(null)
-
-  // KNOWLEDGE-IMPORT.1 — one click pulls the Glofox timetable's class
-  // types + descriptions into knowledge. Existing titles are never
-  // overwritten, so re-running after adding a class is safe.
-  async function importFromGlofox() {
-    setImporting(true); setError(null); setImportNote(null)
-    try {
-      const res = await fetch('/api/agent/knowledge/import-classes', { method: 'POST' })
-      const j = await res.json()
-      if (!j.success) { setError(j.error || 'Import failed'); return }
-      if (j.imported?.length) setEntries(e => [...e, ...j.imported])
-      const bits = []
-      bits.push(`${j.imported?.length || 0} class${(j.imported?.length || 0) === 1 ? '' : 'es'} imported`)
-      if (j.skipped?.length) bits.push(`${j.skipped.length} already in knowledge`)
-      if (j.missing_description?.length) bits.push(`no Glofox description for: ${j.missing_description.join(', ')} (added as drafts — fill them in below)`)
-      setImportNote(j.message || bits.join(' · '))
-    } catch { setError('Import failed') } finally { setImporting(false) }
-  }
-
-  async function addEntry() {
-    setError(null)
-    try {
-      const res = await fetch('/api/agent/knowledge', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: 'sales', title: 'New entry', content: '', enabled: true }),
-      })
-      const j = await res.json()
-      if (j.success) setEntries(e => [...e, j.entry])
-      else setError(j.error || 'Could not add the entry')
-    } catch { setError('Could not add the entry') }
-  }
-  function editLocal(id, patch) {
-    setEntries(e => e.map(x => x.id === id ? { ...x, ...patch } : x))
-  }
-  async function persist(id, patch) {
-    editLocal(id, patch)
-    try {
-      const res = await fetch(`/api/agent/knowledge/${id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-      })
-      const j = await res.json()
-      if (!j.success) setError(j.error || 'Could not save the entry')
-    } catch { setError('Could not save the entry') }
-  }
-  async function deleteEntry(id) {
-    setEntries(e => e.filter(x => x.id !== id))
-    await fetch(`/api/agent/knowledge/${id}`, { method: 'DELETE' })
+  function onOrgDirtyChange(count, sections) {
+    setOrgDirty({ count, sections })
   }
 
   if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
@@ -427,1050 +137,113 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     return (
       <div className="max-w-3xl">
         <h1 className="text-xl font-bold text-un1t-text mb-4">Customer Agent</h1>
-        <ReadFailedNote what="the customer agent settings" onRetry={() => load()} />
+        <ReadFailedNote what="the customer agent settings" onRetry={() => reload()} />
       </div>
     )
   }
 
-  const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
+  const renderField = fieldRenderer(agent)
+  const inOrg = scope === 'org'
+  const menuCounts = inOrg ? { messages: ORG_MESSAGE_COUNT } : {
+    messages: fieldsFor('studio', 'messages', agent.ctx).length,
+    ...(knowledgeCount == null ? {} : { knowledge: knowledgeCount }),
+  }
+  const firstFieldError = Object.values(agent.serverFieldErrors || {}).find((m) => typeof m === 'string' && m)
+  const status = STATUS_CHIPS[statusOf(saved || settings)]
+  const quiet = saved?.quiet_hours
+  const quietChip = quiet && !quiet.off && quiet.start && quiet.end ? `Quiet ${quiet.start} to ${quiet.end}` : null
+  const readOnlyNote = (
+    <p className="text-sm text-un1t-muted border border-un1t-border rounded-lg px-4 py-3 mb-6">
+      Only an owner can change Mia&apos;s settings here.
+    </p>
+  )
+  const links = [
+    { href: '/settings/customer-agent/analytics', label: 'Activity' },
+    { href: '/settings/customer-agent/requests', label: 'Requests' },
+    // IG-HOME.1 / INTEGONE.1 — channel connections live in the Integrations
+    // hub; this opens its Instagram drawer for this studio.
+    ...(location?.id ? [{ href: hubManageHref(location.id, 'instagram'), label: 'Channel connections' }] : []),
+  ]
 
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-xl font-bold text-un1t-text mb-1">Customer Agent</h1>
-      <p className="text-sm text-un1t-muted mb-6">
-        The AI assistant that answers customers on WhatsApp and Instagram. It only
-        answers from the knowledge below and hands off to a human for anything it can&apos;t answer.
-        Ships off by default — use Test mode to trial it on your own number first.
-      </p>
-
-      <Link
-        href="/settings/customer-agent/analytics"
-        className="inline-flex items-center gap-2 text-sm bg-un1t-surface border border-un1t-border rounded-lg px-4 py-2.5 mb-6 hover:border-un1t-subtle transition-colors"
-      >
-        <BarChart3 size={16} className="text-un1t-accent" />
-        <span className="text-un1t-text">View agent activity</span>
-        <span className="text-un1t-muted">— replies, escalations, what customers asked</span>
-      </Link>
-
-      {/* IG-HOME.1 — channel connections moved to the integrations (the
-          Integrations hub since INTEGONE.1); this pointer keeps the old path
-          discoverable, opening the hub's Instagram drawer for this studio. */}
-      {location?.id && (
-        <Link
-          href={hubManageHref(location.id, 'instagram')}
-          className="flex items-center justify-between border border-un1t-border rounded-lg px-4 py-3 mb-6 hover:border-un1t-subtle transition-colors"
-        >
-          <div>
-            <div className="text-sm font-medium text-un1t-text">Channel connections</div>
-            <div className="text-xs text-un1t-muted">
-              WhatsApp and Instagram for {location.name} are managed under Settings → Integrations.
-            </div>
+    <div className="max-w-5xl">
+      <header className="mb-6">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 className="text-xl font-bold text-un1t-text">Customer Agent</h1>
+          {location?.name && <span className="text-sm text-un1t-muted">{location.name}</span>}
+          {!inOrg && <span className={`${CHIP} ${status.cls}`}>{status.text}</span>}
+          {!inOrg && quietChip && <span className={`${CHIP} border border-un1t-border text-un1t-muted`}>{quietChip}</span>}
+        </div>
+        {canOrg && (
+          <div role="radiogroup" aria-label="Editing" className="flex flex-wrap items-center gap-2 mt-3">
+            <span className="text-sm text-un1t-muted" aria-hidden="true">Editing:</span>
+            {SCOPES.map(([key, text]) => {
+              const on = scope === key
+              return (
+                <button key={key} type="button" role="radio" aria-checked={on} onClick={() => switchScope(key)}
+                  className={`text-sm rounded-md px-3 py-1 border ${on
+                    ? 'bg-un1t-surface border-un1t-border font-medium text-un1t-text'
+                    : 'border-transparent text-un1t-muted hover:text-un1t-text'}`}>
+                  {text}
+                </button>
+              )
+            })}
           </div>
-          <span className="text-xs text-un1t-text underline">Manage</span>
-        </Link>
-      )}
-
-      {orgDefaults?.organizationId && (
-        <OrgDefaultsClient
-          organizationId={orgDefaults.organizationId}
-          organizationName={orgDefaults.organizationName || null}
-          onSaved={refreshInherited}
-        />
-      )}
-
-      {!canEdit && (
-        <p className="text-sm text-un1t-muted border border-un1t-border rounded-lg px-4 py-3 mb-6">
-          Only an owner can change these settings.
+        )}
+        <p className="text-sm text-un1t-muted mt-1">
+          The AI assistant that answers customers on WhatsApp and Instagram. It answers only from its
+          knowledge and hands anything else to a human.
         </p>
-      )}
+      </header>
 
-      {/* MIAROLE.1 — one disabled fieldset greys every settings control for a
-          non-owner; the Save buttons are not rendered for them at all. */}
-      <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
-      {/* ── Behaviour ─────────────────────────────────────── */}
-      <section className="space-y-5 border border-un1t-border rounded-lg p-5 mb-6">
-        {/* MIAORG.1 Task 3 — what the source tags mean (staff copy). */}
-        <p className="text-xs text-un1t-muted">
-          A field tagged Organisation default or Default follows your organisation&apos;s setting, or the
-          built-in default, until you change it here. Changing it sets it for this studio only.
-          Use organisation default puts it back.
-        </p>
-        <label className="flex items-center gap-3">
-          <input type="checkbox" className="h-4 w-4" checked={!!settings.enabled}
-            onChange={e => setField('enabled', e.target.checked)} />
-          <span className="text-sm text-un1t-text font-medium">Live — reply to all customers</span>
-        </label>
+      <div className="md:flex md:items-start md:gap-8">
+        <div className="md:w-56 md:shrink-0">
+          <SectionMenu sections={inOrg ? ORG_SECTIONS : SECTIONS} active={section} onSelect={openSection} links={links}
+            dirtySections={inOrg ? orgDirty.sections : dirtySections} dirty={anyDirty} counts={menuCounts} />
+        </div>
 
-        <div className="pl-7 space-y-3 border-l border-un1t-border ml-1">
-          <label className="flex items-center gap-3">
-            <input type="checkbox" className="h-4 w-4" checked={!!settings.test_mode}
-              onChange={e => setField('test_mode', e.target.checked)} />
-            <span className="text-sm text-un1t-text">Test mode — reply only to the numbers below (while not live)</span>
-          </label>
-          {/* Live-despite-test-mode tripwire: both flags on means the
-              allowlist is NOT in effect. Documented behaviour, but operators
-              read "test mode" as scoping and get surprised. */}
-          {!!settings.enabled && !!settings.test_mode && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-              Live is on, so test mode is not scoping anything — Mia is replying to every customer, not just the numbers below. Turn Live off to use the test list.
+        <div className="flex-1 min-w-0">
+          {canOrg && (
+            <div hidden={!inOrg} data-testid="org-scope">
+              <h2 className="text-lg font-semibold text-un1t-text mb-4">{SECTIONS.find((s) => s.key === section)?.label}</h2>
+              <OrgDefaultsClient
+                ref={orgRef}
+                organizationId={orgDefaults.organizationId}
+                organizationName={orgDefaults.organizationName || null}
+                section={section}
+                onSaved={refreshInherited}
+                onDirtyChange={onOrgDirtyChange}
+                onOpenSection={openSection}
+              />
             </div>
           )}
-          <div>
-            <label className="block text-xs text-un1t-muted mb-1">Test numbers (comma-separated, e.g. +353871234567)</label>
-            <input className={inputCls} value={(settings.test_phones || []).join(', ')}
-              onChange={e => setField('test_phones', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-              placeholder="+353871234567, +353879999999" />
-          </div>
-        </div>
 
-        {/* AGENT-HANDS.1 — class-booking autonomy. Consultations for
-            new leads are always autonomous; this controls member
-            CLASS bookings only. */}
-        <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Class bookings</label>
-          <select className={inputCls} value={settings.booking_mode === 'draft' ? 'draft' : 'auto'}
-            onChange={e => setField('booking_mode', e.target.value)}>
-            <option value="auto">Book immediately (agent books verified members straight in)</option>
-            <option value="draft">Queue for approval (one tap in Approvals books it + confirms to the member)</option>
-          </select>
-        </div>
+          <div hidden={inOrg}>
+            {/* Knowledge is outside the owner-only rule (any manager+ edits it). */}
+            {!canEdit && section !== 'knowledge' && section !== 'personality' && readOnlyNote}
 
-        <div>
-          <FieldLabel tag={sourceTag(['handoff_cooldown_hours'])}>Hand back to the agent after (hours)</FieldLabel>
-          <input type="number" min={0} max={168} className={inputCls}
-            value={settings.handoff_cooldown_hours ?? ''}
-            placeholder={inheritedNumber('handoff_cooldown_hours', 12)}
-            onChange={e => setField('handoff_cooldown_hours', e.target.value === '' ? null : Number(e.target.value))} />
-          <p className="text-xs text-un1t-subtle mt-1">
-            After the agent hands a conversation to a human, it stays out of that thread until a staff member
-            resolves it in the inbox (which hands it straight back) — or until this many hours pass. 0 = only a
-            resolve brings the agent back.
-          </p>
-        </div>
+            {SECTIONS.map(({ key, label }) => {
+              const Section = SECTION_COMPONENTS[key]
+              return (
+                <div key={key} hidden={section !== key} data-testid={`section-${key}`}>
+                  <h2 className="text-lg font-semibold text-un1t-text mb-4">{label}</h2>
+                  <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices} onOpenSection={openSection} onCountChange={key === 'knowledge' ? setKnowledgeCount : undefined}
+                    readOnlyNote={key === 'personality' && section === 'personality' && !canEdit ? readOnlyNote : null} />
+                </div>
+              )
+            })}
 
-        {/* MIA-BOARD.1 — auto-resolve. The manual Resolve was used exactly
-            zero times in the feature's lifetime (121 parked threads at the
-            25 Aug re-audit), so the queue now cleans itself. */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <FieldLabel tag={sourceTag(['auto_resolve_after_reply_hours'])}>Auto-resolve after a reply + quiet (hours)</FieldLabel>
-            <input type="number" min={0} max={720} className={inputCls}
-              value={settings.auto_resolve_after_reply_hours ?? ''}
-              placeholder={inheritedNumber('auto_resolve_after_reply_hours', 8)}
-              onChange={e => setField('auto_resolve_after_reply_hours', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-xs text-un1t-subtle mt-1">
-              Once a team member has replied to a handed-off conversation and it then goes quiet for this long,
-              the handoff is marked resolved and the agent is back on duty for the next message. 0 = off.
-            </p>
-          </div>
-          <div>
-            <FieldLabel tag={sourceTag(['auto_resolve_stale_hours'])}>Auto-resolve when fully stale (hours)</FieldLabel>
-            <input type="number" min={0} max={720} className={inputCls}
-              value={settings.auto_resolve_stale_hours ?? ''}
-              placeholder={inheritedNumber('auto_resolve_stale_hours', 48)}
-              onChange={e => setField('auto_resolve_stale_hours', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-xs text-un1t-subtle mt-1">
-              If nothing at all happens in a handed-off conversation for this long, it resolves on its own so
-              the customer&apos;s next message doesn&apos;t land in silence. 0 = off.
-            </p>
-          </div>
-        </div>
-
-        {/* MIA-HYGIENE.1 — reasoning effort. The agent has always read this
-            per turn (resolveAgentEffort), but it had no editor, so every
-            location ran on the 'medium' code default. */}
-        <div>
-          <FieldLabel tag={sourceTag(['effort'])}>Reasoning effort</FieldLabel>
-          <select className={inputCls} value={settings.effort || ''}
-            onChange={e => setField('effort', e.target.value || null)}>
-            <option value="">Default (medium)</option>
-            <option value="low">Low — fastest and cheapest, for simple chat</option>
-            <option value="medium">Medium — balanced</option>
-            <option value="high">High — more thorough, slower</option>
-            <option value="max">Max — most thorough, slowest</option>
-          </select>
-          <p className="text-xs text-un1t-subtle mt-1">
-            How much the agent thinks before replying. Medium suits most studios. Raise it if you see
-            shallow answers on booking or identity questions; lower it for faster, cheaper replies.
-          </p>
-        </div>
-
-        {/* MIA-HYGIENE.1 — same story: read live by the verify-fail handoff,
-            never editable. Bounded 1-5 so a typo can't disable the net. */}
-        <div>
-          <FieldLabel tag={sourceTag(['handoff_after_verify_failures'])}>Hand off after failed ID checks</FieldLabel>
-          <input type="number" min={1} max={5} className={inputCls}
-            value={settings.handoff_after_verify_failures ?? ''}
-            placeholder="2"
-            onChange={e => setField('handoff_after_verify_failures', e.target.value === '' ? null : Number(e.target.value))} />
-          <p className="text-xs text-un1t-subtle mt-1">
-            After this many failed identity checks in a row, the agent stops asking and hands the
-            conversation to a human instead of looping the customer. Blank = the default (2).
-          </p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['agent_name'])}>Agent name</FieldLabel>
-          <input className={inputCls} maxLength={40} value={settings.agent_name || ''}
-            onChange={e => setField('agent_name', e.target.value)}
-            placeholder="Mia" />
-          <p className="text-xs text-un1t-subtle mt-1">
-            The agent introduces itself by this name as the studio&apos;s AI assistant on first contact
-            (Meta&apos;s AI-messaging rules require the disclosure).
-          </p>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Membership sign-up link</label>
-          <input className={inputCls} maxLength={512} value={settings.membership_signup_url || ''}
-            onChange={e => setField('membership_signup_url', e.target.value)}
-            placeholder="https://…" />
-          <p className="text-xs text-un1t-subtle mt-1">
-            Shared when someone wants to join — sign-up and payment happen on this page. Update it
-            here any time (offers, new landing pages); leave blank and the agent hands membership
-            sign-ups to the team instead.
-          </p>
-        </div>
-
-        {/* MIAORG.1 — booking link, at a studio whose membership source takes
-            no bookings (Hatch Street on un1t.online): Mia cannot book there,
-            so she sends this link. Studio-only, always saved; blank = no link
-            (Mia hands bookings to the team). */}
-        {showBookingLink && (
-          <>
-            <div>
-              <label htmlFor="mia-booking-url" className="block text-sm font-medium text-un1t-text mb-1">Booking link</label>
-              <input id="mia-booking-url" type="url" className={inputCls} maxLength={500} value={settings.booking_url || ''}
-                onChange={e => setField('booking_url', e.target.value)}
-                aria-invalid={bookingErrors.booking_url ? 'true' : undefined}
-                placeholder="https://…" />
-              {bookingErrors.booking_url && <p className="text-xs text-red-600 mt-1" role="alert">{bookingErrors.booking_url}</p>}
-              <p className="text-xs text-un1t-subtle mt-1">
-                Mia sends this link when a customer wants to book. Used where class booking isn&apos;t connected.
-                Leave blank and Mia hands bookings to the team instead.
-              </p>
-            </div>
-            <div>
-              <label htmlFor="mia-booking-cta" className="block text-sm font-medium text-un1t-text mb-1">Booking button label</label>
-              <input id="mia-booking-cta" className={inputCls} maxLength={BOOKING_CTA_LABEL_MAX} value={settings.booking_cta_label || ''}
-                onChange={e => setField('booking_cta_label', e.target.value)}
-                aria-invalid={bookingErrors.booking_cta_label ? 'true' : undefined}
-                placeholder={DEFAULT_BOOKING_CTA_LABEL} />
-              {bookingErrors.booking_cta_label && <p className="text-xs text-red-600 mt-1" role="alert">{bookingErrors.booking_cta_label}</p>}
-              <p className="text-xs text-un1t-subtle mt-1">The text on the link&apos;s button, up to {BOOKING_CTA_LABEL_MAX} characters.</p>
-            </div>
-          </>
-        )}
-
-        <div>
-          {/* Studio-only (final review): champ-app reads this studio's own value. */}
-          <label className="block text-sm font-medium text-un1t-text mb-1">Monthly {productName(brand.shortName, 'points')} target</label>
-          <p className="text-xs text-un1t-text-2 mb-1">Shared monthly goal that drives member tiers. Blank = tiers off.</p>
-          <input type="number" min={0} step={50} className={inputCls}
-            value={settings.monthly_points_target ?? ''}
-            onChange={e => setField('monthly_points_target', e.target.value === '' ? null : Number(e.target.value))} />
-        </div>
-
-        <label className="flex items-center gap-3">
-          <input type="checkbox" className="h-4 w-4" checked={!!settings.social_enabled}
-            onChange={e => setField('social_enabled', e.target.checked)} />
-          <span className="text-sm text-un1t-text font-medium">Member social (friends, feed &amp; kudos)</span>
-        </label>
-        <p className="text-xs text-un1t-muted -mt-3 pl-7">
-          Lets members at this location add friends, see each other&apos;s activity, and react.
-        </p>
-
-        <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Post-class join CTA wording</label>
-          <input className={inputCls} maxLength={60} value={settings.membership_cta_label || ''}
-            onChange={e => setField('membership_cta_label', e.target.value)}
-            placeholder="Become a member" />
-          <p className="text-xs text-un1t-subtle mt-1">
-            Button text shown to trials / prospects in the post-class report (the join CTA). Active members get no CTA — booking lives in the member app. Leave blank to use the default shown.
-          </p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['tone'])}>Tone &amp; voice</FieldLabel>
-          <textarea className={inputCls} rows={2} maxLength={2000} value={settings.tone || ''}
-            onChange={e => setField('tone', e.target.value)}
-            placeholder="e.g. Warm, upbeat, brief. Use first names. No emojis." />
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['extra_rules'])}>Extra rules (optional)</FieldLabel>
-          <textarea className={inputCls} rows={2} maxLength={2000} value={settings.extra_rules || ''}
-            onChange={e => setField('extra_rules', e.target.value)}
-            placeholder="e.g. Never discuss competitor pricing." />
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['holding_message'])}>Hand-off message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.holding_message || ''}
-            onChange={e => setField('holding_message', e.target.value)}
-            placeholder={defaultHoldingMessage(brand.companyName)} />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when the agent hands the chat to a human.</p>
-        </div>
-
-        {/* AGENT-HANDS.1 / AGENT-CANCEL.1 — in-thread texts sent once staff
-            approve a drafted booking / cancellation. Placeholders mirror the
-            defaults in src/lib/agent/notify.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['booking_confirmation_text'])}>Booking confirmation message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.booking_confirmation_text || ''}
-            onChange={e => setField('booking_confirmation_text', e.target.value)}
-            placeholder="Good news, you're booked in for {class}. See you there." />
-          {/* BOOKCHATCOPY.1 — the staff Book panel's chat confirmation uses this text too (src/lib/book-chat-copy.js). */}
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a booking the agent drafted, and when staff book them from the Book panel with the chat confirmation ticked. <code>{'{class}'}</code> becomes what was booked and when. Leave blank to use the default shown.</p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['cancellation_confirmation_text'])}>Cancellation confirmation message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.cancellation_confirmation_text || ''}
-            onChange={e => setField('cancellation_confirmation_text', e.target.value)}
-            placeholder="All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a cancellation the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* UN1TMOVE.2 — sent when a un1t.online class booking is moved: staff
-            Move (with the chat confirmation ticked) or an approved move card.
-            Default mirrors src/lib/agent/notify.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['class_move_confirmation_text'])}>Class move confirmation message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.class_move_confirmation_text || ''}
-            onChange={e => setField('class_move_confirmation_text', e.target.value)}
-            placeholder="All sorted, your booking has been moved from {from} to {to}. See you there." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when a class booking is moved to another class: when you approve a move the agent drafted, and when staff move it from the contact page with the chat confirmation ticked. <code>{'{from}'}</code> and <code>{'{to}'}</code> become each class with its day and time. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* UN1TCOMP.1 — sent when staff add complimentary un1t.online credits
-            from the contact page with the WhatsApp box ticked. Default mirrors
-            src/lib/book-chat-copy.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['comp_credits_confirmation_text'])}>Complimentary credits message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.comp_credits_confirmation_text || ''}
-            onChange={e => setField('comp_credits_confirmation_text', e.target.value)}
-            placeholder="Good news, we've added {credits} to your {studio} account, use them by {date}. See you soon." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when staff add complimentary credits from the contact page with the WhatsApp box ticked (only while the WhatsApp window is open). <code>{'{credits}'}</code> becomes how many credits were added, <code>{'{date}'}</code> the use-by day and <code>{'{studio}'}</code> the studio name. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* EVENT-MOVE.7 — in-thread texts once staff decide the agent's event
-            move request. Defaults mirror notify.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['event_move_confirmation_text'])}>Event move confirmation message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.event_move_confirmation_text || ''}
-            onChange={e => setField('event_move_confirmation_text', e.target.value)}
-            placeholder="Done, your entry is now on {event}." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve an event move the agent asked for. <code>{'{event}'}</code> becomes the new event, date and time. A line about the new tickets email, and one about a link for any extra cost, are added after it when they apply. Leave blank to use the default shown.</p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['event_move_failed_text'])}>Event move not possible message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.event_move_failed_text || ''}
-            onChange={e => setField('event_move_failed_text', e.target.value)}
-            placeholder="We could not move your entry: {reason}. The team will be in touch." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve an event move but it cannot be done (for example the time has filled). <code>{'{reason}'}</code> becomes a short plain reason. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* MIA-BOOK.1 — what the agent says when the booking system rejects a
-            booking (e.g. no credits) and the request goes to the team to fix.
-            Default mirrors DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT in notify.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['booking_issue_handoff_text'])}>Booking issue handoff message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.booking_issue_handoff_text || ''}
-            onChange={e => setField('booking_issue_handoff_text', e.target.value)}
-            placeholder="There seems to be an issue with your account, so I'm handing this over to the team to sort it out. You'll hear from them shortly once it's resolved." />
-          <p className="text-xs text-un1t-muted mt-1">What the agent tells the customer when the booking system rejects a booking (for example no credits left) and the request is sent to the team to fix. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* MIA-CREDITS.1 — sent verbatim when the booking pre-flight finds no
-            credits/membership and the thread hands off to a human. Default
-            mirrors DEFAULT_NO_CREDITS_HANDOFF_TEXT in core.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['no_credits_handoff_text'])}>No-credits escalation message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.no_credits_handoff_text || ''}
-            onChange={e => setField('no_credits_handoff_text', e.target.value)}
-            placeholder="You're out of class credits at the moment so I can't book that one straight away. I'll escalate this to a team member to help you out now." />
-          <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer asks to book but has no credits or active membership. The conversation is handed to the team immediately and the booking request appears in Approvals. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* PERSON-ACCT.7 — sent verbatim when the booking tool finds two live
-            accounts for the same person and hands off rather than guessing.
-            Default mirrors DEFAULT_ACCOUNT_CONFLICT_HANDOFF_TEXT in core.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['account_conflict_handoff_text'])}>Duplicate-account escalation message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.account_conflict_handoff_text || ''}
-            onChange={e => setField('account_conflict_handoff_text', e.target.value)}
-            placeholder="You have more than one account with us so I want to get this booking exactly right. I'll get a team member to sort it for you now." />
-          <p className="text-xs text-un1t-muted mt-1">Sent word-for-word when a customer has more than one account holding a live membership or credits, so the agent will not guess which one to book. The conversation is handed to the team and the booking request appears in Approvals with the accounts listed. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* MIA-EXPIRY-QUIET.1 — the "Missed-booking apology" field lived here
-            until 2026-08-31. A booking that outlives its class is now silent to
-            the member and only alerts staff, so there is no copy to edit. */}
-
-        {/* FLOWACK.1 — the WhatsApp booking Flow: one acknowledgement on a
-            class submission (Mia does not answer it), and the holding line when
-            the booking goes to the team. Defaults in default-copy.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['flow_booking_ack_text'])}>Booking form received message (WhatsApp)</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.flow_booking_ack_text || ''}
-            onChange={e => setField('flow_booking_ack_text', e.target.value)}
-            placeholder={DEFAULT_FLOW_BOOKING_ACK_TEXT} />
-          <p className="text-xs text-un1t-muted mt-1">Sent once when a customer books a class through the WhatsApp booking form, while the booking is made. When it is booked they get the booking confirmation (the confirmation template, or the booking confirmation message above). Leave blank to use the default shown.</p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['flow_booking_holding_text'])}>Booking form needs the team message (WhatsApp)</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.flow_booking_holding_text || ''}
-            onChange={e => setField('flow_booking_holding_text', e.target.value)}
-            placeholder={DEFAULT_FLOW_BOOKING_HOLDING_TEXT} />
-          <p className="text-xs text-un1t-muted mt-1">Sent when a class booked through the WhatsApp booking form could not be booked automatically and goes to the team in Approvals. Approving or declining the request there then tells the customer in the chat. Leave blank to use the default shown.</p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['flow_booking_duplicate_text'])}>Booking form sent twice message (WhatsApp)</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.flow_booking_duplicate_text || ''}
-            onChange={e => setField('flow_booking_duplicate_text', e.target.value)}
-            placeholder={DEFAULT_FLOW_BOOKING_DUPLICATE_TEXT} />
-          <p className="text-xs text-un1t-muted mt-1">Sent when a customer sends the WhatsApp booking form for a class they have already asked for. If that class is already booked they get the booking confirmation instead. Leave blank to use the default shown.</p>
-        </div>
-
-        <div>
-          <FieldLabel tag={sourceTag(['flow_paid_trial_text'])}>Booking form paid trial reply (WhatsApp)</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.flow_paid_trial_text || ''}
-            onChange={e => setField('flow_paid_trial_text', e.target.value)}
-            placeholder="New to us? Start with our paid trial here: https://…" />
-          <p className="text-xs text-un1t-muted mt-1">When set, someone new to the studio who books through the WhatsApp booking form is not booked and gets no free trial: they are sent this message instead, so put your paid trial link in it. Members, returners and anyone with credits still book as normal. Leave blank to book new people with the free trial as before.</p>
-        </div>
-
-        {/* APPROVALS-STUDIO.1 — sent in-thread when staff decline a customer
-            request, so a decline is never silence. Default mirrors
-            DEFAULT_APPROVAL_DECLINE_TEXT in notify.js. */}
-        <div>
-          <FieldLabel tag={sourceTag(['approval_decline_text'])}>Request declined message</FieldLabel>
-          <input className={inputCls} maxLength={500} value={settings.approval_decline_text || ''}
-            onChange={e => setField('approval_decline_text', e.target.value)}
-            placeholder="Sorry, we couldn't complete that request this time. The team will be in touch to help." />
-          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you decline a request the agent queued. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* C2 — request_welcome instant greeting. Placeholder IS the code
-            default (src/lib/agent/default-copy.js, pure; welcome-greeting.js
-            pulls server-only WhatsApp code so it is not imported here). */}
-        <div>
-          <FieldLabel tag={sourceTag(['welcome_greeting'])}>Welcome greeting (sent when someone opens the chat without typing)</FieldLabel>
-          <textarea className={inputCls} rows={2} maxLength={500} value={settings.welcome_greeting || ''}
-            onChange={e => setField('welcome_greeting', e.target.value)}
-            placeholder={defaultWelcomeGreeting({ agentName: settings.agent_name, brand: brand.companyName })} />
-          <p className="text-xs text-un1t-muted mt-1">
-            Sent instantly when someone opens a brand-new chat (e.g. from a click-to-WhatsApp ad) without sending a message.
-            Uses the agent&apos;s on/off, test-mode, and quiet-hours switches above. Leave blank to use the default shown.
-          </p>
-        </div>
-
-        {/* C3 — cta_url link messages: a reply ending in a URL becomes a
-            tappable button; this is the button's label. */}
-        <div>
-          <FieldLabel tag={sourceTag(['link_button_text'])}>Link button label (shown on tappable link messages)</FieldLabel>
-          <input className={inputCls} maxLength={25} value={settings.link_button_text || ''}
-            onChange={e => setField('link_button_text', e.target.value)}
-            placeholder="Open link" />
-          <p className="text-xs text-un1t-muted mt-1">When the agent sends a link, it appears as a tappable button with this label. Leave blank to use the default shown.</p>
-        </div>
-
-        {/* MIAHATCH.4 (spec 6.6) — what Mia and the pay pages say about booking
-            and buying at a un1t.online studio (Hatch Street). Shown only there:
-            a Glofox studio never says any of it. Placeholders are the code
-            defaults (default-copy.js); blank = the default. */}
-        {membershipSourceKey === 'un1t_online' && (
-          <div className="space-y-4 border-t border-un1t-border pt-4" data-testid="hatch-copy-group">
-            <h3 className="text-sm font-semibold text-un1t-text">{HATCH_COPY_GROUP_TITLE}</h3>
-            {/* MIAHATCH.5 (Ruling 25) — Mia books, cancels and takes refund
-                requests in chat here only with this ticked AND un1t.online
-                writes switched on for the studio, and only on WhatsApp.
-                MIAHATCH.6: payment links too. */}
-            <div>
-              <label className="flex items-center gap-3">
-                <input type="checkbox" className="h-4 w-4" checked={settings.un1t_chat_actions_enabled === true}
-                  onChange={e => setField('un1t_chat_actions_enabled', e.target.checked)} />
-                <span className="text-sm text-un1t-text font-medium">Mia can book and cancel classes, send payment links and pass refund requests to the team in chat at this studio</span>
-              </label>
-              <p className="text-xs text-un1t-muted mt-1 pl-7">
-                Off: Mia answers questions and shares the booking link, as now. On: on WhatsApp, Mia books and cancels classes, sends payment links for the offers listed under What Mia can sell, and passes refund requests to the team, once un1t.online writes are also switched on for this studio.
-              </p>
-            </div>
-            <p className="text-xs text-un1t-muted">
-              Messages customers get from Mia, and the two pages they land on after paying, at this studio. Leave a field blank to use the default shown.
-            </p>
-            {HATCH_COPY_FIELDS.map(({ key, label, placeholder, help }) => (
-              <div key={key}>
-                <FieldLabel tag={sourceTag([key])}>{label}</FieldLabel>
-                <input className={inputCls} maxLength={500} value={settings[key] || ''}
-                  onChange={e => setField(key, e.target.value)}
-                  placeholder={placeholder} />
-                <p className="text-xs text-un1t-muted mt-1">{help}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div>
-          <FieldLabel tag={sourceTag(['quiet_hours'])}>Quiet hours (optional)</FieldLabel>
-          <div className="flex items-center gap-2 text-sm">
-            <input type="time" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
-              aria-label="Quiet hours start" disabled={noQuietHours}
-              value={settings.quiet_hours?.start || ''}
-              onChange={e => setQuietHours('start', e.target.value)} />
-            <span className="text-un1t-muted">to</span>
-            <input type="time" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
-              aria-label="Quiet hours end" disabled={noQuietHours}
-              value={settings.quiet_hours?.end || ''}
-              onChange={e => setQuietHours('end', e.target.value)} />
-            <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"} — agent stays quiet, a human replies.</span>
-          </div>
-          {quietHalf && <p className="text-xs text-red-600 mt-1" role="alert">Set both times</p>}
-          <label className="flex items-center gap-2 text-sm text-un1t-text mt-2">
-            <input type="checkbox" className="h-4 w-4" checked={noQuietHours}
-              onChange={e => setNoQuietHours(e.target.checked)} />
-            No quiet hours (ignore the organisation&apos;s)
-          </label>
-        </div>
-
-        {error && <div className="text-sm text-red-600">{error}</div>}
-        {canEdit && (
-          <div>
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || bookingInvalid || trialInvalid}
-              className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-              {saving ? 'Saving…' : 'Save settings'}
-            </button>
-            {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-          </div>
-        )}
-      </section>
-
-      {/* MIAHATCH.4 (Task 14) — the products Mia can sell at a un1t.online
-          studio. Its own section and Save (rows behind its own route), shown
-          only there; a Glofox studio sells nothing through Mia. */}
-      {membershipSourceKey === 'un1t_online' && location?.id && (
-        <MiaOffersSection locationId={location.id} canEdit={canEdit} />
-      )}
-
-      {/* ── Membership cancellation form (CANCEL-FORM.2) ───── */}
-      <section className="border border-un1t-border rounded-lg p-5 mt-6">
-        <h2 className="text-base font-semibold text-un1t-text mb-1">Membership cancellation form</h2>
-        <p className="text-sm text-un1t-muted mb-4">
-          Staff send a member a private, single-use link (by email or WhatsApp) to pause or cancel
-          their membership. Submissions land in Approvals like any other request. Every word the member
-          sees is editable here; leave a field blank to use the default shown. Placeholders:{' '}
-          <code>{'{first_name}'}</code> <code>{'{plan}'}</code> <code>{'{location}'}</code>{' '}
-          <code>{'{link}'}</code> <code>{'{end_date}'}</code> <code>{'{start_date}'}</code>.
-        </p>
-
-        <label className="flex items-center gap-3 mb-1">
-          <input type="checkbox" className="h-4 w-4" checked={!!settings.glofox_auto_cancel}
-            onChange={e => setField('glofox_auto_cancel', e.target.checked)} />
-          <span className="text-sm text-un1t-text font-medium">Cancel memberships in Glofox automatically when a cancellation is approved</span>
-        </label>
-        <p className="text-xs text-un1t-muted mb-4 pl-7">
-          Off: approving marks the request approved and you make the change in Glofox by hand (today&apos;s behaviour).
-          On: approving calls Glofox to end the membership on the requested date, and the result shows on the card.
-          Glofox is connected at Stillorgan only.
-        </p>
-
-        <h3 className="text-sm font-semibold text-un1t-text mt-4 mb-2">The form page</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Intro</label>
-            <textarea className={inputCls} rows={2} maxLength={1000} value={settings.cancellation_form?.form_intro || ''}
-              onChange={e => setCancelForm('form_intro', e.target.value)}
-              placeholder={CF_DEFAULTS.form_intro} />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-un1t-text">
-            <input type="checkbox" checked={settings.cancellation_form?.pause_offer_enabled !== false}
-              onChange={e => setCancelForm('pause_offer_enabled', e.target.checked)} />
-            Offer a pause before the cancel details
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Pause offer text</label>
-              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.pause_offer_text || ''}
-                onChange={e => setCancelForm('pause_offer_text', e.target.value)}
-                placeholder={CF_DEFAULTS.pause_offer_text} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Longest pause (weeks)</label>
-              <input type="number" min={1} max={26} className={inputCls}
-                value={settings.cancellation_form?.pause_max_weeks ?? ''}
-                placeholder={String(CF_DEFAULTS.pause_max_weeks)}
-                onChange={e => setCancelForm('pause_max_weeks', e.target.value === '' ? null : Number(e.target.value))} />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Reason options (shown as the member&apos;s choices)</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {CF_REASON_CODES.map(code => (
-                <input key={code} className={inputCls} maxLength={80}
-                  value={settings.cancellation_form?.reason_labels?.[code] || ''}
-                  onChange={e => setCancelReason(code, e.target.value)}
-                  placeholder={CF_DEFAULTS.reason_labels[code]} />
-              ))}
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">End date help text</label>
-              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.end_date_help_text || ''}
-                onChange={e => setCancelForm('end_date_help_text', e.target.value)}
-                placeholder={CF_DEFAULTS.end_date_help_text} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Notice period (days)</label>
-              <input type="number" min={0} max={90} className={inputCls}
-                value={settings.cancellation_form?.notice_days ?? ''}
-                placeholder={String(CF_DEFAULTS.notice_days)}
-                onChange={e => setCancelForm('notice_days', e.target.value === '' ? null : Number(e.target.value))} />
-              <p className="text-xs text-un1t-subtle mt-1">The earliest end date the member can pick is this many days from today.</p>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Review step text</label>
-            <input className={inputCls} maxLength={500} value={settings.cancellation_form?.confirm_text || ''}
-              onChange={e => setCancelForm('confirm_text', e.target.value)}
-              placeholder={CF_DEFAULTS.confirm_text} />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Thanks (cancellation submitted)</label>
-              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.thanks_cancel_text || ''}
-                onChange={e => setCancelForm('thanks_cancel_text', e.target.value)}
-                placeholder={CF_DEFAULTS.thanks_cancel_text} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Thanks (pause submitted)</label>
-              <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.thanks_pause_text || ''}
-                onChange={e => setCancelForm('thanks_pause_text', e.target.value)}
-                placeholder={CF_DEFAULTS.thanks_pause_text} />
-            </div>
-          </div>
-        </div>
-
-        <h3 className="text-sm font-semibold text-un1t-text mt-6 mb-2">Sending the link</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Email subject</label>
-            <input className={inputCls} maxLength={200} value={settings.cancellation_form?.email_subject || ''}
-              onChange={e => setCancelForm('email_subject', e.target.value)}
-              placeholder={CF_DEFAULTS.email_subject} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Email body (must include <code>{'{link}'}</code>)</label>
-            <textarea className={inputCls} rows={5} maxLength={4000} value={settings.cancellation_form?.email_body || ''}
-              onChange={e => setCancelForm('email_body', e.target.value)}
-              placeholder={CF_DEFAULTS.email_body} />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-un1t-text mb-1">WhatsApp message (the link becomes a tappable button)</label>
-              <textarea className={inputCls} rows={3} maxLength={1024} value={settings.cancellation_form?.whatsapp_text || ''}
-                onChange={e => setCancelForm('whatsapp_text', e.target.value)}
-                placeholder={CF_DEFAULTS.whatsapp_text} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Button label</label>
-              <input className={inputCls} maxLength={20} value={settings.cancellation_form?.whatsapp_button_text || ''}
-                onChange={e => setCancelForm('whatsapp_button_text', e.target.value)}
-                placeholder={CF_DEFAULTS.whatsapp_button_text} />
-              <p className="text-xs text-un1t-subtle mt-1">20 characters max (WhatsApp&apos;s limit).</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Outside-window WhatsApp template</label>
-              <select className={inputCls}
-                value={settings.cancellation_form?.whatsapp_template_name || ''}
-                onChange={e => setCancelForm('whatsapp_template_name', e.target.value || null)}>
-                <option value="">— none (send by WhatsApp only inside the 24h window) —</option>
-                {templates.map(t => (
-                  <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
-                ))}
-              </select>
-              <p className="text-xs text-un1t-subtle mt-1">
-                An approved UTILITY template whose URL button ends in <code>{'{{1}}'}</code> (the link token) —
-                lets staff send the form when the member has not messaged in 24 hours.
-              </p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-un1t-text mb-1">Link host (optional)</label>
-              <input className={inputCls} maxLength={512} value={settings.cancellation_form?.public_base_url || ''}
-                onChange={e => setCancelForm('public_base_url', e.target.value)}
-                placeholder="Default: this CRM's address" />
-              <p className="text-xs text-un1t-subtle mt-1">
-                e.g. <code>https://un1tdublin.com</code> to hand members a link on the marketing site instead of the CRM address.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <h3 className="text-sm font-semibold text-un1t-text mt-6 mb-2">After you decide</h3>
-        <p className="text-xs text-un1t-muted mb-3">Sent to the member on the channel the link went out on (email, or the WhatsApp thread).</p>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Cancellation approved</label>
-            <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.cancel_confirmation_text || ''}
-              onChange={e => setCancelForm('cancel_confirmation_text', e.target.value)}
-              placeholder={CF_DEFAULTS.cancel_confirmation_text} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Pause approved</label>
-            <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.pause_confirmation_text || ''}
-              onChange={e => setCancelForm('pause_confirmation_text', e.target.value)}
-              placeholder={CF_DEFAULTS.pause_confirmation_text} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-un1t-text mb-1">Marked as saved (member stays)</label>
-            <textarea className={inputCls} rows={2} maxLength={500} value={settings.cancellation_form?.saved_confirmation_text || ''}
-              onChange={e => setCancelForm('saved_confirmation_text', e.target.value)}
-              placeholder={CF_DEFAULTS.saved_confirmation_text} />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {[['confirmation_template_cancel', 'Cancellation template'], ['confirmation_template_pause', 'Pause template'], ['confirmation_template_saved', 'Saved template']].map(([key, label]) => (
-              <div key={key}>
-                <label className="block text-sm font-medium text-un1t-text mb-1">{label} (WhatsApp, window closed)</label>
-                <select className={inputCls}
-                  value={settings.cancellation_form?.[key] || ''}
-                  onChange={e => setCancelForm(key, e.target.value || null)}>
-                  <option value="">— none —</option>
-                  {templates.map(t => (
-                    <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-un1t-subtle">
-            A WhatsApp-delivered form rarely reopens the 24h window, so without a template the card tells you the member has not been told and you follow up yourself.
-            Templates take <code>{'{{1}}'}</code> first name and <code>{'{{2}}'}</code> the date.
-          </p>
-        </div>
-
-        {canEdit && (
-          <div className="mt-5">
-            <button type="button" onClick={saveSettings} disabled={saving || quietHalf || trialInvalid}
-              className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-              {saving ? 'Saving…' : 'Save settings'}
-            </button>
-            {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-          </div>
-        )}
-      </section>
-
-      {/* ── Proactive follow-ups (AGENT-FOLLOWUP.1) ───────── */}
-      <section className="border border-un1t-border rounded-lg p-5 mt-6">
-        <h2 className="text-base font-semibold text-un1t-text mb-1">Proactive follow-ups</h2>
-        <p className="text-sm text-un1t-muted mb-4">
-          When someone goes quiet on an open request, the agent sends one gentle in-window nudge,
-          then (if they stay quiet past WhatsApp&apos;s 24-hour window) one approved template inviting
-          a reply. A reply re-opens the window and the agent picks the conversation back up.
-        </p>
-        <div className="flex items-center justify-between gap-2 mb-4">
-          <label className="flex items-center gap-2 text-sm text-un1t-text">
-            <input type="checkbox" checked={!!settings.followups?.enabled}
-              onChange={e => setFollowup('enabled', e.target.checked)} />
-            Enable proactive follow-ups
-          </label>
-          {sourceTag(['followups.enabled'])}
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <FieldLabel tag={sourceTag(['followups.nudge_after_hours'])}>Nudge after (hours)</FieldLabel>
-            <input type="number" min={1} max={18} className={inputCls}
-              value={settings.followups?.nudge_after_hours ?? ''}
-              placeholder={inheritedNumber('followups.nudge_after_hours', 3)}
-              onChange={e => setFollowup('nudge_after_hours', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-xs text-un1t-subtle mt-1">How long they&apos;re quiet before the in-window nudge (sent up to 20h after, daytime only).</p>
-          </div>
-          <div>
-            <FieldLabel tag={sourceTag(['followups.template_name'])}>Outside-window template</FieldLabel>
-            <select className={inputCls}
-              value={settings.followups?.template_name || ''}
-              onChange={e => setFollowup('template_name', e.target.value || null)}>
-              <option value="">— none (in-window nudge only) —</option>
-              {templates.map(t => (
-                <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
-              ))}
-            </select>
-            <p className="text-xs text-un1t-subtle mt-1">
-              Approved templates only. Edit the wording in WhatsApp → Templates and re-select here —
-              variables: {'{{1}}'} first name, {'{{2}}'} topic. Marketing consent is required and enforced.
-            </p>
-          </div>
-          <div>
-            <FieldLabel tag={sourceTag(['followups.daily_cap'])}>Daily cap (per studio)</FieldLabel>
-            <input type="number" min={1} max={500} className={inputCls}
-              value={settings.followups?.daily_cap ?? ''}
-              placeholder={inheritedNumber('followups.daily_cap', 50)}
-              onChange={e => setFollowup('daily_cap', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-xs text-un1t-subtle mt-1">Hard ceiling on proactive sends per day.</p>
-          </div>
-        </div>
-      </section>
-
-      {/* ── First-class check-in (AGENT-CHECKIN.1) ────────── */}
-      <section className="border border-un1t-border rounded-lg p-5 mt-6">
-        <h2 className="text-base font-semibold text-un1t-text mb-1">First-class check-in</h2>
-        <p className="text-sm text-un1t-muted mb-4">
-          After a new lead or trial member attends their first class, the agent checks in once —
-          free-form when they have an open chat window (e.g. they booked through the agent), or via
-          the approved template below otherwise. Good replies get offered their next booking;
-          complaints hand off to the team immediately.
-        </p>
-        <div className="flex items-center justify-between gap-2 mb-4">
-          <label className="flex items-center gap-2 text-sm text-un1t-text">
-            <input type="checkbox" checked={!!settings.first_class_checkin?.enabled}
-              onChange={e => setCheckin('enabled', e.target.checked)} />
-            Enable first-class check-ins
-          </label>
-          {sourceTag(['first_class_checkin.enabled'])}
-        </div>
-        {/* AGENT-CHECKIN.2 — live visibility so a silent day is diagnosable
-            from this card (sent counts, last outcome, last tick's skips). */}
-        {checkinStats && (
-          <div className="mb-4 rounded-md border border-un1t-border bg-un1t-bg/40 px-3 py-2 text-xs text-un1t-subtle space-y-1">
-            <p>
-              {/* CHECKINRISKS.1 — both counts are SENDS (the cap's own counter);
-                  null means the read failed, which is never shown as 0. */}
-              <span className="font-semibold text-un1t-text">
-                {checkinStats.sent_today == null
-                  ? 'Sent today: could not be read'
-                  : `Sent today ${checkinStats.sent_today}/${settings.first_class_checkin?.daily_cap ?? 20}`}
-              </span>
-              {' · '}Sent all time {checkinStats.total == null ? 'could not be read' : checkinStats.total}
-              {' · '}Last:{' '}
-              {checkinStats.last_unreadable
-                ? 'could not be read'
-                : checkinStats.last
-                  ? `${checkinStats.last.contact_name || 'contact'} — ${checkinStats.last.note || 'sent'} (${new Date(checkinStats.last.at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`
-                  : 'none yet'}
-            </p>
-            {checkinStats.last_run && (
-              <p>
-                Last run {new Date(checkinStats.last_run.at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
-                {checkinStats.last_run.checkins
-                  ? ` — ${(checkinStats.last_run.checkins.freeform || 0) + (checkinStats.last_run.checkins.templates || 0)} sent · ${checkinStats.last_run.checkins.skipped || 0} skipped${describeCheckinReasons(checkinStats.last_run.checkins)}`
-                  // TZ.16 — the window is the studio's own clock (TZ.5): name its zone.
-                  : ` — no check-in summary yet (runs every 15 min, 9:00–20:00 ${location?.timezone ? zoneCity(location.timezone) : 'studio time'})`}
-              </p>
-            )}
-            {checkinStats.last_run?.day && (
-              <p>{describeCheckinDay(checkinStats.last_run.day)}</p>
-            )}
-            {checkinStats.last_run?.day?.previous && (
-              <p>{describeCheckinDay(checkinStats.last_run.day.previous)}</p>
+            {/* One bar for every section's studio settings (Knowledge saves as
+                you go). Held while quiet hours are half-set, the booking link is
+                invalid or the trial finisher is invalid (useAgentSettings). */}
+            {canEdit && section !== 'knowledge' && (
+              <SaveBar count={changedFieldCount(dirtyPaths)} holds={holds} saving={saving} savedAt={savedAt}
+                error={error} onSave={save}
+                errorLink={error && firstFieldError ? { section: 'bookings', message: firstFieldError } : null} onDiscard={discard} onGoTo={openSection} />
             )}
           </div>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <FieldLabel tag={sourceTag(['first_class_checkin.delay_hours'])}>Send after (hours)</FieldLabel>
-            <input type="number" min={1} max={24} className={inputCls}
-              value={settings.first_class_checkin?.delay_hours ?? ''}
-              placeholder={inheritedNumber('first_class_checkin.delay_hours', 2)}
-              onChange={e => setCheckin('delay_hours', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-xs text-un1t-subtle mt-1">Hours after the class before the check-in (daytime only; evening classes roll to next morning).</p>
-          </div>
-          <div>
-            <FieldLabel tag={sourceTag(['first_class_checkin.template_name'])}>Check-in template</FieldLabel>
-            <select className={inputCls}
-              value={settings.first_class_checkin?.template_name || ''}
-              onChange={e => setCheckin('template_name', e.target.value || null)}>
-              <option value="">— none (open-window check-ins only) —</option>
-              {templates.map(t => (
-                <option key={`fcc:${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
-              ))}
-            </select>
-            <p className="text-xs text-un1t-subtle mt-1">
-              Used when they have no open chat window. Variables: {'{{1}}'} first name, {'{{2}}'} class name.
-              Marketing consent required and enforced.
-            </p>
-          </div>
-          <div>
-            <FieldLabel tag={sourceTag(['first_class_checkin.daily_cap'])}>Daily cap (per studio)</FieldLabel>
-            <input type="number" min={1} max={200} className={inputCls}
-              value={settings.first_class_checkin?.daily_cap ?? ''}
-              placeholder={inheritedNumber('first_class_checkin.daily_cap', 20)}
-              onChange={e => setCheckin('daily_cap', e.target.value === '' ? null : Number(e.target.value))} />
-            <p className="text-xs text-un1t-subtle mt-1">Each contact only ever gets one check-in.</p>
-          </div>
         </div>
-      </section>
-
-      {/* ── Trial finisher follow-up (TRIALDONE.3) ────────────
-          Studio-only (an organisation can never switch it on) and shown only
-          at a un1t.online studio (Hatch Street). After a trial member's last
-          class the studio sends the opener template below; a reply goes to
-          Mia, briefed by the instruction. Off by default. A list of test
-          contacts makes it a test: nobody else is messaged. */}
-      {showTrialDone && settings.trial_done && (() => {
-        const td = settings.trial_done
-        const idsText = td.only_contact_ids_text ?? (Array.isArray(td.only_contact_ids) ? td.only_contact_ids : []).join('\n')
-        const testCount = parseTrialDoneContactIds(idsText).length
-        return (
-          <section className="border border-un1t-border rounded-lg p-5 mt-6" data-testid="trial-done-card">
-            <h2 className="text-base font-semibold text-un1t-text mb-1">Trial finisher follow-up</h2>
-            <p className="text-sm text-un1t-muted mb-4">
-              After a trial member has done 3 trial classes, or 2 classes and the trial has expired, the studio
-              sends them the opener template below. If they reply, Mia helps them choose between a membership and a class pack
-              and sends the payment link. A second message follows if they stay quiet.
-            </p>
-            <div className="flex items-center justify-between gap-2 mb-4">
-              <label className="flex items-center gap-2 text-sm text-un1t-text">
-                <input type="checkbox" checked={!!td.enabled}
-                  onChange={e => setTrialDone('enabled', e.target.checked)} />
-                Enable trial finisher follow-up
-              </label>
-              {testCount > 0 && (
-                <span className="text-[11px] rounded-full bg-amber-500/10 text-amber-700 px-2 py-0.5 whitespace-nowrap">
-                  {`Test: ${testCount} contact${testCount === 1 ? '' : 's'} only`}
-                </span>
-              )}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <FieldLabel>Opener template</FieldLabel>
-                <input className={inputCls} maxLength={512} aria-label="Opener template"
-                  value={td.opener_template ?? ''}
-                  aria-invalid={trialErrors.opener_template ? 'true' : undefined}
-                  onChange={e => setTrialDone('opener_template', e.target.value)} />
-                {trialErrors.opener_template
-                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.opener_template}</p>
-                  : <p className="text-xs text-un1t-subtle mt-1">The approved WhatsApp template name sent first. Variables: {'{{1}}'} first name.</p>}
-              </div>
-              <div>
-                <FieldLabel>Follow-up template</FieldLabel>
-                <input className={inputCls} maxLength={512} aria-label="Follow-up template"
-                  value={td.followup_template ?? ''}
-                  aria-invalid={trialErrors.followup_template ? 'true' : undefined}
-                  onChange={e => setTrialDone('followup_template', e.target.value)} />
-                {trialErrors.followup_template
-                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.followup_template}</p>
-                  : <p className="text-xs text-un1t-subtle mt-1">The approved template name sent once if they have not replied.</p>}
-              </div>
-              <div>
-                <FieldLabel>Send after (hours)</FieldLabel>
-                <input type="number" min={1} max={72} className={inputCls} aria-label="Send after (hours)"
-                  value={td.delay_hours ?? ''}
-                  placeholder="2"
-                  aria-invalid={trialErrors.delay_hours ? 'true' : undefined}
-                  onChange={e => setTrialDone('delay_hours', e.target.value === '' ? null : Number(e.target.value))} />
-                {trialErrors.delay_hours
-                  ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.delay_hours}</p>
-                  : <p className="text-xs text-un1t-subtle mt-1">Hours after the trial ends before the opener goes out.</p>}
-              </div>
-            </div>
-            <div className="mt-4">
-              <FieldLabel>Mia&apos;s instruction</FieldLabel>
-              <textarea className={inputCls} rows={4} aria-label="Mia's instruction"
-                value={td.mia_instruction ?? ''}
-                placeholder={TRIAL_DONE_MIA_INSTRUCTION_DEFAULT}
-                aria-invalid={trialErrors.mia_instruction ? 'true' : undefined}
-                onChange={e => setTrialDone('mia_instruction', e.target.value)} />
-              {trialErrors.mia_instruction
-                ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.mia_instruction}</p>
-                : <p className="text-xs text-un1t-subtle mt-1">What Mia is told when a trial finisher replies. Leave blank for the default shown. Placeholders: {'{studio}'} {'{date}'}. No em-dashes.</p>}
-            </div>
-            <div className="mt-4">
-              <FieldLabel>Test contact ids</FieldLabel>
-              <textarea className={inputCls} rows={2} aria-label="Test contact ids"
-                value={idsText}
-                aria-invalid={trialErrors.only_contact_ids ? 'true' : undefined}
-                onChange={e => setTrialDone('only_contact_ids_text', e.target.value)} />
-              {trialErrors.only_contact_ids
-                ? <p className="text-xs text-red-600 mt-1" role="alert">{trialErrors.only_contact_ids}</p>
-                : <p className="text-xs text-un1t-subtle mt-1">
-                    Up to 20 contact ids, one per line. While this list has anyone in it, ONLY those contacts are messaged: use it to test before clearing it to go live for everyone.
-                  </p>}
-            </div>
-          </section>
-        )
-      })()}
-
-      {/* ── Inline suggestion after approvals (INBOX-APPROVALS-AI.4) ── */}
-      <section className="border border-un1t-border rounded-lg p-5 mt-6">
-        <h2 className="text-base font-semibold text-un1t-text mb-1">Inline suggestion after approvals</h2>
-        <p className="text-sm text-un1t-muted mb-4">
-          After staff decide a request in the inbox, Mia drafts a suggested follow-up they can send.
-        </p>
-        <div className="flex items-center justify-between gap-2">
-          <label className="flex items-center gap-2 text-sm text-un1t-text">
-            <input type="checkbox" checked={settings.inline_suggestion?.enabled !== false}
-              onChange={e => setInlineSuggestion('enabled', e.target.checked)} />
-            Enable inline suggestions
-          </label>
-          {sourceTag(['inline_suggestion.enabled'])}
-        </div>
-      </section>
-
-      </fieldset>
-
-      {/* ── Knowledge ─────────────────────────────────────── */}
-      <section className="border border-un1t-border rounded-lg p-5 mt-6">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-base font-semibold text-un1t-text">Knowledge</h2>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={importFromGlofox} disabled={importing}
-              className="text-sm border border-un1t-border rounded-md px-3 py-1.5 text-un1t-text hover:bg-un1t-bg disabled:opacity-50">
-              {importing ? 'Importing…' : 'Import classes from Glofox'}
-            </button>
-            <button type="button" onClick={addEntry}
-              className="text-sm border border-un1t-border rounded-md px-3 py-1.5 text-un1t-text hover:bg-un1t-bg">
-              + Add entry
-            </button>
-          </div>
-        </div>
-        <p className="text-sm text-un1t-muted mb-4">
-          The facts the agent is allowed to use — prices, offers, policies, FAQs. If it isn&apos;t here,
-          the agent hands off instead of guessing.
-        </p>
-        {importNote && <p className="text-sm text-emerald-700 mb-3">{importNote}</p>}
-
-        {entries.length === 0 && (
-          <div className="text-sm text-un1t-muted border border-dashed border-un1t-border rounded-md p-4">
-            No knowledge yet. Add your prices, trial offer, opening hours, and common questions.
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {entries.map(entry => (
-            <div key={entry.id} className="border border-un1t-border rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <select value={entry.category}
-                  onChange={e => persist(entry.id, { category: e.target.value })}
-                  className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text">
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <input className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm text-un1t-text"
-                  value={entry.title}
-                  onChange={e => editLocal(entry.id, { title: e.target.value })}
-                  onBlur={e => persist(entry.id, { title: e.target.value })}
-                  placeholder="Short title" maxLength={200} />
-                <label className="flex items-center gap-1 text-xs text-un1t-muted">
-                  <input type="checkbox" checked={!!entry.enabled}
-                    onChange={e => persist(entry.id, { enabled: e.target.checked })} />
-                  on
-                </label>
-                <button onClick={() => deleteEntry(entry.id)}
-                  className="text-xs text-red-600 hover:underline">Delete</button>
-              </div>
-              <textarea className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
-                rows={2} maxLength={4000} value={entry.content}
-                onChange={e => editLocal(entry.id, { content: e.target.value })}
-                onBlur={e => persist(entry.id, { content: e.target.value })}
-                placeholder="The answer / fact, in plain language." />
-            </div>
-          ))}
-        </div>
-      </section>
+      </div>
     </div>
   )
 }
