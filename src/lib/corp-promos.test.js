@@ -14,7 +14,7 @@ describe('corp promo registry', () => {
   })
 
   it('lists only live promos', () => {
-    expect(liveCorpPromos().map((p) => p.key)).toEqual(['hatch-3-free'])
+    expect(liveCorpPromos().map((p) => p.key)).toEqual(['hatch-3-free', 'stillorgan-newstart'])
   })
 })
 
@@ -55,16 +55,16 @@ describe('fillCorpPromoTokens', () => {
 })
 
 describe('glofox promos (NEWSTART.1)', () => {
-  it('the newstart promo is a glofox promo at stillorgan, off until its plan exists', () => {
+  it('the newstart promo is a live glofox promo at stillorgan', () => {
     const p = resolveCorpPromo('stillorgan-newstart')
-    expect(p).toMatchObject({ studio: 'stillorgan', publicPath: 'stillorgan', platform: 'glofox', credits: 3, expiresInDays: 7, tag: 'stillorgan-newstart', leadSource: 'corp_promo', live: false, name: 'New Start (Stillorgan)' })
+    expect(p).toMatchObject({ studio: 'stillorgan', publicPath: 'stillorgan', platform: 'glofox', credits: 3, expiresInDays: 7, tag: 'stillorgan-newstart', leadSource: 'corp_promo', live: true, name: 'New Start (Stillorgan)' })
     expect(resolveCorpPromo('hatch-3-free').platform).toBe('un1t_online')
     expect(resolveCorpPromo('hatch-3-free').name).toBe('Corporate trial (Hatch Street)')
   })
 
   it('corpPromosForStudio lists only live promos at that studio', () => {
     expect(corpPromosForStudio('hatch-street').map((p) => p.key)).toEqual(['hatch-3-free'])
-    expect(corpPromosForStudio('stillorgan')).toEqual([])
+    expect(corpPromosForStudio('stillorgan').map((p) => p.key)).toEqual(['stillorgan-newstart'])
     expect(corpPromosForStudio('nowhere')).toEqual([])
   })
 

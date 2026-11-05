@@ -2,12 +2,14 @@
 //
 // SERVER-ONLY by convention (no server-only package in this repo): these ids are operator configuration for the Glofox purchase
 // and never reach a client component. Blank ids mean the plan has not been
-// created in Glofox yet, and the promo stays off (glofoxPlanForPromo -> null).
+// created in Glofox yet, and the promo cannot grant (glofoxPlanForPromo -> null).
 
 import { CORP_PROMOS } from '@/lib/corp-promos'
 
 const CORP_PROMO_GLOFOX_PLANS = Object.freeze({
-  'stillorgan-newstart': Object.freeze({ membershipId: '', planCode: '', planName: 'New Start' }),
+  // Created in Glofox by Richard, 5 Nov 2026 ("New Start Free Trial", €0).
+  // Bought by id, so it works the same once it is made private.
+  'stillorgan-newstart': Object.freeze({ membershipId: '6aec95d590a936f18c065d9f', planCode: '1793889679121', planName: 'New Start Free Trial' }),
 })
 
 /** @returns {{ membershipId: string, planCode: string, planName: string } | null} */

@@ -58,9 +58,9 @@ describe('stillorganTrialHistory', () => {
     expect(no).toEqual({ ok: true, hadTrial: false, reasons: [] })
   })
 
-  it('NEWSTART.1g: a trial status under the New Start plan is not a prior trial (case and spaces ignored)', async () => {
+  it('NEWSTART.1g: a trial status under the New Start plan is not a prior trial, though its name says Trial (case and spaces ignored)', async () => {
     const { db } = makeDb()
-    for (const plan of ['New Start', '  new start ']) {
+    for (const plan of ['New Start Free Trial', '  new start free trial ']) {
       const r = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: plan } })
       expect(r).toEqual({ ok: true, hadTrial: false, reasons: [] })
     }
@@ -71,8 +71,9 @@ describe('stillorganTrialHistory', () => {
     const reset = await stillorganTrialHistory(db, { locationId: LOC, contact: { ...CONTACT, glofox_membership_status: 'trial', glofox_membership_plan: 'The UN1T 14 Day Reset Trial' } })
     expect(reset).toEqual({ ok: true, hadTrial: true, reasons: ['membership_status=trial', 'membership_plan_trial'] })
     const { db: db2 } = makeDb({ rows: { glofox_trial_claims: [{ id: 'cl1' }] } })
-    const other = await stillorganTrialHistory(db2, { locationId: LOC, contact: { ...CONTACT, glofox_member_id: 'gm1', glofox_membership_status: 'trial', glofox_membership_plan: 'New Start' } })
+    const other = await stillorganTrialHistory(db2, { locationId: LOC, contact: { ...CONTACT, glofox_member_id: 'gm1', glofox_membership_status: 'trial', glofox_membership_plan: 'New Start Free Trial' } })
     expect(other.hadTrial).toBe(true)
+    expect(other.reasons).toEqual(['glofox_trial_claim'])
   })
 
   it('a live glofox_trial_claims row counts', async () => {
