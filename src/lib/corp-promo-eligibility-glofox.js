@@ -6,7 +6,8 @@
 //     a contact homed at the studio with glofox_membership_status 'member'.
 //     (trial / credit_member / classpass_payg are NOT refused here: fulfilment
 //     checks the live Glofox plan.)
-//   already_claimed — this promo granted, or in doubt (help_requested), for any
+//   already_claimed — this promo granted, in doubt (help_requested) or resolved by staff
+//     (handled), for any
 //     of them at this studio;
 //   in_progress     — a claim for it is still processing.
 // Prior trials and training never refuse. "This person" is personContactIds()
@@ -58,7 +59,7 @@ export async function glofoxCorpPromoEligibility(db, { locationId, organizationI
     ])
 
     if (studios.length > 0 || homed.length > 0) return { ok: true, eligible: false, reason: 'active_member' }
-    if (claims.some((c) => c.status === 'granted' || c.status === 'help_requested')) return { ok: true, eligible: false, reason: 'already_claimed' }
+    if (claims.some((c) => ['granted', 'help_requested', 'handled'].includes(c.status))) return { ok: true, eligible: false, reason: 'already_claimed' }
     if (claims.some((c) => c.status === 'processing')) return { ok: true, eligible: false, reason: 'in_progress' }
     return { ok: true, eligible: true }
   } catch (e) {

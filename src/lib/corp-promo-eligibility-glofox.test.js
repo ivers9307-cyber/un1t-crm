@@ -59,11 +59,15 @@ describe('glofoxCorpPromoEligibility', () => {
     expect(await run({ corp_promo_claims: [claim('granted', TWIN)] })).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })
   })
 
-  it('help_requested is already_claimed; ineligible, handled and failed are not', async () => {
+  it('help_requested is already_claimed; ineligible and failed are not', async () => {
     expect((await run({ corp_promo_claims: [claim('help_requested')] })).reason).toBe('already_claimed')
-    for (const s of ['ineligible', 'handled', 'failed']) {
+    for (const s of ['ineligible', 'failed']) {
       expect(await run({ corp_promo_claims: [claim(s)] })).toEqual({ ok: true, eligible: true })
     }
+  })
+
+  it('a handled claim on a sibling contact is already_claimed', async () => {
+    expect(await run({ corp_promo_claims: [claim('handled', TWIN)] })).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })
   })
 
   it('a processing claim is in_progress', async () => {
