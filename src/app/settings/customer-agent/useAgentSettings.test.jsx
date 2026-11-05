@@ -49,6 +49,19 @@ describe('useAgentSettings', () => {
     expect(h.current.holds).toEqual([])
   })
 
+  // MIASETTINGS.2c — the header's tags read what is saved, not unsaved edits.
+  it('saved is the loaded settings, untouched by an edit, and moves on a save', async () => {
+    mockFetch(reply(200, STILLORGAN_GET))
+    const h = await renderHook()
+    expect(h.current.saved).toEqual(STILLORGAN_GET.settings)
+    act(() => { h.current.setField('enabled', false) })
+    expect(h.current.saved.enabled).toBe(true)
+    // the re-read after the save fails here, so what was sent is what is saved
+    global.fetch.mockImplementation(async (url, init) => (init?.method === 'PUT' ? reply(200, { success: true }) : reply(500, { success: false })))
+    await act(async () => { await h.current.save() })
+    expect(h.current.saved.enabled).toBe(false)
+  })
+
   it('discard restores the loaded settings and overrides', async () => {
     mockFetch(reply(200, STILLORGAN_GET))
     const h = await renderHook()

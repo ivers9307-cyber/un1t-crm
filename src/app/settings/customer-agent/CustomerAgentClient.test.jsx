@@ -38,7 +38,14 @@ function mockFetch(settingsAnswers, { knowledgeFails = false } = {}) {
   })
 }
 
-afterEach(() => { cleanup(); delete global.fetch })
+// MIASETTINGS.2c — the page shows one section at a time; every section stays
+// mounted and the others are `hidden`, which role queries skip. A test that
+// reaches a field by role opens its section first, by its menu item.
+const openSection = (name) => fireEvent.click(screen.getByRole('button', { name }))
+
+// The section link lives in the URL; put it back so one test's section does
+// not open the next test's page somewhere else.
+afterEach(() => { cleanup(); delete global.fetch; window.history.replaceState(null, '', '/') })
 
 describe('CustomerAgentClient — placeholders carry the brand (W1.S3)', () => {
   it('renders the hand-off and welcome defaults and the Points label from the GET brand', async () => {
@@ -248,7 +255,9 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
       checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
     })
   }
-  const labelRow = (text) => screen.getByText(text).parentElement
+  // A field's label row. Labels only: Mia's voices (Personality and voice)
+  // name a voice kind "Hand-off message" too.
+  const labelRow = (text) => screen.getByText(text, { selector: 'label' }).parentElement
   const putBody = () => {
     const put = global.fetch.mock.calls.find(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
     return put && JSON.parse(put[1].body)
@@ -260,6 +269,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openSection('Personality and voice')
     expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
     expect(within(labelRow('Hand-off message')).getByText('Default')).toBeTruthy()
     expect(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
@@ -294,6 +304,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openSection('Personality and voice')
     fireEvent.change(screen.getByPlaceholderText('e.g. Never discuss competitor pricing.'), { target: { value: 'Studio rule' } })
     expect(within(labelRow('Extra rules (optional)')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
     save()
@@ -306,6 +317,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openSection('Follow-ups')
     expect(within(screen.getByText('Enable proactive follow-ups').closest('label').parentElement).getByText('Default')).toBeTruthy()
     fireEvent.click(screen.getByRole('checkbox', { name: 'Enable proactive follow-ups' }))
     save()
@@ -319,6 +331,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openSection('Personality and voice')
     const tone = screen.getByPlaceholderText('e.g. Warm, upbeat, brief. Use first names. No emojis.')
     expect(tone.value).toBe('Studio tone')
     fireEvent.click(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use organisation default' }))
@@ -335,6 +348,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer({ org: null })])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openSection('Personality and voice')
     expect(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use default' })).toBeTruthy()
     expect(within(labelRow('Extra rules (optional)')).getByText('Default')).toBeTruthy()
   })
@@ -375,6 +389,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     mockFetch([answer(), reply(200, { success: true, settings: { enabled: true } }), answer({ studio: { enabled: true } })])
     render(<CustomerAgentClient canEdit />)
     await ready()
+    openSection('Personality and voice')
     expect(within(labelRow('Tone and voice')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy()
     save()
     await waitFor(() => expect(within(labelRow('Tone and voice')).getByText('Organisation default')).toBeTruthy())
@@ -600,6 +615,9 @@ describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
     fireEvent.change(tones().at(-1), { target: { value: 'My studio tone' } })
     await act(async () => { releasePut() })
     await waitFor(() => expect(studioReads).toBe(2))
+    // The studio's tone is in Personality and voice (the org editor stays
+    // mounted, hidden, above Overview).
+    openSection('Personality and voice')
     // The org editor (above) and the studio's now share the registry's label:
     // the studio's is the last.
     await waitFor(() => expect(within(screen.getAllByText('Tone and voice').at(-1).parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
@@ -738,7 +756,8 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
   const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
   const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
   const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
-  const GROUP = 'Hatch payments and booking'
+  // MIASETTINGS.2c — the group's heading is its Messages group title.
+  const GROUP = 'Payments at Hatch'
 
   it('a un1t.online studio shows the group with every field and the code defaults as placeholders', async () => {
     mockFetch([answer({ membership_source_key: 'un1t_online' })])
@@ -747,8 +766,11 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     expect(screen.getByText(GROUP)).toBeTruthy()
     const group = screen.getByTestId('hatch-copy-group')
     // MIASETTINGS.1c — the 12 Hatch copy fields plus the booking form message
-    // (booking_flow_text), new at the studio and Hatch only.
-    expect(group.querySelectorAll('input:not([type="checkbox"])').length).toBe(13)
+    // (booking_flow_text), new at the studio and Hatch only. MIASETTINGS.2c:
+    // the booking form message sits in Messages' WhatsApp booking form group.
+    expect(group.querySelectorAll('input:not([type="checkbox"])').length).toBe(12)
+    const flowText = screen.getByLabelText('Booking form message (WhatsApp)')
+    expect(screen.getByTestId('message-group-booking-form').contains(flowText)).toBe(true)
     expect(within(group).getByPlaceholderText('Thanks! You can go back to WhatsApp now.')).toBeTruthy()
     expect(within(group).getByPlaceholderText("Here's your secure payment link for {product}. Once it goes through I'll book you into {class}.")).toBeTruthy()
   })
@@ -854,11 +876,13 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
   // payments in chat at this studio. Off unless ticked; saved with the studio.
   const SWITCH = 'Mia can book and cancel classes, send payment links and pass refund requests to the team in chat at this studio'
 
-  it('the Hatch group carries the chat actions switch, unticked by default, no dash in its words', async () => {
+  // MIASETTINGS.2c — the switch moved to Bookings and sales.
+  it('Bookings and sales carries the chat actions switch, unticked by default, no dash in its words', async () => {
     mockFetch([answer({ membership_source_key: 'un1t_online' })])
     render(<CustomerAgentClient canEdit />)
     await ready()
-    const group = screen.getByTestId('hatch-copy-group')
+    openSection('Bookings and sales')
+    const group = screen.getByTestId('section-bookings').querySelector('fieldset')
     const box = within(group).getByLabelText(SWITCH)
     expect(box.type).toBe('checkbox')
     expect(box.checked).toBe(false)
@@ -1021,5 +1045,181 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     await waitFor(() => expect(screen.getByTestId('trial-done-card')).toBeTruthy())
     expect(screen.getByTestId('trial-done-card').closest('fieldset').disabled).toBe(true)
     for (const b of container.querySelectorAll('[data-testid="trial-done-card"] button')) expect(b.getAttribute('type')).toBe('button')
+  })
+})
+
+// MIASETTINGS.2c — the shell: a section menu showing one section at a time,
+// the section in the URL, drafts kept across a switch, and a read-only viewer
+// who can still move around (Review Focus 1).
+describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', () => {
+  const MENU = ['Overview', 'Personality and voice', 'Handoffs', 'Bookings and sales', 'Messages', 'Follow-ups', 'Cancellation form', 'Knowledge', 'Member app']
+  const ready = () => waitFor(() => expect(screen.getByRole('button', { name: 'Overview' })).toBeTruthy())
+  const current = () => screen.getAllByRole('button').filter((b) => b.getAttribute('aria-current') === 'page').map((b) => b.textContent)
+
+  it('opens on Overview, with every section in the menu', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    for (const name of MENU) expect(screen.getByRole('button', { name })).toBeTruthy()
+    expect(current()).toEqual(['Overview'])
+    expect(screen.getByRole('radiogroup', { name: 'Mia is' })).toBeTruthy()
+    // another section's field is in the page but hidden
+    expect(screen.queryByRole('textbox', { name: 'Agent name' })).toBeNull()
+    expect(screen.getByLabelText('Agent name')).toBeTruthy()
+  })
+
+  it('?section=messages opens Messages', async () => {
+    window.history.replaceState(null, '', '/?section=messages')
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(current()).toEqual(['Messages'])
+    expect(screen.getByRole('textbox', { name: 'No-credits escalation message' })).toBeTruthy()
+    expect(screen.queryByRole('radiogroup', { name: 'Mia is' })).toBeNull()
+  })
+
+  it('an unknown section opens Overview', async () => {
+    window.history.replaceState(null, '', '/?section=nonsense')
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(current()).toEqual(['Overview'])
+  })
+
+  it('clicking a menu item shows its section and puts it in the URL', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    openSection('Follow-ups')
+    expect(current()).toEqual(['Follow-ups'])
+    expect(window.location.search).toBe('?section=followups')
+    expect(screen.getByRole('checkbox', { name: 'Enable proactive follow-ups' })).toBeTruthy()
+    openSection('Overview')
+    expect(window.location.search).toBe('')
+  })
+
+  it('the mobile select drives the same section', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const select = screen.getByRole('combobox', { name: 'Section' })
+    expect(select.value).toBe('overview')
+    fireEvent.change(select, { target: { value: 'member-app' } })
+    expect(current()).toEqual(['Member app'])
+    expect(window.location.search).toBe('?section=member-app')
+    openSection('Handoffs')
+    expect(select.value).toBe('handoffs')
+  })
+
+  it('an edit in Personality survives a switch to Messages and back, and is saved', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    openSection('Messages')
+    expect(screen.queryByRole('textbox', { name: 'Agent name' })).toBeNull()
+    openSection('Personality and voice')
+    expect(screen.getByRole('textbox', { name: 'Agent name' }).value).toBe('Maya')
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
+    const [, init] = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
+    expect(JSON.parse(init.body).agent_name).toBe('Maya')
+  })
+
+  it('one Save, on every section but Knowledge', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    for (const name of MENU) {
+      openSection(name)
+      expect(screen.queryAllByRole('button', { name: 'Save settings' }), name).toHaveLength(name === 'Knowledge' ? 0 : 1)
+    }
+  })
+
+  it('Review Focus 1: a non-owner can move around, with every setting input disabled', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit={false} />)
+    await ready()
+    for (const name of MENU) expect(screen.getByRole('button', { name }).matches(':disabled'), name).toBe(false)
+    expect(screen.getByRole('combobox', { name: 'Section' }).matches(':disabled')).toBe(false)
+    openSection('Personality and voice')
+    expect(current()).toEqual(['Personality and voice'])
+    expect(screen.getByRole('textbox', { name: 'Agent name' }).matches(':disabled')).toBe(true)
+    expect(screen.getByText('Only an owner can change these settings.')).toBeTruthy()
+    openSection('Cancellation form')
+    const controls = screen.getByTestId('section-cancellation').querySelectorAll('input, textarea, select')
+    expect(controls.length).toBeGreaterThan(20)
+    for (const c of controls) expect(c.matches(':disabled')).toBe(true)
+    openSection('Member app')
+    expect(screen.getByRole('checkbox', { name: 'Member social (friends, feed and kudos)' }).matches(':disabled')).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Save settings' })).toBeNull()
+  })
+
+  it('the menu foot links to Activity, Requests and the channel connections', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByRole('link', { name: 'Activity' }).getAttribute('href')).toBe('/settings/customer-agent/analytics')
+    expect(screen.getByRole('link', { name: 'Requests' }).getAttribute('href')).toBe('/settings/customer-agent/requests')
+    expect(screen.getByRole('link', { name: 'Channel connections' }).getAttribute('href')).toBe('/settings/integrations-hub?manage=instagram&location=loc1')
+    // the two old link cards are gone
+    expect(screen.queryByText('View agent activity')).toBeNull()
+  })
+
+  it('the header names the studio and shows the SAVED status, not an unsaved switch', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const header = screen.getByRole('banner')
+    expect(within(header).getByRole('heading', { level: 1, name: 'Customer Agent' })).toBeTruthy()
+    expect(within(header).getByText('Test Studio')).toBeTruthy()
+    expect(within(header).getByText('Live').className).toContain('text-green-700')
+    fireEvent.click(screen.getByRole('radio', { name: 'Test' }))
+    expect(within(header).getByText('Live')).toBeTruthy()
+    expect(within(header).queryByText('Test')).toBeNull()
+  })
+
+  it('the header status reads Off, Test, and Live for a live-and-test row', async () => {
+    for (const [flags, text, cls] of [
+      [{ enabled: false, test_mode: false }, 'Off', 'text-un1t-muted'],
+      [{ enabled: false, test_mode: true }, 'Test', 'text-amber-700'],
+      [{ enabled: true, test_mode: true }, 'Live', 'text-green-700'],
+    ]) {
+      mockFetch([reply(200, { ...(await GOOD.json()), settings: { ...DEFAULTS, ...flags, social_enabled: false, glofox_auto_cancel: false } })])
+      const { unmount } = render(<CustomerAgentClient canEdit />)
+      await ready()
+      expect(within(screen.getByRole('banner')).getByText(text).className, text).toContain(cls)
+      unmount()
+    }
+  })
+
+  it('the header shows the saved quiet hours window, and none when switched off', async () => {
+    mockFetch([reply(200, { ...(await GOOD.json()), settings: { ...DEFAULTS, enabled: true, social_enabled: false, glofox_auto_cancel: false, quiet_hours: { start: '21:00', end: '08:00' } } })])
+    const first = render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(screen.getByRole('banner')).getByText('Quiet 21:00 to 08:00')).toBeTruthy()
+    first.unmount()
+    mockFetch([reply(200, { ...(await GOOD.json()), settings: { ...DEFAULTS, enabled: true, social_enabled: false, glofox_auto_cancel: false, quiet_hours: { start: null, end: null, off: true } } })])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(screen.getByRole('banner')).queryByText(/^Quiet /)).toBeNull()
+  })
+
+  it('the template pickers\' empty options carry no dashes', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    openSection('Follow-ups')
+    expect(screen.getByRole('option', { name: 'None (in-window nudge only)' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'None (open-window check-ins only)' })).toBeTruthy()
+  })
+
+  it('Voices sit in Personality and voice with their own permission', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit={false} canEditVoices />)
+    await ready()
+    expect(screen.getByTestId('section-personality').textContent).toContain('Mia\u2019s voices')
+    expect(screen.getByTestId('mia-voices').closest('fieldset')).toBeNull()
   })
 })

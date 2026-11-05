@@ -311,7 +311,9 @@ export function useAgentSettings({ canEdit = false } = {}) {
   const ctx = { membershipSourceKey, bookings, brand, agentName: settings?.agent_name }
 
   return {
-    loading, loadFailed, reload: () => load(), settings, overridden, org, inherited, location, brand, bookings,
+    // `saved`: the settings as last loaded or saved (the header's status and
+    // quiet-hours tags show these, never unsaved edits).
+    loading, loadFailed, reload: () => load(), settings, saved: snapshot?.settings ?? null, overridden, org, inherited, location, brand, bookings,
     membershipSourceKey, checkinStats, templates, ctx,
     setField, setQuietHours, setNoQuietHours, revertToInherited, sourceTag, inheritedNumber,
     dirtyPaths, dirtySections: sectionsOf(dirtyPaths), holds,

@@ -26,9 +26,15 @@ vi.mock('next/navigation', () => ({
 
 // Client component stub — this test asserts on the server-side gate only.
 vi.mock('./CustomerAgentClient', () => ({
-  default: ({ canEdit, orgDefaults }) => (
-    <div>customer-agent-client-rendered can-edit={String(canEdit)} org-defaults={JSON.stringify(orgDefaults ?? null)}</div>
+  default: ({ canEdit, canEditVoices, orgDefaults }) => (
+    <div>customer-agent-client-rendered can-edit={String(canEdit)} can-edit-voices={String(canEditVoices)} org-defaults={JSON.stringify(orgDefaults ?? null)}</div>
   ),
+}))
+
+// MIASETTINGS.2c — Mia's voices render inside the client (Personality and
+// voice), so the page must not render the card itself.
+vi.mock('@/components/settings/MiaVoicesCard', () => ({
+  default: () => <div>mia-voices-card-rendered-by-page</div>,
 }))
 
 import CustomerAgentSettingsPage from './page.js'
@@ -77,6 +83,25 @@ describe('/settings/customer-agent page', () => {
       getCurrentUser.mockResolvedValue(u)
       const html = renderToStaticMarkup(await CustomerAgentSettingsPage())
       expect(html).toContain(`can-edit=${expected}`)
+    })
+  }
+})
+
+// VOICEREPLY.1 / MIASETTINGS.2c — Mia's voices: owners and managers at this
+// studio (or a master) edit them, their own gate, passed to the client.
+describe('/settings/customer-agent page — voices permission (MIASETTINGS.2c)', () => {
+  for (const [label, u, expected] of [
+    ['an owner at the studio', user('owner'), 'true'],
+    ['a master', user('master'), 'true'],
+    ['a manager', user('manager'), 'true'],
+    ['a head coach', user('head_coach'), 'false'],
+    ['a manager at ANOTHER studio (head coach here)', user('head_coach', { loc1: 'head_coach', loc2: 'manager' }), 'false'],
+  ]) {
+    it(`${label}: canEditVoices=${expected}`, async () => {
+      getCurrentUser.mockResolvedValue(u)
+      const html = renderToStaticMarkup(await CustomerAgentSettingsPage())
+      expect(html).toContain(`can-edit-voices=${expected}`)
+      expect(html).not.toContain('mia-voices-card-rendered-by-page')
     })
   }
 })
