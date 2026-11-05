@@ -44,7 +44,7 @@ function rowsIn(db, table, cols, locationId, column, keys) {
 }
 
 /** The contacts in the organisation that are this person (submitted + same email + same mobile). */
-async function personContactIds(db, { organizationId, contactId, email, phone }) {
+export async function personContactIds(db, { organizationId, contactId, email, phone }) {
   const ids = new Set(contactId ? [contactId] : [])
   if (!organizationId) return [...ids]
   const normEmail = typeof email === 'string' ? email.trim().toLowerCase() : ''
