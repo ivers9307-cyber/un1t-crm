@@ -1026,6 +1026,22 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     expect(putBody().followups).toMatchObject({ nudge_after_hours: 5, template_name: 'nudge_v2', daily_cap: 33 })
   })
 
+  it('MIASETTINGS.3b fix: a read-only viewer can open a folded card and sees its fields disabled', async () => {
+    mockFetch([answer({ membership_source_key: 'un1t_online' })])
+    render(<CustomerAgentClient canEdit={false} />)
+    await waitFor(() => expect(screen.getByTestId('trial-done-card')).toBeTruthy())
+    const card = screen.getByTestId('trial-done-card')
+    const toggle = within(card).getByRole('button', { name: 'Show settings', hidden: true })
+    expect(toggle.matches(':disabled')).toBe(false)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(within(card).getByLabelText('Opener template').matches(':disabled')).toBe(true)
+    const hide = within(card).getByRole('button', { name: 'Hide settings', hidden: true })
+    expect(hide.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(hide)
+    expect(within(card).queryByLabelText('Opener template')).toBeNull()
+  })
+
   it('a Glofox studio, no source, or an older GET shows no card', async () => {
     for (const key of ['glofox', 'none', undefined]) {
       mockFetch([answer({ membership_source_key: key })])
@@ -1095,7 +1111,7 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
     mockFetch([answer({ membership_source_key: 'un1t_online' })])
     const { container } = render(<CustomerAgentClient canEdit={false} />)
     await waitFor(() => expect(screen.getByTestId('trial-done-card')).toBeTruthy())
-    expect(screen.getByTestId('trial-done-card').closest('fieldset').disabled).toBe(true)
+    expect(screen.getByTestId('trial-done-card').querySelector('fieldset').disabled).toBe(true)
     for (const b of container.querySelectorAll('[data-testid="trial-done-card"] button')) expect(b.getAttribute('type')).toBe('button')
   })
 })
@@ -1472,6 +1488,28 @@ describe('CustomerAgentClient — knowledge search and filter (MIASETTINGS.3c)',
     expect(titles()).toEqual([])
     fireEvent.change(cat, { target: { value: '' } })
     expect(titles()).toEqual(['Opening hours', 'Trial offer', 'Parking'])
+  })
+
+  it('MIASETTINGS.3c fix: an entry stays listed while typed in, and its blur save still fires', async () => {
+    await openKnowledge()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: 'opening' } })
+    const input = screen.getByDisplayValue('Opening hours')
+    fireEvent.change(input, { target: { value: 'Studio times' } })
+    expect(screen.getByDisplayValue('Studio times')).toBe(input)
+    fireEvent.blur(input)
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => u === '/api/agent/knowledge/k1' && i?.method === 'PUT' && JSON.parse(i.body).title === 'Studio times')).toBe(true))
+    await waitFor(() => expect(titles()).toEqual(['Parking']))
+  })
+
+  it('MIASETTINGS.3c fix: no count in the menu until the knowledge read succeeds', async () => {
+    mockFetch([GOOD])
+    const inner = global.fetch
+    global.fetch = vi.fn(async (url, init) => String(url) === '/api/agent/knowledge' && !init?.method
+      ? reply(200, { success: false }) : inner(url, init))
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.getByRole('button', { name: 'Knowledge' }).parentElement.textContent).toBe('Knowledge')
+    expect(screen.getByRole('option', { name: 'Knowledge' })).toBeTruthy()
   })
 
   it('MIASETTINGS.3c: the menu shows the total entries, unchanged by the filter, without changing the item name', async () => {

@@ -61,19 +61,25 @@ function TemplatePicker({ field, value, onChange, templates, tag, keyPrefix = ''
 // The details are not rendered then, but the values stay in state and still
 // save. "Show settings" opens them without switching the feature on; turning
 // the switch on shows them. `forceOpen` keeps an invalid field in view.
-function FoldCard({ title, intro, header, on, forceOpen = false, always = null, testId, children }) {
+function FoldCard({ title, intro, header, on, forceOpen = false, always = null, testId, canEdit, children }) {
   const [shown, setShown] = useState(false)
-  const open = on || shown || forceOpen
+  const folded = !on && !forceOpen
+  const open = !folded || shown
+  // The fieldset disables the inputs of a read-only viewer; the Show settings
+  // toggle sits outside it so they can still look at the details.
   return (
     <section className={CARD} data-testid={testId}>
       <h3 className="text-base font-semibold text-un1t-text mb-1">{title}</h3>
       <p className="text-sm text-un1t-muted mb-4">{intro}</p>
-      <div className="mb-4">{header}</div>
-      {always}
-      {open ? children : (
-        <button type="button" aria-expanded={false} onClick={() => setShown(true)}
+      <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
+        <div className="mb-4">{header}</div>
+        {always}
+        {open && children}
+      </fieldset>
+      {folded && (
+        <button type="button" aria-expanded={shown} onClick={() => setShown(v => !v)}
           className="text-sm text-un1t-muted hover:text-un1t-text underline">
-          Show settings
+          {shown ? 'Hide settings' : 'Show settings'}
         </button>
       )}
     </section>
@@ -90,9 +96,9 @@ export default function FollowupsSection({ agent, renderField, canEdit }) {
   const setTrialDone = (key, value) => setField(`trial_done.${key}`, value)
 
   return (
-    <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0 space-y-6">
+    <div className="space-y-6">
       {/* ── Proactive follow-ups (AGENT-FOLLOWUP.1) ───────── */}
-      <FoldCard title="Proactive follow-ups" on={!!settings.followups?.enabled}
+      <FoldCard canEdit={canEdit} title="Proactive follow-ups" on={!!settings.followups?.enabled}
         header={renderField('followups.enabled')}
         intro={<>
           When someone goes quiet on an open request, the agent sends one gentle in-window nudge,
@@ -109,7 +115,7 @@ export default function FollowupsSection({ agent, renderField, canEdit }) {
       </FoldCard>
 
       {/* ── First-class check-in (AGENT-CHECKIN.1) ────────── */}
-      <FoldCard title="First-class check-in" on={!!settings.first_class_checkin?.enabled}
+      <FoldCard canEdit={canEdit} title="First-class check-in" on={!!settings.first_class_checkin?.enabled}
         header={renderField('first_class_checkin.enabled')}
         intro={<>
           After a new lead or trial member attends their first class, the agent checks in once:
@@ -172,7 +178,7 @@ export default function FollowupsSection({ agent, renderField, canEdit }) {
         const idsText = td.only_contact_ids_text ?? (Array.isArray(td.only_contact_ids) ? td.only_contact_ids : []).join('\n')
         const testCount = parseTrialDoneContactIds(idsText).length
         return (
-          <FoldCard title="Trial finisher follow-up" testId="trial-done-card" on={!!td.enabled}
+          <FoldCard canEdit={canEdit} title="Trial finisher follow-up" testId="trial-done-card" on={!!td.enabled}
             forceOpen={Object.keys(trialErrors).length > 0}
             intro={<>
               After a trial member has done 3 trial classes, or 2 classes and the trial has expired, the studio
@@ -259,8 +265,10 @@ export default function FollowupsSection({ agent, renderField, canEdit }) {
         <p className="text-sm text-un1t-muted mb-4">
           After staff decide a request in the inbox, Mia drafts a suggested follow-up they can send.
         </p>
-        {renderField('inline_suggestion.enabled')}
+        <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
+          {renderField('inline_suggestion.enabled')}
+        </fieldset>
       </section>
-    </fieldset>
+    </div>
   )
 }

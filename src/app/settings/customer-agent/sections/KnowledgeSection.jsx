@@ -19,15 +19,19 @@ export default function KnowledgeSection({ onCountChange } = {}) {
   const [importNote, setImportNote] = useState(null)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  // The entry being typed in stays listed until its blur save, even if the edit stops it matching.
+  const [editingId, setEditingId] = useState(null)
 
-  useEffect(() => { onCountChange?.(entries.length) }, [entries.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The menu count appears once the read has succeeded, never as 0 before it.
+  useEffect(() => { if (loaded) onCountChange?.(entries.length) }, [loaded, entries.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const k = await fetch('/api/agent/knowledge').then(r => r.json())
-        if (!cancelled && k?.success) setEntries(k.entries || [])
+        if (!cancelled && k?.success) { setEntries(k.entries || []); setLoaded(true) }
       } catch { /* the list stays as it was */ }
     })()
     return () => { cancelled = true }
@@ -68,6 +72,7 @@ export default function KnowledgeSection({ onCountChange } = {}) {
   }
   async function persist(id, patch) {
     editLocal(id, patch)
+    setEditingId(cur => (cur === id ? null : cur))
     try {
       const res = await fetch(`/api/agent/knowledge/${id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
@@ -81,7 +86,8 @@ export default function KnowledgeSection({ onCountChange } = {}) {
     await fetch(`/api/agent/knowledge/${id}`, { method: 'DELETE' })
   }
 
-  const shown = filterKnowledge(entries, { query, category })
+  const matching = new Set(filterKnowledge(entries, { query, category }).map(e => e.id))
+  const shown = entries.filter(e => matching.has(e.id) || e.id === editingId)
 
   return (
     <section className={CARD}>
@@ -136,7 +142,7 @@ export default function KnowledgeSection({ onCountChange } = {}) {
               </select>
               <input className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-sm text-un1t-text"
                 value={entry.title}
-                onChange={e => editLocal(entry.id, { title: e.target.value })}
+                onChange={e => { setEditingId(entry.id); editLocal(entry.id, { title: e.target.value }) }}
                 onBlur={e => persist(entry.id, { title: e.target.value })}
                 placeholder="Short title" maxLength={200} />
               <label className="flex items-center gap-1 text-xs text-un1t-muted">
@@ -149,7 +155,7 @@ export default function KnowledgeSection({ onCountChange } = {}) {
             </div>
             <textarea className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               rows={2} maxLength={4000} value={entry.content}
-              onChange={e => editLocal(entry.id, { content: e.target.value })}
+              onChange={e => { setEditingId(entry.id); editLocal(entry.id, { content: e.target.value }) }}
               onBlur={e => persist(entry.id, { content: e.target.value })}
               placeholder="The answer / fact, in plain language." />
           </div>
