@@ -907,7 +907,9 @@ describe('HATCHPIPE.5 — un1t create dates', () => {
     const first = inserts.find((r) => r.contact_id === 'c-first')
     expect(lead.stage_id).toBe('h-new')
     expect(Math.abs(Date.parse(lead.created_at) - (Date.now() - 2 * 86_400_000))).toBeLessThan(5_000)
-    expect(lead.stage_entered_at).toBe(lead.created_at)
+    // Both come from "2 days ago" fixtures built a moment apart, so they can
+    // differ by a millisecond: same instant within the tolerance used above.
+    expect(Math.abs(Date.parse(lead.stage_entered_at) - Date.parse(lead.created_at))).toBeLessThan(5_000)
     expect(first.stage_id).toBe('h-first')
     expect(Math.abs(Date.parse(first.created_at) - (Date.now() - 30 * 86_400_000))).toBeLessThan(5_000)
     expect(Math.abs(Date.parse(first.stage_entered_at) - (Date.now() - 4 * 86_400_000))).toBeLessThan(5_000)

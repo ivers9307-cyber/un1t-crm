@@ -33,7 +33,6 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { canEditMiaSettings } from '@/lib/agent/settings-access'
 import { resolveAdminOrgId } from '@/lib/org-admin'
 import CustomerAgentClient from './CustomerAgentClient'
-import MiaVoicesCard from '@/components/settings/MiaVoicesCard'
 import { canEditVoices } from '@/lib/wa-voice/voice-settings'
 
 export const dynamic = 'force-dynamic'
@@ -55,13 +54,13 @@ export default async function CustomerAgentSettingsPage() {
     ? { organizationId: orgId, organizationName: user.organizationsById?.[orgId]?.name || null }
     : null
   // VOICEREPLY.1 — Mia's voices: owners and managers at this studio edit
-  // (their own gate, not Mia's owner-only one).
+  // (their own gate, not Mia's owner-only one). MIASETTINGS.2c: the client
+  // shows the card in its Personality and voice section.
   return (
-    <>
-      <CustomerAgentClient canEdit={canEditMiaSettings(user, user.activeLocation?.id)} orgDefaults={orgDefaults} />
-      <div className="px-6 pb-10">
-        <MiaVoicesCard canEdit={canEditVoices(user, user.activeLocation?.id)} />
-      </div>
-    </>
+    <CustomerAgentClient
+      canEdit={canEditMiaSettings(user, user.activeLocation?.id)}
+      canEditVoices={canEditVoices(user, user.activeLocation?.id)}
+      orgDefaults={orgDefaults}
+    />
   )
 }
