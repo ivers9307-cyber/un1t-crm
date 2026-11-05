@@ -7,7 +7,8 @@
 // failed knowledge read never counts as a failed settings read.
 
 import { useState, useEffect } from 'react'
-import { CARD } from './field-renderer'
+import { CARD, inputCls } from './field-renderer'
+import { filterKnowledge } from '../knowledge-filter'
 
 const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'general', 'faq']
 
@@ -16,6 +17,8 @@ export default function KnowledgeSection() {
   const [error, setError] = useState(null)
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
+  const [query, setQuery] = useState('')
+  const [category, setCategory] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -76,6 +79,8 @@ export default function KnowledgeSection() {
     await fetch(`/api/agent/knowledge/${id}`, { method: 'DELETE' })
   }
 
+  const shown = filterKnowledge(entries, { query, category })
+
   return (
     <section className={CARD}>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -103,8 +108,23 @@ export default function KnowledgeSection() {
         </div>
       )}
 
+      {/* MIASETTINGS.3c — outside any disabled fieldset: knowledge is editable by any manager. */}
+      {entries.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <input type="search" aria-label="Search knowledge" className={`${inputCls} sm:col-span-2`}
+            placeholder="Search titles and answers" value={query} onChange={e => setQuery(e.target.value)} />
+          <select aria-label="Category" className={inputCls} value={category} onChange={e => setCategory(e.target.value)}>
+            <option value="">All categories</option>
+            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+      )}
+      {entries.length > 0 && shown.length === 0 && (
+        <p className="text-sm text-un1t-muted border border-dashed border-un1t-border rounded-md p-4">No entries match.</p>
+      )}
+
       <div className="space-y-3">
-        {entries.map(entry => (
+        {shown.map(entry => (
           <div key={entry.id} className="border border-un1t-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
               <select value={entry.category}

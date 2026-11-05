@@ -1414,3 +1414,68 @@ describe('CustomerAgentClient — save bar and unsaved-change guards (MIASETTING
     expect(screen.getByTestId('mia-voices').contains(note)).toBe(false)
   })
 })
+
+// MIASETTINGS.3c — Knowledge search and category filter.
+describe('CustomerAgentClient — knowledge search and filter (MIASETTINGS.3c)', () => {
+  const ENTRIES = [
+    { id: 'k1', category: 'hours', title: 'Opening hours', content: 'Mon to Fri 6am', enabled: true },
+    { id: 'k2', category: 'sales', title: 'Trial offer', content: 'First class free', enabled: true },
+    { id: 'k3', category: 'faq', title: 'Parking', content: 'Opening times of the car park', enabled: true },
+  ]
+  const ready = () => screen.findByRole('button', { name: 'Knowledge' })
+  async function openKnowledge({ canEdit = true } = {}) {
+    mockFetch([GOOD])
+    const inner = global.fetch
+    global.fetch = vi.fn(async (url, init) => {
+      if (String(url) === '/api/agent/knowledge' && !init?.method) return reply(200, { success: true, entries: ENTRIES })
+      if (String(url).startsWith('/api/agent/knowledge/') && init?.method === 'PUT') return reply(200, { success: true })
+      return inner(url, init)
+    })
+    render(<CustomerAgentClient canEdit={canEdit} />)
+    await ready()
+    openSection('Knowledge')
+    await screen.findByDisplayValue('Opening hours')
+  }
+  const titles = () => screen.queryAllByPlaceholderText('Short title').map((i) => i.value)
+
+  it('the search matches title and content; a miss says so', async () => {
+    await openKnowledge()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: 'opening' } })
+    expect(titles()).toEqual(['Opening hours', 'Parking'])
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: 'zzz' } })
+    expect(titles()).toEqual([])
+    expect(screen.getByText('No entries match.')).toBeTruthy()
+  })
+
+  it('the category narrows the list, alone or with the search; All categories restores it', async () => {
+    await openKnowledge()
+    const cat = screen.getByRole('combobox', { name: 'Category' })
+    expect(within(cat).getByRole('option', { name: 'All categories' })).toBeTruthy()
+    fireEvent.change(cat, { target: { value: 'sales' } })
+    expect(titles()).toEqual(['Trial offer'])
+    fireEvent.change(cat, { target: { value: 'faq' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: 'opening' } })
+    expect(titles()).toEqual(['Parking'])
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: '' } })
+    fireEvent.change(cat, { target: { value: '' } })
+    expect(titles()).toEqual(['Opening hours', 'Trial offer', 'Parking'])
+  })
+
+  it('an entry edited so it leaves the filtered list is still saved, and kept in the full list', async () => {
+    await openKnowledge()
+    const cat = screen.getByRole('combobox', { name: 'Category' })
+    fireEvent.change(cat, { target: { value: 'sales' } })
+    const entrySelect = screen.getByDisplayValue('Trial offer').closest('div').querySelector('select')
+    fireEvent.change(entrySelect, { target: { value: 'faq' } })
+    await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => u === '/api/agent/knowledge/k2' && i?.method === 'PUT' && JSON.parse(i.body).category === 'faq')).toBe(true))
+    expect(titles()).toEqual([])
+    fireEvent.change(cat, { target: { value: '' } })
+    expect(titles()).toEqual(['Opening hours', 'Trial offer', 'Parking'])
+  })
+
+  it('the filter controls work for a viewer without owner rights', async () => {
+    await openKnowledge({ canEdit: false })
+    expect(screen.getByRole('searchbox', { name: 'Search knowledge' }).matches(':disabled')).toBe(false)
+    expect(screen.getByRole('combobox', { name: 'Category' }).matches(':disabled')).toBe(false)
+  })
+})
