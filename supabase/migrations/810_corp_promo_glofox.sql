@@ -15,11 +15,11 @@
 
 ALTER TABLE public.corp_promo_claims
   ADD COLUMN IF NOT EXISTS glofox_member_id text,
-  ADD COLUMN IF NOT EXISTS grant jsonb;
+  ADD COLUMN IF NOT EXISTS "grant" jsonb;
 
 COMMENT ON COLUMN public.corp_promo_claims.glofox_member_id IS
   'NEWSTART.1 — the Glofox member id the promo trial was bought onto (Glofox promos only; NULL for un1t.online claims).';
-COMMENT ON COLUMN public.corp_promo_claims.grant IS
+COMMENT ON COLUMN public.corp_promo_claims."grant" IS
   'NEWSTART.1 — write-ahead marker for the Glofox purchase, same shape as trial_purchases.grant: { stage: ''purchasing'' } before the call, the outcome after. No marker, no purchase.';
 
 CREATE UNIQUE INDEX IF NOT EXISTS corp_promo_claims_one_live_per_contact
