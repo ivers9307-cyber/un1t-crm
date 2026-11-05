@@ -42,7 +42,7 @@ export const CORP_PROMOS = Object.freeze({
     expiresInDays: 7,
     tag: 'stillorgan-newstart',
     leadSource: 'corp_promo',
-    live: false,
+    live: true,
   }),
 })
 
