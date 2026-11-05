@@ -117,9 +117,13 @@ export default function CampaignFunnel({ publicPath, campaign, page = null, copy
     setError(null)
   }
 
-  function toDetails() {
-    if (!chosen) return
-    fireStep('pick', { event_id: chosen.event_id })
+  // MOBILEFUNNEL.1 — the class comes with the call (a tapped time continues
+  // in the same event, before `chosen` re-renders); else the one chosen.
+  function toDetails(cls) {
+    const picked = cls || chosen
+    if (!picked) return
+    setChosen(picked)
+    fireStep('pick', { event_id: picked.event_id })
     setError(null)
     setStep('details')
   }

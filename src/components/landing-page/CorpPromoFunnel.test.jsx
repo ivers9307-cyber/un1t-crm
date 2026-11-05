@@ -122,6 +122,24 @@ describe('CorpPromoFunnel', () => {
     expect(posts[1].body.event_id).toBe('b')
   })
 
+  it('MOBILEFUNNEL.1: day-first, tapping a time goes straight to the details with that class, and the claim carries it', async () => {
+    const BUSY = [
+      { event_id: 'm6', name: 'FORCE.', starts_at: '2099-01-05T06:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '06:00' },
+      { event_id: 'm7', name: 'RECLA1M', starts_at: '2099-01-05T07:00:00.000Z', day: '2099-01-05', day_label: 'Mon, 5 Jan', time: '07:00' },
+      { event_id: 't6', name: 'CONVOY', starts_at: '2099-01-06T06:00:00.000Z', day: '2099-01-06', day_label: 'Tue, 6 Jan', time: '06:00' },
+    ]
+    classList = { success: true, data: { classes: BUSY, campaign: { configured: true, timetable_unavailable: false } } }
+    render(<CorpPromoFunnel promoKey="hatch-3-free" copy={COPY} terms={null} page="corp" studio="hatch-street" />)
+    await screen.findByRole('group', { name: 'Day' })
+    expect(screen.queryByRole('button', { name: /^Choose/ })).toBeNull()
+    fireEvent.click(document.querySelector('[data-tile="m7"]'))
+    expect(screen.getByPlaceholderText('First name')).toBeTruthy()
+    expect(screen.getByText('Mon, 5 Jan · RECLA1M', { exact: false })).toBeTruthy()
+    fillAndSubmit()
+    expect(await screen.findByText('On your account')).toBeTruthy()
+    expect(posts[0].body.event_id).toBe('m7')
+  })
+
   it('no live promo shows the unavailable text and fetches nothing', () => {
     render(<CorpPromoFunnel promoKey={null} copy={COPY} terms={null} page="corp" studio="hatch-street" />)
     expect(screen.getByText('Not now')).toBeTruthy()

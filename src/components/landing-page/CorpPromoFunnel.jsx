@@ -149,7 +149,12 @@ export default function CorpPromoFunnel({ promoKey, copy, terms, page = null, st
           copy={words}
           chosen={chosen}
           onPick={(cls) => { setChosen(cls); setError(null) }}
-          onContinue={() => { if (chosen) { setError(null); setStep('form') } }}
+          onContinue={(cls) => {
+            // MOBILEFUNNEL.1 — the class comes with the call: a tapped time
+            // continues in the same event, before `chosen` re-renders.
+            const picked = cls || chosen
+            if (picked) { setChosen(picked); setError(null); setStep('form') }
+          }}
           onSkip={() => { setChosen(null); setError(null); setStep('form') }}
           showClassName
           ctaLabel={cta}
