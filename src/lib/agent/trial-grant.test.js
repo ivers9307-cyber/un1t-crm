@@ -90,6 +90,7 @@ function makeDb(tables = {}, faults = {}) {
         eq(col, v) { filters.push((r) => r[col] === v); return q },
         neq(col, v) { filters.push((r) => r[col] !== v); return q },
         is(col, v) { filters.push((r) => (v === null ? r[col] == null : r[col] === v)); return q },
+        in(col, vs) { filters.push((r) => vs.includes(r[col])); return q },
         contains(col, v) { filters.push((r) => deepContains(r[col], v)); return q },
         limit(n) { cap = n; return q },
         async single() {
@@ -644,6 +645,40 @@ describe('grantTrialBeforeBooking: a trial bought when the account was minted', 
     expect(out.failure).toEqual({ ok: false, message_code: TRIAL_HISTORY_UNREADABLE })
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
     expect(record).not.toHaveBeenCalled()
+  })
+})
+
+// NEWSTART.1g — a New Start claim is the member's free trial.
+describe('grantTrialBeforeBooking: a New Start claim (NEWSTART.1g)', () => {
+  const claim = (over = {}) => ({ id: 'cpc-1', location_id: 'L1', glofox_member_id: 'gm1', promo_key: 'stillorgan-newstart', status: 'granted', grant: null, ...over })
+
+  it('a granted claim stops with TRIAL_ALREADY_GRANTED and buys nothing', async () => {
+    db = makeDb({ corp_promo_claims: [claim()] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(out.proceed).toBe(false)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_ALREADY_GRANTED, prior_corp_claim_id: 'cpc-1' })
+  })
+
+  it('a claim that may have bought (purchasing marker) also stops', async () => {
+    db = makeDb({ corp_promo_claims: [claim({ status: 'processing', grant: { stage: 'purchasing' } })] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toMatchObject({ message_code: TRIAL_ALREADY_GRANTED, prior_corp_claim_id: 'cpc-1' })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a failed claim, or one for another member or studio, does not block', async () => {
+    db = makeDb({ corp_promo_claims: [claim({ status: 'failed' }), claim({ id: 'c2', glofox_member_id: 'gm2' }), claim({ id: 'c3', location_id: 'L2' })] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unreadable claims read → TRIAL_HISTORY_UNREADABLE, nothing bought', async () => {
+    db = makeDb({ corp_promo_claims: { error: { message: 'boom' } } })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.failure).toEqual({ ok: false, message_code: TRIAL_HISTORY_UNREADABLE })
+    expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 })
 
