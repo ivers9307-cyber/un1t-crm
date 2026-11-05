@@ -12,6 +12,7 @@ import { DEFAULTS, buildCustomerAgentSettings, SettingsSchema } from '@/lib/agen
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import { initialOverridden, TRIAL_DONE_MIA_INSTRUCTION_DEFAULT } from '@/lib/agent/settings-overrides'
 import CustomerAgentClient from './CustomerAgentClient.jsx'
+import { fieldsFor } from './fields'
 
 // MIASETTINGS.3b — a follow-up card folded while its switch is off keeps its
 // details behind "Show settings"; open every folded card (in `scope`).
@@ -1359,7 +1360,7 @@ describe('CustomerAgentClient — save bar and unsaved-change guards (MIASETTING
     fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
     expect(screen.getAllByRole('img', { name: 'Unsaved changes' })).toHaveLength(1)
     expect(screen.getByRole('option', { name: 'Personality and voice (unsaved)' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: 'Messages' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: /^Messages \(\d+\)$/ })).toBeTruthy()
   })
 
   it('beforeunload is registered only while there are unsaved changes', async () => {
@@ -1471,6 +1472,26 @@ describe('CustomerAgentClient — knowledge search and filter (MIASETTINGS.3c)',
     expect(titles()).toEqual([])
     fireEvent.change(cat, { target: { value: '' } })
     expect(titles()).toEqual(['Opening hours', 'Trial offer', 'Parking'])
+  })
+
+  it('MIASETTINGS.3c: the menu shows the total entries, unchanged by the filter, without changing the item name', async () => {
+    await openKnowledge()
+    const item = screen.getByRole('button', { name: 'Knowledge' })
+    await waitFor(() => expect(item.parentElement.textContent).toContain('3'))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: 'free' } })
+    expect(titles()).toEqual(['Trial offer'])
+    expect(item.parentElement.textContent).toBe('Knowledge3')
+    expect(screen.getByRole('option', { name: 'Knowledge (3)' })).toBeTruthy()
+  })
+
+  it('MIASETTINGS.3c: the menu shows how many message fields this studio has', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const n = fieldsFor('studio', 'messages', {}).length
+    expect(n).toBeGreaterThan(0)
+    const item = screen.getByRole('button', { name: 'Messages' })
+    expect(item.parentElement.textContent).toMatch(new RegExp(`^Messages${n}`))
   })
 
   it('the filter controls work for a viewer without owner rights', async () => {

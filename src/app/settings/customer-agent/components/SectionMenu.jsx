@@ -11,17 +11,18 @@
 //   onSelect  (key) => void
 //   links     [{ href, label }]
 //   dirtySections  Set of section keys with unsaved changes (a dot on each)
+//   counts    { [sectionKey]: number } shown after the label (not part of its name)
 //   dirty     any unsaved change: the foot links then ask before leaving
 
 import GuardedLink from './GuardedLink'
 
-export default function SectionMenu({ sections, active, onSelect, links = [], dirtySections = new Set(), dirty = false }) {
+export default function SectionMenu({ sections, active, onSelect, links = [], dirtySections = new Set(), dirty = false, counts = {} }) {
   return (
     <nav aria-label="Customer agent settings" className="mb-6 md:mb-0">
       <div className="md:hidden">
         <select aria-label="Section" value={active} onChange={(e) => onSelect(e.target.value)}
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text">
-          {sections.map((s) => <option key={s.key} value={s.key}>{s.label}{dirtySections.has(s.key) ? ' (unsaved)' : ''}</option>)}
+          {sections.map((s) => <option key={s.key} value={s.key}>{s.label}{counts[s.key] != null ? ` (${counts[s.key]})` : ''}{dirtySections.has(s.key) ? ' (unsaved)' : ''}</option>)}
         </select>
       </div>
       <ul className="hidden md:block space-y-0.5">
@@ -35,6 +36,12 @@ export default function SectionMenu({ sections, active, onSelect, links = [], di
                   : 'border border-transparent text-un1t-muted hover:text-un1t-text hover:bg-un1t-surface'}`}>
                 {s.label}
               </button>
+              {counts[s.key] != null && (
+                <span aria-hidden="true"
+                  className="pointer-events-none absolute right-7 top-1/2 -translate-y-1/2 text-xs text-un1t-muted">
+                  {counts[s.key]}
+                </span>
+              )}
               {/* Beside the button, not in it, so the item's name stays its label. */}
               {dirtySections.has(s.key) && (
                 <span role="img" aria-label="Unsaved changes"

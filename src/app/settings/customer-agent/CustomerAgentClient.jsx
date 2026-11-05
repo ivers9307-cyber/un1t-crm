@@ -31,6 +31,7 @@ import OrgDefaultsClient from './OrgDefaultsClient'
 import { useAgentSettings } from './useAgentSettings'
 import { SECTIONS, parseLocation, writeLocation } from './sections'
 import { statusOf } from './status'
+import { fieldsFor } from './fields'
 import SectionMenu from './components/SectionMenu'
 import SaveBar from './components/SaveBar'
 import { changedFieldCount } from './dirty'
@@ -78,6 +79,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   const agent = useAgentSettings({ canEdit })
   const { loading, loadFailed, reload, settings, saved, location, holds, saving, savedAt, error, save, discard, refreshInherited, dirtyPaths, dirtySections } = agent
   const [section, setSection] = useState(initialSection)
+  // MIASETTINGS.3c — the Knowledge entries are loaded by its section; it reports the total here for the menu.
+  const [knowledgeCount, setKnowledgeCount] = useState(null)
 
   // Leaving the page (close, reload, a typed address) with unsaved changes.
   const isDirty = dirtyPaths.length > 0
@@ -104,6 +107,10 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   }
 
   const renderField = fieldRenderer(agent)
+  const menuCounts = {
+    messages: fieldsFor('studio', 'messages', agent.ctx).length,
+    ...(knowledgeCount == null ? {} : { knowledge: knowledgeCount }),
+  }
   const status = STATUS_CHIPS[statusOf(saved || settings)]
   const quiet = saved?.quiet_hours
   const quietChip = quiet && !quiet.off && quiet.start && quiet.end ? `Quiet ${quiet.start} to ${quiet.end}` : null
@@ -138,7 +145,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
       <div className="md:flex md:items-start md:gap-8">
         <div className="md:w-56 md:shrink-0">
           <SectionMenu sections={SECTIONS} active={section} onSelect={openSection} links={links}
-            dirtySections={dirtySections} dirty={isDirty} />
+            dirtySections={dirtySections} dirty={isDirty} counts={menuCounts} />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -160,7 +167,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
             return (
               <div key={key} hidden={section !== key} data-testid={`section-${key}`}>
                 <h2 className="text-lg font-semibold text-un1t-text mb-4">{label}</h2>
-                <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices} onOpenSection={openSection}
+                <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices} onOpenSection={openSection} onCountChange={key === 'knowledge' ? setKnowledgeCount : undefined}
                   readOnlyNote={key === 'personality' && section === 'personality' && !canEdit ? readOnlyNote : null} />
               </div>
             )

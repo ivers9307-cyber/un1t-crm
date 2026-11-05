@@ -12,13 +12,15 @@ import { filterKnowledge } from '../knowledge-filter'
 
 const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'general', 'faq']
 
-export default function KnowledgeSection() {
+export default function KnowledgeSection({ onCountChange } = {}) {
   const [entries, setEntries] = useState([])
   const [error, setError] = useState(null)
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
+
+  useEffect(() => { onCountChange?.(entries.length) }, [entries.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false
