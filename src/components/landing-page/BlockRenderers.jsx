@@ -4,7 +4,7 @@
 // they can be rendered from either a server component (the live
 // public page) or a client component (the in-iframe edit overlay).
 // Interactivity ships as imported client islands (BookingWidget,
-// WaitlistWidget, VideoTestimonials, CountUp, PaidTrialFunnel).
+// WaitlistWidget, VideoTestimonials, CountUp, PaidTrialFunnel, HeaderAutoHide).
 //
 // SOURCE OF TRUTH for "what does each block type look like".
 // Adding a new block type means: register it in
@@ -29,6 +29,7 @@ import WaitlistWidget from '@/components/WaitlistWidget'
 import ClassFunnel from '@/components/ClassFunnel'
 import { classFunnelShownOnLanding } from '@/lib/public-landing'
 import VideoTestimonials from './VideoTestimonials'
+import HeaderAutoHide from './HeaderAutoHide'
 import CountUp from './CountUp'
 import { parseEmbed } from '@/lib/landing-page-embed'
 import { E } from './EditableField'
@@ -1047,15 +1048,21 @@ export function SiteHeader({
   // horizontal scroll to reveal it. Falls back to the full label, so
   // every page without a short label renders exactly as before.
   const headerCtaLabel = (ctaLabelShort && ctaLabelShort.trim()) || ctaLabel
+  // MOBILEFUNNEL.1 — below `lg` the bar is slim (~56px: py-2 and the logo
+  // capped at 36px tall) and, when sticky, slides away while the visitor
+  // scrolls down and back while they scroll up (HeaderAutoHide sets
+  // data-hidden; the classes act only below `lg`, and a focused link inside
+  // brings it back). From `lg` it is the bar it always was.
   return (
     <header
       className={
         sticky
-          ? 'fixed inset-x-0 top-0 z-40 bg-black/55 backdrop-blur-md border-b border-white/10'
+          ? 'fixed inset-x-0 top-0 z-40 bg-black/55 backdrop-blur-md border-b border-white/10 transition-transform duration-300 motion-reduce:transition-none max-lg:data-[hidden=true]:-translate-y-full max-lg:data-[hidden=true]:focus-within:translate-y-0'
           : 'absolute inset-x-0 top-0 z-20'
       }
     >
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+      {sticky && <HeaderAutoHide />}
+      <div className="max-w-6xl mx-auto px-6 py-2 lg:py-4 flex items-center justify-between gap-4">
         {onChangeLogo ? (
           <EditableLogo
             logoUrl={logoUrl}
@@ -1070,7 +1077,7 @@ export function SiteHeader({
             src={logoUrl}
             alt={logoAlt}
             style={{ maxWidth: `${Math.min(logoWidthPx, 170)}px`, maxHeight: '48px', width: 'auto', height: 'auto' }}
-            className="object-contain"
+            className="object-contain max-lg:!max-h-9"
           />
         ) : (
           <div className="font-display font-extrabold text-2xl tracking-widest text-white">{wordmark}</div>
