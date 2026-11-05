@@ -570,6 +570,10 @@ describe('CustomerAgentClient — quiet hours opt-out and org defaults (MIAORG.1
       return reply(200, { success: true, templates: [] })
     })
     const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'All studios (organisation)' })).toBeTruthy())
+    // MIASETTINGS.4 — the organisation defaults sit behind the scope switch.
+    expect(screen.queryByRole('heading', { name: 'Organisation defaults (all studios)' })).toBeNull()
+    fireEvent.click(screen.getByRole('radio', { name: 'All studios (organisation)' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
     expect(screen.getByRole('heading', { name: 'Organisation defaults (all studios)' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
@@ -619,22 +623,26 @@ describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
       return reply(200, { success: true, templates: [] })
     })
     const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'All studios (organisation)' })).toBeTruthy())
+    // MIASETTINGS.4 — the org's tone, behind the scope switch.
+    fireEvent.click(screen.getByRole('radio', { name: 'All studios (organisation)' }))
+    openSection('Personality and voice')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
-    const tones = () => [...container.querySelectorAll(`textarea[placeholder="${TONE_PH}"]`)]
-    // org tone first (the section sits above), the studio's last
-    fireEvent.change(tones()[0], { target: { value: 'New org tone' } })
+    const orgTone = () => container.querySelector('[data-org-field="tone"] textarea')
+    const studioTone = () => screen.getByTestId('section-personality').querySelector(`textarea[placeholder="${TONE_PH}"]`)
+    fireEvent.change(orgTone(), { target: { value: 'New org tone' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
-    // while the org PUT is in flight, the operator edits the STUDIO's tone
-    fireEvent.change(tones().at(-1), { target: { value: 'My studio tone' } })
+    // while the org PUT is in flight, the STUDIO's tone changes (its section
+    // stays mounted, hidden, in the organisation scope)
+    fireEvent.change(studioTone(), { target: { value: 'My studio tone' } })
     await act(async () => { releasePut() })
     await waitFor(() => expect(studioReads).toBe(2))
-    // The studio's tone is in Personality and voice (the org editor stays
-    // mounted, hidden, above Overview).
-    openSection('Personality and voice')
-    // The org editor (above) and the studio's now share the registry's label:
-    // the studio's is the last.
-    await waitFor(() => expect(within(screen.getAllByText('Tone and voice').at(-1).parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
-    expect(tones().at(-1).value).toBe('My studio tone')
+    // the org save is done, so going back to the studio asks nothing
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' }).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('radio', { name: 'This studio' }))
+    expect(screen.getByRole('radio', { name: 'This studio' }).getAttribute('aria-checked')).toBe('true')
+    await waitFor(() => expect(within(screen.getByTestId('section-personality')).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
+    expect(studioTone().value).toBe('My studio tone')
     fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
     const [, init] = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
@@ -1536,5 +1544,161 @@ describe('CustomerAgentClient — knowledge search and filter (MIASETTINGS.3c)',
     await openKnowledge({ canEdit: false })
     expect(screen.getByRole('searchbox', { name: 'Search knowledge' }).matches(':disabled')).toBe(false)
     expect(screen.getByRole('combobox', { name: 'Category' }).matches(':disabled')).toBe(false)
+  })
+})
+
+// MIASETTINGS.4 — the organisation defaults behind a scope switch in the
+// header, for masters and organisation admins only.
+describe('CustomerAgentClient — the scope switch (MIASETTINGS.4)', () => {
+  const ORG_ID = 'a0000000-0000-0000-0000-00000000a0a1'
+  const ORG_DEFAULTS = { organizationId: ORG_ID, organizationName: 'Org A' }
+  const STUDIO_ONLY = ['Bookings and sales', 'Cancellation form', 'Knowledge', 'Member app']
+  const ORG_MENU = ['Overview', 'Personality and voice', 'Handoffs', 'Messages', 'Follow-ups']
+  const current = () => screen.getAllByRole('button').filter((b) => b.getAttribute('aria-current') === 'page').map((b) => b.textContent)
+  const orgRadio = () => screen.getByRole('radio', { name: 'All studios (organisation)' })
+  const studioRadio = () => screen.getByRole('radio', { name: 'This studio' })
+  const STUDIOS = [{ id: 'loc1', name: 'Test Studio', sets: [], mia_on: true }]
+  const orgState = (raw = null) => reply(200, { success: true, data: { organization: { id: ORG_ID, name: 'Org A' }, settings: mergeAgentSettings({ org: raw }).settings, raw, defaults: DEFAULTS, studios: STUDIOS } })
+  // A Glofox studio (Stillorgan-shaped): no Hatch-only field at the studio.
+  function studioAnswer({ membership = 'glofox' } = {}) {
+    const studio = { enabled: true }
+    const { settings, sources } = mergeAgentSettings({ org: null, studio })
+    return reply(200, {
+      success: true, settings: { ...settings, social_enabled: false, glofox_auto_cancel: false }, studio, org: null, sources,
+      inherited: mergeAgentSettings({ org: null, studio: null }).settings,
+      membership_source_key: membership, bookings: true,
+      location: { id: 'loc1', name: 'Test Studio', timezone: 'Europe/Dublin' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+  function mockAll({ org = () => orgState() } = {}) {
+    global.fetch = vi.fn(async (url, init) => {
+      const u = String(url)
+      if (u.startsWith('/api/settings/customer-agent/org')) return org(init)
+      if (u === '/api/settings/customer-agent' && init?.method === 'PUT') return reply(200, { success: true, settings: {} })
+      if (u.startsWith('/api/settings/customer-agent')) return studioAnswer()
+      if (u.startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+      return reply(200, { success: true, templates: [] })
+    })
+  }
+  const readyStudio = () => waitFor(() => expect(screen.getByRole('button', { name: 'Overview' })).toBeTruthy())
+
+  it('no switch without orgDefaults, and ?scope=org without rights opens the studio', async () => {
+    window.history.replaceState(null, '', '/?scope=org&section=cancellation')
+    mockAll()
+    render(<CustomerAgentClient canEdit />)
+    await readyStudio()
+    expect(screen.queryByRole('radiogroup', { name: 'Editing' })).toBeNull()
+    expect(current()).toEqual(['Cancellation form'])
+    for (const name of STUDIO_ONLY) expect(screen.getByRole('button', { name })).toBeTruthy()
+    expect(global.fetch.mock.calls.some(([url]) => String(url).includes('/customer-agent/org'))).toBe(false)
+  })
+
+  it('switching shows the organisation fields and only the organisation sections, and writes scope=org', async () => {
+    mockAll()
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={ORG_DEFAULTS} />)
+    await readyStudio()
+    expect(screen.getByRole('radiogroup', { name: 'Editing' })).toBeTruthy()
+    expect(studioRadio().getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(orgRadio())
+    expect(orgRadio().getAttribute('aria-checked')).toBe('true')
+    expect(window.location.search).toBe('?scope=org')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
+    for (const name of ORG_MENU) expect(screen.getByRole('button', { name })).toBeTruthy()
+    for (const name of STUDIO_ONLY) expect(screen.queryByRole('button', { name })).toBeNull()
+    // the organisation's quiet hours, not the studio's status switch or bar
+    expect(within(container.querySelector('[data-org-field="quiet_hours"]')).getByLabelText('Quiet hours start')).toBeTruthy()
+    expect(screen.queryByRole('radiogroup', { name: 'Mia is' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+    expect(screen.getByLabelText("Start from a studio's settings")).toBeTruthy()
+    openSection('Follow-ups')
+    expect(window.location.search).toBe('?section=followups&scope=org')
+    // back to the studio: every section again, on the same section
+    fireEvent.click(studioRadio())
+    expect(window.location.search).toBe('?section=followups')
+    for (const name of STUDIO_ONLY) expect(screen.getByRole('button', { name })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Save organisation defaults' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
+  })
+
+  it('switching to the organisation from a studio-only section lands on Overview', async () => {
+    window.history.replaceState(null, '', '/?section=knowledge')
+    mockAll()
+    render(<CustomerAgentClient canEdit orgDefaults={ORG_DEFAULTS} />)
+    await readyStudio()
+    expect(current()).toEqual(['Knowledge'])
+    fireEvent.click(orgRadio())
+    expect(current()).toEqual(['Overview'])
+    expect(window.location.search).toBe('?scope=org')
+  })
+
+  it('Review Focus 5: ?scope=org&section=cancellation lands on the organisation Overview', async () => {
+    window.history.replaceState(null, '', '/?scope=org&section=cancellation')
+    mockAll()
+    render(<CustomerAgentClient canEdit orgDefaults={ORG_DEFAULTS} />)
+    await readyStudio()
+    expect(orgRadio().getAttribute('aria-checked')).toBe('true')
+    expect(current()).toEqual(['Overview'])
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save organisation defaults' })).toBeTruthy())
+  })
+
+  it('a dirty studio edit asks before switching: No keeps it, Yes discards it and switches', async () => {
+    mockAll()
+    render(<CustomerAgentClient canEdit orgDefaults={ORG_DEFAULTS} />)
+    await readyStudio()
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(orgRadio())
+    expect(confirm).toHaveBeenCalledWith('Discard your unsaved changes?')
+    expect(studioRadio().getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('textbox', { name: 'Agent name' }).value).toBe('Maya')
+    confirm.mockReturnValue(true)
+    fireEvent.click(orgRadio())
+    expect(orgRadio().getAttribute('aria-checked')).toBe('true')
+    confirm.mockClear()
+    fireEvent.click(studioRadio())
+    // the organisation had nothing unsaved: no question on the way back
+    expect(confirm).not.toHaveBeenCalled()
+    expect(screen.getByRole('textbox', { name: 'Agent name' }).value).not.toBe('Maya')
+    expect(within(screen.getByRole('region', { name: 'Save settings' })).getByText('No unsaved changes')).toBeTruthy()
+    confirm.mockRestore()
+  })
+
+  it('a dirty organisation edit asks before switching back, and Yes discards it', async () => {
+    mockAll({ org: () => orgState({ tone: 'Org tone' }) })
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={ORG_DEFAULTS} />)
+    await readyStudio()
+    fireEvent.click(orgRadio())
+    openSection('Personality and voice')
+    await waitFor(() => expect(container.querySelector('[data-org-field="tone"] textarea')).toBeTruthy())
+    const orgTone = () => container.querySelector('[data-org-field="tone"] textarea')
+    fireEvent.change(orgTone(), { target: { value: 'New org tone' } })
+    expect(screen.getAllByRole('img', { name: 'Unsaved changes' })).toHaveLength(1)
+    const fire = () => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented }
+    expect(fire()).toBe(true)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    fireEvent.click(studioRadio())
+    expect(confirm).toHaveBeenCalledWith('Discard your unsaved changes?')
+    expect(orgRadio().getAttribute('aria-checked')).toBe('true')
+    confirm.mockReturnValue(true)
+    fireEvent.click(studioRadio())
+    expect(studioRadio().getAttribute('aria-checked')).toBe('true')
+    expect(orgTone().value).toBe('Org tone')
+    expect(fire()).toBe(false)
+    confirm.mockRestore()
+  })
+
+  it('the Hatch copy shows in the organisation scope while working from a Glofox studio', async () => {
+    mockAll()
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={ORG_DEFAULTS} />)
+    await readyStudio()
+    // at this studio the Hatch group is not there
+    expect(screen.queryByTestId('hatch-copy-group')).toBeNull()
+    fireEvent.click(orgRadio())
+    openSection('Messages')
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Hatch payments and booking (un1t.online studios)' })).toBeTruthy())
+    expect(container.querySelector('[data-org-field="purchase_link_text"]')).toBeTruthy()
+    expect(screen.getByText('Booking form message (studios with the WhatsApp booking Flow)')).toBeTruthy()
   })
 })

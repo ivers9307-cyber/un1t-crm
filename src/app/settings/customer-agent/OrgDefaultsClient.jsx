@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useImperativeHandle, useRef } from 'react'
 import { Button, Field } from '@/components/ui'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 // MIAORG.1 Task 4 — the same override bookkeeping as the studio editor (which
@@ -11,6 +11,10 @@ import {
 } from '@/lib/agent/settings-org'
 import { buildOrgSavePayload } from './save-payload'
 import { ORG_FIELD_GROUPS, ORG_FIELDS } from './org-fields'
+import { AGENT_FIELDS, fieldsFor } from './fields'
+import { changedPaths, changedFieldCount, dirtySections } from './dirty'
+import AgentField from './components/AgentField'
+import SaveBar from './components/SaveBar'
 
 // MIAORG.1 Task 4 — "Organisation defaults (all studios)": Mia's settings
 // set once for the organisation (org_settings.customer_agent). Every studio
@@ -24,11 +28,49 @@ import { ORG_FIELD_GROUPS, ORG_FIELDS } from './org-fields'
 // value and those that set their own, and the Save shows, before it runs,
 // which studios START using a value the organisation did not set before.
 // The copy action previews the same before it writes.
+//
+// MIASETTINGS.4 — behind the page's scope switch: the shell passes the open
+// `section` and this draws only the organisation fields that live there (the
+// registry's section for each field; Hatch-only conditions do not apply at
+// the organisation, so the Hatch copy shows under Messages with its
+// "(un1t.online studios)" label). One mounted component holds the state for
+// every section, so an edit survives a section switch. Its own save bar
+// counts the changed organisation fields (dirty.js, against what was last
+// loaded or saved); Discard puts that back. `onDirtyChange(count, sections)`
+// tells the shell (the scope-switch prompt, the menu dots, beforeunload), and
+// `ref.discard()` lets the shell drop the edits when switching scope.
+// `section` null draws every section.
 
 const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
 const ORG_API = '/api/settings/customer-agent/org'
 
-export default function OrgDefaultsClient({ organizationId, organizationName = null, onSaved } = {}) {
+// Which section each organisation field lives in (the registry's), and the
+// full organisation entry AgentField draws (checkedByDefault included).
+const SECTION_OF = new Map(AGENT_FIELDS.map((f) => [f.id, f.section]))
+const REGISTRY_ORDER = new Map(AGENT_FIELDS.map((f, i) => [f.id, i]))
+const ORG_ENTRY = new Map(fieldsFor('org', null, {}).map((f) => [f.id, f]))
+
+/**
+ * The organisation groups one section shows, each with only its fields there,
+ * in the studio section's order (the registry's). `section` null = all, in
+ * the organisation editor's own order.
+ */
+function orgGroupsFor(section) {
+  if (section == null) return ORG_FIELD_GROUPS
+  return ORG_FIELD_GROUPS
+    .map((g) => ({
+      ...g,
+      fields: g.fields.filter((f) => SECTION_OF.get(f.id) === section)
+        .sort((a, b) => REGISTRY_ORDER.get(a.id) - REGISTRY_ORDER.get(b.id)),
+    }))
+    .filter((g) => g.fields.length > 0)
+}
+
+const snapshotOf = (values, set) => ({ settings: structuredClone(values), overridden: [...set] })
+
+export default function OrgDefaultsClient({
+  organizationId, organizationName = null, section = null, onSaved, onDirtyChange, onOpenSection, ref,
+} = {}) {
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   // The org layer over the defaults, as edited.
@@ -44,11 +86,14 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
   const [error, setError] = useState(null)
   const [copyFrom, setCopyFrom] = useState('')
   const [copyPreview, setCopyPreview] = useState(false)
+  // What was last loaded or saved: the save bar's "changed" and Discard.
+  const [snapshot, setSnapshot] = useState(null)
 
   function apply(data) {
     setValues(data.settings || {})
     const paths = initialOverridden(data.raw)
     setSet(paths); setLoadedSet(paths)
+    setSnapshot(snapshotOf(data.settings || {}, paths))
     setDefaults(data.defaults || {})
     if (Array.isArray(data.studios)) setStudios(data.studios)
     if (data.organization?.name) setOrgName(data.organization.name)
@@ -115,12 +160,31 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
     })
   }
 
+  // MIASETTINGS.4 — put back what was last loaded or saved.
+  function discard() {
+    if (!snapshot) return
+    setValues(structuredClone(snapshot.settings))
+    setSet([...snapshot.overridden])
+    setError(null)
+  }
+  useImperativeHandle(ref, () => ({ discard }))
+
+  const dirtyPaths = values && snapshot ? changedPaths(snapshot, { settings: values, overridden: set }) : []
+  const dirtyCount = changedFieldCount(dirtyPaths)
+  const dirtyKey = [...dirtySections(dirtyPaths)].sort().join(',')
+  const onDirtyRef = useRef(onDirtyChange)
+  useEffect(() => { onDirtyRef.current = onDirtyChange })
+  useEffect(() => {
+    onDirtyRef.current?.(dirtyCount, new Set(dirtyKey ? dirtyKey.split(',') : []))
+  }, [dirtyCount, dirtyKey])
+
   const orgSets = (field) => field.paths.some(p => isOverridden(set, p))
   // Only values that will actually be stored count (a field marked set but
   // left blank stores nothing).
   const pending = values ? newlyAppliedFields(ORG_FIELDS, loadedSet, nonBlankSetPaths(set, values), studios) : []
   // A half-entered window would be dropped on Save: say so and hold Save.
   const quietHalf = !!values && isHalfQuietWindow(values.quiet_hours)
+  const holds = quietHalf ? [{ section: 'overview', message: 'Set both quiet hours times' }] : []
 
   async function save() {
     setSaving(true); setError(null)
@@ -176,73 +240,58 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
     )
   }
 
-  function control(field, props) {
-    const path = field.paths[0]
-    const v = valueAt(values, path)
-    if (field.kind === 'textarea') {
-      return <textarea {...props} className={inputCls} rows={2} maxLength={field.maxLength} value={v || ''}
-        placeholder={field.placeholder} onChange={e => edit(field, path, e.target.value)} />
-    }
-    if (field.kind === 'number') {
-      return <input {...props} type="number" className={inputCls} min={field.min} max={field.max} step={field.step}
-        value={v ?? ''} placeholder={field.placeholder ?? (valueAt(defaults, path) != null ? String(valueAt(defaults, path)) : undefined)}
-        onChange={e => edit(field, path, e.target.value === '' ? null : Number(e.target.value))} />
-    }
-    if (field.kind === 'select') {
-      return (
-        <select {...props} className={inputCls} value={v || ''} onChange={e => edit(field, path, e.target.value || null)}>
-          {field.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
-      )
-    }
-    if (field.kind === 'quiet_hours') {
-      return (
-        <div className="flex items-center gap-2 text-sm">
-          <input {...props} type="time" aria-label="Quiet hours start" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
-            value={values.quiet_hours?.start || ''} onChange={e => editQuiet('start', e.target.value)} />
-          <span className="text-un1t-muted">to</span>
-          <input type="time" aria-label="Quiet hours end" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
-            value={values.quiet_hours?.end || ''} onChange={e => editQuiet('end', e.target.value)} />
-          {quietHalf && <span className="text-xs text-red-600" role="alert">Set both times</span>}
-        </div>
-      )
-    }
-    return <input {...props} className={inputCls} maxLength={field.maxLength} value={v || ''}
-      placeholder={field.placeholder} onChange={e => edit(field, path, e.target.value)} />
+  // Quiet hours: the pair of times (no zone: each studio's own clock).
+  function quietControl(props) {
+    return (
+      <div className="flex items-center gap-2 text-sm">
+        <input {...props} type="time" aria-label="Quiet hours start" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
+          value={values.quiet_hours?.start || ''} onChange={e => editQuiet('start', e.target.value)} />
+        <span className="text-un1t-muted">to</span>
+        <input type="time" aria-label="Quiet hours end" className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-un1t-text"
+          value={values.quiet_hours?.end || ''} onChange={e => editQuiet('end', e.target.value)} />
+        {quietHalf && <span className="text-xs text-red-600" role="alert">Set both times</span>}
+      </div>
+    )
+  }
+
+  // The number a cleared number field falls back to: the built-in default.
+  function numberPlaceholder(field) {
+    if (field.placeholder != null) return field.placeholder
+    const d = valueAt(defaults, field.paths[0])
+    return d != null ? String(d) : undefined
   }
 
   function renderField(field) {
     const line = describeInheritance(field.paths, studios)
-    if (field.kind === 'checkbox') {
-      const path = field.paths[0]
+    if (field.kind === 'quiet_hours') {
       return (
-        <div key={field.id} data-org-field={field.id}>
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex items-center gap-2 text-sm text-un1t-text">
-              <input type="checkbox" checked={path === 'inline_suggestion.enabled' ? valueAt(values, path) !== false : !!valueAt(values, path)}
-                onChange={e => edit(field, path, e.target.checked)} />
-              {field.label}
-            </label>
-            {tag(field)}
-          </div>
+        <div key={field.id} className="relative" data-org-field={field.id}>
+          <div className="absolute right-0 top-0">{tag(field)}</div>
+          <Field id={`org-${field.id}`} label={field.label} hint={field.help}>
+            {(props) => quietControl(props)}
+          </Field>
           <p className="text-xs text-un1t-subtle mt-1">{line}</p>
         </div>
       )
     }
+    const entry = ORG_ENTRY.get(field.id) || field
+    const path = entry.paths[0]
     return (
-      <div key={field.id} className="relative" data-org-field={field.id}>
-        <div className="absolute right-0 top-0">{tag(field)}</div>
-        <Field id={`org-${field.id}`} label={field.label} hint={field.help}>
-          {(props) => control(field, props)}
-        </Field>
+      <div key={field.id} data-org-field={field.id}>
+        <AgentField field={entry} value={valueAt(values, path)} tag={tag(field)}
+          placeholder={entry.kind === 'number' ? numberPlaceholder(entry) : undefined}
+          onChange={(p, v) => edit(field, p, v)} />
         <p className="text-xs text-un1t-subtle mt-1">{line}</p>
       </div>
     )
   }
 
+  const groups = orgGroupsFor(section)
+  const showCopy = section == null || section === 'overview'
+
   return (
-    <section className="border border-un1t-border rounded-lg p-5 mb-6" aria-labelledby="org-defaults-heading">
-      <h2 id="org-defaults-heading" className="text-base font-semibold text-un1t-text mb-1">Organisation defaults (all studios)</h2>
+    <section className="border border-un1t-border rounded-lg p-5" aria-labelledby="org-defaults-heading">
+      <h3 id="org-defaults-heading" className="text-base font-semibold text-un1t-text mb-1">Organisation defaults (all studios)</h3>
       <p className="text-sm text-un1t-muted mb-4">
         Studios use these unless they set their own.{orgName ? ` These apply to every studio in ${orgName}.` : ''}
       </p>
@@ -255,7 +304,7 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
       {!loading && !loadFailed && values && (
         <div className="space-y-6">
           {/* T4-C — start from a studio's settings */}
-          {studios.length > 0 && (
+          {showCopy && studios.length > 0 && (
             <div className="rounded-md border border-un1t-border bg-un1t-bg/40 p-3 space-y-2">
               <Field id="org-copy-from" label="Start from a studio's settings"
                 hint="Copies that studio's own values into these defaults, replacing the matching organisation values. Values the studio does not set are left as they are. The studio itself is not changed.">
@@ -293,9 +342,10 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
             </div>
           )}
 
-          {ORG_FIELD_GROUPS.map(group => (
-            <div key={group.id} className="space-y-4">
-              <h3 className="text-sm font-semibold text-un1t-text">{group.title}</h3>
+          {groups.map(group => (
+            <div key={group.id} className="space-y-4" data-testid={`org-group-${group.id}`}>
+              {/* "Behaviour" says nothing a section title does not. */}
+              {group.id !== 'behaviour' && <h4 className="text-sm font-semibold text-un1t-text">{group.title}</h4>}
               {group.fields.map(renderField)}
             </div>
           ))}
@@ -308,11 +358,8 @@ export default function OrgDefaultsClient({ organizationId, organizationName = n
             </div>
           )}
 
-          {error && <div className="text-sm text-red-600">{error}</div>}
-          <div>
-            <Button loading={saving} disabled={quietHalf} onClick={save}>Save organisation defaults</Button>
-            {savedAt && <span className="ml-3 text-sm text-green-600">Saved</span>}
-          </div>
+          <SaveBar count={dirtyCount} holds={holds} saving={saving} savedAt={savedAt} error={error}
+            onSave={save} onDiscard={discard} onGoTo={onOpenSection} saveLabel="Save organisation defaults" />
         </div>
       )}
     </section>

@@ -12,6 +12,8 @@ import { DEFAULTS } from '@/lib/agent/settings-contract'
 import { mergeAgentSettings } from '@/lib/agent/settings-resolve'
 import OrgDefaultsClient from './OrgDefaultsClient.jsx'
 import { ORG_PAYLOAD_DROPPED_KEYS } from './save-payload'
+import { ORG_FIELDS } from './org-fields'
+import { SECTIONS } from './sections'
 
 const ORG = 'a0000000-0000-0000-0000-00000000a0a1'
 const NORTH = { id: 'a0000000-0000-0000-0000-0000000000c1', name: 'North Studio', sets: ['followups.daily_cap', 'quiet_hours.off', 'tone'], mia_on: true }
@@ -43,7 +45,7 @@ afterEach(() => { cleanup(); delete global.fetch })
 describe('OrgDefaultsClient — the section', () => {
   it('reads the org route for its organisation and says what the defaults are', async () => {
     mockFetch([reply(200, state())])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} organizationName="Org A" />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} organizationName="Org A" section="overview" />)
     await ready()
     expect(global.fetch.mock.calls[0][0]).toBe(`/api/settings/customer-agent/org?organization_id=${ORG}`)
     expect(screen.getByRole('heading', { name: 'Organisation defaults (all studios)' })).toBeTruthy()
@@ -58,7 +60,7 @@ describe('OrgDefaultsClient — the section', () => {
 
   it('a failed read shows Could not load and no Save', async () => {
     mockFetch([reply(500, { success: false, code: 'org_settings_unreadable' })])
-    render(<OrgDefaultsClient organizationId={ORG} />)
+    render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await waitFor(() => expect(screen.getByText(/Could not load the organisation defaults just now/)).toBeTruthy())
     expect(screen.queryByRole('button', { name: 'Save organisation defaults' })).toBeNull()
   })
@@ -67,15 +69,16 @@ describe('OrgDefaultsClient — the section', () => {
 describe('OrgDefaultsClient — who inherits (T4-A)', () => {
   it('each field names the studios using the org value and those setting their own, Mia off labelled', async () => {
     mockFetch([reply(200, state())])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    const { container, rerender } = render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await ready()
     expect(within(fieldBox('quiet_hours', container)).getByText('Used by South Studio (Mia off). North Studio sets its own.')).toBeTruthy()
+    rerender(<OrgDefaultsClient organizationId={ORG} section="personality" />)
     expect(within(fieldBox('agent_name', container)).getByText('Used by North Studio and South Studio (Mia off).')).toBeTruthy()
   })
 
   it('setting quiet hours where the org had none names, before Save, the studios that start using them', async () => {
     mockFetch([reply(200, state()), reply(200, state({ quiet_hours: { start: '22:00', end: '07:00' } }))])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await ready()
     expect(screen.queryByTestId('org-newly-applied')).toBeNull()
     const box = fieldBox('quiet_hours', container)
@@ -101,7 +104,7 @@ describe('OrgDefaultsClient — who inherits (T4-A)', () => {
 
   it('changing a value the org already set is not a new application', async () => {
     mockFetch([reply(200, state({ tone: 'Org tone' }))])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} section="personality" />)
     await ready()
     fireEvent.change(within(fieldBox('tone', container)).getByRole('textbox'), { target: { value: 'New tone' } })
     expect(screen.queryByTestId('org-newly-applied')).toBeNull()
@@ -109,7 +112,7 @@ describe('OrgDefaultsClient — who inherits (T4-A)', () => {
 
   it('"Use default" stops the organisation setting a field', async () => {
     mockFetch([reply(200, state({ tone: 'Org tone', agent_name: 'Ava' })), reply(200, state({ agent_name: 'Ava' }))])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} section="personality" />)
     await ready()
     const tone = fieldBox('tone', container)
     expect(within(tone).getByRole('textbox').value).toBe('Org tone')
@@ -123,7 +126,7 @@ describe('OrgDefaultsClient — who inherits (T4-A)', () => {
 
   it('a stored value the editor has no input for (limits) is echoed on Save, never dropped', async () => {
     mockFetch([reply(200, state({ limits: { max_replies_per_location_per_day: 200 } }))])
-    render(<OrgDefaultsClient organizationId={ORG} />)
+    render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await ready()
     fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
     await waitFor(() => expect(puts()).toHaveLength(1))
@@ -134,7 +137,7 @@ describe('OrgDefaultsClient — who inherits (T4-A)', () => {
   it('calls onSaved after a good save, so the studio editor re-reads what it inherits', async () => {
     const onSaved = vi.fn(async () => {})
     mockFetch([reply(200, state()), reply(200, state({ tone: 'Warm' }))])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} onSaved={onSaved} />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} onSaved={onSaved} section="personality" />)
     await ready()
     fireEvent.change(within(fieldBox('tone', container)).getByRole('textbox'), { target: { value: 'Warm' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save organisation defaults' }))
@@ -145,7 +148,7 @@ describe('OrgDefaultsClient — who inherits (T4-A)', () => {
 describe('OrgDefaultsClient — Start from a studio\'s settings (T4-C)', () => {
   it('previews what the copy sets and who starts using it, then copies on Copy now', async () => {
     mockFetch([reply(200, state()), reply(200, state({ tone: 'North tone', followups: { daily_cap: 30 } }))])
-    render(<OrgDefaultsClient organizationId={ORG} />)
+    render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await ready()
     fireEvent.change(screen.getByLabelText("Start from a studio's settings"), { target: { value: NORTH.id } })
     fireEvent.click(screen.getByRole('button', { name: 'Review copy' }))
@@ -160,7 +163,7 @@ describe('OrgDefaultsClient — Start from a studio\'s settings (T4-C)', () => {
 
   it('a studio that sets nothing has nothing to copy', async () => {
     mockFetch([reply(200, state())])
-    render(<OrgDefaultsClient organizationId={ORG} />)
+    render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await ready()
     fireEvent.change(screen.getByLabelText("Start from a studio's settings"), { target: { value: SOUTH.id } })
     fireEvent.click(screen.getByRole('button', { name: 'Review copy' }))
@@ -172,7 +175,7 @@ describe('OrgDefaultsClient — Start from a studio\'s settings (T4-C)', () => {
 describe('OrgDefaultsClient — fix round', () => {
   it('a half-entered quiet-hours window says "Set both times" and holds Save', async () => {
     mockFetch([reply(200, state())])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
     await ready()
     const box = fieldBox('quiet_hours', container)
     fireEvent.change(within(box).getByLabelText('Quiet hours start'), { target: { value: '22:00' } })
@@ -188,12 +191,83 @@ describe('OrgDefaultsClient — fix round', () => {
 
   it('a field typed and then cleared is not in the pre-save notice', async () => {
     mockFetch([reply(200, state())])
-    const { container } = render(<OrgDefaultsClient organizationId={ORG} />)
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} section="personality" />)
     await ready()
     const tone = within(fieldBox('tone', container)).getByRole('textbox')
     fireEvent.change(tone, { target: { value: 'Warm' } })
     expect(screen.getByTestId('org-newly-applied')).toBeTruthy()
     fireEvent.change(tone, { target: { value: '' } })
     expect(screen.queryByTestId('org-newly-applied')).toBeNull()
+  })
+})
+
+// MIASETTINGS.4 — the organisation scope shows one section at a time, with
+// its own save bar; the state is shared across sections.
+describe('OrgDefaultsClient — one section at a time (MIASETTINGS.4)', () => {
+  const ORG_SECTION_KEYS = SECTIONS.filter((s) => s.scopes.includes('org')).map((s) => s.key)
+  const shownIds = (container) => [...container.querySelectorAll('[data-org-field]')].map((n) => n.getAttribute('data-org-field'))
+
+  it('every organisation field shows in exactly one section', async () => {
+    mockFetch([reply(200, state())])
+    const { container, rerender } = render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
+    await ready()
+    const seen = []
+    for (const key of ORG_SECTION_KEYS) {
+      rerender(<OrgDefaultsClient organizationId={ORG} section={key} />)
+      seen.push(...shownIds(container))
+    }
+    expect([...seen].sort()).toEqual(ORG_FIELDS.map((f) => f.id).sort())
+  })
+
+  it('Overview shows quiet hours and the studio copy; Personality shows tone and not the copy', async () => {
+    mockFetch([reply(200, state())])
+    const { container, rerender } = render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
+    await ready()
+    expect(shownIds(container)).toEqual(['quiet_hours'])
+    expect(screen.getByLabelText("Start from a studio's settings")).toBeTruthy()
+    rerender(<OrgDefaultsClient organizationId={ORG} section="personality" />)
+    expect(shownIds(container)).toEqual(['agent_name', 'tone', 'extra_rules', 'effort'])
+    expect(screen.queryByLabelText("Start from a studio's settings")).toBeNull()
+  })
+
+  it('Messages shows the Hatch copy under its un1t.online label, and Handoffs the holding message', async () => {
+    mockFetch([reply(200, state())])
+    const { container, rerender } = render(<OrgDefaultsClient organizationId={ORG} section="messages" />)
+    await ready()
+    expect(screen.getByRole('heading', { name: 'Hatch payments and booking (un1t.online studios)' })).toBeTruthy()
+    expect(within(fieldBox('purchase_link_text', container)).getByText('Payment link message')).toBeTruthy()
+    expect(within(fieldBox('chat_booking_unavailable_text', container)).getByText('Chat booking not available message (un1t.online studios)')).toBeTruthy()
+    expect(fieldBox('holding_message', container)).toBeNull()
+    rerender(<OrgDefaultsClient organizationId={ORG} section="handoffs" />)
+    expect(fieldBox('holding_message', container)).toBeTruthy()
+  })
+
+  it('an edit survives a section switch; the bar counts it, Discard puts it back, and onDirtyChange hears both', async () => {
+    const onDirtyChange = vi.fn()
+    mockFetch([reply(200, state({ tone: 'Org tone' }))])
+    const { container, rerender } = render(<OrgDefaultsClient organizationId={ORG} section="personality" onDirtyChange={onDirtyChange} />)
+    await ready()
+    const bar = () => screen.getByRole('region', { name: 'Save settings' })
+    expect(within(bar()).getByText('No unsaved changes')).toBeTruthy()
+    fireEvent.change(within(fieldBox('tone', container)).getByRole('textbox'), { target: { value: 'New tone' } })
+    fireEvent.change(within(fieldBox('agent_name', container)).getByRole('textbox'), { target: { value: 'Ava' } })
+    expect(within(bar()).getByText('2 unsaved changes')).toBeTruthy()
+    expect(onDirtyChange).toHaveBeenLastCalledWith(2, new Set(['personality']))
+    rerender(<OrgDefaultsClient organizationId={ORG} section="followups" onDirtyChange={onDirtyChange} />)
+    rerender(<OrgDefaultsClient organizationId={ORG} section="personality" onDirtyChange={onDirtyChange} />)
+    expect(within(fieldBox('tone', container)).getByRole('textbox').value).toBe('New tone')
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Discard' }))
+    expect(within(fieldBox('tone', container)).getByRole('textbox').value).toBe('Org tone')
+    expect(within(fieldBox('agent_name', container)).getByRole('textbox').value).not.toBe('Ava')
+    expect(within(bar()).getByText('No unsaved changes')).toBeTruthy()
+    expect(onDirtyChange).toHaveBeenLastCalledWith(0, new Set())
+  })
+
+  it('a half quiet-hours window is a hold that names Overview', async () => {
+    mockFetch([reply(200, state())])
+    const { container } = render(<OrgDefaultsClient organizationId={ORG} section="overview" />)
+    await ready()
+    fireEvent.change(within(fieldBox('quiet_hours', container)).getByLabelText('Quiet hours start'), { target: { value: '22:00' } })
+    expect(screen.getByRole('button', { name: 'Set both quiet hours times in Overview' })).toBeTruthy()
   })
 })
