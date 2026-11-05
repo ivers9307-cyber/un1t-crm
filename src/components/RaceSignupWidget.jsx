@@ -1076,7 +1076,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           {eyebrowParts.join(' · ')}
         </p>
       )}
-      <h1 className="mt-3 font-bold uppercase tracking-tight text-5xl md:text-7xl leading-[0.95] text-white">
+      <h1 className="mt-3 font-bold tracking-tight text-5xl md:text-7xl leading-[1.02] text-white">
         {race.name}
       </h1>
     </>
@@ -1223,7 +1223,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               {pillLive && <span style={liveDotStyle} className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               {pillLabel}
             </span>
-            <h1 className="mt-3 font-bold uppercase tracking-tight text-2xl leading-tight text-white">{race.name}</h1>
+            <h1 className="mt-3 font-bold tracking-tight text-2xl leading-tight text-white">{race.name}</h1>
             {eyebrowParts.length > 0 && (
               <p className="mt-1.5 text-[11px] uppercase tracking-[0.2em] text-white/45">{eyebrowParts.join(' · ')}</p>
             )}
