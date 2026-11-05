@@ -586,19 +586,14 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     'linear-gradient(180deg,#141414 0%,#0a0a0a 55%,#000 100%)'
 
   // Optional hero photo. When race.hero_image_url is a non-empty string
-  // we render it as the hero background (keeping the ken-burns zoom and
-  // the legibility scrim on top); otherwise we fall back to the
-  // generated monochrome poster gradient above.
+  // we show it whole at the top with the title below it (EVENTHERO.1);
+  // otherwise we fall back to the generated monochrome poster gradient
+  // above, with the title on it.
   const heroImageUrl =
     typeof race.hero_image_url === 'string' && race.hero_image_url.trim()
       ? race.hero_image_url.trim()
       : null
   const hasHeroImage = !!heroImageUrl
-  // CSS-escape the url() argument so a stray quote/backslash can't break
-  // out of the string (operator-set data, but cheap to harden).
-  const heroImageCss = heroImageUrl
-    ? `url("${heroImageUrl.replace(/["\\]/g, (c) => `\\${c}`)}")`
-    : null
 
   // Optional per-event accent. Only accept a strict #rrggbb value so a
   // bad/injected string can never leak into an inline style. Used to
@@ -1061,39 +1056,77 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     </div>
   )
 
+  // The hero's pill, date line and title: below the photo when there is
+  // one, on the poster artwork when there is not (EVENTHERO.1).
+  const heroText = (
+    <>
+      <div>
+        <span
+          style={livePillStyle}
+          className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}
+        >
+          {pillLive && (
+            <span style={liveDotStyle} className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_0_4px_rgba(34,197,94,0.18)]" />
+          )}
+          {pillLabel}
+        </span>
+      </div>
+      {eyebrowParts.length > 0 && (
+        <p className="mt-5 text-[11px] uppercase tracking-[0.2em] text-white/45">
+          {eyebrowParts.join(' · ')}
+        </p>
+      )}
+      <h1 className="mt-3 font-bold tracking-tight text-5xl md:text-7xl leading-[1.02] text-white">
+        {race.name}
+      </h1>
+    </>
+  )
+
   return (
     <div className="relative w-full">
-      {/* ── HERO (poster style, works with no image) — full page only;
-             the paste-anywhere iframe embed uses a compact header ──── */}
-      {!embedded && (
+      {/* ── HERO — full page only; the paste-anywhere iframe embed uses a
+             compact header ──────────────────────────────────────────
+             EVENTHERO.1 — with a hero photo the banner is the photo alone
+             (cover, slow ken-burns zoom, as before) and the pill, date line
+             and title sit BELOW it: operators upload posters with their own
+             logos and words, and the text, the outlined name watermark and
+             the dark scrim laid over them hid the artwork on desktop and
+             covered it on phones. Only a short fade into the page is left on
+             the photo. With no photo the monochrome poster look stays, text
+             on the artwork. */}
+      {!embedded && hasHeroImage && (
+      <section className="relative">
+        <div className="relative min-h-[36svh] md:min-h-[58svh] overflow-hidden">
+          <div
+            className="absolute inset-[-4%] lp-kenburns"
+            style={{
+              backgroundImage: `url(${JSON.stringify(heroImageUrl)})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
+          />
+          {/* soft fade from the photo into the page */}
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-16 md:h-24 bg-gradient-to-t from-black to-transparent" />
+        </div>
+        <div className="max-w-6xl mx-auto w-full px-5 pt-6 md:pt-8 lp-hero-stagger">
+          {heroText}
+        </div>
+      </section>
+      )}
+      {!embedded && !hasHeroImage && (
       <section className="relative min-h-[58svh] flex items-end overflow-hidden lp-grain">
-        {/* Hero background + slow ken-burns zoom. When a hero photo is
-            set we render it (cover/center); otherwise the monochrome
-            poster gradient + grid-lines fallback. */}
+        {/* monochrome poster gradient + grid-lines, slow ken-burns zoom */}
         <div className="absolute inset-0 overflow-hidden">
-          {hasHeroImage ? (
-            <div
-              className="absolute inset-[-4%] lp-kenburns"
-              style={{
-                backgroundImage: heroImageCss,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-              }}
-            />
-          ) : (
-            <>
-              <div className="absolute inset-[-4%] lp-kenburns" style={{ background: heroBg }} />
-              <div
-                className="absolute inset-0 opacity-50"
-                style={{
-                  backgroundImage: 'linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)',
-                  backgroundSize: '56px 100%',
-                  maskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
-                  WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
-                }}
-              />
-            </>
-          )}
+          <div className="absolute inset-[-4%] lp-kenburns" style={{ background: heroBg }} />
+          <div
+            className="absolute inset-0 opacity-50"
+            style={{
+              backgroundImage: 'linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)',
+              backgroundSize: '56px 100%',
+              maskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
+              WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
+            }}
+          />
         </div>
         {/* huge outlined watermark of the event name */}
         <div
@@ -1108,25 +1141,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
         {/* hero content */}
         <div className="relative z-10 max-w-6xl mx-auto w-full px-5 pb-12 lp-hero-stagger">
-          <div>
-            <span
-              style={livePillStyle}
-              className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}
-            >
-              {pillLive && (
-                <span style={liveDotStyle} className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_0_4px_rgba(34,197,94,0.18)]" />
-              )}
-              {pillLabel}
-            </span>
-          </div>
-          {eyebrowParts.length > 0 && (
-            <p className="mt-5 text-[11px] uppercase tracking-[0.2em] text-white/45">
-              {eyebrowParts.join(' · ')}
-            </p>
-          )}
-          <h1 className="mt-3 font-bold uppercase tracking-tight text-5xl md:text-7xl leading-[0.95] text-white">
-            {race.name}
-          </h1>
+          {heroText}
         </div>
       </section>
       )}
@@ -1208,7 +1223,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               {pillLive && <span style={liveDotStyle} className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               {pillLabel}
             </span>
-            <h1 className="mt-3 font-bold uppercase tracking-tight text-2xl leading-tight text-white">{race.name}</h1>
+            <h1 className="mt-3 font-bold tracking-tight text-2xl leading-tight text-white">{race.name}</h1>
             {eyebrowParts.length > 0 && (
               <p className="mt-1.5 text-[11px] uppercase tracking-[0.2em] text-white/45">{eyebrowParts.join(' · ')}</p>
             )}
