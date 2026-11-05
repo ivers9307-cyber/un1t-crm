@@ -1540,6 +1540,17 @@ describe('CustomerAgentClient — knowledge search and filter (MIASETTINGS.3c)',
     expect(item.parentElement.textContent).toMatch(new RegExp(`^Messages${n}`))
   })
 
+  it('MIASETTINGS.5: an entry added under a filter stays listed so it can be edited', async () => {
+    await openKnowledge()
+    const inner = global.fetch
+    global.fetch = vi.fn(async (url, init) => String(url) === '/api/agent/knowledge' && init?.method === 'POST'
+      ? reply(200, { success: true, entry: { id: 'k9', category: 'sales', title: 'New entry', content: '', enabled: true } }) : inner(url, init))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), { target: { value: 'parking' } })
+    expect(titles()).toEqual(['Parking'])
+    fireEvent.click(screen.getByRole('button', { name: '+ Add entry' }))
+    await waitFor(() => expect(titles()).toEqual(['Parking', 'New entry']))
+  })
+
   it('the filter controls work for a viewer without owner rights', async () => {
     await openKnowledge({ canEdit: false })
     expect(screen.getByRole('searchbox', { name: 'Search knowledge' }).matches(':disabled')).toBe(false)
@@ -1700,5 +1711,86 @@ describe('CustomerAgentClient — the scope switch (MIASETTINGS.4)', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Hatch payments and booking (un1t.online studios)' })).toBeTruthy())
     expect(container.querySelector('[data-org-field="purchase_link_text"]')).toBeTruthy()
     expect(screen.getByText('Booking form message (studios with the WhatsApp booking Flow)')).toBeTruthy()
+  })
+})
+
+describe('CustomerAgentClient — final review fixes (MIASETTINGS.5)', () => {
+  const NC = 'No-credits escalation message'
+  const putBtn = () => screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0]
+
+  it('an open message row stays listed while its search word is typed away', async () => {
+    const g = { ...GOOD, json: async () => ({ ...(await GOOD.json()), settings: { ...DEFAULTS, enabled: true, social_enabled: false, glofox_auto_cancel: false, no_credits_handoff_text: 'zebrafish rule' } }) }
+    mockFetch([g])
+    render(<CustomerAgentClient canEdit />)
+    await screen.findByRole('button', { name: 'Messages' })
+    openSection('Messages')
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search messages' }), { target: { value: 'zebrafish' } })
+    openRow(NC)
+    fireEvent.change(screen.getByRole('textbox', { name: NC }), { target: { value: 'plain' } })
+    expect(screen.getByRole('textbox', { name: NC }).value).toBe('plain')
+  })
+
+  it('a search shows matches in a folded group', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await screen.findByRole('button', { name: 'Messages' })
+    openSection('Messages')
+    const group = screen.getByRole('button', { name: /^Greeting and links \(/ })
+    fireEvent.click(group)
+    expect(group.getAttribute('aria-expanded')).toBe('false')
+    expect(within(screen.getByTestId('message-group-greeting')).queryAllByTestId(/message-row-/)).toHaveLength(0)
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search messages' }), { target: { value: 'a' } })
+    expect(screen.getByRole('button', { name: /^Greeting and links \(/ }).getAttribute('aria-expanded')).toBe('true')
+    expect(within(screen.getByTestId('message-group-greeting')).queryAllByTestId(/message-row-/).length).toBeGreaterThan(0)
+  })
+
+  it('the status switch looks disabled for a non-owner', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit={false} />)
+    await screen.findByRole('button', { name: 'Overview' })
+    for (const r of screen.getAllByRole('radio', { name: /^(Off|Test|Live)/ })) expect(r.disabled).toBe(true)
+  })
+
+  it('the template pickers have dash-free empty options', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await screen.findByRole('button', { name: 'Overview' })
+    expect(screen.getAllByText('None (send by WhatsApp only inside the 24h window)', { selector: 'option' })).toHaveLength(1)
+    expect(screen.getAllByText('None', { selector: 'option' }).length).toBeGreaterThanOrEqual(3)
+    expect(screen.queryAllByText(/— none/, { selector: 'option' })).toHaveLength(0)
+  })
+
+  it('a 400 on a booking field is reachable from the save bar of any section', async () => {
+    const a = { ...GOOD, json: async () => ({ ...(await GOOD.json()), bookings: false }) }
+    mockFetch([a, reply(400, { success: false, error: 'Invalid request body', issues: [{ path: 'booking_cta_label', message: 'Too long' }] })])
+    render(<CustomerAgentClient canEdit />)
+    await screen.findByRole('button', { name: 'Overview' })
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    fireEvent.click(putBtn())
+    const link = await screen.findByRole('button', { name: 'Too long in Bookings and sales' })
+    fireEvent.click(link)
+    expect(screen.getByRole('button', { name: 'Bookings and sales' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('the studio status and quiet hours chips are hidden in the organisation scope', async () => {
+    const ORG_ID = 'a0000000-0000-0000-0000-00000000a0a1'
+    const studio = { enabled: true, quiet_hours: { start: '21:00', end: '07:00' } }
+    const { settings, sources } = mergeAgentSettings({ org: null, studio })
+    global.fetch = vi.fn(async (url) => {
+      const u = String(url)
+      if (u.startsWith('/api/settings/customer-agent/org')) return reply(200, { success: true, data: { organization: { id: ORG_ID, name: 'Org A' }, settings: mergeAgentSettings({ org: null }).settings, raw: null, defaults: DEFAULTS, studios: [] } })
+      if (u.startsWith('/api/settings/customer-agent')) return reply(200, { success: true, settings: { ...settings, social_enabled: false, glofox_auto_cancel: false }, studio, org: null, sources, inherited: mergeAgentSettings({ org: null, studio: null }).settings, membership_source_key: 'glofox', bookings: true, location: { id: 'loc1', name: 'Test Studio', timezone: 'Europe/Dublin' }, checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null } })
+      if (u.startsWith('/api/agent/knowledge')) return reply(200, { success: true, entries: [] })
+      return reply(200, { success: true, templates: [] })
+    })
+    const { container } = render(<CustomerAgentClient canEdit orgDefaults={{ organizationId: ORG_ID, organizationName: 'Org A' }} />)
+    await screen.findByRole('button', { name: 'Overview' })
+    const chips = () => container.querySelectorAll('header span.rounded-full').length
+    expect(screen.getByText('Quiet 21:00 to 07:00')).toBeTruthy()
+    expect(chips()).toBe(2)
+    fireEvent.click(screen.getByRole('radio', { name: 'All studios (organisation)' }))
+    expect(screen.queryByText('Quiet 21:00 to 07:00')).toBeNull()
+    expect(chips()).toBe(0)
   })
 })

@@ -49,7 +49,7 @@ export default function OverviewSection({ agent, canEdit, onOpenSection }) {
         </p>
         {/* MIASETTINGS.2b — one Off / Test / Live switch over enabled + test_mode.
             Choosing never touches test_phones. */}
-        <StatusSwitch settings={settings}
+        <StatusSwitch settings={settings} disabled={!canEdit}
           onChoose={(choice) => { const f = flagsFor(choice); setField('enabled', f.enabled); setField('test_mode', f.test_mode) }}
           onTestPhones={(list) => setField('test_phones', list)} />
 

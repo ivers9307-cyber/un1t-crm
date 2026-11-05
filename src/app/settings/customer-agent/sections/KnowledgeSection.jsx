@@ -63,7 +63,7 @@ export default function KnowledgeSection({ onCountChange } = {}) {
         body: JSON.stringify({ category: 'sales', title: 'New entry', content: '', enabled: true }),
       })
       const j = await res.json()
-      if (j.success) setEntries(e => [...e, j.entry])
+      if (j.success) { setEntries(e => [...e, j.entry]); setEditingId(j.entry.id) } // stays listed under a filter until its blur save
       else setError(j.error || 'Could not add the entry')
     } catch { setError('Could not add the entry') }
   }

@@ -24,7 +24,7 @@ export default function MessagesSection({ agent, canEdit }) {
   const [foldedGroups, setFoldedGroups] = useState(() => new Set())
 
   const all = fieldsFor('studio', 'messages', ctx)
-  const shown = filterMessages(all, { query, changedOnly, settings, overridden, ctx })
+  const shown = filterMessages(all, { query, changedOnly, settings, overridden, ctx, keepIds: openRows })
   const groups = MESSAGE_GROUPS
     .map((g) => ({ ...g, fields: shown.filter((f) => f.group === g.key) }))
     .filter((g) => g.fields.length > 0)
@@ -49,7 +49,8 @@ export default function MessagesSection({ agent, canEdit }) {
       </div>
       {groups.length === 0 && <p className="text-sm text-un1t-muted">No messages match.</p>}
       {groups.map((g) => {
-        const folded = foldedGroups.has(g.key)
+        // Folding applies when the search is empty; a search shows every group's matches.
+        const folded = !query.trim() && foldedGroups.has(g.key)
         return (
           <div key={g.key} className="space-y-3"
             data-testid={g.key === 'hatch-payments' ? 'hatch-copy-group' : `message-group-${g.key}`}>

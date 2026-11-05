@@ -130,7 +130,7 @@ export default function CancellationFormFields({ settings, templates, setField }
             <select className={inputCls}
               value={settings.cancellation_form?.whatsapp_template_name || ''}
               onChange={e => setCancelForm('whatsapp_template_name', e.target.value || null)}>
-              <option value="">— none (send by WhatsApp only inside the 24h window) —</option>
+              <option value="">None (send by WhatsApp only inside the 24h window)</option>
               {templates.map(t => (
                 <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
               ))}
@@ -180,7 +180,7 @@ export default function CancellationFormFields({ settings, templates, setField }
               <select className={inputCls}
                 value={settings.cancellation_form?.[key] || ''}
                 onChange={e => setCancelForm(key, e.target.value || null)}>
-                <option value="">— none —</option>
+                <option value="">None</option>
                 {templates.map(t => (
                   <option key={`${t.name}:${t.language}`} value={t.name}>{t.name} ({t.language})</option>
                 ))}

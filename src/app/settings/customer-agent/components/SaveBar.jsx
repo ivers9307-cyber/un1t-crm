@@ -19,7 +19,7 @@ const LABELS = Object.fromEntries(SECTIONS.map((s) => [s.key, s.label]))
 
 export default function SaveBar({
   count, holds = [], saving = false, savedAt = null, error = null,
-  onSave, onDiscard, onGoTo, saveLabel = 'Save',
+  onSave, onDiscard, onGoTo, saveLabel = 'Save', errorLink = null,
 }) {
   const [showSaved, setShowSaved] = useState(false)
   useEffect(() => {
@@ -36,6 +36,12 @@ export default function SaveBar({
     <div role="region" aria-label="Save settings"
       className="sticky bottom-0 mt-6 border border-un1t-border bg-un1t-surface rounded-lg px-4 py-3 shadow-sm">
       {error && <div className="text-sm text-red-600 mb-2" role="alert">{error}</div>}
+      {error && errorLink && (
+        <button type="button" onClick={() => onGoTo?.(errorLink.section)}
+          className="text-sm text-amber-700 underline text-left mb-2">
+          {`${errorLink.message} in ${LABELS[errorLink.section] || errorLink.section}`}
+        </button>
+      )}
       {holds.length > 0 && (
         <ul className="mb-2 space-y-1">
           {holds.map((h) => (

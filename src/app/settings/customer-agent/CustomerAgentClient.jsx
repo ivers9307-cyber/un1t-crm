@@ -148,6 +148,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
     messages: fieldsFor('studio', 'messages', agent.ctx).length,
     ...(knowledgeCount == null ? {} : { knowledge: knowledgeCount }),
   }
+  const firstFieldError = Object.values(agent.serverFieldErrors || {}).find((m) => typeof m === 'string' && m)
   const status = STATUS_CHIPS[statusOf(saved || settings)]
   const quiet = saved?.quiet_hours
   const quietChip = quiet && !quiet.off && quiet.start && quiet.end ? `Quiet ${quiet.start} to ${quiet.end}` : null
@@ -170,8 +171,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h1 className="text-xl font-bold text-un1t-text">Customer Agent</h1>
           {location?.name && <span className="text-sm text-un1t-muted">{location.name}</span>}
-          <span className={`${CHIP} ${status.cls}`}>{status.text}</span>
-          {quietChip && <span className={`${CHIP} border border-un1t-border text-un1t-muted`}>{quietChip}</span>}
+          {!inOrg && <span className={`${CHIP} ${status.cls}`}>{status.text}</span>}
+          {!inOrg && quietChip && <span className={`${CHIP} border border-un1t-border text-un1t-muted`}>{quietChip}</span>}
         </div>
         {canOrg && (
           <div role="radiogroup" aria-label="Editing" className="flex flex-wrap items-center gap-2 mt-3">
@@ -237,7 +238,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
                 invalid or the trial finisher is invalid (useAgentSettings). */}
             {canEdit && section !== 'knowledge' && (
               <SaveBar count={changedFieldCount(dirtyPaths)} holds={holds} saving={saving} savedAt={savedAt}
-                error={error} onSave={save} onDiscard={discard} onGoTo={openSection} />
+                error={error} onSave={save}
+                errorLink={error && firstFieldError ? { section: 'bookings', message: firstFieldError } : null} onDiscard={discard} onGoTo={openSection} />
             )}
           </div>
         </div>

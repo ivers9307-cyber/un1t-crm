@@ -27,4 +27,17 @@ describe('filterMessages', () => {
     expect(ids({ changedOnly: true, query: 'credits' })).toEqual([])
     expect(ids({ changedOnly: true, query: 'gym' })).toEqual(['a'])
   })
+  it('keeps an open row listed even when it no longer matches', () => {
+    const keepIds = new Set(['a'])
+    expect(ids({ query: 'zzz', keepIds })).toEqual(['a'])
+    expect(ids({ query: 'zzz' })).toEqual([])
+  })
+  it('a blank value searches the default text', () => {
+    const fs = [{ id: 'p', label: 'Plain', paths: ['p_text'], placeholder: 'Hi from the default' },
+      { id: 'q', label: 'Other', paths: ['q_text'], placeholder: (c) => `Default ${c.n}` }]
+    const run = (query, settings) => filterMessages(fs, { query, settings, overridden: [], ctx: { n: 'Zed' } }).map((f) => f.id)
+    expect(run('from the default', {})).toEqual(['p'])
+    expect(run('default zed', { p_text: '  ' })).toEqual(['q'])
+    expect(run('from the default', { p_text: 'Custom words' })).toEqual([])
+  })
 })
