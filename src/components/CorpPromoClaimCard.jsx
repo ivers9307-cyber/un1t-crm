@@ -58,6 +58,7 @@ export default function CorpPromoClaimCard({ item, onDecided }) {
       <div className="text-xs text-un1t-subtle flex flex-wrap gap-x-4 gap-y-1">
         {item.email && <span>{item.email}</span>}
         {item.phone && <span>{item.phone}</span>}
+        {item.glofoxMemberId && <span>Glofox member {item.glofoxMemberId}</span>}
         {item.un1tUserId && <span>un1t.online user {item.un1tUserId}</span>}
         {item.contactId && <Link href={`/contacts/${item.contactId}`} className="underline">Open contact</Link>}
       </div>

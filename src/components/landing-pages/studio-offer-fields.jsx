@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import { STUDIO_OFFER_KEYS } from '@/lib/landing-page-offers'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
 import { centsToEuros, eurosToCents } from '@/lib/price-format'
-import { liveCorpPromos } from '@/lib/corp-promos'
+import { liveCorpPromos, corpPromosForStudio } from '@/lib/corp-promos'
 import { DEFAULT_MIN_NOTICE_HOURS } from '@/lib/manual-timetable'
 import { Field, Input, Textarea } from '@/components/landing-pages/fields'
 import { TimetableReadBack } from '@/components/landing-pages/timetable-read-back'
@@ -176,8 +176,9 @@ function CampaignFunnelFields({ row, load, fields, set }) {
   )
 }
 
-function CorpPromoFields({ fields, set }) {
-  const promos = liveCorpPromos()
+function CorpPromoFields({ row, fields, set }) {
+  // The page studio's own promos (row.public_path); a row that does not know its path lists every live promo.
+  const promos = row?.public_path ? corpPromosForStudio(row.public_path) : liveCorpPromos()
   const key = fields.promo_key || ''
   return (
     <Field label="Promo" hint="The credits and their expiry are fixed per promo.">

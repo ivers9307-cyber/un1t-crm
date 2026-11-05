@@ -366,10 +366,11 @@ async function offerElementFor({ db, page, sp, sub, studio, merged, mergedOffer,
     const resolved = rowKey && wantedKey === rowKey ? resolveCorpPromo(rowKey) : null
     const promo = resolved && resolved.live && resolved.publicPath === contextPath ? resolved : null
     const corpStudioName = contextBrand?.locationName || contextBrand?.companyName || ''
-    const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey)
+    const raw = corpPromoCopyFromBlocks(mergedOffer ? [mergedOffer] : [], rowKey, { platform: promo?.platform || resolved?.platform })
     const tokens = { studio_name: corpStudioName, credits: promo?.credits ?? '' }
     const copy = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.map((t) => fillCorpPromoTokens(t, tokens)) : fillCorpPromoTokens(v, tokens)]))
-    const terms = promo ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
+    // NEWSTART.1: a Glofox promo takes no un1t.online terms tick.
+    const terms = promo && promo.platform !== 'glofox' ? await termsFor(db, contextLocationId, { studioName: corpStudioName, publicPath: promo.publicPath }) : null
     // CLASSFIRST.1 — the one_class layout round the card: the hero reads the
     // FILLED words ({studio_name}, {credits}), the strip the block's; the
     // class step's words go to the card resolved.

@@ -37,6 +37,10 @@ import { resolveCorpPromo, corpPromoCopyFromBlocks, fillCorpPromoTokens } from '
 import { corpPromoEligibility } from '@/lib/corp-promo-eligibility'
 import { fulfilCorpPromoClaim } from '@/lib/corp-promo-claim'
 import { corpPromoTokens } from '@/lib/corp-promo-emails'
+import { glofoxPlanForPromo } from '@/lib/corp-promo-glofox-plans'
+import { glofoxCorpPromoEligibility } from '@/lib/corp-promo-eligibility-glofox'
+import { fulfilGlofoxCorpPromoClaim } from '@/lib/corp-promo-claim-glofox'
+import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { un1tWriteSettingsFrom } from '@/lib/un1t-online-settings'
 import { un1tTermsPayload } from '@/lib/un1t-online-funnel-copy'
 import { readUn1tLegalDocs } from '@/lib/un1t-online-legal'
@@ -131,7 +135,7 @@ export async function POST(request) {
     promo = resolveCorpPromo(rowKey)
     // Only a live promo at this page's studio is for sale (the page shows the same rule).
     if (!promo || !promo.live || promo.publicPath !== r.publicPath) return notAvailable('This offer is not available right now.')
-    copy = corpPromoCopyFromBlocks([block], promo.key)
+    copy = corpPromoCopyFromBlocks([block], promo.key, { platform: promo.platform })
     locationId = r.locationId
     pageId = r.pageId
     terms = r.terms
@@ -154,7 +158,7 @@ export async function POST(request) {
       return unavailable()
     }
     if (!r.ok) return notAvailable('This offer is not available right now.')
-    copy = corpPromoCopyFromBlocks(r.blocks, promo.key)
+    copy = corpPromoCopyFromBlocks(r.blocks, promo.key, { platform: promo.platform })
     locationId = r.locationId
     terms = r.terms // no page_id: the claim came from the promo's own form, not the studio page
     pageBlocks = r.blocks
@@ -168,13 +172,27 @@ export async function POST(request) {
     logError('corp-promo', 'location unreadable', { locationId, code: locErr?.code ?? null })
     return unavailable()
   }
-  const un1t = un1tWriteSettingsFrom(location.settings)
-  if (!un1t.writesEnabled) return notAvailable(copy.unavailable_text)
+  // NEWSTART.1: a Glofox promo runs on the studio's Glofox account, not un1t.online.
+  const isGlofox = promo.platform === 'glofox'
+  let un1t = null
+  if (isGlofox) {
+    // No plan ids yet (or none for this key): nothing is for sale. Before any write.
+    if (!glofoxPlanForPromo(promo.key)) return notAvailable(copy.unavailable_text)
+    const creds = await glofoxCredentialsForLocation(db, locationId)
+    if (creds?.readError) {
+      logError('corp-promo', 'glofox credentials unreadable', { locationId })
+      return unavailable()
+    }
+    if (missingGlofoxCredentialsForLocation(creds).length > 0) return notAvailable(copy.unavailable_text)
+  } else {
+    un1t = un1tWriteSettingsFrom(location.settings)
+    if (!un1t.writesEnabled) return notAvailable(copy.unavailable_text)
+  }
   const tokens = corpPromoTokens({ firstName: b.first_name, credits: promo.credits, expiresAt: null, zone: zoneOfLocation(location), studioName: location.name })
   const say = (text) => fillCorpPromoTokens(text, tokens)
 
   // A new un1t.online account needs the studio's terms and liability waiver.
-  if (b.terms_accepted !== true) {
+  if (!isGlofox && b.terms_accepted !== true) {
     const termsPayload = un1tTermsPayload({ terms, studioName: location.name, publicPath: promo.publicPath })
     return NextResponse.json({
       success: false, code: 'terms_required', error: termsPayload.required_message,
@@ -223,7 +241,8 @@ export async function POST(request) {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
     return applyFormMarketingConsent(db, { contactId, consent: true, source: 'corp_promo', ipAddress: ip, locationId })
   })
-  await bestEffort('deal placement', () => placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Corporate promo' }))
+  // A Glofox promo is placed on its board by the fulfilment, after the grant.
+  if (!isGlofox) await bestEffort('deal placement', () => placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Corporate promo' }))
   await bestEffort('meta lead', async () => {
     const { sendWebsiteConversion, fbcFromFbclid } = await import('@/lib/meta-capi')
     return sendWebsiteConversion(db, {
@@ -234,27 +253,47 @@ export async function POST(request) {
     })
   })
 
-  // ── Who may claim, before anything reaches un1t.online ──
-  const membership = await hatchActiveMembership(db, { locationId, contactId })
-  if (!membership.ok) return unavailable()
-  if (membership.active) return refused('active_member', say(copy.active_member_text))
-  const elig = await corpPromoEligibility(db, {
-    locationId, organizationId: location.organization_id ?? null, contactId, email, phone: b.phone,
-    trialProductId: un1t.trialProductId, promoKey: promo.key,
-  })
-  if (!elig.ok) return unavailable()
+  // ── Who may claim, before anything reaches Glofox / un1t.online ──
+  if (isGlofox) {
+    const gelig = await glofoxCorpPromoEligibility(db, {
+      locationId, organizationId: location.organization_id ?? null, contactId, email, phone: b.phone, promoKey: promo.key,
+    })
+    if (!gelig.ok) return unavailable()
+    if (!gelig.eligible) {
+      if (gelig.reason === 'active_member') return refused('active_member', say(copy.active_member_text))
+      if (gelig.reason === 'already_claimed') return refused('already_claimed', say(copy.already_claimed_text))
+      if (gelig.reason !== 'help_pending' && gelig.reason !== 'in_progress') {
+        logWarn('corp-promo', 'glofox eligibility answered an unmapped reason', { locationId, contactId, reason: String(gelig.reason) })
+      }
+      // help_pending (a card is open or was handled) and in_progress: never
+      // say the classes are on the account.
+      return refused('help_filed', say(copy.help_text))
+    }
+  }
   const refusalText = { already_claimed: copy.already_claimed_text, free_trial_used: copy.trial_used_text, trained: copy.trained_text }
-  if (!elig.eligible) return refused(elig.reason, say(refusalText[elig.reason] || copy.trained_text))
+  if (!isGlofox) {
+    const membership = await hatchActiveMembership(db, { locationId, contactId })
+    if (!membership.ok) return unavailable()
+    if (membership.active) return refused('active_member', say(copy.active_member_text))
+    const elig = await corpPromoEligibility(db, {
+      locationId, organizationId: location.organization_id ?? null, contactId, email, phone: b.phone,
+      trialProductId: un1t.trialProductId, promoKey: promo.key,
+    })
+    if (!elig.ok) return unavailable()
+    if (!elig.eligible) return refused(elig.reason, say(refusalText[elig.reason] || copy.trained_text))
+  }
 
   const { data: contact, error: cErr } = await db.from('contacts')
-    .select('id, email, name, first_name, last_name, phone, un1t_user_id').eq('id', contactId).maybeSingle()
+    .select(isGlofox ? 'id, email, name, first_name, last_name, phone, glofox_member_id' : 'id, email, name, first_name, last_name, phone, un1t_user_id').eq('id', contactId).maybeSingle()
   if (cErr || !contact) {
     logError('corp-promo', 'contact unreadable', { contactId, locationId, code: cErr?.code ?? null })
     return unavailable()
   }
 
   let version = null
-  try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('corp-promo', 'legal documents version unread', { locationId, errClass: e?.name }) }
+  if (!isGlofox) {
+    try { version = (await readUn1tLegalDocs(db, locationId)).version } catch (e) { logWarn('corp-promo', 'legal documents version unread', { locationId, errClass: e?.name }) }
+  }
   const { data: claim, error: insErr } = await db.from('corp_promo_claims').insert({
     ...(pageId ? { page_id: pageId } : {}),
     location_id: locationId,
@@ -265,22 +304,26 @@ export async function POST(request) {
     customer_email: email,
     customer_phone: b.phone,
     status: 'processing',
-    terms_accepted_at: nowIso,
-    terms_source: 'website',
-    terms_version: version,
+    ...(isGlofox ? {} : { terms_accepted_at: nowIso, terms_source: 'website', terms_version: version }),
     attribution: { ...utm, ...(a.utm_source ? { utm_source: String(a.utm_source) } : {}) },
     lead_event_id: b.lead_event_id || null,
     ...classColumnsFor(choice.chosen),
   }).select('*').single()
+  if (isGlofox && insErr?.code === '23505') {
+    // Another claim for this person is already in flight (the partial unique index).
+    return refused('help_filed', say(copy.help_text))
+  }
   if (insErr || !claim) {
     // Ids and the code only: a PostgREST error's details can name the row.
     logError('corp-promo', 'claim insert failed', { contactId, code: insErr?.code ?? null })
     return unavailable()
   }
 
-  const outcome = await fulfilCorpPromoClaim(db, {
-    claim, location, contact, promo, copy, zone: zoneOfLocation(location), trialProductId: un1t.trialProductId,
-  })
+  const outcome = isGlofox
+    ? await fulfilGlofoxCorpPromoClaim(db, { claim, location, contact, promo, copy, zone: zoneOfLocation(location) })
+    : await fulfilCorpPromoClaim(db, {
+      claim, location, contact, promo, copy, zone: zoneOfLocation(location), trialProductId: un1t.trialProductId,
+    })
   if (outcome.kind === 'unavailable') return unavailable()
   if (outcome.kind === 'help_filed') return refused('help_filed', say(copy.help_text))
   if (outcome.kind === 'ineligible') return refused(outcome.reason, say(refusalText[outcome.reason] || copy.trained_text))

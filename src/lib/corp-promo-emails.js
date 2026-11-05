@@ -3,6 +3,10 @@
 // studio's corp_promo block (corpPromoCopyFromBlocks); the operator's text is
 // trusted, the token values are escaped. Transactional, so it honours the
 // administrative opt-out and a bounced/complained address, never marketing.
+// NEWSTART.1: a Glofox studio's claim sends the same way with the Glofox copy
+// (corpPromoCopyFromBlocks(..., { platform: 'glofox' })), expires_at null (the
+// plan's days run from the first class; the copy prints no {expires_on}) and
+// appLinks null, so no un1t.online app section is added.
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { escapeHtml } from '@/lib/html-escape'
 import { fillCorpPromoTokens } from '@/lib/corp-promos'
@@ -32,6 +36,7 @@ const paragraphs = (text) => text.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n
  * @param {object} db service-role client
  * @param {{ claim: object, copy: object, studioName: string, zone: string, appLinks?: object|null }} args
  *   appLinks: the studio's app download links (UN1TWELCOME); the section follows the body, left out when there are none
+ *     (always null for a Glofox studio: no un1t.online app section)
  *   claim: a corp_promo_claims row with credits and expires_at stamped
  * @returns {Promise<{ sent: boolean, reason?: string }>}
  */

@@ -68,6 +68,7 @@ import { fetchUserCreditsResult, purchaseGlofoxMembership } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { readGlofoxConfig } from '@/lib/connection-registry'
 import { logError, logWarn } from '@/lib/log'
+import { glofoxCorpPromoKeys } from '@/lib/corp-promo-glofox-plans'
 
 export const TRIAL_GRANT_FAILED = 'TRIAL_GRANT_FAILED'
 export const TRIAL_NOT_CONFIGURED = 'TRIAL_NOT_CONFIGURED'
@@ -142,6 +143,26 @@ async function trialAtMint(db, { locationId, memberId }) {
     .limit(1)
   if (error) return { ok: false }
   return { ok: true, eventId: data?.[0]?.id ?? null }
+}
+
+// NEWSTART.1g — a New Start claim (a Glofox corp promo) is this member's free
+// trial. Counts when granted, or when its grant carries a 'purchasing' marker
+// (it may have bought); a failed claim does not. { ok: false } on a failed read.
+async function trialOnCorpClaim(db, { locationId, memberId }) {
+  const keys = glofoxCorpPromoKeys()
+  if (!memberId || !keys.length) return { ok: true, claimId: null }
+  const { data, error } = await db.from('corp_promo_claims')
+    .select('id, status, grant')
+    .eq('location_id', locationId)
+    .eq('glofox_member_id', memberId)
+    .in('promo_key', keys)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (error) return { ok: false }
+  // A refused purchase ({ stage: 'purchasing', ok: false }) bought nothing
+  // (the same rule as trial-purchase-processor).
+  const prior = (data || []).find((r) => r?.status === 'granted' || (r?.grant?.stage === 'purchasing' && r.grant.ok !== false))
+  return { ok: true, claimId: prior?.id ?? null }
 }
 
 // TRIALCLAIM.1 (C113) — the atomic claim (mig 697). { ok: true } when this
@@ -264,6 +285,11 @@ export async function grantTrialBeforeBooking(db, {
     const mint = await trialAtMint(db, { locationId, memberId })
     if (!mint.ok) return stop(TRIAL_HISTORY_UNREADABLE)
     if (mint.eventId) return stop(TRIAL_ALREADY_GRANTED, { prior_push_event_id: mint.eventId })
+
+    // ...or a New Start claim was their free trial (NEWSTART.1g).
+    const corp = await trialOnCorpClaim(db, { locationId, memberId })
+    if (!corp.ok) return stop(TRIAL_HISTORY_UNREADABLE)
+    if (corp.claimId) return stop(TRIAL_ALREADY_GRANTED, { prior_corp_claim_id: corp.claimId })
 
     // The funnel block's own trial (carried on the card) wins over the
     // location default, as it does on the mint path; only BOTH ids count.

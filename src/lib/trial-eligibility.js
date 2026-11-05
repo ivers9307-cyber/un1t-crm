@@ -9,6 +9,7 @@
 //
 // Logs carry ids only (location, contact), never a name, email or phone.
 import { logWarn } from '@/lib/log'
+import { glofoxCorpPromoPlanNames } from '@/lib/corp-promo-glofox-plans'
 import { MEMBERSHIP_ACTIVE_STATUSES } from '@/lib/un1t-online-map'
 
 const TRIAL_STATUSES = new Set(['trial', 'no_sale_trial'])
@@ -42,7 +43,13 @@ async function exists(db, table, { locationId, contactId, columns = 'id', build 
 export async function stillorganTrialHistory(db, { locationId, contact }) {
   const reasons = []
   const status = contact?.glofox_membership_status
-  if (TRIAL_STATUSES.has(status)) reasons.push(`membership_status=${status}`)
+  // NEWSTART.1g — a New Start claim parks the contact on a Glofox 'trial'
+  // status under the promo's own plan. That is the free trial (the grant
+  // refuses them later), never a bar to buying the €39 Reset, so the status
+  // reason is dropped for that plan only. Every other signal is unchanged.
+  const plan = String(contact?.glofox_membership_plan || '').trim().toLowerCase()
+  const onPromoPlan = plan !== '' && glofoxCorpPromoPlanNames().includes(plan)
+  if (TRIAL_STATUSES.has(status) && !(status === 'trial' && onPromoPlan)) reasons.push(`membership_status=${status}`)
   if (TRIAL_PLAN.test(contact?.glofox_membership_plan || '')) reasons.push('membership_plan_trial')
 
   const contactId = contact?.id ?? null
@@ -62,6 +69,10 @@ export async function stillorganTrialHistory(db, { locationId, contact }) {
     build: (q) => q.eq('contact_id', contactId).eq('status', 'created'),
   })
   if (!push.ok) return push
+  // NEWSTART.1: if mig 277's glofox_push_events_source_check is ever widened
+  // to admit source 'corp_promo', every new-account New Start claimant would
+  // gain this reason and be barred from the €39 Reset, so that change must
+  // exempt corp_promo here.
   if (push.found) reasons.push('glofox_push_created')
 
   const paid = await exists(db, 'trial_purchases', {

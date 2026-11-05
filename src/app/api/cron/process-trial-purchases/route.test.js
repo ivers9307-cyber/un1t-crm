@@ -4,11 +4,12 @@
 // thrown sweeper are counted and do not.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn() }))
+const mocks = vi.hoisted(() => ({ stamp: vi.fn(), claim: vi.fn(), settle: vi.fn(), sweep: vi.fn(), stalled: vi.fn() }))
 vi.mock('@/lib/cron-heartbeat', () => ({ stampHeartbeat: mocks.stamp }))
 vi.mock('@/lib/trial-purchase-queue', () => ({ claimAndProcessTrialPurchase: mocks.claim, MAX_ATTEMPTS: 5 }))
 vi.mock('@/lib/trial-purchase-un1t-settle', () => ({ settleUn1tTrialPurchases: mocks.settle }))
 vi.mock('@/lib/trial-checkout-purchase-sweep', () => ({ sweepCheckoutTrialPurchases: mocks.sweep }))
+vi.mock('@/lib/corp-promo-stalled-sweep', () => ({ sweepStalledGlofoxCorpClaims: mocks.stalled }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({
   createServerClient: () => ({
@@ -30,6 +31,7 @@ beforeEach(() => {
   process.env.CRON_SECRET = 's3cret'
   mocks.settle.mockResolvedValue({ settled: 0, expired: 0, errors: 0, readFailed: false })
   mocks.sweep.mockResolvedValue({ ok: true, locations: 0, checked: 0, enrolled: 0, already: 0, failed: 0 })
+  mocks.stalled.mockResolvedValue({ ok: true, checked: 0, filed: 0, failed: 0 })
 })
 
 describe('process-trial-purchases cron: the un1t settle sweep', () => {
@@ -92,5 +94,32 @@ describe('process-trial-purchases cron: the checkout purchase sequence sweep', (
     await call()
     expect(mocks.sweep).toHaveBeenCalledTimes(1)
     expect(sweepStamps()).toHaveLength(1)
+  })
+})
+
+// NEWSTART.1f — the stalled /newstart claim sweep is its own arm too.
+describe('process-trial-purchases cron: the stalled claim sweep', () => {
+  const stalledStamps = () => mocks.stamp.mock.calls.filter((c) => c[0] === 'corp-promo-stalled-sweep')
+
+  it('a clean sweep stamps its own row with its outcome', async () => {
+    mocks.stalled.mockResolvedValue({ ok: true, checked: 2, filed: 1, failed: 0 })
+    const body = await (await call()).json()
+    expect(body).toMatchObject({ success: true, stalled_claims_checked: 2, stalled_claims_filed: 1 })
+    expect(stalledStamps()).toEqual([['corp-promo-stalled-sweep', { checked: 2, filed: 1, failed: 0 }]])
+  })
+
+  it('a sweep that was not ok (a read error) does not stamp', async () => {
+    mocks.stalled.mockResolvedValue({ ok: false, checked: 0, filed: 0, failed: 0 })
+    await call()
+    expect(stalledStamps()).toEqual([])
+    expect(mocks.stamp).toHaveBeenCalledWith('process-trial-purchases', expect.any(Object))
+  })
+
+  it('a thrown sweep never fails the run and the other arm still stamps', async () => {
+    mocks.stalled.mockRejectedValue(new Error('bug'))
+    const r = await call()
+    expect(r.status).toBe(200)
+    expect(stalledStamps()).toEqual([])
+    expect(mocks.stamp.mock.calls.filter((c) => c[0] === 'trial-checkout-purchase-sweep')).toHaveLength(1)
   })
 })

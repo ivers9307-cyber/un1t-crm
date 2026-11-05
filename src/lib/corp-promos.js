@@ -10,7 +10,7 @@
 // Only a un1t.online studio can run a promo today (the grant is
 // grantPromoCredits in src/lib/un1t-online-write-ops.js).
 
-/** @typedef {{ key: string, studio: 'hatch', publicPath: string, credits: number, expiresInDays: number, tag: string, leadSource: string, live: boolean }} CorpPromo */
+/** @typedef {{ key: string, name: string, platform: 'un1t_online'|'glofox', studio: 'hatch'|'stillorgan', publicPath: string, credits: number, expiresInDays: number, tag: string, leadSource: string, live: boolean }} CorpPromo */
 
 /** @type {Readonly<Record<string, CorpPromo>>} */
 export const CORP_PROMOS = Object.freeze({
@@ -18,6 +18,8 @@ export const CORP_PROMOS = Object.freeze({
   // anyone with the link who has never trained at Hatch.
   'hatch-3-free': Object.freeze({
     key: 'hatch-3-free',
+    name: 'Corporate trial (Hatch Street)',
+    platform: 'un1t_online',
     studio: 'hatch',
     publicPath: 'hatch-street',
     credits: 3,
@@ -25,6 +27,22 @@ export const CORP_PROMOS = Object.freeze({
     tag: 'hatch-corp-promo',
     leadSource: 'corp_promo',
     live: true,
+  }),
+  // A new Glofox promo key must be added to the corp_promo_claims_one_live_per_contact
+  // index in its own migration (mig 811 limits it to Glofox promos).
+  // NEWSTART.1: Stillorgan is a Glofox studio. Off until the Glofox plan ids
+  // exist in src/lib/corp-promo-glofox-plans.js.
+  'stillorgan-newstart': Object.freeze({
+    key: 'stillorgan-newstart',
+    name: 'New Start (Stillorgan)',
+    platform: 'glofox',
+    studio: 'stillorgan',
+    publicPath: 'stillorgan',
+    credits: 3,
+    expiresInDays: 7,
+    tag: 'stillorgan-newstart',
+    leadSource: 'corp_promo',
+    live: false,
   }),
 })
 
@@ -37,6 +55,11 @@ export function resolveCorpPromo(key) {
 /** The live promos, in registry order. */
 export function liveCorpPromos() {
   return Object.values(CORP_PROMOS).filter((p) => p.live)
+}
+
+/** The live promos at the studio whose public path is `publicPath`, in registry order. */
+export function corpPromosForStudio(publicPath) {
+  return liveCorpPromos().filter((p) => p.publicPath === publicPath)
 }
 
 export const CORP_PROMO_COPY_DEFAULT = Object.freeze({
@@ -61,6 +84,25 @@ export const CORP_PROMO_COPY_DEFAULT = Object.freeze({
   email_body: 'Hi {first_name}, your {credits} free classes at {studio_name} are on your un1t.online account. Use them by {expires_on}. If you are new to un1t.online, a code to set your password is on its way in a separate email; once you are in, book your classes in the app. Reply to this email if anything looks off.',
 })
 
+// NEWSTART.1: the words for a Glofox studio's promo. No un1t.online anywhere.
+export const CORP_PROMO_GLOFOX_COPY_DEFAULT = Object.freeze({
+  ...CORP_PROMO_COPY_DEFAULT,
+  title: 'New Start at {studio_name}',
+  eyebrow: '',
+  heading: '3 free classes at {studio_name}',
+  subhead: 'Coach-led strength and conditioning. Your first three classes are on us: pick your first class, claim in under a minute.',
+  ticks: Object.freeze(['3 coach-led classes, free', 'Use them within 7 days of your first class', 'Book the rest in the UN1T app']),
+  cta_label: 'Claim my 3 free classes',
+  done_title: "You're in 🎉",
+  done_body: 'Your {credits} free classes are on your account. Use them within 7 days of your first class. Check your email for how to log in to the UN1T app and book.',
+  already_claimed_text: "You've already claimed this offer, so your free classes are on your account. Book them in the UN1T app; if they're not there, reply to our email.",
+  active_member_text: "It looks like you're already a member at {studio_name}, so your classes are covered. If that's not right, ask at the front desk.",
+  help_text: "Thanks, we've got your details. Something needs a quick check on our side, so the team will be in touch shortly to get your classes on your account.",
+  unavailable_text: 'This offer is not available right now.',
+  email_subject: 'Your {credits} free classes at {studio_name}',
+  email_body: 'Hi {first_name}, your {credits} free classes at {studio_name} are on your account. Use them within 7 days of your first class. Log in to the UN1T app with this email (tap "Forgot password" if you have not set one) and book your classes there. Reply to this email if anything looks off.',
+})
+
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 const TEXT_FIELDS = Object.keys(CORP_PROMO_COPY_DEFAULT).filter((k) => k !== 'ticks')
 
@@ -69,13 +111,14 @@ const TEXT_FIELDS = Object.keys(CORP_PROMO_COPY_DEFAULT).filter((k) => k !== 'ti
  * naming that promo, else the first corp_promo block with no promo key, every
  * blank or missing field on its default. Pure.
  */
-export function corpPromoCopyFromBlocks(blocks, promoKey) {
+export function corpPromoCopyFromBlocks(blocks, promoKey, { platform } = {}) {
+  const defaults = platform === 'glofox' ? CORP_PROMO_GLOFOX_COPY_DEFAULT : CORP_PROMO_COPY_DEFAULT
   const list = (Array.isArray(blocks) ? blocks : []).filter((b) => b && typeof b === 'object' && b.type === 'corp_promo')
   const block = list.find((b) => str(b.promo_key) === promoKey) || list.find((b) => !str(b.promo_key)) || {}
   const out = {}
-  for (const k of TEXT_FIELDS) out[k] = str(block[k]) || CORP_PROMO_COPY_DEFAULT[k]
+  for (const k of TEXT_FIELDS) out[k] = str(block[k]) || defaults[k]
   const ticks = Array.isArray(block.ticks) ? block.ticks.map(str).filter(Boolean) : []
-  out.ticks = ticks.length > 0 ? ticks : [...CORP_PROMO_COPY_DEFAULT.ticks]
+  out.ticks = ticks.length > 0 ? ticks : [...defaults.ticks]
   return out
 }
 

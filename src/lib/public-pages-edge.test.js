@@ -68,11 +68,11 @@ describe('listPublicPageSlugs', () => {
     expect(db.spy).toHaveBeenCalledTimes(2)
   })
 
-  it('fallback when the read throws: UN1T Group answers the five former code routes and its two studio pages, an unknown org answers []', async () => {
+  it('fallback when the read throws: UN1T Group answers the five former code routes, its two studio pages and /newstart, an unknown org answers []', async () => {
     expect(await listPublicPageSlugs(UN1T_GROUP_ORG_ID, { db: throwingDb, nowMs: 1 }))
-      .toEqual(['trial', '50plus', 'corp', 'start', 'free-class', 'stillorgan', 'hatch-street'])
+      .toEqual(['trial', '50plus', 'corp', 'start', 'free-class', 'stillorgan', 'hatch-street', 'newstart'])
     expect(await listPublicPageSlugs('org-unknown', { db: throwingDb, nowMs: 1 })).toEqual([])
-    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).toHaveLength(7)
+    expect(PUBLIC_PAGE_SLUGS_FALLBACK[UN1T_GROUP_ORG_ID]).toHaveLength(8)
   })
 
   it('reads every page kind (PR3): a live studio page is listed, a draft one is not', async () => {
