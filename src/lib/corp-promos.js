@@ -28,6 +28,8 @@ export const CORP_PROMOS = Object.freeze({
     leadSource: 'corp_promo',
     live: true,
   }),
+  // A new Glofox promo key must be added to the corp_promo_claims_one_live_per_contact
+  // index in its own migration (mig 811 limits it to Glofox promos).
   // NEWSTART.1: Stillorgan is a Glofox studio. Off until the Glofox plan ids
   // exist in src/lib/corp-promo-glofox-plans.js.
   'stillorgan-newstart': Object.freeze({
