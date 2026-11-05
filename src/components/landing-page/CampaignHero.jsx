@@ -37,6 +37,13 @@
 // 5:4 on a tablet (was 16:10), 4:5 on a phone as before. A portrait clip
 // loses less of itself to object-cover; the booking card gains width.
 //
+// MOBILEFUNNEL.1 — below `sm` (a phone) the media box is about half the old
+// 4:5 height (min 240px instead of ~430px at 375px wide), so the card's day
+// row and first class times are on the first screen. The words sit in the
+// box's flow there (flex column, bottom-aligned), so a long heading grows the
+// box instead of being clipped; from `sm` they overlay the bottom edge and
+// every ratio is as before. The top padding follows the slimmer phone header.
+//
 // The video box is the one dark island on a light page: `bg-black` sits on
 // the element whose text is white, which is the rule no-low-contrast-accent-
 // text asks for.
@@ -122,12 +129,12 @@ export default function CampaignHero({
   }
 
   return (
-    <section className="bg-white text-black pt-20 lg:pt-28 pb-10 lg:pb-16">
+    <section className="bg-white text-black pt-[4.25rem] sm:pt-20 lg:pt-28 pb-10 lg:pb-16">
       {/* CLASSFIRST.2 — the columns start together and the media box keeps its
           own height (a sticky 4:5 on desktop) instead of stretching to the
           card: a busy studio's class list used to elongate the photo. */}
       <div className="max-w-6xl mx-auto px-4 sm:px-6 grid gap-5 lg:gap-8 lg:grid-cols-[1.3fr_1fr] lg:items-start">
-        <div className="relative overflow-hidden rounded-3xl bg-black text-white aspect-[4/5] sm:aspect-[5/4] lg:aspect-[4/5] lg:max-h-[720px] lg:sticky lg:top-24">
+        <div data-hero-media="" className="relative overflow-hidden rounded-3xl bg-black text-white flex flex-col justify-end min-h-[240px] sm:block sm:min-h-0 sm:aspect-[5/4] lg:aspect-[4/5] lg:max-h-[720px] lg:sticky lg:top-24">
           {videoUrl ? (
             <video
               ref={videoRef}
@@ -157,10 +164,10 @@ export default function CampaignHero({
               {muted ? `🔊 ${soundLabel}` : '🔇 Sound on'}
             </button>
           )}
-          <div className="absolute inset-x-0 bottom-0 p-6 sm:p-8">
-            {eyebrow && <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-white/75 mb-3">{text('eyebrow', eyebrow)}</div>}
-            <h1 className="font-display font-extrabold uppercase text-[clamp(2rem,6vw,3.5rem)] leading-[1.02] tracking-tight">{text('heading', heading)}</h1>
-            {subhead && <p className="mt-4 text-base sm:text-lg text-white/85 max-w-xl leading-relaxed">{text('subhead', subhead)}</p>}
+          <div data-hero-words="" className="relative px-5 pb-5 pt-16 sm:absolute sm:inset-x-0 sm:bottom-0 sm:p-8">
+            {eyebrow && <div className="text-[11px] uppercase tracking-[0.3em] font-semibold text-white/75 mb-2 sm:mb-3">{text('eyebrow', eyebrow)}</div>}
+            <h1 className="font-display font-extrabold uppercase text-[1.75rem] sm:text-[clamp(2rem,6vw,3.5rem)] leading-[1.02] tracking-tight">{text('heading', heading)}</h1>
+            {subhead && <p className="mt-2 sm:mt-4 text-[15px] sm:text-lg text-white/85 max-w-xl leading-snug sm:leading-relaxed">{text('subhead', subhead)}</p>}
           </div>
         </div>
         <div className="flex items-center justify-center lg:justify-stretch">
