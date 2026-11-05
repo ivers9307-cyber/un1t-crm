@@ -330,3 +330,47 @@ describe('PIPE3 — leavesBoard keeps the €39 and Programmes converts', () => 
     expect(leavesBoard('programme_lead', true)).toBe(true)
   })
 })
+
+// PIPEEXCL.3 — an old class pack with a credit left (Glofox never expires it)
+// is a membership elsewhere only while the person still trains there: a class
+// booked or attended there in the training window. 4 Nov 2026: a 2023
+// Stillorgan 5-class pack with 1 credit took her off Hatch's board the week
+// she paid for the Hatch €39 trial.
+describe('loadActiveElsewhere — pack-only members (PIPEEXCL.3)', () => {
+  const NOW = Date.parse('2026-11-05T12:00:00Z')
+  const daysFromNow = (d) => new Date(NOW + d * 86_400_000).toISOString()
+  const booking = (id, contact_id, days, status = 'ATTENDED', location_id = STILL) => ({ id, location_id, contact_id, status, starts_at: daysFromNow(days) })
+  const packs = (contactIds, packOnlyContactIds) => ({ activeMemberContactIds: vi.fn().mockResolvedValue({ success: true, data: { contactIds, packOnlyContactIds } }) })
+
+  it('a pack holder who has not trained there in the window is not active elsewhere', async () => {
+    seam({ stillorgan: packs(['c-old-pack', 'c-monthly'], ['c-old-pack']) })
+    const { db } = makeDb({ locations: LOCATIONS, person_group_members: [], class_bookings: [booking('b1', 'c-old-pack', -(TRAINING_WINDOW_DAYS + 5))] })
+    const out = await loadActiveElsewhere(db, HATCH, { now: NOW })
+    expect(out.ok).toBe(true)
+    expect([...out.contactIds]).toEqual(['c-monthly'])
+    expect(out.reasons.get('c-monthly')).toBe(ELSEWHERE_MEMBER)
+    expect(out.studios).toEqual([{ locationId: STILL, members: 1, training: 0 }])
+  })
+
+  it('a pack holder who trains there (attended recently, or booked ahead) is a member there, as before', async () => {
+    seam({ stillorgan: packs(['c-recent', 'c-ahead'], ['c-recent', 'c-ahead']) })
+    const { db } = makeDb({ locations: LOCATIONS, person_group_members: [], class_bookings: [booking('b1', 'c-recent', -10), booking('b2', 'c-ahead', 4, 'BOOKED')] })
+    const out = await loadActiveElsewhere(db, HATCH, { now: NOW })
+    expect([...out.contactIds].sort()).toEqual(['c-ahead', 'c-recent'])
+    for (const id of out.contactIds) expect(out.reasons.get(id)).toBe(ELSEWHERE_MEMBER)
+  })
+
+  it('a cancelled booking does not keep a pack alive', async () => {
+    seam({ stillorgan: packs(['c-cancel'], ['c-cancel']) })
+    const { db } = makeDb({ locations: LOCATIONS, person_group_members: [], class_bookings: [booking('b1', 'c-cancel', -3, 'CANCELLED')] })
+    const out = await loadActiveElsewhere(db, HATCH, { now: NOW })
+    expect(out.contactIds.size).toBe(0)
+  })
+
+  it('a read that names no pack-only list keeps every member (the un1t.online read counts subscriptions only)', async () => {
+    seam({ hatch: answers(['c-sub']) })
+    const { db } = makeDb({ locations: LOCATIONS, person_group_members: [], class_bookings: [] })
+    const out = await loadActiveElsewhere(db, STILL, { now: NOW })
+    expect([...out.contactIds]).toEqual(['c-sub'])
+  })
+})

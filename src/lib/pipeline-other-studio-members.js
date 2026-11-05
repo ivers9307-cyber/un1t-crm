@@ -28,6 +28,12 @@
 // training reason never removes a person who also has a live booking here
 // (trainingHere). A membership elsewhere still does.
 //
+// PIPEEXCL.3 (Richard, 5 Nov 2026) — a membership elsewhere that is only a
+// class pack (the read's packOnlyContactIds) counts only while the person
+// trains there (a live booking in the same window). Glofox keeps an unused
+// pack credit "member" for ever: a 2023 Stillorgan pack with one credit took a
+// paying Hatch €39 trialer off Hatch's board.
+//
 // Any failed read is { ok: false, reason }: never "nobody is a member there".
 // The callers then leave the board as it is (no deal leaves, none is held).
 
@@ -175,12 +181,20 @@ export async function loadActiveElsewhere(db, locationId, { now = Date.now() } =
     if (!res?.success || !Array.isArray(res.data?.contactIds)) {
       return { ok: false, reason: 'read_failed', studioId: studio.id, err: bounded(res?.error || 'malformed answer') }
     }
+    // PIPEEXCL.3 — a membership that is only a class pack (Glofox never
+    // expires one with a credit left) counts only while the person trains
+    // there: a live booking in the window (trainers). An idle pack is nobody's
+    // membership, so the person stays a prospect on this board.
+    const packOnly = new Set(Array.isArray(res.data.packOnlyContactIds) ? res.data.packOnlyContactIds : [])
+    let members = 0
     for (const id of res.data.contactIds) {
       if (!id) continue
+      if (packOnly.has(id) && !trainers.has(id)) continue
+      members++
       active.add(id)
       reasons.set(id, ELSEWHERE_MEMBER)
     }
-    studios.push({ locationId: studio.id, members: res.data.contactIds.length, training })
+    studios.push({ locationId: studio.id, members, training })
   }
 
   if (active.size === 0) return { ok: true, contactIds: active, reasons, trainingHere, studios }
