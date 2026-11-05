@@ -24,7 +24,10 @@
 //   7. after the grant, each best-effort: the funded class booking, the board
 //      placement, the confirmation email.
 // Help = row help_requested with the reason + the ops alert to the
-// organisation (the approvals card reads the row). Logs carry ids and codes
+// organisation (the approvals card reads the row). A failed/help stamp only
+// moves a row still processing, so it never overwrites another run's grant;
+// a marker refused because another run's marker or outcome is already on the
+// row files nothing and buys nothing (the stalled sweep owns that row). Logs carry ids and codes
 // only, never the email, phone, name or the new account's password.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchMemberResult, fetchUserCreditsResult, purchaseGlofoxMembership } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
@@ -52,7 +55,7 @@ const HELP_ADVICE = Object.freeze({
   glofox_read_failed: 'Their Glofox account could not be read, so nothing was bought. Check it in Glofox, then add the plan by hand if they qualify.',
   grant_unrecorded: 'The purchase marker could not be written, so nothing was bought. Add the plan by hand if they qualify.',
   grant_refused: 'Glofox refused the plan purchase, so nothing was bought.',
-  grant_unverified: "Glofox gave no clear answer to the plan purchase: it may have gone through. Check the member's invoices in Glofox for a €0 New Start invoice BEFORE adding anything by hand.",
+  grant_unverified: "The plan purchase may have gone through (Glofox gave no clear answer, or another attempt on this claim could not be checked). Check the member's invoices in Glofox for a €0 New Start invoice BEFORE adding anything by hand.",
 })
 const adviceFor = (reason) => HELP_ADVICE[String(reason).split(':')[0]] || ''
 
@@ -81,16 +84,43 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
     if (error) logError(LOG, 'claim not stamped', { ...ids, status: patch.status ?? null, code: error.code ?? null })
     return error || null
   }
+  // A failure or help stamp only ever moves a row that is still processing:
+  // it must never overwrite another run's granted row (or the stalled sweep's
+  // help card). Judged on the rows it touched: 0 → null, an error → undefined.
+  const stampOpen = async (patch) => {
+    try {
+      const { data, error } = await db.from('corp_promo_claims').update(patch)
+        .eq('id', claim.id).eq('location_id', locationId).eq('status', 'processing')
+        .select('id')
+      if (error) {
+        logError(LOG, 'claim not stamped', { ...ids, status: patch.status ?? null, code: error.code ?? null })
+        return undefined
+      }
+      return (data || []).length
+    } catch (e) {
+      logError(LOG, 'claim stamp threw', { ...ids, status: patch.status ?? null, errClass: e?.name })
+      return undefined
+    }
+  }
   const failed = async (reason) => {
-    await stamp({ status: 'failed', reason })
+    await stampOpen({ status: 'failed', reason })
     return { kind: 'unavailable' }
   }
   let memberId = null
+  // Set just before the purchase call: from then on this run holds facts no
+  // one else has, so staff are alerted even if the row moved on meanwhile.
+  let purchaseAttempted = false
   const help = async (reason, { grant } = {}) => {
     const patch = { status: 'help_requested', reason }
     if (memberId) patch.glofox_member_id = memberId
     if (grant) patch.grant = grant
-    await stamp(patch)
+    const touched = await stampOpen(patch)
+    if (touched === 0 && !purchaseAttempted) {
+      // The row is no longer processing: another run granted it, or the
+      // stalled sweep filed it. Not ours to file again; the page says try again.
+      logWarn(LOG, 'claim no longer processing; help not filed', { ...ids, reason: String(reason).split(':')[0] })
+      return { kind: 'unavailable' }
+    }
     logWarn(LOG, 'promo not granted; staff alerted', { ...ids, reason: String(reason).split(':')[0], glofoxMemberId: memberId })
     try {
       if (location.organization_id) {
@@ -175,10 +205,34 @@ export async function fulfilGlofoxCorpPromoClaim(db, { claim, location, contact,
   } catch (e) {
     logError(LOG, 'grant marker threw', { ...ids, errClass: e?.name })
   }
-  if (!marked) return help('grant_unrecorded')
+  if (!marked) {
+    // 0 rows (or an error) may mean ANOTHER run got here first: its marker or
+    // outcome is on the row, and it may have bought the plan. Re-read before
+    // saying "nothing was bought": staff acting on that would add a second plan.
+    let current = null
+    let readFailed = false
+    try {
+      const { data, error } = await db.from('corp_promo_claims').select('status, grant')
+        .eq('id', claim.id).eq('location_id', locationId).maybeSingle()
+      if (error) readFailed = true
+      else current = data
+    } catch {
+      readFailed = true
+    }
+    if (readFailed) {
+      logError(LOG, 'claim unreadable after the marker was refused', { ...ids })
+      return help('grant_unverified')
+    }
+    if (current && (current.status === 'granted' || (current.grant && typeof current.grant === 'object'))) {
+      logWarn(LOG, 'another run holds the grant; nothing bought here', { ...ids, status: current.status ?? null })
+      return { kind: 'unavailable' }
+    }
+    return help('grant_unrecorded')
+  }
 
   // ── 6. The purchase, once ──
   let res
+  purchaseAttempted = true
   try {
     res = await d.purchaseGlofoxMembership(creds, memberId, plan.membershipId, plan.planCode, { body: TRIAL_PURCHASE_BODY })
   } catch (e) {

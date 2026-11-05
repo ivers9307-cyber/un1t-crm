@@ -15,11 +15,16 @@ const PLAN = { membershipId: 'mem-ns', planCode: 'plan-ns', planName: 'New Start
 const CREDS = { branchId: 'br-1', apiKey: 'k', apiToken: 't', readError: null }
 
 /**
- * A fake service-role client: records every update chain (patch + filters).
- * `markerRows` is how many rows the write-ahead marker stamp touches.
+ * A fake service-role client holding ONE corp_promo_claims row: an update
+ * applies only when every filter matches the row (eq / is), and answers the
+ * rows it touched when `.select()` is chained. `beforeMarker(row)` runs just
+ * before the write-ahead marker lands: a concurrent run changing the row.
  */
-function fakeDb({ markerRows = 1, markerError = null, updateError = null } = {}) {
+function fakeDb({ row: start = {}, beforeMarker = null, markerError = null, updateError = null, readError = null } = {}) {
+  const row = { id: 'claim-1', location_id: 'loc-s', status: 'processing', grant: null, ...start }
   const updates = []
+  const reads = []
+  const matches = (filters) => filters.every(([op, c, v]) => (op === 'eq' ? row[c] === v : op === 'is' ? row[c] == v : true))
   const db = {
     from: (table) => ({
       update: (patch) => {
@@ -30,19 +35,32 @@ function fakeDb({ markerRows = 1, markerError = null, updateError = null } = {})
           is: (c, v) => { filters.push(['is', c, v]); return q },
           select: (cols) => { selected = cols; return q },
           then: (ok, no) => {
-            updates.push({ table, patch, filters, selected })
             const isMarker = patch.grant?.stage === 'purchasing' && !('status' in patch)
-            let res
-            if (isMarker) res = { data: markerError ? null : Array.from({ length: markerRows }, () => ({ id: 'claim-1' })), error: markerError }
-            else res = { data: selected ? [{ id: 'claim-1' }] : null, error: typeof updateError === 'function' ? updateError(patch) : updateError }
-            return Promise.resolve(res).then(ok, no)
+            if (isMarker && beforeMarker) beforeMarker(row)
+            const error = isMarker ? markerError : (typeof updateError === 'function' ? updateError(patch) : updateError)
+            const hit = !error && matches(filters)
+            if (hit) Object.assign(row, patch)
+            updates.push({ table, patch, filters, selected, touched: hit ? 1 : 0 })
+            return Promise.resolve({ data: error ? null : (selected ? (hit ? [{ id: row.id }] : []) : null), error }).then(ok, no)
+          },
+        }
+        return q
+      },
+      select: (cols) => {
+        const filters = []
+        const q = {
+          eq: (c, v) => { filters.push(['eq', c, v]); return q },
+          maybeSingle: async () => {
+            reads.push({ table, cols, filters })
+            if (readError) return { data: null, error: readError }
+            return { data: matches(filters) ? { ...row } : null, error: null }
           },
         }
         return q
       },
     }),
   }
-  return { db, updates }
+  return { db, updates, reads, row }
 }
 
 const claim = {
@@ -270,20 +288,75 @@ describe('fulfilGlofoxCorpPromoClaim — plan and credentials', () => {
 })
 
 describe('fulfilGlofoxCorpPromoClaim — the write-ahead purchase', () => {
-  it('a marker stamp that touches 0 rows → help grant_unrecorded, nothing bought', async () => {
-    const f = fakeDb({ markerRows: 0 })
+  it('a marker refused because another run already GRANTED the row: no purchase, no help stamp, no alert', async () => {
+    const f = fakeDb({ beforeMarker: (row) => Object.assign(row, { status: 'granted', grant: { ok: true, at: 'earlier' } }) })
     const d = deps()
-    expect(await run(d, { db: f.db })).toEqual({ kind: 'help_filed' })
-    expect(lastStatus(f.updates).reason).toBe('grant_unrecorded')
-    expect(lastStatus(f.updates)).not.toHaveProperty('grant')
+    expect(await run(d, { db: f.db })).toEqual({ kind: 'unavailable' })
     expect(d.purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(f.updates.some((u) => u.patch.status)).toBe(false)
+    expect(d.sendOpsAlert).not.toHaveBeenCalled()
+    expect(f.row.status).toBe('granted')
+    expect(f.reads).toHaveLength(1)
   })
 
-  it('a marker stamp that errors → help grant_unrecorded, nothing bought', async () => {
+  it("a marker refused because another run's purchasing marker is on the row: no purchase, no grant_unrecorded, no alert", async () => {
+    const other = { stage: 'purchasing', at: 'earlier', glofox_member_id: 'gm-new' }
+    const f = fakeDb({ beforeMarker: (row) => { row.grant = other } })
+    const d = deps()
+    expect(await run(d, { db: f.db })).toEqual({ kind: 'unavailable' })
+    expect(d.purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(f.updates.some((u) => u.patch.reason === 'grant_unrecorded')).toBe(false)
+    expect(f.row).toMatchObject({ status: 'processing', grant: other })
+    expect(d.sendOpsAlert).not.toHaveBeenCalled()
+  })
+
+  it('a refused marker whose re-read fails → help with the "may have gone through" advice, never "nothing was bought"', async () => {
+    const f = fakeDb({ markerError: { code: '57014' }, readError: { code: '08006' } })
+    const d = deps()
+    expect(await run(d, { db: f.db })).toEqual({ kind: 'help_filed' })
+    expect(d.purchaseGlofoxMembership).not.toHaveBeenCalled()
+    expect(f.row).toMatchObject({ status: 'help_requested', reason: 'grant_unverified', grant: null })
+    const html = d.sendOpsAlert.mock.calls[0][0].htmlBody
+    expect(html).toMatch(/may have gone through/)
+    expect(html).toMatch(/€0 New Start invoice/)
+    expect(html).not.toMatch(/nothing was bought/i)
+  })
+
+  it('a help stamp never overwrites a granted row (the stamp is guarded on processing)', async () => {
+    // A live-plan help on a row another run finished meanwhile.
+    const f = fakeDb({ row: { status: 'granted' } })
+    const d = deps({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'linked', glofox_member_id: 'gm-1' })), mapMembershipStatus: vi.fn(() => 'trial') })
+    expect(await run(d, { db: f.db })).toEqual({ kind: 'unavailable' })
+    expect(f.row.status).toBe('granted')
+    const help = f.updates.find((u) => u.patch.status === 'help_requested')
+    expect(help.filters).toContainEqual(['eq', 'status', 'processing'])
+    expect(help.touched).toBe(0)
+    expect(d.sendOpsAlert).not.toHaveBeenCalled()
+  })
+
+  it('an existing help path (live_plan) on a processing row still stamps help and alerts', async () => {
+    const f = fakeDb()
+    const d = deps({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'linked', glofox_member_id: 'gm-1' })), mapMembershipStatus: vi.fn(() => 'member') })
+    expect(await run(d, { db: f.db })).toEqual({ kind: 'help_filed' })
+    expect(f.row).toMatchObject({ status: 'help_requested', reason: 'live_plan: member', glofox_member_id: 'gm-1' })
+    expect(d.sendOpsAlert).toHaveBeenCalledTimes(1)
+  })
+
+  it('a help stamp that errors still alerts staff (the alert is the filing)', async () => {
+    const f = fakeDb({ updateError: (patch) => (patch.status === 'help_requested' ? { code: '57014' } : null) })
+    const d = deps({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'needs_review', error: 'x' })) })
+    expect(await run(d, { db: f.db })).toEqual({ kind: 'help_filed' })
+    expect(d.sendOpsAlert).toHaveBeenCalledTimes(1)
+  })
+
+  it('a marker write that errors, re-read showing no grant → help grant_unrecorded, nothing bought', async () => {
     const f = fakeDb({ markerError: { code: '57014', message: 'timeout' } })
     const d = deps()
     expect(await run(d, { db: f.db })).toEqual({ kind: 'help_filed' })
+    expect(f.reads).toHaveLength(1)
     expect(lastStatus(f.updates).reason).toBe('grant_unrecorded')
+    expect(f.row.grant).toBeNull()
+    expect(d.sendOpsAlert.mock.calls[0][0].htmlBody).toMatch(/nothing was bought/)
     expect(d.purchaseGlofoxMembership).not.toHaveBeenCalled()
   })
 
