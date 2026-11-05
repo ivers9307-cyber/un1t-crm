@@ -24,7 +24,7 @@
 // shows above Overview, as before; it stays mounted (hidden) on the other
 // sections so an org draft survives a switch.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ReadFailedNote from '@/components/settings/ReadFailedNote'
 import { hubManageHref } from '@/lib/integrations-hub-links'
 import OrgDefaultsClient from './OrgDefaultsClient'
@@ -32,6 +32,8 @@ import { useAgentSettings } from './useAgentSettings'
 import { SECTIONS, parseLocation, writeLocation } from './sections'
 import { statusOf } from './status'
 import SectionMenu from './components/SectionMenu'
+import SaveBar from './components/SaveBar'
+import { changedFieldCount } from './dirty'
 import { fieldRenderer } from './sections/field-renderer'
 import OverviewSection from './sections/OverviewSection'
 import PersonalitySection from './sections/PersonalitySection'
@@ -74,8 +76,17 @@ function initialSection() {
 
 export default function CustomerAgentClient({ canEdit = false, orgDefaults = null, canEditVoices = false } = {}) {
   const agent = useAgentSettings({ canEdit })
-  const { loading, loadFailed, reload, settings, saved, location, holds, saving, savedAt, error, save, refreshInherited } = agent
+  const { loading, loadFailed, reload, settings, saved, location, holds, saving, savedAt, error, save, discard, refreshInherited, dirtyPaths, dirtySections } = agent
   const [section, setSection] = useState(initialSection)
+
+  // Leaving the page (close, reload, a typed address) with unsaved changes.
+  const isDirty = dirtyPaths.length > 0
+  useEffect(() => {
+    if (!isDirty) return undefined
+    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [isDirty])
 
   function openSection(key) {
     setSection(key)
@@ -96,6 +107,11 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
   const status = STATUS_CHIPS[statusOf(saved || settings)]
   const quiet = saved?.quiet_hours
   const quietChip = quiet && !quiet.off && quiet.start && quiet.end ? `Quiet ${quiet.start} to ${quiet.end}` : null
+  const readOnlyNote = (
+    <p className="text-sm text-un1t-muted border border-un1t-border rounded-lg px-4 py-3 mb-6">
+      Only an owner can change Mia&apos;s settings here.
+    </p>
+  )
   const links = [
     { href: '/settings/customer-agent/analytics', label: 'Activity' },
     { href: '/settings/customer-agent/requests', label: 'Requests' },
@@ -121,7 +137,8 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
 
       <div className="md:flex md:items-start md:gap-8">
         <div className="md:w-56 md:shrink-0">
-          <SectionMenu sections={SECTIONS} active={section} onSelect={openSection} links={links} />
+          <SectionMenu sections={SECTIONS} active={section} onSelect={openSection} links={links}
+            dirtySections={dirtySections} dirty={isDirty} />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -136,34 +153,25 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           )}
 
           {/* Knowledge is outside the owner-only rule (any manager+ edits it). */}
-          {!canEdit && section !== 'knowledge' && (
-            <p className="text-sm text-un1t-muted border border-un1t-border rounded-lg px-4 py-3 mb-6">
-              Only an owner can change these settings.
-            </p>
-          )}
+          {!canEdit && section !== 'knowledge' && section !== 'personality' && readOnlyNote}
 
           {SECTIONS.map(({ key, label }) => {
             const Section = SECTION_COMPONENTS[key]
             return (
               <div key={key} hidden={section !== key} data-testid={`section-${key}`}>
                 <h2 className="text-lg font-semibold text-un1t-text mb-4">{label}</h2>
-                <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices} />
+                <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices}
+                  readOnlyNote={key === 'personality' && section === 'personality' && !canEdit ? readOnlyNote : null} />
               </div>
             )
           })}
 
-          {/* One Save for every section's studio settings (Knowledge saves as
+          {/* One bar for every section's studio settings (Knowledge saves as
               you go). Held while quiet hours are half-set, the booking link is
               invalid or the trial finisher is invalid (useAgentSettings). */}
           {canEdit && section !== 'knowledge' && (
-            <div className="mt-6">
-              {error && <div className="text-sm text-red-600 mb-2">{error}</div>}
-              <button type="button" onClick={save} disabled={saving || holds.length > 0}
-                className="bg-un1t-text text-un1t-bg px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50">
-                {saving ? 'Saving…' : 'Save settings'}
-              </button>
-              {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
-            </div>
+            <SaveBar count={changedFieldCount(dirtyPaths)} holds={holds} saving={saving} savedAt={savedAt}
+              error={error} onSave={save} onDiscard={discard} onGoTo={openSection} />
           )}
         </div>
       </div>

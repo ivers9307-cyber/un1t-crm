@@ -41,7 +41,7 @@ export default function OverviewSection({ agent, canEdit }) {
               aria-label="Quiet hours end" disabled={noQuietHours}
               value={settings.quiet_hours?.end || ''}
               onChange={e => setQuietHours('end', e.target.value)} />
-            <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"} — agent stays quiet, a human replies.</span>
+            <span className="text-xs text-un1t-muted">{settings.quiet_hours?.tz || location?.timezone || "the studio's timezone"}. The agent stays quiet and a human replies.</span>
           </div>
           {quietHalf && <p className="text-xs text-red-600 mt-1" role="alert">Set both times</p>}
           <label className="flex items-center gap-2 text-sm text-un1t-text mt-2">

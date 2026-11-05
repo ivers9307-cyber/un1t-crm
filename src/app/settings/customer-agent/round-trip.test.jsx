@@ -14,7 +14,7 @@ import {
 } from './__fixtures__/agent-settings'
 import { renderEditor, lastPutBody, saveNow, editByLabel } from './__fixtures__/harness'
 
-afterEach(() => { cleanup(); delete global.fetch })
+afterEach(() => { cleanup(); delete global.fetch; window.history.replaceState(null, '', '/') })
 
 // Leaf paths of a PUT body: objects descend (null counts as empty), arrays and
 // scalars are leaves. `overridden` is compared apart.

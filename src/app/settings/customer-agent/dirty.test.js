@@ -2,7 +2,7 @@
 // differs from the last load or save, and which sections that touches.
 
 import { describe, it, expect } from 'vitest'
-import { changedPaths, dirtySections } from './dirty'
+import { changedPaths, dirtySections, changedFieldCount } from './dirty'
 import { sectionForPath } from './sections'
 
 const BASE = {
@@ -132,5 +132,25 @@ describe('sectionForPath', () => {
   it('no dot-boundary false match, and an unknown path is null', () => {
     expect(sectionForPath('tone_extra')).toBe(null)
     expect(sectionForPath('limits.max_replies_per_location_per_day')).toBe(null)
+  })
+})
+
+describe('changedFieldCount', () => {
+  it('is 0 for no changes', () => { expect(changedFieldCount([])).toBe(0) })
+  it('counts one field once however many of its paths changed', () => {
+    expect(changedFieldCount(['enabled', 'test_mode', 'test_phones'])).toBe(1)
+    expect(changedFieldCount(['quiet_hours.start', 'quiet_hours.end'])).toBe(1)
+  })
+  it('maps a nested path through its dot-prefix', () => {
+    expect(changedFieldCount(['cancellation_form.reason_labels.price', 'cancellation_form.title'])).toBe(1)
+  })
+  it('maps an overridden entry the same way as its path', () => {
+    expect(changedFieldCount(['overridden:followups.daily_cap', 'followups.daily_cap'])).toBe(1)
+  })
+  it('counts different fields separately', () => {
+    expect(changedFieldCount(['tone', 'agent_name', 'followups.enabled'])).toBe(3)
+  })
+  it('counts a path no field owns as its own change', () => {
+    expect(changedFieldCount(['zzz_unknown', 'zzz_other'])).toBe(2)
   })
 })

@@ -3,6 +3,7 @@
 // last load or save (spec, Saving). Pure: no React here.
 
 import { sectionForPath } from './sections'
+import { AGENT_FIELDS } from './fields'
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 // Blank text and no value read the same: a field typed into and emptied again
@@ -62,4 +63,27 @@ export function dirtySections(paths) {
     if (section) out.add(section)
   }
   return out
+}
+
+/**
+ * How many registry fields these unsaved paths touch (the save bar's count):
+ * each path maps to the field whose paths include it or a dot-prefix of it
+ * ('overridden:<path>' maps the same way), and a field counts once however many
+ * of its paths changed. A path no field owns counts as its own change.
+ * @param {string[]} paths  changedPaths' result
+ * @returns {number}
+ */
+export function changedFieldCount(paths) {
+  const ids = new Set()
+  for (const raw of paths) {
+    const p = raw.startsWith('overridden:') ? raw.slice('overridden:'.length) : raw
+    let best = null
+    for (const f of AGENT_FIELDS) {
+      for (const fp of f.paths) {
+        if ((p === fp || p.startsWith(`${fp}.`)) && (!best || fp.length > best.len)) best = { id: f.id, len: fp.length }
+      }
+    }
+    ids.add(best ? best.id : `path:${p}`)
+  }
+  return ids.size
 }

@@ -51,7 +51,7 @@ describe('CustomerAgentClient — placeholders carry the brand (W1.S3)', () => {
   it('renders the hand-off and welcome defaults and the Points label from the GET brand', async () => {
     mockFetch([reply(200, { ...(await GOOD.json()), brand: { companyName: 'Gym A', shortName: 'GA' } })])
     const { container } = render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
     expect(container.querySelector('input[placeholder="Thanks for your message! One of the Gym A team will get back to you shortly."]')).toBeTruthy()
     expect(container.querySelector('textarea[placeholder^="Hi, I\'m Mia, the studio\'s assistant at Gym A."]')).toBeTruthy()
     expect(screen.getByText('Monthly GA Points target')).toBeTruthy()
@@ -61,7 +61,7 @@ describe('CustomerAgentClient — placeholders carry the brand (W1.S3)', () => {
   it('with no brand in the payload the placeholders still read naturally', async () => {
     mockFetch([GOOD])
     const { container } = render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
     expect(container.querySelector('input[placeholder="Thanks for your message! One of the team will get back to you shortly."]')).toBeTruthy()
     expect(screen.getByText('Monthly Points target')).toBeTruthy()
   })
@@ -72,7 +72,7 @@ describe('CustomerAgentClient — a failed read (SETTINGSWIPE.1)', () => {
     mockFetch([reply(500, { success: false, code: 'settings_unreadable', error: 'x' })])
     render(<CustomerAgentClient canEdit />)
     await waitFor(() => expect(screen.getByText(NOTE)).toBeTruthy())
-    expect(screen.queryByRole('button', { name: /Save settings/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Save( settings)?$/ })).toBeNull()
     expect(screen.queryByText('Loading…')).toBeNull()
   })
 
@@ -80,7 +80,7 @@ describe('CustomerAgentClient — a failed read (SETTINGSWIPE.1)', () => {
     mockFetch([new TypeError('Failed to fetch')])
     render(<CustomerAgentClient canEdit />)
     await waitFor(() => expect(screen.getByText(NOTE)).toBeTruthy())
-    expect(screen.queryByRole('button', { name: /Save settings/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Save( settings)?$/ })).toBeNull()
   })
 
   it('Try again re-reads, and a good read shows the editor with Save', async () => {
@@ -88,14 +88,14 @@ describe('CustomerAgentClient — a failed read (SETTINGSWIPE.1)', () => {
     render(<CustomerAgentClient canEdit />)
     await waitFor(() => expect(screen.getByText(NOTE)).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
     expect(screen.queryByText(NOTE)).toBeNull()
   })
 
   it('a failed KNOWLEDGE read does not hide a good settings read', async () => {
     mockFetch([GOOD], { knowledgeFails: true })
     render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
     expect(screen.queryByText(NOTE)).toBeNull()
   })
 })
@@ -155,24 +155,24 @@ describe('CustomerAgentClient — read-only for a non-owner (MIAROLE.1)', () => 
     mockFetch([GOOD])
     render(<CustomerAgentClient canEdit={false} />)
     await waitFor(() => expect(screen.getByRole('radiogroup', { name: 'Mia is' })).toBeTruthy())
-    expect(screen.queryByRole('button', { name: /Save settings/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Save( settings)?$/ })).toBeNull()
     expect(screen.getByRole('radio', { name: 'Live' }).matches(':disabled')).toBe(true)
-    expect(screen.getByText('Only an owner can change these settings.')).toBeTruthy()
+    expect(screen.getByText("Only an owner can change Mia's settings here.")).toBeTruthy()
   })
 
   it('omitting canEdit fails closed (read-only)', async () => {
     mockFetch([GOOD])
     render(<CustomerAgentClient />)
     await waitFor(() => expect(screen.getByRole('radiogroup', { name: 'Mia is' })).toBeTruthy())
-    expect(screen.queryByRole('button', { name: /Save settings/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Save( settings)?$/ })).toBeNull()
   })
 
   it('an owner gets the working editor', async () => {
     mockFetch([GOOD])
     render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
     expect(screen.getByRole('radio', { name: 'Live' }).matches(':disabled')).toBe(false)
-    expect(screen.queryByText('Only an owner can change these settings.')).toBeNull()
+    expect(screen.queryByText("Only an owner can change Mia's settings here.")).toBeNull()
   })
 })
 
@@ -218,22 +218,22 @@ describe('CustomerAgentClient — quiet hours follow the studio zone (TZ.5)', ()
   it('a Dublin studio reads exactly as before', async () => {
     mockFetch([await withQuiet('Europe/Dublin')])
     render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getByText('Europe/Dublin — agent stays quiet, a human replies.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Europe/Dublin. The agent stays quiet and a human replies.')).toBeTruthy())
   })
 
   it('a New York studio names its own zone, and Save writes no zone of its own', async () => {
     mockFetch([await withQuiet('America/New_York')])
     render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getByText('America/New_York — agent stays quiet, a human replies.')).toBeTruthy())
-    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(screen.getByText('America/New_York. The agent stays quiet and a human replies.')).toBeTruthy())
+    fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(savedQuietHours()).toEqual({ start: '21:00', end: '08:00', tz: null }))
   })
 
   it('a stored zone is shown and kept on save', async () => {
     mockFetch([await withQuiet('America/New_York', 'Europe/Dublin')])
     render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getByText('Europe/Dublin — agent stays quiet, a human replies.')).toBeTruthy())
-    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    await waitFor(() => expect(screen.getByText('Europe/Dublin. The agent stays quiet and a human replies.')).toBeTruthy())
+    fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(savedQuietHours()).toEqual({ start: '21:00', end: '08:00', tz: 'Europe/Dublin' }))
   })
 })
@@ -262,8 +262,8 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     const put = global.fetch.mock.calls.find(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
     return put && JSON.parse(put[1].body)
   }
-  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
-  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
+  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
 
   it('tags each inherited field with its source; the studio\'s own field offers the way back', async () => {
     mockFetch([answer()])
@@ -403,7 +403,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     await ready()
     const [start, end] = container.querySelectorAll('input[type="time"]')
     expect(start.value).toBe('21:00')
-    expect(screen.getByText('America/New_York — agent stays quiet, a human replies.')).toBeTruthy()
+    expect(screen.getByText('America/New_York. The agent stays quiet and a human replies.')).toBeTruthy()
     fireEvent.click(within(labelRow('Quiet hours (optional)')).getByRole('button', { name: 'Use default' }))
     expect(start.value).toBe('')
     expect(end.value).toBe('')
@@ -479,8 +479,8 @@ describe('CustomerAgentClient — quiet hours opt-out and org defaults (MIAORG.1
     const put = global.fetch.mock.calls.find(([url, init]) => String(url) === '/api/settings/customer-agent' && init?.method === 'PUT')
     return put && JSON.parse(put[1].body)
   }
-  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
-  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
+  const save = () => fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
   const optOut = () => screen.getByRole('checkbox', { name: "No quiet hours (ignore the organisation's)" })
 
   it('ticking it clears the window and saves quiet_hours.off alone', async () => {
@@ -622,7 +622,7 @@ describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
     // the studio's is the last.
     await waitFor(() => expect(within(screen.getAllByText('Tone and voice').at(-1).parentElement).getByRole('button', { name: 'Use organisation default' })).toBeTruthy())
     expect(tones().at(-1).value).toBe('My studio tone')
-    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
     const [, init] = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
     const body = JSON.parse(init.body)
@@ -633,13 +633,13 @@ describe('CustomerAgentClient — fix round (MIAORG.1 Task 4)', () => {
   it('a half-entered quiet-hours window says "Set both times" and holds Save', async () => {
     mockFetch([studioAnswer(null)])
     render(<CustomerAgentClient canEdit />)
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
     fireEvent.change(screen.getByLabelText('Quiet hours start'), { target: { value: '21:00' } })
     expect(screen.getByText('Set both times')).toBeTruthy()
-    for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(true)
+    for (const b of screen.getAllByRole('button', { name: /^Save( settings)?$/ })) expect(b.disabled).toBe(true)
     fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '07:00' } })
     expect(screen.queryByText('Set both times')).toBeNull()
-    for (const b of screen.getAllByRole('button', { name: /Save settings/ })) expect(b.disabled).toBe(false)
+    for (const b of screen.getAllByRole('button', { name: /^Save( settings)?$/ })) expect(b.disabled).toBe(false)
   })
 })
 
@@ -658,8 +658,8 @@ describe('CustomerAgentClient — booking link fields (MIAORG.1 final review)', 
   }
   const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
   const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
-  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
-  const saveButton = () => screen.getAllByRole('button', { name: /Save settings/ })[0]
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
+  const saveButton = () => screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0]
 
   it('a studio that takes no bookings shows the fields; an edit goes into the PUT body', async () => {
     mockFetch([answer({ bookings: false }), reply(200, { success: true, settings: {} }), answer({ bookings: false })])
@@ -755,7 +755,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
   }
   const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
   const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
-  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
   // MIASETTINGS.2c — the group's heading is its Messages group title.
   const GROUP = 'Payments at Hatch'
 
@@ -800,7 +800,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     render(<CustomerAgentClient canEdit />)
     await ready()
     fireEvent.change(screen.getByPlaceholderText('Thanks! You can go back to WhatsApp now.'), { target: { value: '  All done, back to WhatsApp.  ' } })
-    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(putBody()).toBeTruthy())
     expect(putBody().overridden).toContain('pay_done_page_text')
     expect(putBody().pay_done_page_text).toBe('All done, back to WhatsApp.')
@@ -896,7 +896,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     render(<CustomerAgentClient canEdit />)
     await ready()
     fireEvent.click(screen.getByLabelText(SWITCH))
-    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(putBody()).toBeTruthy())
     expect(putBody().un1t_chat_actions_enabled).toBe(true)
   })
@@ -908,7 +908,7 @@ describe('CustomerAgentClient — Hatch payments and booking copy (MIAHATCH.4)',
     const box = screen.getByLabelText(SWITCH)
     expect(box.checked).toBe(true)
     fireEvent.click(box)
-    fireEvent.click(screen.getAllByRole('button', { name: /Save settings/ })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0])
     await waitFor(() => expect(putBody()).toBeTruthy())
     expect(putBody().un1t_chat_actions_enabled).toBe(false)
   })
@@ -944,8 +944,8 @@ describe('CustomerAgentClient — trial finisher card (TRIALDONE.3)', () => {
   }
   const puts = () => global.fetch.mock.calls.filter(([url, init]) => String(url).startsWith('/api/settings/customer-agent') && init?.method === 'PUT')
   const putBody = () => { const p = puts()[0]; return p && JSON.parse(p[1].body) }
-  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
-  const saveButton = () => screen.getAllByRole('button', { name: /Save settings/ })[0]
+  const ready = () => waitFor(() => expect(screen.getAllByRole('button', { name: /^Save( settings)?$/ }).length).toBeGreaterThan(0))
+  const saveButton = () => screen.getAllByRole('button', { name: /^Save( settings)?$/ })[0]
   const TITLE = 'Trial finisher follow-up'
   const ID_A = '11111111-1111-4111-8111-111111111111'
 
@@ -1121,7 +1121,7 @@ describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', ()
     expect(screen.queryByRole('textbox', { name: 'Agent name' })).toBeNull()
     openSection('Personality and voice')
     expect(screen.getByRole('textbox', { name: 'Agent name' }).value).toBe('Maya')
-    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(global.fetch.mock.calls.some(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')).toBe(true))
     const [, init] = global.fetch.mock.calls.find(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
     expect(JSON.parse(init.body).agent_name).toBe('Maya')
@@ -1133,7 +1133,7 @@ describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', ()
     await ready()
     for (const name of MENU) {
       openSection(name)
-      expect(screen.queryAllByRole('button', { name: 'Save settings' }), name).toHaveLength(name === 'Knowledge' ? 0 : 1)
+      expect(screen.queryAllByRole('button', { name: 'Save' }), name).toHaveLength(name === 'Knowledge' ? 0 : 1)
     }
   })
 
@@ -1146,14 +1146,14 @@ describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', ()
     openSection('Personality and voice')
     expect(current()).toEqual(['Personality and voice'])
     expect(screen.getByRole('textbox', { name: 'Agent name' }).matches(':disabled')).toBe(true)
-    expect(screen.getByText('Only an owner can change these settings.')).toBeTruthy()
+    expect(screen.getByText("Only an owner can change Mia's settings here.")).toBeTruthy()
     openSection('Cancellation form')
     const controls = screen.getByTestId('section-cancellation').querySelectorAll('input, textarea, select')
     expect(controls.length).toBeGreaterThan(20)
     for (const c of controls) expect(c.matches(':disabled')).toBe(true)
     openSection('Member app')
     expect(screen.getByRole('checkbox', { name: 'Member social (friends, feed and kudos)' }).matches(':disabled')).toBe(true)
-    expect(screen.queryByRole('button', { name: 'Save settings' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
   })
 
   it('the menu foot links to Activity, Requests and the channel connections', async () => {
@@ -1221,5 +1221,142 @@ describe('CustomerAgentClient — sections, menu and shell (MIASETTINGS.2c)', ()
     await ready()
     expect(screen.getByTestId('section-personality').textContent).toContain('Mia\u2019s voices')
     expect(screen.getByTestId('mia-voices').closest('fieldset')).toBeNull()
+  })
+})
+
+// MIASETTINGS.2d — one save bar, the unsaved-change guards and the menu dots.
+describe('CustomerAgentClient — save bar and unsaved-change guards (MIASETTINGS.2d)', () => {
+  const ready = () => waitFor(() => expect(screen.getByRole('button', { name: 'Overview' })).toBeTruthy())
+  const bar = () => screen.getByRole('region', { name: 'Save settings' })
+  const puts = () => global.fetch.mock.calls.filter(([u, i]) => String(u) === '/api/settings/customer-agent' && i?.method === 'PUT')
+  const hatch = () => {
+    const studio = { enabled: true }
+    const { settings, sources } = mergeAgentSettings({ org: null, studio })
+    return reply(200, {
+      success: true, settings: { ...settings, social_enabled: false, glofox_auto_cancel: false }, studio, org: null, sources,
+      inherited: mergeAgentSettings({ org: null, studio: null }).settings,
+      membership_source_key: 'un1t_online',
+      location: { id: 'loc1', name: 'Test Studio' },
+      checkin_stats: { sent_today: 0, total: 0, last: null, last_run: null },
+    })
+  }
+
+  it('counts the fields edited, one quiet-hours edit as one, and Discard puts everything back', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(within(bar()).queryByText(/unsaved change/)).toBeNull()
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    expect(within(bar()).getByText('1 unsaved change')).toBeTruthy()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya2' } })
+    expect(within(bar()).getByText('1 unsaved change')).toBeTruthy()
+    openSection('Overview')
+    fireEvent.change(screen.getByLabelText('Quiet hours start'), { target: { value: '22:00' } })
+    fireEvent.change(screen.getByLabelText('Quiet hours end'), { target: { value: '07:00' } })
+    expect(within(bar()).getByText('2 unsaved changes')).toBeTruthy()
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Discard' }))
+    expect(within(bar()).queryByText(/unsaved change/)).toBeNull()
+    expect(screen.getByLabelText('Quiet hours start').value).toBe('')
+    openSection('Personality and voice')
+    expect(screen.getByRole('textbox', { name: 'Agent name' }).value).not.toMatch(/Maya/)
+  })
+
+  it('Review Focus 4: an invalid trial finisher holds Save, names Follow-ups, and the hold opens it', async () => {
+    mockFetch([hatch()])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    openSection('Follow-ups')
+    fireEvent.change(within(screen.getByTestId('trial-done-card')).getByLabelText('Opener template'), { target: { value: 'Has Caps' } })
+    openSection('Overview')
+    expect(within(bar()).getByRole('button', { name: 'Save' }).disabled).toBe(true)
+    fireEvent.click(within(bar()).getByRole('button', { name: /in Follow-ups$/ }))
+    expect(screen.getAllByRole('button').filter((b) => b.getAttribute('aria-current') === 'page').map((b) => b.textContent)).toEqual(['Follow-ups'])
+  })
+
+  it('saving from Messages saves an edit made in Personality too', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    openSection('Messages')
+    fireEvent.change(screen.getByRole('textbox', { name: 'No-credits escalation message' }), { target: { value: 'Call us' } })
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    const body = JSON.parse(puts()[0][1].body)
+    expect(body.agent_name).toBe('Maya')
+    expect(body.no_credits_handoff_text).toBe('Call us')
+  })
+
+  it('a non-owner gets no bar', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit={false} />)
+    await ready()
+    expect(screen.queryByRole('region', { name: 'Save settings' })).toBeNull()
+  })
+
+  it('a dot marks each section with unsaved changes, in the list and the select', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    expect(screen.queryAllByRole('img', { name: 'Unsaved changes' })).toHaveLength(0)
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    expect(screen.getAllByRole('img', { name: 'Unsaved changes' })).toHaveLength(1)
+    expect(screen.getByRole('option', { name: 'Personality and voice (unsaved)' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Messages' })).toBeTruthy()
+  })
+
+  it('beforeunload is registered only while there are unsaved changes', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const fire = () => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented }
+    expect(fire()).toBe(false)
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    expect(fire()).toBe(true)
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Discard' }))
+    expect(fire()).toBe(false)
+  })
+
+  it('the menu foot links ask before leaving only when dirty', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit />)
+    await ready()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    expect(fireEvent.click(screen.getByRole('link', { name: 'Activity' }))).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+    openSection('Personality and voice')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Agent name' }), { target: { value: 'Maya' } })
+    expect(fireEvent.click(screen.getByRole('link', { name: 'Requests' }))).toBe(false)
+    expect(confirm).toHaveBeenCalledWith('Discard your unsaved changes?')
+    confirm.mockRestore()
+  })
+
+  it('Knowledge stays editable for a viewer without owner rights', async () => {
+    mockFetch([GOOD])
+    const inner = global.fetch
+    global.fetch = vi.fn(async (url, init) => String(url).startsWith('/api/agent/knowledge') && !init?.method
+      ? reply(200, { success: true, entries: [{ id: 'k1', category: 'sales', title: 'Opening hours', content: 'x', enabled: true }] })
+      : inner(url, init))
+    render(<CustomerAgentClient canEdit={false} />)
+    await ready()
+    openSection('Knowledge')
+    expect(screen.getByRole('button', { name: '+ Add entry' }).matches(':disabled')).toBe(false)
+    expect((await screen.findByDisplayValue('Opening hours')).matches(':disabled')).toBe(false)
+  })
+
+  it('Ruling 8: in Personality and voice the read-only note sits above the settings, not the voices', async () => {
+    mockFetch([GOOD])
+    render(<CustomerAgentClient canEdit={false} canEditVoices />)
+    await ready()
+    openSection('Personality and voice')
+    const note = screen.getByText("Only an owner can change Mia's settings here.")
+    const section = screen.getByTestId('section-personality')
+    const fieldset = section.querySelector('fieldset')
+    expect(note.compareDocumentPosition(fieldset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('mia-voices').contains(note)).toBe(false)
   })
 })

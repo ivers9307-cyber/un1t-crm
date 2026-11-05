@@ -5,7 +5,7 @@ import { cleanup, screen, fireEvent } from '@testing-library/react'
 import { LEGACY_FULL_BLOB_GET, STILLORGAN_GET } from './__fixtures__/agent-settings'
 import { renderEditor, lastPutBody, saveNow, editByLabel } from './__fixtures__/harness'
 
-afterEach(() => { cleanup(); delete global.fetch })
+afterEach(() => { cleanup(); delete global.fetch; window.history.replaceState(null, '', '/') })
 
 describe('Off / Test / Live in the editor', () => {
   it('a legacy live-and-test row saves its flags untouched when another field is edited', async () => {
