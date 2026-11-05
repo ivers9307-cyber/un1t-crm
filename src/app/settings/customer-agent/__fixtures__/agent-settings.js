@@ -77,7 +77,9 @@ export const SECTION_LABELS = {
 // One field per future section. `value` is what is typed; `expectKey` is the
 // PUT body path that must be the only one to change (the editor's own
 // `overridden` list may also gain that path). The cancellation intro is
-// `form_intro` in the stored block.
+// Hatch in Test (the test numbers only show there); used by the test_phones edit.
+export const HATCH_TEST_GET = { ...HATCH_GET, settings: { ...HATCH_GET.settings, enabled: false, test_mode: true } }
+
 export const EDIT_ONE_PER_SECTION = [
   { section: 'personality', label: 'Agent name', value: 'Maya', expectKey: 'agent_name' },
   { section: 'handoffs', label: 'Hand back to the agent after (hours)', value: '7', expectKey: 'handoff_cooldown_hours' },
@@ -88,5 +90,5 @@ export const EDIT_ONE_PER_SECTION = [
   { section: 'followups', label: 'Daily cap (per studio)', value: '33', expectKey: 'followups.daily_cap' },
   { section: 'cancellation', label: 'Intro', value: 'Sorry to see you go.', expectKey: 'cancellation_form.form_intro' },
   { section: 'member-app', label: 'Monthly GA Points target', value: '750', expectKey: 'monthly_points_target' },
-  { section: 'overview', label: 'Test numbers (comma-separated, e.g. +353871234567)', value: '+353871111111, +353872222222', expectKey: 'test_phones' },
+  { section: 'overview', label: 'Test numbers (comma-separated, e.g. +353871234567)', value: '+353871111111, +353872222222', expectKey: 'test_phones', get: HATCH_TEST_GET },
 ]

@@ -437,12 +437,13 @@ describe('round trip: the frozen PUT bodies', () => {
 describe('round trip: one edit changes one key', () => {
   for (const e of EDIT_ONE_PER_SECTION) {
     it(`${e.section}: editing "${e.label}" changes only ${e.expectKey}`, async () => {
-      await renderEditor(HATCH_GET)
+      const get = e.get ?? HATCH_GET
+      await renderEditor(get)
       await saveNow()
       const base = lastPutBody()
       cleanup()
 
-      await renderEditor(HATCH_GET)
+      await renderEditor(get)
       await editByLabel(e.label, e.value, { section: e.section })
       await saveNow()
       const edited = lastPutBody()

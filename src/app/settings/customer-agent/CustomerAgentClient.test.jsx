@@ -147,16 +147,16 @@ describe('CustomerAgentClient — read-only for a non-owner (MIAROLE.1)', () => 
   it('a non-owner sees the settings with no Save, every control disabled, and says why', async () => {
     mockFetch([GOOD])
     render(<CustomerAgentClient canEdit={false} />)
-    await waitFor(() => expect(screen.getByText(/Live — reply to all customers/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('radiogroup', { name: 'Mia is' })).toBeTruthy())
     expect(screen.queryByRole('button', { name: /Save settings/ })).toBeNull()
-    expect(screen.getByRole('checkbox', { name: /Live — reply to all customers/ }).matches(':disabled')).toBe(true)
+    expect(screen.getByRole('radio', { name: 'Live' }).matches(':disabled')).toBe(true)
     expect(screen.getByText('Only an owner can change these settings.')).toBeTruthy()
   })
 
   it('omitting canEdit fails closed (read-only)', async () => {
     mockFetch([GOOD])
     render(<CustomerAgentClient />)
-    await waitFor(() => expect(screen.getByText(/Live — reply to all customers/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('radiogroup', { name: 'Mia is' })).toBeTruthy())
     expect(screen.queryByRole('button', { name: /Save settings/ })).toBeNull()
   })
 
@@ -164,7 +164,7 @@ describe('CustomerAgentClient — read-only for a non-owner (MIAROLE.1)', () => 
     mockFetch([GOOD])
     render(<CustomerAgentClient canEdit />)
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Save settings/ }).length).toBeGreaterThan(0))
-    expect(screen.getByRole('checkbox', { name: /Live — reply to all customers/ }).matches(':disabled')).toBe(false)
+    expect(screen.getByRole('radio', { name: 'Live' }).matches(':disabled')).toBe(false)
     expect(screen.queryByText('Only an owner can change these settings.')).toBeNull()
   })
 })
@@ -276,7 +276,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
     expect(within(signup).queryByText('Organisation default')).toBeNull()
     expect(within(signup).queryByRole('button', { name: /Use/ })).toBeNull()
     // the on/off switch sits straight in the section, with no tag beside it
-    const live = screen.getByRole('checkbox', { name: /Live — reply to all customers/ }).closest('label')
+    const live = screen.getByRole('radiogroup', { name: 'Mia is' }).parentElement
     expect(live.parentElement.tagName).toBe('SECTION')
     expect(live.nextElementSibling?.textContent).not.toMatch(/^(Default|Organisation default|Use (organisation )?default)$/)
   })
@@ -438,7 +438,7 @@ describe('CustomerAgentClient — overrides and source tags (MIAORG.1 Task 3)', 
   it('a read-only viewer sees the tags but no way back', async () => {
     mockFetch([answer()])
     render(<CustomerAgentClient canEdit={false} />)
-    await waitFor(() => expect(screen.getByText(/Live — reply to all customers/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('radiogroup', { name: 'Mia is' })).toBeTruthy())
     expect(within(labelRow('Extra rules (optional)')).getByText('Organisation default')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Use organisation default' })).toBeNull()
   })

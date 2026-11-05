@@ -19,6 +19,8 @@ import OrgDefaultsClient from './OrgDefaultsClient'
 // MIASETTINGS.2a — the studio settings state (load, edits, overrides, save,
 // unsaved changes, holds) lives in one hook.
 import { useAgentSettings } from './useAgentSettings'
+import StatusSwitch from './components/StatusSwitch'
+import { flagsFor } from './status'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
 // Instagram agent. Manager+ only. Two parts: behaviour settings + the
@@ -273,33 +275,11 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
           built-in default, until you change it here. Changing it sets it for this studio only.
           Use organisation default puts it back.
         </p>
-        <label className="flex items-center gap-3">
-          <input type="checkbox" className="h-4 w-4" checked={!!settings.enabled}
-            onChange={e => setField('enabled', e.target.checked)} />
-          <span className="text-sm text-un1t-text font-medium">Live — reply to all customers</span>
-        </label>
-
-        <div className="pl-7 space-y-3 border-l border-un1t-border ml-1">
-          <label className="flex items-center gap-3">
-            <input type="checkbox" className="h-4 w-4" checked={!!settings.test_mode}
-              onChange={e => setField('test_mode', e.target.checked)} />
-            <span className="text-sm text-un1t-text">Test mode — reply only to the numbers below (while not live)</span>
-          </label>
-          {/* Live-despite-test-mode tripwire: both flags on means the
-              allowlist is NOT in effect. Documented behaviour, but operators
-              read "test mode" as scoping and get surprised. */}
-          {!!settings.enabled && !!settings.test_mode && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-              Live is on, so test mode is not scoping anything — Mia is replying to every customer, not just the numbers below. Turn Live off to use the test list.
-            </div>
-          )}
-          <div>
-            <label className="block text-xs text-un1t-muted mb-1">Test numbers (comma-separated, e.g. +353871234567)</label>
-            <input className={inputCls} value={(settings.test_phones || []).join(', ')}
-              onChange={e => setField('test_phones', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-              placeholder="+353871234567, +353879999999" />
-          </div>
-        </div>
+        {/* MIASETTINGS.2b — one Off / Test / Live switch over enabled + test_mode.
+            Choosing never touches test_phones. */}
+        <StatusSwitch settings={settings}
+          onChoose={(choice) => { const f = flagsFor(choice); setField('enabled', f.enabled); setField('test_mode', f.test_mode) }}
+          onTestPhones={(list) => setField('test_phones', list)} />
 
         {/* MIASETTINGS.1c — every plain field below is drawn from the registry
             (fields.js) by AgentField, in today's order. A field whose `when`
