@@ -33,6 +33,8 @@
 //   hero    { videoUrl, posterUrl, soundLabel, eyebrow, heading, subhead }
 //   offer   the funnel, rendered inside the hero
 //   expect  { eyebrow, heading, cards }  ExpectStrip
+//   (MOBILEFUNNEL.1: its `cta` also feeds StickyOfferBar, the phone's
+//   bottom button back to the card, so cta.href must be the card's anchor)
 // BlocksLayout also takes (a studio page's; each default leaves a campaign
 // page's markup as it was):
 //   cta.labelShort  the header's short CTA label ('' = cta.label)
@@ -54,6 +56,7 @@ import CampaignHero from '@/components/landing-page/CampaignHero'
 import ExpectStrip from '@/components/landing-page/ExpectStrip'
 import FrostedHero, { learnMoreIdFor } from '@/components/landing-page/FrostedHero'
 import JsonLd from '@/components/landing-page/JsonLd'
+import StickyOfferBar from '@/components/landing-page/StickyOfferBar'
 
 const shellClass = (tone) => (tone === 'light'
   ? 'min-h-screen bg-white text-black antialiased'
@@ -154,6 +157,9 @@ export function OneClassLayout({ tone = 'light', logo, cta, footer, blocks = [],
       <Blocks blocks={blocks} blockProps={blockProps} cta={cta} tone={tone} />
 
       <Footer footer={footer} cta={cta} />
+
+      {/* MOBILEFUNNEL.1 — below lg, the way back to the card once it is off screen. */}
+      <StickyOfferBar href={cta?.href || null} label={cta?.label || ''} />
     </div>
   )
 }
