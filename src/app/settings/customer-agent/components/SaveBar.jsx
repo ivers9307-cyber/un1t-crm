@@ -3,9 +3,9 @@
 // MIASETTINGS.2d — the one save bar for Mia's studio settings. It shows how
 // many unsaved changes there are, Discard and Save, any holds (each a button
 // that opens the section to fix), the save error, and "Saved" for four
-// seconds after a save. With nothing to say it is out of sight but still in
-// the page (a keyboard user tabbing to it sees it), so Save with no edits
-// keeps working.
+// seconds after a save.
+// With nothing to say it is a quiet strip ("No unsaved changes") and Save
+// stays enabled, so saving with no edits keeps working.
 //   count     unsaved changes (dirty.js changedFieldCount)
 //   holds     [{ section, message }]
 //   savedAt   ms epoch of the last good save, or null
@@ -34,9 +34,7 @@ export default function SaveBar({
   const idle = count === 0 && !showSaved
   return (
     <div role="region" aria-label="Save settings"
-      className={idle
-        ? 'sr-only focus-within:not-sr-only focus-within:mt-6'
-        : 'sticky bottom-0 mt-6 border border-un1t-border bg-un1t-surface rounded-lg px-4 py-3 shadow-sm'}>
+      className="sticky bottom-0 mt-6 border border-un1t-border bg-un1t-surface rounded-lg px-4 py-3 shadow-sm">
       {error && <div className="text-sm text-red-600 mb-2" role="alert">{error}</div>}
       {holds.length > 0 && (
         <ul className="mb-2 space-y-1">
@@ -54,6 +52,7 @@ export default function SaveBar({
         {count > 0 && (
           <span className="text-sm text-un1t-text">{count === 1 ? '1 unsaved change' : `${count} unsaved changes`}</span>
         )}
+        {idle && <span className="text-sm text-un1t-muted">No unsaved changes</span>}
         {count === 0 && showSaved && <span className="text-sm text-green-700">Saved</span>}
         <span className="flex-1" />
         {count > 0 && (

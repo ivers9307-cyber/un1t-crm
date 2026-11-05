@@ -15,10 +15,11 @@ describe('SaveBar', () => {
     expect(screen.getByText('3 unsaved changes')).toBeTruthy()
   })
 
-  it('is out of sight when nothing is unsaved', () => {
+  it('is a quiet strip when nothing is unsaved, with Save still enabled', () => {
     const { container } = render(<SaveBar {...base} />)
-    expect(container.firstChild.className).toContain('sr-only')
-    expect(screen.queryByText(/unsaved change/)).toBeNull()
+    expect(container.firstChild.className).not.toContain('sr-only')
+    expect(screen.getByText('No unsaved changes')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Save' }).disabled).toBe(false)
     expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull()
   })
 
@@ -48,9 +49,9 @@ describe('SaveBar', () => {
 
   it('shows Saved for four seconds after a save', async () => {
     vi.useFakeTimers()
-    const { container } = render(<SaveBar {...base} savedAt={Date.now()} />)
+    render(<SaveBar {...base} savedAt={Date.now()} />)
     expect(screen.getByText('Saved')).toBeTruthy()
-    expect(container.firstChild.className).not.toContain('sr-only')
+    expect(screen.queryByText('No unsaved changes')).toBeNull()
     await act(async () => { await vi.advanceTimersByTimeAsync(3900) })
     expect(screen.getByText('Saved')).toBeTruthy()
     await act(async () => { await vi.advanceTimersByTimeAsync(200) })
