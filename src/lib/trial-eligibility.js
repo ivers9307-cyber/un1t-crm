@@ -69,6 +69,10 @@ export async function stillorganTrialHistory(db, { locationId, contact }) {
     build: (q) => q.eq('contact_id', contactId).eq('status', 'created'),
   })
   if (!push.ok) return push
+  // NEWSTART.1: if mig 277's glofox_push_events_source_check is ever widened
+  // to admit source 'corp_promo', every new-account New Start claimant would
+  // gain this reason and be barred from the €39 Reset, so that change must
+  // exempt corp_promo here.
   if (push.found) reasons.push('glofox_push_created')
 
   const paid = await exists(db, 'trial_purchases', {

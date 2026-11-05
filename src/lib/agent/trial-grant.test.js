@@ -92,6 +92,7 @@ function makeDb(tables = {}, faults = {}) {
         is(col, v) { filters.push((r) => (v === null ? r[col] == null : r[col] === v)); return q },
         in(col, vs) { filters.push((r) => vs.includes(r[col])); return q },
         contains(col, v) { filters.push((r) => deepContains(r[col], v)); return q },
+        order() { return q },
         limit(n) { cap = n; return q },
         async single() {
           const out = run()
@@ -665,6 +666,13 @@ describe('grantTrialBeforeBooking: a New Start claim (NEWSTART.1g)', () => {
     const out = await grantTrialBeforeBooking(db, base)
     expect(out.failure).toMatchObject({ message_code: TRIAL_ALREADY_GRANTED, prior_corp_claim_id: 'cpc-1' })
     expect(purchaseGlofoxMembership).not.toHaveBeenCalled()
+  })
+
+  it('a refused purchase (purchasing stage, ok:false) bought nothing and does not block', async () => {
+    db = makeDb({ corp_promo_claims: [claim({ status: 'failed', grant: { stage: 'purchasing', ok: false } })] })
+    const out = await grantTrialBeforeBooking(db, base)
+    expect(out.proceed).toBe(true)
+    expect(purchaseGlofoxMembership).toHaveBeenCalledTimes(1)
   })
 
   it('a failed claim, or one for another member or studio, does not block', async () => {

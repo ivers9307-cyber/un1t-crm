@@ -21,8 +21,11 @@ const WHY = Object.freeze({
   un1t_promo_unverified: 'un1t.online did not answer clearly and no credits show on the account. Check the account before adding any.',
 })
 
-/** The card's sentence for a claim's reason code. */
-export function claimWhy(reason) {
+// A stalled claim may have bought only if it got as far as recording a grant.
+const grantStarted = (grant) => !!grant && typeof grant === 'object' && !!(grant.stage || grant.outcome)
+
+/** The card's sentence for a claim's reason code (grant: the row's grant jsonb). */
+export function claimWhy(reason, grant = null) {
   const r = String(reason || '')
   if (WHY[r]) return WHY[r]
   if (r.startsWith('un1t_account_refused')) return `un1t.online could not give them an account (${r.split(':').slice(1).join(':').trim() || 'no reason given'}). Nothing was granted.`
@@ -33,7 +36,8 @@ export function claimWhy(reason) {
   if (code === 'live_plan') return 'They already hold a live plan or credits at Stillorgan in Glofox. Nothing was bought. Check their account and add New Start by hand only if that is right.'
   if (code === 'glofox_read_failed') return 'We could not read their Glofox account. Nothing was bought.'
   if (code === 'grant_refused') return `Glofox refused the New Start plan (${detail}). Nothing was bought.`
-  if (code === 'grant_unrecorded') return 'We could not record the purchase, so nothing was bought.'
+  if (code === 'grant_unrecorded') return 'We could not record the Glofox purchase, so nothing was bought.'
+  if (code === 'stalled' && !grantStarted(grant)) return 'The claim stopped before anything was bought. Nothing was bought.'
   if (code === 'grant_unverified' || code === 'stalled') return 'The New Start purchase in Glofox may have gone through. Check the member\'s €0 New Start invoice in Glofox before adding the plan by hand.'
   if (code === 'account_needs_review') return `We could not choose their Glofox account safely (${detail}). Nothing was bought.`
   if (code === 'account_create_failed') return `We could not find or create their Glofox account (${detail}). Nothing was bought.`
@@ -58,8 +62,8 @@ export function toItem(r) {
     un1tUserId: r.un1t_user_id || null,
     glofoxMemberId: r.glofox_member_id || null,
     platform: resolveCorpPromo(r.promo_key)?.platform || null,
-    checkInvoice: /^(grant_unverified|stalled)/.test(String(r.reason || '')),
-    why: claimWhy(r.reason),
+    checkInvoice: /^grant_unverified/.test(String(r.reason || '')) || (/^stalled/.test(String(r.reason || '')) && grantStarted(r.grant)),
+    why: claimWhy(r.reason, r.grant),
   }
 }
 

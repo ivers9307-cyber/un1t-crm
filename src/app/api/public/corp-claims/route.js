@@ -262,6 +262,11 @@ export async function POST(request) {
     if (!gelig.eligible) {
       if (gelig.reason === 'active_member') return refused('active_member', say(copy.active_member_text))
       if (gelig.reason === 'already_claimed') return refused('already_claimed', say(copy.already_claimed_text))
+      if (gelig.reason !== 'help_pending' && gelig.reason !== 'in_progress') {
+        logWarn('corp-promo', 'glofox eligibility answered an unmapped reason', { locationId, contactId, reason: String(gelig.reason) })
+      }
+      // help_pending (a card is open or was handled) and in_progress: never
+      // say the classes are on the account.
       return refused('help_filed', say(copy.help_text))
     }
   }

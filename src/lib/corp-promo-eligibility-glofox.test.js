@@ -59,15 +59,15 @@ describe('glofoxCorpPromoEligibility', () => {
     expect(await run({ corp_promo_claims: [claim('granted', TWIN)] })).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })
   })
 
-  it('help_requested is already_claimed; ineligible and failed are not', async () => {
-    expect((await run({ corp_promo_claims: [claim('help_requested')] })).reason).toBe('already_claimed')
+  it('help_requested is help_pending; ineligible and failed are not', async () => {
+    expect((await run({ corp_promo_claims: [claim('help_requested')] })).reason).toBe('help_pending')
     for (const s of ['ineligible', 'failed']) {
       expect(await run({ corp_promo_claims: [claim(s)] })).toEqual({ ok: true, eligible: true })
     }
   })
 
-  it('a handled claim on a sibling contact is already_claimed', async () => {
-    expect(await run({ corp_promo_claims: [claim('handled', TWIN)] })).toEqual({ ok: true, eligible: false, reason: 'already_claimed' })
+  it('a handled claim on a sibling contact is help_pending', async () => {
+    expect(await run({ corp_promo_claims: [claim('handled', TWIN)] })).toEqual({ ok: true, eligible: false, reason: 'help_pending' })
   })
 
   it('a processing claim is in_progress', async () => {
@@ -77,6 +77,7 @@ describe('glofoxCorpPromoEligibility', () => {
   it('already_claimed wins over in_progress; active_member wins over both', async () => {
     const claims = [claim('processing'), claim('granted', TWIN)]
     expect((await run({ corp_promo_claims: claims })).reason).toBe('already_claimed')
+    expect((await run({ corp_promo_claims: [claim('help_requested'), claim('granted', TWIN)] })).reason).toBe('already_claimed')
     const out = await run({ corp_promo_claims: claims, contact_studios: [{ contact_id: ME, location_id: LOC, membership_status: 'active' }] })
     expect(out.reason).toBe('active_member')
   })

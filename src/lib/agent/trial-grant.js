@@ -156,9 +156,12 @@ async function trialOnCorpClaim(db, { locationId, memberId }) {
     .eq('location_id', locationId)
     .eq('glofox_member_id', memberId)
     .in('promo_key', keys)
+    .order('created_at', { ascending: false })
     .limit(50)
   if (error) return { ok: false }
-  const prior = (data || []).find((r) => r?.status === 'granted' || r?.grant?.stage === 'purchasing')
+  // A refused purchase ({ stage: 'purchasing', ok: false }) bought nothing
+  // (the same rule as trial-purchase-processor).
+  const prior = (data || []).find((r) => r?.status === 'granted' || (r?.grant?.stage === 'purchasing' && r.grant.ok !== false))
   return { ok: true, claimId: prior?.id ?? null }
 }
 

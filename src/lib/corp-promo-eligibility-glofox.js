@@ -6,9 +6,10 @@
 //     a contact homed at the studio with glofox_membership_status 'member'.
 //     (trial / credit_member / classpass_payg are NOT refused here: fulfilment
 //     checks the live Glofox plan.)
-//   already_claimed — this promo granted, in doubt (help_requested) or resolved by staff
-//     (handled), for any
-//     of them at this studio;
+//   already_claimed — this promo was GRANTED for any of them at this studio;
+//   help_pending    — a claim of theirs is in doubt (help_requested) or was
+//     resolved by staff (handled): we cannot say the classes are on the
+//     account, so the answer must never claim they are;
 //   in_progress     — a claim for it is still processing.
 // Prior trials and training never refuse. "This person" is personContactIds()
 // (same email or same WhatsApp-normalised mobile, across the organisation).
@@ -25,7 +26,7 @@ const CHUNK = 200
  * @param {object} db service-role client
  * @param {{ locationId: string, organizationId: string|null, contactId: string|null,
  *   email: string|null, phone: string|null, promoKey: string }} args
- * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'active_member'|'already_claimed'|'in_progress' } | { ok: false }>}
+ * @returns {Promise<{ ok: true, eligible: true } | { ok: true, eligible: false, reason: 'active_member'|'already_claimed'|'help_pending'|'in_progress' } | { ok: false }>}
  */
 export async function glofoxCorpPromoEligibility(db, { locationId, organizationId = null, contactId = null, email = null, phone = null, promoKey } = {}) {
   if (!locationId) throw new TypeError('glofoxCorpPromoEligibility: locationId is required')
@@ -59,7 +60,8 @@ export async function glofoxCorpPromoEligibility(db, { locationId, organizationI
     ])
 
     if (studios.length > 0 || homed.length > 0) return { ok: true, eligible: false, reason: 'active_member' }
-    if (claims.some((c) => ['granted', 'help_requested', 'handled'].includes(c.status))) return { ok: true, eligible: false, reason: 'already_claimed' }
+    if (claims.some((c) => c.status === 'granted')) return { ok: true, eligible: false, reason: 'already_claimed' }
+    if (claims.some((c) => ['help_requested', 'handled'].includes(c.status))) return { ok: true, eligible: false, reason: 'help_pending' }
     if (claims.some((c) => c.status === 'processing')) return { ok: true, eligible: false, reason: 'in_progress' }
     return { ok: true, eligible: true }
   } catch (e) {

@@ -55,10 +55,6 @@ export default function CorpPromoClaimCard({ item, onDecided }) {
 
       <p className="text-sm text-un1t-text">{item.why}</p>
 
-      {item.checkInvoice && (
-        <p className="text-sm text-amber-700">Check the member's €0 New Start invoice in Glofox before adding the plan by hand.</p>
-      )}
-
       <div className="text-xs text-un1t-subtle flex flex-wrap gap-x-4 gap-y-1">
         {item.email && <span>{item.email}</span>}
         {item.phone && <span>{item.phone}</span>}
