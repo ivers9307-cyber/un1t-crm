@@ -30,8 +30,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
-import { findOrCreateRaceContactWithOutcome } from '@/lib/race-contact-linking'
-import { applyOfferFormConsent } from '@/lib/offer-form-consent'
+import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { sanitiseVisitOrigin } from '@/lib/visit-origin'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
@@ -70,8 +69,7 @@ const Schema = z.object({
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
   phone: z.string().trim().min(1).max(50).refine(isValidMobileNumber, 'Enter a valid mobile number'),
-  // MOBILEFUNNEL.1 — optional, unticked by default (src/lib/offer-form-consent.js).
-  consent: z.boolean().optional(),
+  consent: z.boolean().refine((v) => v === true, { message: 'Please tick consent to continue' }),
   attribution: z.object({
     utm_campaign: z.string().max(200).optional(),
     utm_content: z.string().max(200).optional(),
@@ -214,7 +212,7 @@ export async function POST(request) {
   // ── Capture the lead (the class funnel's steps, same helpers) ──
   const name = `${b.first_name} ${b.last_name}`.trim()
   const email = b.email.toLowerCase()
-  const { contactId, created: contactCreated } = await findOrCreateRaceContactWithOutcome({
+  const contactId = await findOrCreateRaceContact({
     db, locationId, email, name, phone: b.phone, restrictToOrg: true,
     insertFields: { source: 'paid_trial', first_name: b.first_name, last_name: b.last_name },
   })
@@ -250,10 +248,9 @@ export async function POST(request) {
     }
   } catch (e) { logWarn('trialbuy', 'visit origin failed', { err: e }) }
   try { await writeContactTag(db, { contactId, locationId, tag: product.tag }) } catch (e) { logWarn('trialbuy', 'tag failed', { err: e }) }
-  // MOBILEFUNNEL.1 — ticked: opt in; unticked: opt a contact made just now out
-  // (a new contact's marketing defaults to on), leave an existing one alone.
   try {
-    await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: b.consent, source: 'paid_trial', ipAddress: ip, locationId })
+    const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
+    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'paid_trial', ipAddress: ip, locationId })
   } catch (e) { logWarn('trialbuy', 'consent failed', { err: e }) }
   try { await placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Trial buyer' }) } catch (e) { logWarn('trialbuy', 'deal placement failed', { err: e }) }
 

@@ -162,8 +162,7 @@ export async function findOrCreateRaceContact(args) {
  * arguments, same lookups and the same writes as findOrCreateRaceContact,
  * which is this function's `contactId`.
  *
- * The public offer forms (/api/public/corp-claims, class-booking,
- * trial-purchases) use it to record an unticked consent box as an opt-out
+ * The public offer forms (/api/public/corp-claims, class-booking) use it to record an unticked consent box as an opt-out
  * for a contact they just created (a new contact's marketing rows default
  * to TRUE, migs 005/487/489), while leaving an existing contact's earlier
  * choice alone.

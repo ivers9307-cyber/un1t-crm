@@ -368,7 +368,8 @@ export async function POST(request) {
   // MOBILEFUNNEL.1 — ticked: opt in; unticked: opt a contact made just now out
   // (a new contact's marketing defaults to on), leave an existing one alone.
   try {
-    await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: b.consent, source: 'start_class', ipAddress: ip, locationId })
+    const consentOut = await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: b.consent, source: 'start_class', ipAddress: ip, locationId })
+    if (consentOut.result && consentOut.result.ok === false) logError('classbook', 'consent write failed', { contactId, locationId, applied: consentOut.applied })
   } catch (e) { logWarn('classbook', 'consent failed', { err: e }) }
   // Open (or re-open) this lead's place on the studio's primary board.
   // Best-effort — losing the deal must never cost the booking. Same helper as

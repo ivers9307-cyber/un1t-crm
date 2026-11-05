@@ -42,6 +42,7 @@ describe('StickyOfferBar', () => {
     mountWithCard()
     expect(observers).toHaveLength(1)
     expect(observers[0].targets[0].id).toBe('corp')
+    expect(document.querySelector('[data-sticky-offer-spacer]')).not.toBeNull()
     expect(bar()).toBeNull() // nothing until the observer has spoken
     await cardVisible(false)
     const link = screen.getByRole('link', { name: 'Claim my 3 free classes' })
@@ -72,12 +73,14 @@ describe('StickyOfferBar', () => {
   it('never shows with no card at the anchor, no anchor, no label or no IntersectionObserver', async () => {
     render(<StickyOfferBar href="#missing" label="Claim" />)
     expect(observers).toHaveLength(0)
+    expect(document.querySelector('[data-sticky-offer-spacer]')).toBeNull() // no card, no black strip
     cleanup()
     expect(renderToStaticMarkup(<StickyOfferBar href={null} label="Claim" />)).toBe('')
     expect(renderToStaticMarkup(<StickyOfferBar href="#corp" label="" />)).toBe('')
     vi.stubGlobal('IntersectionObserver', undefined)
     mountWithCard()
     expect(bar()).toBeNull()
+    expect(document.querySelector('[data-sticky-offer-spacer]')).toBeNull()
   })
 
   it('anchorIdOf takes only an in-page anchor', () => {

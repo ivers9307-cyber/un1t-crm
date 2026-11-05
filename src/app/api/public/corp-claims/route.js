@@ -243,7 +243,7 @@ export async function POST(request) {
   // (a new contact's marketing defaults to on), leave an existing one alone.
   await bestEffort('consent', async () => {
     const r = await applyOfferFormConsent(db, { contactId, created: contactCreated, consent: b.consent, source: 'corp_promo', ipAddress: ip, locationId })
-    return r.result
+    if (r.result && r.result.ok === false) logError('corp-promo', 'consent write failed', { contactId, locationId, applied: r.applied })
   })
   // A Glofox promo is placed on its board by the fulfilment, after the grant.
   if (!isGlofox) await bestEffort('deal placement', () => placeWaitlistEntry(db, { contactId, locationId, title: b.first_name || 'Corporate promo' }))

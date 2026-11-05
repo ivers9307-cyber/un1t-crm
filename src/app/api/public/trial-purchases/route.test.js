@@ -22,8 +22,7 @@ const mocks = vi.hoisted(() => ({
   state: null,
 }))
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: mocks.rateLimit, getClientIp: () => '1.2.3.4', rateLimitResponse: () => new Response('rate', { status: 429 }) }))
-// MOBILEFUNNEL.1 — the route reads the outcome form; `mocks.created` says whether this POST made the contact.
-vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: mocks.contact, findOrCreateRaceContactWithOutcome: async (a) => ({ contactId: await mocks.contact(a), created: mocks.created === true }) }))
+vi.mock('@/lib/race-contact-linking', () => ({ findOrCreateRaceContact: mocks.contact }))
 vi.mock('@/lib/trial-purchase-payments', () => ({ createTrialPurchasePayment: mocks.payment }))
 vi.mock('@/lib/meta-capi', () => ({ sendWebsiteConversion: mocks.capi, fbcFromFbclid: (v) => (v ? `fb.1.${v}` : null) }))
 vi.mock('@/lib/marketing-consent', () => ({ applyFormMarketingConsent: mocks.consent }))
@@ -157,7 +156,6 @@ async function readFixture(table, filters) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.created = false
   mocks.state = freshState()
   mocks.rateLimit.mockResolvedValue({ allowed: true })
   mocks.read.mockImplementation(readFixture)
@@ -209,34 +207,6 @@ describe('POST /api/public/trial-purchases — the chosen class', () => {
     expect(await r.json()).toEqual({ success: false, code: 'timetable_unavailable', error: 'Timetable down; buy anyway.' })
     expect(mocks.contact).not.toHaveBeenCalled()
     expect(mocks.inserted).not.toHaveBeenCalled()
-  })
-})
-
-// MOBILEFUNNEL.1 — consent is optional and starts unticked (src/lib/offer-form-consent.js).
-describe('POST /api/public/trial-purchases — marketing consent', () => {
-  it('ticked: opts in', async () => {
-    const r = await POST(req({ ...BODY, consent: true }))
-    expect(r.status).toBe(200)
-    expect(mocks.consent).toHaveBeenCalledTimes(1)
-    expect(mocks.consent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c1', consent: true, source: 'paid_trial', locationId: 'loc1' }))
-  })
-  it('unticked and the contact was created by this purchase: opts out (a new contact defaults to on)', async () => {
-    mocks.created = true
-    const r = await POST(req({ ...BODY, consent: false }))
-    expect(r.status).toBe(200)
-    expect((await r.json()).data.purchaseId).toBe('tp1')
-    expect(mocks.consent).toHaveBeenCalledTimes(1)
-    expect(mocks.consent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'c1', consent: false, source: 'paid_trial', locationId: 'loc1' }))
-  })
-  it('unticked (or absent) and the contact already existed: the purchase opens and no consent is written', async () => {
-    const { consent: _drop, ...noConsent } = BODY
-    for (const body of [{ ...BODY, consent: false }, noConsent]) {
-      mocks.consent.mockClear()
-      const r = await POST(req(body))
-      expect(r.status).toBe(200)
-      expect((await r.json()).success).toBe(true)
-      expect(mocks.consent).not.toHaveBeenCalled()
-    }
   })
 })
 

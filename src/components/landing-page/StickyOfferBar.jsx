@@ -16,8 +16,8 @@
 // scrolls the card to just under the header (smoothly unless the visitor
 // asks for reduced motion); without JS the link is a plain anchor. The bar
 // clears the iPhone home indicator (env(safe-area-inset-bottom)), and a
-// spacer of the same height after the footer keeps the footer's last line
-// from sitting under it.
+// spacer of the same height after the footer (only once the card is found)
+// keeps the footer's last line from sitting under it.
 //
 // The editor's preview never renders it: EditOfferLayout draws its own
 // layout, and only the public OneClassLayout mounts this bar.
@@ -33,6 +33,9 @@ export const anchorIdOf = (href) => (typeof href === 'string' && href.startsWith
 export default function StickyOfferBar({ href, label }) {
   const id = anchorIdOf(href)
   const [show, setShow] = useState(false)
+  // The spacer only once the card is found and watched: a page with no card
+  // (a promo with no live offer) gets no black strip under its footer.
+  const [watching, setWatching] = useState(false)
 
   useEffect(() => {
     if (!id || typeof IntersectionObserver === 'undefined') return undefined
@@ -42,7 +45,8 @@ export default function StickyOfferBar({ href, label }) {
       for (const entry of entries) setShow(!entry.isIntersecting)
     }, { threshold: 0 })
     observer.observe(card)
-    return () => observer.disconnect()
+    setWatching(true)
+    return () => { observer.disconnect(); setWatching(false) }
   }, [id])
 
   if (!id || !label) return null
@@ -59,7 +63,7 @@ export default function StickyOfferBar({ href, label }) {
 
   return (
     <>
-      <div aria-hidden="true" className="lg:hidden bg-black" style={SPACER_STYLE} />
+      {watching && <div aria-hidden="true" data-sticky-offer-spacer="" className="lg:hidden bg-black" style={SPACER_STYLE} />}
       {show && (
         <div data-sticky-offer="" className="fixed inset-x-0 bottom-0 z-30 lg:hidden bg-white/95 backdrop-blur border-t border-black/10 px-4 pt-3" style={BAR_PAD_STYLE}>
           <a href={href} onClick={goToCard} className="block w-full rounded-full bg-black text-white text-center py-3.5 px-6 font-bold text-base">
