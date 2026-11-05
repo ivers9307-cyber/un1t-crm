@@ -1096,7 +1096,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
              on the artwork. */}
       {!embedded && hasHeroImage && (
       <section className="relative">
-        <div className="relative min-h-[58svh] overflow-hidden">
+        <div className="relative min-h-[36svh] md:min-h-[58svh] overflow-hidden">
           <div
             className="absolute inset-[-4%] lp-kenburns"
             style={{
