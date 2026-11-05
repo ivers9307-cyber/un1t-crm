@@ -37,7 +37,7 @@ export const PUBLIC_PAGES_CACHE_TTL_MS = 60_000
 // The slugs UN1T Group serves as pages: the campaign slugs that were code
 // routes before they were database rows, and its two studio pages.
 export const PUBLIC_PAGE_SLUGS_FALLBACK = Object.freeze({
-  [UN1T_GROUP_ORG_ID]: Object.freeze(['trial', '50plus', 'corp', 'start', 'free-class', 'stillorgan', 'hatch-street']),
+  [UN1T_GROUP_ORG_ID]: Object.freeze(['trial', '50plus', 'corp', 'start', 'free-class', 'stillorgan', 'hatch-street', 'newstart']),
 })
 
 // A page is public once it is live, announced as coming soon, or retired (a

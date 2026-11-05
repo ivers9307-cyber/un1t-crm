@@ -12,12 +12,17 @@
 // its own heartbeat row, 'trial-checkout-purchase-sweep'): stamped only when
 // the sweep returned ok, in its own try/catch, after the parent's stamp, so
 // neither can stop the other.
+// NEWSTART.1f — and after it, the stalled /newstart claim sweep (an ARM,
+// heartbeat 'corp-promo-stalled-sweep'): files Glofox promo claims stuck in
+// 'processing' for 15 minutes as help_requested/stalled and alerts staff.
+// Same rule: own try/catch, stamped only when ok, after the other stamps.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { claimAndProcessTrialPurchase, MAX_ATTEMPTS } from '@/lib/trial-purchase-queue'
 import { settleUn1tTrialPurchases } from '@/lib/trial-purchase-un1t-settle'
 import { sweepCheckoutTrialPurchases } from '@/lib/trial-checkout-purchase-sweep'
+import { sweepStalledGlofoxCorpClaims } from '@/lib/corp-promo-stalled-sweep'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -27,6 +32,7 @@ export const maxDuration = 300
 const STALE_MS = 10 * 60_000
 const FRESH_ROW_GRACE_MS = 30_000
 const CHECKOUT_SWEEP_HEARTBEAT = 'trial-checkout-purchase-sweep'
+const STALLED_SWEEP_HEARTBEAT = 'corp-promo-stalled-sweep'
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -81,7 +87,8 @@ export async function GET(request) {
     }
     if (stats.reap_failed === 0 && stats.un1t_read_failed === 0) await stampHeartbeat('process-trial-purchases', stats)
     const sweep = await runCheckoutPurchaseSweep(db)
-    return NextResponse.json({ success: true, ...stats, ...sweep })
+    const stalled = await runStalledClaimSweep(db)
+    return NextResponse.json({ success: true, ...stats, ...sweep, ...stalled })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || String(e) }, { status: 500 })
   }
@@ -103,5 +110,24 @@ async function runCheckoutPurchaseSweep(db) {
   } catch (e) {
     logError('process-trial-purchases', 'checkout purchase sweep threw', { errName: e?.name ?? null })
     return { checkout_seq_ok: false, checkout_seq_checked: 0, checkout_seq_enrolled: 0 }
+  }
+}
+
+// NEWSTART.1f — the stalled-claim arm. Returns its counts; never throws.
+async function runStalledClaimSweep(db) {
+  try {
+    const res = await sweepStalledGlofoxCorpClaims(db)
+    if (res?.ok) {
+      const { checked, filed, failed } = res
+      try {
+        await stampHeartbeat(STALLED_SWEEP_HEARTBEAT, { checked, filed, failed })
+      } catch (e) {
+        logError('process-trial-purchases', 'stalled claim sweep stamp threw', { errName: e?.name ?? null })
+      }
+    }
+    return { stalled_claims_ok: Boolean(res?.ok), stalled_claims_checked: res?.checked || 0, stalled_claims_filed: res?.filed || 0 }
+  } catch (e) {
+    logError('process-trial-purchases', 'stalled claim sweep threw', { errName: e?.name ?? null })
+    return { stalled_claims_ok: false, stalled_claims_checked: 0, stalled_claims_filed: 0 }
   }
 }

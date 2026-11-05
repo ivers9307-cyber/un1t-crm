@@ -88,7 +88,7 @@ function makeDbFor(row, updates, lists = {}) {
         select: () => b,
         eq: () => b,
         neq: () => b,
-        contains: () => b,
+        contains: () => b, in: () => b, order: () => b,
         // TRIALCLAIM.1 — the trial claim's insert (answered by single()
         // below, so it lands) and its release's .is() filter.
         insert: () => b,
@@ -760,7 +760,7 @@ describe('PATCH class_booking approval — the trial grant is written ahead (TRI
           // TRIALPURCHASE.2 — the helper's list reads (other cards, the queue
           // row) find nothing here.
           neq: () => b,
-          contains: () => b,
+          contains: () => b, in: () => b, order: () => b,
           // TRIALCLAIM.1 — the claim insert lands (single() answers an id).
           insert: () => b,
           is: () => b,
@@ -949,7 +949,7 @@ describe('PATCH class_booking approval — manual booking sends Schedule to Meta
       from(table) {
         let patch = null
         const b = {
-          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b, order: () => b,
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, in: () => b, limit: () => b, order: () => b,
           update(p) { patch = p; log.push({ table, patch: p }); return b },
           then(resolve, reject) {
             const data = table === 'class_booking_requests' ? queueRows : (pageTables[table] || [])
@@ -1074,7 +1074,7 @@ describe('PATCH class_booking approval — manual booking emails the customer', 
       from(table) {
         let patch = null
         const b = {
-          select: () => b, eq: () => b, neq: () => b, contains: () => b, limit: () => b, order: () => b,
+          select: () => b, eq: () => b, neq: () => b, contains: () => b, in: () => b, limit: () => b, order: () => b,
           update(p) { patch = p; log.push({ table, patch: p }); return b },
           then(resolve, reject) { return Promise.resolve({ data: table === 'class_booking_requests' ? [{ id: 'cbr-9' }] : [], error: null }).then(resolve, reject) },
           async maybeSingle() {

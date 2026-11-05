@@ -36,6 +36,18 @@ describe('sendCorpPromoEmail', () => {
     expect(sent.mock.calls[0][0].htmlBody).not.toContain('App Store')
   })
 
+  it('NEWSTART.1: a Glofox claim (no expiry, no app links) sends the Glofox words, no un1t.online section', async () => {
+    const glofoxCopy = corpPromoCopyFromBlocks([], 'stillorgan-newstart', { platform: 'glofox' })
+    const glofoxClaim = { ...claim, location_id: 'loc-s', expires_at: null }
+    expect(await sendCorpPromoEmail(db({ id: 'c-1' }), { claim: glofoxClaim, copy: glofoxCopy, studioName: 'UN1T Stillorgan', zone: 'Europe/Dublin', appLinks: null })).toEqual({ sent: true })
+    const msg = sent.mock.calls[0][0]
+    expect(msg.subject).toBe('Your 3 free classes at UN1T Stillorgan')
+    expect(msg.htmlBody).toContain('within 7 days of your first class')
+    expect(msg.htmlBody).not.toMatch(/un1t\.online/i)
+    expect(msg.htmlBody).not.toContain('App Store')
+    expect(msg.htmlBody).not.toContain('{expires_on}')
+  })
+
   it('honours the administrative opt-out and a bounced address', async () => {
     expect(await sendCorpPromoEmail(db({ id: 'c-1', contact_preferences: { email_administrative: false } }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin' })).toEqual({ sent: false, reason: 'opted_out_administrative_email' })
     expect(await sendCorpPromoEmail(db({ id: 'c-1', email_status: 'bounced' }), { claim, copy: COPY, studioName: 'S', zone: 'Europe/Dublin' })).toMatchObject({ sent: false })
