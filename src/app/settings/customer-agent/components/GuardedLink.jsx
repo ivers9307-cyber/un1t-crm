@@ -9,7 +9,8 @@ export default function GuardedLink({ href, dirty = false, onClick, children, ..
   return (
     <Link href={href} {...rest}
       onClick={(e) => {
-        if (dirty && !window.confirm('Discard your unsaved changes?')) { e.preventDefault(); return }
+        const plain = !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 || e.defaultPrevented)
+        if (plain && dirty && !window.confirm('Discard your unsaved changes?')) { e.preventDefault(); return }
         onClick?.(e)
       }}>
       {children}

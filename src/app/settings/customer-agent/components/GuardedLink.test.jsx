@@ -27,4 +27,10 @@ describe('GuardedLink', () => {
     const { notPrevented } = click(true, true)
     expect(notPrevented).toBe(true)
   })
+  it('does not ask for a click that opens a new tab', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<GuardedLink href="/x" dirty>Go</GuardedLink>)
+    fireEvent.click(screen.getByRole('link', { name: 'Go' }), { ctrlKey: true })
+    expect(confirm).not.toHaveBeenCalled()
+  })
 })

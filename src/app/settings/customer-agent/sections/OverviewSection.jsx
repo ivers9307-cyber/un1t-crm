@@ -8,13 +8,37 @@ import StatusSwitch from '../components/StatusSwitch'
 import FieldLabel from '../components/FieldLabel'
 import { flagsFor } from '../status'
 import { CARD } from './field-renderer'
+import { SECTIONS } from '../sections'
+import { overrideCountsBySection } from '../overview-counts'
 
-export default function OverviewSection({ agent, canEdit }) {
-  const { settings, location, setField, setQuietHours, setNoQuietHours, sourceTag, holds } = agent
+export default function OverviewSection({ agent, canEdit, onOpenSection }) {
+  const { settings, location, setField, setQuietHours, setNoQuietHours, sourceTag, holds, overridden, org } = agent
+  const counts = overrideCountsBySection(overridden)
+  const changed = SECTIONS.filter((s) => counts[s.key] > 0)
   const noQuietHours = settings?.quiet_hours?.off === true
   // MIAORG.1 Task 4 — one end of the window only holds Save ("Set both times").
   const quietHalf = holds.some((h) => h.section === 'overview')
   return (
+    <>
+    {org != null && (
+      <section className={`mb-4 ${CARD}`}>
+        <h3 className="text-sm font-semibold text-un1t-text mb-2">What this studio has changed</h3>
+        {changed.length === 0 ? (
+          <p className="text-sm text-un1t-muted">This studio uses the organisation&apos;s settings for everything.</p>
+        ) : (
+          <ul className="space-y-1">
+            {changed.map((s) => (
+              <li key={s.key}>
+                <button type="button" onClick={() => onOpenSection?.(s.key)}
+                  className="text-sm text-un1t-accent underline">
+                  {`${s.label}: ${counts[s.key]} ${counts[s.key] === 1 ? 'setting' : 'settings'}`}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    )}
     <fieldset disabled={!canEdit} className="m-0 min-w-0 border-0 p-0">
       <section className={`space-y-5 ${CARD}`}>
         {/* MIAORG.1 Task 3 — what the source tags mean (staff copy). */}
@@ -52,5 +76,6 @@ export default function OverviewSection({ agent, canEdit }) {
         </div>
       </section>
     </fieldset>
+    </>
   )
 }

@@ -160,7 +160,7 @@ export default function CustomerAgentClient({ canEdit = false, orgDefaults = nul
             return (
               <div key={key} hidden={section !== key} data-testid={`section-${key}`}>
                 <h2 className="text-lg font-semibold text-un1t-text mb-4">{label}</h2>
-                <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices}
+                <Section agent={agent} renderField={renderField} canEdit={canEdit} canEditVoices={canEditVoices} onOpenSection={openSection}
                   readOnlyNote={key === 'personality' && section === 'personality' && !canEdit ? readOnlyNote : null} />
               </div>
             )
