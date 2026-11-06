@@ -205,6 +205,38 @@ describe('updateBoard', () => {
     expect(res.board.config.stages.at(-1).slug).toBe('o_reset_39_converted')
   })
 
+  const ordersOf = (db, boardId) => db.tables.pipeline_stages
+    .filter((s) => s.pipeline_id === boardId)
+    .map((s) => [s.slug, s.display_order])
+
+  it('insertingAStageMidListRenumbersEveryColumn', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const config = editableConfig(board, (c) => {
+      const at = c.stages.findIndex((s) => s.role === 'checkpoint')
+      c.stages.splice(at, 0, { role: 'checkpoint', name: 'Day 3', day: 3 })
+    })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    const wantOrder = ['o_reset_39_new', 'o_reset_39_first_class', 'o_reset_39_day_3', 'o_reset_39_day_7', 'o_reset_39_done']
+    expect(res.board.config.stages.map((s) => s.slug)).toEqual(wantOrder)
+    const orders = new Map(ordersOf(db, board.id))
+    wantOrder.forEach((slug, i) => expect(orders.get(slug)).toBe(900 + i))
+    expect(new Set(orders.values()).size).toBe(orders.size)
+    expect(res.board.stages.map((s) => s.slug)).toEqual(wantOrder)
+  })
+
+  it('reorderingKeptStagesMovesTheirColumns', async () => {
+    const db = seedDb()
+    const board = await createdBoard(db)
+    const config = editableConfig(board, (c) => { c.stages.reverse() })
+    const res = await updateBoard(db, { locationId: LOC, boardId: board.id, patch: { config } })
+    expect(res.ok).toBe(true)
+    const orders = new Map(ordersOf(db, board.id))
+    config.stages.forEach((s, i) => expect(orders.get(`o_reset_39_${s.role === 'checkpoint' ? 'day_7' : s.role}`)).toBe(900 + i))
+    expect(new Set(orders.values()).size).toBe(orders.size)
+  })
+
   it('removeStageWithDealsIs409', async () => {
     const db = seedDb()
     const board = await createdBoard(db)

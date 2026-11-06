@@ -373,7 +373,7 @@ export async function updateBoard(db, { locationId, boardId, patch = {} } = {}) 
 async function applyStageDiff(db, { locationId, row, next }) {
   const { data: stageRows, error: stagesError } = await db
     .from('pipeline_stages')
-    .select('id, slug, name')
+    .select('id, slug, name, display_order')
     .eq('location_id', locationId)
     .eq('pipeline_id', row.id)
     .range(0, PAGE - 1)
@@ -433,20 +433,26 @@ async function applyStageDiff(db, { locationId, row, next }) {
     }
   }
 
-  // 3. Renamed stages.
+  // 3. Kept stages take their name AND column position from the stagesFor
+  //    row for their slug (900 + index in the new order), so an inserted or
+  //    reordered stage never leaves two columns on one display_order.
   for (const s of nextRows) {
     const existing = bySlug.get(s.slug)
-    if (!existing || existing.name === s.name) continue
-    const { data: renamed, error } = await db
+    if (!existing) continue
+    const change = {}
+    if (existing.name !== s.name) change.name = s.name
+    if (existing.display_order !== s.display_order) change.display_order = s.display_order
+    if (Object.keys(change).length === 0) continue
+    const { data: changed, error } = await db
       .from('pipeline_stages')
-      .update({ name: s.name })
+      .update(change)
       .eq('id', existing.id)
       .eq('location_id', locationId)
       .eq('pipeline_id', row.id)
       .select('id')
-    if (error || !renamed || renamed.length !== 1) {
-      logError(MODULE, 'stage rename failed', { locationId, stageId: existing.id, err: error?.message || 'row count' })
-      return fail(500, 'Could not rename a stage.')
+    if (error || !changed || changed.length !== 1) {
+      logError(MODULE, 'stage update failed', { locationId, stageId: existing.id, err: error?.message || 'row count' })
+      return fail(500, 'Could not update a stage.')
     }
   }
 

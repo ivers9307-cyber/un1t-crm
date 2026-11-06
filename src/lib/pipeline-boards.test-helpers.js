@@ -21,6 +21,7 @@ export function fakeDb(seed = {}) {
     let head = false
     let single = false
     let range = null
+    const orders = []
     const b = {
       select(_cols, opts = {}) { if (op === 'select') head = !!opts.head; return b },
       insert(rows) { op = 'insert'; payload = Array.isArray(rows) ? rows : [rows]; return b },
@@ -28,7 +29,7 @@ export function fakeDb(seed = {}) {
       delete() { op = 'delete'; return b },
       eq(col, v) { filters.push((r) => r[col] === v); return b },
       in(col, vs) { filters.push((r) => vs.includes(r[col])); return b },
-      order() { return b },
+      order(col, { ascending = true } = {}) { orders.push([col, ascending]); return b },
       range(from, to) { range = [from, to]; return b },
       limit() { return b },
       maybeSingle() { single = true; return b },
@@ -58,6 +59,14 @@ export function fakeDb(seed = {}) {
         return { data: hit.map((r) => ({ id: r.id })), error: null }
       }
       let out = rows.filter(match)
+      for (const [col, asc] of [...orders].reverse()) {
+        out = [...out].sort((x, y) => {
+          if (x[col] === y[col]) return 0
+          if (x[col] == null) return 1
+          if (y[col] == null) return -1
+          return (x[col] < y[col] ? -1 : 1) * (asc ? 1 : -1)
+        })
+      }
       if (head) return { data: null, count: out.length, error: null }
       if (range) out = out.slice(range[0], range[1] + 1)
       if (single) return { data: out[0] ? { ...out[0] } : null, error: null }

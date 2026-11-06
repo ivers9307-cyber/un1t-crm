@@ -11,7 +11,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation, guardMasterOrOwner } from '@/lib/auth'
-import { MANAGER_ROLES, boardCreateSchema } from '@/lib/schemas'
+import { MANAGER_ROLES, boardCreateSchema, uuidLike } from '@/lib/schemas'
 import { canBuildSequencesAt } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { listBoards, createBoard } from '@/lib/pipeline-boards'
@@ -19,6 +19,7 @@ import { listBoards, createBoard } from '@/lib/pipeline-boards'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
+const notFound = () => NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 const failure = (r) => NextResponse.json(
   { success: false, error: r.error, ...(r.code ? { code: r.code } : {}), ...(r.issues ? { issues: r.issues } : {}) },
   { status: r.status },
@@ -28,6 +29,7 @@ export async function GET(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const { id: locationId } = await params
+  if (!uuidLike.safeParse(locationId).success) return notFound()
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   if (!hasRoleAtLocation(user, locationId, MANAGER_ROLES) && !canBuildSequencesAt(user, locationId)) {
@@ -45,6 +47,7 @@ export async function POST(request, { params }) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const { id: locationId } = await params
+  if (!uuidLike.safeParse(locationId).success) return notFound()
   const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   const roleGuard = guardMasterOrOwner(user, locationId)

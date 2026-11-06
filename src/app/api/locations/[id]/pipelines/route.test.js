@@ -39,6 +39,15 @@ describe('GET /api/locations/[id]/pipelines', () => {
     expect(listBoards).not.toHaveBeenCalled()
   })
 
+  it('badLocationIdIs404WithoutARead', async () => {
+    getCurrentUser.mockResolvedValue(userWith('master'))
+    const bad = { params: Promise.resolve({ id: 'not-a-uuid' }) }
+    expect((await GET(getReq(), bad)).status).toBe(404)
+    expect((await POST(postReq(), bad)).status).toBe(404)
+    expect(listBoards).not.toHaveBeenCalled()
+    expect(createBoard).not.toHaveBeenCalled()
+  })
+
   it('managerCanList', async () => {
     getCurrentUser.mockResolvedValue(userWith('manager'))
     const res = await GET(getReq(), props)
