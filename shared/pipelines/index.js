@@ -11,6 +11,7 @@ import * as acquisitionUn1t from './acquisition-un1t.js'
 import * as paidTrial from './paid-trial.js'
 import * as programmes from './programmes.js'
 import * as paidTrialUn1t from './paid-trial-un1t.js'
+import * as offer from './offer.js'
 
 export const BOARD_MODULES = Object.freeze({
   acquisition,
@@ -21,9 +22,27 @@ export const BOARD_MODULES = Object.freeze({
   programmes,
   // HATCH39 — the same €39 board, fed from un1t.online (Hatch Street).
   paid_trial_un1t: paidTrialUn1t,
+  // PIPEBUILD.3a — self-service offer boards: stages come from pipelines.config.
+  offer,
 })
 
 export const PIPELINE_MODES = Object.freeze({ DERIVED: 'derived', MANUAL: 'manual' })
+
+/**
+ * PIPEBUILD.3e — every contacts column any registered board module reads, in
+ * registry order, each once. The single-contact placement paths (place-now, the
+ * Cold route) select this, so a new module's fields reach the router there too.
+ * @returns {string[]}
+ */
+export function allRequiredFields() {
+  const out = []
+  for (const mod of Object.values(BOARD_MODULES)) {
+    for (const f of Array.isArray(mod?.requiredFields) ? mod.requiredFields : []) {
+      if (!out.includes(f)) out.push(f)
+    }
+  }
+  return out
+}
 
 /**
  * Resolve a pipelines.module value to its board module.

@@ -395,7 +395,7 @@ describe('PIPELINES.3 — per-pipeline orchestration', () => {
  * audit close are replaced so the log is deterministic. SELECT filters apply
  * as in fakeDb (a filter on a column a fixture row lacks is ignored).
  */
-function recordingDb(fixtures = {}, { errors = {} } = {}) {
+function recordingDb(fixtures = {}, { errors = {}, insertErrors = {} } = {}) {
   const calls = []
   const norm = (v) => {
     if (v && typeof v === 'object' && !Array.isArray(v)) {
@@ -412,7 +412,7 @@ function recordingDb(fixtures = {}, { errors = {} } = {}) {
     let op = 'select'
     const filters = []
     const c = {}
-    for (const m of ['select', 'eq', 'in', 'order', 'range', 'single', 'maybeSingle', 'limit', 'gte', 'update', 'insert', 'upsert']) {
+    for (const m of ['select', 'eq', 'in', 'is', 'order', 'range', 'single', 'maybeSingle', 'limit', 'gte', 'update', 'insert', 'upsert']) {
       c[m] = (...args) => {
         entry.push([m, ...args.map(norm)])
         if (m === 'update' || m === 'insert' || m === 'upsert') op = m
@@ -432,6 +432,10 @@ function recordingDb(fixtures = {}, { errors = {} } = {}) {
         return resolve({ data: null, error: { message: errors[table] } })
       }
       if (op === 'insert') {
+        // PIPEBUILD.3d — insertErrors[table](row) answers a message to fail that insert.
+        const insertArg = entry.find((x) => Array.isArray(x) && x[0] === 'insert')?.[1]
+        const insertFail = typeof insertErrors[table] === 'function' ? insertErrors[table](insertArg) : null
+        if (insertFail) return resolve({ data: null, error: { message: insertFail } })
         return resolve({ data: table === 'pipeline_classification_runs' ? { id: 'run-1' } : null, error: null })
       }
       // An UPDATE … .select('id') answers the ids it matched, as PostgREST does
@@ -489,7 +493,7 @@ describe('HATCHPIPE.2 — contacts-input path is unchanged', () => {
         ['insert', { location_id: 'loc-st', source: 'cron', dry_run: false, status: 'running', created_by: 'u-1' }],
         ['select', 'id'], ['single']],
       ['pipelines',
-        ['select', 'id, key, module, mode, enabled, is_primary'],
+        ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority'], // PIPEBUILD.3d: the board settings ride along
         ['eq', 'location_id', 'loc-st'], ['eq', 'enabled', true]],
       ['pipeline_stages',
         ['select', 'id, slug, pipeline_id'],
@@ -854,7 +858,7 @@ describe('HATCHPIPE.2 — dry run of a disabled board (includeDisabled)', () => 
     const pipelineCalls = dry.calls.filter((e) => e[0] === 'pipelines')
     expect(pipelineCalls).toHaveLength(2)
     expect(pipelineCalls[1].slice(1)).toEqual([
-      ['select', 'id, key, module, mode, enabled, is_primary'],
+      ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority'], // PIPEBUILD.3d: the board settings ride along
       ['eq', 'location_id', HATCH], ['eq', 'enabled', false], ['in', 'key', ['acquisition']],
     ])
     expect(pipelineInputs).toHaveBeenCalledTimes(1)
@@ -1810,5 +1814,437 @@ describe('STILL39SEQ.1 — €39 board moves on the contacts path fire the stage
     const rec = recordingDb(fixtures())
     await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
     expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// PIPEBUILD.3d — configured offer boards (module `offer`) on the nightly pass:
+// their config and claims are loaded, the router places by descriptor, their
+// moves AND creates fire the stage follow-ups (one mass guard per stage), a
+// silent board places without firing, an unreadable claim fails the run, and a
+// studio with no offer board runs exactly as before.
+// ---------------------------------------------------------------------------
+describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
+  beforeEach(() => {
+    vi.mocked(membershipReadsFor).mockReset()
+    vi.mocked(logWarn).mockClear()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockReset()
+    vi.mocked(triggerSequencesForPipelineStageChange).mockResolvedValue(undefined)
+  })
+
+  const STILL = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const ACQ = { id: 'p-acq', location_id: STILL, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null, config: {}, priority: 100 }
+  const PAID = { id: 'p-paid', location_id: STILL, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null, config: {}, priority: 100 }
+  const CORP_CONFIG = {
+    entry: { type: 'lead_source', values: ['corp_x'] },
+    stages: [
+      { role: 'new', slug: 'corp_new', name: 'New' },
+      { role: 'first_class', slug: 'corp_first_class', name: 'First class' },
+      { role: 'done', slug: 'corp_done', name: 'Done' },
+      { role: 'converted', slug: 'corp_converted', name: 'Converted' },
+    ],
+    duration_days: 14,
+  }
+  const CORP = { id: 'p-corp', location_id: STILL, key: 'corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
+  const ACQ_STAGES = ['new_lead', 'first_class', 'second_class', 'trial_done', 'converted', 'member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant']
+    .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL }))
+  const PAID_STAGES = ['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
+    .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid', location_id: STILL }))
+  const CORP_STAGES = ['corp_new', 'corp_first_class', 'corp_done', 'corp_converted']
+    .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-corp', location_id: STILL }))
+
+  // A corp lead from yesterday, no class yet: Corp New.
+  const corpNew = (id, over = {}) => ({ id, name: id, email: null, glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [], last_lead_source: 'corp_x', last_lead_source_at: ago(1), ...over })
+  // A corp lead from 3 days ago who came to a class yesterday: Corp First class.
+  const corpAttended = (id) => corpNew(id, { last_lead_source_at: ago(3), recent_bookings: [attendedBooking(1)], last_attended_at: ago(1) })
+  const acqDeal = (id, contactId, slug = 'new_lead') => ({ id, contact_id: contactId, stage_id: `s-${slug}`, pipeline_id: 'p-acq', location_id: STILL, status: 'open' })
+
+  const corpFixtures = (over = {}) => ({
+    pipelines: [ACQ, CORP], pipeline_stages: [...ACQ_STAGES, ...CORP_STAGES],
+    contacts: [corpNew('c-new'), corpAttended('c-move')],
+    deals: [acqDeal('d-move', 'c-move')],
+    pipeline_board_claims: [], locations: [{ id: STILL, settings: {}, membership_source: 'glofox' }],
+    ...over,
+  })
+
+  it('noOfferBoardIdenticalToday: acquisition + €39 board, no offer board → the recorded calls of today (only the pipelines select grew)', async () => {
+    const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(8), created_at: ago(8), last_attended_at: ago(6), recent_bookings: [attendedBooking(6)] }
+    const lapsed = { id: 'c-lapsed', name: 'Lapsed', email: null, glofox_membership_status: 'ex_member', last_attended_at: ago(400), joined_at: ago(800), created_at: ago(800), recent_bookings: [] }
+    const fresh = { id: 'c-fresh', name: 'Fresh', email: null, glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [] }
+    const rec = recordingDb({
+      pipelines: [ACQ, PAID], pipeline_stages: [...ACQ_STAGES, ...PAID_STAGES],
+      contacts: [buyer, lapsed, fresh],
+      trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(8), granted_at: ago(8), duration_days: 14 }],
+      pipeline_board_claims: [], locations: [{ id: STILL, settings: {} }],
+      deals: [
+        { id: 'd-buyer', contact_id: 'c-buyer', stage_id: 's-paid_trial_first_class', pipeline_id: 'p-paid', location_id: STILL, status: 'open' },
+        acqDeal('d-lapsed', 'c-lapsed', 'member'),
+      ],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, source: 'cron', userId: 'u-1' })
+    // Recorded against the orchestrator BEFORE PIPEBUILD.3d (ff83a44e1), same
+    // fixture: identical calls, order and payloads, except that the pipelines
+    // select names the three board-settings columns.
+    expect(rec.calls).toEqual([
+      ['pipeline_classification_runs',
+        ['insert', { location_id: STILL, source: 'cron', dry_run: false, status: 'running', created_by: 'u-1' }],
+        ['select', 'id'], ['single']],
+      ['pipelines',
+        ['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority'],
+        ['eq', 'location_id', STILL], ['eq', 'enabled', true]],
+      ['pipeline_stages', ['select', 'id, slug, pipeline_id'], ['eq', 'location_id', STILL], ['in', 'pipeline_id', ['p-acq', 'p-paid']]],
+      ['contacts',
+        ['select', 'id, name, email, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, last_attended_at, total_attended_7d, total_attended_30d, last_payment_at, joined_at, created_at, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at, gympass_member_id, last_lead_source_at'],
+        ['eq', 'location_id', STILL], ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      ['locations', ['select', 'settings'], ['eq', 'id', STILL], ['maybeSingle']],
+      ['trial_purchases',
+        ['select', 'id, contact_id, status, payment_status, paid_at, granted_at, duration_days, plan_code, landing_path, page_id'],
+        ['eq', 'location_id', STILL], ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      ['pipeline_board_claims',
+        ['select', 'contact_id, claimed_at, source'],
+        ['eq', 'location_id', STILL], ['eq', 'board_key', 'programmes'], ['order', 'contact_id', { ascending: true }], ['range', 0, 999]],
+      ['deals',
+        ['select', 'id, contact_id, stage_id, pipeline_id'],
+        ['eq', 'location_id', STILL], ['eq', 'status', 'open'], ['in', 'pipeline_id', ['p-acq', 'p-paid']],
+        ['order', 'id', { ascending: true }], ['range', 0, 999]],
+      ['deals', ['update', { stage_id: 's-paid_trial_day_7' }], ['in', 'id', ['d-buyer']], ['eq', 'status', 'open'], ['select', 'id']],
+      ['deals', ['update', { stage_id: 's-dormant' }], ['in', 'id', ['d-lapsed']]],
+      ['deals', ['insert', { title: 'Fresh', contact_id: 'c-fresh', stage_id: 's-new_lead', pipeline_id: 'p-acq', location_id: STILL, status: 'open' }]],
+      ['pipeline_classification_runs',
+        ['update', {
+          status: 'success', contacts_seen: 3, deals_moved: 2, deals_unchanged: 0, deals_created: 1, errors: 0,
+          movement_matrix: { paid_trial_first_class: { paid_trial_day_7: 1 }, member: { dormant: 1 }, '': { new_lead: 1 } },
+          samples: [
+            { contact_id: 'c-buyer', contact_name: 'Buyer', from_slug: 'paid_trial_first_class', to_slug: 'paid_trial_day_7' },
+            { contact_id: 'c-lapsed', contact_name: 'Lapsed', from_slug: 'member', to_slug: 'dormant' },
+          ],
+          finished_at: '<iso>', duration_ms: '<ms>',
+        }],
+        ['eq', 'id', 'run-1']],
+    ])
+    // The one trigger of today: the €39 move. The acquisition create fires nothing.
+    expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual([
+      ['c-buyer', 'paid_trial_first_class', 'paid_trial_day_7', { locationId: STILL }],
+    ])
+    expect(out).toEqual({
+      ok: true, run_id: 'run-1', contacts_seen: 3, deals_moved: 2, deals_unchanged: 0, deals_created: 1, errors: 0,
+      movement_matrix: { paid_trial_first_class: { paid_trial_day_7: 1 }, member: { dormant: 1 }, '': { new_lead: 1 } },
+      samples: [
+        { contact_id: 'c-buyer', contact_name: 'Buyer', from_slug: 'paid_trial_first_class', to_slug: 'paid_trial_day_7' },
+        { contact_id: 'c-lapsed', contact_name: 'Lapsed', from_slug: 'member', to_slug: 'dormant' },
+      ],
+      pipelines_skipped: [], deals_left_board: 0, creates_withheld: 0, other_studio_check: 'ok',
+      input_source: 'contacts', boards_moved: 0, duplicate_deals_closed: 0, claims_pending: 0,
+    })
+  })
+
+  it('placesIntoOfferBoard: a new corp lead gets a Corp deal, an acquisition deal moves onto the Corp board (stage AND pipeline), claims recorded first', async () => {
+    const rec = recordingDb(corpFixtures())
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+
+    // The offer board's fields are read (offer requiredFields), and its stages and deals.
+    const contactsRead = rec.calls.find((e) => e[0] === 'contacts')
+    expect(rec.argOf(contactsRead, 'select')[1]).toMatch(/last_lead_source, /)
+    expect(rec.argOf(contactsRead, 'select')[1]).toMatch(/glofox_membership_plan/)
+    const stagesRead = rec.calls.find((e) => e[0] === 'pipeline_stages')
+    expect(rec.argOf(stagesRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq', 'p-corp']])
+
+    // The recorded offer claims (both people, board_key = the board's key) land before any deal write.
+    const claimWrites = rec.writesTo('pipeline_board_claims')
+    expect(claimWrites).toHaveLength(1)
+    const upsert = rec.argOf(claimWrites[0], 'upsert')
+    expect(upsert[1].map((r) => [r.contact_id, r.board_key, r.source]).sort()).toEqual([['c-move', 'corp', 'lead_source'], ['c-new', 'corp', 'lead_source']])
+    const firstDealWrite = rec.calls.findIndex((e) => e[0] === 'deals' && (rec.argOf(e, 'update') || rec.argOf(e, 'insert')))
+    expect(rec.calls.indexOf(claimWrites[0])).toBeLessThan(firstDealWrite)
+
+    const updates = rec.writesTo('deals').filter((e) => rec.argOf(e, 'update'))
+    expect(updates).toHaveLength(1)
+    expect(rec.argOf(updates[0], 'update')[1]).toEqual({ stage_id: 's-corp_first_class', pipeline_id: 'p-corp' })
+    expect(rec.argOf(updates[0], 'in')).toEqual(['in', 'id', ['d-move']])
+    // A firing board: the move is guarded on open and returns the ids it changed.
+    expect(rec.argOf(updates[0], 'eq')).toEqual(['eq', 'status', 'open'])
+
+    const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert'))
+    expect(inserts).toHaveLength(1)
+    expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' })
+
+    // The legacy claim tables are not read for an offer-only studio.
+    expect(rec.tables()).not.toContain('trial_purchases')
+    expect(out).toMatchObject({
+      ok: true, input_source: 'contacts', deals_moved: 1, deals_created: 1, boards_moved: 1, errors: 0, claims_pending: 2,
+      movement_matrix: { new_lead: { corp_first_class: 1 }, '': { corp_new: 1 } },
+    })
+  })
+
+  it('offerCreatesFireNullToSlug: a Corp create fires null → corp_new after the insert, the move fires from its old stage; a failed insert fires nothing', async () => {
+    const rec = recordingDb(corpFixtures())
+    await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual(expect.arrayContaining([
+      ['c-new', null, 'corp_new', { locationId: STILL }],
+      ['c-move', 'new_lead', 'corp_first_class', { locationId: STILL }],
+    ]))
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(2)
+
+    vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
+    const failing = recordingDb(corpFixtures(), { insertErrors: { deals: (row) => (row?.contact_id === 'c-new' ? 'insert refused' : null) } })
+    const out = await reclassifyAllContacts(failing.db, { locationId: STILL })
+    expect(out).toMatchObject({ deals_created: 0, errors: 1 })
+    expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual([
+      ['c-move', 'new_lead', 'corp_first_class', { locationId: STILL }],
+    ])
+  })
+
+  it('an acquisition create at an offer studio still fires nothing (only offer boards fire their creates)', async () => {
+    const fresh = { id: 'c-fresh', name: 'Fresh', email: null, glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [] }
+    const rec = recordingDb(corpFixtures({ contacts: [fresh], deals: [] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, deals_created: 1 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('massGuardHoldsCreates: creates and moves into one Corp stage count together; 51 holds the whole stage, 50 fires every one', async () => {
+    const build = (creates, moves) => {
+      const contacts = []
+      const deals = []
+      for (let i = 0; i < creates; i++) contacts.push(corpNew(`c-cr-${String(i).padStart(2, '0')}`))
+      for (let i = 0; i < moves; i++) {
+        const id = `c-mv-${String(i).padStart(2, '0')}`
+        contacts.push(corpNew(id))
+        deals.push(acqDeal(`d-mv-${String(i).padStart(2, '0')}`, id))
+      }
+      return corpFixtures({ contacts, deals })
+    }
+    const held = recordingDb(build(30, 21))
+    const heldOut = await reclassifyAllContacts(held.db, { locationId: STILL })
+    expect(heldOut).toMatchObject({ ok: true, deals_created: 30, deals_moved: 21 })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'stage trigger held: mass move', expect.objectContaining({ to_slug: 'corp_new', moves: 51, limit: 50 }))
+
+    vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
+    const fires = recordingDb(build(30, 20))
+    await reclassifyAllContacts(fires.db, { locationId: STILL })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(50)
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-cr-00', null, 'corp_new', { locationId: STILL })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-mv-00', 'new_lead', 'corp_new', { locationId: STILL })
+  })
+
+  it('silentBoardFiresNothing: a silent board still places (create + move) but no follow-up starts; the €39 board beside it still fires', async () => {
+    const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(8), created_at: ago(8), last_attended_at: ago(6), recent_bookings: [attendedBooking(6)] }
+    const rec = recordingDb(corpFixtures({
+      pipelines: [ACQ, PAID, CORP], pipeline_stages: [...ACQ_STAGES, ...PAID_STAGES, ...CORP_STAGES],
+      contacts: [corpNew('c-new'), corpAttended('c-move'), buyer],
+      deals: [acqDeal('d-move', 'c-move'), { id: 'd-buyer', contact_id: 'c-buyer', stage_id: 's-paid_trial_first_class', pipeline_id: 'p-paid', location_id: STILL, status: 'open' }],
+      trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(8), granted_at: ago(8), duration_days: 14 }],
+    }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, silentBoardIds: ['p-corp'] })
+    expect(out).toMatchObject({ ok: true, deals_created: 1, deals_moved: 2, boards_moved: 1 })
+    const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert'))
+    expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp' })
+    expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual([
+      ['c-buyer', 'paid_trial_first_class', 'paid_trial_day_7', { locationId: STILL }],
+    ])
+  })
+
+  it('offerMatchedPurchaseNotAPaidClaim (nightly): a trial_purchase offer board\'s buyer is never placed on the €39 board', async () => {
+    // The offer board sorts AFTER the €39 board (250 > 200): were the purchase
+    // also a €39 paid claim, the buyer would land on the €39 board.
+    const RESET = { ...CORP, id: 'p-reset', key: 'reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
+    const RESET_STAGES = ['reset_new', 'reset_first_class', 'reset_done', 'reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
+    const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+    const eur39 = { id: 'c-39', name: 'Buyer39', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+    const rec = recordingDb(corpFixtures({
+      pipelines: [ACQ, PAID, RESET], pipeline_stages: [...ACQ_STAGES, ...PAID_STAGES, ...RESET_STAGES],
+      contacts: [buyer, eur39], deals: [],
+      trial_purchases: [
+        { id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null },
+        { id: 'tp-2', location_id: STILL, contact_id: 'c-39', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'EUR39', landing_path: null, page_id: null },
+      ],
+    }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
+    expect(out).toMatchObject({ ok: true, board_histogram: { reset: 1, paid_trial: 1 } })
+  })
+
+  it('offerClaimReadFailureFailsRun: an unreadable pipeline_board_claims read fails the run before any write', async () => {
+    const rec = recordingDb(corpFixtures(), { errors: { pipeline_board_claims: 'claims down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: false, error: 'claims unavailable: claims_unreadable' })
+    expect(rec.writesTo('deals')).toHaveLength(0)
+    expect(rec.writesTo('pipeline_board_claims')).toHaveLength(0)
+    const close = rec.writesTo('pipeline_classification_runs').find((e) => rec.argOf(e, 'update'))
+    expect(rec.argOf(close, 'update')[1]).toMatchObject({ status: 'failed', error_message: 'claims unavailable: claims_unreadable' })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+  })
+
+  it('an offer claim read failure also stops a run whose €39 claims read fine (nothing written, programme claims included)', async () => {
+    const fifty = { id: 'c-fifty', name: 'Fifty', email: null, glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [], last_lead_source: 'meta_50plus', last_lead_source_at: ago(1) }
+    const PROG = { id: 'p-prog', location_id: STILL, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false, board_type: null, config: {}, priority: 100 }
+    const TAGGED = { ...CORP, config: { ...CORP_CONFIG, entry: { type: 'tag', values: ['corp'] } } }
+    const rec = recordingDb(corpFixtures({
+      pipelines: [ACQ, PROG, TAGGED], contacts: [fifty], deals: [], trial_purchases: [],
+      locations: [{ id: STILL, settings: { pipelines: { programmes: { lead_sources: ['meta_50plus'] } } }, membership_source: 'glofox' }],
+    }), { errors: { contact_tags: 'tags down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: false, error: 'claims unavailable: tags_unreadable' })
+    expect(rec.writesTo('pipeline_board_claims')).toHaveLength(0)
+    expect(rec.writesTo('deals')).toHaveLength(0)
+  })
+
+  it('dryRunIncludesDisabledOfferBoard: includeDisabledBoardIds previews a disabled offer board by id; a real run never reads it', async () => {
+    const off = { ...CORP, enabled: false }
+    const rec = recordingDb(corpFixtures({ pipelines: [ACQ, off] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true, includeDisabledBoardIds: ['p-corp'] })
+    const pipelineCalls = rec.calls.filter((e) => e[0] === 'pipelines')
+    expect(pipelineCalls).toHaveLength(2)
+    expect(rec.argOf(pipelineCalls[1], 'select')).toEqual(['select', 'id, key, module, mode, enabled, is_primary, board_type, config, priority'])
+    expect(pipelineCalls[1]).toContainEqual(['eq', 'enabled', false])
+    expect(pipelineCalls[1]).toContainEqual(['in', 'id', ['p-corp']])
+    expect(rec.calls.filter((e) => e.some((x) => Array.isArray(x) && ['update', 'insert', 'upsert'].includes(x[0])))).toHaveLength(0)
+    expect(out).toMatchObject({
+      ok: true, deals_moved: 1, deals_created: 1, claims_pending: 2,
+      board_histogram: { corp: 2 }, stage_histogram: { corp_new: 1, corp_first_class: 1 },
+    })
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+
+    const real = recordingDb(corpFixtures({ pipelines: [ACQ, off] }))
+    await reclassifyAllContacts(real.db, { locationId: STILL, includeDisabledBoardIds: ['p-corp'] })
+    expect(real.calls.filter((e) => e[0] === 'pipelines')).toHaveLength(1)
+    expect(real.writesTo('pipeline_board_claims')).toHaveLength(0)
+  })
+
+  it('includeDisabledBoardIds ignores a disabled row that is not an offer board', async () => {
+    const offPaid = { ...PAID, enabled: false }
+    const rec = recordingDb(corpFixtures({ pipelines: [ACQ, offPaid] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true, includeDisabledBoardIds: ['p-paid'] })
+    expect(out.ok).toBe(true)
+    expect(out.pipelines_skipped).toEqual(['paid_trial'])
+    expect(rec.tables()).not.toContain('trial_purchases')
+  })
+
+  it('an offer board whose config will not parse is held: skipped, its deals neither moved nor duplicated', async () => {
+    const broken = { ...CORP, config: { entry: { type: 'nope' } } }
+    const rec = recordingDb(corpFixtures({
+      pipelines: [ACQ, broken],
+      deals: [{ id: 'd-new', contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
+      contacts: [corpNew('c-new')],
+    }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, deals_moved: 0, deals_created: 0, deals_held: 1, pipelines_skipped: ['corp'] })
+    // Its deals are read (so its people are recognised), its stages are not targets.
+    const dealsRead = rec.calls.find((e) => e[0] === 'deals' && rec.argOf(e, 'select'))
+    expect(rec.argOf(dealsRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq', 'p-corp']])
+    const stagesRead = rec.calls.find((e) => e[0] === 'pipeline_stages')
+    expect(rec.argOf(stagesRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq']])
+    expect(rec.writesTo('deals')).toHaveLength(0)
+  })
+
+  it('an offer board at a un1t.online studio is refused (un1t_online_studio); the un1t boards run as before', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
+      snapshots: [['c-l', leadSnap()]],
+    })))
+    const offerAtHatch = { ...CORP, location_id: HATCH }
+    const rec = recordingDb({
+      pipelines: [HATCH_PIPELINES[0], offerAtHatch], pipeline_stages: HATCH_STAGES, deals: [],
+      locations: [{ id: HATCH, membership_source: 'un1t_online' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['corp'], board_histogram: { acquisition: 1 } })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
+  })
+
+  it('an offer board beside a un1t board at a studio not labelled un1t.online is still refused (mixed_input_sources)', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
+      snapshots: [['c-l', leadSnap()]],
+    })))
+    const rec = recordingDb({
+      pipelines: [HATCH_PIPELINES[0], { ...CORP, location_id: HATCH }], pipeline_stages: HATCH_STAGES, deals: [],
+      locations: [{ id: HATCH, membership_source: 'none' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['corp'] })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'mixed_input_sources' }))
+  })
+
+  it('unreadableSourceWithTrialPurchaseOffer at a un1t-boards studio keeps its answer: the offer board is refused, the un1t boards still run', async () => {
+    seamWith(vi.fn().mockResolvedValue(hatchInputs({
+      contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
+      snapshots: [['c-l', leadSnap()]],
+    })))
+    const RESET = { ...CORP, location_id: HATCH, id: 'p-reset', key: 'reset', config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] } } }
+    const rec = recordingDb({
+      pipelines: [HATCH_PIPELINES[0], RESET], pipeline_stages: HATCH_STAGES, deals: [],
+    }, { errors: { locations: 'locations down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['reset'] })
+  })
+
+  it('offerBoardRefusedAtUn1tStudioAlone: a un1t.online studio with ONLY an offer board enabled reads no contacts, writes nothing, fires nothing', async () => {
+    const offerAtHatch = { ...CORP, location_id: HATCH }
+    const rec = recordingDb({
+      pipelines: [offerAtHatch], pipeline_stages: CORP_STAGES.map((st) => ({ ...st, location_id: HATCH })),
+      contacts: [corpNew('c-new')], deals: [], pipeline_board_claims: [],
+      locations: [{ id: HATCH, membership_source: 'un1t_online' }],
+    })
+    const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
+    expect(out).toMatchObject({ ok: true, contacts_seen: 0, deals_created: 0, pipelines_skipped: ['corp'] })
+    expect(rec.tables()).not.toContain('contacts')
+    expect(rec.tables()).not.toContain('pipeline_board_claims')
+    expect(rec.writesTo('deals')).toHaveLength(0)
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    expect(membershipReadsFor).not.toHaveBeenCalled()
+    const locRead = rec.calls.find((e) => e[0] === 'locations')
+    expect(locRead).toEqual(['locations', ['select', 'membership_source'], ['eq', 'id', HATCH], ['maybeSingle']])
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
+  })
+
+  it('unreadableSourceWithTrialPurchaseOfferPlacesNobody (nightly): an unreadable membership_source beside a trial_purchase offer board fails the run before any claim, contact or deal is touched', async () => {
+    // Held, the offer board would leave the buyer's purchase in the €39 claim
+    // and the €39 board (sorted ahead at 200) would take them.
+    const RESET = { ...CORP, id: 'p-reset', key: 'reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
+    const RESET_STAGES = ['reset_new', 'reset_first_class', 'reset_done', 'reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
+    const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
+    for (const pipelines of [[ACQ, PAID, RESET], [ACQ, RESET]]) {
+      vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
+      const rec = recordingDb(corpFixtures({
+        pipelines, pipeline_stages: [...ACQ_STAGES, ...PAID_STAGES, ...RESET_STAGES],
+        contacts: [buyer, corpAttended('c-move')], deals: [acqDeal('d-move', 'c-move')],
+        trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null }],
+      }), { errors: { locations: 'locations down' } })
+      const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+      expect(out).toMatchObject({ ok: false, error: 'claims unavailable: membership_source_unreadable', pipelines_skipped: ['reset'] })
+      expect(rec.tables()).not.toContain('contacts')
+      expect(rec.tables()).not.toContain('trial_purchases')
+      expect(rec.writesTo('deals')).toHaveLength(0)
+      expect(rec.writesTo('pipeline_board_claims')).toHaveLength(0)
+      const close = rec.writesTo('pipeline_classification_runs').find((e) => rec.argOf(e, 'update'))
+      expect(rec.argOf(close, 'update')[1]).toMatchObject({ status: 'failed', error_message: 'claims unavailable: membership_source_unreadable' })
+      expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    }
+  })
+
+  it('membershipSourceReadFailureHoldsOffer / unreadableSourceWithoutTrialPurchaseOfferHoldsOnly (nightly): an unreadable membership_source holds the offer board (never guesses contacts); the acquisition board still runs', async () => {
+    const rec = recordingDb(corpFixtures({
+      contacts: [corpNew('c-new'), corpAttended('c-move')],
+      deals: [acqDeal('d-move', 'c-move'), { id: 'd-held', contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
+    }), { errors: { locations: 'locations down' } })
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
+    expect(out).toMatchObject({ ok: true, pipelines_skipped: ['corp'], deals_held: 1, deals_created: 0 })
+    // c-move (no deal on the held board) is placed by acquisition alone: the corp claim is not read.
+    expect(rec.tables()).not.toContain('pipeline_board_claims')
+    expect(rec.writesTo('deals').some((e) => JSON.stringify(e).includes('p-corp'))).toBe(false)
+    expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'membership_source_unreadable' }))
+  })
+
+  it('an active member at another studio leaves the Corp board unless they are in its Converted column', async () => {
+    vi.mocked(loadActiveElsewhere).mockResolvedValue({ ok: true, contactIds: new Set(['c-new', 'c-conv']), reasons: new Map(), studios: [] })
+    const conv = corpNew('c-conv', { glofox_membership_status: 'member', converted_at: ago(1) })
+    const rec = recordingDb(corpFixtures({ contacts: [corpNew('c-new'), conv], deals: [] }))
+    const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
+    expect(out).toMatchObject({ ok: true, creates_withheld: 1, stage_histogram: { corp_converted: 1 } })
   })
 })

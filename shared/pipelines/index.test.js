@@ -20,7 +20,8 @@ describe('board registry', () => {
   it('every registered module satisfies the contract', () => {
     for (const [name, mod] of Object.entries(BOARD_MODULES)) {
       expect(Array.isArray(mod.stages), `${name}.stages`).toBe(true)
-      expect(mod.stages.length, `${name}.stages non-empty`).toBeGreaterThan(0)
+      // `offer` takes its stages from the board's config, so its static list is empty.
+      if (name !== 'offer') expect(mod.stages.length, `${name}.stages non-empty`).toBeGreaterThan(0)
       expect(Array.isArray(mod.requiredFields), `${name}.requiredFields`).toBe(true)
       expect(mod.requiredFields.length, `${name}.requiredFields non-empty`).toBeGreaterThan(0)
       expect(typeof mod.classify, `${name}.classify`).toBe('function')
@@ -150,5 +151,19 @@ describe('HATCH39 — paid_trial_un1t', () => {
     expect(mod.stages).toBe(paid.stages)
     expect(mod.classify).toBe(paid.classify)
     expect(mod.requiredFields).toEqual(['id', 'name', 'email', 'location_id'])
+  })
+})
+
+// PIPEBUILD.3a — the offer module's stages come from config.
+describe('PIPEBUILD.3a — offer', () => {
+  it('offerRegistered: registers offer as a contacts-input module with no static stages', () => {
+    const mod = getBoardModule('offer')
+    expect(mod).toBeTruthy()
+    expect(mod.inputSource).toBeUndefined()
+    expect(mod.stages).toEqual([])
+    expect(typeof mod.classify).toBe('function')
+    for (const f of ['lead_source', 'last_lead_source', 'last_lead_source_at', 'glofox_membership_plan', 'recent_bookings', 'converted_at']) {
+      expect(mod.requiredFields, `missing ${f}`).toContain(f)
+    }
   })
 })

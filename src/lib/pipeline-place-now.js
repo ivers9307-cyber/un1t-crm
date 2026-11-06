@@ -5,15 +5,17 @@
 // (class-booking). Both read the contact fresh and hand it to
 // ensureDealForContact, which routes through shared/pipelines/router.js like
 // the nightly pass. Best-effort by contract: never throws, never reports a
-// failure as success; the nightly run converges either way.
+// failure as success; the nightly run converges either way. An offer board's
+// stage follow-up fires from here (PIPEBUILD.3e); no other board's does.
 
 import { ensureDealForContact } from './glofox-sync.js'
 import { logWarn } from './log.js'
-import { getBoardModule } from '../../shared/pipelines/index.js'
+import { allRequiredFields } from '../../shared/pipelines/index.js'
 
-// Every column the router reads (the Programmes module's list is the widest
-// contacts-input set) plus the studio the row lives at.
-export const PLACE_NOW_COLUMNS = [...new Set([...getBoardModule('programmes').requiredFields, 'location_id'])].join(', ')
+// Every column the router reads (PIPEBUILD.3e: the union of every registered
+// board module's fields, the offer board's included) plus the studio the row
+// lives at.
+export const PLACE_NOW_COLUMNS = [...new Set([...allRequiredFields(), 'location_id'])].join(', ')
 
 /**
  * @param {object} db  service-role client
@@ -39,11 +41,29 @@ export async function placeContactNow(db, { locationId, contactId, now = Date.no
     return { ok: false, reason: 'contact_unreadable' }
   }
   if (!contact) return { ok: false, reason: 'contact_missing' }
+  let deal
   try {
-    const deal = await ensureDealForContact(db, locationId, contactId, contact, contact.name || null, { now })
-    return { ok: true, deal }
+    deal = await ensureDealForContact(db, locationId, contactId, contact, contact.name || null, { now })
   } catch (e) {
     logWarn('pipeline-place-now', 'placement threw', { locationId, contactId, err: e?.message })
     return { ok: false, reason: 'placement_threw' }
   }
+  // PIPEBUILD.3e — an offer board's stage starts its follow-up the moment the
+  // card lands (create or move). configuredBoardsOnly keeps every other board
+  // exactly as before: place-now fired no sequence for them and still fires
+  // none (the nightly pass and the webhook own those). Best-effort: the
+  // placement is already written.
+  if (deal?.action === 'create' || deal?.action === 'move') {
+    try {
+      const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
+      await triggerSequencesForDealPlacement(contactId, deal, {
+        dealLocationId: deal.location_id ?? locationId,
+        pipelineId: deal.pipeline_id,
+        configuredBoardsOnly: true,
+      })
+    } catch (e) {
+      logWarn('pipeline-place-now', 'stage trigger threw', { locationId, contactId, err: e?.message })
+    }
+  }
+  return { ok: true, deal }
 }

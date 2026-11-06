@@ -77,6 +77,24 @@ describe('loadStageCoverage', () => {
     expect(acqNew.followups.map((f) => f.trigger)).toEqual(['contact_created'])
   })
 
+  it('offerBoardCoverage', async () => {
+    const db = fakeDb({
+      pipelines: { data: [{ ...board, key: 'summer', name: 'Summer offer', module: 'offer' }] },
+      pipeline_stages: { data: [
+        stage({ id: 's1', slug: 'new', name: 'Joined', stage_role: 'new' }),
+        stage({ id: 's2', slug: 'bought', name: 'Bought', stage_role: 'converted' }),
+      ] },
+      email_sequences: { data: [
+        { id: 'q1', name: 'Bought thanks', trigger_type: 'pipeline_stage_change', trigger_config: { to_status: 'bought' } },
+      ] },
+    })
+    const r = await loadStageCoverage(db, 'loc1')
+    expect(r.ok).toBe(true)
+    const [fresh, bought] = r.boards[0].stages
+    expect(bought.followups).toEqual([{ id: 'q1', name: 'Bought thanks', trigger: 'pipeline_stage_change' }])
+    expect(fresh.followups).toEqual([])   // an entry with no follow-up aimed at it is not falsely covered
+  })
+
   it('pileFromRole', async () => {
     const db = fakeDb({
       pipelines: { data: [board] },

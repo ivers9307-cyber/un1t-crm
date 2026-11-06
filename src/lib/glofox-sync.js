@@ -17,9 +17,9 @@ import { PIPELINE_MODES, getBoardModule } from '../../shared/pipelines/index.js'
 // PIPE3.7 — the router and its claims: at a studio running a claim board
 // (Stillorgan's €39 Trial / Programmes) a contact is placed on ONE of several
 // boards, and the trial's own credits are never a Class Pack.
-import { routeContact, CLAIM_BOARD_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
-import { claimLive as paidClaimLive } from '../../shared/pipelines/paid-trial.js'
-import { loadPlacementClaims, loadBoardsForLocation, loadPaidClaimForContact } from './pipeline-claims.js'
+import { routeContact, CLAIM_BOARD_MODULES, OFFER_MODULES, BOARD_KEYS } from '../../shared/pipelines/router.js'
+import { loadPlacementClaims, loadBoardsForLocation, loadPackGuardForContact, placementPackGuard } from './pipeline-claims.js'
+import { placementDescriptors } from './pipeline-offer-claims.js'
 import { findGlofoxCrossoverContact, recordGlofoxCrossover } from './glofox-crossover.js'
 import { upsertContactStudio } from './contact-studios.js'
 import { hasBookableMembership } from './person-accounts.js'
@@ -585,19 +585,29 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     claims = placement.claims
   }
   const derivedBoards = (boards || []).filter((b) => b.mode === PIPELINE_MODES.DERIVED)
-  const claimBoards = derivedBoards.filter((b) => CLAIM_BOARD_MODULES.includes(b.module))
+  // PIPEBUILD.3e — an offer board is a claim board too (its claims arrive as
+  // claims.offers).
+  const claimBoards = derivedBoards.filter((b) => CLAIM_BOARD_MODULES.includes(b.module) || OFFER_MODULES.includes(b.module))
 
   // PIPELINE5.4 — classifier is the source of truth for stage.
   // Single rule set runs from applyMemberSync (per-event) AND from
   // the nightly /api/cron/pipeline-classify, so the two converge.
   let targetSlug
   let targetBoard = primary
+  let heldIds = new Set()
   if (claimBoards.length > 0) {
-    const route = routeContact(contactSnapshot || {}, claims, now, new Set(derivedBoards.map((b) => b.module)))
+    // PIPEBUILD.3e — the router gets board DESCRIPTORS keyed by pipelines.key,
+    // exactly as the nightly pass builds them (key ≠ module at Hatch, and on
+    // every offer board), and the target board is found by that key. Offer
+    // boards whose claims are unknown, or whose config will not parse, are
+    // held (placementDescriptors).
+    const placement = placementDescriptors(derivedBoards, { offersKnown: claims?.offers instanceof Map })
+    heldIds = placement.heldIds
+    const route = routeContact(contactSnapshot || {}, claims, now, placement.descriptors)
     targetSlug = route.slug
     targetBoard = route.boardKey === BOARD_KEYS.ACQUISITION
       ? primary
-      : (derivedBoards.find((b) => b.key === route.boardKey) || derivedBoards.find((b) => b.module === route.boardKey) || primary)
+      : (derivedBoards.find((b) => b.key === route.boardKey && !heldIds.has(b.id)) || primary)
   } else {
     targetSlug = classifyContact(contactSnapshot || {})
   }
@@ -616,6 +626,11 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     const open = await findOpenDealsAtLocation(db, contactId, locationId)
     if (open === null) return { action: 'error', error: 'open deals unreadable' }
     const visible = open.filter((d) => enabledIds.has(d.pipeline_id))
+    // PIPEBUILD.3e — a person with an open deal on a HELD offer board is left
+    // exactly as they are (the nightly pass's rule): no move, no create, no
+    // duplicate close. Routing them without that board would drain it.
+    const onHeld = visible.find((d) => heldIds.has(d.pipeline_id))
+    if (onHeld) return { action: 'leave', deal_id: onHeld.id, stage_slug: null, reason: 'held_board' }
     const keep = visible.find((d) => d.pipeline_id === pipelineId) || visible[0] || null
     const surplus = visible.filter((d) => keep && d.id !== keep.id)
     for (const d of surplus) {
@@ -2375,16 +2390,21 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     } else if (placement.claimBoards) {
       // The boards ride along so ensureDealForContact reads `pipelines` no more.
       placementOpts = { claims: placement.claims, boards: placement.boards }
-      liveTrialClaim = paidClaimLive(placement.claims?.paid ?? null, claimsRow, syncNow)
+      // PIPEBUILD.3g/3h — the €39 claim over EVERY purchase, or a live
+      // trial_purchase offer claim (its own, possibly longer, window): an
+      // offer trial's credits are the trial's too, never a Class Pack. The
+      // same rule whatever boards the studio runs (placementPackGuard).
+      liveTrialClaim = placementPackGuard(placement, claimsRow, syncNow)
     }
   } else {
     // PIPE3 fix pass (review #2) — a sync that skips placement (the detail
     // backfill, every ~30 min over every Stillorgan contact) still runs the
     // pack stamp with fresh credits, so it must still know about a live €39
-    // claim: one indexed read of this contact's purchases. Unreadable = no
-    // stamp this sync.
-    const paid = await loadPaidClaimForContact(db, { locationId, contactId, now: syncNow })
-    liveTrialClaim = paid.ok ? paidClaimLive(paid.claim, claimsRow, syncNow) : true
+    // claim: one indexed read of this contact's purchases (PIPEBUILD.3h: and
+    // the boards, only for a lapsed €39 claim, in case a trial_purchase offer
+    // board's longer window still holds it). Unreadable = no stamp this sync.
+    const guard = await loadPackGuardForContact(db, { locationId, contactId, contact: claimsRow, now: syncNow })
+    liveTrialClaim = guard.ok ? guard.live : true
   }
 
   // FUNNEL.3 — stamp the Class Pack moment. Same write-once/best-effort
@@ -2502,8 +2522,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // pipeline-reclassify input, so the two writers converge).
         gympass_member_id: m.gympass_member_id ?? ex.gympass_member_id ?? null,
         // PIPE3.7 — what the router's programme match and the €39 rules read.
+        // PIPEBUILD.3e — and an offer board's (its lead-source entry dates the
+        // claim from last_lead_source_at; the persisted row is the only source).
         lead_source: m.lead_source ?? ex.lead_source ?? null,
         last_lead_source: ex.last_lead_source ?? null,
+        last_lead_source_at: ex.last_lead_source_at ?? null,
         glofox_membership_plan: m.glofox_membership_plan ?? ex.glofox_membership_plan ?? null,
         location_id: ex.location_id ?? null,
       }
@@ -2601,14 +2624,16 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
   // pipeline_stage_change sequence with a to_status other than the creation
   // stage could ever fire.
   //
-  // The adapter fires on 'move' only — NOT on 'leave' (the classifier is
-  // idempotent, so an unchanged member returns 'leave' on every single sync)
-  // and NOT on 'create' (that's contact creation, already covered). Volume is
-  // therefore bounded by real reclassifications of members Glofox reports as
-  // modified, which is the same population the membership_state trigger
-  // already fires for. The NIGHTLY BULK reclassify (pipeline-reclassify.js,
-  // /api/cron/pipeline-classify) is deliberately NOT wired — it moves
-  // thousands of deals in one pass.
+  // It fires on a landed 'move', never on 'leave' (the classifier is
+  // idempotent, so an unchanged member returns 'leave' on every single sync).
+  // A 'create' fires only for a CONFIGURED board (PIPEBUILD.3e: an offer board,
+  // read off the board's board_type by triggerSequencesForDealPlacement, which
+  // fires its entry stage); a first deal on any other board fires nothing, as
+  // contact creation already covers it. Volume is bounded by real
+  // reclassifications of members Glofox reports as modified. The NIGHTLY pass
+  // (pipeline-reclassify.js, /api/cron/pipeline-classify) fires too: its
+  // landed moves on the un1t.online, €39 and offer boards, and its offer-board
+  // creates (TDSEQ.1 / STILL39SEQ.1 / PIPEBUILD.3d).
   let stageChangeTriggerResult = null
   if (dealResult?.action === 'move') {
     try {
@@ -2620,6 +2645,20 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
       stageChangeTriggerResult = { fired: true, from: dealResult.from_slug ?? null, to: dealResult.to_slug ?? null }
     } catch (e) {
       stageChangeTriggerResult = { error: e?.message || 'pipeline_stage_change trigger threw' }
+    }
+  } else if (dealResult?.action === 'create') {
+    // PIPEBUILD.3e — a first deal fires only on an offer board (the adapter
+    // reads the board's board_type); on every other board it fires nothing,
+    // as before. A create is made on this studio's board. The result field
+    // stays null for creates (today's shape); the adapter logs its own skips.
+    try {
+      const { triggerSequencesForDealPlacement } = await import('./sequences/triggers.js')
+      await triggerSequencesForDealPlacement(contactId, dealResult, {
+        dealLocationId: locationId,
+        pipelineId: dealResult?.pipeline_id,
+      })
+    } catch (e) {
+      logWarn('glofox-sync', 'create stage trigger threw', { locationId, contactId, err: e?.message })
     }
   }
 

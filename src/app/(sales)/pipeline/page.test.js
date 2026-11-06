@@ -318,6 +318,7 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
     expect(loadUn1tCardSignals.mock.calls[0][1].contactIds).toEqual(['c1'])
     const byId = Object.fromEntries(boardProps.last.initialDeals.map((d) => [d.id, d]))
     expect(byId.d1.showSignals).toBe(true)
+    expect(byId.d1.classesOf3).toBe(true)   // acquisition_un1t
     expect(byId.d1.signals).toEqual(SIG)
   })
 

@@ -39,6 +39,10 @@ const PipelineReclassifySchema = z.object({
   // Honoured ONLY with dry_run: a real run never classifies a disabled board.
   // PIPE3 — and Stillorgan's two claim boards before mig 798 enables them.
   include_disabled: z.array(z.enum(['acquisition', 'paid_trial', 'programmes'])).optional(),
+  // PIPEBUILD.3d — and a DISABLED offer board (module offer), named by its
+  // pipeline id, dry-run as itself so it can be previewed before it is switched
+  // on. Honoured ONLY with dry_run; a non-offer row is skipped by the run.
+  board_ids: z.array(uuidLike).max(20).optional(),
   // HATCHPIPE.5 — instead of classifying, re-date the open deals on the
   // location's un1t.online boards from the un1t evidence (created_at,
   // stage_entered_at; no stage change). Dry-run it first. Needs an explicit
@@ -46,6 +50,8 @@ const PipelineReclassifySchema = z.object({
   restamp_dates: z.boolean().optional(),
 }).refine((b) => !(b.restamp_dates && b.include_disabled?.length), {
   message: 'restamp_dates cannot be combined with include_disabled', path: ['include_disabled'],
+}).refine((b) => !(b.restamp_dates && b.board_ids?.length), {
+  message: 'restamp_dates cannot be combined with board_ids', path: ['board_ids'],
 }).refine((b) => !b.restamp_dates || Boolean(b.location_id), {
   message: 'restamp_dates needs an explicit location_id', path: ['location_id'],
 })
@@ -90,6 +96,7 @@ export async function POST(request) {
     source,
     userId: user.id || null,
     ...(dryRun && body?.include_disabled?.length ? { includeDisabled: body.include_disabled } : {}),
+    ...(dryRun && body?.board_ids?.length ? { includeDisabledBoardIds: body.board_ids } : {}),
   })
 
   // The orchestrator returns ok:true even on partial — the audit row
