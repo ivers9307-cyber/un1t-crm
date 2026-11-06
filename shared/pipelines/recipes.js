@@ -51,6 +51,22 @@ const PROMO_ENDING = 'Hi {{1}}, your {offer} at {studio} has now ended 👋 I ho
 
 // ---------- graph builders ----------
 
+function stableHash(text) {
+  let h = 5381
+  for (let i = 0; i < text.length; i += 1) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0
+  return h.toString(36).padStart(6, '0').slice(-6)
+}
+
+/** `${boardKey}_${packKey}_${suffix}`, never truncated: a long boardKey is shortened
+ *  to a prefix plus a stable hash so the packKey and suffix always survive. */
+export function tagFor(boardKey, packKey, suffix) {
+  const full = `${boardKey}_${packKey}_${suffix}`
+  if (full.length <= TAG_MAX) return full
+  const room = TAG_MAX - packKey.length - suffix.length - 2
+  if (room < 8) throw new Error(`tag for ${packKey}/${suffix} cannot fit in ${TAG_MAX} characters`)
+  return `${boardKey.slice(0, room - 7)}_${stableHash(boardKey)}_${packKey}_${suffix}`
+}
+
 function graphBuilder(kind, spec) {
   return (ctx) => {
     const { boardKey, packKey, stageSlug, ids } = ctx
@@ -59,7 +75,7 @@ function graphBuilder(kind, spec) {
     let n = 0
     const node = (type, config) => { const id = `n${++n}`; nodes.push({ id, type, config }); return id }
     const edge = (from, to, label) => edges.push(label ? { from, to, label } : { from, to })
-    const tag = (suffix) => node('apply_tag', { tag: `${boardKey}_${packKey}_${suffix}`.slice(0, TAG_MAX) })
+    const tag = (suffix) => node('apply_tag', { tag: tagFor(boardKey, packKey, suffix) })
     const send = (ref) => node('whatsapp', { template_id: ids[ref], variables: { 1: 'first_name' } })
     const inStage = () => node('branch', { predicate: { type: 'in_pipeline_stage_at_studio', stages: [stageSlug] } })
     const booked = (days) => node('branch', { predicate: { type: 'booked_class_at_studio', within_days: days } })
@@ -198,6 +214,13 @@ export const RECIPES = Object.freeze({
 
 // ---------- rendering ----------
 
+// Operator input: single-line, and never able to add Meta variables.
+function cleanFillIn(name, value) {
+  const v = String(value ?? '')
+  if (v.includes('{{') || v.includes('}}')) throw new Error(`${name} must not contain {{ or }}`)
+  return v.replace(/\s+/g, ' ').trim()
+}
+
 function fillIns(text, values) {
   return text.replace(/(?<!\{)\{([a-z_]+)\}(?!\})/g, (_, k) => {
     if (!(k in values)) throw new Error(`unknown fill-in {${k}}`)
@@ -229,11 +252,11 @@ export function renderPack(recipeKey, packKey, opts = {}) {
   const { boardKey, studioSlug, studioName, offerName, durationDays, signer } = opts
   const checkpointDay = packDef.day ?? 7
   const values = {
-    studio: studioName ?? '',
-    offer: offerName ?? '',
+    studio: cleanFillIn('studioName', studioName),
+    offer: cleanFillIn('offerName', offerName),
     days: String(durationDays ?? ''),
     days_left: String(Number.isFinite(durationDays) ? Math.max(durationDays - checkpointDay, 0) : ''),
-    signer: signer ?? '',
+    signer: cleanFillIn('signer', signer),
   }
   const templates = packDef.templates.map((t) => {
     const components = [{

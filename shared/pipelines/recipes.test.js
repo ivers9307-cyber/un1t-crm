@@ -9,6 +9,21 @@ const BASE = {
   appLinks: { iosUrl: 'https://apps.apple.com/ie/app/un1t-class-booking/id1532075895', androidUrl: 'https://play.google.com/store/apps/details?id=ie.zappy.fennec.untholborn' },
 }
 const bodyOf = (t) => t.components.find((c) => c.type === 'BODY').text
+// Every path from the trigger to a whatsapp node passes an in-stage branch via its yes edge.
+function expectGuarded(g, label) {
+  const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]))
+  const out = (id) => g.edges.filter((e) => e.from === id)
+  const walk = (id, guarded, seen) => {
+    const n = byId[id]
+    if (n.type === 'whatsapp') expect(guarded, `${label} ${id}`).toBe(true)
+    for (const e of out(id)) {
+      const stageYes = n.type === 'branch' && n.config.predicate.type === 'in_pipeline_stage_at_studio' && e.label === 'yes'
+      walk(e.to, guarded || stageYes, seen)
+    }
+  }
+  for (const e of out('trigger')) walk(e.to, false)
+  expect(g.nodes.some((n) => n.type === 'whatsapp')).toBe(true)
+}
 const allPacks = () => Object.values(RECIPES).flatMap((r) => r.packs.map((p) => [r.key, p.key]))
 
 describe('recipes', () => {
@@ -40,8 +55,7 @@ describe('recipes', () => {
         expect(n.config.tag.startsWith(`reset_${pk}_`)).toBe(true)
         expect(n.config.tag.length).toBeLessThanOrEqual(60)
       }
-      // every WhatsApp node is guarded by an in-stage check somewhere upstream
-      expect(g.nodes.some((x) => x.type === 'branch' && x.config.predicate.type === 'in_pipeline_stage_at_studio')).toBe(true)
+      expectGuarded(g, `${rk}/${pk}`)
       const firstWait = g.nodes.find((x) => x.type === 'wait')
       if (firstWait && pk !== 'trial_done') expect(firstWait.config).toEqual({ minutes: 1 })
     }
@@ -98,5 +112,40 @@ describe('recipes', () => {
     expect(t('after_first_class').main).toBe('Hi {{1}}, great to have you in for your first class of the 14 Day Reset at UN1T Stillorgan 💪 How did you find it? If you\'ve any questions about classes, I\'m here to help. The more you come in over the 14 days, the more you\'ll get out of it. Download the app to book your classes, or reply here and I can get you sorted. Thanks, Garrett')
     expect(t('halfway').main).toBe('Hi {{1}}, you\'re halfway through your 14 Day Reset at UN1T Stillorgan 💪 You\'ve 7 days of unlimited classes left, so book your next few sessions now and finish strong. Any questions, just reply here. Garrett')
     expect(t('halfway').nudge).toBe(book)
+  })
+
+  it('tagsNeverCollideWithLongBoardKey', () => {
+    const boardKey = 'a_very_long_board_key_name_that_goes_on_and_on_xx12'.padEnd(50, 'z').slice(0, 50)
+    const other = boardKey.slice(0, 49) + 'y'
+    expect(boardKey.length).toBe(50)
+    const tagsOf = (bk, only) => allPacks().filter(([rk]) => !only || rk === only).flatMap(([rk, pk]) => {
+      const { templates, buildGraph } = renderPack(rk, pk, { ...BASE, boardKey: bk })
+      const g = buildGraph(Object.fromEntries(templates.map((t) => [t.ref, 'id'])), 's')
+      const tags = g.nodes.filter((n) => n.type === 'apply_tag').map((n) => n.config.tag)
+      expect(new Set(tags).size, `${rk}/${pk}`).toBe(tags.length)
+      tags.forEach((t) => expect(t.length).toBeLessThanOrEqual(60))
+      return tags
+    })
+    // one board per recipe, so uniqueness is judged within a recipe
+    for (const rk of Object.keys(RECIPES)) {
+      const a = tagsOf(boardKey, rk)
+      expect(new Set(a).size).toBe(a.length)
+      expect(tagsOf(other, rk).filter((t) => a.includes(t))).toEqual([])
+    }
+    expect(tagsOf(boardKey).some((t) => t.endsWith('_already_booked'))).toBe(true)
+  })
+
+  it('rejectsDoubleBraceInFillIn', () => {
+    for (const k of ['studioName', 'offerName', 'signer']) {
+      for (const bad of ['x {{1}}', 'a {{', 'b }}']) {
+        expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, [k]: bad })).toThrow(/\{\{ or \}\}/)
+      }
+    }
+  })
+
+  it('collapsesNewlinesInSigner', () => {
+    const t = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, signer: '  Garrett\n\nat   UN1T\r\n' }).templates[0]
+    expect(bodyOf(t).endsWith('book it for you. Garrett at UN1T')).toBe(true)
+    expect(bodyOf(t)).not.toContain('\n')
   })
 })
