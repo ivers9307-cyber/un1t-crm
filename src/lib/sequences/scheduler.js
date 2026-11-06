@@ -19,10 +19,12 @@
 import { createServerClient } from '@/lib/supabase'
 import { logWarn, logInfo, logError } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
-import { nextAcceptableSend, QUIET_HOURS_COLUMNS } from '@/lib/send-quiet-hours'
+import { nextAcceptableSend } from '@/lib/send-quiet-hours'
 import { DEFAULT_TZ, resolveZone, instantToZonedParts, getLocationZone, LocationZoneReadError } from '@/lib/location-time'
 import { evaluateSequenceAudience } from './audience.js'
 import { TemplateNotApprovedDeferral, templateStamp, templateWaitDecision, withoutTemplateWait } from './template-wait.js'
+import { CLAIM_LEASE_MS } from './claim-lease.js'
+import { hasSendWindow, loadQuietHours } from './send-timing.js'
 import {
   sendEmailStep,
   sendWhatsappStep,
@@ -38,12 +40,9 @@ import {
 
 export const MAX_ERRORS = 5
 export const PROCESS_BATCH_SIZE = 100
-// How far forward a claimed enrolment's next_step_at is leased while the
-// runner processes it. The runner has no SELECT … FOR UPDATE SKIP LOCKED,
-// so each row is claimed with a CAS bump (see runSequences); the lease is
-// long enough to cover a tick's processing and short enough that a crashed
-// tick's enrolment is retried promptly.
-export const CLAIM_LEASE_MS = 10 * 60_000
+// The claim lease (see runSequences) lives in ./claim-lease.js since
+// PIPEBUILD.1g, so template-wait.js can read it without a cycle.
+export { CLAIM_LEASE_MS }
 
 // ── Public: pause / resume / exit ────────────────────────────────
 
@@ -134,24 +133,9 @@ export function clampToSendWindow(candidate, window, zone = DEFAULT_TZ) {
   return attempt
 }
 
-/**
- * Does this send_window actually constrain anything?
- *
- * Deliberately the same predicate clampToSendWindow uses to decide it has
- * nothing to do: null/undefined, `{}`, and `{ start_hour: null, end_hour:
- * null, skip_days: [] }` all mean "the operator configured no window". They
- * must agree, or an empty object would count as a sequence-level window and
- * silently block the quiet-hours fallback below.
- *
- * @param {object|null|undefined} window
- * @returns {boolean}
- */
-export function hasSendWindow(window) {
-  if (!window || typeof window !== 'object') return false
-  if (Number.isFinite(window.start_hour)) return true
-  if (Number.isFinite(window.end_hour)) return true
-  return Array.isArray(window.skip_days) && window.skip_days.length > 0
-}
+// hasSendWindow lives in ./send-timing.js since PIPEBUILD.1g (template-wait.js
+// needs it and cannot import this module); re-exported for existing callers.
+export { hasSendWindow }
 
 // ─── SEQ-QUIET.1: the location's quiet hours as a fallback ────────
 //
@@ -183,31 +167,9 @@ export function hasSendWindow(window) {
 // handles the DST edges, including the spring-forward Sunday where 01:00 does
 // not exist.
 
-const QUIET_HOURS_SELECT =
-  `${QUIET_HOURS_COLUMNS.enabled}, ${QUIET_HOURS_COLUMNS.start}, ${QUIET_HOURS_COLUMNS.end}`
-
-/**
- * The company_settings quiet-hours row for a location, or null.
- *
- * A missing row (or a read failure) returns null, which normalizeQuietHours
- * reads as "use the code-side default" — the same posture as the settings
- * route. A location with no settings row must not silently mean "no quiet
- * hours"; that is the whole point of the default existing in two places.
- */
-async function loadQuietHours(db, locationId) {
-  if (!locationId) return null
-  try {
-    const { data, error } = await db
-      .from('company_settings')
-      .select(QUIET_HOURS_SELECT)
-      .eq('location_id', locationId)
-      .limit(1)
-    if (error) return null
-    return (data && data[0]) || null
-  } catch {
-    return null
-  }
-}
+// loadQuietHours (a missing row or a failed read → null → the code-side
+// default) lives in ./send-timing.js since PIPEBUILD.1g, beside readQuietHours,
+// the throwing variant the template-approval wake-up uses.
 
 // ─── Tier 1C: goal-tracking helper (mig 088) ─────────────────────
 
@@ -363,6 +325,20 @@ export async function runSequences({ now = new Date() } = {}) {
     return quietCache.get(locationId)
   }
 
+  // Mig 089 + SEQ-QUIET.1: the one fire-time clamp for a step. A sequence's
+  // own send_window wins outright; a windowless sequence falls back to the
+  // studio's quiet hours (see the block comment above loadQuietHours — the
+  // two are never merged). Test enrolments bypass BOTH so QA isn't blocked by
+  // weekend/night hours. PIPEBUILD.1g: the template-wait retry goes through
+  // here too, so a template approved at 22:30 cannot send at 22:35.
+  const clampFireAt = async (rawNext, { sequence, zone, isTest }) => {
+    if (isTest) return rawNext
+    if (hasSendWindow(sequence?.send_window)) {
+      return clampToSendWindow(rawNext, sequence.send_window, zone ?? undefined)
+    }
+    return nextAcceptableSend(rawNext, await quietHoursFor(sequence?.location_id), zone ?? undefined)
+  }
+
   // Pick due rows. Order by next_step_at so older deliveries fire
   // first. SKIP LOCKED isn't directly available via PostgREST so we
   // tolerate the small chance of two cron invocations grabbing the
@@ -392,6 +368,10 @@ export async function runSequences({ now = new Date() } = {}) {
   if (!due || due.length === 0) return stats
 
   for (const enrollment of due) {
+    // Hoisted out of the try so the catch's template-wait deferral can clamp
+    // its retry on the same studio clock (PIPEBUILD.1g).
+    let sequence = null
+    let zone = null
     try {
       // Atomic claim — the runner has no SELECT … FOR UPDATE SKIP LOCKED, so
       // two overlapping cron ticks can both pick this due row. The step SENDS
@@ -414,7 +394,7 @@ export async function runSequences({ now = new Date() } = {}) {
       }
 
       // Reload the parent sequence + the contact in one go.
-      const [{ data: sequence }, { data: contact }] = await Promise.all([
+      const [{ data: sequenceRow }, { data: contact }] = await Promise.all([
         db.from('email_sequences').select('*').eq('id', enrollment.sequence_id).single(),
         db.from('contacts')
           // LOCCOMMS.5 — contact_location_preferences is REQUIRED here: the step
@@ -424,6 +404,7 @@ export async function runSequences({ now = new Date() } = {}) {
           .select('*, contact_preferences(unsubscribe_token), contact_location_preferences(location_id, email_marketing, sms_marketing, whatsapp_marketing)')
           .eq('id', enrollment.contact_id).single(),
       ])
+      sequence = sequenceRow
       if (!sequence || !contact) {
         await db.from('sequence_enrollments').update({
           status: 'exited',
@@ -539,7 +520,6 @@ export async function runSequences({ now = new Date() } = {}) {
       // nothing sent and no error_count, and the claim lease above
       // (CLAIM_LEASE_MS) brings it back on a later tick. Test enrolments never
       // clamp, so they need no zone.
-      let zone = null
       if (enrollment.metadata?.test !== true) {
         try {
           zone = await getLocationZone(db, sequence.location_id)
@@ -664,21 +644,9 @@ export async function runSequences({ now = new Date() } = {}) {
         const rawNext = isTest
           ? new Date(now.getTime() + accelSeconds * 1000)
           : new Date(now.getTime() + nextStepDelayMs(followingStep.data))
-        // Mig 089: respect the per-sequence send window. SEQ-QUIET.1: a
-        // sequence with no window of its own falls back to the location's
-        // quiet hours (see the block comment above loadQuietHours — the
-        // sequence-level window wins outright; the two are never merged).
-        // Test enrolments bypass BOTH so QA isn't blocked by weekend/night
-        // hours.
-        let clamped
-        if (isTest) {
-          clamped = rawNext
-        } else if (hasSendWindow(sequence.send_window)) {
-          clamped = clampToSendWindow(rawNext, sequence.send_window, zone)
-        } else {
-          clamped = nextAcceptableSend(rawNext, await quietHoursFor(sequence.location_id), zone)
-        }
-        nextFireAt = clamped.toISOString()
+        // Mig 089 send window / SEQ-QUIET.1 quiet-hours fallback; test
+        // enrolments bypass both (clampFireAt).
+        nextFireAt = (await clampFireAt(rawNext, { sequence, zone, isTest })).toISOString()
       }
       const newStatus = followingStep.data ? 'active' : 'completed'
 
@@ -795,8 +763,15 @@ export async function runSequences({ now = new Date() } = {}) {
             stats.exited_stale = (stats.exited_stale || 0) + 1
           }
         } else {
+          // PIPEBUILD.1g — the hourly retry is a fire time like any other: it
+          // is clamped exactly as a step's next_step_at is (send_window wins,
+          // else the studio's quiet hours; test enrolments bypass), because
+          // the retry that finds the template APPROVED sends on the spot.
+          const retryAt = await clampFireAt(new Date(decision.nextAt), {
+            sequence, zone, isTest: enrollment.metadata?.test === true,
+          })
           const { error: waitErr } = await db.from('sequence_enrollments').update({
-            next_step_at: decision.nextAt,
+            next_step_at: retryAt.toISOString(),
             metadata: decision.metadata,
             last_processed_at: now.toISOString(),
             last_error: `${templateStamp(e.templateId)}waiting for Meta to approve "${e.templateName}" (${e.status})`,

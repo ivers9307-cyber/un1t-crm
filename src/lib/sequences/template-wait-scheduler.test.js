@@ -93,9 +93,10 @@ describe('runSequences — TemplateNotApprovedDeferral handling', () => {
     const { db, statements } = makeDb(routeFor(baseEnrollment))
     createServerClient.mockReturnValue(db)
     sendWhatsappStep.mockRejectedValue(deferral())
-    const before = Date.now()
+    // Midday Dublin: outside quiet hours, so the retry is exactly +1 h.
+    const now = new Date('2026-11-06T12:00:00.000Z')
 
-    const stats = await runSequences()
+    const stats = await runSequences({ now })
 
     expect(stats.deferred).toBe(1)
     expect(stats.errored).toBe(0)
@@ -104,20 +105,21 @@ describe('runSequences — TemplateNotApprovedDeferral handling', () => {
     expect(payload).not.toHaveProperty('error_count')
     expect(payload).not.toHaveProperty('status')
     expect(payload).not.toHaveProperty('current_step_order')
-    const at = Date.parse(payload.next_step_at)
-    expect(Math.abs(at - (before + 60 * 60_000))).toBeLessThan(60_000)
+    expect(payload.next_step_at).toBe('2026-11-06T13:00:00.000Z')
+    expect(plainUpdate(statements).ops).toContainEqual({ method: 'eq', args: ['status', 'active'] })
     expect(payload.metadata.template_wait).toMatchObject({ template_id: 'tpl-1', step_order: 1 })
     expect(payload.last_error).toBe(`${templateStamp('tpl-1')}waiting for Meta to approve "welcome" (PENDING)`)
   })
 
   it('pausedByMetaDefersThenExits', async () => {
-    const since = new Date(Date.now() - 49 * 3_600_000).toISOString()
+    const now = new Date('2026-11-06T12:00:00.000Z')
+    const since = new Date(now.getTime() - 49 * 3_600_000).toISOString()
     const enrollment = { ...baseEnrollment, metadata: { template_wait: { template_id: 'tpl-1', step_order: 1, since } } }
     const { db, statements } = makeDb(routeFor(enrollment))
     createServerClient.mockReturnValue(db)
     sendWhatsappStep.mockRejectedValue(deferral('PAUSED'))
 
-    const stats = await runSequences()
+    const stats = await runSequences({ now })
 
     expect(stats.exited_stale).toBe(1)
     expect(stats.deferred).toBe(0)
@@ -125,6 +127,51 @@ describe('runSequences — TemplateNotApprovedDeferral handling', () => {
     const payload = plainUpdate(statements).ops[0].args[0]
     expect(payload).toMatchObject({ status: 'exited', exit_reason: 'stale_template_wait', next_step_at: null })
     expect(payload.exited_at).toEqual(expect.any(String))
+    expect(plainUpdate(statements).ops).toContainEqual({ method: 'eq', args: ['status', 'active'] })
+  })
+
+  // PIPEBUILD.1g — the retry is a fire time: the one that finds the template
+  // APPROVED sends on the spot, so it must respect the studio's quiet hours.
+  it('deferralInQuietHoursRetriesAtTheEndOfQuietHours', async () => {
+    const { db, statements } = makeDb(routeFor(baseEnrollment))
+    createServerClient.mockReturnValue(db)
+    sendWhatsappStep.mockRejectedValue(deferral())
+    // 22:00 Europe/Dublin (GMT in November); default quiet hours 21:00-08:00.
+    const now = new Date('2026-11-06T22:00:00.000Z')
+
+    const stats = await runSequences({ now })
+
+    expect(stats.deferred).toBe(1)
+    const update = plainUpdate(statements)
+    expect(update.ops[0].args[0].next_step_at).toBe('2026-11-07T08:00:00.000Z')
+    expect(update.ops).toContainEqual({ method: 'eq', args: ['status', 'active'] })
+  })
+
+  it('deferralRespectsTheSequenceSendWindowOverQuietHours', async () => {
+    const route = routeFor(baseEnrollment)
+    const { db, statements } = makeDb((state) => state.table === 'email_sequences'
+      ? { data: { id: 'seq-1', status: 'active', location_id: 'loc-1', goal_config: null, send_window: { start_hour: 10, end_hour: 18 } } }
+      : route(state))
+    createServerClient.mockReturnValue(db)
+    sendWhatsappStep.mockRejectedValue(deferral())
+    const now = new Date('2026-11-06T22:00:00.000Z')
+
+    await runSequences({ now })
+
+    // The window (10:00-18:00) wins outright: 10:00 Dublin, not 08:00.
+    expect(plainUpdate(statements).ops[0].args[0].next_step_at).toBe('2026-11-07T10:00:00.000Z')
+  })
+
+  it('testEnrolmentDeferralIsNotClamped', async () => {
+    const enrollment = { ...baseEnrollment, metadata: { test: true } }
+    const { db, statements } = makeDb(routeFor(enrollment))
+    createServerClient.mockReturnValue(db)
+    sendWhatsappStep.mockRejectedValue(deferral())
+    const now = new Date('2026-11-06T22:00:00.000Z')
+
+    await runSequences({ now })
+
+    expect(plainUpdate(statements).ops[0].args[0].next_step_at).toBe('2026-11-06T23:00:00.000Z')
   })
 
   it('advanceClearsWaitRecord', async () => {
