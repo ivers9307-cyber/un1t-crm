@@ -7253,6 +7253,21 @@ registry.registerPath({
     409: { description: 'Refused (see description)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
+registry.registerPath({
+  method: 'post',
+  path: '/api/pipelines/{id}/dry-run',
+  tags: ['Pipelines'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Dry-run one offer board: who would enter, per stage, and from which boards (owner / master at the studio)',
+  request: { params: z.object({ id: uuidLike }) },
+  description: 'Runs the placement pass with dryRun true (nothing is written); a board that is off is included for this run only. Returns { entering, byStage: [{ slug, name, count }], overlap: [{ boardKey, boardName?, count }], contactsSeen, errors }. Built-in boards are 409; a failed run is 503.',
+  responses: {
+    200: { description: 'The dry-run summary' },
+    ...boardErrors,
+    409: { description: 'Built-in board', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The run could not be completed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 for (const [mode, verb] of [['enable', 'on'], ['disable', 'off']]) {
   registry.registerPath({
     method: 'post',
