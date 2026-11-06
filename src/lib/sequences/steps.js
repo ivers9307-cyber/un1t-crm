@@ -49,6 +49,7 @@ import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 import { bookedWithinDaysError } from './graph/schema.js'
+import { templateStamp, TEMPLATE_WAIT_STATUSES, TemplateNotApprovedDeferral } from './template-wait.js'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -462,12 +463,26 @@ async function resolveApprovedWhatsappTemplate(db, step, sequence) {
     .select('*')
     .eq('id', step.whatsapp_template_id)
     .single()
-  if (!template) throw new Error('WhatsApp template not found.')
-  if (template.status !== 'APPROVED') {
-    throw new Error(`WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
-  }
+  const stamp = templateStamp(step.whatsapp_template_id)
+  if (!template) throw new Error(`${stamp}WhatsApp template not found.`)
+  // PIPEBUILD.1g — the studio check runs BEFORE the status checks: another
+  // studio's template is an operator fault whatever its status, and a PENDING
+  // one must error, not wait 48 h and then exit as if Meta were slow (its
+  // approval would never wake this sequence anyway: onTemplateApproved only
+  // touches the template's own studio).
   if (template.location_id !== sequence.location_id) {
-    throw new Error('WhatsApp template belongs to a different location than the sequence.')
+    throw new Error(`${stamp}WhatsApp template belongs to a different location than the sequence.`)
+  }
+  if (template.status !== 'APPROVED') {
+    // PIPEBUILD.1b — Meta may still approve it: wait (the scheduler retries
+    // hourly and gives up after 48 h) instead of error-then-pause.
+    if (TEMPLATE_WAIT_STATUSES.includes(template.status)) {
+      throw new TemplateNotApprovedDeferral({
+        templateId: step.whatsapp_template_id, templateName: template.name,
+        status: template.status, stepOrder: step.step_order ?? null,
+      })
+    }
+    throw new Error(`${stamp}WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
   }
   return template
 }
@@ -796,6 +811,12 @@ export async function updateFieldStep(db, { step, contact }) {
 //                                         within_days narrows it to a class in
 //                                         the last N days or still to come
 //                                         (STILL39SEQ.1)
+//   - has_future_booking_at_studio {} — a non-cancelled class_bookings row at
+//                                         the sequence's studio starting after
+//                                         now, or a /start request in flight
+//                                         (PIPEBUILD.1d: tells "already booked
+//                                         their next class" from "attended and
+//                                         stopped")
 //   - in_pipeline_stage_at_studio { stages } — the contact has an open deal
 //                                         at the sequence's studio, on an
 //                                         enabled board, in one of the stage
@@ -849,7 +870,12 @@ const IN_FLIGHT_CLASS_REQUEST_STATUSES = ['queued', 'processing', 'booked', 'nee
 // STILL39SEQ.1 — `sinceIso` (from the predicate's within_days) narrows both
 // reads: a class starting since then (so one still to come counts) and a
 // request made since then. Absent = every booking ever, as before.
-async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = null }) {
+//
+// PIPEBUILD.1d — `futureFromIso` (has_future_booking_at_studio) asks only for a
+// class still to come: a booking, or an in-flight request, whose class starts
+// after it (a request with no starts_at does not count). It takes
+// no window, so it never combines with `sinceIso`.
+async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = null, futureFromIso = null, label = 'booked_class_at_studio' }) {
   let bookingsQuery = db
     .from('class_bookings')
     .select('id')
@@ -857,8 +883,9 @@ async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = nu
     .eq('location_id', locationId)
     .neq('status', 'CANCELLED')
   if (sinceIso) bookingsQuery = bookingsQuery.gte('starts_at', sinceIso)
+  if (futureFromIso) bookingsQuery = bookingsQuery.gt('starts_at', futureFromIso)
   const { data: bookings, error: bookingsError } = await bookingsQuery.limit(1)
-  if (bookingsError) throw new Error(`branch booked_class_at_studio: ${bookingsError.message}`)
+  if (bookingsError) throw new Error(`branch ${label}: ${bookingsError.message}`)
   if (bookings && bookings.length > 0) return true
 
   let requestsQuery = db
@@ -868,8 +895,11 @@ async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = nu
     .eq('location_id', locationId)
     .in('status', IN_FLIGHT_CLASS_REQUEST_STATUSES)
   if (sinceIso) requestsQuery = requestsQuery.gte('created_at', sinceIso)
+  // A request's own class time must still be to come: a stale 'booked' or
+  // 'needs_review' row (null starts_at included) is not a future booking.
+  if (futureFromIso) requestsQuery = requestsQuery.gt('starts_at', futureFromIso)
   const { data: requests, error: requestsError } = await requestsQuery.limit(1)
-  if (requestsError) throw new Error(`branch booked_class_at_studio: ${requestsError.message}`)
+  if (requestsError) throw new Error(`branch ${label}: ${requestsError.message}`)
   return Boolean(requests && requests.length > 0)
 }
 
@@ -1003,6 +1033,18 @@ export async function evaluateBranchPredicate(db, { contact, predicate, location
     const days = predicate.within_days == null || predicate.within_days === '' ? null : Number(predicate.within_days)
     const sinceIso = days ? new Date(nowMs - days * 86_400_000).toISOString() : null
     return hasBookedClassAtStudio(db, { contactId: contact.id, locationId, sinceIso })
+  }
+
+  if (type === 'has_future_booking_at_studio') {
+    // Thrown, not guessed, like booked_class_at_studio. starts_at is an
+    // instant, so "now" needs no timezone maths.
+    if (!locationId) throw new Error('branch has_future_booking_at_studio: the sequence studio is required')
+    return hasBookedClassAtStudio(db, {
+      contactId: contact.id,
+      locationId,
+      futureFromIso: new Date(nowMs).toISOString(),
+      label: 'has_future_booking_at_studio',
+    })
   }
 
   if (type === 'has_tag') {

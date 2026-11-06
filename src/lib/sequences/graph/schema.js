@@ -33,7 +33,7 @@ export const ACTIVE_NODE_TYPES = NODE_TYPES.filter((t) => !RETIRED_NODE_TYPES.in
 // the builder's picker order. TDSEQ.1 added the two studio-scoped ones:
 // in_pipeline_stage_at_studio { stages } and whatsapp_reply_since_enrolment {}.
 export const BRANCH_PREDICATE_TYPES = [
-  'has_tag', 'booked_class_at_studio', 'in_pipeline_stage_at_studio', 'whatsapp_reply_since_enrolment',
+  'has_tag', 'booked_class_at_studio', 'has_future_booking_at_studio', 'in_pipeline_stage_at_studio', 'whatsapp_reply_since_enrolment',
   'field_equals', 'field_in',
 ]
 

@@ -7153,6 +7153,23 @@ registry.registerPath({
   },
 })
 
+// PIPEBUILD.1e — which stages of each enabled board have a live follow-up.
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/stage-coverage',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's pipeline stages with the live follow-ups aimed at each",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  description: '{ boards: [{ id, key, name, stages: [{ id, slug, name, isPile, followups: [{ id, name, trigger }] }] }] }. Enabled boards only, archived stages left out; a follow-up is an active sequence on pipeline_stage_change to that stage, or the stage\'s entry trigger. Needs the sequence-builder permission or a manager role at the studio.',
+  responses: {
+    200: { description: 'The coverage' },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Could not read the coverage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
 // only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.
 registry.registerPath({

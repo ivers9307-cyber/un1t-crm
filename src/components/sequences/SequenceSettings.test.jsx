@@ -466,39 +466,27 @@ describe('Webhook secret panel after a save (SEQPAGEGATE.1 review)', () => {
   })
 })
 
-// HATCHCARD.3 — the €39 board's stages can start a sequence. The Hatch hourly
-// un1t pass fires pipeline_stage_change for every landed move (TDSEQ.1), so a
-// sequence on paid_trial_day_7 / paid_trial_done reaches €39 buyers there.
+// HATCHCARD.3 — the €39 board's stages can start a sequence. Since PIPEBUILD.1e
+// they come from the studio's real boards (the stage-coverage read), not a
+// hard-coded list, so a board's stages appear labelled with the board's name.
 describe('Pipeline stage trigger lists the €39 board stages (HATCHCARD.3)', () => {
-  beforeEach(() => { vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) })
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
   const options = (select) => Array.from(select.querySelectorAll('option')).map((o) => [o.value, o.textContent])
 
-  function stageSelects() {
-    const { container, getByText } = render(
+  it('both stage selects (from / to) offer the €39 board\'s stages, labelled with the board', async () => {
+    const stages = ['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
+      .map((slug, i) => ({ id: `s${i}`, slug, name: slug, isPile: false, followups: [] }))
+    vi.stubGlobal('fetch', vi.fn((url) => String(url).includes('/stage-coverage')
+      ? Promise.resolve({ json: () => Promise.resolve({ success: true, data: { boards: [{ id: 'b', key: 'paid_trial', name: '€39 Trial', stages }] } }) })
+      : new Promise(() => {})))
+    const { container, getByText, findAllByText } = render(
       <SequenceSettings sequence={{ id: 'seq-1', location_id: 'loc-1', name: 'Day 7', status: 'draft', trigger_type: 'pipeline_stage_change', trigger_config: {} }} />,
     )
     fireEvent.click(getByText('Settings & trigger'))
-    return Array.from(container.querySelectorAll('select')).filter((s) => options(s).some(([v]) => v === 'new_lead'))
-  }
-
-  it('both stage selects (from / to) offer the five €39 stages after the acquisition ones', () => {
-    const selects = stageSelects()
+    await findAllByText('€39 Trial · paid_trial_day_7')
+    const selects = Array.from(container.querySelectorAll('select')).filter((s) => options(s).some(([v]) => v === 'paid_trial_day_7'))
     expect(selects).toHaveLength(2)
-    for (const s of selects) {
-      const values = options(s).map(([v]) => v)
-      for (const slug of ['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']) {
-        expect(values).toContain(slug)
-      }
-      expect(values.indexOf('paid_trial_new_lead')).toBeGreaterThan(values.indexOf('dormant'))
-    }
-  })
-  it('each €39 stage is labelled as the €39 board\'s, so it is never mistaken for the free trial\'s', () => {
-    const [to] = stageSelects()
-    const label = Object.fromEntries(options(to))
-    expect(label.paid_trial_day_7).toMatch(/€39/)
-    expect(label.paid_trial_done).toMatch(/€39/)
-    expect(label.trial_done).toBe('trial_done')
+    for (const s of selects) expect(options(s).map(([v]) => v)).toEqual(['', ...stages.map((x) => x.slug)])
   })
 })
 
@@ -518,5 +506,72 @@ describe('Trigger list offers the €39 purchase (PAIDTRIALTRIGGER.1)', () => {
     const checkout = Array.from(select.options).find((o) => o.value === 'paid_trial_checkout_purchased')
     expect(checkout).toBeTruthy()
     expect(checkout.textContent).toMatch(/€39.*checkout/)
+  })
+})
+
+describe('Stage pickers — real stages (PIPEBUILD.1e)', () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const coverage = { success: true, data: { boards: [
+    { id: 'b1', key: 'main', name: 'Main', stages: [{ id: 's1', slug: 'first_class', name: 'First class', isPile: false, followups: [] }] },
+  ] } }
+  const optionValues = (select) => Array.from(select.querySelectorAll('option')).map(o => o.value)
+
+  function open(config, stageCoverage = () => Promise.resolve({ json: () => Promise.resolve(coverage) })) {
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      if (String(url).includes('/stage-coverage')) return stageCoverage()
+      return new Promise(() => {})
+    }))
+    const seq = { id: 'seq-1', location_id: 'loc-1', name: 'S', status: 'draft', trigger_type: 'pipeline_stage_change', trigger_config: config }
+    const r = render(<SequenceSettings sequence={seq} />)
+    fireEvent.click(r.getByText('Settings & trigger'))
+    return r
+  }
+
+  it('stagePickerListsFetchedStages', async () => {
+    const { container, findAllByText } = open({})
+    await findAllByText('Main · First class')
+    const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('first_class'))
+    expect(optionValues(sel)).toEqual(['', 'first_class'])
+  })
+
+  it('keepsUnknownStoredSlugSelectable', async () => {
+    const { container, findAllByText } = open({ to_status: 'old_stage' })
+    await findAllByText('Main · First class')
+    const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('old_stage'))
+    expect(sel.value).toBe('old_stage')
+    expect(sel.textContent).toContain('old_stage (not on an active board)')
+  })
+
+  // PIPEBUILD.1g — before the boards are known, a stored slug shows bare.
+  it('storedSlugShowsBareWhileBoardsLoad', () => {
+    const { container } = open({ to_status: 'old_stage' }, () => new Promise(() => {}))
+    const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('old_stage'))
+    expect(sel.value).toBe('old_stage')
+    const opt = Array.from(sel.options).find(o => o.value === 'old_stage')
+    expect(opt.textContent).toBe('old_stage')
+  })
+
+  it('storedSlugShowsBareWhenTheBoardsFetchFails', async () => {
+    let failed
+    const { container } = open({ to_status: 'old_stage' }, () => { failed = Promise.reject(new Error('net')); return failed })
+    await failed.catch(() => {})
+    await new Promise((r) => setTimeout(r, 0))
+    const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('old_stage'))
+    const opt = Array.from(sel.options).find(o => o.value === 'old_stage')
+    expect(opt.textContent).toBe('old_stage')
+  })
+
+  it('warnsWhenToStageEmpty', async () => {
+    const hint = 'This fires on every stage change. Pick a "To stage" for a stage follow-up.'
+    const empty = open({})
+    expect(await empty.findByText(hint)).toBeTruthy()
+    cleanup()
+    const set = open({ to_status: 'first_class' })
+    await set.findAllByText('Main · First class')
+    expect(set.queryByText(hint)).toBeNull()
   })
 })

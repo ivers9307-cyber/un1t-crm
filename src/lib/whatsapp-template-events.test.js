@@ -1,6 +1,10 @@
 // src/lib/whatsapp-template-events.test.js
-import { describe, it, expect } from 'vitest'
-import { templateColumnUpdate, templateNotification, templateEventRow } from './whatsapp-template-events.js'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { templateColumnUpdate, templateNotification, templateEventRow, applyTemplateEvent } from './whatsapp-template-events.js'
+
+vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
+vi.mock('@/lib/sequences/template-wait', () => ({ onTemplateApproved: vi.fn(async () => ({ woken: 0, resumed: 0, leftPaused: 0 })) }))
+const { onTemplateApproved } = await import('@/lib/sequences/template-wait')
 
 const status = (event, reason) => ({ field: 'message_template_status_update', value: { event, reason, message_template_id: 1, message_template_name: 'welcome_offer', message_template_language: 'en' } })
 const quality = (next, prev) => ({ field: 'message_template_quality_update', value: { new_quality_score: next, previous_quality_score: prev, message_template_id: 1, message_template_name: 'welcome_offer' } })
@@ -19,6 +23,10 @@ describe('templateColumnUpdate', () => {
   })
   it('returns null for an unknown field', () => {
     expect(templateColumnUpdate('messages', {})).toBeNull()
+  })
+  // PIPEBUILD.1g — REINSTATED (a quality pause ended) is stored as APPROVED.
+  it('stores REINSTATED as APPROVED', () => {
+    expect(templateColumnUpdate('message_template_status_update', status('REINSTATED', 'NONE').value)).toEqual({ status: 'APPROVED', rejection_reason: null })
   })
 })
 
@@ -62,7 +70,64 @@ describe('templateEventRow', () => {
   it('quality → from prev, to new', () => {
     expect(templateEventRow('message_template_quality_update', quality('RED', 'YELLOW').value)).toEqual({ kind: 'quality', from_value: 'YELLOW', to_value: 'RED', reason: null })
   })
+  it('keeps Meta\'s raw REINSTATED on the audit row', () => {
+    expect(templateEventRow('message_template_status_update', status('REINSTATED', 'NONE').value)).toEqual({ kind: 'status', from_value: null, to_value: 'REINSTATED', reason: null })
+  })
   it('category → from prev, to new', () => {
     expect(templateEventRow('template_category_update', category('UTILITY', 'MARKETING').value)).toEqual({ kind: 'category', from_value: 'MARKETING', to_value: 'UTILITY', reason: null })
+  })
+})
+
+describe('applyTemplateEvent approval hook', () => {
+  const row = { id: 'r1', location_id: 'loc1', name: 'n', status: 'PENDING', quality_rating: null, category: 'MARKETING', rejection_reason: null }
+  function db({ updateError = null } = {}) {
+    const inserts = []
+    return {
+      inserts,
+      from(table) {
+        if (table === 'whatsapp_template_events') return { insert: async (r) => { inserts.push(r); return { error: null } } }
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }),
+          update: () => ({ eq: async () => ({ error: updateError }) }),
+        }
+      },
+    }
+  }
+  beforeEach(() => vi.mocked(onTemplateApproved).mockClear())
+  it('approvedTransitionCallsHook', async () => {
+    const d = db()
+    await applyTemplateEvent(d, 'message_template_status_update', status('APPROVED').value)
+    expect(onTemplateApproved).toHaveBeenCalledTimes(1)
+    expect(onTemplateApproved).toHaveBeenCalledWith(d, row)
+  })
+  it('reinstatedFromPausedStoresApprovedAndCallsHook', async () => {
+    const updates = []
+    const paused = { ...row, status: 'PAUSED' }
+    const inserts = []
+    const d = {
+      from(table) {
+        if (table === 'whatsapp_template_events') return { insert: async (r) => { inserts.push(r); return { error: null } } }
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: paused, error: null }) }) }),
+          update: (patch) => { updates.push(patch); return { eq: async () => ({ error: null }) } },
+        }
+      },
+    }
+    await applyTemplateEvent(d, 'message_template_status_update', status('REINSTATED', 'NONE').value)
+    expect(updates).toEqual([{ status: 'APPROVED', rejection_reason: null }])
+    expect(inserts[0]).toMatchObject({ kind: 'status', to_value: 'REINSTATED' })
+    expect(onTemplateApproved).toHaveBeenCalledTimes(1)
+    expect(onTemplateApproved).toHaveBeenCalledWith(d, paused)
+  })
+  it('nonApprovedTransitionSkipsHook', async () => {
+    await applyTemplateEvent(db(), 'message_template_status_update', status('REJECTED', 'X').value)
+    expect(onTemplateApproved).not.toHaveBeenCalled()
+  })
+  it('updateErrorSkipsHookAndAudit', async () => {
+    const d = db({ updateError: { message: 'nope' } })
+    const r = await applyTemplateEvent(d, 'message_template_status_update', status('APPROVED').value)
+    expect(r).toEqual({ skipped: 'update_failed' })
+    expect(d.inserts).toHaveLength(0)
+    expect(onTemplateApproved).not.toHaveBeenCalled()
   })
 })

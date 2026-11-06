@@ -43,6 +43,10 @@ import { canWriteActivitiesAt } from '@/lib/activity-write-gate'
 import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
+import StageFollowupCoverage from '@/components/StageFollowupCoverage'
+import { canBuildSequencesAt } from '@/lib/sequence-access'
+import { hasRoleAtLocation } from '@/lib/role-at-location'
+import { MANAGER_ROLES } from '@/lib/schemas'
 import { splitStagesByFunnel } from '@/lib/pipeline-classifier'
 import { membershipStateForPage, membershipSettingsHref, canManageMembershipSource } from '@/lib/membership/state-for-page'
 import Link from 'next/link'
@@ -217,6 +221,10 @@ export default async function PipelinePage(props) {
   // has no classifier, and an 'unknown' read is not a known absence.
   const membership = manual ? null : await membershipStateForPage(db, locationId)
   const noSourceNote = membership?.state === 'none'
+  // PIPEBUILD.1f — the follow-up coverage strip: derived boards only, for
+  // someone who can build sequences or manages this studio.
+  const canBuildSeq = canBuildSequencesAt(user, locationId)
+  const showCoverage = !manual && (canBuildSeq || hasRoleAtLocation(user, locationId, MANAGER_ROLES))
   const canManageSource = noSourceNote && canManageMembershipSource(user, locationId)
 
   // "funnel" is the derived board's word for its live columns; a manual board
@@ -241,6 +249,9 @@ export default async function PipelinePage(props) {
             ? <>Choose one in <Link href={membershipSettingsHref(locationId)} className="underline">Settings → Integrations</Link>.</>
             : 'Ask an owner to connect one.'}
         </p>
+      )}
+      {showCoverage && (
+        <StageFollowupCoverage locationId={locationId} pipelineId={activePipeline.id} canEditSequences={canBuildSeq} />
       )}
       <PipelineViewSwitcher
         pipelines={pipelines}

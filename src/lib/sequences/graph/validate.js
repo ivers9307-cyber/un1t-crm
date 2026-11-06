@@ -3,6 +3,7 @@
 // (the gate). Pure. Returns { ok, errors: [{ code, nodeId?, message }] }.
 import { parseGraphShape, TRIGGER_SOURCE_ID, BRANCH_PREDICATE_TYPES, bookedWithinDaysError } from './schema.js'
 import { urlButtonStepBlock } from '../../whatsapp-template-buttons.js'
+import { whatsappApprovalIssues } from '../template-approval.js'
 
 // TDSEQ.1 — the runner throws on a predicate it cannot evaluate (and retries
 // it until the enrolment pauses), so such a branch must not publish.
@@ -89,7 +90,7 @@ function urlButtonErrors(nodes, whatsappTemplates) {
   return out
 }
 
-export function validateGraph(graph, { whatsappTemplates } = {}) {
+export function validateGraph(graph, { whatsappTemplates, requireApprovedTemplates = false } = {}) {
   const shape = parseGraphShape(graph)
   if (!shape.ok) {
     return { ok: false, errors: [{ code: 'shape', message: shape.error.message }] }
@@ -167,6 +168,20 @@ export function validateGraph(graph, { whatsappTemplates } = {}) {
   if (cyclic) push('cycle', 'the flow contains a loop — steps must always move forward')
 
   errors.push(...urlButtonErrors(g.nodes, whatsappTemplates))
+
+  // PIPEBUILD.1a — publish only: every WhatsApp step must name an APPROVED
+  // template at this studio. Off by default so the builder's inline view and
+  // the sequence AI agent behave as before.
+  if (requireApprovedTemplates) {
+    const refs = []
+    g.nodes.forEach((n, i) => {
+      if (n.type !== 'whatsapp') return
+      const c = n.config || {}
+      const templateId = c.template_id ?? c.whatsapp_template_id
+      if (templateId) refs.push({ stepNumber: i + 1, nodeId: n.id, templateId })
+    })
+    errors.push(...whatsappApprovalIssues(refs, whatsappTemplates))
+  }
 
   return { ok: errors.length === 0, errors }
 }

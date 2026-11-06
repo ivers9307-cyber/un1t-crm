@@ -61,6 +61,7 @@ function describePredicate(p) {
     case 'booked_class_at_studio': return p.within_days
       ? `Has booked a class at this studio in the last ${p.within_days} days or upcoming`
       : 'Has booked a class at this studio'
+    case 'has_future_booking_at_studio': return 'Has a class booked from now on at this studio'
     case 'in_pipeline_stage_at_studio': return `In stage ${(p.stages || []).join(' or ') || '(none)'} at this studio`
     case 'whatsapp_reply_since_enrolment': return 'Replied on WhatsApp since this flow began'
     default: return humanise(p.type)
@@ -98,7 +99,7 @@ const TRIGGER_LABELS = {
   un1t_paid_trial_purchased: () => 'When someone buys the €39 trial',
   paid_trial_checkout_purchased: () => 'When someone buys the €39 trial on our checkout',
   booking_created: () => 'When a booking is created',
-  pipeline_stage_change: (c) => c?.to_stage ? `When pipeline stage becomes ${c.to_stage}` : 'When pipeline stage changes',
+  pipeline_stage_change: (c) => c?.to_status ? `When pipeline stage becomes ${c.to_status}` : 'When pipeline stage changes',
   tag_added: (c) => c?.tag ? `When the tag “${c.tag}” is added` : 'When a tag is added',
   event_reminder: () => 'Before a booking (reminder)',
   segment_entered: () => 'When a contact enters a segment',

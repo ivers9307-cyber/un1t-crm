@@ -1,4 +1,7 @@
 // src/lib/whatsapp-template-events.js
+import { logError } from '@/lib/log'
+import { onTemplateApproved } from '@/lib/sequences/template-wait'
+
 // WA-TMPL — pure helpers for the WhatsApp template webhooks. No IO (the
 // applyTemplateEvent IO wrapper lives below, but these three are pure + unit-tested).
 // Events: message_template_status_update / _quality_update / template_category_update.
@@ -10,11 +13,20 @@ function cleanReason(reason) {
   return reason && reason !== 'NONE' ? reason : null
 }
 
+// PIPEBUILD.1g — Meta sends `REINSTATED` when a quality pause ends. It is an
+// event, not a status: the Graph API lists the template as APPROVED again, and
+// every send path (and the approval wake-up) reads `status === 'APPROVED'`.
+// Stored raw, the row would read REINSTATED, every send would refuse it, and
+// waiting enrolments would never wake. The audit row keeps Meta's raw event.
+function storedStatus(event) {
+  return event === 'REINSTATED' ? 'APPROVED' : event
+}
+
 // Webhook field+value → the whatsapp_templates column patch (or null for an unknown field).
 export function templateColumnUpdate(field, value) {
   switch (field) {
     case 'message_template_status_update':
-      return { status: value.event, rejection_reason: cleanReason(value.reason) }
+      return { status: storedStatus(value.event), rejection_reason: cleanReason(value.reason) }
     case 'message_template_quality_update':
       return { quality_rating: value.new_quality_score }
     case 'template_category_update':
@@ -96,16 +108,27 @@ export async function applyTemplateEvent(db, field, value) {
   const changed = Object.entries(update).some(([k, v]) => template[k] !== v)
   if (!changed) return { skipped: 'unchanged', template }
 
-  await db.from('whatsapp_templates').update(update).eq('id', template.id)
+  const { error: updateErr } = await db.from('whatsapp_templates').update(update).eq('id', template.id)
+  if (updateErr) {
+    logError('wa-template-events', 'template update failed', { templateId: template.id, err: updateErr.message })
+    return { skipped: 'update_failed' }
+  }
 
   const ev = templateEventRow(field, value)
   if (ev) {
-    await db.from('whatsapp_template_events').insert({
+    const { error: auditErr } = await db.from('whatsapp_template_events').insert({
       template_id: template.id,
       location_id: template.location_id,
       ...ev,
     })
+    if (auditErr) {
+      logError('wa-template-events', 'audit insert failed', { templateId: template.id, err: auditErr.message })
+    }
   }
+
+  // PIPEBUILD.1c — approval (or a REINSTATED, stored as APPROVED) wakes
+  // waiting enrolments (never throws).
+  if (update.status === 'APPROVED') await onTemplateApproved(db, template)
 
   return { template, notify: templateNotification(field, value, template.name) }
 }

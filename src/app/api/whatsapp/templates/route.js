@@ -12,6 +12,7 @@ import { listLocationNumberConfigs } from '@/lib/whatsapp-config'
 import { planTemplateSync } from '@/lib/whatsapp-template-sync'
 import { NO_WHATSAPP_NUMBER_MESSAGE, NO_LOCATION_MESSAGE } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
+import { onTemplateApproved } from '@/lib/sequences/template-wait'
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -125,7 +126,7 @@ async function templateRowsOnWaba(db, wabaId) {
   const rows = []
   for (let from = 0; ; from += ROWS_PAGE) {
     const { data, error } = await db.from('whatsapp_templates')
-      .select('id, name, language, location_id, meta_template_id')
+      .select('id, name, language, location_id, meta_template_id, status')
       .eq('business_account_id', wabaId)
       .order('id', { ascending: true })
       .range(from, from + ROWS_PAGE - 1)
@@ -179,7 +180,7 @@ async function syncTemplatesFromMeta(db, locationId) {
       // Meta's id only (globally unique) and stamped with the WABA here.
       const metaIds = new Set(metaTemplates.map((mt) => mt.id).filter(Boolean).map(String))
       const { data: unstamped, error: unstampedErr } = await db.from('whatsapp_templates')
-        .select('id, name, language, location_id, meta_template_id')
+        .select('id, name, language, location_id, meta_template_id, status')
         .eq('location_id', locationId)
         .is('business_account_id', null)
       if (unstampedErr) throw new Error(`Could not read the saved templates: ${unstampedErr.message}`)
@@ -187,12 +188,17 @@ async function syncTemplatesFromMeta(db, locationId) {
 
       const plan = planTemplateSync({ metaTemplates, rowsOnWaba, studioId: locationId, isHomeStudio, wabaId })
       let failed = 0
+      const storedStatus = new Map(rowsOnWaba.map((r) => [r.id, r.status]))
       // supabase-js REPORTS a failed write on `error`, it does not throw, so each
       // write is judged: unchecked, a sync that persisted nothing still returned
       // a clean result over top of the stale rows.
       for (const u of plan.updates) {
         const { error } = await db.from('whatsapp_templates').update(u.row).eq('id', u.id)
-        if (error) failed++
+        if (error) { failed++; continue }
+        // PIPEBUILD.1c — newly approved: wake enrolments waiting on it.
+        if (u.row.status === 'APPROVED' && storedStatus.get(u.id) !== 'APPROVED') {
+          await onTemplateApproved(db, { id: u.id, location_id: u.row.location_id })
+        }
       }
       for (const row of plan.inserts) {
         const { error } = await db.from('whatsapp_templates').insert(row)

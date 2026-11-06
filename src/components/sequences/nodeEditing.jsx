@@ -294,6 +294,12 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
               since they entered this flow.
             </p>
           )}
+          {ptype === 'has_future_booking_at_studio' && (
+            <p className="text-xs text-un1t-subtle">
+              Yes when the contact has a class booked from now on at this studio, or a booking request
+              still in flight. A class they already attended does not count.
+            </p>
+          )}
           {ptype === 'booked_class_at_studio' && (
             <>
               <p className="text-xs text-un1t-subtle">
@@ -352,6 +358,7 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
 const BRANCH_PREDICATE_LABELS = {
   has_tag: 'Contact has a tag',
   booked_class_at_studio: 'Contact has booked a class here',
+  has_future_booking_at_studio: 'Has a class booked from now on at this studio',
   in_pipeline_stage_at_studio: 'Contact is in a pipeline stage here',
   whatsapp_reply_since_enrolment: 'Contact replied on WhatsApp since entering this flow',
   field_equals: 'Field equals a value',

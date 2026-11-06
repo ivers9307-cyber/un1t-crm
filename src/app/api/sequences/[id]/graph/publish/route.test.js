@@ -39,6 +39,7 @@ const OWNER = { id: 'b0000000-0000-0000-0000-000000000002', role: 'owner', locat
 const DYNAMIC_TPL = {
   id: 'wt-dyn',
   name: 'Overdue pay link',
+  status: 'APPROVED',
   components: [
     { type: 'BODY', text: 'Hi {{1}}, {{2}} is outstanding.' },
     { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Pay now', url: 'https://pay.repset.ie/{{1}}', example: ['x'] }] },
@@ -150,7 +151,7 @@ describe('publish gate — dynamic URL button value', () => {
 
     await publish(waGraph({ url_button: 'x' }))
 
-    expect(templateSelect).toHaveBeenCalledWith('id, name, components')
+    expect(templateSelect).toHaveBeenCalledWith('id, name, status, components')
     const eqCall = templateSelect.mock.results[0].value.eq
     expect(eqCall).toHaveBeenCalledWith('location_id', LOC_ID)
     expect(eqCall.mock.results[0].value.in).toHaveBeenCalledWith('id', ['wt-dyn'])
@@ -166,21 +167,36 @@ describe('publish gate — dynamic URL button value', () => {
     expect(db.from).not.toHaveBeenCalledWith('whatsapp_templates')
   })
 
-  // Failing open is right — a template read that fell over must not block an
-  // otherwise-fine publish — but a gate that silently stops running is a gate
-  // that will later look like it never worked.
-  it('logs a warning when the template read fails, and still publishes', async () => {
-    const { db } = mockDb({ templateError: { message: 'connection reset' } })
+  it('failsClosedWhenTemplateReadErrors', async () => {
+    const { db, rpcSpy, sequenceUpdate } = mockDb({ templateError: { message: 'connection reset' } })
     createServerClient.mockReturnValue(db)
 
     const res = await publish(waGraph({}))
+    const body = await res.json()
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(503)
+    expect(body.error).toBe('Could not check the WhatsApp templates just now. Nothing was published.')
+    expect(rpcSpy).not.toHaveBeenCalled()
+    expect(sequenceUpdate).not.toHaveBeenCalled()
     expect(logWarn).toHaveBeenCalledWith(
       'sequences',
-      expect.stringContaining('URL-button gate skipped'),
+      expect.stringContaining('publish refused'),
       expect.objectContaining({ sequenceId: SEQ_ID, err: 'connection reset' }),
     )
+  })
+
+  it('refusesPendingTemplate', async () => {
+    const { db, rpcSpy, sequenceUpdate } = mockDb({ templates: [{ ...DYNAMIC_TPL, status: 'PENDING' }] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await publish(waGraph({ url_button: 'x' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(422)
+    expect(body.issues[0].code).toBe('template_not_approved')
+    expect(body.issues[0].message).toContain('Overdue pay link')
+    expect(rpcSpy).not.toHaveBeenCalled()
+    expect(sequenceUpdate).not.toHaveBeenCalled()
   })
 
   it('does not warn on a clean read', async () => {
@@ -190,14 +206,15 @@ describe('publish gate — dynamic URL button value', () => {
     expect(logWarn).not.toHaveBeenCalled()
   })
 
-  it('publishes when the template row cannot be read — it must not block on an unknown template', async () => {
-    // A template belonging to another location, or deleted: the rule has no
-    // opinion. The send path still refuses per-step, which is the right place.
-    const { db } = mockDb({ templates: [] })
+  it('refuses with template_not_found when the template id is not at this studio', async () => {
+    const { db, rpcSpy } = mockDb({ templates: [] })
     createServerClient.mockReturnValue(db)
 
     const res = await publish(waGraph({}))
-    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(res.status).toBe(422)
+    expect(body.issues[0].code).toBe('template_not_found')
+    expect(rpcSpy).not.toHaveBeenCalled()
   })
 })
 

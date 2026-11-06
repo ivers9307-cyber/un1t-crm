@@ -23,6 +23,7 @@ const PIPELINE_SLUGS = [
   'new_lead', 'rebook', 'first_class', 'second_class', 'trial_done',
   'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant',
 ]
+export const TO_STAGE_EMPTY_HINT = 'This fires on every stage change. Pick a "To stage" for a stage follow-up.'
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 // SEQEXIT.1 — the audience stopped being an entry gate and became a
@@ -69,20 +70,6 @@ const TRIGGER_OPTIONS = [
 // pulls createServerClient + the whole enrol path.
 const ANNIV_FIELDS = ANNIVERSARY_FROM_FIELD_OPTIONS
 const INACT_SIGNALS = [['last_emailed_at', 'Last emailed'], ['last_email_open_at', 'Last email open'], ['last_booking_at', 'Last booking']]
-// HATCHCARD.3 — the €39 board's stages, labelled as such so "Trial Done" on
-// the €39 board is never mistaken for the free trial's trial_done. A un1t.online
-// studio's hourly pass fires pipeline_stage_change for every landed move
-// (TDSEQ.1), so these reach €39 buyers at Hatch Street. A card CREATED straight
-// onto a stage starts nothing (a create is not a move), so a buyer's first
-// column is better reached with the un1t.online account trigger.
-const PAID_TRIAL_STAGE_OPTS = [
-  ['paid_trial_new_lead', 'paid_trial_new_lead (€39 board)'],
-  ['paid_trial_first_class', 'paid_trial_first_class (€39 board)'],
-  ['paid_trial_day_7', 'paid_trial_day_7 (€39 board)'],
-  ['paid_trial_done', 'paid_trial_done (€39 board)'],
-  ['paid_trial_converted', 'paid_trial_converted (€39 board)'],
-]
-const STAGE_OPTS = [['', 'Any stage'], ...PIPELINE_SLUGS.map(s => [s, s]), ...PAID_TRIAL_STAGE_OPTS]
 // Glofox membership states (mig 195). 'locked' = payment arrears (churn radar's Overdue tab).
 const STATE_OPTS = [['', 'Any state'], ['active', 'active'], ['paused', 'paused'], ['locked', 'locked (arrears)']]
 // SEQGAPS.1 — same vocabulary for the membership_state GOAL, minus the
@@ -140,6 +127,9 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
   const [justSet, setJustSet] = useState(!!justSetSecret)
   const [origin, setOrigin] = useState('')
   const [segments, setSegments] = useState([])
+  // PIPEBUILD.1e — the studio's real stages (enabled boards, not archived),
+  // from the stage-coverage read. null until loaded or if the fetch failed.
+  const [stageBoards, setStageBoards] = useState(null)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(null) // 'save' | 'rotate' | null
   const [feedback, setFeedback] = useState(null)
@@ -155,7 +145,30 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
       .catch(() => {})
     return () => { active = false }
   }, [sequence?.location_id])
+  useEffect(() => {
+    const loc = sequence?.location_id
+    if (!loc) return
+    let active = true
+    fetch(`/api/locations/${loc}/stage-coverage`)
+      .then(r => r.json())
+      .then(d => { if (active && d?.success && Array.isArray(d.data?.boards)) setStageBoards(d.data.boards) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [sequence?.location_id])
 
+  // From/To stage options: the fetched stages, with a stored slug that is not
+  // on an active board kept selectable (never silently rewritten to "Any").
+  // PIPEBUILD.1g — while the boards are unknown (still loading, or the fetch
+  // failed: stageBoards === null) a stored slug shows bare; we cannot say it is
+  // "not on an active board" before we know the boards.
+  const stageOptsFor = (stored) => {
+    const opts = [['', 'Any stage']]
+    for (const b of stageBoards || []) for (const st of b.stages) opts.push([st.slug, `${b.name} · ${st.name}`])
+    if (stored && !opts.some(([v]) => v === stored)) {
+      opts.push([stored, stageBoards === null ? stored : `${stored} (not on an active board)`])
+    }
+    return opts
+  }
   const touch = () => { setDirty(true); setFeedback(null) }
   const leaveJustSet = () => { if (justSet) { setJustSet(false); onJustSetSecret?.(null) } }
   const goalType = goal?.type || ''
@@ -283,8 +296,11 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
             )}
             {triggerType === 'pipeline_stage_change' && (
               <div className="grid grid-cols-2 gap-2">
-                <Labeled label="From stage"><Select value={tcfg.from_status || ''} onChange={v => setCfg({ from_status: v || undefined })} options={STAGE_OPTS} /></Labeled>
-                <Labeled label="To stage"><Select value={tcfg.to_status || ''} onChange={v => setCfg({ to_status: v || undefined })} options={STAGE_OPTS} /></Labeled>
+                <Labeled label="From stage"><Select value={tcfg.from_status || ''} onChange={v => setCfg({ from_status: v || undefined })} options={stageOptsFor(tcfg.from_status)} /></Labeled>
+                <Labeled label="To stage"><Select value={tcfg.to_status || ''} onChange={v => setCfg({ to_status: v || undefined })} options={stageOptsFor(tcfg.to_status)} /></Labeled>
+                {!tcfg.to_status && (
+                  <p className="col-span-2 text-xs text-un1t-muted">{TO_STAGE_EMPTY_HINT}</p>
+                )}
               </div>
             )}
             {triggerType === 'tag_added' && (

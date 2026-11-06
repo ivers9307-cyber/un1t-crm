@@ -18,6 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { glofoxProvisionStep } from './steps.js'
+import { TemplateNotApprovedDeferral, templateStamp } from './template-wait.js'
 
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
@@ -245,7 +246,7 @@ describe('evaluateBranchPredicate', () => {
           const ops = []
           calls[table]?.push(ops)
           const builder = {}
-          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit', 'gte']) {
+          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit', 'gte', 'gt']) {
             builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
           }
           builder.then = (onF, onR) => Promise.resolve(result[table] || { data: [], error: null }).then(onF, onR)
@@ -280,6 +281,53 @@ describe('evaluateBranchPredicate', () => {
     it('is false when the contact has neither a booking nor a live request at the studio', async () => {
       const db = recordingDb()
       expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    describe('has_future_booking_at_studio', () => {
+      const NOW = Date.parse('2026-11-03T12:00:00Z')
+      const nowIso = new Date(NOW).toISOString()
+      const fpred = { type: 'has_future_booking_at_studio' }
+
+      it('futureBookingTrue: a non-cancelled booking after now at the studio is true', async () => {
+        const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(true)
+        const ops = db.calls.class_bookings[0]
+        expect(ops).toContainEqual(['gt', 'starts_at', nowIso])
+        expect(ops).toContainEqual(['eq', 'location_id', 'loc-st'])
+        expect(ops).toContainEqual(['neq', 'status', 'CANCELLED'])
+      })
+
+      it('pastBookingOnlyFalse: no future booking and no in-flight request is false', async () => {
+        const db = recordingDb()
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(false)
+        expect(db.calls.class_booking_requests[0].some(([m]) => m === 'gte')).toBe(false)
+      })
+
+      it('pastRequestDoesNotCount: a request whose class is not still to come is false', async () => {
+        // The mock returns the same rows whatever is asked, so assert the filter
+        // that excludes a stale or null-starts_at request is on the query.
+        const db = recordingDb({ bookings: [], requests: [] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(false)
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['gt', 'starts_at', nowIso])
+      })
+
+      it('inFlightRequestCounts: an in-flight request at the studio is true', async () => {
+        const db = recordingDb({ requests: [{ id: 'req-1' }] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(true)
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['in', 'status', ['queued', 'processing', 'booked', 'needs_review']])
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['gt', 'starts_at', nowIso])
+      })
+
+      it('futureBookingNeedsStudio: no studio throws', async () => {
+        await expect(steps.evaluateBranchPredicate(recordingDb(), { contact, predicate: fpred, nowMs: NOW }))
+          .rejects.toThrow(/has_future_booking_at_studio: the sequence studio is required/)
+      })
+
+      it('throws on a failed read rather than answering false', async () => {
+        const db = recordingDb({ bookingsError: { message: 'boom' } })
+        await expect(steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW }))
+          .rejects.toThrow(/boom/)
+      })
     })
 
     // STILL39SEQ.1 — within_days: only a class in the last N days or still to
@@ -1043,6 +1091,43 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     }
     await expect(steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact }))
       .rejects.toThrow(/template not found/)
+  })
+
+  describe('PIPEBUILD.1b — unapproved template', () => {
+    const tplDb = (tpl) => ({
+      from: (table) => {
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: tpl }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({}),
+    })
+    const run = (tpl) => steps.sendWhatsappStep(tplDb(tpl), { step, sequence, contact: consentedContact })
+
+    it('pendingTemplateThrowsDeferral', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'PENDING', location_id: 'loc-1' }).catch(e => e)
+      expect(err).toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err.status).toBe('PENDING')
+    })
+    it('pausedByMetaThrowsDeferral', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'PAUSED', location_id: 'loc-1' }).catch(e => e)
+      expect(err).toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err.status).toBe('PAUSED')
+    })
+    it('rejectedTemplateThrowsStampedError', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'REJECTED', location_id: 'loc-1' }).catch(e => e)
+      expect(err).not.toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message.startsWith(templateStamp(step.whatsapp_template_id))).toBe(true)
+    })
+    // PIPEBUILD.1g — another studio's template errors whatever its status: a
+    // PENDING one must not wait 48 h for an approval that cannot wake it.
+    it('pendingTemplateFromAnotherStudioThrowsStampedError', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'PENDING', location_id: 'loc-OTHER' }).catch(e => e)
+      expect(err).not.toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toBe(`${templateStamp(step.whatsapp_template_id)}WhatsApp template belongs to a different location than the sequence.`)
+    })
   })
 
   it('PAYLINK.6 — a pay-link template with no link on the run is a recorded skip, not a send', async () => {

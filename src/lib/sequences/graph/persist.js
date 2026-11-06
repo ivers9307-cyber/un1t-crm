@@ -35,10 +35,12 @@ export function resolveSequenceGraph(sequence, { preferDraft = true } = {}) {
  * @param opts.whatsappTemplates the location's { id, name, components } rows, so
  *   the URL-button rule (SEQ-URLBUTTON.1) can see the buttons behind a step's
  *   template id. Omit and that rule simply says nothing.
+ * @param opts.requireApprovedTemplates PIPEBUILD.1a: refuse a WhatsApp step whose
+ *   template is missing from `whatsappTemplates` or not APPROVED at Meta.
  * @returns {{ok:false, errors:Array}|{ok:true, steps:Array}}
  */
-export function compileForPublish(graph, { whatsappTemplates } = {}) {
-  const v = validateGraph(graph, { whatsappTemplates })
+export function compileForPublish(graph, { whatsappTemplates, requireApprovedTemplates = false } = {}) {
+  const v = validateGraph(graph, { whatsappTemplates, requireApprovedTemplates })
   if (!v.ok) return { ok: false, errors: v.errors }
   return { ok: true, steps: compileGraphToSteps(graph) }
 }

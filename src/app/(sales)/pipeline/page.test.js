@@ -16,6 +16,8 @@ vi.mock('@/lib/activity-write-gate', () => ({ canWriteActivitiesAt: () => true }
 const boardProps = vi.hoisted(() => ({ last: null }))
 vi.mock('@/components/KanbanBoard', () => ({ default: (props) => { boardProps.last = props; return <div>{`board:${props.initialStages.map((s) => s.slug).join(',')}`}</div> } }))
 vi.mock('@/components/PipelineViewSwitcher', () => ({ default: () => <div>switcher</div> }))
+vi.mock('@/components/StageFollowupCoverage', () => ({ default: (props) => <div>{`coverage:${props.pipelineId}:${props.canEditSequences}`}</div> }))
+vi.mock('@/lib/sequence-access', () => ({ canBuildSequencesAt: vi.fn(() => false) }))
 // HATCHCARD.1 — the signals read is mocked; the rest of the module is real.
 vi.mock('@/lib/pipeline-card-signals', async (importOriginal) => ({ ...(await importOriginal()), loadUn1tCardSignals: vi.fn() }))
 
@@ -25,6 +27,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { membershipStateForPage } from '@/lib/membership/state-for-page'
 import { loadUn1tCardSignals } from '@/lib/pipeline-card-signals'
+import { canBuildSequencesAt } from '@/lib/sequence-access'
 
 const LOC = 'a0000000-0000-4000-8000-00000000000a'
 const CAPS = { memberships: true, bookings: true, credits: true, invoices: true, schedule: true }
@@ -323,5 +326,36 @@ describe('/pipeline — un1t card signals (HATCHCARD.1)', () => {
     const html = renderToStaticMarkup(await Page({ searchParams: {} }))
     expect(html).toContain('board:')
     expect(boardProps.last.initialDeals.every((d) => !('signals' in d))).toBe(true)
+  })
+})
+
+// PIPEBUILD.1f — the follow-up coverage strip: a derived board, for someone who
+// can build sequences or manages the studio, and nobody else.
+describe('/pipeline — follow-up coverage strip (PIPEBUILD.1f)', () => {
+  const asRole = (role) => getCurrentUser.mockResolvedValue({ id: 'u1', profileRole: 'staff', rolesByLocation: { [LOC]: role }, activeLocation: { id: LOC, name: 'Studio' } })
+  beforeEach(() => {
+    membershipStateForPage.mockResolvedValue({ source: 'glofox', state: 'configured', label: 'Glofox', capabilities: CAPS })
+  })
+
+  it('rendersCoverageForManagers', async () => {
+    asRole('manager')
+    canBuildSequencesAt.mockReturnValue(false)
+    const html = renderToStaticMarkup(await Page({ searchParams: {} }))
+    expect(html).toContain('coverage:p1:false')
+    expect(html.indexOf('coverage:')).toBeLessThan(html.indexOf('switcher'))
+    canBuildSequencesAt.mockReturnValue(true)
+    expect(renderToStaticMarkup(await Page({ searchParams: {} }))).toContain('coverage:p1:true')
+  })
+
+  it('hidesCoverageForStaff', async () => {
+    asRole('staff')
+    canBuildSequencesAt.mockReturnValue(false)
+    expect(renderToStaticMarkup(await Page({ searchParams: {} }))).not.toContain('coverage:')
+  })
+
+  it('hidesCoverageOnManualBoards', async () => {
+    asRole('owner')
+    createServerClient.mockReturnValue(dbFor({ mode: 'manual' }))
+    expect(renderToStaticMarkup(await Page({ searchParams: {} }))).not.toContain('coverage:')
   })
 })

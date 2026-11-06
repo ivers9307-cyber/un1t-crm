@@ -41,7 +41,7 @@ const OWNER = { id: USER_ID, role: 'owner', locations: [{ id: LOC_ID, role: 'own
 
 // PUT reads the sequence row up front (guard + effective-value merge),
 // then updates. `row` feeds every select; `updateSpy` captures writes.
-function mockDb({ row } = {}) {
+function mockDb({ row, waSteps = [], templates = [], templateError = null } = {}) {
   const updateSpy = vi.fn(() => ({
     eq: vi.fn(() => ({
       select: vi.fn(() => ({
@@ -49,8 +49,16 @@ function mockDb({ row } = {}) {
       })),
     })),
   }))
+  const templateRead = vi.fn(() => Promise.resolve({ data: templateError ? null : templates, error: templateError }))
   const db = {
     from: vi.fn((table) => {
+      if (table === 'sequence_steps') {
+        const chain = { eq: vi.fn(() => chain), order: vi.fn(() => Promise.resolve({ data: waSteps, error: null })) }
+        return { select: vi.fn(() => chain) }
+      }
+      if (table === 'whatsapp_templates') {
+        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ in: templateRead })) })) }
+      }
       if (table !== 'email_sequences') throw new Error(`unexpected table: ${table}`)
       return {
         select: vi.fn(() => ({
@@ -63,7 +71,7 @@ function mockDb({ row } = {}) {
       }
     }),
   }
-  return { db, updateSpy }
+  return { db, updateSpy, templateRead }
 }
 
 const putReq = (body) => new Request(`http://localhost/api/sequences/${SEQ_ID}`, {
@@ -309,5 +317,59 @@ describe('PUT /api/sequences/[id] — the up-front read (SEQPAGEGATE.1 review)',
     expect(res.status).toBe(404)
     expect(await res.json()).toEqual({ success: false, error: 'Not found' })
     expect(db.from).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('PUT /api/sequences/[id] — activation refuses an unapproved WhatsApp template (PIPEBUILD.1a)', () => {
+  const row = (status) => ({ id: SEQ_ID, location_id: LOC_ID, trigger_type: 'manual', trigger_config: {}, status })
+  const steps = [{ whatsapp_template_id: 'wt1', step_order: 2 }]
+
+  it('putActivateRefusesPendingTemplate', async () => {
+    const { db, updateSpy } = mockDb({
+      row: row('paused'), waSteps: steps,
+      templates: [{ id: 'wt1', name: 'Trial follow-up', status: 'PENDING', components: [] }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(putReq({ status: 'active' }), props)
+    const json = await res.json()
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('Step 2 uses the WhatsApp template "Trial follow-up", which is PENDING at Meta. Activate it once the template is approved.')
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('putActivateAllowsApproved', async () => {
+    const { db, updateSpy } = mockDb({
+      row: row('paused'), waSteps: steps,
+      templates: [{ id: 'wt1', name: 'Trial follow-up', status: 'APPROVED', components: [] }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(putReq({ status: 'active' }), props)
+    expect(res.status).toBe(200)
+    expect(updateSpy).toHaveBeenCalled()
+  })
+
+  it('putOtherFieldsSkipsCheck', async () => {
+    const { db, templateRead } = mockDb({
+      row: row('active'), waSteps: steps,
+      templates: [{ id: 'wt1', name: 'x', status: 'PENDING', components: [] }],
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(putReq({ name: 'Renamed' }), props)
+    expect(res.status).toBe(200)
+    expect(db.from).not.toHaveBeenCalledWith('sequence_steps')
+    expect(templateRead).not.toHaveBeenCalled()
+  })
+
+  it('a template read that fails refuses activation with a 503 and writes nothing', async () => {
+    const { db, updateSpy } = mockDb({ row: row('draft'), waSteps: steps, templateError: { message: 'boom' } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await PUT(putReq({ status: 'active' }), props)
+    expect(res.status).toBe(503)
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 })
