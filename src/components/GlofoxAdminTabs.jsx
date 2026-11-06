@@ -77,7 +77,7 @@ export default function GlofoxAdminTabs(props) {
       {active === 'import'     && <GlofoxImportClient {...props} />}
       {active === 'review'     && <GlofoxPushReviewTab />}
       {active === 'invoices'   && <GlofoxInvoiceBackfillTab />}
-      {active === 'reclassify' && <PipelineReclassifyTab />}
+      {active === 'reclassify' && <PipelineReclassifyTab locationId={props.activeLocationId} />}
     </div>
   )
 }

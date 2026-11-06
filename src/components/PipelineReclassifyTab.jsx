@@ -19,6 +19,7 @@
 // 'backfill' / 'manual'.
 
 import { useState } from 'react'
+import { useStudioStages } from '@/lib/use-studio-stages'
 import { Loader2, Sparkles, CheckCircle2, AlertTriangle, Eye, Play } from 'lucide-react'
 
 // FUNNEL.1 taxonomy — labels mirror the mig 350 stage rows.
@@ -57,11 +58,13 @@ export const STAGE_LABELS = {
   dormant_classpass: 'Dormant — ClassPass',
 }
 
-function fmtSlug(slug) {
-  return STAGE_LABELS[slug] || slug || '—'
+function fmtSlug(slug, bySlug) {
+  return STAGE_LABELS[slug] ?? bySlug?.get(slug)?.name ?? (slug || '—')
 }
 
-export default function PipelineReclassifyTab() {
+export default function PipelineReclassifyTab({ locationId = null }) {
+  const { bySlug } = useStudioStages(locationId)
+  const fmt = (slug) => fmtSlug(slug, bySlug)
   const [busy, setBusy] = useState(false)
   const [mode, setMode] = useState(null) // 'preview' | 'commit' | null
   const [result, setResult] = useState(null)
@@ -145,12 +148,12 @@ export default function PipelineReclassifyTab() {
         </div>
       )}
 
-      {result && <ResultPanel result={result} mode={mode} />}
+      {result && <ResultPanel result={result} mode={mode} fmt={fmt} />}
     </div>
   )
 }
 
-function ResultPanel({ result, mode }) {
+function ResultPanel({ result, mode, fmt }) {
   const matrix = result.movement_matrix || {}
   const matrixRows = Object.entries(matrix).flatMap(
     ([from, tos]) => Object.entries(tos).map(([to, count]) => ({ from, to, count }))
@@ -193,8 +196,8 @@ function ResultPanel({ result, mode }) {
               <tbody>
                 {matrixRows.map((r, i) => (
                   <tr key={i} className="border-b border-un1t-border/40">
-                    <td className="py-1.5 pr-4 text-un1t-subtle">{fmtSlug(r.from)}</td>
-                    <td className="py-1.5 pr-4">{fmtSlug(r.to)}</td>
+                    <td className="py-1.5 pr-4 text-un1t-subtle">{fmt(r.from)}</td>
+                    <td className="py-1.5 pr-4">{fmt(r.to)}</td>
                     <td className="py-1.5 text-right tabular-nums font-medium">{r.count}</td>
                   </tr>
                 ))}
@@ -211,7 +214,7 @@ function ResultPanel({ result, mode }) {
             {result.samples.map((s, i) => (
               <li key={i}>
                 <span className="text-un1t-text">{s.contact_name || s.contact_id}</span>
-                <span className="mx-2">{fmtSlug(s.from_slug)} → {fmtSlug(s.to_slug)}</span>
+                <span className="mx-2">{fmt(s.from_slug)} → {fmt(s.to_slug)}</span>
               </li>
             ))}
           </ul>

@@ -169,6 +169,15 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
     }
     return opts
   }
+  // PIPEBUILD.2d — goal stage: today's slugs first, then every studio stage not
+  // already listed, labelled like the trigger picker.
+  const goalStageOpts = () => {
+    const opts = PIPELINE_SLUGS.map(v => [v, v])
+    for (const b of stageBoards || []) for (const st of b.stages) {
+      if (!opts.some(([v]) => v === st.slug)) opts.push([st.slug, `${b.name} · ${st.name}`])
+    }
+    return opts
+  }
   const touch = () => { setDirty(true); setFeedback(null) }
   const leaveJustSet = () => { if (justSet) { setJustSet(false); onJustSetSecret?.(null) } }
   const goalType = goal?.type || ''
@@ -445,7 +454,7 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
             </p>
           )}
           {goalType === 'pipeline_stage' && (
-            <Labeled label="Stage"><Select value={goal.value || PIPELINE_SLUGS[0]} onChange={v => { setGoal({ ...goal, value: v }); touch() }} options={PIPELINE_SLUGS} /></Labeled>
+            <Labeled label="Stage"><Select value={goal.value || PIPELINE_SLUGS[0]} onChange={v => { setGoal({ ...goal, value: v }); touch() }} options={goalStageOpts()} /></Labeled>
           )}
           {goalType === 'membership_state' && (
             <Labeled label="Membership state" hint="For a dunning flow, pick active — paying is a win, so the exit is recorded as “Goal met”, not a drop-out.">
