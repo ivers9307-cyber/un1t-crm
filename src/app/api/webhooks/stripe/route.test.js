@@ -24,6 +24,9 @@ vi.mock('@/lib/donation-payments', () => ({
 vi.mock('@/lib/charity-donations', () => ({ resolveCharitySettings: vi.fn(() => ({ match_multiplier: 2 })) }))
 vi.mock('@/lib/qstash', () => ({ publishQueuePush: vi.fn(), CLASS_BOOKINGS_WORKER_PATH: '/x' }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/payments/apple-pay-domains', () => ({
+  registerCheckoutDomainsForAccount: vi.fn(async () => ({ ok: true, results: [] })),
+}))
 
 const { POST } = await import('./route.js')
 const { verifyStripeWebhook, getStripe } = await import('@/lib/stripe')
@@ -31,6 +34,7 @@ const { createServerClient } = await import('@/lib/supabase')
 const { resolveRacePaymentByProviderRef, markRacePaymentStatus } = await import('@/lib/race-payments')
 const { sendRaceConfirmations, sendGapPaidEmail } = await import('@/lib/race-confirmations')
 const { logWarn } = await import('@/lib/log')
+const { registerCheckoutDomainsForAccount } = await import('@/lib/payments/apple-pay-domains')
 const { resolveDonationByRef, markDonationPaymentStatus, markDonationRefunded, runPaidDonationSideEffects } = await import('@/lib/donation-payments')
 
 const GAP = { id: 'gp1', kind: 'move_gap', registration_move_id: 'mv1', status: 'pending' }
@@ -164,5 +168,53 @@ describe('POST /api/webhooks/stripe — un1t_donation (CHARITY.7)', () => {
     resolveRacePaymentByProviderRef.mockResolvedValue(GAP)
     await POST(req())
     expect(resolveDonationByRef).not.toHaveBeenCalled()
+  })
+})
+
+// HOSTAPPLEPAY.1 — the first account.updated with charges enabled registers
+// our checkout domains on the host's account (Apple Pay on direct charges).
+describe('POST /api/webhooks/stripe — account.updated (HOSTAPPLEPAY.1)', () => {
+  function hostDb(host) {
+    const updates = []
+    const db = {
+      updates,
+      from: vi.fn(() => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: host, error: null }) }) }),
+        update: (patch) => ({ eq: async () => { updates.push(patch); return { error: null } } }),
+      })),
+    }
+    return db
+  }
+  const accountEvent = (charges) => ({
+    type: 'account.updated',
+    data: { object: { id: 'acct_h', charges_enabled: charges, payouts_enabled: charges, details_submitted: true, requirements: { currently_due: [] } } },
+  })
+
+  it('registers the domains when the host first becomes able to charge', async () => {
+    const db = hostDb({ id: 'h1', onboarding_completed_at: null })
+    createServerClient.mockReturnValue(db)
+    verifyStripeWebhook.mockReturnValue(accountEvent(true))
+    const res = await POST(req())
+    expect(res.status).toBe(200)
+    expect(db.updates[0]).toEqual(expect.objectContaining({ charges_enabled: true }))
+    expect(registerCheckoutDomainsForAccount).toHaveBeenCalledWith(db, 'acct_h')
+  })
+
+  it('does not re-register on later updates of an onboarded host, or while charges are off', async () => {
+    createServerClient.mockReturnValue(hostDb({ id: 'h1', onboarding_completed_at: '2026-01-01T00:00:00Z' }))
+    verifyStripeWebhook.mockReturnValue(accountEvent(true))
+    await POST(req())
+    createServerClient.mockReturnValue(hostDb({ id: 'h1', onboarding_completed_at: null }))
+    verifyStripeWebhook.mockReturnValue(accountEvent(false))
+    await POST(req())
+    expect(registerCheckoutDomainsForAccount).not.toHaveBeenCalled()
+  })
+
+  it('an account that is not a host registers nothing', async () => {
+    createServerClient.mockReturnValue(hostDb(null))
+    verifyStripeWebhook.mockReturnValue(accountEvent(true))
+    const res = await POST(req())
+    expect(res.status).toBe(200)
+    expect(registerCheckoutDomainsForAccount).not.toHaveBeenCalled()
   })
 })
