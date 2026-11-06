@@ -465,6 +465,14 @@ async function resolveApprovedWhatsappTemplate(db, step, sequence) {
     .single()
   const stamp = templateStamp(step.whatsapp_template_id)
   if (!template) throw new Error(`${stamp}WhatsApp template not found.`)
+  // PIPEBUILD.1g — the studio check runs BEFORE the status checks: another
+  // studio's template is an operator fault whatever its status, and a PENDING
+  // one must error, not wait 48 h and then exit as if Meta were slow (its
+  // approval would never wake this sequence anyway: onTemplateApproved only
+  // touches the template's own studio).
+  if (template.location_id !== sequence.location_id) {
+    throw new Error(`${stamp}WhatsApp template belongs to a different location than the sequence.`)
+  }
   if (template.status !== 'APPROVED') {
     // PIPEBUILD.1b — Meta may still approve it: wait (the scheduler retries
     // hourly and gives up after 48 h) instead of error-then-pause.
@@ -475,9 +483,6 @@ async function resolveApprovedWhatsappTemplate(db, step, sequence) {
       })
     }
     throw new Error(`${stamp}WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
-  }
-  if (template.location_id !== sequence.location_id) {
-    throw new Error(`${stamp}WhatsApp template belongs to a different location than the sequence.`)
   }
   return template
 }

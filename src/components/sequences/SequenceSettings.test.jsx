@@ -520,9 +520,9 @@ describe('Stage pickers — real stages (PIPEBUILD.1e)', () => {
   ] } }
   const optionValues = (select) => Array.from(select.querySelectorAll('option')).map(o => o.value)
 
-  function open(config) {
+  function open(config, stageCoverage = () => Promise.resolve({ json: () => Promise.resolve(coverage) })) {
     vi.stubGlobal('fetch', vi.fn((url) => {
-      if (String(url).includes('/stage-coverage')) return Promise.resolve({ json: () => Promise.resolve(coverage) })
+      if (String(url).includes('/stage-coverage')) return stageCoverage()
       return new Promise(() => {})
     }))
     const seq = { id: 'seq-1', location_id: 'loc-1', name: 'S', status: 'draft', trigger_type: 'pipeline_stage_change', trigger_config: config }
@@ -544,6 +544,25 @@ describe('Stage pickers — real stages (PIPEBUILD.1e)', () => {
     const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('old_stage'))
     expect(sel.value).toBe('old_stage')
     expect(sel.textContent).toContain('old_stage (not on an active board)')
+  })
+
+  // PIPEBUILD.1g — before the boards are known, a stored slug shows bare.
+  it('storedSlugShowsBareWhileBoardsLoad', () => {
+    const { container } = open({ to_status: 'old_stage' }, () => new Promise(() => {}))
+    const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('old_stage'))
+    expect(sel.value).toBe('old_stage')
+    const opt = Array.from(sel.options).find(o => o.value === 'old_stage')
+    expect(opt.textContent).toBe('old_stage')
+  })
+
+  it('storedSlugShowsBareWhenTheBoardsFetchFails', async () => {
+    let failed
+    const { container } = open({ to_status: 'old_stage' }, () => { failed = Promise.reject(new Error('net')); return failed })
+    await failed.catch(() => {})
+    await new Promise((r) => setTimeout(r, 0))
+    const sel = Array.from(container.querySelectorAll('select')).find(s => optionValues(s).includes('old_stage'))
+    const opt = Array.from(sel.options).find(o => o.value === 'old_stage')
+    expect(opt.textContent).toBe('old_stage')
   })
 
   it('warnsWhenToStageEmpty', async () => {

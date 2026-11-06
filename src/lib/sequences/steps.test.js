@@ -1120,6 +1120,14 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
       expect(err).toBeInstanceOf(Error)
       expect(err.message.startsWith(templateStamp(step.whatsapp_template_id))).toBe(true)
     })
+    // PIPEBUILD.1g — another studio's template errors whatever its status: a
+    // PENDING one must not wait 48 h for an approval that cannot wake it.
+    it('pendingTemplateFromAnotherStudioThrowsStampedError', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'PENDING', location_id: 'loc-OTHER' }).catch(e => e)
+      expect(err).not.toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message).toBe(`${templateStamp(step.whatsapp_template_id)}WhatsApp template belongs to a different location than the sequence.`)
+    })
   })
 
   it('PAYLINK.6 — a pay-link template with no link on the run is a recorded skip, not a send', async () => {

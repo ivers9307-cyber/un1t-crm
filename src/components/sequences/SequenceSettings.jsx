@@ -158,10 +158,15 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
 
   // From/To stage options: the fetched stages, with a stored slug that is not
   // on an active board kept selectable (never silently rewritten to "Any").
+  // PIPEBUILD.1g — while the boards are unknown (still loading, or the fetch
+  // failed: stageBoards === null) a stored slug shows bare; we cannot say it is
+  // "not on an active board" before we know the boards.
   const stageOptsFor = (stored) => {
     const opts = [['', 'Any stage']]
     for (const b of stageBoards || []) for (const st of b.stages) opts.push([st.slug, `${b.name} · ${st.name}`])
-    if (stored && !opts.some(([v]) => v === stored)) opts.push([stored, `${stored} (not on an active board)`])
+    if (stored && !opts.some(([v]) => v === stored)) {
+      opts.push([stored, stageBoards === null ? stored : `${stored} (not on an active board)`])
+    }
     return opts
   }
   const touch = () => { setDirty(true); setFeedback(null) }

@@ -13,11 +13,20 @@ function cleanReason(reason) {
   return reason && reason !== 'NONE' ? reason : null
 }
 
+// PIPEBUILD.1g — Meta sends `REINSTATED` when a quality pause ends. It is an
+// event, not a status: the Graph API lists the template as APPROVED again, and
+// every send path (and the approval wake-up) reads `status === 'APPROVED'`.
+// Stored raw, the row would read REINSTATED, every send would refuse it, and
+// waiting enrolments would never wake. The audit row keeps Meta's raw event.
+function storedStatus(event) {
+  return event === 'REINSTATED' ? 'APPROVED' : event
+}
+
 // Webhook field+value → the whatsapp_templates column patch (or null for an unknown field).
 export function templateColumnUpdate(field, value) {
   switch (field) {
     case 'message_template_status_update':
-      return { status: value.event, rejection_reason: cleanReason(value.reason) }
+      return { status: storedStatus(value.event), rejection_reason: cleanReason(value.reason) }
     case 'message_template_quality_update':
       return { quality_rating: value.new_quality_score }
     case 'template_category_update':
@@ -117,7 +126,8 @@ export async function applyTemplateEvent(db, field, value) {
     }
   }
 
-  // PIPEBUILD.1c — approval wakes waiting enrolments (never throws).
+  // PIPEBUILD.1c — approval (or a REINSTATED, stored as APPROVED) wakes
+  // waiting enrolments (never throws).
   if (update.status === 'APPROVED') await onTemplateApproved(db, template)
 
   return { template, notify: templateNotification(field, value, template.name) }

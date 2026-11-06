@@ -24,6 +24,10 @@ describe('templateColumnUpdate', () => {
   it('returns null for an unknown field', () => {
     expect(templateColumnUpdate('messages', {})).toBeNull()
   })
+  // PIPEBUILD.1g — REINSTATED (a quality pause ended) is stored as APPROVED.
+  it('stores REINSTATED as APPROVED', () => {
+    expect(templateColumnUpdate('message_template_status_update', status('REINSTATED', 'NONE').value)).toEqual({ status: 'APPROVED', rejection_reason: null })
+  })
 })
 
 describe('templateNotification', () => {
@@ -66,6 +70,9 @@ describe('templateEventRow', () => {
   it('quality → from prev, to new', () => {
     expect(templateEventRow('message_template_quality_update', quality('RED', 'YELLOW').value)).toEqual({ kind: 'quality', from_value: 'YELLOW', to_value: 'RED', reason: null })
   })
+  it('keeps Meta\'s raw REINSTATED on the audit row', () => {
+    expect(templateEventRow('message_template_status_update', status('REINSTATED', 'NONE').value)).toEqual({ kind: 'status', from_value: null, to_value: 'REINSTATED', reason: null })
+  })
   it('category → from prev, to new', () => {
     expect(templateEventRow('template_category_update', category('UTILITY', 'MARKETING').value)).toEqual({ kind: 'category', from_value: 'MARKETING', to_value: 'UTILITY', reason: null })
   })
@@ -92,6 +99,25 @@ describe('applyTemplateEvent approval hook', () => {
     await applyTemplateEvent(d, 'message_template_status_update', status('APPROVED').value)
     expect(onTemplateApproved).toHaveBeenCalledTimes(1)
     expect(onTemplateApproved).toHaveBeenCalledWith(d, row)
+  })
+  it('reinstatedFromPausedStoresApprovedAndCallsHook', async () => {
+    const updates = []
+    const paused = { ...row, status: 'PAUSED' }
+    const inserts = []
+    const d = {
+      from(table) {
+        if (table === 'whatsapp_template_events') return { insert: async (r) => { inserts.push(r); return { error: null } } }
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: paused, error: null }) }) }),
+          update: (patch) => { updates.push(patch); return { eq: async () => ({ error: null }) } },
+        }
+      },
+    }
+    await applyTemplateEvent(d, 'message_template_status_update', status('REINSTATED', 'NONE').value)
+    expect(updates).toEqual([{ status: 'APPROVED', rejection_reason: null }])
+    expect(inserts[0]).toMatchObject({ kind: 'status', to_value: 'REINSTATED' })
+    expect(onTemplateApproved).toHaveBeenCalledTimes(1)
+    expect(onTemplateApproved).toHaveBeenCalledWith(d, paused)
   })
   it('nonApprovedTransitionSkipsHook', async () => {
     await applyTemplateEvent(db(), 'message_template_status_update', status('REJECTED', 'X').value)
