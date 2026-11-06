@@ -11,7 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
-import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
+import { pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classesOf3ForModule, PIPELINE_PAGE_SIZE } from '@/lib/pipeline-board'
 import { loadUn1tCardSignals, cardSignalsEnabledForModule } from '@/lib/pipeline-card-signals'
 import { stageShowsSignals } from '@/lib/pipeline-card-signal-slugs'
 import { zoneOfLocation } from '@/lib/location-time'
@@ -103,5 +103,5 @@ export async function GET(request) {
     else signals = res?.signals ?? null
   }
 
-  return NextResponse.json({ success: true, deals: (data || []).map(boardDealMapper({ ...cardOptions, signals, showSignals })) })
+  return NextResponse.json({ success: true, deals: (data || []).map(boardDealMapper({ ...cardOptions, signals, showSignals, classesOf3: classesOf3ForModule(boardModule) })) })
 }

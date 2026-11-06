@@ -131,6 +131,7 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
     const live = await (await GET(req())).json()
     expect(live.deals[0].signals).toEqual(SIG)
     expect(live.deals[0].showSignals).toBe(true)
+    expect(live.deals[0].classesOf3).toBe(true)   // acquisition_un1t
     loadUn1tCardSignals.mockClear()
     configured({ slug: 'bought', stage_role: 'converted', is_dormant: false })
     const done = await (await GET(req())).json()

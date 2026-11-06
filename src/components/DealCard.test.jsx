@@ -154,7 +154,7 @@ describe('DealCard — Cold on the board it is drawn on', () => {
 describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
   const SIG = { classes_attended: 1, credits_left: 2, credits_unlimited: false, next_class_at: null, last_class_days: 9, last_class_warm: true, wa_state: 'no_reply', wa_days: 6 }
   const deal = (signals, slug = 'first_class', over = {}) => ({
-    id: 'd-9', title: 'Jane O\'Quigley', next_class_badge: false, signals, showSignals: true,
+    id: 'd-9', title: 'Jane O\'Quigley', next_class_badge: false, signals, showSignals: true, classesOf3: true,
     contacts: { id: 'c-9', name: 'Jane O\'Quigley', lead_source: 'website', pipeline_stage_slug: slug },
     ...over,
   })
@@ -175,7 +175,7 @@ describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
     expect(html.match(/Jane O(&#x27;|')Quigley/g)).toHaveLength(1)
   })
   it('singulars, unlimited credits, a booked class, a reply, today', () => {
-    const html = r(deal({ ...SIG, classes_attended: 1, credits_left: null, credits_unlimited: true, next_class_at: '2026-11-03T08:00:00Z', last_class_days: 0, last_class_warm: false, wa_state: 'replied', wa_days: 0 }, 'paid_trial_first_class'))
+    const html = r(deal({ ...SIG, classes_attended: 1, credits_left: null, credits_unlimited: true, next_class_at: '2026-11-03T08:00:00Z', last_class_days: 0, last_class_warm: false, wa_state: 'replied', wa_days: 0 }, 'paid_trial_first_class', { classesOf3: false }))
     expect(html).toContain('1 class')
     expect(html).not.toContain('of 3')
     expect(html).toContain('Unlimited')
@@ -209,6 +209,16 @@ describe('DealCard — un1t card signals (HATCHCARD.1)', () => {
     expect(r(deal(SIG, 'my_custom_stage'), 'my_custom_stage')).toContain('of 3 classes')
     expect(r(deal(SIG, 'new_lead', { showSignals: false }), 'new_lead')).not.toContain('of 3 classes')
     expect(r(deal(SIG, 'new_lead', { showSignals: undefined }), 'new_lead')).not.toContain('of 3 classes')
+  })
+  it('classesOf3OnlyOnAcquisition', () => {
+    // the server decides by board kind; the slug prefix no longer matters
+    const sig = { ...SIG, classes_attended: 2 }
+    expect(r(deal(sig, 'paid_trial_first_class', { classesOf3: false }))).toContain('2 classes')
+    expect(r(deal(sig, 'paid_trial_first_class', { classesOf3: false }))).not.toContain('of 3')
+    expect(r(deal(sig, 'bought', { classesOf3: false }))).toContain('2 classes')       // offer board
+    expect(r(deal(sig, 'bought', { classesOf3: false }))).not.toContain('of 3')
+    expect(r(deal(sig, 'paid_trial_odd_slug', { classesOf3: true }))).toContain('2 of 3 classes')   // acquisition, any slug
+    expect(r(deal(sig, 'first_class', { classesOf3: undefined }))).toContain('2 classes')
   })
   it('a Glofox card (no signals key) renders exactly as before', () => {
     const glofox = { id: 'd-1', title: 'Ada', contacts: { id: 'c-1', name: 'Ada Lovelace', pipeline_stage_slug: 'new_lead', lead_source: 'website', trial_credits_remaining: 3 } }

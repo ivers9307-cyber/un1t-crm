@@ -155,9 +155,10 @@ export default function DealCard({ deal, locationId, timezone = null, stageName,
   // (stageShowsSignals: slug set or stage role) and says so in showSignals.
   const columnSlug = stageSlug ?? contact.pipeline_stage_slug
   const sig = deal.signals && deal.showSignals === true ? deal.signals : null
-  const paidBoard = typeof columnSlug === 'string' && columnSlug.startsWith('paid_trial_')
+  // PIPEBUILD.3f — the server says whether this is a free-trial acquisition board.
+  const classesOf3 = deal.classesOf3 === true
   const classesLabel = sig
-    ? (!paidBoard && sig.classes_attended <= 3
+    ? (classesOf3 && sig.classes_attended <= 3
       ? `${sig.classes_attended} of 3 classes`
       : plural(sig.classes_attended, 'class', 'classes'))
     : null

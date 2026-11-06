@@ -34,7 +34,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import {
-  pipelineDealSelect, boardDealMapper, boardCardOptionsForModule,
+  pipelineDealSelect, boardDealMapper, boardCardOptionsForModule, classesOf3ForModule,
   initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
 } from '@/lib/pipeline-board'
 import { getCurrentUser } from '@/lib/auth'
@@ -202,6 +202,7 @@ export default async function PipelinePage(props) {
   // PIPEBUILD.2e — each column's mapper carries that column's decision.
   const boardDeals = perStage.flatMap((sg) => sg.rows.map(boardDealMapper({
     ...cardOptions, signals, showSignals: stageShowsSignals({ board: activePipeline, stage: sg.stage }),
+    classesOf3: classesOf3ForModule(activePipeline.module),
   })))
   const stageCounts = Object.fromEntries(perStage.map((sg) => [sg.stage.id, sg.count]))
   const visibleTotal = perStage.reduce((n, sg) => n + sg.count, 0)
