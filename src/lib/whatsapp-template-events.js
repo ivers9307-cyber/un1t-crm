@@ -1,6 +1,7 @@
 // src/lib/whatsapp-template-events.js
 import { logError } from '@/lib/log'
 import { onTemplateApproved } from '@/lib/sequences/template-wait'
+import { onTemplateStatusForFollowups } from '@/lib/pipeline-followup-approval'
 
 // WA-TMPL — pure helpers for the WhatsApp template webhooks. No IO (the
 // applyTemplateEvent IO wrapper lives below, but these three are pure + unit-tested).
@@ -8,6 +9,8 @@ import { onTemplateApproved } from '@/lib/sequences/template-wait'
 
 const NOTIFY_STATUSES = new Set(['APPROVED', 'REJECTED', 'PAUSED', 'DISABLED', 'LIMIT_EXCEEDED'])
 const NOTIFY_QUALITY = new Set(['YELLOW', 'RED'])
+// Statuses that move a waiting stage follow-up (pipeline-followup-approval).
+const FOLLOWUP_STATUSES = new Set(['APPROVED', 'REJECTED', 'DISABLED'])
 
 function cleanReason(reason) {
   return reason && reason !== 'NONE' ? reason : null
@@ -129,6 +132,9 @@ export async function applyTemplateEvent(db, field, value) {
   // PIPEBUILD.1c — approval (or a REINSTATED, stored as APPROVED) wakes
   // waiting enrolments (never throws).
   if (update.status === 'APPROVED') await onTemplateApproved(db, template)
+  // PIPEBUILD.4e — stage follow-ups waiting on this template publish once all
+  // their templates are approved, or are marked rejected (never throws).
+  if (FOLLOWUP_STATUSES.has(update.status)) await onTemplateStatusForFollowups(db, template, update.status)
 
   return { template, notify: templateNotification(field, value, template.name) }
 }

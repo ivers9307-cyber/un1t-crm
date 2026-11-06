@@ -135,9 +135,14 @@ const CALLERS = {
     why: 'WAORGNUMBER.4 (R8): the openers are the number’s, shared by every studio using it, so after the own-number check (no extra resolver call) a studio that is not the number’s home answers 403 unless the caller is an organisation admin (master passes); Meta is not called. route.test.js. chat openers on the location’s own number (C33 WAROLE.1), 409 / 500 before Meta.',
   },
   'src/app/api/whatsapp/templates/route.js': {
-    calls: { createTemplate: 1, getTemplates: 1, ownNumberOrRefusal: 1, listLocationNumberConfigs: 1 },
+    calls: { getTemplates: 1, listLocationNumberConfigs: 1 },
     decision: 'own-number',
     why: 'WAORGNUMBER.2 (R5): create goes on the WABA of the studio’s default switched-on number (ownNumberOrRefusal, 409 / 500 before Meta), refuses a name another studio uses on that WABA (409 naming the owner) and stores business_account_id; sync walks the distinct WABAs of the numbers switched on at the studio (listLocationNumberConfigs: none → sync_error, a failed read → sync_error, Meta not called, cache served), reads every page, updates its own rows, skips other studios’ and adopts unowned ones only at the number’s home studio. route.own-number.test.js, route.sync-error.test.js. Before: create: 409 / 500 before Meta (it named no location, so it always used the env WABA). Sync: sync_error, Meta not called, cache served (it copied the env WABA’s templates into a number-less location). route.own-number.test.js. ?conversation_id= serves the thread’s studio’s cached rows (ORGCONTACTS.0: read off the conversation row; templateLocationIdFor, an identity kept only for this count, is deleted), no sync.',
+  },
+  'src/lib/whatsapp-template-submit.js': {
+    calls: { createTemplate: 1, ownNumberOrRefusal: 1 },
+    decision: 'own-number',
+    why: 'PIPEBUILD.4a: the create half of POST /api/whatsapp/templates, lifted out so the recipe installer can submit from a library. After the buttons check, ownNumberOrRefusal (409 none switched on / 500 lookup failed, passed through as the result status) runs before any Meta call; the name clash read, createTemplate and the insert follow, exactly as the route did (WAORGNUMBER.2 R5). Never throws: every failure is a result the caller maps. whatsapp-template-submit.test.js, route.own-number.test.js.',
   },
   'src/app/api/whatsapp/templates/[id]/route.js': {
     calls: { deleteTemplate: 1, templateNumberOrRefusal: 1 },

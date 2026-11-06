@@ -1,18 +1,23 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createTemplate as createMetaTemplate, getTemplates as getMetaTemplates } from '@/lib/whatsapp'
+import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'
+import { submitWhatsappTemplate } from '@/lib/whatsapp-template-submit'
 import { getCurrentUser, assertLocationAccess, assertLocationAccessOr404, getUserLocationIds } from '@/lib/auth'
 import { canManageWaTemplatesAt } from '@/lib/wa-template-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { componentsButtonsError } from '@/lib/whatsapp-template-buttons'
-import { ownNumberOrRefusal, NUMBER_LOOKUP_FAILED_MESSAGE } from '@/lib/whatsapp-own-number'
+import { NUMBER_LOOKUP_FAILED_MESSAGE } from '@/lib/whatsapp-own-number'
 import { listLocationNumberConfigs } from '@/lib/whatsapp-config'
 import { planTemplateSync } from '@/lib/whatsapp-template-sync'
 import { NO_WHATSAPP_NUMBER_MESSAGE, NO_LOCATION_MESSAGE } from '@/lib/whatsapp-number-missing'
 import { logError } from '@/lib/log'
 import { onTemplateApproved } from '@/lib/sequences/template-wait'
+import { onTemplateStatusForFollowups } from '@/lib/pipeline-followup-approval'
+
+// Template statuses that move a stage follow-up (whatsapp-template-events.js
+// hands the hook the same three).
+const FOLLOWUP_STATUSES = new Set(['APPROVED', 'REJECTED', 'DISABLED'])
 
 const WaTemplateCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -195,9 +200,17 @@ async function syncTemplatesFromMeta(db, locationId) {
       for (const u of plan.updates) {
         const { error } = await db.from('whatsapp_templates').update(u.row).eq('id', u.id)
         if (error) { failed++; continue }
+        const newStatus = u.row.status
+        const transitioned = Boolean(newStatus) && storedStatus.get(u.id) !== newStatus
         // PIPEBUILD.1c — newly approved: wake enrolments waiting on it.
-        if (u.row.status === 'APPROVED' && storedStatus.get(u.id) !== 'APPROVED') {
+        if (transitioned && newStatus === 'APPROVED') {
           await onTemplateApproved(db, { id: u.id, location_id: u.row.location_id })
+        }
+        // PIPEBUILD.4e — and stage follow-ups waiting on it: an approval may
+        // publish them, a rejection or a disable marks them rejected (the
+        // same statuses the webhook path hands over). Never throws.
+        if (transitioned && FOLLOWUP_STATUSES.has(newStatus)) {
+          await onTemplateStatusForFollowups(db, { id: u.id, location_id: u.row.location_id }, newStatus)
         }
       }
       for (const row of plan.inserts) {
@@ -237,81 +250,23 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  // Meta refuses a malformed button with a generic code-100 "Invalid parameter"
-  // that names neither the button nor the rule. Fail here instead, with both.
-  const buttonError = componentsButtonsError(body.components)
-  if (buttonError) return NextResponse.json({ success: false, error: buttonError }, { status: 400 })
-
-  // WACONFIGFALLBACK.1 — submit on THIS location's own WABA. The create was
-  // called with no location at all, so every template went to the global env
-  // number's WABA whatever location it was saved under. No number → 409 and
-  // Meta is never called; a failed lookup → 500.
-  const own = await ownNumberOrRefusal(locationId, 'wa-templates-create')
-  if (!own.ok) return NextResponse.json({ success: false, error: own.error }, { status: own.status })
-
   const db = createServerClient()
-
-  // WAORGNUMBER.2 (R5) — the template goes on the WABA of the studio's default
-  // number, which other studios may share. A name another studio already uses
-  // on that account (or this studio in this language) is refused before Meta,
-  // naming the owner: Meta would merge a second studio's template into the
-  // owner's under one name.
-  const wabaId = own.config.businessAccountId || null
-  const language = body.language || 'en'
-  if (wabaId) {
-    // `locations!location_id`: whatsapp_template_events, whatsapp_broadcasts
-    // and event_types each hold FKs to both tables, so a bare `locations` embed
-    // is ambiguous and PostgREST answers 300 (PGRST201), failing every create.
-    const { data: clashes, error: clashErr } = await db.from('whatsapp_templates')
-      .select('location_id, language, locations!location_id ( name )')
-      .eq('business_account_id', wabaId)
-      .eq('name', body.name)
-    if (clashErr) {
-      logError('wa-templates-create', 'name check failed', { locationId, err: clashErr.message })
-      return NextResponse.json({ success: false, error: 'Could not check that template name just now. Try again.' }, { status: 500 })
-    }
-    const clash = (clashes || []).find((r) => r.location_id !== locationId || r.language === language)
-    if (clash) {
-      const owner = clash.locations?.name || 'another studio'
-      return NextResponse.json({
-        success: false,
-        error: `That name is already used by ${owner} on this WhatsApp account. Pick another name.`,
-      }, { status: 409 })
-    }
-  }
-
-  try {
-    // Submit to Meta
-    const metaResult = await createMetaTemplate({
-      name: body.name,
-      category: body.category || 'MARKETING',
-      language,
-      components: body.components || [],
-      parameterFormat: body.parameter_format,
-    }, { config: own.config })
-
-    // Save locally with Meta's ID and status
-    const { data, error } = await db.from('whatsapp_templates').insert({
-      name: body.name,
-      meta_template_id: metaResult.id,
-      language,
-      category: body.category || 'MARKETING',
-      components: body.components || [],
-      example_values: body.example_values || {},
-      status: metaResult.status || 'PENDING',
-      location_id: locationId,
-      business_account_id: wabaId,
-      created_by: user.id,
-      header_media_handle: body.header_media_handle || null,
-      header_media_url: body.header_media_url || null,
-      header_media_path: body.header_media_path || null,
-      display_group: body.display_group?.trim() || null,
-    }).select().single()
-
-    if (error) throw new Error(error.message)
-
-    return NextResponse.json({ success: true, template: data })
-  } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
-  }
+  // Buttons check, own-number refusal, name clash, Meta submit and the insert
+  // all live in submitWhatsappTemplate (PIPEBUILD.4a); the route maps its result.
+  const result = await submitWhatsappTemplate(db, {
+    locationId,
+    name: body.name,
+    category: body.category || 'MARKETING',
+    language: body.language || 'en',
+    components: body.components || [],
+    createdBy: user.id,
+    parameterFormat: body.parameter_format,
+    exampleValues: body.example_values,
+    headerMediaHandle: body.header_media_handle,
+    headerMediaUrl: body.header_media_url,
+    headerMediaPath: body.header_media_path,
+    displayGroup: body.display_group,
+  })
+  if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: result.status })
+  return NextResponse.json({ success: true, template: result.template })
 }

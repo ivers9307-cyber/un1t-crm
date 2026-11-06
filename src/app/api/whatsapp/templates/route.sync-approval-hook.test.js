@@ -28,12 +28,14 @@ vi.mock('@/lib/whatsapp-config', () => ({
   listLocationNumberConfigs: vi.fn(async () => [{ source: 'db', id: 'n1', locationId: 'loc-1', homeLocationId: 'loc-1', phoneNumberId: 'PNI-SYNTH', token: 'tok-synth', businessAccountId: 'WABA-SYNTH' }]),
 }))
 vi.mock('@/lib/sequences/template-wait', () => ({ onTemplateApproved: vi.fn(async () => ({ woken: 0, resumed: 0, leftPaused: 0 })) }))
+vi.mock('@/lib/pipeline-followup-approval', () => ({ onTemplateStatusForFollowups: vi.fn(async () => ({ published: 0, rejected: 0 })) }))
 vi.mock('@/lib/log', () => ({ logError: vi.fn(), logWarn: vi.fn(), logInfo: vi.fn() }))
 
 import { GET } from './route.js'
 import { getTemplates as getMetaTemplates } from '@/lib/whatsapp'
 import { createServerClient } from '@/lib/supabase'
 import { onTemplateApproved } from '@/lib/sequences/template-wait'
+import { onTemplateStatusForFollowups } from '@/lib/pipeline-followup-approval'
 import { fakeTemplatesDb } from './templates-fake-db.test-helpers.js'
 
 
@@ -76,5 +78,46 @@ describe('sync approval hook', () => {
     getMetaTemplates.mockResolvedValue([{ ...META[0], status: 'PENDING' }])
     await GET(req())
     expect(onTemplateApproved).not.toHaveBeenCalled()
+  })
+  // PIPEBUILD.4e — the stage follow-up hook rides the same transition.
+  it('syncCallsHookOnApprovedTransition', async () => {
+    setup('PENDING')
+    await GET(req())
+    expect(onTemplateStatusForFollowups).toHaveBeenCalledTimes(1)
+    expect(onTemplateStatusForFollowups).toHaveBeenCalledWith(expect.anything(), { id: 'row-1', location_id: 'loc-1' }, 'APPROVED')
+
+    vi.mocked(onTemplateStatusForFollowups).mockClear()
+    setup('APPROVED')
+    await GET(req())
+    setup('PENDING', { 'whatsapp_templates:update': { message: 'permission denied' } })
+    await GET(req())
+    expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
+  })
+  it('syncCallsHookOnRejectedOrDisabledTransition', async () => {
+    for (const status of ['REJECTED', 'DISABLED']) {
+      vi.mocked(onTemplateStatusForFollowups).mockClear()
+      vi.mocked(onTemplateApproved).mockClear()
+      getMetaTemplates.mockResolvedValue([{ ...META[0], status }])
+      setup('PENDING')
+      await GET(req())
+      expect(onTemplateStatusForFollowups).toHaveBeenCalledTimes(1)
+      expect(onTemplateStatusForFollowups).toHaveBeenCalledWith(expect.anything(), { id: 'row-1', location_id: 'loc-1' }, status)
+      // Only an approval wakes enrolments.
+      expect(onTemplateApproved).not.toHaveBeenCalled()
+
+      // No transition (already that status), or a failed write: no call.
+      vi.mocked(onTemplateStatusForFollowups).mockClear()
+      setup(status)
+      await GET(req())
+      setup('PENDING', { 'whatsapp_templates:update': { message: 'permission denied' } })
+      await GET(req())
+      expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
+    }
+    // PAUSED moves no follow-up.
+    vi.mocked(onTemplateStatusForFollowups).mockClear()
+    getMetaTemplates.mockResolvedValue([{ ...META[0], status: 'PAUSED' }])
+    setup('APPROVED')
+    await GET(req())
+    expect(onTemplateStatusForFollowups).not.toHaveBeenCalled()
   })
 })
