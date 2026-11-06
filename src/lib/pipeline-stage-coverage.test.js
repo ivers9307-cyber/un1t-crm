@@ -54,15 +54,41 @@ describe('loadStageCoverage', () => {
     expect(db.seen.find((s) => s.table === 'email_sequences').filters).toContainEqual(['eq', 'status', 'active'])
   })
 
-  it('countsEntryTriggerForNewLead', async () => {
+  it('entryTriggersByModuleOnNewRole', async () => {
+    const seqs = [
+      { id: 'q1', name: 'Welcome', trigger_type: 'contact_created', trigger_config: {} },
+      { id: 'q2', name: 'Stillorgan buyer', trigger_type: 'paid_trial_checkout_purchased', trigger_config: {} },
+      { id: 'q3', name: 'Hatch buyer', trigger_type: 'un1t_paid_trial_purchased', trigger_config: {} },
+    ]
+    const run = async (module) => {
+      const db = fakeDb({
+        pipelines: { data: [{ ...board, module }] },
+        pipeline_stages: { data: [stage({ id: 's1', slug: 'paid_trial_new_lead', stage_role: 'new' }), stage({ id: 's2', slug: 'rebook', stage_role: 'custom' })] },
+        email_sequences: { data: seqs },
+      })
+      return (await loadStageCoverage(db, 'loc1')).boards[0].stages
+    }
+    const [hatchNew, hatchOther] = await run('paid_trial_un1t')
+    expect(hatchNew.followups.map((f) => f.trigger)).toEqual(['un1t_paid_trial_purchased'])
+    expect(hatchOther.followups).toEqual([])
+    const [stillNew] = await run('paid_trial')
+    expect(stillNew.followups.map((f) => f.trigger)).toEqual(['paid_trial_checkout_purchased'])
+    const [acqNew] = await run('acquisition')
+    expect(acqNew.followups.map((f) => f.trigger)).toEqual(['contact_created'])
+  })
+
+  it('pileFromRole', async () => {
     const db = fakeDb({
       pipelines: { data: [board] },
-      pipeline_stages: { data: [stage({ id: 's1', slug: 'new_lead', name: 'New lead' }), stage({ id: 's2', slug: 'rebook', name: 'Rebook' })] },
-      email_sequences: { data: [{ id: 'q1', name: 'Welcome', trigger_type: 'contact_created', trigger_config: {} }] },
+      pipeline_stages: { data: [
+        stage({ id: 's1', slug: 'a', stage_role: 'pile', is_dormant: false }),
+        stage({ id: 's2', slug: 'b', stage_role: 'custom', is_dormant: true }),
+        stage({ id: 's3', slug: 'c', stage_role: undefined, is_dormant: true }),
+      ] },
+      email_sequences: { data: [] },
     })
     const r = await loadStageCoverage(db, 'loc1')
-    expect(r.boards[0].stages[0].followups).toEqual([{ id: 'q1', name: 'Welcome', trigger: 'contact_created' }])
-    expect(r.boards[0].stages[1].followups).toEqual([])
+    expect(r.boards[0].stages.map((s) => s.isPile)).toEqual([true, false, true])
   })
 
   it('skipsDisabledBoardsAndArchivedStages', async () => {

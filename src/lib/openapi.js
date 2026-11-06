@@ -7170,6 +7170,23 @@ registry.registerPath({
   },
 })
 
+// PIPEBUILD.2c — the stages of the studio's enabled boards, for UI display.
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/stages',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: "A studio's pipeline stages (enabled boards, not archived)",
+  request: { params: z.object({ id: uuidLike }) },
+  description: '{ stages: [{ slug, name, color, stage_role, role_config, is_dormant, display_order, board_key, board_name }] }, ordered by board display_order then stage display_order. Any member of the studio may read it.',
+  responses: {
+    200: { description: 'The stages' },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not a member of the studio', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Could not read the stages', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // SCHEDULE-SPEND-AGG.1 — the roster's contractor spend panel. Studio totals
 // only; FTECOSTVIS.1 keeps the salary-derived FTE labour total to admins.
 registry.registerPath({
