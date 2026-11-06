@@ -1,4 +1,7 @@
 // src/lib/whatsapp-template-events.js
+import { logError } from '@/lib/log'
+import { onTemplateApproved } from '@/lib/sequences/template-wait'
+
 // WA-TMPL — pure helpers for the WhatsApp template webhooks. No IO (the
 // applyTemplateEvent IO wrapper lives below, but these three are pure + unit-tested).
 // Events: message_template_status_update / _quality_update / template_category_update.
@@ -96,16 +99,26 @@ export async function applyTemplateEvent(db, field, value) {
   const changed = Object.entries(update).some(([k, v]) => template[k] !== v)
   if (!changed) return { skipped: 'unchanged', template }
 
-  await db.from('whatsapp_templates').update(update).eq('id', template.id)
+  const { error: updateErr } = await db.from('whatsapp_templates').update(update).eq('id', template.id)
+  if (updateErr) {
+    logError('wa-template-events', 'template update failed', { templateId: template.id, err: updateErr.message })
+    return { skipped: 'update_failed' }
+  }
 
   const ev = templateEventRow(field, value)
   if (ev) {
-    await db.from('whatsapp_template_events').insert({
+    const { error: auditErr } = await db.from('whatsapp_template_events').insert({
       template_id: template.id,
       location_id: template.location_id,
       ...ev,
     })
+    if (auditErr) {
+      logError('wa-template-events', 'audit insert failed', { templateId: template.id, err: auditErr.message })
+    }
   }
+
+  // PIPEBUILD.1c — approval wakes waiting enrolments (never throws).
+  if (update.status === 'APPROVED') await onTemplateApproved(db, template)
 
   return { template, notify: templateNotification(field, value, template.name) }
 }
