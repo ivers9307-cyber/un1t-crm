@@ -284,6 +284,28 @@ describe('onTemplateStatusForFollowups', () => {
     expect(logError).not.toHaveBeenCalledWith('pipeline-followup-approval', 'publish failed; follow-up left awaiting approval', expect.anything())
   })
 
+  it('a failed publish does not undo a claim made after its own', async () => {
+    let tablesRef
+    publishSequence.mockImplementation(async () => {
+      // While this publish runs, a reinstall's repair re-claims the row.
+      tablesRef.pipeline_stage_followups[0].updated_at = '2099-01-01T00:00:00.000Z'
+      return { ok: false, status: 422, error: 'Flow has problems' }
+    })
+    const { db, tables, ops } = fakeDb({
+      pipeline_stage_followups: [followup()],
+      email_sequences: [sequence()],
+      whatsapp_templates: [tpl('wt-1', 'APPROVED')],
+    })
+    tablesRef = tables
+    const r = await onTemplateStatusForFollowups(db, { id: 'wt-1', location_id: LOC }, 'APPROVED')
+    expect(r).toEqual({ published: 0, rejected: 0 })
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    const claim = ops.find((q) => q.op === 'update' && q.payload.state === 'live')
+    const revert = ops.find((q) => q.op === 'update' && q.payload.state === 'awaiting_approval')
+    expect(revert.filters).toContainEqual(['eq', 'updated_at', claim.payload.updated_at])
+    expect(logError).toHaveBeenCalledWith('pipeline-followup-approval', expect.stringContaining('re-claimed meanwhile'), expect.anything())
+  })
+
   it('neverThrows', async () => {
     for (const failKey of ['pipeline_stage_followups.select', 'email_sequences.select', 'whatsapp_templates.select']) {
       const { db, tables } = fakeDb({

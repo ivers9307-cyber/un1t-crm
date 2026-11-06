@@ -490,6 +490,7 @@ describe('installFollowupPack', () => {
       pipeline_stage_followups: [{
         id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-1',
         whatsapp_template_id: 'wt-a', pack_key: 'book_first_class', state: 'live', want_live: true,
+        updated_at: '2026-11-01T00:00:00.000Z',
       }],
       email_sequences: [{ id: 'seq-1', location_id: LOC, status: seqStatus, graph: null, draft_graph: { nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt-a' } }] } }],
       whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }],
@@ -519,6 +520,55 @@ describe('installFollowupPack', () => {
     const r2 = await installFollowupPack(held.db, args())
     expect(r2).toMatchObject({ ok: true, created: false, followup: { state: 'awaiting_approval' } })
     expect(held.tables.pipeline_stage_followups[0].state).toBe('awaiting_approval')
+  })
+
+  it('a freshly claimed live row is a publish in flight: a reinstall leaves it alone', async () => {
+    const fresh = new Date(Date.now() - 30 * 1000).toISOString()
+    const { db, ops } = fakeDb({
+      pipeline_stage_followups: [{
+        id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-1',
+        whatsapp_template_id: 'wt-a', pack_key: 'book_first_class', state: 'live', want_live: true, updated_at: fresh,
+      }],
+      email_sequences: [{ id: 'seq-1', location_id: LOC, status: 'draft', graph: null, draft_graph: { nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt-a' } }] } }],
+      whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }],
+    })
+    submitsOk()
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: false, followup: { state: 'live', updated_at: fresh } })
+    expect(publishSequence).not.toHaveBeenCalled()
+    expect(ops.filter((q) => q.op === 'update')).toHaveLength(0)
+  })
+
+  it('a stale-claim repair only reverts the claim it judged, never a newer one', async () => {
+    const { db, ops } = fakeDb({
+      pipeline_stage_followups: [{
+        id: 'fu-1', location_id: LOC, pipeline_id: PIPE, stage_id: STAGE, sequence_id: 'seq-1',
+        whatsapp_template_id: 'wt-a', pack_key: 'book_first_class', state: 'live', want_live: true,
+        updated_at: '2026-11-01T00:00:00.000Z',
+      }],
+      email_sequences: [{ id: 'seq-1', location_id: LOC, status: 'draft', graph: null, draft_graph: { nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt-a' } }] } }],
+      whatsapp_templates: [{ id: 'wt-a', location_id: LOC, status: 'APPROVED' }],
+    })
+    submitsOk()
+    await installFollowupPack(db, args())
+    const revert = ops.find((q) => q.table === 'pipeline_stage_followups' && q.op === 'update' && q.payload.state === 'awaiting_approval')
+    expect(revert.filters).toContainEqual(['eq', 'updated_at', '2026-11-01T00:00:00.000Z'])
+  })
+
+  it('a failed publish does not undo a claim made after its own', async () => {
+    submitsOk('APPROVED')
+    let tablesRef
+    publishSequence.mockImplementation(async () => {
+      // While this publish runs, a reinstall's repair re-claims the row.
+      tablesRef.pipeline_stage_followups[0].updated_at = '2099-01-01T00:00:00.000Z'
+      return { ok: false, status: 422, error: 'Flow has problems' }
+    })
+    const { db, tables } = fakeDb()
+    tablesRef = tables
+    const r = await installFollowupPack(db, args())
+    expect(r).toMatchObject({ ok: true, created: true, publishError: 'Flow has problems' })
+    expect(tables.pipeline_stage_followups[0].state).toBe('live')
+    expect(r.followup.state).toBe('live')
   })
 
   it('refusesReinstallOverActiveOff', async () => {

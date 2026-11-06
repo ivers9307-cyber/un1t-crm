@@ -13,18 +13,38 @@ const bodyOf = (t) => t.components.find((c) => c.type === 'BODY').text
 function expectGuarded(g, label) {
   const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]))
   const out = (id) => g.edges.filter((e) => e.from === id)
-  const walk = (id, guarded, seen) => {
+  const walk = (id, guarded) => {
     const n = byId[id]
     if (n.type === 'whatsapp') expect(guarded, `${label} ${id}`).toBe(true)
     for (const e of out(id)) {
       const stageYes = n.type === 'branch' && n.config.predicate.type === 'in_pipeline_stage_at_studio' && e.label === 'yes'
-      walk(e.to, guarded || stageYes, seen)
+      walk(e.to, guarded || stageYes)
     }
   }
   for (const e of out('trigger')) walk(e.to, false)
   expect(g.nodes.some((n) => n.type === 'whatsapp')).toBe(true)
 }
 const allPacks = () => Object.values(RECIPES).flatMap((r) => r.packs.map((p) => [r.key, p.key]))
+
+describe('expectGuarded', () => {
+  it('fails on a send no in-stage branch guards', () => {
+    const unguarded = {
+      nodes: [{ id: 'trigger', type: 'trigger' }, { id: 'w', type: 'wait', config: {} }, { id: 's', type: 'whatsapp', config: {} }],
+      edges: [{ from: 'trigger', to: 'w' }, { from: 'w', to: 's' }],
+    }
+    expect(() => expectGuarded(unguarded, 'neg')).toThrow()
+    // The same send behind the in-stage branch's yes edge passes.
+    const guarded = {
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        { id: 'b', type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio' } } },
+        { id: 's', type: 'whatsapp', config: {} },
+      ],
+      edges: [{ from: 'trigger', to: 'b' }, { from: 'b', to: 's', label: 'yes' }],
+    }
+    expect(() => expectGuarded(guarded, 'pos')).not.toThrow()
+  })
+})
 
 describe('recipes', () => {
   it('everyRecipeConfigParses', () => {

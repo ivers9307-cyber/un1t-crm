@@ -255,10 +255,18 @@ export async function installFollowupPack(db, {
   return { ok: true, ...outcome, created: true }
 }
 
+// A claim that has held `live` over a draft sequence for longer than this is
+// stuck (publish failed AND its revert failed). Younger than this it may be a
+// publish still in flight (this installer or the approval hook), which must be
+// left alone: reverting it would let a second caller publish again, and the
+// first caller's revert would then undo the second caller's claim.
+export const STUCK_LIVE_LEASE_MS = 5 * 60 * 1000
+
 // Step 2: an installed row is returned as it stands, unless it is stranded.
-//  - `live` over a sequence that is still a draft: a publish failed and the
-//    revert write failed too, so nothing sends and no approval will ever move
-//    it. Put it back to awaiting_approval, then re-check as below.
+//  - `live` over a sequence that is still a draft, claimed more than
+//    STUCK_LIVE_LEASE_MS ago: a publish failed and the revert write failed
+//    too, so nothing sends and no approval will ever move it. Put it back to
+//    awaiting_approval (only if nobody re-claimed it since), then re-check.
 //  - `awaiting_approval` (want_live): every template may already be approved
 //    (an approval that landed mid-install, or a publish that failed after the
 //    claim). Re-read the statuses at this studio and publish if so.
@@ -281,12 +289,15 @@ async function recheckInstalled(db, locationId, existing) {
   let followup = existing
   if (existing.state === 'live') {
     if (seq.status !== 'draft') return asIs
-    const { data: reverted, error: revertErr } = await db.from('pipeline_stage_followups')
+    if (claimIsFresh(existing.updated_at)) return asIs
+    let revert = db.from('pipeline_stage_followups')
       .update({ state: 'awaiting_approval', updated_at: new Date().toISOString() })
       .eq('id', existing.id)
       .eq('location_id', locationId)
       .eq('state', 'live')
-      .select('id')
+    // Only the claim we judged stale: a newer claim has a newer updated_at.
+    if (existing.updated_at) revert = revert.eq('updated_at', existing.updated_at)
+    const { data: reverted, error: revertErr } = await revert.select('id')
     if (revertErr) {
       logError(MODULE, 'reinstall: stuck live follow-up could not be put back', { followupId: existing.id, sequenceId: seq.id, err: revertErr.message })
       return fail(500, 'This follow-up is marked live but its sequence never went live, and it could not be repaired just now. Try again.', 'publish_failed_state_stuck')
@@ -320,9 +331,19 @@ async function publishIfAllApproved(db, locationId, followup, sequenceId, templa
   return claimAndPublish(db, locationId, followup, sequenceId)
 }
 
+// True while a `live` claim is young enough to be a publish still in flight.
+// An unreadable timestamp counts as stale, so a stuck row is never kept stuck.
+function claimIsFresh(updatedAt, now = Date.now()) {
+  const at = Date.parse(updatedAt ?? '')
+  return Number.isFinite(at) && now - at < STUCK_LIVE_LEASE_MS
+}
+
 async function claimAndPublish(db, locationId, followup, sequenceId) {
+  // The claim's own timestamp: the revert below matches on it, so a failed
+  // publish can only undo THIS claim, never a newer one.
+  const claimAt = new Date().toISOString()
   const { data: claimed, error: claimErr } = await db.from('pipeline_stage_followups')
-    .update({ state: 'live', updated_at: new Date().toISOString() })
+    .update({ state: 'live', updated_at: claimAt })
     .eq('id', followup.id)
     .eq('location_id', locationId)
     .eq('state', 'awaiting_approval')
@@ -341,13 +362,23 @@ async function claimAndPublish(db, locationId, followup, sequenceId) {
   } catch (err) {
     published = { ok: false, error: err?.message || String(err) }
   }
-  if (published?.ok) return { followup: { ...followup, state: 'live' } }
+  if (published?.ok) return { followup: { ...followup, state: 'live', updated_at: claimAt } }
 
-  const { error: revertErr } = await db.from('pipeline_stage_followups')
+  const { data: reverted, error: revertErr } = await db.from('pipeline_stage_followups')
     .update({ state: 'awaiting_approval', updated_at: new Date().toISOString() })
     .eq('id', followup.id)
     .eq('location_id', locationId)
     .eq('state', 'live')
+    .eq('updated_at', claimAt)
+    .select('id')
+  if (!revertErr && !reverted?.length) {
+    // Someone re-claimed it after our claim (a reinstall's repair once the
+    // lease ran out). Their claim stands; report the row as it now is.
+    logError(MODULE, 'install: publish failed; the follow-up was re-claimed meanwhile, left as it is', {
+      followupId: followup.id, sequenceId, err: published?.error,
+    })
+    return { followup: await rereadFollowup(db, locationId, followup), publishError: published?.error }
+  }
   if (revertErr) {
     // The row reads live over a draft sequence. Say so: reporting
     // awaiting_approval would be a lie about what is on disk. A reinstall

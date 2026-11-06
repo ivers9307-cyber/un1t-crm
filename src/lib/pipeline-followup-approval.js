@@ -123,8 +123,11 @@ async function publishWaiting(db, template, result) {
   for (const f of candidates) {
     if (!f.templateIds.every((id) => approved.has(id))) continue
 
+    // The claim's own timestamp: the revert below matches on it, so a failed
+    // publish can only undo THIS claim, never a newer one.
+    const claimAt = new Date().toISOString()
     const { data: claimed, error: claimErr } = await db.from('pipeline_stage_followups')
-      .update({ state: 'live', updated_at: new Date().toISOString() })
+      .update({ state: 'live', updated_at: claimAt })
       .eq('id', f.id)
       .eq('location_id', template.location_id)
       .eq('state', 'awaiting_approval')
@@ -147,11 +150,20 @@ async function publishWaiting(db, template, result) {
       continue
     }
 
-    const { error: revertErr } = await db.from('pipeline_stage_followups')
+    const { data: reverted, error: revertErr } = await db.from('pipeline_stage_followups')
       .update({ state: 'awaiting_approval', updated_at: new Date().toISOString() })
       .eq('id', f.id)
       .eq('location_id', template.location_id)
       .eq('state', 'live')
+      .eq('updated_at', claimAt)
+      .select('id')
+    if (!revertErr && !reverted?.length) {
+      // Re-claimed after ours (a reinstall's repair); that claim stands.
+      logError(MODULE, 'publish failed; the follow-up was re-claimed meanwhile, left as it is', {
+        followupId: f.id, sequenceId: f.sequence_id, templateId: template.id, err: published?.error,
+      })
+      continue
+    }
     if (revertErr) {
       // Stuck: the row says live, the sequence is still a draft, nothing
       // sends. A reinstall of the pack puts it back and re-checks.
