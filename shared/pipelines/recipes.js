@@ -8,6 +8,8 @@ import { stageSlugFor } from './offer-config.js'
 export const FOOTER_TEXT = 'Reply STOP to unsubscribe'
 const TAG_MAX = 60
 const NAME_MAX = 512
+// Meta's limit on a template BODY's text.
+const BODY_MAX = 1024
 
 // ---------- naming ----------
 
@@ -19,10 +21,18 @@ export function studioSlugFor(locationName) {
     .replace(/^_+|_+$/g, '')
 }
 
-/** `${studioSlug}_${boardKey}_${packKey}[_${ref}]`, lowercased, [a-z0-9_] only. */
+/** `${studioSlug}_${boardKey}_${packKey}[_${ref}]`, lowercased, [a-z0-9_] only.
+ *  Throws on an empty studio slug, board key or pack key (two studios or two
+ *  boards would share one name), and on a name over Meta's 512: truncating
+ *  could make two different templates one name. */
 export function templateNameFor({ studioSlug, boardKey, packKey, ref } = {}) {
+  for (const [label, v] of [['studioSlug', studioSlug], ['boardKey', boardKey], ['packKey', packKey]]) {
+    if (v == null || String(v).trim() === '') throw new Error(`a template name needs a ${label}`)
+  }
   const raw = [studioSlug, boardKey, packKey, ref].filter((p) => p != null && p !== '').join('_')
-  return raw.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, NAME_MAX)
+  const name = raw.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+  if (name.length > NAME_MAX) throw new Error(`the template name ${name.slice(0, 40)}… is longer than ${NAME_MAX} characters`)
+  return name
 }
 
 // ---------- wording ----------
@@ -214,11 +224,14 @@ export const RECIPES = Object.freeze({
 
 // ---------- rendering ----------
 
-// Operator input: single-line, and never able to add Meta variables.
+// Operator input: single-line, never able to add Meta variables, and never
+// empty (an empty fill-in reads "starting your  at  💪" to a customer).
 function cleanFillIn(name, value) {
   const v = String(value ?? '')
   if (v.includes('{{') || v.includes('}}')) throw new Error(`${name} must not contain {{ or }}`)
-  return v.replace(/\s+/g, ' ').trim()
+  const cleaned = v.replace(/\s+/g, ' ').trim()
+  if (!cleaned) throw new Error(`${name} is required`)
+  return cleaned
 }
 
 function fillIns(text, values) {
@@ -251,17 +264,28 @@ export function renderPack(recipeKey, packKey, opts = {}) {
   if (!packDef) throw new Error(`unknown pack ${packKey} in recipe ${recipeKey}`)
   const { boardKey, studioSlug, studioName, offerName, durationDays, signer } = opts
   const checkpointDay = packDef.day ?? 7
+  if (!Number.isInteger(durationDays) || durationDays < 1) {
+    throw new Error('durationDays must be a whole number of days, 1 or more')
+  }
+  // "You've 0 days left" at the halfway check-in is never right.
+  if (packDef.graphKind === 'halfway' && durationDays <= checkpointDay) {
+    throw new Error(`durationDays must be more than the day ${checkpointDay} check-in for the ${packKey} pack`)
+  }
   const values = {
     studio: cleanFillIn('studioName', studioName),
     offer: cleanFillIn('offerName', offerName),
-    days: String(durationDays ?? ''),
-    days_left: String(Number.isFinite(durationDays) ? Math.max(durationDays - checkpointDay, 0) : ''),
+    days: String(durationDays),
+    days_left: String(durationDays - checkpointDay),
     signer: cleanFillIn('signer', signer),
   }
   const templates = packDef.templates.map((t) => {
+    const text = fillIns(t.body, values)
+    if (text.length > BODY_MAX) {
+      throw new Error(`the ${packKey} message is ${text.length} characters, over WhatsApp's ${BODY_MAX}: shorten the fill-ins`)
+    }
     const components = [{
       type: 'BODY',
-      text: fillIns(t.body, values),
+      text,
       example: { body_text: [['Tim']] },
     }, { type: 'FOOTER', text: FOOTER_TEXT }]
     const buttons = buttonsFor(t.buttons, opts)

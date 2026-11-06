@@ -143,6 +143,70 @@ describe('recipes', () => {
     }
   })
 
+  it('rejectsEmptyFillIns', () => {
+    for (const k of ['studioName', 'offerName', 'signer']) {
+      for (const bad of [undefined, null, '', '   ', '\n\t']) {
+        expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, [k]: bad }), `${k}=${JSON.stringify(bad)}`).toThrow(new RegExp(`${k} is required`))
+      }
+    }
+  })
+
+  it('rejectsMissingDuration', () => {
+    for (const bad of [undefined, null, '', 0, -3, 1.5, '14', Number.NaN]) {
+      expect(() => renderPack('paid_trial_offer', 'after_first_class', { ...BASE, durationDays: bad }), String(bad)).toThrow(/durationDays/)
+    }
+    // Every pack refuses it, including those whose wording has no {days}.
+    for (const [rk, pk] of allPacks()) {
+      expect(() => renderPack(rk, pk, { ...BASE, durationDays: undefined }), `${rk}/${pk}`).toThrow(/durationDays/)
+    }
+    expect(() => renderPack('promo_claim', 'welcome', { ...BASE, durationDays: 1 })).not.toThrow()
+  })
+
+  it('rejectsHalfwayDurationNotAfterCheckpoint', () => {
+    for (const d of [1, 6, 7]) {
+      expect(() => renderPack('paid_trial_offer', 'halfway', { ...BASE, durationDays: d }), String(d)).toThrow(/day 7 check-in/)
+    }
+    const ok = renderPack('paid_trial_offer', 'halfway', { ...BASE, durationDays: 8 })
+    expect(bodyOf(ok.templates[0])).toContain("You've 1 days of unlimited classes left")
+    // Only the halfway pack is held to it.
+    expect(() => renderPack('paid_trial_offer', 'after_first_class', { ...BASE, durationDays: 7 })).not.toThrow()
+  })
+
+  it('rejectsBodyOver1024', () => {
+    const long = 'x'.repeat(1000)
+    expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, offerName: long })).toThrow(/1024/)
+    // The longest live wording with ordinary fill-ins stays well inside it.
+    for (const [rk, pk] of allPacks()) {
+      for (const t of renderPack(rk, pk, BASE).templates) expect(bodyOf(t).length).toBeLessThanOrEqual(1024)
+    }
+  })
+
+  it('templateNameForRefusesEmptyPartsAndOverlongNames', () => {
+    for (const bad of [undefined, null, '', '  ']) {
+      expect(() => templateNameFor({ studioSlug: bad, boardKey: 'b', packKey: 'p', ref: 'main' })).toThrow(/studioSlug/)
+      expect(() => templateNameFor({ studioSlug: 's', boardKey: bad, packKey: 'p', ref: 'main' })).toThrow(/boardKey/)
+      expect(() => templateNameFor({ studioSlug: 's', boardKey: 'b', packKey: bad, ref: 'main' })).toThrow(/packKey/)
+    }
+    // A name over 512 throws instead of being cut into a possible collision.
+    const long = 'b'.repeat(505)
+    expect(templateNameFor({ studioSlug: 's', boardKey: long, packKey: 'p' })).toHaveLength(509)
+    expect(() => templateNameFor({ studioSlug: 's', boardKey: long, packKey: 'p', ref: 'main' })).toThrow(/512/)
+    expect(() => templateNameFor({ studioSlug: 's', boardKey: long, packKey: 'p', ref: 'followup' })).toThrow(/512/)
+    // An unnamed studio reaches renderPack as an empty slug and is refused.
+    expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, studioSlug: studioSlugFor('!!!') })).toThrow(/studioSlug/)
+  })
+
+  it('noPackKeyIsAnUnderscoreSuffixOfAnother', () => {
+    // `${board}_${pack}` names: a pack `done` beside a pack `trial_done` would
+    // let board `x_trial` + `done` and board `x` + `trial_done` share a name.
+    const keys = [...new Set(Object.values(RECIPES).flatMap((r) => r.packs.map((p) => p.key)))]
+    for (const a of keys) {
+      for (const b of keys) {
+        if (a !== b) expect(b.endsWith(`_${a}`), `${b} ends with _${a}`).toBe(false)
+      }
+    }
+  })
+
   it('collapsesNewlinesInSigner', () => {
     const t = renderPack('paid_trial_offer', 'book_first_class', { ...BASE, signer: '  Garrett\n\nat   UN1T\r\n' }).templates[0]
     expect(bodyOf(t).endsWith('book it for you. Garrett at UN1T')).toBe(true)
