@@ -102,6 +102,10 @@ describe('describeNode — operator-facing one-line summary per type', () => {
 })
 
 describe('describeTrigger — what starts the flow', () => {
+  it('labelsStageChangeWithToStatus', () => {
+    expect(describeTrigger({ type: 'pipeline_stage_change', config: { to_status: 'paid_trial_first_class' } })).toContain('paid_trial_first_class')
+  })
+
   it('maps known trigger types to friendly labels', () => {
     expect(describeTrigger({ type: 'manual' })).toBe('Manually enrolled')
     expect(describeTrigger({ type: 'booking_created' })).toBe('When a booking is created')
