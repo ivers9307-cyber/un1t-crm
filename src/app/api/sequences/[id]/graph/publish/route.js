@@ -3,13 +3,8 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
-import { compileForPublish } from '@/lib/sequences/graph/persist'
-import { parseGraphShape } from '@/lib/sequences/graph/schema'
-import { compileGraphToSteps } from '@/lib/sequences/graph/compile'
-import { planStepPublish } from '@/lib/sequences/graph/step-identity'
 import { validateBody } from '@/lib/validate'
-import { loadTemplatesForApproval } from '@/lib/sequences/template-approval'
-import { logWarn } from '@/lib/log'
+import { publishSequence } from '@/lib/sequences/publish'
 
 // Permissive — graph is a free-form object validated by compileForPublish.
 const PublishSchema = z.object({
@@ -35,10 +30,6 @@ const PublishSchema = z.object({
 // are intentionally left to PUT /api/sequences/[id] (it owns webhook-token
 // generation).
 
-// Same-file literal so check:select-columns resolves it; the route test pins
-// it to STEP_IDENTITY_COLUMNS (what the plan compares).
-const STEP_ROW_SELECT = 'id, step_order, step_type, graph_node_id, subject, html_content, template_id, whatsapp_template_id, whatsapp_variables, whatsapp_header_media_url, sms_body, delay_days, delay_hours, delay_minutes, config'
-
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
@@ -59,74 +50,13 @@ export async function POST(request, props) {
   const validation = await validateBody(request, PublishSchema, { allowEmpty: true })
   if (!validation.ok) return validation.response
   const body = validation.data
-  const graph = body?.graph ?? existing.draft_graph ?? existing.graph
-  if (!graph) {
-    return NextResponse.json({ success: false, error: 'Nothing to publish — no graph or draft on this sequence' }, { status: 400 })
-  }
-
-  // SEQ-URLBUTTON.1 — the URL-button rule needs the TEMPLATE, and the graph
-  // carries only an id. Load this location's rows (scoped to the sequence's own
-  // location, so another tenant's template can never satisfy the check) and only
-  // when a WhatsApp step actually names one — most flows have none.
-  const waTemplateIds = [...new Set(
-    (parseGraphShape(graph).data?.nodes || [])
-      .filter(n => n?.type === 'whatsapp')
-      .map(n => n.config?.template_id ?? n.config?.whatsapp_template_id)
-      .filter(Boolean),
-  )]
-  let whatsappTemplates = []
-  if (waTemplateIds.length) {
-    // PIPEBUILD.1a — fail CLOSED. The read now backs the approval rule as well
-    // as the URL-button rule, so a read that fell over must not let an
-    // unchecked template go live. Nothing has been written at this point.
-    const loaded = await loadTemplatesForApproval(db, { locationId: existing.location_id, templateIds: waTemplateIds })
-    if (!loaded.ok) {
-      logWarn('sequences', 'publish: whatsapp_templates read failed, publish refused', { sequenceId: params.id, err: loaded.error?.message || String(loaded.error) })
-      return NextResponse.json(
-        { success: false, error: 'Could not check the WhatsApp templates just now. Nothing was published.' },
-        { status: 503 },
-      )
-    }
-    whatsappTemplates = loaded.rows
-  }
-
-  const result = compileForPublish(graph, { whatsappTemplates, requireApprovedTemplates: true })
+  const result = await publishSequence(db, { sequenceId: params.id, graph: body?.graph, existing })
   if (!result.ok) {
     return NextResponse.json(
-      { success: false, error: 'Flow has problems that must be fixed before publishing', issues: result.errors },
-      { status: 422 },
+      { success: false, error: result.error, ...(result.issues ? { issues: result.issues } : {}) },
+      { status: result.status },
     )
   }
 
-  // STEPATTRIB.1 — which existing row each compiled node updates in place.
-  // Rows from before mig 698 carry no node id; the stored PUBLISHED graph
-  // (not the draft) is what they were compiled from, so it identifies them.
-  const { data: existingRows, error: rowsError } = await db.from('sequence_steps')
-    .select(STEP_ROW_SELECT)
-    .eq('sequence_id', params.id)
-  if (rowsError) return NextResponse.json({ success: false, error: rowsError.message }, { status: 500 })
-
-  const plan = planStepPublish({
-    compiled: compileGraphToSteps(graph, { withNodeIds: true }),
-    existingRows: existingRows || [],
-    previousGraph: existing.graph,
-  })
-  const { error: stepsError } = await db.rpc('publish_sequence_steps', {
-    p_sequence_id: params.id,
-    p_steps: plan.steps,
-  })
-  if (stepsError) return NextResponse.json({ success: false, error: stepsError.message }, { status: 500 })
-
-  // Promote the graph to canonical + clear the draft + GO LIVE. Setting
-  // status='active' is what actually makes the sequence run: both the
-  // enrolment triggers (lib/sequences/triggers.js) and the runner
-  // (scheduler.js) gate on status='active', so a published-but-still-'draft'
-  // sequence would materialise steps yet never enrol anyone. Store the
-  // normalised graph shape so the column stays clean (defaults applied).
-  const { error: seqError } = await db.from('email_sequences')
-    .update({ graph: parseGraphShape(graph).data, draft_graph: null, status: 'active' })
-    .eq('id', params.id)
-  if (seqError) return NextResponse.json({ success: false, error: seqError.message }, { status: 500 })
-
-  return NextResponse.json({ success: true, steps: result.steps.length })
+  return NextResponse.json({ success: true, steps: result.steps })
 }
