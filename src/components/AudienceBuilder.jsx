@@ -364,9 +364,9 @@ export function withStudioStages(cfg, stages) {
   const options = [...cfg.options]
   const valueLabels = { ...cfg.valueLabels }
   for (const st of stages) {
-    if (options.includes(st.slug) || valueLabels[st.slug]) continue
+    if (options.includes(st.slug)) continue
     options.push(st.slug)
-    valueLabels[st.slug] = `${st.board_name ? `${st.board_name}: ` : ''}${st.name}`
+    valueLabels[st.slug] ??= `${st.board_name ? `${st.board_name}: ` : ''}${st.name}`
   }
   return { ...cfg, options, valueLabels }
 }

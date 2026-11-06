@@ -12,6 +12,7 @@
 // can only drift together.
 
 import { FUNNEL_STAGE_SLUGS, OFF_FUNNEL_STAGE_SLUGS } from '../../shared/pipeline-classifier.js'
+import { DEFAULT_ROLE_BY_SLUG } from '../../shared/pipelines/stage-roles.js'
 import { BUNDLE_KEYS } from '../../shared/permission-bundles.js'
 import { DEFAULT_NOTIFICATION_CONFIG } from './notification-config.js'
 
@@ -37,6 +38,8 @@ export function defaultPipelineStages() {
   return [...FUNNEL_STAGE_SLUGS, ...OFF_FUNNEL_STAGE_SLUGS].map((slug) => ({
     slug,
     ...STAGE_DETAILS[slug],
+    stage_role: DEFAULT_ROLE_BY_SLUG[slug]?.stage_role ?? 'custom',
+    role_config: { ...(DEFAULT_ROLE_BY_SLUG[slug]?.role_config ?? {}) },
     archived: false,
     is_dormant: OFF_FUNNEL_STAGE_SLUGS.includes(slug),
   }))

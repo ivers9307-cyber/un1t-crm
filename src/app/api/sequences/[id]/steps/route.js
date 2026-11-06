@@ -112,7 +112,7 @@ export async function POST(request, props) {
     const refusal = await liveSequenceTemplateRefusal(db, {
       sequenceStatus: seq.status,
       locationId: seqLocation,
-      templateRefs: [{ stepNumber: body.step_order ?? 'new', templateId: body.whatsapp_template_id }],
+      templateRefs: [{ stepNumber: body.step_order, templateId: body.whatsapp_template_id }],
     })
     if (refusal) return templateRefusalResponse(refusal, params.id)
   }
@@ -181,7 +181,7 @@ export async function PUT(request, props) {
     locationId: seqLocation,
     templateRefs: steps
       .filter(st => st.whatsapp_template_id)
-      .map(st => ({ stepNumber: st.step_order ?? '?', templateId: st.whatsapp_template_id })),
+      .map(st => ({ stepNumber: st.step_order, templateId: st.whatsapp_template_id })),
   })
   if (refusal) return templateRefusalResponse(refusal, params.id)
 

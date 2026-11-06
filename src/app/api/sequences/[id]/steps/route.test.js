@@ -102,6 +102,13 @@ describe('legacy steps API: live sequence + unapproved template', () => {
     expect(calls.update).not.toHaveBeenCalled()
   })
 
+  it('refusal copy has no step number when the request carries none', async () => {
+    const { db } = mockDb({ templates: PENDING })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(json('POST', { step_type: 'whatsapp', whatsapp_template_id: TPL_ID }), params())
+    expect((await res.json()).error).toBe('This step uses the WhatsApp template "Welcome", which is PENDING at Meta. Use it once the template is approved.')
+  })
+
   it('an approved template on a live sequence is accepted', async () => {
     const { db, calls } = mockDb({ templates: APPROVED })
     createServerClient.mockReturnValue(db)

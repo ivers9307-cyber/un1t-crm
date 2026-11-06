@@ -9,6 +9,8 @@
  * @param {Array<{id:string, name?:string, status?:string}>} templates
  * @returns {Array<{code:'template_not_found'|'template_not_approved', nodeId?:string, message:string}>}
  */
+const stepWho = (n) => (Number.isInteger(n) ? `Step ${n}` : 'This step')
+
 export function whatsappApprovalIssues(refs, templates) {
   const byId = new Map((Array.isArray(templates) ? templates : []).map(t => [t.id, t]))
   const out = []
@@ -18,7 +20,7 @@ export function whatsappApprovalIssues(refs, templates) {
     if (!template) {
       out.push(withNode({
         code: 'template_not_found',
-        message: `Step ${ref.stepNumber} uses a WhatsApp template that could not be found at this studio. Pick another template.`,
+        message: `${stepWho(ref.stepNumber)} uses a WhatsApp template that could not be found at this studio. Pick another template.`,
       }))
       continue
     }
@@ -26,7 +28,7 @@ export function whatsappApprovalIssues(refs, templates) {
     if (status !== 'APPROVED') {
       out.push(withNode({
         code: 'template_not_approved',
-        message: `Step ${ref.stepNumber} uses the WhatsApp template "${template.name || 'unnamed'}", which is ${status || 'not approved'} at Meta.`,
+        message: `${stepWho(ref.stepNumber)} uses the WhatsApp template "${template.name || 'unnamed'}", which is ${status || 'not approved'} at Meta.`,
       }))
     }
   }

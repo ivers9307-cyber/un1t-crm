@@ -425,7 +425,7 @@ export default function SequenceSettings({ sequence, locationTimeZone = null, ju
               <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
               <span className="block text-[11px] text-un1t-subtle/80 mt-1">{AUDIENCE_CONTINUOUS_HINT}</span>
             </div>
-            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} timeZone={locationTimeZone} />
+            <AudienceBuilder locationId={sequence?.location_id} filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} timeZone={locationTimeZone} />
             {/* FILTER-B.3 — a MATCHING count, deliberately not a send count.
                 Since SEQEXIT.1 this filter is a continuing condition: it
                 decides who enrols AND who stays, re-checked before every

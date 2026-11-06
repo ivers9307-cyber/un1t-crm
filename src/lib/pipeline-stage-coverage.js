@@ -1,3 +1,5 @@
+import { stageRoleOf, isPileRole } from '@shared/pipelines/stage-roles'
+
 // PIPEBUILD.1e — which pipeline stages have a live follow-up aimed at them.
 //
 // Follow-ups were missed because nothing showed a stage with no sequence. One
@@ -23,8 +25,6 @@ export const ENTRY_TRIGGERS_BY_MODULE = {
   paid_trial: ['paid_trial_checkout_purchased'],
   paid_trial_un1t: ['un1t_paid_trial_purchased'],
 }
-
-import { stageRoleOf, isPileRole } from '@shared/pipelines/stage-roles'
 
 const PAGE = 1000
 

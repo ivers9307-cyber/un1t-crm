@@ -68,7 +68,7 @@ export async function PUT(request, props) {
     const refusal = await liveSequenceTemplateRefusal(db, {
       sequenceStatus: seq.status,
       locationId: seqLocation,
-      templateRefs: [{ stepNumber: updates.step_order ?? 'this', templateId: updates.whatsapp_template_id }],
+      templateRefs: [{ stepNumber: updates.step_order, templateId: updates.whatsapp_template_id }],
     })
     if (refusal) {
       if (refusal.readFailed) {

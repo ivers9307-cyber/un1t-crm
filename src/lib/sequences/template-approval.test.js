@@ -20,4 +20,10 @@ describe('whatsappApprovalIssues', () => {
   it('passesApproved', () => {
     expect(whatsappApprovalIssues(refs, [{ id: 't1', name: 'x', status: 'APPROVED' }])).toEqual([])
   })
+  it('says "This step" when there is no step number', () => {
+    for (const stepNumber of [undefined, null, 'new', '?']) {
+      const out = whatsappApprovalIssues([{ stepNumber, templateId: 't1' }], [{ id: 't1', name: 'Welcome', status: 'PENDING' }])
+      expect(out[0].message).toBe('This step uses the WhatsApp template "Welcome", which is PENDING at Meta.')
+    }
+  })
 })

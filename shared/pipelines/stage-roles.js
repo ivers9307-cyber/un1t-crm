@@ -7,6 +7,24 @@ export const STAGE_ROLES = Object.freeze([
   'new', 'first_class', 'class_n', 'checkpoint', 'done', 'converted', 'pile', 'custom',
 ])
 
+// The role (and role_config) a default stage slug is seeded with. ONE map: mig
+// 814's backfill groups and location-seed's new-studio rows both follow it
+// (tests/pipeline-stage-roles-map.test.js pins it to the migration text).
+const ROLE_GROUPS = [
+  ['new', ['new_lead', 'paid_trial_new_lead', 'programme_lead', 'waitlist_new_enquiry', 'returning_booked'], {}],
+  ['first_class', ['first_class', 'paid_trial_first_class', 'programme_first_class', 'returning_first_class'], {}],
+  ['class_n', ['second_class', 'returning_second_class'], { count: 2 }],
+  ['checkpoint', ['paid_trial_day_7'], { day: 7 }],
+  ['done', ['trial_done', 'paid_trial_done', 'returning_final_class'], {}],
+  ['converted', ['converted', 'paid_trial_converted', 'programme_converted', 'waitlist_converted'], {}],
+  ['pile', ['member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant'], {}],
+]
+
+export const DEFAULT_ROLE_BY_SLUG = Object.freeze(Object.fromEntries(
+  ROLE_GROUPS.flatMap(([stage_role, slugs, role_config]) =>
+    slugs.map((slug) => [slug, Object.freeze({ stage_role, role_config: Object.freeze({ ...role_config }) })])),
+))
+
 const LIVE_FUNNEL = new Set(['new', 'first_class', 'class_n', 'checkpoint', 'done'])
 
 // Stored role if valid; else a dormant stage is the pile; else custom.

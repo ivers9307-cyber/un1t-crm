@@ -123,6 +123,12 @@ CREATE INDEX IF NOT EXISTS pipeline_stage_followups_template_idx
   ON public.pipeline_stage_followups (whatsapp_template_id);
 CREATE INDEX IF NOT EXISTS pipeline_stage_followups_sequence_idx
   ON public.pipeline_stage_followups (sequence_id);
+CREATE INDEX IF NOT EXISTS pipeline_stage_followups_pipeline_idx
+  ON public.pipeline_stage_followups (pipeline_id);
+CREATE INDEX IF NOT EXISTS pipeline_stage_followups_created_by_idx
+  ON public.pipeline_stage_followups (created_by);
+CREATE INDEX IF NOT EXISTS pipelines_created_by_idx
+  ON public.pipelines (created_by);
 
 ALTER TABLE public.pipeline_stage_followups ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.pipeline_stage_followups FROM anon, authenticated;

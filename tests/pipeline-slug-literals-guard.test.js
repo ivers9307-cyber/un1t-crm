@@ -22,7 +22,7 @@
 // A floor, not a proof: a list built at runtime or split across several small
 // literals is invisible to it.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
@@ -171,18 +171,22 @@ export const BASELINE = {
   'mobile/lib/mail-compose.js :: MEMBER_STAGES': { count: 1, reason: 'existing board semantics' },
 }
 
+// One whole-repo scan (~5 s) shared by the three scan-dependent tests.
+const SLOW = 60_000
+let scan
+beforeAll(() => { scan = scanRepo() }, SLOW)
+
 describe('pipeline stage-slug literals', () => {
   it('noNewStageSlugLists', () => {
-    const { unexpected } = compareToBaseline(scanRepo(), BASELINE)
+    const { unexpected } = compareToBaseline(scan, BASELINE)
     expect(unexpected, 'a new hard-coded list of pipeline stage slugs: read the studio stage rows (shared/pipelines/) instead, or baseline it with a reason').toEqual([])
   })
 
   it('every baseline entry still matches a site (nothing stale)', () => {
-    expect(compareToBaseline(scanRepo(), BASELINE).stale).toEqual([])
+    expect(compareToBaseline(scan, BASELINE).stale).toEqual([])
   })
 
   it('staleBaselineFails', () => {
-    const scan = scanRepo()
     const ghost = { ...BASELINE, 'src/lib/does-not-exist.js :: GONE': { count: 1, reason: 'x' } }
     expect(compareToBaseline(scan, ghost).stale).toEqual(['src/lib/does-not-exist.js :: GONE (baseline 1, found 0)'])
     // and a shrunken count is stale too
