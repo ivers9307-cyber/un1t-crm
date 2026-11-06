@@ -20,7 +20,7 @@
 // inputs, so a no-op re-run produces 'unchanged' for every
 // contact. Safe to run hourly if needed.
 
-import { logWarn } from './log.js'
+import { logWarn, logError } from './log.js'
 import { getBoardModule, PIPELINE_MODES } from '../../shared/pipelines/index.js'
 import { membershipReadsFor, supportsRead } from './membership/reads/index.js'
 import { un1tDealDates } from './membership/reads/un1t-pipeline-dates.js'
@@ -56,7 +56,9 @@ const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
 const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_un1t', ...OFFER_MODULES])
 // PIPEBUILD.3d — the pipelines columns a run reads: the board settings (mig 814)
 // ride along so an offer board's config and priority reach the router.
-const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority'
+// PIPEBUILD.5c — and baseline_at (mig 815): an offer board switched on and not
+// yet baselined places silently this run and is stamped after it.
+const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority, baseline_at'
 const OFFER_BOARD_TYPE = 'offer'
 // PIPEBUILD.3d — UN1T_MEMBERSHIP_SOURCES (pipeline-offer-claims.js): the
 // locations.membership_source values whose members live in un1t.online. An
@@ -104,7 +106,11 @@ function selectColsFor(modules) {
  *   skipped. Honoured only with dryRun; ignored (no query) otherwise.
  * @param {string[]} [args.silentBoardIds=[]]  PIPEBUILD.3d — pipeline ids whose
  *   placements are made but whose stage follow-ups (moves and creates) are not
- *   fired this run (an offer board's first run after it is switched on).
+ *   fired this run. PIPEBUILD.5c — every running offer board whose baseline_at
+ *   is null joins this set on its own: its first pass after switch-on places
+ *   the people who already qualify without messaging them, and a real run that
+ *   ends ok with no errors stamps its baseline_at (the event paths hold the
+ *   board until then: placementDescriptors).
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -120,6 +126,11 @@ function selectColsFor(modules) {
  *   unlinked?: number,             un1t path: clients with no contact
  *   skipped_no_contact?: number,   un1t path: clients whose contact is gone
  *   stage_histogram?: object,      dry runs only: { [target slug]: n }
+ *   board_overlap?: object,        dry runs only, PIPEBUILD.5c: planned cross-board
+ *                                  moves INTO an offer board,
+ *                                  { [offer board key]: { [from board key]: n } }
+ *   boards_baselined?: string[],   real runs, PIPEBUILD.5c: the keys of the offer
+ *                                  boards this run stamped baseline_at on
  *   deals_left_board?: number,     PIPEEXCL.1 (acquisition_un1t boards only): open deals closed (status 'lost')
  *                                  because the person is an active member at
  *                                  another studio of the organisation
@@ -416,7 +427,14 @@ export async function reclassifyAllContacts(db, args) {
     .filter((p) => CONTACTS_STAGE_TRIGGER_MODULES.includes(p.module))
     .map((p) => p.id))
   // PIPEBUILD.3d — boards placed this run without starting any follow-up.
-  const silentIds = new Set(Array.isArray(silentBoardIds) ? silentBoardIds : [])
+  // PIPEBUILD.5c — every running offer board not yet baselined is one of them
+  // (the option's ids are kept beside it). A dry run builds the same set so its
+  // counts describe the real run; it fires and stamps nothing either way.
+  const unbaselinedOffers = offerPipelines.filter((p) => p.baseline_at == null)
+  const silentIds = new Set([
+    ...(Array.isArray(silentBoardIds) ? silentBoardIds : []),
+    ...unbaselinedOffers.map((p) => p.id),
+  ])
 
   // 2. Build the slug → stage_id lookup ONCE for this location.
   // PIPELINES.5 — pipeline_id comes back with the stage because the create
@@ -489,7 +507,9 @@ export async function reclassifyAllContacts(db, args) {
       contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0,
       movement_matrix: {}, samples: [],
     }, startedAt)
-    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [], pipelines_skipped: pipelinesSkipped, ...un1tCounts(inputSource, un1tInputs) }
+    // PIPEBUILD.5c — nobody to place is still a classified board: stamp it.
+    const baselined = !dryRun && unbaselinedOffers.length > 0 ? await stampBaselines(db, locationId, unbaselinedOffers) : null
+    return { ok: true, run_id: runId, contacts_seen: 0, deals_moved: 0, deals_unchanged: 0, deals_created: 0, errors: 0, movement_matrix: {}, samples: [], pipelines_skipped: pipelinesSkipped, ...un1tCounts(inputSource, un1tInputs), ...(baselined ? { boards_baselined: baselined } : {}), ...(dryRun ? { board_overlap: {} } : {}) }
   }
 
   // 3b. PIPE3 — the claims the router needs: the paid-trial rows and the
@@ -806,6 +826,7 @@ export async function reclassifyAllContacts(db, args) {
       to_slug: targetSlug,
       target_stage_id: targetStageId,
       target_pipeline_id: targetPipelineId,
+      from_pipeline_id: existing.pipeline_id || null,
       cross_board: crossBoard,
       contact_name: c.name || c.email || null,
     })
@@ -1010,6 +1031,22 @@ export async function reclassifyAllContacts(db, args) {
     dealsLeftBoard = leavesToApply.length
   }
 
+  // PIPEBUILD.5c — on a dry run, who an offer board would take off another
+  // board (keyed by board key), so the owner sees the overlap before switching
+  // it on. Every board in boardRows is named (held and previewed ones included).
+  const boardOverlap = {}
+  if (dryRun) {
+    const keyById = new Map(boardRows.map((p) => [p.id, p.key]))
+    for (const m of movesToApply) {
+      if (!m.cross_board || !offerPipelineIds.has(m.target_pipeline_id)) continue
+      const to = keyById.get(m.target_pipeline_id)
+      const from = keyById.get(m.from_pipeline_id) || 'unknown'
+      if (!to) continue
+      boardOverlap[to] = boardOverlap[to] || {}
+      boardOverlap[to][from] = (boardOverlap[to][from] || 0) + 1
+    }
+  }
+
   // PIPEEXCL.1 — a failed other-studio read is logged once, structurally.
   let otherStudioError = null
   if (exclusionFailed) {
@@ -1059,6 +1096,18 @@ export async function reclassifyAllContacts(db, args) {
     if (rebookLanded.length > 0) await writeRebookNotes(db, { locationId, landed: rebookLanded, nowMs })
   }
 
+  // PIPEBUILD.5c — a real run that placed everyone it meant to stamps the
+  // offer boards it baselined silently, so tomorrow's newcomers get their
+  // follow-ups and the event paths stop holding them. Not after any error (a
+  // failed write may have left a qualifier unplaced, who would then be placed
+  // loudly), and not when the other-studio read failed (every create was held,
+  // so the people who already qualify are still to be placed). A failed stamp
+  // is logged and leaves the board silent another night; the run stays ok.
+  let baselined = null
+  if (!dryRun && unbaselinedOffers.length > 0 && errors === 0 && !exclusionFailed) {
+    baselined = await stampBaselines(db, locationId, unbaselinedOffers)
+  }
+
   return {
     ok: true,
     run_id: runId,
@@ -1084,7 +1133,39 @@ export async function reclassifyAllContacts(db, args) {
     ...(needsClaims ? { claims_pending: claimsPending } : {}),
     ...(dryRun ? { board_histogram: boardHistogram } : {}),
     ...(heldPipelineIds.size > 0 ? { deals_held: dealsHeld } : {}),
+    ...(dryRun ? { board_overlap: boardOverlap } : {}),
+    ...(baselined ? { boards_baselined: baselined } : {}),
   }
+}
+
+// PIPEBUILD.5c — stamp baseline_at on offer boards a real run classified while
+// they were unbaselined. Guarded on the studio and on baseline_at still null
+// (a board stamped since, or switched off and on again, is left to its own
+// state). Every failure is logged with ids only and never fails the run: the
+// board just stays silent until a later pass stamps it.
+async function stampBaselines(db, locationId, boards) {
+  const nowIso = new Date().toISOString()
+  const stamped = []
+  for (const p of boards) {
+    try {
+      const { data, error } = await db
+        .from('pipelines')
+        .update({ baseline_at: nowIso, updated_at: nowIso })
+        .eq('id', p.id)
+        .eq('location_id', locationId)
+        .is('baseline_at', null)
+        .select('id')
+      if (error) {
+        logError('pipeline-reclassify', 'offer board baseline not stamped', { locationId, pipelineId: p.id, key: p.key, err: boundedErr(error.message) })
+        continue
+      }
+      // Zero rows: stamped already, or no longer this studio's — nothing to do.
+      if (Array.isArray(data) && data.length > 0) stamped.push(p.key)
+    } catch (e) {
+      logError('pipeline-reclassify', 'offer board baseline not stamped', { locationId, pipelineId: p.id, key: p.key, err: boundedErr(e?.message || e) })
+    }
+  }
+  return stamped
 }
 
 // TDSEQ.1 — fire triggerSequencesForPipelineStageChange for each landed un1t

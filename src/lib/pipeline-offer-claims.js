@@ -110,17 +110,23 @@ export async function readMembershipSource(db, locationId) {
  * and its id in `heldIds` so a person with a deal on it is left alone rather
  * than drained off it.
  *
+ * PIPEBUILD.5c — an offer board switched on and not yet baselined
+ * (`baseline_at` null or absent: mig 815) is held too while `holdUnbaselined`
+ * is true, the default every event path uses: its first placements are the
+ * nightly pass's, made silently, so switching a board on never messages people
+ * who already qualify. Only a caller that places silently may pass false.
+ *
  * @param {object[]} boards  pipelines rows
- * @param {{ offersKnown?: boolean }} [opts]
+ * @param {{ offersKnown?: boolean, holdUnbaselined?: boolean }} [opts]
  * @returns {{ descriptors: Array<{ key, module, board_type, priority, config }>, heldIds: Set<string> }}
  */
-export function placementDescriptors(boards, { offersKnown = true } = {}) {
+export function placementDescriptors(boards, { offersKnown = true, holdUnbaselined = true } = {}) {
   const descriptors = []
   const heldIds = new Set()
   for (const b of Array.isArray(boards) ? boards : []) {
     if (!b || b.mode !== 'derived' || b.enabled === false || typeof b.key !== 'string') continue
     if (OFFER_MODULES.includes(b.module)) {
-      const parsed = offersKnown && b.board_type === 'offer'
+      const parsed = offersKnown && b.board_type === 'offer' && !(holdUnbaselined && b.baseline_at == null)
         ? splitOfferBoards([{ ...b, enabled: true }]).descriptors[0]
         : null
       if (!parsed) { heldIds.add(b.id); continue }

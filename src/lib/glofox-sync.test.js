@@ -28,6 +28,7 @@ import {
   SIBLING_STUDIO_NO_ACTIVITY,
 } from './glofox-sync.js'
 import { triggerSequencesForDealPlacement } from './sequences/triggers.js'
+import { placeContactNow } from './pipeline-place-now.js'
 
 // The sequence adapters are dynamically imported by applyMemberSync; stub them
 // so a placement test never reaches a real client (PIPEBUILD.3e asserts the
@@ -3098,7 +3099,7 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
     ],
     duration_days: 14,
   }
-  const CORP = { id: 'p-corp', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
+  const CORP = { id: 'p-corp', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10, baseline_at: '2026-10-01T00:00:00Z' } // PIPEBUILD.5c: baselined, so it places and fires as in PR 3
   const STAGES = [
     ...['new_lead', 'first_class', 'pack_member', 'dormant', 'member', 'cold_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq' })),
     ...['paid_trial_new_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid' })),
@@ -3109,10 +3110,10 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
 
   // A fluent fake: eq/in/is filters honoured when the row carries the column,
   // range/order accepted, writes recorded with their filters.
-  function offerDb({ pipelines, deals = [], purchases = [], claims = [], promos = [], location = { id: LOC, settings: RULES, membership_source: 'glofox' }, errors = {} } = {}) {
+  function offerDb({ pipelines, deals = [], purchases = [], claims = [], promos = [], location = { id: LOC, settings: RULES, membership_source: 'glofox' }, errors = {}, contacts = [] } = {}) {
     const tables = {
       pipelines, pipeline_stages: STAGES, deals, trial_purchases: purchases, pipeline_board_claims: claims,
-      corp_promo_claims: promos, contact_tags: [], locations: location ? [location] : [],
+      corp_promo_claims: promos, contact_tags: [], locations: location ? [location] : [], contacts,
     }
     const writes = []
     const reads = []
@@ -3259,6 +3260,54 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
       const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
       expect(out).toEqual({ action: 'error', error: 'claims unavailable: promos_unreadable' })
       expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+  })
+
+  // PIPEBUILD.5c — a board switched on and not yet baselined is held on every
+  // event path: its qualifiers are placed by the nightly pass, silently.
+  describe('eventPathsHoldUnbaselinedBoard', () => {
+    const UNBASED = { ...CORP, baseline_at: null }
+
+    it('ensureDealForContact: a promo holder is not put on the unbaselined Corp board (acquisition instead, as for a held board)', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, UNBASED], promos: [promo] })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-acq', stage_slug: 'new_lead' })
+      expect(writes.some((w) => w.table === 'deals' && JSON.stringify(w.payload).includes('p-corp'))).toBe(false)
+    })
+
+    it('the webhook path (pre-loaded boards and offer claims) holds it too', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, UNBASED] })
+      const offers = new Map([['o_corp', { start: NOW - 86_400_000, end: NOW + 13 * 86_400_000, source: 'corp_promo' }]])
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead', { boards: [ACQ, UNBASED], claims: { paid: null, programme: null, offers } })
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-acq' })
+      expect(writes.some((w) => w.table === 'deals' && JSON.stringify(w.payload).includes('p-corp'))).toBe(false)
+    })
+
+    it('a board switched on again: a person whose old deal is still open on it is left alone until the baseline', async () => {
+      const { db, writes } = offerDb({
+        pipelines: [ACQ, UNBASED], promos: [promo],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-o_corp_new', status: 'open' }],
+      })
+      expect(await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'held_board' })
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+
+    it('placeContactNow: not placed on the offer board, so no follow-up of that board can start', async () => {
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const row = { id: 'c1', name: 'Corp Lead', location_id: LOC, ...lead }
+      const { db } = offerDb({ pipelines: [ACQ, UNBASED], promos: [promo], contacts: [row] })
+      const out = await placeContactNow(db, { locationId: LOC, contactId: 'c1', now: NOW })
+      expect(out).toMatchObject({ ok: true, deal: { action: 'create', pipeline_id: 'p-acq' } })
+      // The only adapter call names the acquisition board, which is not a
+      // configured board: configuredBoardsOnly fires nothing for it.
+      expect(vi.mocked(triggerSequencesForDealPlacement).mock.calls).toEqual([
+        ['c1', expect.objectContaining({ action: 'create', pipeline_id: 'p-acq' }), { dealLocationId: LOC, pipelineId: 'p-acq', configuredBoardsOnly: true }],
+      ])
+    })
+
+    it('once baselined, the same promo holder lands on the Corp board (PR 3 behaviour)', async () => {
+      const { db } = offerDb({ pipelines: [ACQ, { ...UNBASED, baseline_at: new Date(NOW).toISOString() }], promos: [promo] })
+      expect(await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'create', pipeline_id: 'p-corp', stage_slug: 'o_corp_new' })
     })
   })
 })

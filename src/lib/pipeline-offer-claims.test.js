@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   splitOfferBoards, loadOfferClaimsForLocation, loadOfferClaimsForContact,
-  offerPurchaseEntries, withoutOfferPurchases,
+  offerPurchaseEntries, withoutOfferPurchases, placementDescriptors,
 } from './pipeline-offer-claims.js'
 import { loadClaimsForLocation, pendingProgrammeClaims } from './pipeline-claims.js'
 
@@ -73,6 +73,31 @@ describe('splitOfferBoards', () => {
 })
 
 // PIPEBUILD.3g — the trial_purchase entries the €39 claim loaders leave out.
+// PIPEBUILD.5c — an offer board switched on and not yet baselined is held on
+// the event paths until the nightly pass has placed its qualifiers silently.
+describe('placementDescriptors — baseline (PIPEBUILD.5c)', () => {
+  const acq = { id: 'p-acq', key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, board_type: null, priority: null, config: {} }
+  const unbaselined = { ...board('o_x', { type: 'lead_source', values: ['x'] }), baseline_at: null }
+  const absent = board('o_y', { type: 'lead_source', values: ['y'] })
+  const baselined = { ...board('o_z', { type: 'lead_source', values: ['z'] }), baseline_at: '2026-11-01T00:00:00Z' }
+
+  it('eventPathsHoldUnbaselinedBoard: by default an offer board with baseline_at null (or not read) is held, a baselined one placed', () => {
+    const { descriptors, heldIds } = placementDescriptors([acq, unbaselined, absent, baselined])
+    expect(descriptors.map((d) => d.key)).toEqual(['acquisition', 'o_z'])
+    expect([...heldIds].sort()).toEqual(['p-o_x', 'p-o_y'])
+  })
+  it('holdUnbaselined false (the silent nightly pass only) gives the unbaselined board its descriptor', () => {
+    const { descriptors, heldIds } = placementDescriptors([acq, unbaselined, baselined], { holdUnbaselined: false })
+    expect(descriptors.map((d) => d.key)).toEqual(['acquisition', 'o_x', 'o_z'])
+    expect(heldIds.size).toBe(0)
+  })
+  it('offers unknown still holds a baselined board', () => {
+    const { descriptors, heldIds } = placementDescriptors([acq, baselined], { offersKnown: false, holdUnbaselined: false })
+    expect(descriptors.map((d) => d.key)).toEqual(['acquisition'])
+    expect([...heldIds]).toEqual(['p-o_z'])
+  })
+})
+
 describe('offerPurchaseEntries / withoutOfferPurchases', () => {
   it('only enabled, parseable trial_purchase offer boards give an entry', () => {
     const trial = board('o_reset', { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] })

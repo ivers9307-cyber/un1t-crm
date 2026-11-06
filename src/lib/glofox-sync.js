@@ -600,7 +600,9 @@ export async function ensureDealForContact(db, locationId, contactId, contactSna
     // exactly as the nightly pass builds them (key ≠ module at Hatch, and on
     // every offer board), and the target board is found by that key. Offer
     // boards whose claims are unknown, or whose config will not parse, are
-    // held (placementDescriptors).
+    // held (placementDescriptors). PIPEBUILD.5c — so is an offer board switched
+    // on and not yet baselined (holdUnbaselined, the default): its qualifiers
+    // are placed by the nightly pass, silently, never here.
     const placement = placementDescriptors(derivedBoards, { offersKnown: claims?.offers instanceof Map })
     heldIds = placement.heldIds
     const route = routeContact(contactSnapshot || {}, claims, now, placement.descriptors)
