@@ -29,6 +29,22 @@ export const BOARD_MODULES = Object.freeze({
 export const PIPELINE_MODES = Object.freeze({ DERIVED: 'derived', MANUAL: 'manual' })
 
 /**
+ * PIPEBUILD.3e — every contacts column any registered board module reads, in
+ * registry order, each once. The single-contact placement paths (place-now, the
+ * Cold route) select this, so a new module's fields reach the router there too.
+ * @returns {string[]}
+ */
+export function allRequiredFields() {
+  const out = []
+  for (const mod of Object.values(BOARD_MODULES)) {
+    for (const f of Array.isArray(mod?.requiredFields) ? mod.requiredFields : []) {
+      if (!out.includes(f)) out.push(f)
+    }
+  }
+  return out
+}
+
+/**
  * Resolve a pipelines.module value to its board module.
  * @param {string|null} name
  * @returns {{stages: object[], requiredFields: string[], classify: Function}|null}

@@ -825,7 +825,7 @@ describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
   // whole membership on every nightly tick.
   it.each([
     ['leave', { action: 'leave', deal_id: 'd1', stage_slug: 'converted' }],
-    ['create', { action: 'create', deal_id: 'd1', stage_slug: 'new_lead' }],
+    // A 'create' reads its board first (PIPEBUILD.3e): see createOnLegacyBoardDoesNot.
     ['error', { action: 'error', error: 'stage not found' }],
     ['skipped', { action: 'skipped', reason: 'reclassify skipped (no booking signal)' }],
     ['null', null],
@@ -950,6 +950,99 @@ describe('triggerSequencesForDealPlacement (STAGETRIG.1)', () => {
       createServerClient.mockReturnValue(movedDb())
       await triggers.triggerSequencesForDealPlacement('c1', dealResult, OPTS)
       expect(enrolContacts).not.toHaveBeenCalled()
+    })
+  })
+})
+
+// PIPEBUILD.3e — a placement on a CONFIGURED board (pipelines.board_type set:
+// an offer board) fires that board's own stage at the board's studio, as the
+// nightly pass does (triggerSequencesForPipelineStageChange with { locationId }).
+// A create fires only there; every other board keeps STAGETRIG.1/HATCHPIPE.1.
+describe('triggerSequencesForDealPlacement — configured boards (PIPEBUILD.3e)', () => {
+  const OPTS = { dealLocationId: 'loc-1', pipelineId: 'pl-corp' }
+  const CREATE = { action: 'create', deal_id: 'd1', stage_slug: 'corp_new', pipeline_id: 'pl-corp' }
+  const boardDb = ({ board = { id: 'pl-corp', location_id: 'loc-1', board_type: 'offer' }, contact = { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'new_lead' }, seqs } = {}) => mockDb({
+    pipelines: { maybeSingle: board },
+    contacts: { maybeSingle: contact, single: contact },
+    email_sequences: { list: seqs ?? [{ id: 's-corp', trigger_config: { to_status: 'corp_new' }, audience_filter: null }] },
+  })
+  const builderFor = (db, table) => db.from.mock.results
+    .map((r, i) => ({ r: r.value, t: db.from.mock.calls[i][0] }))
+    .filter((x) => x.t === table).map((x) => x.r)
+
+  it('createOnOfferBoardFires: a first deal on an offer board enrols null → its entry stage at the board\'s studio', async () => {
+    const db = boardDb()
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForDealPlacement('c1', CREATE, OPTS)
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({
+      sequenceId: 's-corp', contactIds: ['c1'], sourceType: 'pipeline_stage_change', sourceRef: 'null→corp_new',
+    }))
+    const [board] = builderFor(db, 'pipelines')
+    expect(board.eq).toHaveBeenCalledWith('id', 'pl-corp')
+    const [seq] = builderFor(db, 'email_sequences')
+    expect(seq.eq).toHaveBeenCalledWith('location_id', 'loc-1')
+  })
+
+  it('createOnLegacyBoardDoesNot: a first deal on a board without board_type enrols nobody and reads no sequences', async () => {
+    const db = boardDb({ board: { id: 'pl-acq', location_id: 'loc-1', board_type: null } })
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForDealPlacement('c1', { ...CREATE, stage_slug: 'new_lead', pipeline_id: 'pl-acq' }, { dealLocationId: 'loc-1', pipelineId: 'pl-acq' })
+    expect(enrolContacts).not.toHaveBeenCalled()
+    expect(db.from).not.toHaveBeenCalledWith('email_sequences')
+    expect(db.from).not.toHaveBeenCalledWith('contacts')
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('a create whose board belongs to another studio than the deal enrols nobody', async () => {
+    createServerClient.mockReturnValue(boardDb({ board: { id: 'pl-corp', location_id: 'loc-2', board_type: 'offer' } }))
+    await triggers.triggerSequencesForDealPlacement('c1', CREATE, OPTS)
+    expect(enrolContacts).not.toHaveBeenCalled()
+  })
+
+  it('a create with an unreadable board skips with board_unreadable', async () => {
+    createServerClient.mockReturnValue(mockDb({}))
+    await triggers.triggerSequencesForDealPlacement('c1', CREATE, OPTS)
+    expect(enrolContacts).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'board_unreadable', dealLocationId: 'loc-1' })
+  })
+
+  it('a create without its board skips with missing_board and reads nothing', async () => {
+    await triggers.triggerSequencesForDealPlacement('c1', CREATE, {})
+    expect(createServerClient).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'missing_board', dealLocationId: undefined })
+  })
+
+  it('a move onto an offer board that the slug-source fence would refuse still fires the board\'s stage', async () => {
+    // The slug the database holds is not the offer stage (not_slug_source).
+    const db = boardDb({ contact: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'new_lead' } })
+    createServerClient.mockReturnValue(db)
+    await triggers.triggerSequencesForDealPlacement('c1', { action: 'move', from_slug: 'new_lead', to_slug: 'corp_new' }, OPTS)
+    expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ sourceRef: 'new_lead→corp_new' }))
+    const [seq] = builderFor(db, 'email_sequences')
+    expect(seq.eq).toHaveBeenCalledWith('location_id', 'loc-1')
+  })
+
+  it('a legacy move the fence refuses is still refused with its reason (the board read changes nothing)', async () => {
+    createServerClient.mockReturnValue(boardDb({ board: { id: 'pl-1', location_id: 'loc-1', board_type: null }, contact: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'lapsed' } }))
+    await triggers.triggerSequencesForDealPlacement('c1', { action: 'move', from_slug: 'active_trial', to_slug: 'converted' }, { dealLocationId: 'loc-1', pipelineId: 'pl-1' })
+    expect(enrolContacts).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'not_slug_source', dealLocationId: 'loc-1' })
+  })
+
+  describe('configuredBoardsOnly (the place-now path)', () => {
+    it('a legacy-board move enrols nobody and never reads the contact', async () => {
+      const db = boardDb({ board: { id: 'pl-1', location_id: 'loc-1', board_type: null }, contact: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'converted' } })
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForDealPlacement('c1', { action: 'move', from_slug: 'active_trial', to_slug: 'converted' }, { dealLocationId: 'loc-1', pipelineId: 'pl-1', configuredBoardsOnly: true })
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(db.from).not.toHaveBeenCalledWith('contacts')
+    })
+    it('an offer-board move and create fire', async () => {
+      createServerClient.mockReturnValue(boardDb())
+      await triggers.triggerSequencesForDealPlacement('c1', { action: 'move', from_slug: 'new_lead', to_slug: 'corp_new' }, { ...OPTS, configuredBoardsOnly: true })
+      createServerClient.mockReturnValue(boardDb())
+      await triggers.triggerSequencesForDealPlacement('c1', CREATE, { ...OPTS, configuredBoardsOnly: true })
+      expect(enrolContacts).toHaveBeenCalledTimes(2)
     })
   })
 })

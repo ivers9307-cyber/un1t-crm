@@ -27,6 +27,15 @@ import {
   hasActivityAtStudio,
   SIBLING_STUDIO_NO_ACTIVITY,
 } from './glofox-sync.js'
+import { triggerSequencesForDealPlacement } from './sequences/triggers.js'
+
+// The sequence adapters are dynamically imported by applyMemberSync; stub them
+// so a placement test never reaches a real client (PIPEBUILD.3e asserts the
+// create pass-through).
+vi.mock('./sequences/triggers.js', () => ({
+  triggerSequencesForDealPlacement: vi.fn(async () => {}),
+  triggerSequencesForMembershipStateChange: vi.fn(async () => {}),
+}))
 
 // Helper: build a Plan A ctx for tests. Real call site fetches via
 // /2.0/credits + /2.0/memberships. Tests inline-construct the same
@@ -2658,6 +2667,22 @@ describe('CROSSOVERDEAL.1 — a sibling-studio contact is placed on this board o
       expect(out.crossover).toBeUndefined()
       expect(out.deal).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'new_lead' })
     })
+    // PIPEBUILD.3e — a create goes through the stage adapter with this
+    // studio's board; the adapter fires it only on an offer board.
+    it('a create is passed to the stage adapter with the studio and board; the result field stays null', async () => {
+      vi.mocked(triggerSequencesForDealPlacement).mockClear()
+      const home = { ...hatch(), id: 'c-home', location_id: 'stillorgan' }
+      const out = await applyMemberSync(fakeDb({ rowsByEmail: [home] }), 'stillorgan', member, { bookings: [], skipInteractions: true })
+      expect(out.deal).toMatchObject({ action: 'create', pipeline_id: 'p-acq' })
+      expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith('c-home', out.deal, { dealLocationId: 'stillorgan', pipelineId: 'p-acq' })
+      expect(out.stage_change_trigger).toBeNull()
+    })
+    it('a throwing adapter on a create never fails the sync', async () => {
+      vi.mocked(triggerSequencesForDealPlacement).mockRejectedValueOnce(new Error('sequences down'))
+      const home = { ...hatch(), id: 'c-home', location_id: 'stillorgan' }
+      const out = await applyMemberSync(fakeDb({ rowsByEmail: [home] }), 'stillorgan', member, { bookings: [], skipInteractions: true })
+      expect(out.deal).toMatchObject({ action: 'create' })
+    })
   })
 
   describe('previewMemberSync mirrors apply', () => {
@@ -2964,5 +2989,190 @@ describe('ensureDealForContact — a un1t.online primary is left to the hourly p
     const out = await ensureDealForContact(db, 'hatch', 'c1', {}, 'Lead', { boards, claims: { paid: null, programme: null } })
     expect(out).toMatchObject({ action: 'leave', reason: 'un1t_board' })
     expect(writes).toEqual([])
+  })
+})
+
+// PIPEBUILD.3e — the event paths (webhook, Cold, place-now) route with board
+// DESCRIPTORS keyed by pipelines.key, as the nightly pass does, and place offer
+// boards from the contact's offer claims.
+describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e)', () => {
+  const LOC = 'loc-st'
+  const NOW = Date.now()
+  const ago = (d) => new Date(NOW - d * 86_400_000).toISOString()
+  const ACQ = { id: 'p-acq', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null, config: {}, priority: 100 }
+  const PAID = { id: 'p-paid', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null, config: {}, priority: 100 }
+  const PROG = { id: 'p-prog', location_id: LOC, key: 'programmes', module: 'programmes', mode: 'derived', enabled: true, is_primary: false, board_type: null, config: {}, priority: 100 }
+  const CORP_CONFIG = {
+    entry: { type: 'corp_promo', values: ['acme'] },
+    stages: [
+      { role: 'new', slug: 'corp_new', name: 'New' },
+      { role: 'first_class', slug: 'corp_first_class', name: 'First class' },
+      { role: 'done', slug: 'corp_done', name: 'Done' },
+      { role: 'converted', slug: 'corp_converted', name: 'Converted' },
+    ],
+    duration_days: 14,
+  }
+  const CORP = { id: 'p-corp', location_id: LOC, key: 'corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
+  const STAGES = [
+    ...['new_lead', 'first_class', 'pack_member', 'dormant', 'member', 'cold_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq' })),
+    ...['paid_trial_new_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid' })),
+    ...['programme_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog' })),
+    ...['corp_new', 'corp_first_class', 'corp_done', 'corp_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-corp' })),
+  ]
+  const RULES = { pipelines: { programmes: { lead_sources: ['meta_50plus'], glofox_plan_patterns: [] } } }
+
+  // A fluent fake: eq/in/is filters honoured when the row carries the column,
+  // range/order accepted, writes recorded with their filters.
+  function offerDb({ pipelines, deals = [], purchases = [], claims = [], promos = [], location = { id: LOC, settings: RULES, membership_source: 'glofox' }, errors = {} } = {}) {
+    const tables = {
+      pipelines, pipeline_stages: STAGES, deals, trial_purchases: purchases, pipeline_board_claims: claims,
+      corp_promo_claims: promos, contact_tags: [], locations: location ? [location] : [],
+    }
+    const writes = []
+    const reads = []
+    function chain(table) {
+      reads.push(table)
+      const filters = []
+      let op = 'select'
+      let payload = null
+      const c = {}
+      c.select = () => c; c.order = () => c; c.limit = () => c; c.range = () => c
+      c.single = () => { if (op === 'select') op = 'single'; return c }
+      c.maybeSingle = c.single
+      c.eq = (col, val) => { filters.push({ kind: 'eq', col, val }); return c }
+      c.in = (col, vals) => { filters.push({ kind: 'in', col, vals }); return c }
+      c.is = (col, val) => { filters.push({ kind: 'eq', col, val }); return c }
+      c.update = (f) => { op = 'update'; payload = f; return c }
+      c.insert = (f) => { op = 'insert'; payload = f; return c }
+      c.upsert = (f, o) => { op = 'upsert'; payload = { rows: f, opts: o }; return c }
+      const apply = (rows) => (rows || []).filter((r) => filters.every((f) => {
+        if (!Object.prototype.hasOwnProperty.call(r, f.col)) return true
+        return f.kind === 'in' ? f.vals.includes(r[f.col]) : r[f.col] === f.val
+      }))
+      c.then = (resolve) => {
+        if (op === 'select' || op === 'single') {
+          if (errors[table]) return resolve({ data: null, error: { message: errors[table] } })
+          const rows = apply(tables[table])
+          return resolve({ data: op === 'single' ? (rows[0] ?? null) : rows, error: null })
+        }
+        writes.push({ table, op, payload, filters })
+        const idF = filters.find((f) => f.col === 'id')
+        const data = op === 'insert' ? { id: 'd-new' } : (op === 'update' && idF ? [{ id: idF.val }] : null)
+        return resolve({ data, error: null })
+      }
+      return c
+    }
+    return { db: { from: chain }, writes, reads }
+  }
+  const lead = { glofox_membership_status: 'lead', joined_at: ago(1), created_at: ago(1), recent_bookings: [] }
+  const fiftyLead = { ...lead, last_lead_source: 'meta_50plus', last_lead_source_at: ago(1) }
+  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', updated_at: ago(1) }
+
+  describe('ensureDealUsesBoardKeys', () => {
+    it('Hatch-style: a board whose key is not its module name is matched by KEY, so a programmes-module board keyed otherwise is not the Programmes board', async () => {
+      // A programmes-module board keyed 'programmes_50plus' (key ≠ module).
+      // Routing by module name used to put a live programme claim onto it;
+      // the nightly pass routes by key and leaves the person on acquisition.
+      const KEYED = { ...PROG, key: 'programmes_50plus' }
+      const { db, writes } = offerDb({
+        pipelines: [ACQ, KEYED],
+        claims: [{ contact_id: 'c2', location_id: LOC, board_key: 'programmes', claimed_at: ago(1), source: 'lead_source' }],
+      })
+      const out = await ensureDealForContact(db, LOC, 'c2', fiftyLead, 'Fifty')
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-acq', stage_slug: 'new_lead' })
+      const insert = writes.find((w) => w.table === 'deals' && w.op === 'insert')
+      expect(insert.payload.pipeline_id).toBe('p-acq')
+    })
+
+    it('Stillorgan (key = module): the programme lead still lands on the Programmes board, exactly as before', async () => {
+      const { db } = offerDb({ pipelines: [ACQ, PAID, PROG] })
+      const out = await ensureDealForContact(db, LOC, 'c2', fiftyLead, 'Fifty')
+      expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'programme_lead', pipeline_id: 'p-prog' })
+    })
+
+    it('Stillorgan pre-loaded boards and claims (the webhook path) route the same way', async () => {
+      const { db, reads } = offerDb({ pipelines: [ACQ, PAID, PROG] })
+      const claims = { paid: null, programme: { claimedAt: NOW - 86_400_000, source: 'lead_source' } }
+      const out = await ensureDealForContact(db, LOC, 'c2', fiftyLead, 'Fifty', { claims, boards: [ACQ, PAID, PROG] })
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-prog' })
+      expect(reads).not.toContain('pipelines')
+    })
+  })
+
+  describe('placesOfferBoardOnEvent', () => {
+    it('a granted corp promo with no deal: a deal on the Corp board at its entry stage', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, PAID, PROG, CORP], promos: [promo] })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'corp_new', pipeline_id: 'p-corp' })
+      const insert = writes.find((w) => w.table === 'deals' && w.op === 'insert')
+      expect(insert.payload).toMatchObject({ contact_id: 'c1', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: LOC })
+    })
+
+    it('an acquisition deal moves onto the Corp board: stage AND pipeline in one update, boards named by key', async () => {
+      const { db, writes } = offerDb({
+        pipelines: [ACQ, CORP],
+        promos: [promo],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-acq', stage_id: 's-new_lead', status: 'open' }],
+      })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(out).toEqual({
+        action: 'move', deal_id: 'd1', from_slug: 'new_lead', to_slug: 'corp_new',
+        pipeline_id: 'p-corp', location_id: LOC, from_board: 'acquisition', to_board: 'corp',
+      })
+      const updates = writes.filter((w) => w.table === 'deals' && w.op === 'update')
+      expect(updates).toHaveLength(1)
+      expect(updates[0].payload).toEqual({ stage_id: 's-corp_new', pipeline_id: 'p-corp' })
+    })
+
+    it('pre-loaded claims carrying offers (the webhook path) place on the offer board with no claim reads', async () => {
+      const { db, reads } = offerDb({ pipelines: [ACQ, CORP] })
+      const offers = new Map([['corp', { start: NOW - 86_400_000, end: NOW + 13 * 86_400_000, source: 'corp_promo' }]])
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead', { boards: [ACQ, CORP], claims: { paid: null, programme: null, offers } })
+      expect(out).toMatchObject({ action: 'create', stage_slug: 'corp_new', pipeline_id: 'p-corp' })
+      expect(reads).not.toContain('corp_promo_claims')
+    })
+
+    it('Cold outranks an offer claim: the person stays on the acquisition pile', async () => {
+      const { db } = offerDb({ pipelines: [ACQ, CORP], promos: [promo] })
+      const out = await ensureDealForContact(db, LOC, 'c1', { ...lead, pipeline_dismissed_at: ago(0) }, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'create', stage_slug: 'cold_lead', pipeline_id: 'p-acq' })
+    })
+
+    it('offers unknown (pre-loaded claims without offers): a person on the offer board is left alone, never drained', async () => {
+      const { db, writes } = offerDb({
+        pipelines: [ACQ, CORP],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-corp_new', status: 'open' }],
+      })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead', { boards: [ACQ, CORP], claims: { paid: null, programme: null } })
+      expect(out).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'held_board' })
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
+
+    it('an offer board whose config will not parse is held: its people are left alone, nobody is placed on it', async () => {
+      const BROKEN = { ...CORP, config: { entry: { type: 'nope' } } }
+      const held = offerDb({
+        pipelines: [ACQ, BROKEN],
+        promos: [promo],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-corp_new', status: 'open' }],
+      })
+      expect(await ensureDealForContact(held.db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'held_board' })
+      expect(held.writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+      const fresh = offerDb({ pipelines: [ACQ, BROKEN], promos: [promo] })
+      expect(await ensureDealForContact(fresh.db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'create', pipeline_id: 'p-acq' })
+    })
+
+    it('at a un1t.online studio the offer board is refused: no promo read, nobody placed on it', async () => {
+      const { db, reads } = offerDb({ pipelines: [ACQ, CORP], promos: [promo], location: { id: LOC, settings: RULES, membership_source: 'un1t_online' } })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(out).toMatchObject({ action: 'create', pipeline_id: 'p-acq' })
+      expect(reads).not.toContain('corp_promo_claims')
+    })
+
+    it('a failed offer claim read places nobody', async () => {
+      const { db, writes } = offerDb({ pipelines: [ACQ, CORP], promos: [promo], errors: { corp_promo_claims: 'down' } })
+      const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
+      expect(out).toEqual({ action: 'error', error: 'claims unavailable: promos_unreadable' })
+      expect(writes.filter((w) => w.table === 'deals')).toHaveLength(0)
+    })
   })
 })

@@ -25,7 +25,7 @@ import { hasPermissionAtAnyLocation, hasPermissionForLocation } from '@/lib/perm
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { ensureDealForContact } from '@/lib/glofox-sync'
-import { getBoardModule } from '@shared/pipelines/index.js'
+import { allRequiredFields } from '@shared/pipelines/index.js'
 import { reclassifyUn1tBoardNow } from '@/lib/un1t-pipeline-cadence'
 import { writeStudioDismissal } from '@/lib/studio-pipeline-dismissal'
 import { logPipelineDismissal } from '@/lib/activity-events'
@@ -42,11 +42,11 @@ const PipelineStatusSchema = z.object({
   location_id: uuidLike.optional(),
 })
 
-// Classifier input columns — everything the router reads (PIPE3.7: the
-// Programmes module declares the widest contacts-input set, the acquisition
-// classifier's columns included) plus the studio the row lives at, so the
-// immediate re-placement matches what the nightly cron would compute.
-const SNAPSHOT_COLS = [...new Set([...getBoardModule('programmes').requiredFields, 'location_id'])].join(', ')
+// Classifier input columns — everything the router reads (PIPEBUILD.3e: the
+// union of every registered board module's fields, the offer board's included)
+// plus the studio the row lives at, so the immediate re-placement matches what
+// the nightly cron would compute.
+const SNAPSHOT_COLS = [...new Set([...allRequiredFields(), 'location_id'])].join(', ')
 
 export async function POST(request, props) {
   const params = await props.params
@@ -161,12 +161,15 @@ export async function POST(request, props) {
   // pipeline stage move, and it was invisible to the sequence engine: the
   // pipeline_stage_change trigger only ever ran from contact CREATION. Fires
   // only when ensureDealForContact reports action 'move' with two different
-  // slugs, so a re-click that lands on the same stage enrols nobody.
+  // slugs, so a re-click that lands on the same stage enrols nobody
+  // (PIPEBUILD.3e: or a 'create' on an offer board, its entry stage).
   // Best-effort — the dismissal itself is already saved.
   try {
     const { triggerSequencesForDealPlacement } = await import('@/lib/sequences/triggers')
+    // PIPEBUILD.3e — a create carries no location_id: it was made on this
+    // studio's board. The adapter fires a create only on an offer board.
     await triggerSequencesForDealPlacement(id, deal, {
-      dealLocationId: deal?.location_id,
+      dealLocationId: deal?.location_id ?? (deal?.action === 'create' ? boardLocationId : undefined),
       pipelineId: deal?.pipeline_id,
     })
   } catch {

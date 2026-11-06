@@ -236,3 +236,73 @@ describe('loadPlacementClaims', () => {
     expect(await loadPlacementClaims(fakeDb({ pipelines: [ACQ, PAID], locations: [] }, { errors: { trial_purchases: 'x' } }).db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toMatchObject({ ok: false, reason: 'purchases_unreadable' })
   })
 })
+
+// PIPEBUILD.3e — an offer board is a claim board for a single placement: its
+// claims ride along as claims.offers (Map<boardKey, claim>).
+describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
+  const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
+  const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
+  const CORP = {
+    id: 'p3', location_id: LOC, key: 'corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 10,
+    config: {
+      entry: { type: 'corp_promo', values: ['acme'] },
+      stages: [{ role: 'new', slug: 'corp_new', name: 'New' }, { role: 'converted', slug: 'corp_converted', name: 'Converted' }],
+      duration_days: 14,
+    },
+  }
+  const contact = { id: 'c1', location_id: LOC }
+  const promo = { id: 'cp1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', updated_at: iso(T0) }
+
+  it('an offer board alone is a claim board: its claims are read, the €39/Programmes tables are not', async () => {
+    const { db } = fakeDb(
+      { pipelines: [ACQ, CORP], locations: [{ id: LOC, membership_source: 'glofox' }], corp_promo_claims: [promo] },
+      { errors: { trial_purchases: 'must not be read', pipeline_board_claims: 'must not be read' } },
+    )
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out.ok).toBe(true)
+    expect(out.claimBoards).toBe(true)
+    expect(out.claims.paid).toBeNull()
+    expect(out.claims.programme).toBeNull()
+    expect(out.claims.offers).toBeInstanceOf(Map)
+    expect(out.claims.offers.get('corp')).toMatchObject({ start: T0, source: 'corp_promo' })
+  })
+
+  it('beside a €39 board both kinds are read', async () => {
+    const { db } = fakeDb({
+      pipelines: [ACQ, PAID, CORP], locations: [{ id: LOC, settings: {}, membership_source: 'glofox' }], corp_promo_claims: [promo],
+      trial_purchases: [{ id: 'tp1', location_id: LOC, contact_id: 'c1', status: 'granted', payment_status: 'paid', paid_at: iso(T0), granted_at: iso(T0), duration_days: 14 }],
+      pipeline_board_claims: [],
+    })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out.claims.paid).toMatchObject({ start: T0 })
+    expect(out.claims.offers.get('corp')).toMatchObject({ start: T0 })
+  })
+
+  it('without an offer board the claims keep today\'s shape (no offers key)', async () => {
+    const { db } = fakeDb({ pipelines: [ACQ, PAID], locations: [{ id: LOC, settings: {} }], trial_purchases: [], pipeline_board_claims: [] })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(Object.keys(out.claims).sort()).toEqual(['paid', 'programme'])
+  })
+
+  it('at a un1t.online studio the offer boards are refused: offers null, no promo read', async () => {
+    const { db } = fakeDb(
+      { pipelines: [ACQ, CORP], locations: [{ id: LOC, membership_source: 'un1t_online' }] },
+      { errors: { corp_promo_claims: 'must not be read' } },
+    )
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out).toMatchObject({ ok: true, claimBoards: true, offersRefused: 'un1t_online_studio' })
+    expect(out.claims.offers).toBeNull()
+  })
+
+  it('an unreadable membership source holds the offer boards (offers null), never guesses', async () => {
+    const { db } = fakeDb({ pipelines: [ACQ, CORP], corp_promo_claims: [promo] }, { errors: { locations: 'down' } })
+    const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
+    expect(out).toMatchObject({ ok: true, offersRefused: 'membership_source_unreadable' })
+    expect(out.claims.offers).toBeNull()
+  })
+
+  it('a failed offer claim read is reported with its reason', async () => {
+    const { db } = fakeDb({ pipelines: [ACQ, CORP], locations: [{ id: LOC, membership_source: 'glofox' }] }, { errors: { corp_promo_claims: 'x' } })
+    expect(await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })).toMatchObject({ ok: false, reason: 'promos_unreadable' })
+  })
+})

@@ -24,6 +24,7 @@ import { selectAll } from './select-all.js'
 import { parseOfferConfig } from '../../shared/pipelines/offer-config.js'
 import { offerClaimLive } from '../../shared/pipelines/offer.js'
 import { paidTrialClaim, DAY_MS } from '../../shared/pipelines/paid-trial.js'
+import { OFFER_MODULES } from '../../shared/pipelines/router.js'
 import {
   PURCHASE_COLS, toProgrammeClaim, pendingRecordedClaims, upsertBoardClaims,
 } from './pipeline-claims.js'
@@ -62,6 +63,73 @@ export function splitOfferBoards(boards) {
     })
   }
   return { descriptors, skipped }
+}
+
+/**
+ * PIPEBUILD.3d/3e — locations.membership_source values whose members live in
+ * un1t.online (mig 717's legacy 'un1t' included). An offer board reads contacts
+ * columns, so it is refused at such a studio (PR 3b brings un1t offer boards).
+ */
+export const UN1T_MEMBERSHIP_SOURCES = Object.freeze(['un1t_online', 'un1t'])
+
+/**
+ * PIPEBUILD.3e — a studio's membership source, for the offer-board refusal on
+ * the single-placement paths. Never throws; a failed read or no row is
+ * { ok: false } (the caller holds its offer boards, never guesses "contacts").
+ * @returns {Promise<{ ok: true, source: string|null } | { ok: false, reason: string }>}
+ */
+export async function readMembershipSource(db, locationId) {
+  try {
+    const { data, error } = await db
+      .from('locations')
+      .select('membership_source')
+      .eq('id', locationId)
+      .maybeSingle()                       // primary key; 0 rows = no studio
+    if (error) {
+      logWarn('pipeline-offer-claims', 'membership source unreadable', { locationId, err: bounded(error) })
+      return { ok: false, reason: 'membership_source_unreadable' }
+    }
+    if (!data) {
+      logWarn('pipeline-offer-claims', 'membership source unreadable', { locationId, reason: 'no_location_row' })
+      return { ok: false, reason: 'membership_source_unreadable' }
+    }
+    return { ok: true, source: data.membership_source ?? null }
+  } catch (e) {
+    logWarn('pipeline-offer-claims', 'membership source unreadable', { locationId, err: bounded(e) })
+    return { ok: false, reason: 'membership_source_unreadable' }
+  }
+}
+
+/**
+ * PIPEBUILD.3e — the router's board descriptors for a single placement
+ * (ensureDealForContact), keyed by pipelines.key like the nightly pass's.
+ * Derived, enabled boards only. An offer board carries its parsed config; one
+ * that will not parse, one not marked board_type 'offer', and every offer board
+ * when its claims are unknown (`offersKnown` false: a refused studio, or a
+ * caller that pre-loaded claims without offers) is HELD instead: no descriptor,
+ * and its id in `heldIds` so a person with a deal on it is left alone rather
+ * than drained off it.
+ *
+ * @param {object[]} boards  pipelines rows
+ * @param {{ offersKnown?: boolean }} [opts]
+ * @returns {{ descriptors: Array<{ key, module, board_type, priority, config }>, heldIds: Set<string> }}
+ */
+export function placementDescriptors(boards, { offersKnown = true } = {}) {
+  const descriptors = []
+  const heldIds = new Set()
+  for (const b of Array.isArray(boards) ? boards : []) {
+    if (!b || b.mode !== 'derived' || b.enabled === false || typeof b.key !== 'string') continue
+    if (OFFER_MODULES.includes(b.module)) {
+      const parsed = offersKnown && b.board_type === 'offer'
+        ? splitOfferBoards([{ ...b, enabled: true }]).descriptors[0]
+        : null
+      if (!parsed) { heldIds.add(b.id); continue }
+      descriptors.push({ key: b.key, module: b.module, board_type: 'offer', priority: parsed.priority, config: parsed.config })
+      continue
+    }
+    descriptors.push({ key: b.key, module: b.module, board_type: null, priority: b.priority ?? null, config: null })
+  }
+  return { descriptors, heldIds }
 }
 
 /** The descriptors alone (an array carrying the skipped list as `.skipped`). */

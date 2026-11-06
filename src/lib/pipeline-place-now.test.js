@@ -4,8 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./glofox-sync.js', () => ({ ensureDealForContact: vi.fn() }))
 vi.mock('./log.js', () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('./sequences/triggers.js', () => ({ triggerSequencesForDealPlacement: vi.fn(async () => {}) }))
 
 import { ensureDealForContact } from './glofox-sync.js'
+import { triggerSequencesForDealPlacement } from './sequences/triggers.js'
+import { allRequiredFields } from '../../shared/pipelines/index.js'
+import { requiredFields as offerFields } from '../../shared/pipelines/offer.js'
 import { placeContactNow, PLACE_NOW_COLUMNS } from './pipeline-place-now.js'
 
 const LOC = 'loc-st'
@@ -20,7 +24,10 @@ const dbWith = ({ row = contactRow, error = null } = {}) => {
   return { db: { from: (t) => { calls.push(['from', t]); return q } }, calls }
 }
 
-beforeEach(() => { vi.mocked(ensureDealForContact).mockReset(); vi.mocked(ensureDealForContact).mockResolvedValue({ action: 'move' }) })
+beforeEach(() => {
+  vi.mocked(ensureDealForContact).mockReset(); vi.mocked(ensureDealForContact).mockResolvedValue({ action: 'move' })
+  vi.mocked(triggerSequencesForDealPlacement).mockReset(); vi.mocked(triggerSequencesForDealPlacement).mockResolvedValue(undefined)
+})
 
 describe('placeContactNow', () => {
   it('reads the contact by id with the placement columns and places it at the studio', async () => {
@@ -50,5 +57,36 @@ describe('placeContactNow', () => {
     const { db, calls } = dbWith()
     expect(await placeContactNow(db, { locationId: null, contactId: 'c1' })).toEqual({ ok: false, reason: 'missing_arguments' })
     expect(calls).toHaveLength(0)
+  })
+  it('placeNowColumnsCoverOffer: every registered board module\'s fields, the offer board\'s included, plus location_id', () => {
+    const cols = PLACE_NOW_COLUMNS.split(', ')
+    for (const col of [...offerFields, 'last_lead_source_at', 'location_id']) expect(cols).toContain(col)
+    for (const col of allRequiredFields()) expect(cols).toContain(col)
+    expect(new Set(cols).size).toBe(cols.length)
+  })
+  // PIPEBUILD.3e — the result goes through the sequence adapter, configured
+  // boards only: an offer board's stage starts its follow-up; the boards that
+  // fired nothing from place-now before still fire nothing.
+  it('passes the placement through the stage trigger, configured boards only, at the studio', async () => {
+    const placed = { action: 'create', deal_id: 'd1', stage_slug: 'corp_new', pipeline_id: 'p-corp' }
+    vi.mocked(ensureDealForContact).mockResolvedValue(placed)
+    const out = await placeContactNow(dbWith().db, { locationId: LOC, contactId: 'c1', now: 1 })
+    expect(out).toEqual({ ok: true, deal: placed })
+    expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith('c1', placed, { dealLocationId: LOC, pipelineId: 'p-corp', configuredBoardsOnly: true })
+  })
+  it('a move names its own studio; an error or leave result fires nothing', async () => {
+    const moved = { action: 'move', deal_id: 'd1', from_slug: 'new_lead', to_slug: 'corp_new', pipeline_id: 'p-corp', location_id: LOC }
+    vi.mocked(ensureDealForContact).mockResolvedValueOnce(moved)
+    await placeContactNow(dbWith().db, { locationId: LOC, contactId: 'c1' })
+    expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith('c1', moved, { dealLocationId: LOC, pipelineId: 'p-corp', configuredBoardsOnly: true })
+    vi.mocked(triggerSequencesForDealPlacement).mockClear()
+    vi.mocked(ensureDealForContact).mockResolvedValueOnce({ action: 'error', error: 'x' })
+    await placeContactNow(dbWith().db, { locationId: LOC, contactId: 'c1' })
+    expect(triggerSequencesForDealPlacement).not.toHaveBeenCalled()
+  })
+  it('a throwing trigger never fails the placement', async () => {
+    vi.mocked(ensureDealForContact).mockResolvedValue({ action: 'create', deal_id: 'd1', stage_slug: 'corp_new', pipeline_id: 'p-corp' })
+    vi.mocked(triggerSequencesForDealPlacement).mockRejectedValue(new Error('sequences down'))
+    expect(await placeContactNow(dbWith().db, { locationId: LOC, contactId: 'c1' })).toMatchObject({ ok: true, deal: { action: 'create' } })
   })
 })

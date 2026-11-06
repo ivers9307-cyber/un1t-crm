@@ -224,6 +224,29 @@ describe('POST /api/contacts/[id]/pipeline-status', () => {
       CONTACT_ID, placed, { dealLocationId: LOC_ID, pipelineId: 'pl-1' },
     )
   })
+
+  // PIPEBUILD.3e — a create carries no location_id; the board's studio is named
+  // so an offer board's entry stage can fire (the adapter decides by board_type).
+  it('a create is passed through with the board\'s studio', async () => {
+    createServerClient.mockReturnValue(makeDb(vi.fn()))
+    const placed = { action: 'create', deal_id: 'd1', stage_slug: 'corp_new', pipeline_id: 'pl-corp' }
+    ensureDealForContact.mockResolvedValueOnce(placed)
+    await POST(req({ cold: false }), props)
+    expect(triggerSequencesForDealPlacement).toHaveBeenCalledWith(
+      CONTACT_ID, placed, { dealLocationId: LOC_ID, pipelineId: 'pl-corp' },
+    )
+  })
+
+  it('the contact read selects every board module\'s fields (offer boards included)', async () => {
+    const db = makeDb(vi.fn())
+    createServerClient.mockReturnValue(db)
+    await POST(req({ cold: true }), props)
+    const i = db.from.mock.calls.findIndex(([t]) => t === 'contacts')
+    const cols = db.from.mock.results[i].value.select.mock.calls[0][0].split(', ')
+    for (const col of ['last_lead_source', 'last_lead_source_at', 'lead_source', 'glofox_membership_plan', 'pipeline_dismissed_at', 'location_id']) {
+      expect(cols).toContain(col)
+    }
+  })
 })
 
 // HATCHCOLD.2 — Cold applies on the board it was pressed from.

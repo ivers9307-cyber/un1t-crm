@@ -304,13 +304,14 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
  * returns it, so the callers that place deals pass their result straight
  * in rather than each re-deriving "was this a move?".
  *
- * Fires ONLY for action === 'move' with two genuinely different slugs:
+ * Fires for action === 'move' with two genuinely different slugs:
  *   • 'leave'   — the classifier is idempotent, so an unchanged member
  *                 returns 'leave' on EVERY sync. Firing on those would
  *                 re-enrol the entire membership on every tick.
  *   • 'create'  — a first deal is contact creation, already covered by
  *                 POST /api/contacts (oldStage null); firing here as
- *                 well would double-enrol.
+ *                 well would double-enrol. EXCEPT on a configured board
+ *                 (PIPEBUILD.3e, below): its entry stage is the board's own.
  *   • 'error' / 'skipped' — no write happened.
  *
  * Beyond that, enrolment keeps its own guards (active-enrolment dedup,
@@ -332,19 +333,34 @@ export async function triggerSequencesForPipelineStageChange(contactId, oldStage
  * An unreadable contact skips too (`contact_unreadable`). Each skip is a
  * `logWarn('sequences', 'stage_trigger_skipped', { reason, dealLocationId })`.
  *
+ * PIPEBUILD.3e — CONFIGURED boards (pipelines.board_type set; today only offer
+ * boards). Their stage slugs are the board's own (corp_new, …), never the
+ * contact's home-studio slug the fence protects, so a placement on one fires
+ * `null → slug` (create) or `from → to` (move) through
+ * triggerSequencesForPipelineStageChange with `{ locationId: dealLocationId }`:
+ * the board's studio's sequences, a studio outside the contact's organisation
+ * refused there — exactly what the nightly pass fires for the same placement,
+ * so whichever writer lands the card first, the same sequences start (and
+ * enrolment is once per person per sequence). The board is read by id and
+ * must belong to `dealLocationId`; an unreadable board skips a create
+ * (`board_unreadable`) and leaves a refused move refused. A create on any
+ * other board still fires nothing. `configuredBoardsOnly` (placeContactNow,
+ * which fired nothing before) fires for configured boards only.
+ *
  * Best-effort and never throws: every caller has already committed its
  * primary write.
  *
  * @param {string} contactId
- * @param {{action: string, from_slug?: string|null, to_slug?: string|null}|null} dealResult
+ * @param {{action: string, from_slug?: string|null, to_slug?: string|null, stage_slug?: string|null}|null} dealResult
  *   the return value of ensureDealForContact.
- * @param {{dealLocationId?: string|null, pipelineId?: string|null}} [board]
- *   location_id and pipeline_id of the deal that moved.
+ * @param {{dealLocationId?: string|null, pipelineId?: string|null, configuredBoardsOnly?: boolean}} [board]
+ *   location_id and pipeline_id of the deal that moved (or was created).
  */
-export async function triggerSequencesForDealPlacement(contactId, dealResult, { dealLocationId, pipelineId } = {}) {
-  if (!contactId || dealResult?.action !== 'move') return
-  const from = dealResult.from_slug ?? null
-  const to = dealResult.to_slug ?? null
+export async function triggerSequencesForDealPlacement(contactId, dealResult, { dealLocationId, pipelineId, configuredBoardsOnly = false } = {}) {
+  const action = dealResult?.action
+  if (!contactId || (action !== 'move' && action !== 'create')) return
+  const from = action === 'move' ? (dealResult.from_slug ?? null) : null
+  const to = action === 'move' ? (dealResult.to_slug ?? null) : (dealResult.stage_slug ?? null)
   if (from === to) return
   const skip = (reason) =>
     logWarn('sequences', 'stage_trigger_skipped', { reason, dealLocationId })
@@ -352,14 +368,37 @@ export async function triggerSequencesForDealPlacement(contactId, dealResult, { 
     if (!dealLocationId || !pipelineId) return skip('missing_board')
 
     const db = createServerClient()
+    // PIPEBUILD.3e — a CONFIGURED board (pipelines.board_type set: an offer
+    // board) fires its own stage at its own studio, as the nightly pass does.
+    const fireOnBoard = () =>
+      triggerSequencesForPipelineStageChange(contactId, from, to, { locationId: dealLocationId })
+
+    // A create, or the place-now path (which fired nothing before 3e), fires
+    // ONLY on a configured board; every other board stays silent here.
+    if (action === 'create' || configuredBoardsOnly) {
+      const board = await readConfiguredBoard(db, pipelineId, dealLocationId)
+      if (board.unreadable) return skip('board_unreadable')
+      if (!board.configured) return
+      return await fireOnBoard()
+    }
+
     const { data: contact, error } = await db
       .from('contacts')
       .select('id, location_id, pipeline_stage_slug')
       .eq('id', contactId)
       .maybeSingle()
     if (error || !contact) return skip('contact_unreadable')
-    if (contact.location_id !== dealLocationId) return skip('cross_location')
-    if (contact.pipeline_stage_slug !== to) return skip('not_slug_source')
+    const refusal = contact.location_id !== dealLocationId
+      ? 'cross_location'
+      : (contact.pipeline_stage_slug !== to ? 'not_slug_source' : null)
+    if (refusal) {
+      // The HATCHPIPE.1 fence protects the contact's home-studio slug, which a
+      // configured board's own stage is not: such a move fires on its board.
+      // An unreadable board is not a configured one (the refusal stands).
+      const board = await readConfiguredBoard(db, pipelineId, dealLocationId)
+      if (board.configured) return await fireOnBoard()
+      return skip(refusal)
+    }
 
     await triggerSequencesForPipelineStageChange(contactId, from, to)
   } catch (e) {
@@ -367,6 +406,22 @@ export async function triggerSequencesForDealPlacement(contactId, dealResult, { 
     // this catches the createServerClient/import-level case so a sync
     // or route can never fail on account of a sequence.
     logWarn('sequences', `deal placement trigger failed for ${contactId}`, { err: e })
+  }
+}
+
+// PIPEBUILD.3e — is this pipeline a configured board (board_type set) at the
+// deal's studio? Never throws: a failed read is { unreadable: true }.
+async function readConfiguredBoard(db, pipelineId, locationId) {
+  try {
+    const { data, error } = await db
+      .from('pipelines')
+      .select('id, location_id, board_type')
+      .eq('id', pipelineId)
+      .maybeSingle()                       // primary key; 0 rows = gone
+    if (error) return { configured: false, unreadable: true }
+    return { configured: Boolean(data && data.location_id === locationId && data.board_type) }
+  } catch {
+    return { configured: false, unreadable: true }
   }
 }
 

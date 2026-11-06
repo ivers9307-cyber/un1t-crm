@@ -20,7 +20,8 @@ import { logWarn } from './log.js'
 import { selectAll } from './select-all.js'
 import { paidTrialClaim } from '../../shared/pipelines/paid-trial.js'
 import { matchProgrammeSignal, programmeClaimLive } from '../../shared/pipelines/programmes.js'
-import { BOARD_KEYS, CLAIM_BOARD_MODULES } from '../../shared/pipelines/router.js'
+import { BOARD_KEYS, CLAIM_BOARD_MODULES, OFFER_MODULES } from '../../shared/pipelines/router.js'
+import { loadOfferClaimsForContact, readMembershipSource, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
 
 export const PROGRAMME_RULES_PATH = Object.freeze(['pipelines', 'programmes'])
 const PROGRAMME_BOARD = BOARD_KEYS.PROGRAMMES
@@ -255,20 +256,51 @@ export async function loadClaimsForContact(db, { locationId, contactId, contact,
  * with no claim board answers { claimBoards: false, claims: null } after the
  * one boards read and nothing else.
  *
- * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme }|null }
+ * PIPEBUILD.3e — an offer board is a claim board too. Its claims ride along as
+ * `claims.offers` (Map<boardKey, claim>, recording a new lead-source / plan /
+ * tag match), and the €39/Programmes tables are read only when one of THOSE
+ * boards runs. At a un1t.online studio, or when its membership source cannot
+ * be read, the offer boards are refused: `claims.offers` is null and
+ * `offersRefused` says why (ensureDealForContact then holds them). A studio
+ * with no offer board gets exactly today's claims shape (no `offers` key).
+ * A failed offer READ fails the call; a recorded claim already written by then
+ * is a fact the nightly pass would record the same way.
+ *
+ * @returns {Promise<{ ok: true, boards: object[], claimBoards: boolean, claims: { paid, programme, offers? }|null, offersRefused?: string }
  *   | { ok: false, reason: string, boards?: object[] }>}
  */
 export async function loadPlacementClaims(db, { locationId, contactId, contact, now = Date.now(), write = true }) {
   const boardsRes = await loadBoardsForLocation(db, locationId)
   if (!boardsRes.ok) return { ok: false, reason: boardsRes.reason }
   const boards = boardsRes.boards
-  const claimBoards = boards.some((b) => b.mode === 'derived' && CLAIM_BOARD_MODULES.includes(b.module))
-  if (!claimBoards) return { ok: true, boards, claimBoards: false, claims: null }
-  const rulesRes = await loadProgrammeRules(db, locationId)
-  if (!rulesRes.ok) return { ok: false, reason: rulesRes.reason, boards }
-  const claimsRes = await loadClaimsForContact(db, { locationId, contactId, contact, now, rules: rulesRes.rules, write })
-  if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
-  return { ok: true, boards, claimBoards: true, claims: claimsRes.claims }
+  const derived = boards.filter((b) => b.mode === 'derived')
+  const legacyBoards = derived.some((b) => CLAIM_BOARD_MODULES.includes(b.module))
+  const offerRows = derived.filter((b) => OFFER_MODULES.includes(b.module))
+  if (!legacyBoards && offerRows.length === 0) return { ok: true, boards, claimBoards: false, claims: null }
+
+  let claims = { paid: null, programme: null }
+  if (legacyBoards) {
+    const rulesRes = await loadProgrammeRules(db, locationId)
+    if (!rulesRes.ok) return { ok: false, reason: rulesRes.reason, boards }
+    const claimsRes = await loadClaimsForContact(db, { locationId, contactId, contact, now, rules: rulesRes.rules, write })
+    if (!claimsRes.ok) return { ok: false, reason: claimsRes.reason, boards }
+    claims = claimsRes.claims
+  }
+  if (offerRows.length === 0) return { ok: true, boards, claimBoards: true, claims }
+
+  const source = await readMembershipSource(db, locationId)
+  const offersRefused = !source.ok
+    ? source.reason
+    : (UN1T_MEMBERSHIP_SOURCES.includes(source.source) ? 'un1t_online_studio' : null)
+  if (offersRefused) {
+    logWarn('pipeline-claims', 'offer boards refused', { locationId, reason: offersRefused })
+    return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: null }, offersRefused }
+  }
+  const offerRes = await loadOfferClaimsForContact(db, {
+    locationId, boards: offerRows, contact: { ...(contact || {}), id: contactId }, now, write,
+  })
+  if (!offerRes.ok) return { ok: false, reason: offerRes.reason, boards }
+  return { ok: true, boards, claimBoards: true, claims: { ...claims, offers: offerRes.offers } }
 }
 
 /**

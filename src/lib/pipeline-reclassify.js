@@ -38,7 +38,7 @@ import {
 } from './pipeline-claims.js'
 // PIPEBUILD.3d — configured offer boards (module `offer`): their config is
 // parsed here and their claims loaded once per run.
-import { splitOfferBoards, loadOfferClaimsForLocation } from './pipeline-offer-claims.js'
+import { splitOfferBoards, loadOfferClaimsForLocation, UN1T_MEMBERSHIP_SOURCES } from './pipeline-offer-claims.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -58,10 +58,9 @@ const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_
 // ride along so an offer board's config and priority reach the router.
 const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority'
 const OFFER_BOARD_TYPE = 'offer'
-// PIPEBUILD.3d — locations.membership_source values whose members live in
-// un1t.online (mig 726: 'un1t_online'; mig 717's older 'un1t' too). An offer
-// board reads contacts, so it is refused at these studios until PR 3b.
-const UN1T_MEMBERSHIP_SOURCES = Object.freeze(['un1t_online', 'un1t'])
+// PIPEBUILD.3d — UN1T_MEMBERSHIP_SOURCES (pipeline-offer-claims.js): the
+// locations.membership_source values whose members live in un1t.online. An
+// offer board reads contacts, so it is refused at these studios until PR 3b.
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
 const STAGE_TRIGGER_MASS_MOVE = 50
