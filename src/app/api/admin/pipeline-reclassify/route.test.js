@@ -79,3 +79,37 @@ describe('POST /api/admin/pipeline-reclassify — PIPE3 include_disabled keys', 
     expect(args.includeDisabled).toEqual(['paid_trial', 'programmes'])
   })
 })
+
+
+// PIPEBUILD.3d — a disabled offer board is previewed by id (board_ids), dry run only.
+describe('POST /api/admin/pipeline-reclassify — board_ids', () => {
+  const BOARD = 'b0000000-0000-0000-0000-00000000000c'
+
+  it('dryRunIncludesDisabledOfferBoard: passes includeDisabledBoardIds with dry_run, beside an unchanged include_disabled', async () => {
+    const res = await POST(req({ location_id: LOC, dry_run: true, include_disabled: ['paid_trial'], board_ids: [BOARD] }))
+    expect(res.status).toBe(200)
+    const args = vi.mocked(reclassifyAllContacts).mock.calls.at(-1)[1]
+    expect(args.includeDisabledBoardIds).toEqual([BOARD])
+    expect(args.includeDisabled).toEqual(['paid_trial'])
+  })
+
+  it('drops board_ids on a real run', async () => {
+    const res = await POST(req({ location_id: LOC, board_ids: [BOARD] }))
+    expect(res.status).toBe(200)
+    const args = vi.mocked(reclassifyAllContacts).mock.calls.at(-1)[1]
+    expect(args.dryRun).toBe(false)
+    expect(args).not.toHaveProperty('includeDisabledBoardIds')
+  })
+
+  it('refuses a board id that is not a uuid', async () => {
+    const res = await POST(req({ location_id: LOC, dry_run: true, board_ids: ['corp'] }))
+    expect(res.status).toBe(400)
+    expect(reclassifyAllContacts).not.toHaveBeenCalled()
+  })
+
+  it('refuses board_ids with restamp_dates', async () => {
+    const res = await POST(req({ location_id: LOC, restamp_dates: true, board_ids: [BOARD] }))
+    expect(res.status).toBe(400)
+    expect(restampUn1tDealDates).not.toHaveBeenCalled()
+  })
+})

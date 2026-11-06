@@ -30,11 +30,15 @@ import { writeRebookNotes } from './pipeline-rebook-notes.js'
 // PIPE3 — one router places a contact on one of several contacts-input boards
 // (acquisition / paid_trial / programmes at Stillorgan); the claims it needs
 // are read once per run.
-import { routeContact, CLAIM_BOARD_MODULES } from '../../shared/pipelines/router.js'
+import { routeContact, CLAIM_BOARD_MODULES, OFFER_MODULES } from '../../shared/pipelines/router.js'
 import { paidClaimFromSnapshot } from '../../shared/pipelines/paid-trial.js'
 import {
   loadClaimsForLocation, loadProgrammeRules, pendingProgrammeClaims, upsertProgrammeClaims,
+  upsertBoardClaims,
 } from './pipeline-claims.js'
+// PIPEBUILD.3d — configured offer boards (module `offer`): their config is
+// parsed here and their claims loaded once per run.
+import { splitOfferBoards, loadOfferClaimsForLocation } from './pipeline-offer-claims.js'
 
 // HATCHPIPE.2 — a board whose module declares this inputSource is classified
 // from the location's membership read adapter (un1tOnlineReads.pipelineInputs:
@@ -49,7 +53,11 @@ const REBOOK_SLUG = 'rebook'
 // claim boards before mig 798; Hatch's €39 board before mig 804) is dry-run as
 // itself.
 const DRY_RUN_DISABLED_MODULE = 'acquisition_un1t'
-const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_un1t'])
+const DRY_RUN_SELF_MODULES = Object.freeze([...CLAIM_BOARD_MODULES, 'paid_trial_un1t', ...OFFER_MODULES])
+// PIPEBUILD.3d — the pipelines columns a run reads: the board settings (mig 814)
+// ride along so an offer board's config and priority reach the router.
+const PIPELINE_COLS = 'id, key, module, mode, enabled, is_primary, board_type, config, priority'
+const OFFER_BOARD_TYPE = 'offer'
 // TDSEQ.1 — more than this many deals moved into ONE stage in ONE run is a
 // rule change, not people progressing: no sequence starts for that stage.
 const STAGE_TRIGGER_MASS_MOVE = 50
@@ -58,7 +66,9 @@ const STAGE_TRIGGER_MASS_MOVE = 50
 // Trial Done by TIME, so this pass makes those moves and nothing else would
 // start a sequence for them. Acquisition is deliberately absent: it moves
 // thousands of deals a night, and its moves fire through ensureDealForContact.
-const CONTACTS_STAGE_TRIGGER_MODULES = Object.freeze(['paid_trial'])
+// PIPEBUILD.3d — offer boards too: like the €39 board their columns are reached
+// by time and by claim, so this pass is the one place their moves happen.
+const CONTACTS_STAGE_TRIGGER_MODULES = Object.freeze(['paid_trial', ...OFFER_MODULES])
 
 // PIPELINES.3 — the columns a run selects are the UNION of what its enabled
 // derived boards DECLARE, not a hand-maintained list. The list this replaced
@@ -85,6 +95,13 @@ function selectColsFor(modules) {
  * @param {string[]} [args.includeDisabled=[]]  pipeline keys whose DISABLED
  *   rows at the location are dry-run as acquisition_un1t. Honoured only with
  *   dryRun; ignored (no query) otherwise.
+ * @param {string[]} [args.includeDisabledBoardIds=[]]  PIPEBUILD.3d — pipeline
+ *   ids of DISABLED offer boards (module `offer`) to dry-run as themselves, so
+ *   an offer board can be previewed before it is switched on. Other rows are
+ *   skipped. Honoured only with dryRun; ignored (no query) otherwise.
+ * @param {string[]} [args.silentBoardIds=[]]  PIPEBUILD.3d — pipeline ids whose
+ *   placements are made but whose stage follow-ups (moves and creates) are not
+ *   fired this run (an offer board's first run after it is switched on).
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -114,6 +131,7 @@ function selectColsFor(modules) {
 export async function reclassifyAllContacts(db, args) {
   const {
     locationId, dryRun = false, source = 'cron', userId = null, includeDisabled = [],
+    includeDisabledBoardIds = [], silentBoardIds = [],
   } = args || {}
   const startedAt = new Date()
 
@@ -158,7 +176,7 @@ export async function reclassifyAllContacts(db, args) {
   // deliberately unregistered (0 deals, and it cannot fill).
   const { data: pipelineRows, error: pipelinesErr } = await db
     .from('pipelines')
-    .select('id, key, module, mode, enabled, is_primary')
+    .select(PIPELINE_COLS)
     .eq('location_id', locationId)
     .eq('enabled', true)
   if (pipelinesErr) {
@@ -171,10 +189,11 @@ export async function reclassifyAllContacts(db, args) {
   // the named keys are classified as acquisition_un1t. Never on a real run:
   // without dryRun this issues no query at all.
   const boardRows = [...(pipelineRows || [])]
+  const pipelinesSkipped = []
   if (dryRun && Array.isArray(includeDisabled) && includeDisabled.length > 0) {
     const { data: disabledRows, error: disabledErr } = await db
       .from('pipelines')
-      .select('id, key, module, mode, enabled, is_primary')
+      .select(PIPELINE_COLS)
       .eq('location_id', locationId)
       .eq('enabled', false)
       .in('key', includeDisabled)
@@ -185,15 +204,51 @@ export async function reclassifyAllContacts(db, args) {
       boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED, module: DRY_RUN_SELF_MODULES.includes(p.module) ? p.module : DRY_RUN_DISABLED_MODULE })
     }
   }
+  // PIPEBUILD.3d — a disabled OFFER board previewed by id, as itself. Never on
+  // a real run (no query), and never a row that is not an offer board.
+  if (dryRun && Array.isArray(includeDisabledBoardIds) && includeDisabledBoardIds.length > 0) {
+    const { data: disabledRows, error: disabledErr } = await db
+      .from('pipelines')
+      .select(PIPELINE_COLS)
+      .eq('location_id', locationId)
+      .eq('enabled', false)
+      .in('id', includeDisabledBoardIds)
+    if (disabledErr) {
+      return { ok: false, error: `pipeline load: ${disabledErr.message}`, run_id: runId }
+    }
+    const have = new Set(boardRows.map((p) => p.id))
+    for (const p of disabledRows || []) {
+      if (have.has(p.id)) continue
+      if (!OFFER_MODULES.includes(p.module)) { pipelinesSkipped.push(p.key); continue }
+      boardRows.push({ ...p, mode: PIPELINE_MODES.DERIVED })
+    }
+  }
 
-  const pipelinesSkipped = []
   let activePipelines = []
+  // PIPEBUILD.3d — an offer board whose config will not parse (or that is not
+  // marked board_type 'offer') is HELD: it is reported as skipped, its stages
+  // are not targets, and a person with an open deal on it is left alone this
+  // run. Dropping it outright would read that person as deal-less and give
+  // them a second deal on another board; routing them would drain the board.
+  const heldPipelines = []
   for (const p of boardRows) {
     if (p.mode === PIPELINE_MODES.MANUAL) { pipelinesSkipped.push(p.key); continue }
     const mod = getBoardModule(p.module)
     if (!mod) {
       pipelinesSkipped.push(p.key)
       logWarn('pipeline-reclassify', 'no board module registered', { key: p.key, module: p.module, locationId })
+      continue
+    }
+    if (OFFER_MODULES.includes(p.module)) {
+      // Treated as running (a dry-run preview of a disabled row included).
+      const parsed = p.board_type === OFFER_BOARD_TYPE ? splitOfferBoards([{ ...p, enabled: true }]).descriptors[0] : null
+      if (!parsed) {
+        pipelinesSkipped.push(p.key)
+        heldPipelines.push(p)
+        logWarn('pipeline-reclassify', 'offer board held', { key: p.key, locationId, reason: p.board_type === OFFER_BOARD_TYPE ? 'config_unparseable' : 'not_an_offer_board' })
+        continue
+      }
+      activePipelines.push({ ...p, mod, offerConfig: parsed.config })
       continue
     }
     activePipelines.push({ ...p, mod })
@@ -204,6 +259,23 @@ export async function reclassifyAllContacts(db, args) {
   // boards (no such location exists or is planned), so the contacts path is
   // exactly the one that ran before.
   let inputSource = 'contacts'
+  // PIPEBUILD.3d — an offer board reads contacts, so it cannot run at a
+  // un1t.online studio yet (PR 3b). There it is the offer board that is refused,
+  // never the studio's un1t boards: switching an offer board on must not move
+  // the whole studio onto the contacts path. Refused, it is also held (a person
+  // with a deal on it is left alone).
+  const isUn1t = (p) => p.mod.inputSource === UN1T_INPUT
+  const isOffer = (p) => OFFER_MODULES.includes(p.module)
+  if (activePipelines.some(isUn1t) && activePipelines.some(isOffer)
+    && activePipelines.every((p) => isUn1t(p) || isOffer(p))) {
+    for (const p of activePipelines) {
+      if (!isOffer(p)) continue
+      pipelinesSkipped.push(p.key)
+      heldPipelines.push(p)
+      logWarn('pipeline-reclassify', 'board refused', { key: p.key, module: p.module, locationId, reason: 'mixed_input_sources' })
+    }
+    activePipelines = activePipelines.filter((p) => !isOffer(p))
+  }
   if (activePipelines.some((p) => p.mod.inputSource === UN1T_INPUT)) {
     if (activePipelines.some((p) => p.mod.inputSource !== UN1T_INPUT)) {
       for (const p of activePipelines) {
@@ -262,16 +334,38 @@ export async function reclassifyAllContacts(db, args) {
   }
 
   const activePipelineIds = activePipelines.map((p) => p.id)
+  // PIPEBUILD.3d — held boards' open deals are read (so their people are left
+  // alone, below); no stage of theirs is a target.
+  const heldPipelineIds = new Set(heldPipelines.map((p) => p.id))
+  const dealPipelineIds = heldPipelineIds.size > 0 ? [...activePipelineIds, ...heldPipelineIds] : activePipelineIds
   const selectCols = selectColsFor(activePipelines.map((p) => p.mod))
-  // PIPE3 — the board KEYS running here, for the router (pipelines.key; at
-  // Stillorgan key and module coincide); and whether the contacts path needs
-  // claims (trial_purchases, pipeline_board_claims) loaded.
-  const activeBoardKeys = new Set(activePipelines.map((p) => p.key))
-  const needsClaims = inputSource !== UN1T_INPUT && activePipelines.some((p) => CLAIM_BOARD_MODULES.includes(p.module))
-  // STILL39SEQ.1 — the contacts-input boards here whose landed moves fire.
+  // PIPE3 / PIPEBUILD.3b — the boards running here, for the router, as
+  // descriptors (pipelines.key; at Stillorgan key and module coincide). An
+  // offer board carries its parsed config; every other board board_type null,
+  // which the router reads exactly as today's Set of keys.
+  const boardDescriptors = activePipelines.map((p) => (p.offerConfig
+    ? { key: p.key, module: p.module, board_type: OFFER_BOARD_TYPE, priority: p.priority ?? 100, config: p.offerConfig }
+    : { key: p.key, module: p.module, board_type: null, priority: p.priority ?? null, config: null }))
+  const offerPipelines = activePipelines.filter((p) => p.offerConfig)
+  const offerPipelineIds = new Set(offerPipelines.map((p) => p.id))
+  // PIPEEXCL.1 — an offer board's Converted column is a customer stage here,
+  // like the €39 board's: a person who joined through it keeps it.
+  const offerCustomerSlugs = new Set(offerPipelines.flatMap((p) => p.offerConfig.stages
+    .filter((st) => st.role === 'converted').map((st) => st.slug)))
+  // Whether the contacts path needs claims loaded: the €39/Programmes claims
+  // (trial_purchases, pipeline_board_claims, the programme rules) and, read
+  // separately, the offer boards' claims (PIPEBUILD.3d). Neither table is read
+  // at a studio running neither kind of board.
+  const needsLegacyClaims = inputSource !== UN1T_INPUT && activePipelines.some((p) => CLAIM_BOARD_MODULES.includes(p.module))
+  const needsOfferClaims = inputSource !== UN1T_INPUT && offerPipelines.length > 0
+  const needsClaims = needsLegacyClaims || needsOfferClaims
+  // STILL39SEQ.1 / PIPEBUILD.3d — the contacts-input boards here whose landed
+  // moves (and, on an offer board, creates) fire.
   const triggerPipelineIds = new Set(inputSource === UN1T_INPUT ? [] : activePipelines
     .filter((p) => CONTACTS_STAGE_TRIGGER_MODULES.includes(p.module))
     .map((p) => p.id))
+  // PIPEBUILD.3d — boards placed this run without starting any follow-up.
+  const silentIds = new Set(Array.isArray(silentBoardIds) ? silentBoardIds : [])
 
   // 2. Build the slug → stage_id lookup ONCE for this location.
   // PIPELINES.5 — pipeline_id comes back with the stage because the create
@@ -354,38 +448,68 @@ export async function reclassifyAllContacts(db, args) {
   //     rather than moving every €39 buyer back to the acquisition board.
   //     New programme matches are recorded BEFORE routing on a real run and
   //     applied in memory on a dry run (claims_pending).
+  //     PIPEBUILD.3d — and the offer boards' claims (pipeline-offer-claims.js),
+  //     read only when an offer board runs here. Every read happens before any
+  //     claim is written: an offer read failing after the programme claims were
+  //     recorded would leave half a run's bookkeeping behind a failed run.
   let paidByContact = new Map()
   let programmeByContact = new Map()
+  let offersByContact = new Map()
   let claimsPending = 0
-  if (needsClaims) {
+  const failClaims = async (reason) => {
+    const errorMessage = `claims unavailable: ${reason}`
+    await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
+    return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
+  }
+  let programmePending = []
+  if (needsLegacyClaims) {
     const rules = await loadProgrammeRules(db, locationId)
-    if (!rules.ok) {
-      const errorMessage = `claims unavailable: ${rules.reason}`
-      await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
-      return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
-    }
+    if (!rules.ok) return failClaims(rules.reason)
     const claims = await loadClaimsForLocation(db, { locationId, contactIds: new Set(contacts.map((c) => c.id)), now: nowMs })
-    if (!claims.ok) {
-      const errorMessage = `claims unavailable: ${claims.reason}`
-      await markRun(db, runId, { status: 'failed', error_message: errorMessage }, startedAt)
-      return { ok: false, error: errorMessage, run_id: runId, input_source: inputSource, pipelines_skipped: pipelinesSkipped }
-    }
+    if (!claims.ok) return failClaims(claims.reason)
     paidByContact = claims.paidByContact
     programmeByContact = claims.programmeByContact
-    const pending = pendingProgrammeClaims(contacts, programmeByContact, rules.rules, nowMs)
-    claimsPending = pending.length
-    if (pending.length > 0) {
-      if (!dryRun) {
-        const wrote = await upsertProgrammeClaims(db, locationId, pending, nowMs)
-        // A lost claim write is never grounds to stop: the lead-source match is
-        // re-derived next run (a plan match re-dates to that run). Logged by
-        // the helper; the placement below still uses the in-memory claim.
-        if (!wrote.ok) logWarn('pipeline-reclassify', 'programme claims not recorded', { locationId, pending: pending.length })
-      }
-      for (const row of pending) {
-        programmeByContact.set(row.contact_id, { claimedAt: Date.parse(row.claimed_at), source: row.source })
-      }
+    programmePending = pendingProgrammeClaims(contacts, programmeByContact, rules.rules, nowMs)
+  }
+  let offerPending = []
+  if (needsOfferClaims) {
+    let offers
+    try {
+      offers = await loadOfferClaimsForLocation(db, {
+        locationId,
+        // Treated as running (a dry-run preview of a disabled row included).
+        boards: offerPipelines.map((p) => ({ id: p.id, key: p.key, priority: p.priority, board_type: p.board_type, config: p.config, enabled: true })),
+        contacts,
+        now: nowMs,
+      })
+    } catch (e) {
+      offers = { ok: false, reason: 'offer_claims_threw', err: boundedErr(e?.message || e) }
     }
+    if (!offers?.ok) {
+      logWarn('pipeline-reclassify', 'offer claims unavailable', { locationId, reason: offers?.reason || 'unknown', ...(offers?.err ? { err: offers.err } : {}) })
+      return failClaims(offers?.reason || 'unknown')
+    }
+    offersByContact = offers.offersByContact instanceof Map ? offers.offersByContact : new Map()
+    offerPending = Array.isArray(offers.pending) ? offers.pending : []
+  }
+  claimsPending = programmePending.length + offerPending.length
+  if (programmePending.length > 0) {
+    if (!dryRun) {
+      const wrote = await upsertProgrammeClaims(db, locationId, programmePending, nowMs)
+      // A lost claim write is never grounds to stop: the lead-source match is
+      // re-derived next run (a plan match re-dates to that run). Logged by
+      // the helper; the placement below still uses the in-memory claim.
+      if (!wrote.ok) logWarn('pipeline-reclassify', 'programme claims not recorded', { locationId, pending: programmePending.length })
+    }
+    for (const row of programmePending) {
+      programmeByContact.set(row.contact_id, { claimedAt: Date.parse(row.claimed_at), source: row.source })
+    }
+  }
+  // The offer loader already placed its pending claims in offersByContact; a
+  // real run records them (the same never-stop rule as the programme claims).
+  if (offerPending.length > 0 && !dryRun) {
+    const wrote = await upsertBoardClaims(db, locationId, offerPending, nowMs)
+    if (!wrote.ok) logWarn('pipeline-reclassify', 'offer claims not recorded', { locationId, pending: offerPending.length })
   }
 
   // 4. Pull every open deal at the location in one query.
@@ -418,7 +542,7 @@ export async function reclassifyAllContacts(db, args) {
       .select('id, contact_id, stage_id, pipeline_id')
       .eq('location_id', locationId)
       .eq('status', 'open')
-      .in('pipeline_id', activePipelineIds)
+      .in('pipeline_id', dealPipelineIds)
       .order('id', { ascending: true })
       .range(dealStart, dealEnd)
     if (error) { dealsErr = error; break }
@@ -509,6 +633,8 @@ export async function reclassifyAllContacts(db, args) {
   let duplicateDealsClosed = 0
   let createsWithheld = 0
   let createsHeld = 0
+  let dealsHeld = 0 // PIPEBUILD.3d: people left alone because a deal of theirs sits on a held board
+  const createsLanded = [] // PIPEBUILD.3d: real runs, offer boards: creates whose insert landed
   const stageHistogram = {} // dry runs only: { target_slug: count }
   const boardHistogram = {} // dry runs only, PIPE3: { board key: count }
 
@@ -522,7 +648,7 @@ export async function reclassifyAllContacts(db, args) {
       snapshot,
       { paid: paidClaimFromSnapshot(snapshot), programme: null },
       nowMs,
-      activeBoardKeys,
+      boardDescriptors,
       { classifyAcquisition: un1tClassify },
     )
   }
@@ -530,15 +656,23 @@ export async function reclassifyAllContacts(db, args) {
   // PIPE3 — the contacts path places through the router. The row carries
   // every column the active boards declared (selectColsFor), which is what the
   // old inline field list guaranteed for classifyContact; with the acquisition
-  // board alone the router IS classifyContact.
+  // board alone the router IS classifyContact. PIPEBUILD.3d — with the
+  // person's offer claims (Map<boardKey, claim>), which the router reads only
+  // for the offer boards among the descriptors.
   const routeFromRow = (c) => routeContact(
     c,
-    { paid: paidByContact.get(c.id) ?? null, programme: programmeByContact.get(c.id) ?? null },
+    { paid: paidByContact.get(c.id) ?? null, programme: programmeByContact.get(c.id) ?? null, offers: offersByContact.get(c.id) ?? null },
     nowMs,
-    activeBoardKeys,
+    boardDescriptors,
   )
 
   for (const c of contacts) {
+    // PIPEBUILD.3d — a person with an open deal on a held offer board is left
+    // exactly as they are this run: no move, no create, no close.
+    if (heldPipelineIds.size > 0 && (dealsByContact.get(c.id) || []).some((d) => heldPipelineIds.has(d.pipeline_id))) {
+      dealsHeld++
+      continue
+    }
     const route = un1tInputs ? routeFromSnapshot(c.id) : routeFromRow(c)
     const targetSlug = route ? route.slug : null
     const targetStageId = stageIdBySlug.get(targetSlug)
@@ -557,7 +691,8 @@ export async function reclassifyAllContacts(db, args) {
     }
 
     // PIPEEXCL.1 — an active member at another studio leaves this board.
-    if (activeElsewhere && leavesBoard(targetSlug, activeElsewhere.has(c.id), { reason: elsewhereReason(c.id), trainsHere: trainingHere.has(c.id) })) {
+    if (activeElsewhere && !offerCustomerSlugs.has(targetSlug)
+      && leavesBoard(targetSlug, activeElsewhere.has(c.id), { reason: elsewhereReason(c.id), trainsHere: trainingHere.has(c.id) })) {
       if (existing) {
         leavesToApply.push({
           deal_id: existing.id,
@@ -720,6 +855,11 @@ export async function reclassifyAllContacts(db, args) {
       }
       dealsCreated++
       if (c.target_slug === REBOOK_SLUG) rebookCreated.push({ contact_id: c.contact_id })
+      // PIPEBUILD.3d — a card first placed on an offer board starts that
+      // column's follow-ups (null → slug), only once its insert landed.
+      if (offerPipelineIds.has(c.target_pipeline_id) && triggerPipelineIds.has(c.target_pipeline_id)) {
+        createsLanded.push({ contact_id: c.contact_id, from_slug: null, to_slug: c.target_slug, target_pipeline_id: c.target_pipeline_id })
+      }
       movementMatrix[''] = movementMatrix[''] || {}
       movementMatrix[''][c.target_slug] = (movementMatrix[''][c.target_slug] || 0) + 1
     }
@@ -845,7 +985,10 @@ export async function reclassifyAllContacts(db, args) {
   // movesLanded holds only real moves whose write succeeded). After every
   // write and the audit close, so a slow or failing enrolment can never fail
   // or hold up the run.
-  if (movesLanded.length > 0) await fireStageTriggers(movesLanded, locationId)
+  // PIPEBUILD.3d — and a landed create on an offer board, counted per stage
+  // with the moves for the mass guard. A silent board fires neither.
+  const firing = [...movesLanded, ...createsLanded].filter((m) => !silentIds.has(m.target_pipeline_id))
+  if (firing.length > 0) await fireStageTriggers(firing, locationId)
 
   // REBOOK.1 — a card that landed in Rebook gets a timeline note naming the
   // class it booked and what became of it. un1t.online boards only (the one
@@ -882,6 +1025,7 @@ export async function reclassifyAllContacts(db, args) {
     duplicate_deals_closed: duplicateDealsClosed,
     ...(needsClaims ? { claims_pending: claimsPending } : {}),
     ...(dryRun ? { board_histogram: boardHistogram } : {}),
+    ...(heldPipelineIds.size > 0 ? { deals_held: dealsHeld } : {}),
   }
 }
 
@@ -892,7 +1036,8 @@ export async function reclassifyAllContacts(db, args) {
 // pass); every other Glofox board fires through ensureDealForContact, and a
 // nightly re-run of this pass is not a new event for it. Enrolment is once per
 // person per sequence, so a move ensureDealForContact also fired is harmless. A move from an unknown
-// stage (from_slug 'unknown') never fires. Best-effort: a throw is
+// stage (from_slug 'unknown') never fires. PIPEBUILD.3d — offer boards fire
+// their moves AND their landed creates (from_slug null), one count per stage. Best-effort: a throw is
 // logged and the next move still fires. A stage that took more than
 // STAGE_TRIGGER_MASS_MOVE moves this run is held whole (a classifier rule
 // change moving many deals at once is not N people progressing).
@@ -1101,7 +1246,8 @@ const LEFT_BOARD = '(left board)'
 // un1t.online (Hatch Street). PIPEEXCL.1 ran on acquisition_un1t only.
 // PIPE3 — the two claim boards are acquisition boards too: a Hatch member is
 // not a Stillorgan €39 prospect either.
-const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t', 'paid_trial', 'programmes', 'paid_trial_un1t'])
+// PIPEBUILD.3d — and every offer board, as the €39 board.
+const EXCLUDING_MODULES = new Set(['acquisition', 'acquisition_un1t', 'paid_trial', 'programmes', 'paid_trial_un1t', ...OFFER_MODULES])
 // The contact's timeline says why the deal closed, per reason.
 const LEFT_BOARD_ACTIVITY = Object.freeze({
   [ELSEWHERE_MEMBER]: {
