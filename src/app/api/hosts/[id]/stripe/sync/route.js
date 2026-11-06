@@ -10,6 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { HOST_COLS, loadHostForOrg } from '@/lib/hosts'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
+import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,6 +55,10 @@ export async function POST(_request, props) {
       .select(HOST_COLS)
       .single()
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    // HOSTAPPLEPAY.1 — once the host can charge, register our checkout
+    // domains on their account so Apple Pay shows on their checkout. Best
+    // effort (never throws); the daily cron retries anything missed.
+    if (st.chargesEnabled) await registerCheckoutDomainsForAccount(db, host.stripe_connected_account_id)
     return NextResponse.json({ success: true, data })
   } catch (e) {
     return NextResponse.json(

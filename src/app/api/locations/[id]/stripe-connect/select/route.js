@@ -31,6 +31,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404, hasRoleAtLocation } from '@/lib/auth'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
+import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,5 +81,11 @@ export async function POST(request, props) {
   const nextSettings = { ...(loc.settings || {}), payments: { ...payments, provider } }
   const { error: upErr } = await db.from('locations').update({ settings: nextSettings, updated_at: new Date().toISOString() }).eq('id', locationId)
   if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
+  // HOSTAPPLEPAY.1 — a studio switching to Stripe charges on its own connected
+  // account, so Apple Pay needs our checkout domains registered there too.
+  // Best effort; the daily cron covers a miss.
+  if (provider === 'stripe_connect') {
+    await registerCheckoutDomainsForAccount(db, payments.stripe_connected_account_id)
+  }
   return NextResponse.json({ success: true, data: { provider } })
 }

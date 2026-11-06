@@ -31,6 +31,7 @@ import { resolveCharitySettings } from '@/lib/charity-donations'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
 import { GAP_PAYMENT_KIND } from '@/lib/registration-entry'
+import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -107,6 +108,12 @@ export async function POST(request) {
           updates.onboarding_completed_at = new Date().toISOString()
         }
         await db.from('event_hosts').update(updates).eq('id', host.id)
+        // HOSTAPPLEPAY.1 — the first time the host can charge, register our
+        // checkout domains on their account (Apple Pay needs it for a direct
+        // charge). Best effort; the daily cron covers a miss.
+        if (account.charges_enabled && !host.onboarding_completed_at) {
+          await registerCheckoutDomainsForAccount(db, account.id)
+        }
       }
     } else if (event.type === 'checkout.session.completed') {
       // A third-party host's ticket payment succeeded. markRacePaymentStatus

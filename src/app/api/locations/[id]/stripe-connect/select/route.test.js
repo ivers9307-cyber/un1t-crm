@@ -26,11 +26,15 @@ vi.mock('@/lib/auth', async () => {
   return { ...actual, getCurrentUser: vi.fn() }
 })
 vi.mock('@/lib/payments/stripe-connect', () => ({ retrieveAccountStatus: vi.fn() }))
+vi.mock('@/lib/payments/apple-pay-domains', () => ({
+  registerCheckoutDomainsForAccount: vi.fn(async () => ({ ok: true, results: [] })),
+}))
 
 import { POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
+import { registerCheckoutDomainsForAccount } from '@/lib/payments/apple-pay-domains'
 
 const LOC_A = 'a0000000-0000-0000-0000-000000000001'
 const LOC_B = 'b0000000-0000-0000-0000-000000000002'
@@ -121,6 +125,7 @@ describe('POST .../stripe-connect/select — the legitimate flow is byte-identic
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, data: { provider: 'revolut' } })
     expect(retrieveAccountStatus).not.toHaveBeenCalled()
+    expect(registerCheckoutDomainsForAccount).not.toHaveBeenCalled()
   })
 
   it('writes provider into settings.payments for the TARGET without clobbering other settings', async () => {
@@ -135,6 +140,16 @@ describe('POST .../stripe-connect/select — the legitimate flow is byte-identic
       payments: { stripe_connected_account_id: 'acct_1', provider: 'stripe_connect' },
     })
     expect(db.writes[0].filters).toEqual({ id: LOC_A })
+    // HOSTAPPLEPAY.1 — Apple Pay domains registered on the studio's account.
+    expect(registerCheckoutDomainsForAccount).toHaveBeenCalledWith(db, 'acct_1')
+  })
+
+  it('HOSTAPPLEPAY.1: a failed domain registration never fails the switch', async () => {
+    createServerClient.mockReturnValue(db = makeDb({ settings: { payments: { stripe_connected_account_id: 'acct_1' } } }))
+    registerCheckoutDomainsForAccount.mockResolvedValueOnce({ ok: false, error: 'down', results: [] })
+    const res = await POST(post(LOC_A, { provider: 'stripe_connect' }), props(LOC_A))
+    expect(res.status).toBe(200)
+    expect(db.writes).toHaveLength(1)
   })
 
   it('400s an unknown provider without writing or calling Stripe (unchanged)', async () => {
@@ -151,6 +166,7 @@ describe('POST .../stripe-connect/select — the legitimate flow is byte-identic
     const res = await POST(post(LOC_A, { provider: 'stripe_connect' }), props(LOC_A))
     expect(res.status).toBe(400)
     expect(db.writes).toEqual([])
+    expect(registerCheckoutDomainsForAccount).not.toHaveBeenCalled()
   })
 })
 
