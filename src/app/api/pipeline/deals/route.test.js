@@ -138,6 +138,14 @@ describe('GET /api/pipeline/deals — un1t card signals (HATCHCARD.1)', () => {
     expect('signals' in done.deals[0]).toBe(false)
     expect(loadUn1tCardSignals).not.toHaveBeenCalled()
   })
+  it('classesOf3 follows the board kind: true on acquisition_un1t, false on paid_trial_un1t', async () => {
+    withStage('new_lead', 'acquisition_un1t')
+    expect((await (await GET(req())).json()).deals[0].classesOf3).toBe(true)
+    withStage('paid_trial_new_lead', 'paid_trial_un1t')
+    const paid = (await (await GET(req())).json()).deals[0]
+    expect(paid.showSignals).toBe(true)
+    expect(paid.classesOf3).toBe(false)
+  })
   it('a Glofox board, a pile column, or the dormant view: no read and no signals key', async () => {
     withStage('new_lead', 'acquisition')
     expect('signals' in (await (await GET(req())).json()).deals[0]).toBe(false)

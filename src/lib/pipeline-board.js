@@ -175,6 +175,7 @@ export function boardDealMapper({ badge = true, glofoxCredits = true, signals = 
       ...deal,
       // PIPEBUILD.2e — the SERVER decides whether this column shows signals
       // (stageShowsSignals); the card renders them iff this is true.
+      // classesOf3 only rides with signals: DealCard reads it only when signals are present.
       ...(signals instanceof Map ? { signals: signals.get(contact.id) ?? null, showSignals: showSignals === true, classesOf3: classesOf3 === true } : {}),
       age: dealAge(deal, Date.now()),
       // HATCHPIPE.5 — the card must know the badge is OFF, not merely that no

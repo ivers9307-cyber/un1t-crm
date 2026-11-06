@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  toBoardDeal, boardDealMapper, badgeEnabledForModule, boardCardOptionsForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
+  toBoardDeal, boardDealMapper, badgeEnabledForModule, boardCardOptionsForModule, classesOf3ForModule, pipelineContactFields, PIPELINE_PAGE_SIZE,
   initialPageSizeFor, readWholeColumn, PIPELINE_READ_PAGE,
   ageDays, formatAge, dealAge, PIPELINE_BACKFILL_CUTOFF,
 } from './pipeline-board.js'
@@ -115,6 +115,16 @@ describe('pipelineContactFields', () => {
   })
   it('page size is a sane positive number', () => {
     expect(PIPELINE_PAGE_SIZE).toBeGreaterThan(0)
+  })
+})
+
+describe('classesOf3ForModule', () => {
+  it('only the free-trial acquisition modules say "of 3"', () => {
+    expect(classesOf3ForModule('acquisition')).toBe(true)
+    expect(classesOf3ForModule('acquisition_un1t')).toBe(true)
+    for (const m of ['paid_trial', 'paid_trial_un1t', 'offer', 'programmes', null, undefined]) {
+      expect(classesOf3ForModule(m)).toBe(false)
+    }
   })
 })
 
