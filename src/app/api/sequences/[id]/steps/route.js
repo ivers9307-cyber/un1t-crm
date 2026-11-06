@@ -5,6 +5,8 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { liveSequenceTemplateRefusal } from '@/lib/sequences/template-approval'
+import { logError } from '@/lib/log'
 
 const StepShape = z.object({
   step_order: z.number().int().min(0).max(1000).optional(),
@@ -41,8 +43,23 @@ const StepBulkUpdateSchema = z.object({
 
 async function loadSequenceLocation(db, sequenceId) {
   const { data } = await db.from('email_sequences')
-    .select('location_id').eq('id', sequenceId).single()
+    .select('location_id, status').eq('id', sequenceId).single()
   return data?.location_id
+}
+
+// PIPEBUILD.2f — status rides with the location read so a live sequence can be
+// gated; loadSequenceLocation stays the string the GET/gates use.
+async function loadSequenceGate(db, sequenceId) {
+  const { data } = await db.from('email_sequences')
+    .select('location_id, status').eq('id', sequenceId).single()
+  return data || null
+}
+
+function templateRefusalResponse(refusal, sequenceId) {
+  if (refusal.readFailed) {
+    logError('sequences', 'steps: whatsapp_templates read failed', { sequenceId, err: refusal.readFailed?.message || String(refusal.readFailed) })
+  }
+  return NextResponse.json({ success: false, error: refusal.error }, { status: refusal.status })
 }
 
 // GET /api/sequences/[id]/steps
@@ -77,7 +94,8 @@ export async function POST(request, props) {
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
-  const seqLocation = await loadSequenceLocation(db, params.id)
+  const seq = await loadSequenceGate(db, params.id)
+  const seqLocation = seq?.location_id
   if (!seqLocation) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
@@ -87,6 +105,17 @@ export async function POST(request, props) {
   const validation = await validateBody(request, StepCreateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  // PIPEBUILD.2f — a live sequence refuses an unapproved WhatsApp template
+  // (only a whatsapp step stores one; drafts are never checked).
+  if ((body.step_type || 'email') === 'whatsapp' && body.whatsapp_template_id) {
+    const refusal = await liveSequenceTemplateRefusal(db, {
+      sequenceStatus: seq.status,
+      locationId: seqLocation,
+      templateRefs: [{ stepNumber: body.step_order ?? 'new', templateId: body.whatsapp_template_id }],
+    })
+    if (refusal) return templateRefusalResponse(refusal, params.id)
+  }
 
   // Get next step order
   const { data: existing } = await db.from('sequence_steps')
@@ -134,7 +163,8 @@ export async function PUT(request, props) {
   if (!canBuildSequencesSomewhere(user)) return sequencePermissionRequired()
 
   const db = createServerClient()
-  const seqLocation = await loadSequenceLocation(db, params.id)
+  const seq = await loadSequenceGate(db, params.id)
+  const seqLocation = seq?.location_id
   if (!seqLocation) return sequenceNotFound()
   const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
@@ -144,6 +174,16 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, StepBulkUpdateSchema)
   if (!validation.ok) return validation.response
   const { steps } = validation.data
+
+  // PIPEBUILD.2f — every template this request sets on a live sequence.
+  const refusal = await liveSequenceTemplateRefusal(db, {
+    sequenceStatus: seq.status,
+    locationId: seqLocation,
+    templateRefs: steps
+      .filter(st => st.whatsapp_template_id)
+      .map(st => ({ stepNumber: st.step_order ?? '?', templateId: st.whatsapp_template_id })),
+  })
+  if (refusal) return templateRefusalResponse(refusal, params.id)
 
   for (const step of steps) {
     // Build update payload incrementally so undefined fields aren't
@@ -163,10 +203,17 @@ export async function PUT(request, props) {
     if (step.whatsapp_header_media_url !== undefined) updates.whatsapp_header_media_url = step.whatsapp_header_media_url
     if (step.config !== undefined) updates.config = step.config
 
-    await db.from('sequence_steps')
+    const { error } = await db.from('sequence_steps')
       .update(updates)
       .eq('id', step.id)
       .eq('sequence_id', params.id)  // also constrain by parent so cross-sequence writes can't sneak through
+    if (error) {
+      logError('sequences', 'steps bulk update failed', { sequenceId: params.id, stepId: step.id, err: error.message })
+      return NextResponse.json({
+        success: false,
+        error: `Could not save step ${step.step_order ?? step.id}: ${error.message}`,
+      }, { status: 500 })
+    }
   }
 
   return NextResponse.json({ success: true })

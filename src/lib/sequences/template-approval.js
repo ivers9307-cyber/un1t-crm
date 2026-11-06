@@ -52,3 +52,32 @@ export async function loadTemplatesForApproval(db, { locationId, templateIds }) 
     return { ok: false, error }
   }
 }
+
+/**
+ * PIPEBUILD.2f — the legacy steps API's gate. A LIVE (active) sequence may not
+ * have a step pointed at a template that is not approved; a draft is never
+ * checked. `templateRefs` are the non-null whatsapp_template_id values the
+ * request sets, as { stepNumber, templateId }.
+ * @returns {Promise<null|{status:number, error:string, readFailed?:object}>}
+ */
+export async function liveSequenceTemplateRefusal(db, { sequenceStatus, locationId, templateRefs }) {
+  if (sequenceStatus !== 'active') return null
+  const refs = (templateRefs || []).filter(r => r.templateId)
+  if (refs.length === 0) return null
+  const loaded = await loadTemplatesForApproval(db, { locationId, templateIds: refs.map(r => r.templateId) })
+  if (!loaded.ok) {
+    return {
+      status: 503,
+      error: 'Could not check the WhatsApp templates just now. The step was not saved.',
+      readFailed: loaded.error,
+    }
+  }
+  const [issue] = whatsappApprovalIssues(refs, loaded.rows)
+  if (!issue) return null
+  return {
+    status: 400,
+    error: issue.code === 'template_not_approved'
+      ? `${issue.message} Use it once the template is approved.`
+      : issue.message,
+  }
+}
