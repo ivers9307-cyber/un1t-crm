@@ -16,6 +16,13 @@
 // A claim for a board the studio does not run is ignored, so a studio with the
 // acquisition board alone behaves exactly as before this module existed.
 //
+// PIPEBUILD.3g — offer boards (module `offer`, given as descriptors) slot into
+// steps 2-3 by their own `priority`: after Cold/Gympass the router walks ONE
+// ordered list of offer boards (priority; null or invalid = 100) with the €39
+// board as an entry at priority 200 and Programmes at 300. Lower wins; at the
+// same number an offer board goes before the €39/Programmes entry, then by key.
+// With no offer board the list is exactly steps 2-3.
+//
 // Pure, no IO. The claims come from src/lib/pipeline-claims.js.
 
 import { classifyContact } from '../pipeline-classifier.js'
@@ -32,11 +39,24 @@ export const BOARD_KEYS = Object.freeze({
 /** The board modules that need claims loaded before they can place anyone. */
 export const CLAIM_BOARD_MODULES = Object.freeze([BOARD_KEYS.PAID_TRIAL, BOARD_KEYS.PROGRAMMES])
 
-/** PIPEBUILD.3b — modules whose boards are configured offers, placed first, by priority. */
+/** PIPEBUILD.3b — modules whose boards are configured offers, placed by priority (3g). */
 export const OFFER_MODULES = Object.freeze(['offer'])
+
+/** PIPEBUILD.3g — where an offer board without a usable priority sorts. */
+export const OFFER_DEFAULT_PRIORITY = 100
+/** PIPEBUILD.3g — the €39 and Programmes boards' places in the offer order. */
+export const PAID_TRIAL_PRIORITY = 200
+export const PROGRAMMES_PRIORITY = 300
 
 // The acquisition piles that outrank every claim.
 const OUTRANKS_CLAIMS = new Set(['cold_lead', 'gympass'])
+
+const offerPriority = (p) => {
+  if (p == null || p === '' || typeof p === 'boolean') return OFFER_DEFAULT_PRIORITY
+  const n = Number(p)
+  return Number.isFinite(n) ? n : OFFER_DEFAULT_PRIORITY
+}
+const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 
 /**
  * Which board, and which column, a contact belongs on.
@@ -64,24 +84,40 @@ export function routeContact(contact, claims, now = Date.now(), boards = null, {
   const programme = claims?.programme ?? null
 
   if (OUTRANKS_CLAIMS.has(acq)) return { boardKey: BOARD_KEYS.ACQUISITION, slug: acq }
+
+  // PIPEBUILD.3g — one ordered walk: offer boards by priority, the €39 and
+  // Programmes boards as fixed entries at 200 and 300 (offer first on a tie,
+  // then key). Without descriptors there are no offer entries.
+  const offers = claims?.offers instanceof Map ? claims.offers : null
+  const entries = [
+    { kind: 'paid', priority: PAID_TRIAL_PRIORITY, key: BOARD_KEYS.PAID_TRIAL },
+    { kind: 'programmes', priority: PROGRAMMES_PRIORITY, key: BOARD_KEYS.PROGRAMMES },
+  ]
   if (descriptors) {
-    const offers = claims?.offers instanceof Map ? claims.offers : null
-    const offerBoards = descriptors
-      .filter((d) => d.board_type === 'offer' && OFFER_MODULES.includes(d.module))
-      .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-    for (const d of offerBoards) {
+    for (const d of descriptors) {
+      if (d.board_type !== 'offer' || !OFFER_MODULES.includes(d.module)) continue
+      entries.push({ kind: 'offer', priority: offerPriority(d.priority), key: d.key, d })
+    }
+  }
+  entries.sort((a, b) => a.priority - b.priority
+    || (a.kind === 'offer' ? 0 : 1) - (b.kind === 'offer' ? 0 : 1)
+    || byKey(a.key, b.key))
+
+  for (const e of entries) {
+    if (e.kind === 'offer') {
+      const d = e.d
       if (!offers || !d.config || !Array.isArray(d.config.stages)) continue
       const claim = offers.get(d.key) ?? null
       if (offerClaimLive(claim, contact, now, d.config)) {
         return { boardKey: d.key, slug: classifyOffer(contact, now, claim, d.config) }
       }
+    } else if (e.kind === 'paid') {
+      if (has(BOARD_KEYS.PAID_TRIAL) && paidClaimLive(paid, contact, now)) {
+        return { boardKey: BOARD_KEYS.PAID_TRIAL, slug: classifyPaid(contact, now, paid) }
+      }
+    } else if (has(BOARD_KEYS.PROGRAMMES) && programmeClaimLive(programme, contact, now)) {
+      return { boardKey: BOARD_KEYS.PROGRAMMES, slug: classifyProgramme(contact, now, programme) }
     }
-  }
-  if (has(BOARD_KEYS.PAID_TRIAL) && paidClaimLive(paid, contact, now)) {
-    return { boardKey: BOARD_KEYS.PAID_TRIAL, slug: classifyPaid(contact, now, paid) }
-  }
-  if (has(BOARD_KEYS.PROGRAMMES) && programmeClaimLive(programme, contact, now)) {
-    return { boardKey: BOARD_KEYS.PROGRAMMES, slug: classifyProgramme(contact, now, programme) }
   }
   return { boardKey: BOARD_KEYS.ACQUISITION, slug: acq }
 }

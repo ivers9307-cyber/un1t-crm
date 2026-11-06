@@ -1029,6 +1029,55 @@ describe('triggerSequencesForDealPlacement — configured boards (PIPEBUILD.3e)'
     expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'not_slug_source', dealLocationId: 'loc-1' })
   })
 
+  // PIPEBUILD.3g — the contact's home studio is NOT the board's studio.
+  describe('a contact from another studio (home ≠ dealLocationId)', () => {
+    const away = { id: 'c1', location_id: 'loc-home', organization_id: 'org-1', pipeline_stage_slug: 'new_lead' }
+    const awayDb = ({ board = { id: 'pl-corp', location_id: 'loc-1', board_type: 'offer' }, boardStudioOrg = 'org-1' } = {}) => mockDb({
+      pipelines: { maybeSingle: board },
+      contacts: { maybeSingle: away, single: away },
+      locations: { maybeSingle: { id: 'loc-1', organization_id: boardStudioOrg } },
+      email_sequences: { list: [{ id: 's-corp', trigger_config: { to_status: 'corp_new' }, audience_filter: null }] },
+    })
+
+    it('same organisation: an offer-board create and move fire at the BOARD\'s studio', async () => {
+      for (const result of [CREATE, { action: 'move', from_slug: 'new_lead', to_slug: 'corp_new' }]) {
+        enrolContacts.mockClear()
+        const db = awayDb()
+        createServerClient.mockReturnValue(db)
+        await triggers.triggerSequencesForDealPlacement('c1', result, OPTS)
+        const [seq] = builderFor(db, 'email_sequences')
+        expect(seq.eq).toHaveBeenCalledWith('location_id', 'loc-1')
+        expect(seq.eq).not.toHaveBeenCalledWith('location_id', 'loc-home')
+        const [loc] = builderFor(db, 'locations')
+        expect(loc.eq).toHaveBeenCalledWith('id', 'loc-1')
+        expect(enrolContacts).toHaveBeenCalledTimes(1)
+        expect(enrolContacts).toHaveBeenCalledWith(expect.objectContaining({ sequenceId: 's-corp', contactIds: ['c1'] }))
+      }
+    })
+
+    it('another organisation: refused cross_organisation, no sequence read, nothing enrolled', async () => {
+      for (const result of [CREATE, { action: 'move', from_slug: 'new_lead', to_slug: 'corp_new' }]) {
+        enrolContacts.mockClear()
+        logWarn.mockClear()
+        const db = awayDb({ boardStudioOrg: 'org-2' })
+        createServerClient.mockReturnValue(db)
+        await triggers.triggerSequencesForDealPlacement('c1', result, OPTS)
+        expect(db.from).not.toHaveBeenCalledWith('email_sequences')
+        expect(enrolContacts).not.toHaveBeenCalled()
+        expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_change_skipped', { reason: 'cross_organisation', locationId: 'loc-1' })
+      }
+    })
+
+    it('a legacy board in the same situation still skips cross_location', async () => {
+      const db = awayDb({ board: { id: 'pl-1', location_id: 'loc-1', board_type: null } })
+      createServerClient.mockReturnValue(db)
+      await triggers.triggerSequencesForDealPlacement('c1', { action: 'move', from_slug: 'active_trial', to_slug: 'converted' }, { dealLocationId: 'loc-1', pipelineId: 'pl-1' })
+      expect(enrolContacts).not.toHaveBeenCalled()
+      expect(db.from).not.toHaveBeenCalledWith('email_sequences')
+      expect(logWarn).toHaveBeenCalledWith('sequences', 'stage_trigger_skipped', { reason: 'cross_location', dealLocationId: 'loc-1' })
+    })
+  })
+
   describe('configuredBoardsOnly (the place-now path)', () => {
     it('a legacy-board move enrols nobody and never reads the contact', async () => {
       const db = boardDb({ board: { id: 'pl-1', location_id: 'loc-1', board_type: null }, contact: { id: 'c1', location_id: 'loc-1', pipeline_stage_slug: 'converted' } })
