@@ -61,25 +61,25 @@ const purchase = (id, contactId, over = {}) => ({
 
 describe('splitOfferBoards', () => {
   it('keeps enabled offer boards with a parsed config; skips and reports a bad one', () => {
-    const good = board('reset', { type: 'tag', values: ['VIP'] })
-    const bad = { ...board('broken', { type: 'tag', values: [] }) }
-    const off = { ...board('off', { type: 'tag', values: ['x'] }), enabled: false }
+    const good = board('o_reset', { type: 'tag', values: ['VIP'] })
+    const bad = { ...board('o_broken', { type: 'tag', values: [] }) }
+    const off = { ...board('o_off', { type: 'tag', values: ['x'] }), enabled: false }
     const acq = { id: 'a', key: 'acquisition', module: 'acquisition', board_type: null, enabled: true, config: {} }
     const { descriptors, skipped } = splitOfferBoards([good, bad, off, acq])
-    expect(descriptors.map((b) => b.key)).toEqual(['reset'])
+    expect(descriptors.map((b) => b.key)).toEqual(['o_reset'])
     expect(descriptors[0].entry).toEqual({ type: 'tag', values: ['vip'] })
-    expect(skipped.map((s) => s.key)).toEqual(['broken'])
+    expect(skipped.map((s) => s.key)).toEqual(['o_broken'])
   })
 })
 
 // PIPEBUILD.3g — the trial_purchase entries the €39 claim loaders leave out.
 describe('offerPurchaseEntries / withoutOfferPurchases', () => {
   it('only enabled, parseable trial_purchase offer boards give an entry', () => {
-    const trial = board('reset', { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] })
-    const off = { ...board('off', { type: 'trial_purchase', match: 'plan_code', values: ['OFF'] }), enabled: false }
-    const notOffer = { ...board('nb', { type: 'trial_purchase', match: 'plan_code', values: ['NB'] }), board_type: null }
-    const broken = board('broken', { type: 'trial_purchase', match: 'nope', values: ['X'] })
-    const tag = board('tagged', { type: 'tag', values: ['vip'] })
+    const trial = board('o_reset', { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] })
+    const off = { ...board('o_off', { type: 'trial_purchase', match: 'plan_code', values: ['OFF'] }), enabled: false }
+    const notOffer = { ...board('o_nb', { type: 'trial_purchase', match: 'plan_code', values: ['NB'] }), board_type: null }
+    const broken = board('o_broken', { type: 'trial_purchase', match: 'nope', values: ['X'] })
+    const tag = board('o_tagged', { type: 'tag', values: ['vip'] })
     expect(offerPurchaseEntries([trial, off, notOffer, broken, tag])).toEqual([{ type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }])
     expect(offerPurchaseEntries(null)).toEqual([])
   })
@@ -92,7 +92,7 @@ describe('offerPurchaseEntries / withoutOfferPurchases', () => {
 
 describe('loadOfferClaimsForLocation', () => {
   it('trialPurchaseByPlanCode', async () => {
-    const boards = [board('reset', { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] })]
+    const boards = [board('o_reset', { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] })]
     const { db } = fakeDb({ trial_purchases: [
       purchase('t1', 'c1', { plan_code: 'RESET14' }),
       purchase('t2', 'c2', { plan_code: 'OTHER' }),
@@ -101,42 +101,42 @@ describe('loadOfferClaimsForLocation', () => {
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], now: T0 })
     expect(out.ok).toBe(true)
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
-    expect(out.offersByContact.get('c1').get('reset')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'trial_purchase' })
+    expect(out.offersByContact.get('c1').get('o_reset')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'trial_purchase' })
     expect(out.pending).toEqual([])
   })
   it('trialPurchaseByLandingPath', async () => {
-    const boards = [board('lp', { type: 'trial_purchase', match: 'landing_path', values: ['/50plus'] })]
+    const boards = [board('o_lp', { type: 'trial_purchase', match: 'landing_path', values: ['/50plus'] })]
     const { db } = fakeDb({ trial_purchases: [
       purchase('t1', 'c1', { landing_path: '/50plus' }),
       purchase('t2', 'c2', { landing_path: '/trial' }),
     ] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }], now: T0 })
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
-    expect(out.offersByContact.get('c1').get('lp').end).toBe(T0 + 14 * DAY)
+    expect(out.offersByContact.get('c1').get('o_lp').end).toBe(T0 + 14 * DAY)
   })
   it('boardDurationWins', async () => {
     // The board says 21 days; the purchase row says 7 (and another 14): the board wins.
-    const boards = [board('lp', { type: 'trial_purchase', match: 'landing_path', values: ['/50plus'] }, { duration_days: 21 })]
+    const boards = [board('o_lp', { type: 'trial_purchase', match: 'landing_path', values: ['/50plus'] }, { duration_days: 21 })]
     const { db } = fakeDb({ trial_purchases: [
       purchase('t1', 'c1', { landing_path: '/50plus', duration_days: 7 }),
       purchase('t2', 'c2', { landing_path: '/50plus', duration_days: 14 }),
     ] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }], now: T0 })
-    expect(out.offersByContact.get('c1').get('lp')).toEqual({ start: T0, end: T0 + 21 * DAY, source: 'trial_purchase' })
-    expect(out.offersByContact.get('c2').get('lp').end).toBe(T0 + 21 * DAY)
+    expect(out.offersByContact.get('c1').get('o_lp')).toEqual({ start: T0, end: T0 + 21 * DAY, source: 'trial_purchase' })
+    expect(out.offersByContact.get('c2').get('o_lp').end).toBe(T0 + 21 * DAY)
   })
   it('trialPurchaseByPageId', async () => {
-    const boards = [board('pg', { type: 'trial_purchase', match: 'page_id', values: ['11111111-1111-1111-1111-111111111111'] })]
+    const boards = [board('o_pg', { type: 'trial_purchase', match: 'page_id', values: ['11111111-1111-1111-1111-111111111111'] })]
     const { db } = fakeDb({ trial_purchases: [
       purchase('t1', 'c1', { page_id: '11111111-1111-1111-1111-111111111111', granted_at: null, status: 'queued' }),
       purchase('t2', 'c2', { page_id: '22222222-2222-2222-2222-222222222222' }),
     ] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }], now: T0 })
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
-    expect(out.offersByContact.get('c1').get('pg').start).toBe(T0 - 1000)   // paid_at when never granted
+    expect(out.offersByContact.get('c1').get('o_pg').start).toBe(T0 - 1000)   // paid_at when never granted
   })
   it('corpPromoGranted (the claim starts at created_at, never updated_at)', async () => {
-    const boards = [board('corp', { type: 'corp_promo', values: ['acme'] }, { duration_days: 7 })]
+    const boards = [board('o_corp', { type: 'corp_promo', values: ['acme'] }, { duration_days: 7 })]
     const { db } = fakeDb({ corp_promo_claims: [
       // a later edit moved updated_at on; the window still runs from created_at
       { id: 'k1', location_id: LOC, contact_id: 'c1', promo_key: 'acme', status: 'granted', created_at: iso(T0), updated_at: iso(T0 + 5 * DAY) },
@@ -145,38 +145,38 @@ describe('loadOfferClaimsForLocation', () => {
     ] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], now: T0 })
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
-    expect(out.offersByContact.get('c1').get('corp')).toEqual({ start: T0, end: T0 + 7 * DAY, source: 'corp_promo' })
+    expect(out.offersByContact.get('c1').get('o_corp')).toEqual({ start: T0, end: T0 + 7 * DAY, source: 'corp_promo' })
   })
   it('leadSourceRecordedOnce', async () => {
-    const boards = [board('lead', { type: 'lead_source', values: ['meta_x'] })]
+    const boards = [board('o_lead', { type: 'lead_source', values: ['meta_x'] })]
     const contacts = [{ id: 'c1', last_lead_source: 'META_X', last_lead_source_at: iso(T0 - DAY) }, { id: 'c2', lead_source: 'meta_x' }, { id: 'c3', last_lead_source: 'other' }]
     const first = fakeDb({ pipeline_board_claims: [] })
     const out = await loadOfferClaimsForLocation(first.db, { locationId: LOC, boards, contacts, now: T0 })
     expect(out.pending).toEqual([
-      { contact_id: 'c1', board_key: 'lead', claimed_at: iso(T0 - DAY), source: 'lead_source' },
-      { contact_id: 'c2', board_key: 'lead', claimed_at: iso(T0), source: 'lead_source' },
+      { contact_id: 'c1', board_key: 'o_lead', claimed_at: iso(T0 - DAY), source: 'lead_source' },
+      { contact_id: 'c2', board_key: 'o_lead', claimed_at: iso(T0), source: 'lead_source' },
     ])
-    expect(out.offersByContact.get('c1').get('lead')).toEqual({ start: T0 - DAY, end: T0 - DAY + 14 * DAY, source: 'lead_source' })
+    expect(out.offersByContact.get('c1').get('o_lead')).toEqual({ start: T0 - DAY, end: T0 - DAY + 14 * DAY, source: 'lead_source' })
     // Second run: stored claims exist, nothing pending, claim unchanged.
     const second = fakeDb({ pipeline_board_claims: [
-      { contact_id: 'c1', location_id: LOC, board_key: 'lead', claimed_at: iso(T0 - DAY), source: 'lead_source' },
-      { contact_id: 'c2', location_id: LOC, board_key: 'lead', claimed_at: iso(T0), source: 'lead_source' },
+      { contact_id: 'c1', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0 - DAY), source: 'lead_source' },
+      { contact_id: 'c2', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0), source: 'lead_source' },
     ] })
     const again = await loadOfferClaimsForLocation(second.db, { locationId: LOC, boards, contacts, now: T0 + 3 * DAY })
     expect(again.pending).toEqual([])
-    expect(again.offersByContact.get('c1').get('lead').start).toBe(T0 - DAY)
+    expect(again.offersByContact.get('c1').get('o_lead').start).toBe(T0 - DAY)
     expect(second.writes).toEqual([])
   })
   it('glofoxPlanRecorded', async () => {
-    const boards = [board('plan', { type: 'glofox_plan', values: ['elites trial'] })]
+    const boards = [board('o_plan', { type: 'glofox_plan', values: ['elites trial'] })]
     const { db } = fakeDb({ pipeline_board_claims: [] })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1', glofox_membership_plan: 'The Elites Trial' }, { id: 'c2', glofox_membership_plan: 'Elite Membership' }], now: T0 })
-    expect(out.pending).toEqual([{ contact_id: 'c1', board_key: 'plan', claimed_at: iso(T0), source: 'glofox_plan' }])
-    expect(out.offersByContact.get('c1').get('plan')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'glofox_plan' })
+    expect(out.pending).toEqual([{ contact_id: 'c1', board_key: 'o_plan', claimed_at: iso(T0), source: 'glofox_plan' }])
+    expect(out.offersByContact.get('c1').get('o_plan')).toEqual({ start: T0, end: T0 + 14 * DAY, source: 'glofox_plan' })
     expect(out.offersByContact.has('c2')).toBe(false)
   })
   it('tagRecorded', async () => {
-    const boards = [board('tagged', { type: 'tag', values: ['vip'] })]
+    const boards = [board('o_tagged', { type: 'tag', values: ['vip'] })]
     const { db } = fakeDb({
       pipeline_board_claims: [],
       contact_tags: [
@@ -186,24 +186,24 @@ describe('loadOfferClaimsForLocation', () => {
       ],
     })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], now: T0 })
-    expect(out.pending).toEqual([{ contact_id: 'c1', board_key: 'tagged', claimed_at: iso(T0 - 2 * DAY), source: 'tag' }])
-    expect(out.offersByContact.get('c1').get('tagged').start).toBe(T0 - 2 * DAY)
+    expect(out.pending).toEqual([{ contact_id: 'c1', board_key: 'o_tagged', claimed_at: iso(T0 - 2 * DAY), source: 'tag' }])
+    expect(out.offersByContact.get('c1').get('o_tagged').start).toBe(T0 - 2 * DAY)
     expect([...out.offersByContact.keys()]).toEqual(['c1'])
   })
   it('anyLoaderFailureFailsAll', async () => {
     const boards = [
-      board('a', { type: 'trial_purchase', match: 'plan_code', values: ['X'] }),
-      board('b', { type: 'corp_promo', values: ['acme'] }),
+      board('o_a', { type: 'trial_purchase', match: 'plan_code', values: ['X'] }),
+      board('o_b', { type: 'corp_promo', values: ['acme'] }),
     ]
     const { db } = fakeDb({ trial_purchases: [purchase('t1', 'c1', { plan_code: 'X' })] }, { errors: { corp_promo_claims: 'boom' } })
     const out = await loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [{ id: 'c1' }], now: T0 })
     expect(out).toMatchObject({ ok: false, reason: 'promos_unreadable' })
     expect(out.offersByContact).toBeUndefined()
     const tags = fakeDb({ pipeline_board_claims: [] }, { errors: { contact_tags: 'boom' } })
-    expect(await loadOfferClaimsForLocation(tags.db, { locationId: LOC, boards: [board('t', { type: 'tag', values: ['vip'] })], contacts: [{ id: 'c1' }], now: T0 }))
+    expect(await loadOfferClaimsForLocation(tags.db, { locationId: LOC, boards: [board('o_t', { type: 'tag', values: ['vip'] })], contacts: [{ id: 'c1' }], now: T0 }))
       .toMatchObject({ ok: false, reason: 'tags_unreadable' })
     const claims = fakeDb({}, { errors: { pipeline_board_claims: 'boom' } })
-    expect(await loadOfferClaimsForLocation(claims.db, { locationId: LOC, boards: [board('l', { type: 'lead_source', values: ['x'] })], contacts: [{ id: 'c1' }], now: T0 }))
+    expect(await loadOfferClaimsForLocation(claims.db, { locationId: LOC, boards: [board('o_l', { type: 'lead_source', values: ['x'] })], contacts: [{ id: 'c1' }], now: T0 }))
       .toMatchObject({ ok: false, reason: 'claims_unreadable' })
   })
   it('noOfferBoardsNoReads', async () => {
@@ -214,7 +214,7 @@ describe('loadOfferClaimsForLocation', () => {
     expect(reads).toEqual([])
     // and only the table an active entry type uses is read
     const one = fakeDb({ corp_promo_claims: [] })
-    await loadOfferClaimsForLocation(one.db, { locationId: LOC, boards: [board('b', { type: 'corp_promo', values: ['acme'] })], contacts: [{ id: 'c1' }], now: T0 })
+    await loadOfferClaimsForLocation(one.db, { locationId: LOC, boards: [board('o_b', { type: 'corp_promo', values: ['acme'] })], contacts: [{ id: 'c1' }], now: T0 })
     expect(one.reads).toEqual(['corp_promo_claims'])
   })
 })
@@ -224,15 +224,15 @@ describe('recorded renewal windows', () => {
   const C = T0
   const touch = (at) => ({ id: 'c1', last_lead_source: 'meta_x', last_lead_source_at: iso(at) })
   const run = (extra, touchAt, nowAt) => {
-    const boards = [board('lead', { type: 'lead_source', values: ['meta_x'] }, extra)]
-    const { db } = fakeDb({ pipeline_board_claims: stored('lead', C) })
+    const boards = [board('o_lead', { type: 'lead_source', values: ['meta_x'] }, extra)]
+    const { db } = fakeDb({ pipeline_board_claims: stored('o_lead', C) })
     return loadOfferClaimsForLocation(db, { locationId: LOC, boards, contacts: [touch(touchAt)], now: nowAt })
   }
   it('lapsedLeadSourceRenewed (default windows)', async () => {
     // claim +14d end, +60d quiet -> live until C+74d; a touch at C+80d renews.
     const out = await run({}, C + 80 * DAY, C + 81 * DAY)
     expect(out.pending).toHaveLength(1)
-    expect(out.offersByContact.get('c1').get('lead').start).toBe(C + 80 * DAY)
+    expect(out.offersByContact.get('c1').get('o_lead').start).toBe(C + 80 * DAY)
   })
   it('recordedRenewalUsesBoardWindows', async () => {
     // quiet_days 30: live until C+44d, so a touch at C+84d (40d after it lapsed) renews.
@@ -241,13 +241,13 @@ describe('recorded renewal windows', () => {
     // quiet_days 90: still live until C+104d, the same touch must NOT renew.
     const long = await run({ quiet_days: 90 }, C + 84 * DAY, C + 85 * DAY)
     expect(long.pending).toEqual([])
-    expect(long.offersByContact.get('c1').get('lead').start).toBe(C)
+    expect(long.offersByContact.get('c1').get('o_lead').start).toBe(C)
   })
 })
 
 describe('loadOfferClaimsForContact', () => {
   it('returns this contact\'s offers and records a pending claim when write is true', async () => {
-    const boards = [board('lead', { type: 'lead_source', values: ['meta_x'] }), board('reset', { type: 'trial_purchase', match: 'plan_code', values: ['R'] })]
+    const boards = [board('o_lead', { type: 'lead_source', values: ['meta_x'] }), board('o_reset', { type: 'trial_purchase', match: 'plan_code', values: ['R'] })]
     const { db, writes } = fakeDb({
       pipeline_board_claims: [],
       trial_purchases: [purchase('t1', 'c1', { plan_code: 'R' }), purchase('t2', 'c9', { plan_code: 'R' })],
@@ -255,16 +255,16 @@ describe('loadOfferClaimsForContact', () => {
     const contact = { id: 'c1', last_lead_source: 'meta_x', last_lead_source_at: iso(T0) }
     const out = await loadOfferClaimsForContact(db, { locationId: LOC, boards, contact, now: T0, write: true })
     expect(out.ok).toBe(true)
-    expect([...out.offers.keys()].sort()).toEqual(['lead', 'reset'])
+    expect([...out.offers.keys()].sort()).toEqual(['o_lead', 'o_reset'])
     expect(writes).toHaveLength(1)
-    expect(writes[0].rows[0]).toMatchObject({ contact_id: 'c1', board_key: 'lead', source: 'lead_source' })
+    expect(writes[0].rows[0]).toMatchObject({ contact_id: 'c1', board_key: 'o_lead', source: 'lead_source' })
     const dry = fakeDb({ pipeline_board_claims: [] })
     await loadOfferClaimsForContact(dry.db, { locationId: LOC, boards: [boards[0]], contact, now: T0, write: false })
     expect(dry.writes).toEqual([])
   })
   it('a failed read is reported', async () => {
     const { db } = fakeDb({}, { errors: { trial_purchases: 'boom' } })
-    const out = await loadOfferClaimsForContact(db, { locationId: LOC, boards: [board('r', { type: 'trial_purchase', match: 'plan_code', values: ['R'] })], contact: { id: 'c1' }, now: T0, write: false })
+    const out = await loadOfferClaimsForContact(db, { locationId: LOC, boards: [board('o_r', { type: 'trial_purchase', match: 'plan_code', values: ['R'] })], contact: { id: 'c1' }, now: T0, write: false })
     expect(out).toMatchObject({ ok: false, reason: 'purchases_unreadable' })
   })
 })
@@ -277,7 +277,7 @@ describe('programmeClaimsUnchanged', () => {
     ])
     const { db } = fakeDb({ trial_purchases: [], pipeline_board_claims: [
       { contact_id: 'c1', location_id: LOC, board_key: 'programmes', claimed_at: iso(T0), source: 'lead_source' },
-      { contact_id: 'c1', location_id: LOC, board_key: 'lead', claimed_at: iso(T0 + 5), source: 'lead_source' },
+      { contact_id: 'c1', location_id: LOC, board_key: 'o_lead', claimed_at: iso(T0 + 5), source: 'lead_source' },
     ] })
     const out = await loadClaimsForLocation(db, { locationId: LOC, contactIds: new Set(['c1']), now: T0 })
     expect(out.programmeByContact.get('c1')).toEqual({ claimedAt: T0, source: 'lead_source' })

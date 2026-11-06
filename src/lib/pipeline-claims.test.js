@@ -246,10 +246,10 @@ describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
   const CORP = {
-    id: 'p3', location_id: LOC, key: 'corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 10,
+    id: 'p3', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 10,
     config: {
       entry: { type: 'corp_promo', values: ['acme'] },
-      stages: [{ role: 'new', slug: 'corp_new', name: 'New' }, { role: 'converted', slug: 'corp_converted', name: 'Converted' }],
+      stages: [{ role: 'new', slug: 'o_corp_new', name: 'New' }, { role: 'converted', slug: 'o_corp_converted', name: 'Converted' }],
       duration_days: 14,
     },
   }
@@ -267,7 +267,7 @@ describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
     expect(out.claims.paid).toBeNull()
     expect(out.claims.programme).toBeNull()
     expect(out.claims.offers).toBeInstanceOf(Map)
-    expect(out.claims.offers.get('corp')).toMatchObject({ start: T0, source: 'corp_promo' })
+    expect(out.claims.offers.get('o_corp')).toMatchObject({ start: T0, source: 'corp_promo' })
   })
 
   it('beside a €39 board both kinds are read', async () => {
@@ -278,7 +278,7 @@ describe('loadPlacementClaims — offer boards (PIPEBUILD.3e)', () => {
     })
     const out = await loadPlacementClaims(db, { locationId: LOC, contactId: 'c1', contact, now: T0 })
     expect(out.claims.paid).toMatchObject({ start: T0 })
-    expect(out.claims.offers.get('corp')).toMatchObject({ start: T0 })
+    expect(out.claims.offers.get('o_corp')).toMatchObject({ start: T0 })
   })
 
   it('without an offer board the claims keep today\'s shape (no offers key)', async () => {
@@ -317,14 +317,14 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
   const RESET = {
-    id: 'p3', location_id: LOC, key: 'reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    id: 'p3', location_id: LOC, key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
     config: {
       entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
-      stages: [{ role: 'new', slug: 'reset_new', name: 'New' }, { role: 'converted', slug: 'reset_converted', name: 'Converted' }],
+      stages: [{ role: 'new', slug: 'o_reset_new', name: 'New' }, { role: 'converted', slug: 'o_reset_converted', name: 'Converted' }],
       duration_days: 10,
     },
   }
-  const TAGGED = { ...RESET, id: 'p4', key: 'tagged', config: { ...RESET.config, entry: { type: 'tag', values: ['vip'] } } }
+  const TAGGED = { ...RESET, id: 'p4', key: 'o_tagged', config: { ...RESET.config, entry: { type: 'tag', values: ['vip'] } } }
   const buy = (id, contactId, planCode, at = T0) => ({
     id, location_id: LOC, contact_id: contactId, status: 'granted', payment_status: 'paid',
     paid_at: iso(at), granted_at: iso(at), duration_days: 14, plan_code: planCode, landing_path: null, page_id: null,
@@ -353,7 +353,7 @@ describe('offer-matched purchases are not €39 paid claims (PIPEBUILD.3g)', () 
     const res = await loadPlacementClaims(placed.db, { locationId: LOC, contactId: 'c1', contact, now: T0, write: false })
     expect(res.ok).toBe(true)
     expect(res.claims.paid).toBeNull()
-    expect(res.claims.offers.get('reset')).toMatchObject({ start: T0, end: T0 + 10 * 86_400_000, source: 'trial_purchase' })
+    expect(res.claims.offers.get('o_reset')).toMatchObject({ start: T0, end: T0 + 10 * 86_400_000, source: 'trial_purchase' })
     expect(res.purchasePaid).toMatchObject({ start: T0 })
   })
 
@@ -408,14 +408,14 @@ describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {
   const ACQ = { id: 'p1', location_id: LOC, key: 'acquisition', module: 'acquisition', mode: 'derived', enabled: true, is_primary: true, board_type: null }
   const PAID = { id: 'p2', location_id: LOC, key: 'paid_trial', module: 'paid_trial', mode: 'derived', enabled: true, is_primary: false, board_type: null }
   const RESET = {
-    id: 'p3', location_id: LOC, key: 'reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    id: 'p3', location_id: LOC, key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
     config: {
       entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
-      stages: [{ role: 'new', slug: 'reset_new', name: 'New' }, { role: 'converted', slug: 'reset_converted', name: 'Converted' }],
+      stages: [{ role: 'new', slug: 'o_reset_new', name: 'New' }, { role: 'converted', slug: 'o_reset_converted', name: 'Converted' }],
       duration_days: 90,
     },
   }
-  const CORP = { ...RESET, id: 'p4', key: 'corp', config: { ...RESET.config, entry: { type: 'corp_promo', values: ['acme'] } } }
+  const CORP = { ...RESET, id: 'p4', key: 'o_corp', config: { ...RESET.config, entry: { type: 'corp_promo', values: ['acme'] } } }
   const buy = (at, planCode = 'RESET14') => ({
     id: 't1', location_id: LOC, contact_id: 'c1', status: 'granted', payment_status: 'paid',
     paid_at: iso(at), granted_at: iso(at), duration_days: 14, plan_code: planCode, landing_path: null, page_id: null,
@@ -474,7 +474,7 @@ describe('PIPEBUILD.3h — unreadable source and the pack guard', () => {
     // the €39 claim over every purchase lapsed at day 74 (14 + 60 quiet)…
     expect(placementPackGuard({ ...out, claims: { ...out.claims, offers: new Map() } }, contact, now)).toBe(false)
     // …the offer claim (90 days) is live: the guard holds
-    expect(out.claims.offers.get('reset')).toMatchObject({ start: T0, end: T0 + 90 * DAY })
+    expect(out.claims.offers.get('o_reset')).toMatchObject({ start: T0, end: T0 + 90 * DAY })
     expect(placementPackGuard(out, contact, now)).toBe(true)
     // past the offer's own quiet window it lapses too
     expect(placementPackGuard(out, contact, T0 + 151 * DAY)).toBe(false)

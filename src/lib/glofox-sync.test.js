@@ -2963,10 +2963,10 @@ describe('applyMemberSync — pack stamp beside a trial_purchase offer board (PI
   const at = new Date(Date.now() - 2 * 86_400_000).toISOString()
   const granted = { id: 'tp1', location_id: 'stillorgan', contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: at, granted_at: at, duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null }
   const RESET = {
-    id: 'p-reset', key: 'reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
+    id: 'p-reset', key: 'o_reset', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', priority: 50,
     config: {
       entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] },
-      stages: [{ role: 'new', slug: 'reset_new', name: 'New' }, { role: 'converted', slug: 'reset_converted', name: 'Converted' }],
+      stages: [{ role: 'new', slug: 'o_reset_new', name: 'New' }, { role: 'converted', slug: 'o_reset_converted', name: 'Converted' }],
     },
   }
   const pipelines = [
@@ -3091,19 +3091,19 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
   const CORP_CONFIG = {
     entry: { type: 'corp_promo', values: ['acme'] },
     stages: [
-      { role: 'new', slug: 'corp_new', name: 'New' },
-      { role: 'first_class', slug: 'corp_first_class', name: 'First class' },
-      { role: 'done', slug: 'corp_done', name: 'Done' },
-      { role: 'converted', slug: 'corp_converted', name: 'Converted' },
+      { role: 'new', slug: 'o_corp_new', name: 'New' },
+      { role: 'first_class', slug: 'o_corp_first_class', name: 'First class' },
+      { role: 'done', slug: 'o_corp_done', name: 'Done' },
+      { role: 'converted', slug: 'o_corp_converted', name: 'Converted' },
     ],
     duration_days: 14,
   }
-  const CORP = { id: 'p-corp', location_id: LOC, key: 'corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
+  const CORP = { id: 'p-corp', location_id: LOC, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
   const STAGES = [
     ...['new_lead', 'first_class', 'pack_member', 'dormant', 'member', 'cold_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq' })),
     ...['paid_trial_new_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid' })),
     ...['programme_lead'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-prog' })),
-    ...['corp_new', 'corp_first_class', 'corp_done', 'corp_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-corp' })),
+    ...['o_corp_new', 'o_corp_first_class', 'o_corp_done', 'o_corp_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-corp' })),
   ]
   const RULES = { pipelines: { programmes: { lead_sources: ['meta_50plus'], glofox_plan_patterns: [] } } }
 
@@ -3189,9 +3189,9 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
     it('a granted corp promo with no deal: a deal on the Corp board at its entry stage', async () => {
       const { db, writes } = offerDb({ pipelines: [ACQ, PAID, PROG, CORP], promos: [promo] })
       const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
-      expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'corp_new', pipeline_id: 'p-corp' })
+      expect(out).toMatchObject({ action: 'create', deal_id: 'd-new', stage_slug: 'o_corp_new', pipeline_id: 'p-corp' })
       const insert = writes.find((w) => w.table === 'deals' && w.op === 'insert')
-      expect(insert.payload).toMatchObject({ contact_id: 'c1', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: LOC })
+      expect(insert.payload).toMatchObject({ contact_id: 'c1', stage_id: 's-o_corp_new', pipeline_id: 'p-corp', location_id: LOC })
     })
 
     it('an acquisition deal moves onto the Corp board: stage AND pipeline in one update, boards named by key', async () => {
@@ -3202,19 +3202,19 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
       })
       const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead')
       expect(out).toEqual({
-        action: 'move', deal_id: 'd1', from_slug: 'new_lead', to_slug: 'corp_new',
-        pipeline_id: 'p-corp', location_id: LOC, from_board: 'acquisition', to_board: 'corp',
+        action: 'move', deal_id: 'd1', from_slug: 'new_lead', to_slug: 'o_corp_new',
+        pipeline_id: 'p-corp', location_id: LOC, from_board: 'acquisition', to_board: 'o_corp',
       })
       const updates = writes.filter((w) => w.table === 'deals' && w.op === 'update')
       expect(updates).toHaveLength(1)
-      expect(updates[0].payload).toEqual({ stage_id: 's-corp_new', pipeline_id: 'p-corp' })
+      expect(updates[0].payload).toEqual({ stage_id: 's-o_corp_new', pipeline_id: 'p-corp' })
     })
 
     it('pre-loaded claims carrying offers (the webhook path) place on the offer board with no claim reads', async () => {
       const { db, reads } = offerDb({ pipelines: [ACQ, CORP] })
-      const offers = new Map([['corp', { start: NOW - 86_400_000, end: NOW + 13 * 86_400_000, source: 'corp_promo' }]])
+      const offers = new Map([['o_corp', { start: NOW - 86_400_000, end: NOW + 13 * 86_400_000, source: 'corp_promo' }]])
       const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead', { boards: [ACQ, CORP], claims: { paid: null, programme: null, offers } })
-      expect(out).toMatchObject({ action: 'create', stage_slug: 'corp_new', pipeline_id: 'p-corp' })
+      expect(out).toMatchObject({ action: 'create', stage_slug: 'o_corp_new', pipeline_id: 'p-corp' })
       expect(reads).not.toContain('corp_promo_claims')
     })
 
@@ -3227,7 +3227,7 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
     it('offers unknown (pre-loaded claims without offers): a person on the offer board is left alone, never drained', async () => {
       const { db, writes } = offerDb({
         pipelines: [ACQ, CORP],
-        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-corp_new', status: 'open' }],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-o_corp_new', status: 'open' }],
       })
       const out = await ensureDealForContact(db, LOC, 'c1', lead, 'Corp Lead', { boards: [ACQ, CORP], claims: { paid: null, programme: null } })
       expect(out).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'held_board' })
@@ -3239,7 +3239,7 @@ describe('ensureDealForContact — boards by key, and offer boards (PIPEBUILD.3e
       const held = offerDb({
         pipelines: [ACQ, BROKEN],
         promos: [promo],
-        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-corp_new', status: 'open' }],
+        deals: [{ id: 'd1', contact_id: 'c1', location_id: LOC, pipeline_id: 'p-corp', stage_id: 's-o_corp_new', status: 'open' }],
       })
       expect(await ensureDealForContact(held.db, LOC, 'c1', lead, 'Corp Lead')).toMatchObject({ action: 'leave', deal_id: 'd1', reason: 'held_board' })
       expect(held.writes.filter((w) => w.table === 'deals')).toHaveLength(0)

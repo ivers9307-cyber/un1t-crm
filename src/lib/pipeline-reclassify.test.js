@@ -1841,19 +1841,19 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
   const CORP_CONFIG = {
     entry: { type: 'lead_source', values: ['corp_x'] },
     stages: [
-      { role: 'new', slug: 'corp_new', name: 'New' },
-      { role: 'first_class', slug: 'corp_first_class', name: 'First class' },
-      { role: 'done', slug: 'corp_done', name: 'Done' },
-      { role: 'converted', slug: 'corp_converted', name: 'Converted' },
+      { role: 'new', slug: 'o_corp_new', name: 'New' },
+      { role: 'first_class', slug: 'o_corp_first_class', name: 'First class' },
+      { role: 'done', slug: 'o_corp_done', name: 'Done' },
+      { role: 'converted', slug: 'o_corp_converted', name: 'Converted' },
     ],
     duration_days: 14,
   }
-  const CORP = { id: 'p-corp', location_id: STILL, key: 'corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
+  const CORP = { id: 'p-corp', location_id: STILL, key: 'o_corp', module: 'offer', mode: 'derived', enabled: true, is_primary: false, board_type: 'offer', config: CORP_CONFIG, priority: 10 }
   const ACQ_STAGES = ['new_lead', 'first_class', 'second_class', 'trial_done', 'converted', 'member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant']
     .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-acq', location_id: STILL }))
   const PAID_STAGES = ['paid_trial_new_lead', 'paid_trial_first_class', 'paid_trial_day_7', 'paid_trial_done', 'paid_trial_converted']
     .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-paid', location_id: STILL }))
-  const CORP_STAGES = ['corp_new', 'corp_first_class', 'corp_done', 'corp_converted']
+  const CORP_STAGES = ['o_corp_new', 'o_corp_first_class', 'o_corp_done', 'o_corp_converted']
     .map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-corp', location_id: STILL }))
 
   // A corp lead from yesterday, no class yet: Corp New.
@@ -1956,35 +1956,35 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const claimWrites = rec.writesTo('pipeline_board_claims')
     expect(claimWrites).toHaveLength(1)
     const upsert = rec.argOf(claimWrites[0], 'upsert')
-    expect(upsert[1].map((r) => [r.contact_id, r.board_key, r.source]).sort()).toEqual([['c-move', 'corp', 'lead_source'], ['c-new', 'corp', 'lead_source']])
+    expect(upsert[1].map((r) => [r.contact_id, r.board_key, r.source]).sort()).toEqual([['c-move', 'o_corp', 'lead_source'], ['c-new', 'o_corp', 'lead_source']])
     const firstDealWrite = rec.calls.findIndex((e) => e[0] === 'deals' && (rec.argOf(e, 'update') || rec.argOf(e, 'insert')))
     expect(rec.calls.indexOf(claimWrites[0])).toBeLessThan(firstDealWrite)
 
     const updates = rec.writesTo('deals').filter((e) => rec.argOf(e, 'update'))
     expect(updates).toHaveLength(1)
-    expect(rec.argOf(updates[0], 'update')[1]).toEqual({ stage_id: 's-corp_first_class', pipeline_id: 'p-corp' })
+    expect(rec.argOf(updates[0], 'update')[1]).toEqual({ stage_id: 's-o_corp_first_class', pipeline_id: 'p-corp' })
     expect(rec.argOf(updates[0], 'in')).toEqual(['in', 'id', ['d-move']])
     // A firing board: the move is guarded on open and returns the ids it changed.
     expect(rec.argOf(updates[0], 'eq')).toEqual(['eq', 'status', 'open'])
 
     const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert'))
     expect(inserts).toHaveLength(1)
-    expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' })
+    expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', stage_id: 's-o_corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' })
 
     // The legacy claim tables are not read for an offer-only studio.
     expect(rec.tables()).not.toContain('trial_purchases')
     expect(out).toMatchObject({
       ok: true, input_source: 'contacts', deals_moved: 1, deals_created: 1, boards_moved: 1, errors: 0, claims_pending: 2,
-      movement_matrix: { new_lead: { corp_first_class: 1 }, '': { corp_new: 1 } },
+      movement_matrix: { new_lead: { o_corp_first_class: 1 }, '': { o_corp_new: 1 } },
     })
   })
 
-  it('offerCreatesFireNullToSlug: a Corp create fires null → corp_new after the insert, the move fires from its old stage; a failed insert fires nothing', async () => {
+  it('offerCreatesFireNullToSlug: a Corp create fires null → o_corp_new after the insert, the move fires from its old stage; a failed insert fires nothing', async () => {
     const rec = recordingDb(corpFixtures())
     await reclassifyAllContacts(rec.db, { locationId: STILL })
     expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual(expect.arrayContaining([
-      ['c-new', null, 'corp_new', { locationId: STILL }],
-      ['c-move', 'new_lead', 'corp_first_class', { locationId: STILL }],
+      ['c-new', null, 'o_corp_new', { locationId: STILL }],
+      ['c-move', 'new_lead', 'o_corp_first_class', { locationId: STILL }],
     ]))
     expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(2)
 
@@ -1993,7 +1993,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const out = await reclassifyAllContacts(failing.db, { locationId: STILL })
     expect(out).toMatchObject({ deals_created: 0, errors: 1 })
     expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual([
-      ['c-move', 'new_lead', 'corp_first_class', { locationId: STILL }],
+      ['c-move', 'new_lead', 'o_corp_first_class', { locationId: STILL }],
     ])
   })
 
@@ -2021,14 +2021,14 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const heldOut = await reclassifyAllContacts(held.db, { locationId: STILL })
     expect(heldOut).toMatchObject({ ok: true, deals_created: 30, deals_moved: 21 })
     expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
-    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'stage trigger held: mass move', expect.objectContaining({ to_slug: 'corp_new', moves: 51, limit: 50 }))
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'stage trigger held: mass move', expect.objectContaining({ to_slug: 'o_corp_new', moves: 51, limit: 50 }))
 
     vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
     const fires = recordingDb(build(30, 20))
     await reclassifyAllContacts(fires.db, { locationId: STILL })
     expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledTimes(50)
-    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-cr-00', null, 'corp_new', { locationId: STILL })
-    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-mv-00', 'new_lead', 'corp_new', { locationId: STILL })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-cr-00', null, 'o_corp_new', { locationId: STILL })
+    expect(triggerSequencesForPipelineStageChange).toHaveBeenCalledWith('c-mv-00', 'new_lead', 'o_corp_new', { locationId: STILL })
   })
 
   it('silentBoardFiresNothing: a silent board still places (create + move) but no follow-up starts; the €39 board beside it still fires', async () => {
@@ -2042,7 +2042,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL, silentBoardIds: ['p-corp'] })
     expect(out).toMatchObject({ ok: true, deals_created: 1, deals_moved: 2, boards_moved: 1 })
     const inserts = rec.writesTo('deals').filter((e) => rec.argOf(e, 'insert'))
-    expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp' })
+    expect(rec.argOf(inserts[0], 'insert')[1]).toMatchObject({ contact_id: 'c-new', stage_id: 's-o_corp_new', pipeline_id: 'p-corp' })
     expect(vi.mocked(triggerSequencesForPipelineStageChange).mock.calls).toEqual([
       ['c-buyer', 'paid_trial_first_class', 'paid_trial_day_7', { locationId: STILL }],
     ])
@@ -2051,8 +2051,8 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
   it('offerMatchedPurchaseNotAPaidClaim (nightly): a trial_purchase offer board\'s buyer is never placed on the €39 board', async () => {
     // The offer board sorts AFTER the €39 board (250 > 200): were the purchase
     // also a €39 paid claim, the buyer would land on the €39 board.
-    const RESET = { ...CORP, id: 'p-reset', key: 'reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
-    const RESET_STAGES = ['reset_new', 'reset_first_class', 'reset_done', 'reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
+    const RESET = { ...CORP, id: 'p-reset', key: 'o_reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
+    const RESET_STAGES = ['o_reset_new', 'o_reset_first_class', 'o_reset_done', 'o_reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
     const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
     const eur39 = { id: 'c-39', name: 'Buyer39', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
     const rec = recordingDb(corpFixtures({
@@ -2064,7 +2064,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       ],
     }))
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
-    expect(out).toMatchObject({ ok: true, board_histogram: { reset: 1, paid_trial: 1 } })
+    expect(out).toMatchObject({ ok: true, board_histogram: { o_reset: 1, paid_trial: 1 } })
   })
 
   it('offerClaimReadFailureFailsRun: an unreadable pipeline_board_claims read fails the run before any write', async () => {
@@ -2104,7 +2104,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     expect(rec.calls.filter((e) => e.some((x) => Array.isArray(x) && ['update', 'insert', 'upsert'].includes(x[0])))).toHaveLength(0)
     expect(out).toMatchObject({
       ok: true, deals_moved: 1, deals_created: 1, claims_pending: 2,
-      board_histogram: { corp: 2 }, stage_histogram: { corp_new: 1, corp_first_class: 1 },
+      board_histogram: { o_corp: 2 }, stage_histogram: { o_corp_new: 1, o_corp_first_class: 1 },
     })
     expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
 
@@ -2127,11 +2127,11 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const broken = { ...CORP, config: { entry: { type: 'nope' } } }
     const rec = recordingDb(corpFixtures({
       pipelines: [ACQ, broken],
-      deals: [{ id: 'd-new', contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
+      deals: [{ id: 'd-new', contact_id: 'c-new', stage_id: 's-o_corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
       contacts: [corpNew('c-new')],
     }))
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
-    expect(out).toMatchObject({ ok: true, deals_moved: 0, deals_created: 0, deals_held: 1, pipelines_skipped: ['corp'] })
+    expect(out).toMatchObject({ ok: true, deals_moved: 0, deals_created: 0, deals_held: 1, pipelines_skipped: ['o_corp'] })
     // Its deals are read (so its people are recognised), its stages are not targets.
     const dealsRead = rec.calls.find((e) => e[0] === 'deals' && rec.argOf(e, 'select'))
     expect(rec.argOf(dealsRead, 'in')).toEqual(['in', 'pipeline_id', ['p-acq', 'p-corp']])
@@ -2151,8 +2151,8 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       locations: [{ id: HATCH, membership_source: 'un1t_online' }],
     })
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
-    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['corp'], board_histogram: { acquisition: 1 } })
-    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['o_corp'], board_histogram: { acquisition: 1 } })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_corp', reason: 'un1t_online_studio' }))
   })
 
   it('an offer board beside a un1t board at a studio not labelled un1t.online is still refused (mixed_input_sources)', async () => {
@@ -2165,8 +2165,8 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       locations: [{ id: HATCH, membership_source: 'none' }],
     })
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
-    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['corp'] })
-    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'mixed_input_sources' }))
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['o_corp'] })
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_corp', reason: 'mixed_input_sources' }))
   })
 
   it('unreadableSourceWithTrialPurchaseOffer at a un1t-boards studio keeps its answer: the offer board is refused, the un1t boards still run', async () => {
@@ -2174,12 +2174,12 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       contacts: [{ id: 'c-l', name: 'L', email: null, location_id: HATCH }],
       snapshots: [['c-l', leadSnap()]],
     })))
-    const RESET = { ...CORP, location_id: HATCH, id: 'p-reset', key: 'reset', config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] } } }
+    const RESET = { ...CORP, location_id: HATCH, id: 'p-reset', key: 'o_reset', config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] } } }
     const rec = recordingDb({
       pipelines: [HATCH_PIPELINES[0], RESET], pipeline_stages: HATCH_STAGES, deals: [],
     }, { errors: { locations: 'locations down' } })
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH, dryRun: true })
-    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['reset'] })
+    expect(out).toMatchObject({ ok: true, input_source: 'un1t_online', pipelines_skipped: ['o_reset'] })
   })
 
   it('offerBoardRefusedAtUn1tStudioAlone: a un1t.online studio with ONLY an offer board enabled reads no contacts, writes nothing, fires nothing', async () => {
@@ -2190,7 +2190,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
       locations: [{ id: HATCH, membership_source: 'un1t_online' }],
     })
     const out = await reclassifyAllContacts(rec.db, { locationId: HATCH })
-    expect(out).toMatchObject({ ok: true, contacts_seen: 0, deals_created: 0, pipelines_skipped: ['corp'] })
+    expect(out).toMatchObject({ ok: true, contacts_seen: 0, deals_created: 0, pipelines_skipped: ['o_corp'] })
     expect(rec.tables()).not.toContain('contacts')
     expect(rec.tables()).not.toContain('pipeline_board_claims')
     expect(rec.writesTo('deals')).toHaveLength(0)
@@ -2198,14 +2198,14 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     expect(membershipReadsFor).not.toHaveBeenCalled()
     const locRead = rec.calls.find((e) => e[0] === 'locations')
     expect(locRead).toEqual(['locations', ['select', 'membership_source'], ['eq', 'id', HATCH], ['maybeSingle']])
-    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'un1t_online_studio' }))
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_corp', reason: 'un1t_online_studio' }))
   })
 
   it('unreadableSourceWithTrialPurchaseOfferPlacesNobody (nightly): an unreadable membership_source beside a trial_purchase offer board fails the run before any claim, contact or deal is touched', async () => {
     // Held, the offer board would leave the buyer's purchase in the €39 claim
     // and the €39 board (sorted ahead at 200) would take them.
-    const RESET = { ...CORP, id: 'p-reset', key: 'reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
-    const RESET_STAGES = ['reset_new', 'reset_first_class', 'reset_done', 'reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
+    const RESET = { ...CORP, id: 'p-reset', key: 'o_reset', priority: 250, config: { ...CORP_CONFIG, entry: { type: 'trial_purchase', match: 'plan_code', values: ['RESET14'] }, stages: CORP_CONFIG.stages.map((st) => ({ ...st, slug: st.slug.replace('corp_', 'reset_') })) } }
+    const RESET_STAGES = ['o_reset_new', 'o_reset_first_class', 'o_reset_done', 'o_reset_converted'].map((slug) => ({ id: `s-${slug}`, slug, pipeline_id: 'p-reset', location_id: STILL }))
     const buyer = { id: 'c-buyer', name: 'Buyer', email: null, glofox_membership_status: 'trial', joined_at: ago(2), created_at: ago(2), recent_bookings: [] }
     for (const pipelines of [[ACQ, PAID, RESET], [ACQ, RESET]]) {
       vi.mocked(triggerSequencesForPipelineStageChange).mockClear()
@@ -2215,7 +2215,7 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
         trial_purchases: [{ id: 'tp-1', location_id: STILL, contact_id: 'c-buyer', status: 'granted', payment_status: 'paid', paid_at: ago(2), granted_at: ago(2), duration_days: 14, plan_code: 'RESET14', landing_path: null, page_id: null }],
       }), { errors: { locations: 'locations down' } })
       const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
-      expect(out).toMatchObject({ ok: false, error: 'claims unavailable: membership_source_unreadable', pipelines_skipped: ['reset'] })
+      expect(out).toMatchObject({ ok: false, error: 'claims unavailable: membership_source_unreadable', pipelines_skipped: ['o_reset'] })
       expect(rec.tables()).not.toContain('contacts')
       expect(rec.tables()).not.toContain('trial_purchases')
       expect(rec.writesTo('deals')).toHaveLength(0)
@@ -2229,15 +2229,15 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
   it('membershipSourceReadFailureHoldsOffer / unreadableSourceWithoutTrialPurchaseOfferHoldsOnly (nightly): an unreadable membership_source holds the offer board (never guesses contacts); the acquisition board still runs', async () => {
     const rec = recordingDb(corpFixtures({
       contacts: [corpNew('c-new'), corpAttended('c-move')],
-      deals: [acqDeal('d-move', 'c-move'), { id: 'd-held', contact_id: 'c-new', stage_id: 's-corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
+      deals: [acqDeal('d-move', 'c-move'), { id: 'd-held', contact_id: 'c-new', stage_id: 's-o_corp_new', pipeline_id: 'p-corp', location_id: STILL, status: 'open' }],
     }), { errors: { locations: 'locations down' } })
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL })
-    expect(out).toMatchObject({ ok: true, pipelines_skipped: ['corp'], deals_held: 1, deals_created: 0 })
+    expect(out).toMatchObject({ ok: true, pipelines_skipped: ['o_corp'], deals_held: 1, deals_created: 0 })
     // c-move (no deal on the held board) is placed by acquisition alone: the corp claim is not read.
     expect(rec.tables()).not.toContain('pipeline_board_claims')
     expect(rec.writesTo('deals').some((e) => JSON.stringify(e).includes('p-corp'))).toBe(false)
     expect(triggerSequencesForPipelineStageChange).not.toHaveBeenCalled()
-    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'corp', reason: 'membership_source_unreadable' }))
+    expect(logWarn).toHaveBeenCalledWith('pipeline-reclassify', 'board refused', expect.objectContaining({ key: 'o_corp', reason: 'membership_source_unreadable' }))
   })
 
   it('an active member at another studio leaves the Corp board unless they are in its Converted column', async () => {
@@ -2245,6 +2245,6 @@ describe('PIPEBUILD.3d — offer boards on the nightly pass', () => {
     const conv = corpNew('c-conv', { glofox_membership_status: 'member', converted_at: ago(1) })
     const rec = recordingDb(corpFixtures({ contacts: [corpNew('c-new'), conv], deals: [] }))
     const out = await reclassifyAllContacts(rec.db, { locationId: STILL, dryRun: true })
-    expect(out).toMatchObject({ ok: true, creates_withheld: 1, stage_histogram: { corp_converted: 1 } })
+    expect(out).toMatchObject({ ok: true, creates_withheld: 1, stage_histogram: { o_corp_converted: 1 } })
   })
 })

@@ -12,6 +12,29 @@ export const DEFAULT_DURATION_DAYS = 14
 export const DEFAULT_QUIET_DAYS = 60
 export const DEFAULT_CONVERTED_WINDOW_DAYS = 60
 export const MIA_NOTES_MAX = 1000
+export const OFFER_NAME_MAX = 60
+export const SIGNER_MAX = 40
+
+// An offer board's key. It prefixes every stage slug, template name and tag, so it
+// can never collide with a built-in board key (`acquisition`, `paid_trial`, ...).
+export const BOARD_KEY_RE = /^o_[a-z0-9_]{1,40}$/
+
+/** A board key from its name: slugified, 36 characters at most, `o_` prefixed,
+ *  and made unique against `takenKeys` with `_2`, `_3`, ... */
+export function boardKeyFor(name, takenKeys = new Set()) {
+  const slug = String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 36)
+    .replace(/_+$/g, '')
+  const base = slug ? `o_${slug}` : 'o_board'
+  if (!takenKeys.has(base)) return base
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}_${n}`
+    if (!takenKeys.has(candidate)) return candidate
+  }
+}
 
 const STAGE_ROLES_ALLOWED = STAGE_ROLES.filter((r) => r !== 'pile' && r !== 'custom')
 const AT_MOST_ONE = ['first_class', 'done', 'converted']
@@ -32,6 +55,14 @@ function intInRange(raw, name, min, max, fallback, errors) {
     return fallback
   }
   return raw
+}
+
+function optionalText(raw, name, max, errors) {
+  if (raw == null) return undefined
+  if (typeof raw !== 'string') { errors.push(`${name} must be text`); return undefined }
+  const v = raw.trim()
+  if (v.length > max) { errors.push(`${name} must be ${max} characters or fewer`); return undefined }
+  return v
 }
 
 function parseEntry(raw, errors) {
@@ -104,6 +135,7 @@ function parseStages(raw, boardKey, errors) {
 export function parseOfferConfig(raw, { boardKey } = {}) {
   const errors = []
   if (typeof boardKey !== 'string' || !boardKey) return { ok: false, errors: ['boardKey is required'] }
+  if (!BOARD_KEY_RE.test(boardKey)) return { ok: false, errors: ['boardKey must look like o_name'] }
   if (!isObj(raw)) return { ok: false, errors: ['config must be an object'] }
   const entry = parseEntry(raw.entry, errors)
   const stages = parseStages(raw.stages, boardKey, errors)
@@ -116,8 +148,12 @@ export function parseOfferConfig(raw, { boardKey } = {}) {
     else if (raw.mia_notes.length > MIA_NOTES_MAX) errors.push(`mia_notes must be ${MIA_NOTES_MAX} characters or fewer`)
     else mia_notes = raw.mia_notes
   }
+  const offer_name = optionalText(raw.offer_name, 'offer_name', OFFER_NAME_MAX, errors)
+  const signer = optionalText(raw.signer, 'signer', SIGNER_MAX, errors)
   if (errors.length) return { ok: false, errors }
   const config = { entry, stages, duration_days, quiet_days, converted_window_days }
+  if (offer_name) config.offer_name = offer_name
+  if (signer) config.signer = signer
   if (mia_notes !== undefined) config.mia_notes = mia_notes
   return { ok: true, config }
 }

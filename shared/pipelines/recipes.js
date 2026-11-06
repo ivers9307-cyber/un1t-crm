@@ -21,15 +21,18 @@ export function studioSlugFor(locationName) {
     .replace(/^_+|_+$/g, '')
 }
 
-/** `${studioSlug}_${boardKey}_${packKey}[_${ref}]`, lowercased, [a-z0-9_] only.
+/** `${studioSlug}_${boardKey}_${packKey}[_${ref}][_v${version}]`, lowercased, [a-z0-9_] only.
+ *  `version` (a whole number) adds the `_v<n>` suffix only above 1: a replaced
+ *  template needs a new name, and version 1 keeps the name it always had.
  *  Throws on an empty studio slug, board key or pack key (two studios or two
  *  boards would share one name), and on a name over Meta's 512: truncating
  *  could make two different templates one name. */
-export function templateNameFor({ studioSlug, boardKey, packKey, ref } = {}) {
+export function templateNameFor({ studioSlug, boardKey, packKey, ref, version } = {}) {
   for (const [label, v] of [['studioSlug', studioSlug], ['boardKey', boardKey], ['packKey', packKey]]) {
     if (v == null || String(v).trim() === '') throw new Error(`a template name needs a ${label}`)
   }
-  const raw = [studioSlug, boardKey, packKey, ref].filter((p) => p != null && p !== '').join('_')
+  const suffix = Number.isInteger(version) && version > 1 ? `v${version}` : null
+  const raw = [studioSlug, boardKey, packKey, ref, suffix].filter((p) => p != null && p !== '').join('_')
   const name = raw.toLowerCase().replace(/[^a-z0-9_]/g, '_')
   if (name.length > NAME_MAX) throw new Error(`the template name ${name.slice(0, 40)}… is longer than ${NAME_MAX} characters`)
   return name
@@ -241,6 +244,25 @@ function fillIns(text, values) {
   })
 }
 
+// The default body's "Tap below ..." sentence points at a button. With no button
+// at all (no booking flow, no app links) it points at nothing, so it goes, along
+// with the space or newline after it.
+function dropTapBelow(body) {
+  return body.replace(/Tap below[^.!?]*[.!?]\s*/, '')
+}
+
+// An operator's own wording for one message. It keeps Meta's first-name variable
+// {{1}}, can add no other variable, and may use the fill-in tokens.
+function checkWording(ref, body) {
+  if (typeof body !== 'string') throw new Error(`wording: the ${ref} message must be text`)
+  const text = body.replace(/\r\n?/g, '\n').trim()
+  if (!text.includes('{{1}}')) throw new Error('wording: the message must include {{1}} (the first name)')
+  if (text.replaceAll('{{1}}', '').match(/\{\{|\}\}/)) {
+    throw new Error('wording: the message can use {{1}} only; no other {{ }} variables')
+  }
+  return text
+}
+
 function buttonsFor(kinds, { bookingFlowId, appLinks }) {
   const out = []
   for (const kind of kinds) {
@@ -262,7 +284,11 @@ export function renderPack(recipeKey, packKey, opts = {}) {
   if (!recipeDef) throw new Error(`unknown recipe ${recipeKey}`)
   const packDef = recipeDef.packs.find((p) => p.key === packKey)
   if (!packDef) throw new Error(`unknown pack ${packKey} in recipe ${recipeKey}`)
-  const { boardKey, studioSlug, studioName, offerName, durationDays, signer } = opts
+  const { boardKey, studioSlug, studioName, offerName, durationDays, signer, version, bodies } = opts
+  if (version != null && (!Number.isInteger(version) || version < 1)) throw new Error('version must be a whole number, 1 or more')
+  for (const ref of Object.keys(bodies ?? {})) {
+    if (!packDef.templates.some((t) => t.ref === ref)) throw new Error(`wording: this pack has no ${ref} message`)
+  }
   const checkpointDay = packDef.day ?? 7
   if (!Number.isInteger(durationDays) || durationDays < 1) {
     throw new Error('durationDays must be a whole number of days, 1 or more')
@@ -279,20 +305,29 @@ export function renderPack(recipeKey, packKey, opts = {}) {
     signer: cleanFillIn('signer', signer),
   }
   const templates = packDef.templates.map((t) => {
-    const text = fillIns(t.body, values)
+    const buttons = buttonsFor(t.buttons, opts)
+    const override = bodies?.[t.ref]
+    let source
+    if (override != null) source = checkWording(t.ref, override)
+    else source = buttons.length === 0 ? dropTapBelow(t.body) : t.body
+    let text
+    try {
+      text = fillIns(source, values)
+    } catch (err) {
+      throw override != null ? new Error(`wording: ${err.message}`) : err
+    }
     if (text.length > BODY_MAX) {
-      throw new Error(`the ${packKey} message is ${text.length} characters, over WhatsApp's ${BODY_MAX}: shorten the fill-ins`)
+      throw new Error(`${override != null ? 'wording: ' : ''}the ${packKey} message is ${text.length} characters, over WhatsApp's ${BODY_MAX}: shorten ${override != null ? 'it' : 'the fill-ins'}`)
     }
     const components = [{
       type: 'BODY',
       text,
       example: { body_text: [['Tim']] },
     }, { type: 'FOOTER', text: FOOTER_TEXT }]
-    const buttons = buttonsFor(t.buttons, opts)
     if (buttons.length) components.push({ type: 'BUTTONS', buttons })
     return {
       ref: t.ref,
-      name: templateNameFor({ studioSlug, boardKey, packKey, ref: t.ref }),
+      name: templateNameFor({ studioSlug, boardKey, packKey, ref: t.ref, version }),
       category: 'MARKETING',
       language: 'en',
       components,
