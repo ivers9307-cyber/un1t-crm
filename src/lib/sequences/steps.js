@@ -806,6 +806,12 @@ export async function updateFieldStep(db, { step, contact }) {
 //                                         within_days narrows it to a class in
 //                                         the last N days or still to come
 //                                         (STILL39SEQ.1)
+//   - has_future_booking_at_studio {} — a non-cancelled class_bookings row at
+//                                         the sequence's studio starting after
+//                                         now, or a /start request in flight
+//                                         (PIPEBUILD.1d: tells "already booked
+//                                         their next class" from "attended and
+//                                         stopped")
 //   - in_pipeline_stage_at_studio { stages } — the contact has an open deal
 //                                         at the sequence's studio, on an
 //                                         enabled board, in one of the stage
@@ -859,7 +865,12 @@ const IN_FLIGHT_CLASS_REQUEST_STATUSES = ['queued', 'processing', 'booked', 'nee
 // STILL39SEQ.1 — `sinceIso` (from the predicate's within_days) narrows both
 // reads: a class starting since then (so one still to come counts) and a
 // request made since then. Absent = every booking ever, as before.
-async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = null }) {
+//
+// PIPEBUILD.1d — `futureFromIso` (has_future_booking_at_studio) asks only for a
+// class still to come: a booking starting after it, or any request in flight
+// (a request has no class time, so it counts whenever it was made). It takes
+// no window, so it never combines with `sinceIso`.
+async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = null, futureFromIso = null, label = 'booked_class_at_studio' }) {
   let bookingsQuery = db
     .from('class_bookings')
     .select('id')
@@ -867,8 +878,9 @@ async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = nu
     .eq('location_id', locationId)
     .neq('status', 'CANCELLED')
   if (sinceIso) bookingsQuery = bookingsQuery.gte('starts_at', sinceIso)
+  if (futureFromIso) bookingsQuery = bookingsQuery.gt('starts_at', futureFromIso)
   const { data: bookings, error: bookingsError } = await bookingsQuery.limit(1)
-  if (bookingsError) throw new Error(`branch booked_class_at_studio: ${bookingsError.message}`)
+  if (bookingsError) throw new Error(`branch ${label}: ${bookingsError.message}`)
   if (bookings && bookings.length > 0) return true
 
   let requestsQuery = db
@@ -879,7 +891,7 @@ async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = nu
     .in('status', IN_FLIGHT_CLASS_REQUEST_STATUSES)
   if (sinceIso) requestsQuery = requestsQuery.gte('created_at', sinceIso)
   const { data: requests, error: requestsError } = await requestsQuery.limit(1)
-  if (requestsError) throw new Error(`branch booked_class_at_studio: ${requestsError.message}`)
+  if (requestsError) throw new Error(`branch ${label}: ${requestsError.message}`)
   return Boolean(requests && requests.length > 0)
 }
 
@@ -1013,6 +1025,18 @@ export async function evaluateBranchPredicate(db, { contact, predicate, location
     const days = predicate.within_days == null || predicate.within_days === '' ? null : Number(predicate.within_days)
     const sinceIso = days ? new Date(nowMs - days * 86_400_000).toISOString() : null
     return hasBookedClassAtStudio(db, { contactId: contact.id, locationId, sinceIso })
+  }
+
+  if (type === 'has_future_booking_at_studio') {
+    // Thrown, not guessed, like booked_class_at_studio. starts_at is an
+    // instant, so "now" needs no timezone maths.
+    if (!locationId) throw new Error('branch has_future_booking_at_studio: the sequence studio is required')
+    return hasBookedClassAtStudio(db, {
+      contactId: contact.id,
+      locationId,
+      futureFromIso: new Date(nowMs).toISOString(),
+      label: 'has_future_booking_at_studio',
+    })
   }
 
   if (type === 'has_tag') {

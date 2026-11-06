@@ -8,7 +8,7 @@ import {
 describe('graph schema constants', () => {
   it('lists every branch predicate the runner evaluates (TDSEQ.1 adds two studio-scoped ones)', () => {
     expect(BRANCH_PREDICATE_TYPES).toEqual([
-      'has_tag', 'booked_class_at_studio', 'in_pipeline_stage_at_studio', 'whatsapp_reply_since_enrolment',
+      'has_tag', 'booked_class_at_studio', 'has_future_booking_at_studio', 'in_pipeline_stage_at_studio', 'whatsapp_reply_since_enrolment',
       'field_equals', 'field_in',
     ])
   })

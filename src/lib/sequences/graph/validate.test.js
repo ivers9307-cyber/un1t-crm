@@ -219,6 +219,10 @@ describe('validateGraph — dynamic URL button value (SEQ-URLBUTTON.1)', () => {
       }
     })
 
+    it('validateAcceptsFutureBookingPredicate: has_future_booking_at_studio needs no config', () => {
+      expect(validateGraph(branchGraph({ type: 'has_future_booking_at_studio' }))).toEqual({ ok: true, errors: [] })
+    })
+
     it('refuses a predicate type the runner does not know', () => {
       const g = branchGraph({ type: 'made_up' })
       expect(codes(g)).toContain('missing_config')

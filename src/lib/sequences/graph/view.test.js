@@ -82,6 +82,7 @@ describe('describeNode — operator-facing one-line summary per type', () => {
     [{ type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }, 'Branch', 'Has tag “vip”'],
     [{ type: 'branch', config: { predicate: { type: 'booked_class_at_studio' } } }, 'Branch', 'Has booked a class at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'booked_class_at_studio', within_days: 8 } } }, 'Branch', 'Has booked a class at this studio in the last 8 days or upcoming'],
+    [{ type: 'branch', config: { predicate: { type: 'has_future_booking_at_studio' } } }, 'Branch', 'Has a class booked from now on at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done'] } } }, 'Branch', 'In stage trial_done at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'in_pipeline_stage_at_studio', stages: ['trial_done', 'second_class'] } } }, 'Branch', 'In stage trial_done or second_class at this studio'],
     [{ type: 'branch', config: { predicate: { type: 'whatsapp_reply_since_enrolment' } } }, 'Branch', 'Replied on WhatsApp since this flow began'],

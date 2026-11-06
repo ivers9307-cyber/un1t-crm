@@ -61,6 +61,7 @@ function describePredicate(p) {
     case 'booked_class_at_studio': return p.within_days
       ? `Has booked a class at this studio in the last ${p.within_days} days or upcoming`
       : 'Has booked a class at this studio'
+    case 'has_future_booking_at_studio': return 'Has a class booked from now on at this studio'
     case 'in_pipeline_stage_at_studio': return `In stage ${(p.stages || []).join(' or ') || '(none)'} at this studio`
     case 'whatsapp_reply_since_enrolment': return 'Replied on WhatsApp since this flow began'
     default: return humanise(p.type)

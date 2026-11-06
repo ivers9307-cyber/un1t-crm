@@ -246,7 +246,7 @@ describe('evaluateBranchPredicate', () => {
           const ops = []
           calls[table]?.push(ops)
           const builder = {}
-          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit', 'gte']) {
+          for (const m of ['select', 'eq', 'neq', 'not', 'in', 'is', 'limit', 'gte', 'gt']) {
             builder[m] = vi.fn((...args) => { ops.push([m, ...args]); return builder })
           }
           builder.then = (onF, onR) => Promise.resolve(result[table] || { data: [], error: null }).then(onF, onR)
@@ -281,6 +281,45 @@ describe('evaluateBranchPredicate', () => {
     it('is false when the contact has neither a booking nor a live request at the studio', async () => {
       const db = recordingDb()
       expect(await steps.evaluateBranchPredicate(db, { contact, predicate: pred, locationId: 'loc-hatch' })).toBe(false)
+    })
+
+    describe('has_future_booking_at_studio', () => {
+      const NOW = Date.parse('2026-11-03T12:00:00Z')
+      const nowIso = new Date(NOW).toISOString()
+      const fpred = { type: 'has_future_booking_at_studio' }
+
+      it('futureBookingTrue: a non-cancelled booking after now at the studio is true', async () => {
+        const db = recordingDb({ bookings: [{ id: 'cb-1' }] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(true)
+        const ops = db.calls.class_bookings[0]
+        expect(ops).toContainEqual(['gt', 'starts_at', nowIso])
+        expect(ops).toContainEqual(['eq', 'location_id', 'loc-st'])
+        expect(ops).toContainEqual(['neq', 'status', 'CANCELLED'])
+      })
+
+      it('pastBookingOnlyFalse: no future booking and no in-flight request is false', async () => {
+        const db = recordingDb()
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(false)
+        // The request read is not narrowed by created_at: in flight counts whenever it was made.
+        expect(db.calls.class_booking_requests[0].some(([m]) => m === 'gte')).toBe(false)
+      })
+
+      it('inFlightRequestCounts: an in-flight request at the studio is true', async () => {
+        const db = recordingDb({ requests: [{ id: 'req-1' }] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(true)
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['in', 'status', ['queued', 'processing', 'booked', 'needs_review']])
+      })
+
+      it('futureBookingNeedsStudio: no studio throws', async () => {
+        await expect(steps.evaluateBranchPredicate(recordingDb(), { contact, predicate: fpred, nowMs: NOW }))
+          .rejects.toThrow(/has_future_booking_at_studio: the sequence studio is required/)
+      })
+
+      it('throws on a failed read rather than answering false', async () => {
+        const db = recordingDb({ bookingsError: { message: 'boom' } })
+        await expect(steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW }))
+          .rejects.toThrow(/boom/)
+      })
     })
 
     // STILL39SEQ.1 — within_days: only a class in the last N days or still to
