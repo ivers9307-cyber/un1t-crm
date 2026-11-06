@@ -232,3 +232,27 @@ describe('validateGraph — dynamic URL button value (SEQ-URLBUTTON.1)', () => {
     })
   })
 })
+
+describe('validateGraph — approved templates (PIPEBUILD.1a)', () => {
+  const waGraph = () => ({
+    version: 1,
+    trigger: { type: 'manual', config: {} },
+    nodes: [{ id: 'n1', type: 'whatsapp', config: { template_id: 'wt1', variables: {} } }],
+    edges: [{ from: 'trigger', to: 'n1' }],
+  })
+  const pending = [{ id: 'wt1', name: 'Trial follow-up', status: 'PENDING', components: [] }]
+
+  it('requireApprovedTemplatesOffByDefault', () => {
+    expect(validateGraph(waGraph(), { whatsappTemplates: pending }).errors.map(e => e.code))
+      .not.toContain('template_not_approved')
+    expect(validateGraph(waGraph()).ok).toBe(true)
+  })
+
+  it('requireApprovedTemplatesFlagsPending', () => {
+    const r = validateGraph(waGraph(), { whatsappTemplates: pending, requireApprovedTemplates: true })
+    expect(r.ok).toBe(false)
+    const issue = r.errors.find(e => e.code === 'template_not_approved')
+    expect(issue.nodeId).toBe('n1')
+    expect(issue.message).toContain('Step 1')
+  })
+})

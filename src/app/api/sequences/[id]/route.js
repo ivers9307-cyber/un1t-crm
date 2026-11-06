@@ -6,6 +6,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { canBuildSequencesAt, canBuildSequencesSomewhere, sequencePermissionRequired, sequenceNotFound } from '@/lib/sequence-access'
 import { validateBody } from '@/lib/validate'
 import { logError } from '@/lib/log'
+import { whatsappApprovalIssues, loadTemplatesForApproval } from '@/lib/sequences/template-approval'
 import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { SEQUENCE_BUILDER_ROW_SELECT, toBuilderSequence } from '@/lib/sequences/builder-shape'
 import { uuidLike } from '@/lib/schemas'
@@ -195,6 +196,48 @@ export async function PUT(request, props) {
         success: false,
         error: 'This sequence fires when contacts enter or leave a segment, but no segment is selected — it would never enrol anyone. Pick a segment in the trigger settings, then activate.',
       }, { status: 400 })
+    }
+  }
+
+  // PIPEBUILD.1a — refuse to ACTIVATE a sequence whose WhatsApp step uses a
+  // template Meta has not approved (it would go live and pause at the first
+  // send). Only on the move TO active; any other edit of a live sequence skips
+  // the read.
+  if (effStatus === 'active' && existing.status !== 'active') {
+    const { data: waSteps, error: waStepsErr } = await db.from('sequence_steps')
+      .select('whatsapp_template_id, step_order')
+      .eq('sequence_id', params.id)
+      .eq('step_type', 'whatsapp')
+      .order('step_order', { ascending: true })
+    const unreadable = () => NextResponse.json({
+      success: false,
+      error: 'Could not check the WhatsApp templates just now. The sequence was not activated.',
+    }, { status: 503 })
+    if (waStepsErr) {
+      logError('sequences', 'sequence activate: steps read failed', { sequenceId: params.id, err: waStepsErr.message })
+      return unreadable()
+    }
+    const refs = (waSteps || [])
+      .filter(r => r.whatsapp_template_id)
+      .map(r => ({ stepNumber: r.step_order, templateId: r.whatsapp_template_id }))
+    if (refs.length) {
+      const loaded = await loadTemplatesForApproval(db, {
+        locationId: existing.location_id,
+        templateIds: refs.map(r => r.templateId),
+      })
+      if (!loaded.ok) {
+        logError('sequences', 'sequence activate: whatsapp_templates read failed', { sequenceId: params.id, err: loaded.error?.message || String(loaded.error) })
+        return unreadable()
+      }
+      const [issue] = whatsappApprovalIssues(refs, loaded.rows)
+      if (issue) {
+        return NextResponse.json({
+          success: false,
+          error: issue.code === 'template_not_approved'
+            ? `${issue.message} Activate it once the template is approved.`
+            : issue.message,
+        }, { status: 400 })
+      }
     }
   }
 
