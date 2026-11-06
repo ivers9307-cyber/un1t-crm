@@ -17,11 +17,12 @@
 // broken contact (e.g. invalid email) can't fill the cron logs forever.
 
 import { createServerClient } from '@/lib/supabase'
-import { logWarn, logInfo } from '@/lib/log'
+import { logWarn, logInfo, logError } from '@/lib/log'
 import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
 import { nextAcceptableSend, QUIET_HOURS_COLUMNS } from '@/lib/send-quiet-hours'
 import { DEFAULT_TZ, resolveZone, instantToZonedParts, getLocationZone, LocationZoneReadError } from '@/lib/location-time'
 import { evaluateSequenceAudience } from './audience.js'
+import { TemplateNotApprovedDeferral, templateStamp, templateWaitDecision, withoutTemplateWait } from './template-wait.js'
 import {
   sendEmailStep,
   sendWhatsappStep,
@@ -698,6 +699,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // The row was claimed with status='active', so the only way to miss
       // here is a deliberate mid-step exit; a 0-row match is not an error
       // and leaves the throw-on-advance-failure discipline untouched.
+      const clearedMetadata = withoutTemplateWait(enrollment.metadata)
       const { data: advanced, error: advanceErr } = await db.from('sequence_enrollments').update({
         current_step_order: followingOrder != null ? followingOrder - 1 : step.step_order,
         next_step_at: nextFireAt,
@@ -706,6 +708,8 @@ export async function runSequences({ now = new Date() } = {}) {
         last_step_send_id: sendId,
         last_error: null,
         error_count: 0,
+        // PIPEBUILD.1b — the step went out, so any template wait is over.
+        ...(clearedMetadata ? { metadata: clearedMetadata } : {}),
       }).eq('id', enrollment.id).eq('status', 'active').select('id')
       // PRESEND.1 (review) — a CAS that can match nothing must SAY so. There
       // are exactly two ways to land here and they read very differently:
@@ -762,6 +766,47 @@ export async function runSequences({ now = new Date() } = {}) {
           last_processed_at: now.toISOString(),
         }).eq('id', enrollment.id)
         stats.deferred++
+        continue
+      }
+      // PIPEBUILD.1b — a template Meta has not approved yet is a wait, not an
+      // error: nothing was sent, so retry in an hour, and past 48 h exit the
+      // run rather than send a stale message. A failed write here leaves the
+      // claim lease in place, which brings the row back; still nothing sent.
+      if (e instanceof TemplateNotApprovedDeferral) {
+        const decision = templateWaitDecision({
+          metadata: enrollment.metadata,
+          stepOrder: e.stepOrder,
+          templateId: e.templateId,
+          now,
+        })
+        const ids = { enrollmentId: enrollment.id, sequenceId: enrollment.sequence_id, templateId: e.templateId }
+        if (decision.action === 'exit') {
+          const { error: exitErr } = await db.from('sequence_enrollments').update({
+            status: 'exited',
+            exit_reason: 'stale_template_wait',
+            exited_at: now.toISOString(),
+            next_step_at: null,
+            last_processed_at: now.toISOString(),
+          }).eq('id', enrollment.id).eq('status', 'active')
+          if (exitErr) {
+            logError('sequences', 'template wait exit write failed', { ...ids, error: exitErr.message })
+          } else {
+            logWarn('sequences', 'template wait over 48h; enrolment exited, nothing sent', ids)
+            stats.exited_stale = (stats.exited_stale || 0) + 1
+          }
+        } else {
+          const { error: waitErr } = await db.from('sequence_enrollments').update({
+            next_step_at: decision.nextAt,
+            metadata: decision.metadata,
+            last_processed_at: now.toISOString(),
+            last_error: `${templateStamp(e.templateId)}waiting for Meta to approve "${e.templateName}" (${e.status})`,
+          }).eq('id', enrollment.id).eq('status', 'active')
+          if (waitErr) {
+            logError('sequences', 'template wait write failed', { ...ids, error: waitErr.message })
+          } else {
+            stats.deferred++
+          }
+        }
         continue
       }
       const errCount = (enrollment.error_count || 0) + 1

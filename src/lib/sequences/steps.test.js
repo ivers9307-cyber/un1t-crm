@@ -18,6 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { glofoxProvisionStep } from './steps.js'
+import { TemplateNotApprovedDeferral, templateStamp } from './template-wait.js'
 
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
@@ -1043,6 +1044,35 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     }
     await expect(steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact }))
       .rejects.toThrow(/template not found/)
+  })
+
+  describe('PIPEBUILD.1b — unapproved template', () => {
+    const tplDb = (tpl) => ({
+      from: (table) => {
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: tpl }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', features: {} } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({}),
+    })
+    const run = (tpl) => steps.sendWhatsappStep(tplDb(tpl), { step, sequence, contact: consentedContact })
+
+    it('pendingTemplateThrowsDeferral', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'PENDING', location_id: 'loc-1' }).catch(e => e)
+      expect(err).toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err.status).toBe('PENDING')
+    })
+    it('pausedByMetaThrowsDeferral', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'PAUSED', location_id: 'loc-1' }).catch(e => e)
+      expect(err).toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err.status).toBe('PAUSED')
+    })
+    it('rejectedTemplateThrowsStampedError', async () => {
+      const err = await run({ id: 't1', name: 'tpl', status: 'REJECTED', location_id: 'loc-1' }).catch(e => e)
+      expect(err).not.toBeInstanceOf(TemplateNotApprovedDeferral)
+      expect(err).toBeInstanceOf(Error)
+      expect(err.message.startsWith(templateStamp(step.whatsapp_template_id))).toBe(true)
+    })
   })
 
   it('PAYLINK.6 — a pay-link template with no link on the run is a recorded skip, not a send', async () => {

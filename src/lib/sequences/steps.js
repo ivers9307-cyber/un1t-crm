@@ -49,6 +49,7 @@ import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { paymentFromEnrollment, paymentCtaHtml, payAmountPhrase, dunningPresendGate } from '@/lib/dunning-payment'
 import { URL_BUTTON_MAPPING_KEY, dynamicUrlButtonIndex } from '@/lib/whatsapp-template-buttons'
 import { bookedWithinDaysError } from './graph/schema.js'
+import { templateStamp, TEMPLATE_WAIT_STATUSES, TemplateNotApprovedDeferral } from './template-wait.js'
 
 // ── DUNNING.3 — transactional lane ───────────────────────────────
 // A dunning enrolment is a SERVICE message about the member's own account
@@ -462,12 +463,21 @@ async function resolveApprovedWhatsappTemplate(db, step, sequence) {
     .select('*')
     .eq('id', step.whatsapp_template_id)
     .single()
-  if (!template) throw new Error('WhatsApp template not found.')
+  const stamp = templateStamp(step.whatsapp_template_id)
+  if (!template) throw new Error(`${stamp}WhatsApp template not found.`)
   if (template.status !== 'APPROVED') {
-    throw new Error(`WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
+    // PIPEBUILD.1b — Meta may still approve it: wait (the scheduler retries
+    // hourly and gives up after 48 h) instead of error-then-pause.
+    if (TEMPLATE_WAIT_STATUSES.includes(template.status)) {
+      throw new TemplateNotApprovedDeferral({
+        templateId: step.whatsapp_template_id, templateName: template.name,
+        status: template.status, stepOrder: step.step_order ?? null,
+      })
+    }
+    throw new Error(`${stamp}WhatsApp template "${template.name}" is ${template.status}, not APPROVED — cannot send.`)
   }
   if (template.location_id !== sequence.location_id) {
-    throw new Error('WhatsApp template belongs to a different location than the sequence.')
+    throw new Error(`${stamp}WhatsApp template belongs to a different location than the sequence.`)
   }
   return template
 }
