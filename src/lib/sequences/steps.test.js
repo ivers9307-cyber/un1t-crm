@@ -300,14 +300,22 @@ describe('evaluateBranchPredicate', () => {
       it('pastBookingOnlyFalse: no future booking and no in-flight request is false', async () => {
         const db = recordingDb()
         expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(false)
-        // The request read is not narrowed by created_at: in flight counts whenever it was made.
         expect(db.calls.class_booking_requests[0].some(([m]) => m === 'gte')).toBe(false)
+      })
+
+      it('pastRequestDoesNotCount: a request whose class is not still to come is false', async () => {
+        // The mock returns the same rows whatever is asked, so assert the filter
+        // that excludes a stale or null-starts_at request is on the query.
+        const db = recordingDb({ bookings: [], requests: [] })
+        expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(false)
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['gt', 'starts_at', nowIso])
       })
 
       it('inFlightRequestCounts: an in-flight request at the studio is true', async () => {
         const db = recordingDb({ requests: [{ id: 'req-1' }] })
         expect(await steps.evaluateBranchPredicate(db, { contact, predicate: fpred, locationId: 'loc-st', nowMs: NOW })).toBe(true)
         expect(db.calls.class_booking_requests[0]).toContainEqual(['in', 'status', ['queued', 'processing', 'booked', 'needs_review']])
+        expect(db.calls.class_booking_requests[0]).toContainEqual(['gt', 'starts_at', nowIso])
       })
 
       it('futureBookingNeedsStudio: no studio throws', async () => {

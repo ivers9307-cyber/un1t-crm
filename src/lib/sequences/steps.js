@@ -867,8 +867,8 @@ const IN_FLIGHT_CLASS_REQUEST_STATUSES = ['queued', 'processing', 'booked', 'nee
 // request made since then. Absent = every booking ever, as before.
 //
 // PIPEBUILD.1d — `futureFromIso` (has_future_booking_at_studio) asks only for a
-// class still to come: a booking starting after it, or any request in flight
-// (a request has no class time, so it counts whenever it was made). It takes
+// class still to come: a booking, or an in-flight request, whose class starts
+// after it (a request with no starts_at does not count). It takes
 // no window, so it never combines with `sinceIso`.
 async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = null, futureFromIso = null, label = 'booked_class_at_studio' }) {
   let bookingsQuery = db
@@ -890,6 +890,9 @@ async function hasBookedClassAtStudio(db, { contactId, locationId, sinceIso = nu
     .eq('location_id', locationId)
     .in('status', IN_FLIGHT_CLASS_REQUEST_STATUSES)
   if (sinceIso) requestsQuery = requestsQuery.gte('created_at', sinceIso)
+  // A request's own class time must still be to come: a stale 'booked' or
+  // 'needs_review' row (null starts_at included) is not a future booking.
+  if (futureFromIso) requestsQuery = requestsQuery.gt('starts_at', futureFromIso)
   const { data: requests, error: requestsError } = await requestsQuery.limit(1)
   if (requestsError) throw new Error(`branch ${label}: ${requestsError.message}`)
   return Boolean(requests && requests.length > 0)
