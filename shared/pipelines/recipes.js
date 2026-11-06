@@ -245,10 +245,11 @@ function fillIns(text, values) {
 }
 
 // The default body's "Tap below ..." sentence points at a button. With no button
-// at all (no booking flow, no app links) it points at nothing, so it goes, along
-// with the space or newline after it.
-function dropTapBelow(body) {
-  return body.replace(/Tap below[^.!?]*[.!?]\s*/, '')
+// at all (no booking flow, no app links) it points at nothing, so it becomes the
+// reply line, keeping the sentence's own trailing space or newline.
+export const REPLY_TO_BOOK = "Reply here and we'll book it for you."
+function replaceTapBelow(body) {
+  return body.replace(/Tap below[^.!?]*[.!?](\s*)/, (_, ws) => `${REPLY_TO_BOOK}${ws}`)
 }
 
 // An operator's own wording for one message. It keeps Meta's first-name variable
@@ -256,8 +257,9 @@ function dropTapBelow(body) {
 function checkWording(ref, body) {
   if (typeof body !== 'string') throw new Error(`wording: the ${ref} message must be text`)
   const text = body.replace(/\r\n?/g, '\n').trim()
-  if (!text.includes('{{1}}')) throw new Error('wording: the message must include {{1}} (the first name)')
-  if (text.replaceAll('{{1}}', '').match(/\{\{|\}\}/)) {
+  const exactOne = /(?<!\{)\{\{1\}\}(?!\})/g
+  if (!exactOne.test(text)) throw new Error('wording: the message must include {{1}} (the first name)')
+  if (/\{\{|\}\}/.test(text.replace(exactOne, ''))) {
     throw new Error('wording: the message can use {{1}} only; no other {{ }} variables')
   }
   return text
@@ -309,7 +311,7 @@ export function renderPack(recipeKey, packKey, opts = {}) {
     const override = bodies?.[t.ref]
     let source
     if (override != null) source = checkWording(t.ref, override)
-    else source = buttons.length === 0 ? dropTapBelow(t.body) : t.body
+    else source = buttons.length === 0 ? replaceTapBelow(t.body) : t.body
     let text
     try {
       text = fillIns(source, values)

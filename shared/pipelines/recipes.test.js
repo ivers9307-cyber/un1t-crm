@@ -248,6 +248,8 @@ describe('recipes', () => {
     expect(() => run('Hello there')).toThrow(/wording/)
     expect(() => run('Hi {{1}} and {{2}}')).toThrow(/wording/)
     expect(() => run('Hi {{1}} {nope}')).toThrow(/wording/)
+    expect(() => run('Hi {{{1}}}')).toThrow(/wording/)
+    expect(() => run('Hi {{1}}}')).toThrow(/wording/)
     expect(() => run('Hi {{1}} ' + 'x'.repeat(1100))).toThrow(/wording/)
     expect(() => renderPack('paid_trial_offer', 'book_first_class', { ...BASE, bodies: { other: 'Hi {{1}}' } })).toThrow(/wording/)
     const t = run('Hi {{1}}, {offer} at {studio} for {days} days. {signer}').templates[0]
@@ -268,7 +270,12 @@ describe('recipes', () => {
       }
     }
     const t = renderPack('programme_lead', 'welcome', { ...BASE, bookingFlowId: undefined }).templates[0]
-    expect(bodyOf(t)).toBe("Hi {{1}}, welcome to the 14 Day Reset at UN1T Stillorgan 💪 We haven't seen you book your first class yet. Garrett")
+    expect(bodyOf(t)).toBe("Hi {{1}}, welcome to the 14 Day Reset at UN1T Stillorgan 💪 We haven't seen you book your first class yet. Reply here and we'll book it for you. Garrett")
+    for (const [rk, pk] of [['paid_trial_offer', 'book_first_class'], ['programme_lead', 'welcome'], ['promo_claim', 'welcome']]) {
+      const b = bodyOf(renderPack(rk, pk, { ...BASE, bookingFlowId: undefined }).templates[0])
+      expect(b, pk).toContain("yet. Reply here and we'll book it for you. Garrett")
+      expect(b).not.toContain('Tap below')
+    }
     // With a button the sentence stays.
     const withFlow = renderPack('programme_lead', 'welcome', BASE).templates[0]
     expect(bodyOf(withFlow)).toContain('Tap below')
